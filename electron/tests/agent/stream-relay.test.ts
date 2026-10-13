@@ -578,7 +578,7 @@ describe('start 幂等化（同 ssi 二次 start 续流行，不 INSERT）', () 
       type: 'start',
       streamSessionId: 'ss-idem-1',
       sessionId: '!room:idem',
-      senderAgentId: '@bot:localhost',
+      senderAgentId: 'agent-resume-1f2e3d',
     });
     __flushEventBufferForTest();
     const first = getMessageByStreamSessionId('ss-idem-1')!;
@@ -589,7 +589,7 @@ describe('start 幂等化（同 ssi 二次 start 续流行，不 INSERT）', () 
       type: 'start',
       streamSessionId: 'ss-idem-1',
       sessionId: '!room:idem',
-      senderAgentId: '@bot:localhost',
+      senderAgentId: 'agent-resume-1f2e3d',
     });
     __flushEventBufferForTest();
 
@@ -615,10 +615,10 @@ describe('start 幂等化（同 ssi 二次 start 续流行，不 INSERT）', () 
 
   it('幂等续流端到端：二次 start 后 text/end 落复用行收尾（单行 done，body 聚合）', () => {
     __routeChunkToBufferForTest({
-      type: 'start', streamSessionId: 'ss-idem-2', sessionId: '!room:idem', senderAgentId: '@bot:localhost',
+      type: 'start', streamSessionId: 'ss-idem-2', sessionId: '!room:idem', senderAgentId: 'agent-resume-1f2e3d',
     });
     __routeChunkToBufferForTest({
-      type: 'start', streamSessionId: 'ss-idem-2', sessionId: '!room:idem', senderAgentId: '@bot:localhost',
+      type: 'start', streamSessionId: 'ss-idem-2', sessionId: '!room:idem', senderAgentId: 'agent-resume-1f2e3d',
     });
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-idem-2', delta: '续跑输出' });
     __routeChunkToBufferForTest({ type: 'end', streamSessionId: 'ss-idem-2', finishReason: 'stop' });
@@ -632,7 +632,7 @@ describe('start 幂等化（同 ssi 二次 start 续流行，不 INSERT）', () 
   it('带 roll 的流族：start 用 base ssi 复用最新 #roll1 行（base 保持 done 不动）', () => {
     // 真实生产路径建 roll 族：base 行 + roll 换行终态化 base + #roll1 承接
     __routeChunkToBufferForTest({
-      type: 'start', streamSessionId: 'ss-idem-r', sessionId: '!room:idem', senderAgentId: '@bot:localhost',
+      type: 'start', streamSessionId: 'ss-idem-r', sessionId: '!room:idem', senderAgentId: 'agent-pm-9a8b7c',
     });
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-idem-r', delta: '断点前' });
     __routeChunkToBufferForTest({ type: 'message_roll', streamSessionId: 'ss-idem-r' });
@@ -641,7 +641,7 @@ describe('start 幂等化（同 ssi 二次 start 续流行，不 INSERT）', () 
 
     // resume 派发后子进程以 base ssi 重发 start → 必须续流 #roll1（族内当前行）
     __routeChunkToBufferForTest({
-      type: 'start', streamSessionId: 'ss-idem-r', sessionId: '!room:idem', senderAgentId: '@bot:localhost',
+      type: 'start', streamSessionId: 'ss-idem-r', sessionId: '!room:idem', senderAgentId: 'agent-pm-9a8b7c',
     });
     __flushEventBufferForTest();
 
@@ -661,7 +661,7 @@ describe('start 幂等化（同 ssi 二次 start 续流行，不 INSERT）', () 
   it('命中非 streaming 旧行（契约外形态）：warn 后按新流 INSERT 独立行，事件落新行', () => {
     // 真实路径造 done 旧行：start + end 收尾
     __routeChunkToBufferForTest({
-      type: 'start', streamSessionId: 'ss-idem-d', sessionId: '!room:idem', senderAgentId: '@bot:localhost',
+      type: 'start', streamSessionId: 'ss-idem-d', sessionId: '!room:idem', senderAgentId: 'agent-coder-55cc11',
     });
     __routeChunkToBufferForTest({ type: 'end', streamSessionId: 'ss-idem-d', finishReason: 'stop' });
     __flushEventBufferForTest();
@@ -669,7 +669,7 @@ describe('start 幂等化（同 ssi 二次 start 续流行，不 INSERT）', () 
 
     // 同 ssi 再 start（正常 resume 不应出现——flip 先行；防御路径锁行为）
     __routeChunkToBufferForTest({
-      type: 'start', streamSessionId: 'ss-idem-d', sessionId: '!room:idem', senderAgentId: '@bot:localhost',
+      type: 'start', streamSessionId: 'ss-idem-d', sessionId: '!room:idem', senderAgentId: 'agent-coder-55cc11',
     });
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-idem-d', delta: '新流文本' });
     __flushEventBufferForTest();
@@ -690,14 +690,14 @@ describe('start 幂等化（同 ssi 二次 start 续流行，不 INSERT）', () 
 
   it('未命中旧行：保持历史行为 INSERT 新行（首启动新流不受幂等化影响）', () => {
     __routeChunkToBufferForTest({
-      type: 'start', streamSessionId: 'ss-idem-fresh', sessionId: '!room:idem', senderAgentId: '@bot:localhost',
+      type: 'start', streamSessionId: 'ss-idem-fresh', sessionId: '!room:idem', senderAgentId: 'agent-coder-84b0e7',
     });
     __flushEventBufferForTest();
 
     const rows = listMessagesBySession('!room:idem');
     expect(rows).toHaveLength(1);
     expect(rows[0]!.status).toBe('streaming');
-    expect(rows[0]!.sender).toBe('@bot:localhost');
+    expect(rows[0]!.sender).toBe('agent-coder-84b0e7');
   });
 });
 
