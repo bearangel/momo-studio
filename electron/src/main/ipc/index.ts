@@ -8,6 +8,10 @@ import { registerAssetHandlers } from '../files/asset-ipc';
 import { registerAssetReadHandlers } from '../files/asset-read-ipc';
 import { registerAgentHandlers } from '../agent/ipc.handlers';
 import { registerStreamIpc } from '../agent/stream-relay';
+// 三级中断四通道（spec 2026-10-13 §7.2）：RouterService 级联 + registry 在途查询
+import { registerInterruptIpc } from '../agent/interrupt-ipc';
+import { getRouterService } from '../agent/router-bootstrap';
+import { dispatchRegistry } from '../agent/dispatch-registry';
 import { registerSessionIpcHandlers } from '../im/session.ipc.handlers';
 import { registerMcpHandlers } from '../mcp/ipc.handlers';
 import { registerAllocationHandlers } from '../workspace/ipc.handlers';
@@ -45,6 +49,21 @@ export function registerIpcHandlers(opts: WorkspaceIpcOpts = {}): void {
   registerAssetReadHandlers();
   registerAgentHandlers();
   registerStreamIpc();
+  // 三级中断四通道（spec 2026-10-13 §7.2）：注册先于 RouterService lazy 启动
+  //（main/index.ts 中 initTaskDrivenRuntime 在 registerIpcHandlers 之后），故
+  // abortTurn/stopAll/cancelChain 于 invoke 时刻经 getRouterService 解析单例——
+  // 未启动 = 无在途流/链，幂等空结果（与 abortStreamBySessionId 未注入 resolver
+  // 返回 false 同语义）。listInFlight 直返 registry 在途视图，subAgentName 恒
+  // null 占位（agent 名解析是 P2-D Task D1 扩展点）。
+  registerInterruptIpc({
+    abortTurn: (sessionId) =>
+      getRouterService()?.abortTurn(sessionId) ?? { stoppedStream: false },
+    stopAll: (sessionId) =>
+      getRouterService()?.stopAll(sessionId) ?? { stoppedStreams: 0, cancelledChains: 0 },
+    cancelChain: (arg) => getRouterService()?.cancelChain(arg) ?? { status: 'not_found' },
+    listInFlight: (sessionId) =>
+      dispatchRegistry.listInFlight(sessionId).map((chain) => ({ ...chain, subAgentName: null })),
+  });
   registerSessionIpcHandlers();
   registerMcpHandlers();
   registerAllocationHandlers();

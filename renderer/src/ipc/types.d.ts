@@ -1270,9 +1270,9 @@ export type CollabTarget = { type: 'agent'; instanceId: string } | { type: 'team
  * v2.0 P1 Task 8：session: 命名空间 IPC 契约（会话内核，纯 SQLite 无 Matrix）。
  *
  * v25 Task 6（spec §5）：泛化 create 退役 → createQuick / createCollab。
- * invoke 通道 10 个（session.ipc.handlers.ts）：
+ * invoke 通道 11 个（session.ipc.handlers.ts）：
  *   list / get / createQuick / createCollab / rename / delete / send /
- *   getMessages / loadOlder / exportMessages
+ *   getMessages / loadOlder / exportMessages / stopAll
  * 推送通道 2 个：
  *   session:message             消息行实时推送（载荷 ImMessage）
  *   session:message_event_batch 流式 events 批量推送（MessageEventBuffer flush）
@@ -1353,12 +1353,61 @@ export interface SessionApiSurface {
   }>;
   /** 导出会话最近 limit 条消息为 Markdown。返回 { filename, content }，renderer 用 Blob 触发下载 */
   exportMessages(sessionId: string, limit: number): Promise<{ filename: string; content: string }>;
+  /**
+   * 三级中断·会话级急停（spec 2026-10-13 §7.5，通道 session:stopAll）：该会话
+   * 全部流 aborted + 全部在途链 cancelled + 待投递回执队列清空。
+   */
+  stopAll(sessionId: string): Promise<{ stoppedStreams: number; cancelledChains: number }>;
   /** 订阅消息行实时推送（session:message） */
   onMessage(callback: (msg: ImMessage) => void): () => void;
   /** 订阅流式 events 批量推送（session:message_event_batch，MessageEventBuffer flush 时触发） */
   onMessageEventBatch(callback: (batch: MessageEventBatch) => void): () => void;
   /** K10：订阅会话列表变化推送（session:listChanged——主进程主动新建执行会话时触发） */
   onListChanged(callback: () => void): () => void;
+}
+
+/**
+ * 在途链视图（dispatch:listInFlight 返回项，spec 2026-10-13 §9）。
+ * 与主进程 dispatch-registry.ts InFlightChain 逐字段一致（跨进程独立定义，
+ * 仅结构对齐）；subAgentName 为 P2-D（Task D1）扩展点——agent 名主进程解析
+ * 接入前恒为 null。
+ */
+export interface InFlightChainView {
+  /** 链 ID（dispatch 事件的 task_id，单点生成沿线透传） */
+  taskId: string;
+  /** 累计轮次：首派 = 1，followup 复用链 ID 递增 */
+  round: number;
+  /** 链所在会话 */
+  sessionId: string;
+  /** PM assignmentId */
+  pmAssignmentId: string;
+  /** 子 agent assignmentId */
+  subAssignmentId: string;
+  /** 子 agent 流 id（chip 链级停止的查找键，spec §7.6） */
+  subStreamSessionId?: string;
+  /** PM 当前流 id */
+  pmStreamSessionId?: string;
+  /** 链注册时刻（epoch ms） */
+  startedAt: number;
+  /** 子 agent 展示名（D1 主进程解析；本期恒 null） */
+  subAgentName: string | null;
+}
+
+/**
+ * 三级中断·链级 + 在途查询通道面（IPC 命名空间 dispatch:*，主进程
+ * agent/interrupt-ipc.ts 注册，spec 2026-10-13 §7.2 / §7.6 / §9）。
+ */
+export interface DispatchApiSurface {
+  /**
+   * 链级取消（spec §7.6）：renderer 只持 subStreamSessionId（chip 查找键），
+   * taskId 入口留给主进程内部调用。查无 / 已终态 → not_found（幂等取消）。
+   */
+  cancelChain(arg: {
+    taskId?: string;
+    subStreamSessionId?: string;
+  }): Promise<{ status: 'cancelled' | 'not_found' }>;
+  /** 在途链查询（§9）：sessionId 缺省 = 全部会话 */
+  listInFlight(sessionId?: string): Promise<InFlightChainView[]>;
 }
 
 /**
@@ -1862,6 +1911,11 @@ export interface ApiSurface {
     onRuntimeChanged(callback: () => void): () => void;
     /** Task 6：中断指定 streamSessionId 的活跃流式会话（原按 roomId 中断，修同房覆盖问题） */
     abortStream(streamSessionId: string): Promise<void>;
+    /**
+     * 三级中断·回合级（spec 2026-10-13 §7.3）：先断本回合派生链再停 PM 流。
+     * 车道空闲（无在途回合）→ { stoppedStream: false } 幂等 no-op。
+     */
+    abortTurn(sessionId: string): Promise<{ stoppedStream: boolean }>;
   };
   /**
    * v25 Task 6：团队通道面（spec §4.2）。全部委托 team.ts 服务层。
@@ -1951,6 +2005,8 @@ export interface ApiSurface {
    * v2.0 P1 Task 8：会话内核命名空间（session.ipc.handlers.ts）。
    */
   session: SessionApiSurface;
+  /** 三级中断·链级 + 在途查询（dispatch:cancelChain / dispatch:listInFlight） */
+  dispatch: DispatchApiSurface;
   mcp: {
     // P3 Task 7：register 收敛到 resource.registerMcp（mcp:register 通道已删除）
     /** 启动某 workspace 内的 MCP 进程（进程池复用） */

@@ -123,6 +123,8 @@ const api: ApiSurface = {
       };
     },
     abortStream: (streamSessionId: string) => invoke('agent:abortStream', streamSessionId),
+    // 三级中断·回合级（spec 2026-10-13 §7.3）：载荷 { sessionId }——级联含本回合派生子链
+    abortTurn: (sessionId: string) => invoke('agent:abortTurn', { sessionId }),
   },
   // v25 Task 6：团队通道面（spec §4.2）
   team: {
@@ -283,6 +285,8 @@ const api: ApiSurface = {
       invoke('session:loadOlder', sessionId, beforeTs, count),
     exportMessages: (sessionId: string, limit: number) =>
       invoke<{ filename: string; content: string }>('session:exportMessages', sessionId, limit),
+    // 三级中断·会话级急停（spec 2026-10-13 §7.5）：全部流 + 全链 + 待投递回执清空
+    stopAll: (sessionId: string) => invoke('session:stopAll', { sessionId }),
     onMessage: (callback) => {
       const handler = (_evt: IpcRendererEvent, msg: ImMessage): void => callback(msg);
       ipcRenderer.on('session:message', handler);
@@ -305,6 +309,14 @@ const api: ApiSurface = {
         ipcRenderer.off('session:listChanged', handler);
       };
     },
+  },
+  // 三级中断·链级 + 在途查询（spec 2026-10-13 §7.6/§9）：通道名与载荷形状与
+  // 主进程 agent/interrupt-ipc.ts 逐字对齐（boundary 规则 4）
+  dispatch: {
+    cancelChain: (arg: { taskId?: string; subStreamSessionId?: string }) =>
+      invoke('dispatch:cancelChain', arg),
+    listInFlight: (sessionId?: string) =>
+      invoke('dispatch:listInFlight', sessionId === undefined ? {} : { sessionId }),
   },
   allocation: {
     get: (workspaceId) => invoke('allocation:get', workspaceId),

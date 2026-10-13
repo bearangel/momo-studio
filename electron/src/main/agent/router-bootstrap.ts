@@ -70,6 +70,15 @@ export async function ensureRouterService(
 }
 
 /**
+ * 读取当前 RouterService 单例（三级中断 IPC 等消费方 invoke 时刻解析用，
+ * spec 2026-10-13 §7.2——IPC 注册先于 router lazy 启动，不能在注册时绑定）。
+ * lazy 启动前 / destroy 后返回 null——调用方自行降级（无 router = 无在途流/链）。
+ */
+export function getRouterService(): RouterService | null {
+  return currentRouterService;
+}
+
+/**
  * 销毁 RouterService（before-quit 时调用）。
  * 反向清理：setBridgeRouter(null) + 释放模块引用。
  * 已 null 时 no-op。
