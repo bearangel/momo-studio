@@ -30,6 +30,7 @@ import { migration052 } from './052_agent_tools_tier1_backfill';
 import { migration053 } from './053_mcp_enabled';
 import { migration054 } from './054_global_tool_budget_default_50';
 import { migration055 } from './055_provider_last_verified_at';
+import { migration056 } from './056_system_sender_flip';
 
 export interface Migration {
   version: number;
@@ -1061,6 +1062,13 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 供应商最近验证时刻（走查 D7）：NULL = 从未验证，UI「未验证」徽标依据。
     version: migration055.version,
     sql: migration055.up,
+  },
+  {
+    // 存量 dispatch 回执行 / followup 追问行 sender='owner' → 'system'
+    // （spec 2026-10-13 §5.7，双特征防误伤：task_id + 回执前缀 / parent_stream_session_id）。
+    // SQL 住在独立模块 056_system_sender_flip.ts（约定同 032-055）。
+    version: migration056.version,
+    sql: migration056.up,
   },
 ];
 
