@@ -26,9 +26,9 @@ import {
   HEARTBEAT_INTERVAL_MS,
   type DispatchChainHandle,
 } from './dispatch-registry';
-import { insertMessage } from '../storage/messages/repo';
+import { insertMessage, hasReceiptRow } from '../storage/messages/repo';
 import { getDb } from '../storage/db';
-import { writeStreamStartFailure } from './stream-relay';
+import { writeStreamStartFailure, pushSessionMessage } from './stream-relay';
 import type { AgentRunner, TaskConfig } from './agent-runner';
 import type { TaskDispatcher } from '../task/dispatcher';
 import { registerLane, getLane } from './session-lane';
@@ -840,6 +840,10 @@ export class RouterService {
    *    即用户轮输入，结果全文随历史进入推理
    */
   private async deliverChainResult(h: DispatchChainHandle): Promise<void> {
+    if (hasReceiptRow(h.sessionId, h.taskId)) {
+      logger.warn('dispatch 回执查重命中——跳过投递（防上游状态机缺陷重复污染会话）', { taskId: h.taskId });
+      return;
+    }
     const streamSessionId = randomUUID();
     const statusText = h.outcome === 'failed' ? '失败' : '完成';
     // B3：taskId 经净化插值（防伪造消息结构注入 PM 上下文）
@@ -850,7 +854,7 @@ export class RouterService {
       `--- 回执正文 ---\n${h.body ?? ''}\n--- 回执结束 ---\n` +
       '如需就该结果继续追问，使用 dispatch_followup(taskId)；本通知已持久化到会话历史。';
     try {
-      insertMessage({
+      const row = insertMessage({
         sessionId: h.sessionId,
         sender: 'system', // spec §5.2：系统生成行——PM 重建时经 sender-role 映射仍为 user 轮
         eventType: 'm.room.message',
@@ -858,6 +862,9 @@ export class RouterService {
         taskId: h.taskId,
         streamSessionId,
       });
+      // spec §5.6：本行 streamSessionId 与唤醒流共享 = 回合标识（input 行 + output 行同属一回合），
+      // 契约：同 ssi 至多一条 system 行 + 一条 agent 流行，getLatest 恒返 agent 行（Task A4 锁）。
+      pushSessionMessage(row); // spec §6.4：实时可见——回执行随落库推送 renderer
     } catch (err) {
       // 行落库失败不阻断唤醒（会话历史少一行，但 PM 本轮仍能拿到结果正文）
       logger.warn('dispatch 回执注入行落库失败（继续唤醒）', {

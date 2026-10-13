@@ -232,6 +232,19 @@ export function listMessagesByStreamSessionId(streamSessionId: string): MessageR
   return rows.map(rowToCamel);
 }
 
+/** 是否已存在该链回执行（投递前查重兜底，spec §6.3）——system 行 + 同 taskId */
+export function hasReceiptRow(sessionId: string, taskId: string): boolean {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `SELECT 1 FROM messages
+       WHERE session_id = ? AND task_id = ? AND sender = 'system' AND segment_of IS NULL
+       LIMIT 1`,
+    )
+    .get(sessionId, taskId);
+  return row !== undefined;
+}
+
 /**
  * 按会话拉取消息（时间升序）。
  * opts.afterTs（压缩改造 Task 4，spec §5）：仅拉 created_at 严格大于该值的消息——

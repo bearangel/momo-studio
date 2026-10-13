@@ -118,7 +118,9 @@ export function __resetEventBufferForTest(): void {
  * 不可见，重启拉历史才出现（2.0.0 主机验收 P0-2）。与 onFlush 推 event batch
  * 的窗口获取方式一致；非 Electron 环境（测试/headless）静默跳过。
  */
-function pushSessionMessage(msg: ReturnType<typeof insertMessage>): void {
+// router-service 回执投递共用（A9，spec §6.4）——回执行随落库实时推送 renderer，
+// 不等 renderer 重启拉历史（与流消息同一实时可见契约）。
+export function pushSessionMessage(msg: ReturnType<typeof insertMessage>): void {
   // 同 onFlush：非主进程环境（测试 / headless / runtime 子进程）静默跳过
   const { BrowserWindow } = loadElectronApis();
   if (!BrowserWindow) return;

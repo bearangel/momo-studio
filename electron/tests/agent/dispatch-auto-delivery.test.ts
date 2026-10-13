@@ -28,7 +28,7 @@ vi.mock('electron', () => ({
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertSession } from '../../src/main/storage/sessions/repo';
-import { listMessagesBySession } from '../../src/main/storage/messages/repo';
+import { listMessagesBySession, insertMessage } from '../../src/main/storage/messages/repo';
 import { RouterService } from '../../src/main/agent/router-service';
 import { dispatchRegistry, __resetDispatchRegistryForTest } from '../../src/main/agent/dispatch-registry';
 import type { AgentRunner } from '../../src/main/agent/agent-runner';
@@ -302,6 +302,50 @@ describe('routeDispatch 重复轮拒绝', () => {
     }
     expect(subSpies.executeTask).not.toHaveBeenCalled();
     expect(dispatchRegistry.get('../../etc/evil')).toBeUndefined();
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// A9（spec §6.3）：投递前查重兜底——同链已有 system 回执行 → 整条跳过
+//（不落行不唤醒；防上游状态机缺陷重复污染会话的终极兜底）。
+// ══════════════════════════════════════════════════════════════════════════
+
+describe('A9 投递前查重兜底', () => {
+  it('同链已有回执行 → 整条跳过（不落行不唤醒，spec §6.3 终极兜底）', async () => {
+    // 预置同 taskId 的 system 回执行（真实落库——模拟上游缺陷场景：行已存在
+    // 但 delivered 标记 / ack 状态丢失，投递被再次触发）
+    insertMessage({
+      sessionId: sessChatId,
+      sender: 'system',
+      eventType: 'm.room.message',
+      body: '【dispatch 回执自动送达】任务链 T-dup-rct（第 1 轮）已完成（历史残留回执行）',
+      taskId: 'T-dup-rct',
+    });
+    dispatchRegistry.register({
+      taskId: 'T-dup-rct',
+      pmAssignmentId: 'inst-pm',
+      subAssignmentId: 'inst-sub',
+      sessionId: sessChatId,
+      isFollowupRound: true, // followup 恒投递——正常必投，唯一能拦住的就是查重守卫
+    });
+    const { runner, spies } = mkRunner(false);
+    const svc = new RouterService({ runners: new Map([['inst-pm', runner]]) });
+
+    await svc.routeEvent(
+      mkEvent('io.momo-studio.task_reply', {
+        task_id: 'T-dup-rct', status: 'completed', body: '重复触发回执', reply_to: 'inst-pm',
+      }, sessChatId),
+      'owner', null, 'inst-pm',
+    );
+    // 给投递异步循环一个窗口（同 B6 的 20ms 模式）——证明其确实运行过且被守卫拦下
+    await new Promise((r) => setTimeout(r, 20));
+
+    // 不唤醒：routeUserChat 零调用（executeTask 为其派发终点 spy）
+    expect(spies.executeTask).not.toHaveBeenCalled();
+    // 不落行：同 taskId 消息行仍只有预置那 1 条（零新增）
+    const rows = listMessagesBySession(sessChatId).filter((r) => r.taskId === 'T-dup-rct');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.body).toContain('历史残留回执行');
   });
 });
 
