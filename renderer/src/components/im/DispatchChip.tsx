@@ -3,11 +3,16 @@
 // dispatch 委派 chip：紧凑头行展示子 agent 委派状态，点击展开 SubAgentSection。
 // v2.1：状态走 dispatchStatusStyle（tone 同源 Badge）；图标全 lucide；
 // 活动提示/计时器/展开箭头去字形。自动展开语义（userToggled）不变。
+// B5：isBusy（executing/queued）头行提供链级停止按钮——直调
+// ipc.dispatch.cancelChain（by subStreamSessionId），取消后状态翻转由
+// abort_dispatch 广播 → 子流事件回流驱动（非本地乐观态）。
 import { useEffect, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { Brain, ChevronDown, ChevronRight, CircleCheck, CircleSlash, CircleX, Clock, Loader2, PenLine, Send, Timer, Wrench } from 'lucide-react';
+import { Brain, ChevronDown, ChevronRight, CircleCheck, CircleSlash, CircleX, Clock, Loader2, PenLine, Send, Square, Timer, Wrench } from 'lucide-react';
 import type { StreamState } from '../../stores/stream.store';
+import { ipc } from '../../ipc/client';
 import { Avatar } from '../ui/Avatar';
+import { showToast } from '../ui/Toast';
 import { dispatchStatusStyle, type DispatchStatus } from '../../lib/task-status';
 import { SubAgentSection } from './SubAgentSection';
 
@@ -124,6 +129,20 @@ export function DispatchChip({ child, subStream }: DispatchChipProps) {
           </span>
         )}
         {timerSince !== null && <ElapsedTimer since={timerSince} />}
+        {isBusy && (
+          <button
+            type="button"
+            aria-label={`停止 ${child.subAgentName} 的子任务`}
+            className="ml-1 inline-flex cursor-pointer items-center text-tertiary hover:text-status-error"
+            onClick={async (e) => {
+              e.stopPropagation(); // 不触发 chip 展开
+              const r = await ipc.dispatch.cancelChain({ subStreamSessionId: child.subStreamSessionId });
+              if (r.status === 'not_found') showToast('子任务已结束');
+            }}
+          >
+            <Square size={11} strokeWidth={1.75} aria-hidden />
+          </button>
+        )}
         <span className="ml-auto shrink-0 text-tertiary" aria-hidden>
           {expanded ? <ChevronDown size={12} strokeWidth={1.75} /> : <ChevronRight size={12} strokeWidth={1.75} />}
         </span>

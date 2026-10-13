@@ -8,11 +8,15 @@
 //   - 展开且传入 subStream 时渲染 SubAgentSection（子 agent 正文可见）
 //   - status 变化触发的自动展开/折叠行为
 //   - 用户手动 toggle 后抑制后续自动行为（userToggled 标志）
+//   - B5 链级停止按钮：isBusy（executing/queued）渲染；点击 →
+//     ipc.dispatch.cancelChain({ subStreamSessionId })；stopPropagation 防误触
+//     chip 展开；not_found → toast『子任务已结束』（cancelled 不弹）
 //
 // v2.1：emoji 字形 / inline hex 断言退役，按 tone class + lucide svg 语义断言。
-import { describe, it, expect } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { StreamState } from '../../stores/stream.store';
+import { Toast, dismissToast } from '../ui/Toast';
 import type { DispatchChild } from './DispatchChip';
 import { DispatchChip } from './DispatchChip';
 
@@ -52,6 +56,19 @@ const ELAPSED_TEXT = /^\d+(m\d{2})?s$/;
 
 /** 头像 emoji 夹具数据（subAgentAvatar 数据流豁免——非 UI 字形，lint 规则只查 JSX 字面量） */
 const EMOJI_AVATAR = '🔬';
+
+// B5 停止按钮走 ipc 边界 mock（BubbleToolbar 同款：换 window.api，经真实 ipc Proxy）
+const cancelChainMock = vi.fn();
+const mockApi = { dispatch: { cancelChain: cancelChainMock } };
+(globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
+
+/** 头行 chip 本体按钮：isBusy 态下 DOM 另有停止按钮，getByRole('button') 会命中
+ *  多个——头行是唯一带 aria-expanded 的 button，按该属性精确定位 */
+function getHeaderButton(): HTMLElement {
+  const btn = document.querySelector<HTMLElement>('button[aria-expanded]');
+  if (!btn) throw new Error('头行按钮未渲染（button[aria-expanded]）');
+  return btn;
+}
 
 describe('DispatchChip — 状态渲染', () => {
   it('queued 渲染 排队（neutral tone：bg-surface-3）', () => {
@@ -125,7 +142,7 @@ describe('DispatchChip — 自动展开/折叠默认值', () => {
       <DispatchChip child={makeChild({ status: 'executing' })} subStream={makeStream()} />,
     );
     expect(screen.getByText('子任务输出文本')).toBeInTheDocument();
-    expect(screen.getByRole('button')).toHaveAttribute('aria-expanded', 'true');
+    expect(getHeaderButton()).toHaveAttribute('aria-expanded', 'true');
   });
 
   it('failed 默认展开（便于查看错误细节）', () => {
@@ -133,7 +150,7 @@ describe('DispatchChip — 自动展开/折叠默认值', () => {
       <DispatchChip child={makeChild({ status: 'failed' })} subStream={makeStream()} />,
     );
     expect(screen.getByText('子任务输出文本')).toBeInTheDocument();
-    expect(screen.getByRole('button')).toHaveAttribute('aria-expanded', 'true');
+    expect(getHeaderButton()).toHaveAttribute('aria-expanded', 'true');
   });
 
   it('completed 默认折叠（subStream 正文不可见）', () => {
@@ -141,7 +158,7 @@ describe('DispatchChip — 自动展开/折叠默认值', () => {
       <DispatchChip child={makeChild({ status: 'completed' })} subStream={makeStream()} />,
     );
     expect(screen.queryByText('子任务输出文本')).not.toBeInTheDocument();
-    expect(screen.getByRole('button')).toHaveAttribute('aria-expanded', 'false');
+    expect(getHeaderButton()).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('queued 默认折叠', () => {
@@ -149,7 +166,7 @@ describe('DispatchChip — 自动展开/折叠默认值', () => {
       <DispatchChip child={makeChild({ status: 'queued' })} subStream={makeStream()} />,
     );
     expect(screen.queryByText('子任务输出文本')).not.toBeInTheDocument();
-    expect(screen.getByRole('button')).toHaveAttribute('aria-expanded', 'false');
+    expect(getHeaderButton()).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('aborted 默认折叠（中断非异常，减少视觉噪音）', () => {
@@ -157,7 +174,7 @@ describe('DispatchChip — 自动展开/折叠默认值', () => {
       <DispatchChip child={makeChild({ status: 'aborted' })} subStream={makeStream()} />,
     );
     expect(screen.queryByText('子任务输出文本')).not.toBeInTheDocument();
-    expect(screen.getByRole('button')).toHaveAttribute('aria-expanded', 'false');
+    expect(getHeaderButton()).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('展开但未传 subStream 时不渲染 SubAgentSection（不报错）', () => {
@@ -175,9 +192,9 @@ describe('DispatchChip — 点击 toggle', () => {
       <DispatchChip child={makeChild({ status: 'completed' })} subStream={makeStream()} />,
     );
     expect(screen.queryByText('子任务输出文本')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button'));
+    fireEvent.click(getHeaderButton());
     expect(screen.getByText('子任务输出文本')).toBeInTheDocument();
-    expect(screen.getByRole('button')).toHaveAttribute('aria-expanded', 'true');
+    expect(getHeaderButton()).toHaveAttribute('aria-expanded', 'true');
   });
 
   it('executing（展开）点击后折叠', () => {
@@ -185,16 +202,16 @@ describe('DispatchChip — 点击 toggle', () => {
       <DispatchChip child={makeChild({ status: 'executing' })} subStream={makeStream()} />,
     );
     expect(screen.getByText('子任务输出文本')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button'));
+    fireEvent.click(getHeaderButton());
     expect(screen.queryByText('子任务输出文本')).not.toBeInTheDocument();
-    expect(screen.getByRole('button')).toHaveAttribute('aria-expanded', 'false');
+    expect(getHeaderButton()).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('连续点击两次回到原状态', () => {
     render(
       <DispatchChip child={makeChild({ status: 'completed' })} subStream={makeStream()} />,
     );
-    const btn = screen.getByRole('button');
+    const btn = getHeaderButton();
     fireEvent.click(btn); // 展开
     expect(btn).toHaveAttribute('aria-expanded', 'true');
     fireEvent.click(btn); // 再折叠
@@ -232,7 +249,7 @@ describe('DispatchChip — status 变化的自动行为', () => {
     );
     expect(screen.getByText('子任务输出文本')).toBeInTheDocument();
     // 用户手动折叠
-    fireEvent.click(screen.getByRole('button'));
+    fireEvent.click(getHeaderButton());
     expect(screen.queryByText('子任务输出文本')).not.toBeInTheDocument();
     // status 变为 failed（自动行为应展开，但用户已手动折叠 → 保持折叠）
     rerender(
@@ -248,7 +265,7 @@ describe('DispatchChip — status 变化的自动行为', () => {
     );
     expect(screen.queryByText('子任务输出文本')).not.toBeInTheDocument();
     // 用户手动展开
-    fireEvent.click(screen.getByRole('button'));
+    fireEvent.click(getHeaderButton());
     expect(screen.getByText('子任务输出文本')).toBeInTheDocument();
     // status 变为 queued（自动行为应折叠，但用户已手动展开 → 保持展开）
     rerender(
@@ -327,9 +344,85 @@ describe('DispatchChip — 执行中活动提示（子 agent 工作过程可见�
 describe('DispatchChip — 委派区紫色语义底', () => {
   it('头行使用 bg-status-violet-tint + border-strong（与气泡底色区分）', () => {
     render(<DispatchChip child={makeChild({ status: 'completed' })} />);
-    const header = screen.getByRole('button');
+    const header = getHeaderButton();
     expect(header).toHaveClass('bg-status-violet-tint');
     expect(header).toHaveClass('border-strong');
     expect(header).not.toHaveClass('bg-surface-2');
+  });
+});
+
+// === B5：链级停止按钮（spec 2026-10-13 §7.6——cancelChain by subStreamSessionId） ===
+describe('DispatchChip — 链级停止按钮', () => {
+  beforeEach(() => {
+    cancelChainMock.mockReset();
+    cancelChainMock.mockResolvedValue({ status: 'cancelled' });
+    dismissToast(); // Toast 模块级单例复位，防跨用例串扰
+  });
+
+  it('executing 渲染停止按钮（aria-label 含子 agent 名）', () => {
+    render(
+      <DispatchChip
+        child={makeChild({ status: 'executing', subAgentName: '研究员' })}
+        subStream={makeStream()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: '停止 研究员 的子任务' })).toBeInTheDocument();
+  });
+
+  it('queued（isBusy）也渲染停止按钮', () => {
+    render(<DispatchChip child={makeChild({ status: 'queued' })} />);
+    expect(screen.getByRole('button', { name: '停止 码农 的子任务' })).toBeInTheDocument();
+  });
+
+  it.each(['completed', 'failed', 'aborted', 'delegated'] as const)(
+    '%s（非 isBusy）不渲染停止按钮',
+    (status) => {
+      render(<DispatchChip child={makeChild({ status })} subStream={makeStream()} />);
+      expect(screen.queryByRole('button', { name: /停止 .+ 的子任务/ })).not.toBeInTheDocument();
+    },
+  );
+
+  it('点击停止按钮 → cancelChain({ subStreamSessionId })，且不误触 chip 展开（stopPropagation）', async () => {
+    render(
+      <DispatchChip
+        child={makeChild({ status: 'executing', subStreamSessionId: 'sub-stream-9' })}
+        subStream={makeStream()}
+      />,
+    );
+    // executing 默认展开——若 stopPropagation 缺失，点击会被外层 handleToggle 折叠
+    expect(getHeaderButton()).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(screen.getByRole('button', { name: '停止 码农 的子任务' }));
+    await waitFor(() =>
+      expect(cancelChainMock).toHaveBeenCalledWith({ subStreamSessionId: 'sub-stream-9' }),
+    );
+    expect(getHeaderButton()).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('cancelChain 返回 not_found → toast『子任务已结束』', async () => {
+    cancelChainMock.mockResolvedValue({ status: 'not_found' });
+    render(
+      <>
+        <DispatchChip child={makeChild({ status: 'executing' })} subStream={makeStream()} />
+        <Toast />
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '停止 码农 的子任务' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('ui-toast')).toHaveTextContent('子任务已结束'),
+    );
+  });
+
+  it('cancelChain 返回 cancelled → 不弹 toast', async () => {
+    render(
+      <>
+        <DispatchChip child={makeChild({ status: 'executing' })} subStream={makeStream()} />
+        <Toast />
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '停止 码农 的子任务' }));
+    await waitFor(() => expect(cancelChainMock).toHaveBeenCalledTimes(1));
+    // 冲刷 async onClick 的微任务链（mockResolvedValue 已决，宏任务边界后判定分支必已执行）
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByTestId('ui-toast')).not.toBeInTheDocument();
   });
 });
