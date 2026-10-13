@@ -18,17 +18,24 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-// mock electron：stream-relay 的 BrowserWindow 推送在测试环境静默降级（同款模式）
+// mock electron：stream-relay 的 BrowserWindow 推送在测试环境静默降级（同款模式）。
+// vi.mock 工厂提升到 import 之前——send spy 经 vi.hoisted 声明，供 §6.4 推送回归锁断言。
+const { mockSend } = vi.hoisted(() => ({
+  // vitest 1.6 泛型为参数元组形态（2.x 才是函数类型）；与 WebContentsLike.send 结构兼容
+  mockSend: vi.fn<[string, unknown?], void>(),
+}));
+
 vi.mock('electron', () => ({
   BrowserWindow: {
-    getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: vi.fn() } }],
+    getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: mockSend } }],
   },
   ipcMain: { handle: vi.fn(), on: vi.fn() },
 }));
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertSession } from '../../src/main/storage/sessions/repo';
-import { listMessagesBySession, insertMessage } from '../../src/main/storage/messages/repo';
+import { listMessagesBySession, insertMessage, type MessageRow } from '../../src/main/storage/messages/repo';
+import { __setElectronApisForTest } from '../../src/main/electron-access';
 import { RouterService } from '../../src/main/agent/router-service';
 import { dispatchRegistry, __resetDispatchRegistryForTest } from '../../src/main/agent/dispatch-registry';
 import type { AgentRunner } from '../../src/main/agent/agent-runner';
@@ -76,7 +83,23 @@ function mkEvent(
   };
 }
 
+/** §6.4 推送回归锁：读取 mock 窗口经 session:message 通道收到的消息行 */
+function sentSessionMessages(): MessageRow[] {
+  return mockSend.mock.calls
+    .filter((c) => c[0] === 'session:message')
+    .map((c) => c[1] as MessageRow);
+}
+
 beforeEach(() => {
+  mockSend.mockClear(); // mock 模块级单例跨用例共享——先清推送账本再开新用例
+  // electron-access 经 raw require('electron') 取 API，vi.mock 拦不到（其模块头
+  // 注释明示）——pushSessionMessage 的 BrowserWindow 假件走显式注入（进程边界
+  // DI），窗口结构与上方 vi.mock 同款，共用同一 send spy
+  __setElectronApisForTest({
+    BrowserWindow: {
+      getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: mockSend } }],
+    },
+  });
   fs.mkdirSync(tmpRoot, { recursive: true });
   process.env.AP_USER_DATA_DIR = tmpRoot;
   runMigrations();
@@ -102,6 +125,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  __setElectronApisForTest(null); // 还原真实探测（不泄漏到同进程其他测试文件）
   closeDb();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
   delete process.env.AP_USER_DATA_DIR;
@@ -153,6 +177,14 @@ describe('followup 终态自动送达', () => {
     expect(rows[0]?.sender).toBe('system'); // spec §5.2：回执行系统角色落库
     expect(rows[0]?.body).toContain('追问的完整答复');
     expect(rows[0]?.streamSessionId).toBe(task.streamSessionId);
+
+    // §6.4 推送回归锁（P0-2 前科）：回执行随落库实时推送 renderer——删掉
+    // deliverChainResult 里的 pushSessionMessage 一行则此处红（行在 DB，重启前不可见）
+    const pushed = sentSessionMessages();
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]?.sender).toBe('system');
+    expect(pushed[0]?.taskId).toBe('T-fu-1');
+    expect(pushed[0]?.id).toBe(rows[0]?.id); // 推送即落库行（同一 MessageRow 直通）
   });
 
   it('PM 忙碌 → 不打扰在途回合；onPmIdle 边沿补投', async () => {
@@ -346,6 +378,9 @@ describe('A9 投递前查重兜底', () => {
     const rows = listMessagesBySession(sessChatId).filter((r) => r.taskId === 'T-dup-rct');
     expect(rows).toHaveLength(1);
     expect(rows[0]?.body).toContain('历史残留回执行');
+    // §6.4 反向锁：查重跳过也不推送（预置行为测试直插 DB，不经投递路径——
+    // 推送账本里出现该 taskId 行 = 守卫失效或推送越界）
+    expect(sentSessionMessages().filter((m) => m.taskId === 'T-dup-rct')).toHaveLength(0);
   });
 });
 
