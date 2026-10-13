@@ -1369,8 +1369,8 @@ export interface SessionApiSurface {
 /**
  * 在途链视图（dispatch:listInFlight 返回项，spec 2026-10-13 §9）。
  * 与主进程 dispatch-registry.ts InFlightChain 逐字段一致（跨进程独立定义，
- * 仅结构对齐）；subAgentName 为 P2-D（Task D1）扩展点——agent 名主进程解析
- * 接入前恒为 null。
+ * 仅结构对齐）；subAgentName 由主进程解析（D1 inflight-view：listMembers
+ * JOIN agentName），成员已删 / 解析失败时为 null，UI 降级短 taskId。
  */
 export interface InFlightChainView {
   /** 链 ID（dispatch 事件的 task_id，单点生成沿线透传） */
@@ -1389,7 +1389,7 @@ export interface InFlightChainView {
   pmStreamSessionId?: string;
   /** 链注册时刻（epoch ms） */
   startedAt: number;
-  /** 子 agent 展示名（D1 主进程解析；本期恒 null） */
+  /** 子 agent 展示名（D1 主进程解析 agentName；成员已删 / 解析失败 → null，UI 降级短 taskId） */
   subAgentName: string | null;
 }
 

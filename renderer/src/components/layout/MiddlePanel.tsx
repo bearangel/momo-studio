@@ -15,6 +15,7 @@ import { InputToolbar } from '../im/InputToolbar';
 import { RoomToolBudgetBadge } from '../im/RoomToolBudgetBadge';
 import { ExportChatButton } from '../im/ExportChatButton';
 import { TaskProgressButton } from '../im/TaskProgressButton';
+import { InFlightPanel } from '../im/InFlightPanel';
 import { AgentsView } from '../agent/AgentsView';
 import { SettingsView } from '../settings/SettingsView';
 import { ResourceLibraryView } from '../resource-library/ResourceLibraryView';
@@ -78,6 +79,8 @@ export function MiddlePanel() {
             {activeSessionId && <RoomToolBudgetBadge sessionId={activeSessionId} />}
             {activeSessionId && <ExportChatButton sessionId={activeSessionId} />}
             {activeSessionId && <TaskProgressButton sessionId={activeSessionId} />}
+            {/* P2-D：在途子任务面板入口（2s 轮询 + 单链取消，spec 2026-10-13 §9） */}
+            {activeSessionId && <InFlightPanel sessionId={activeSessionId} />}
           </div>
           <MessageList />
           <InputToolbar
