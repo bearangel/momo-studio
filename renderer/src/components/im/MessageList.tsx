@@ -16,6 +16,7 @@ import { MessageBubble } from './MessageBubble';
 import { EmptyState } from '../ui/EmptyState';
 import { MessageFlashStyle } from '../common/MessageFlash';
 import { isTopLevelMessage } from '../../lib/locate-message';
+import { isTurnAnchor } from '../../lib/sender';
 
 export function MessageList() {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
@@ -77,9 +78,11 @@ export function MessageList() {
     // 2026-09-06 UI 修复：自己发送的消息追加时无条件贴底。原实现仅
     // isNearBottom 时贴底——用户在上方浏览历史时发送，新消息落在视野外，
     // 需手动滚动。agent 消息追加仍维持原策略（不打断浏览历史）。
+    // spec §5.3：贴底锚点口径放宽为 isTurnAnchor——owner 或 system 行
+    // （回执唤醒回合）出现即贴底，统一消费 A1 的锚点判定。
     const lastMsg = messages?.[messages.length - 1];
     const isNewOwnMessage =
-      lastMsg !== undefined && lastMsg.sender === 'owner' && lastMsg.id !== prevLastMsgIdRef.current;
+      lastMsg !== undefined && isTurnAnchor(lastMsg.sender) && lastMsg.id !== prevLastMsgIdRef.current;
     prevLastMsgIdRef.current = lastMsg?.id ?? null;
 
     if (isFirstRender.current || isRoomChange || isNewOwnMessage || isNearBottomRef.current) {

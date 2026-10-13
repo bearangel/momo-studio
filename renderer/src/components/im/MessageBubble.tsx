@@ -34,10 +34,12 @@ import { useStreamStore } from '../../stores/stream.store';
 import { useEditorStore } from '../../stores/editor.store';
 import { parseMessageContext } from '../../lib/message-context';
 import { loadAssetDataUrl } from '../../lib/asset-data-url';
+import { isSystemSender } from '../../lib/sender';
 import { cn } from '../../lib/cn';
 import { DispatchCard } from './DispatchCard';
 import { TaskReplyCard } from './TaskReplyCard';
 import { CompactNotice } from './CompactNotice';
+import { SystemEventCard } from './SystemEventCard';
 import { MessageFrame } from './MessageFrame';
 import { AgentStreamBubble } from './AgentStreamBubble';
 import { MarkdownBody } from './MarkdownBody';
@@ -131,7 +133,17 @@ interface Props {
   senderName?: string;
 }
 
+// v2.1 dispatch 回执（spec §5.3，2026-10-13 P0-A）：
+//   - sender='system' 行经 MessageBubble 首行分支渲染 SystemEventCard（居中窄卡）
+//   - 分支置于 stream 查询之前——系统行不进流式路径；因早于 useStreamStore/
+//     useState 返回，路由体拆入 MessageBubbleBody（react-hooks/rules-of-hooks
+//     禁止 early return 后调 hook；拆分后 system 行连 stream store 订阅都不发生）
 export function MessageBubble({ message, isSelf, senderName }: Props) {
+  if (isSystemSender(message.sender)) return <SystemEventCard message={message} />; // spec §5.3
+  return <MessageBubbleBody message={message} isSelf={isSelf} senderName={senderName} />;
+}
+
+function MessageBubbleBody({ message, isSelf, senderName }: Props) {
   // A 子系统：按 message.id 查 stream。streaming 或已完成带富信息时用 AgentStreamBubble
   // 渲染（thinking/工具调用/dispatches 从 message_events 聚合），否则渲染静态消息。
   const stream = useStreamStore((s) => s.streams.get(message.id));

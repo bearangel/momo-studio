@@ -278,4 +278,10 @@ describe('isTopLevelMessage', () => {
     expect(isTopLevelMessage(makeMsg({ parentStreamSessionId: 's-1' }))).toBe(false);
     expect(isTopLevelMessage(makeMsg({ segmentOf: 'm-0' }))).toBe(false);
   });
+
+  // spec §5.3-1：system 行（dispatch 回执）是顶层可见行——MessageList 过滤
+  // 口径不得把系统事件卡滤掉（与 SystemEventCard 接线的契约锁）
+  it('system 行放行顶层渲染（spec §5.3 契约锁）', () => {
+    expect(isTopLevelMessage(makeMsg({ sender: 'system', parentStreamSessionId: null, segmentOf: null, eventType: 'm.room.message' }))).toBe(true);
+  });
 });

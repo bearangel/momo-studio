@@ -12,6 +12,7 @@ import { ListTodo, LocateFixed, X } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import { useStreamStore, type StreamState } from '../../stores/stream.store';
 import { useBotNameMap, resolveBotName } from '../../lib/useBotNames';
+import { isTurnAnchor } from '../../lib/sender';
 import { cn } from '../../lib/cn';
 import { flashMessage } from '../common/MessageFlash';
 import { TodoList } from './TodoList';
@@ -34,11 +35,12 @@ export function TaskProgressButton({ sessionId }: Props) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  // 目标 = 最新「顶层 + 非用户」含清单消息（子 agent 清单留在嵌套区，spec §5）
+  // 目标 = 最新「顶层 + 非用户」含清单消息（子 agent 清单留在嵌套区，spec §5）。
+  // spec §5.3：跳过口径放宽为 isTurnAnchor——system 回执行不参与任务按钮目标
   const target = useMemo<Target | null>(() => {
     let found: Target | null = null;
     for (const msg of messages ?? []) {
-      if (msg.sender === 'owner') continue;
+      if (isTurnAnchor(msg.sender)) continue;
       if (msg.parentStreamSessionId !== null) continue;
       const stream = streams.get(msg.id);
       if (stream && stream.todos.length > 0) {

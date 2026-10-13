@@ -209,6 +209,31 @@ describe('MessageBubble 已完成带富信息分支（A9：done 显示富信息�
   });
 });
 
+describe('MessageBubble system 行分支（spec §5.3 系统事件卡接线）', () => {
+  const receiptBody = '【dispatch 回执自动送达】任务链 t-1（第 1 轮）已完成（工具调用 1 次）。';
+
+  it("sender='system' → SystemEventCard 摘要，不渲染气泡/流式/其它卡片", () => {
+    mockStreams.clear();
+    const msg = makeMsg('m1', { sender: 'system', body: receiptBody });
+    render(<MessageBubble message={msg} isSelf={false} />);
+    expect(screen.getByRole('button', { name: /子任务回执/ })).toBeInTheDocument();
+    expect(screen.queryByTestId('dispatch')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('task-reply')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('agent-stream')).not.toBeInTheDocument();
+    // 不走静态气泡：正文原文不直接渲染（只有展开后的 pre 才含全文）
+    expect(screen.queryByText(receiptBody)).not.toBeInTheDocument();
+  });
+
+  it('system 行即便 stream store 有同名 entry 也不进流式路径（分支先于 stream 判定）', () => {
+    mockStreams.clear();
+    mockStreams.set('m1', makeStream({ messageId: 'm1', status: 'streaming' }));
+    const msg = makeMsg('m1', { sender: 'system', body: receiptBody });
+    render(<MessageBubble message={msg} isSelf={false} />);
+    expect(screen.queryByTestId('agent-stream')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /子任务回执/ })).toBeInTheDocument();
+  });
+});
+
 describe('MessageBubble 链接拦截（S2 导航劫持防护）', () => {
   let openSpy: MockInstance<Parameters<typeof window.open>, ReturnType<typeof window.open>>;
   beforeEach(() => {
