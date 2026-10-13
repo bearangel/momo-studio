@@ -71,11 +71,11 @@ function queryChainRows(taskId: string, executionSessionId: string): ChainRow[] 
 /**
  * 重建子会话链历史（同步；纯读取）。
  *
- * 行角色分流：sender='owner'（session-service.sendUserMessage 的用户行
- * 约定）= followup 追问——收口上一轮 assistant 输出后按位插入 user 消息；
- * 其余（子 agent 流行，sender=agentUserId 约定）= 事件喂入共享聚合状态机。
- * 连续 agent 行（如 `#roll{n}` 续行）自然并入同一轮，跨行拼接语义同构
- * turn-reconstructor 的流族事件全序。
+ * 行角色分流：sender='owner' / 'system'（spec §5.2 起系统生成行——回执行 /
+ * followup 追问行均为 user 轮语义）= 收口上一轮 assistant 输出后按位插入
+ * user 消息；其余（子 agent 流行，sender=agentUserId 约定）= 事件喂入共享
+ * 聚合状态机。连续 agent 行（如 `#roll{n}` 续行）自然并入同一轮，跨行拼接
+ * 语义同构 turn-reconstructor 的流族事件全序。
  */
 export function rebuildSubConversation(
   taskId: string,
@@ -91,7 +91,8 @@ export function rebuildSubConversation(
     const agg = createAssistantRoundAggregator();
     let rounds = 0;
     for (const row of rows) {
-      if (row.sender === 'owner') {
+      // spec §5.4：owner/system → user 轮（A5 将收敛为 mapsToUserRole 单点映射）
+      if (row.sender === 'owner' || row.sender === 'system') {
         agg.closeRound();
         agg.appendMessage({ role: 'user', content: row.body });
         rounds++;

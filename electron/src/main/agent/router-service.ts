@@ -78,7 +78,7 @@ function safeTaskIdText(taskId: string): string {
  * - ok：解析成功（assignment 可与 dispatch_from / subAssignmentId 比对）
  * - degrade：环境性失败（DB 不可用）——降级放行 + 日志（桥层身份绑定仍是
  *   主防线：sender 无法跨身份伪造，环境失败不等于攻击）
- * - reject：会话不存在 / 发送者非该会话 workspace 成员 / 非法身份（owner/空）。
+ * - reject：会话不存在 / 发送者非该会话 workspace 成员 / 非法身份（owner/system/空）。
  *   这些状态可被攻击者经 envelope sessionId **主动安排**（跨 workspace 会话 /
  *   不存在的会话 → 反查必然落空），必须 fail-closed——否则 round-1 HIGH-A
  *   （持久化 owner 行注入 + 任意 PM 唤醒 + 第三方链 settle 劫持）经此复活。
@@ -89,7 +89,7 @@ type SenderLookup =
   | { outcome: 'reject' };
 
 function resolveSender(sender: string | undefined, sessionId: string): SenderLookup {
-  if (typeof sender !== 'string' || sender.length === 0 || sender === 'owner') {
+  if (typeof sender !== 'string' || sender.length === 0 || sender === 'owner' || sender === 'system') {
     return { outcome: 'reject' };
   }
   let ws: string | null;
@@ -814,8 +814,9 @@ export class RouterService {
 
   /**
    * 自动送达一条链终态（v2.9 核心）：
-   * 1. 落库 dispatch-result 消息行（sender='owner' + taskId=链 ID——行因此
-   *    进链历史，后续 followup 的 rebuildSubConversation 天然聚合本轮结果；
+   * 1. 落库 dispatch-result 消息行（sender='system'（spec §5.2：系统生成行，
+   *    非 owner/agent 身份）+ taskId=链 ID——行因此进链历史，后续 followup 的
+   *    rebuildSubConversation 天然聚合本轮结果；
    *    streamSessionId 单点生成，与唤醒流共用 = routeUserChat 的输入流）
    * 2. routeUserChat(systemKickoff) 唤醒 PM 新回合——PM 上下文重建时该行
    *    即用户轮输入，结果全文随历史进入推理
@@ -833,7 +834,7 @@ export class RouterService {
     try {
       insertMessage({
         sessionId: h.sessionId,
-        sender: 'owner',
+        sender: 'system', // spec §5.2：系统生成行——PM 重建时经 sender-role 映射仍为 user 轮
         eventType: 'm.room.message',
         body,
         taskId: h.taskId,

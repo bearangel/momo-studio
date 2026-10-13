@@ -424,14 +424,14 @@ describe('runtime-entry：start chunk 携带 taskId（接线锁）', () => {
 // ══════════════════════════════════════════════════════════════════════════
 
 describe('chain-writer：appendFollowupQuestionRow 落库形状', () => {
-  it('12. user 行形状：sender owner + 双键打标（task_id + session_id）+ parent_stream + body', () => {
+  it('12. 追问行形状：sender system + 双键打标（task_id + session_id）+ parent_stream + body', () => {
     appendFollowupQuestionRow('T-chain-fq', 'sess-chain-fq', 'ss-sub-r1', '把结论展开成表格');
 
     const rows = listMessagesBySession('sess-chain-fq');
     expect(rows).toHaveLength(1);
     const row = rows[0];
     expect(row).toMatchObject({
-      sender: 'owner',
+      sender: 'system', // spec §5.2：追问行为系统生成行（PM 代发，非用户手输）
       eventType: 'm.room.message',
       body: '把结论展开成表格',
       taskId: 'T-chain-fq',

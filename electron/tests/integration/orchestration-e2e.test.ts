@@ -339,8 +339,8 @@ describe('followup 端到端（dispatch 派发 → 回复落库 → followup 续
     expect(cfg3.body).toBe('再问一句');
     // v2.9 自动送达 + B4(ii) 复用前补投：二轮 settle 经真 routeTaskReply →
     // followup 轮恒投递（第 3 条）；三轮 followup 复用链时二轮回执若未投递
-    // 则先补投（第 4 条）。行均 sender=owner + taskId=链 ID → 进链历史，
-    // 重建器聚合进前缀（结果随链历史进入后续轮次）
+    // 则先补投（第 4 条）。行均 sender=system（spec §5.2，重建时映射为 user
+    // 轮）+ taskId=链 ID → 进链历史，重建器聚合进前缀（结果随链历史进入后续轮次）
     expect(cfg3.historyPrefix).toEqual([
       { role: 'assistant', content: '首轮结论' },
       { role: 'user', content: '把结论展开成表格' },

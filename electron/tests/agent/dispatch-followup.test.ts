@@ -173,10 +173,10 @@ function seedFirstRoundWithToolPair(taskId: string): void {
   __flushEventBufferForTest();
 }
 
-/** 该链已落库的 followup 追问 user 行 */
+/** 该链已落库的 followup 追问行（chain-writer 落 system 行——spec §5.2） */
 function followupRows(taskId: string): Array<{ body: string; parentStreamSessionId: string | null }> {
   return listMessagesBySession(sessChatId)
-    .filter((r) => r.taskId === taskId && r.sender === 'owner')
+    .filter((r) => r.taskId === taskId && r.sender === 'system')
     .map((r) => ({ body: r.body, parentStreamSessionId: r.parentStreamSessionId }));
 }
 
@@ -310,12 +310,13 @@ describe('executeFollowup 校验三连', () => {
     expect(dispatchContents()).toHaveLength(1);
   });
 
-  it('链内只有 owner 行（无子 agent 行）→ 无法定位目标 agent 拒绝', () => {
+  it('链内只有追问行（system，无子 agent 行）→ 无法定位目标 agent 拒绝', () => {
     const CHAIN = 'T-chain-owner-only';
     // 构造：上一轮 followup 已写追问行但子 agent 流行缺失（极端清理后形态）
+    // sender 照抄 chain-writer 生产形态（spec §5.2 起为 system）
     insertMessage({
       sessionId: sessChatId,
-      sender: 'owner',
+      sender: 'system',
       eventType: 'm.room.message',
       body: '上一轮问',
       taskId: CHAIN,

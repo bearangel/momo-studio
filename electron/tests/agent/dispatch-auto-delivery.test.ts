@@ -145,11 +145,12 @@ describe('followup 终态自动送达', () => {
     expect(task.body).toContain('dispatch_followup');
     expect(task.streamSessionId.length).toBeGreaterThan(0);
 
-    // 消息行已落库：sender=owner + taskId=链 ID（进链历史，后续 followup 重建聚合）
+    // 消息行已落库：sender=system（spec §5.2：回执行系统角色落库，非 owner）
+    // + taskId=链 ID（进链历史，后续 followup 重建聚合）
     // + streamSessionId 与唤醒流同源（单点生成沿线共享——boundary-rules 铁律 1）
     const rows = listMessagesBySession(sessChatId).filter((r) => r.taskId === 'T-fu-1');
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.sender).toBe('owner');
+    expect(rows[0]?.sender).toBe('system'); // spec §5.2：回执行系统角色落库
     expect(rows[0]?.body).toContain('追问的完整答复');
     expect(rows[0]?.streamSessionId).toBe(task.streamSessionId);
   });
