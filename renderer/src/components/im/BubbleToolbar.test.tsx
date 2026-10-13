@@ -1,7 +1,7 @@
 // renderer/src/components/im/BubbleToolbar.test.tsx
 //
 // 气泡工具条测试（2026-09-28）：动作簇随流状态切换 + 撤回挂载条件透传。
-//   - streaming → 停止按钮（调 abortStream），无复制/撤回
+//   - streaming → 停止按钮（调 abortTurn 回合级级联，参数为 sessionId），无复制/撤回
 //   - 终态 → 复制按钮（常显——与撤回统一可见）；canUndo=true 时含撤回按钮
 //   - canUndo=false（如 aborted）→ 仅复制
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -10,9 +10,10 @@ import type { ImMessage } from '../../ipc/types';
 import { useSessionStore } from '../../stores/session.store';
 import { BubbleToolbar } from './BubbleToolbar';
 
+const abortTurnMock = vi.fn();
 const abortStreamMock = vi.fn();
 const mockApi = {
-  agent: { abortStream: abortStreamMock },
+  agent: { abortTurn: abortTurnMock, abortStream: abortStreamMock },
   journal: { list: vi.fn(), revert: vi.fn(), scan: vi.fn(), rollbackFileBefore: vi.fn(), preview: vi.fn() },
   session: { getMessages: vi.fn(), deleteMessages: vi.fn() },
 };
@@ -58,15 +59,19 @@ function seedLatest(): void {
 
 describe('BubbleToolbar — 动作簇', () => {
   beforeEach(() => {
+    abortTurnMock.mockReset().mockResolvedValue({ stoppedStream: true });
     abortStreamMock.mockReset().mockResolvedValue(undefined);
     mockApi.journal.list.mockReset().mockResolvedValue([]);
     seedLatest();
   });
 
-  it('streaming → 停止按钮（调 abortStream），无复制/撤回', () => {
+  it('streaming → 停止按钮（调 abortTurn 回合级级联，参数为 sessionId），无复制/撤回', () => {
     render(<BubbleToolbar message={makeMessage()} isStreaming canUndo={false} />);
     fireEvent.click(screen.getByRole('button', { name: /停止/ }));
-    expect(abortStreamMock).toHaveBeenCalledWith('s-1');
+    // sessionId='ses-1' ≠ streamSessionId='s-1'——参数为会话 id 即锁死回合级语义
+    expect(abortTurnMock).toHaveBeenCalledTimes(1);
+    expect(abortTurnMock).toHaveBeenCalledWith('ses-1');
+    expect(abortStreamMock).not.toHaveBeenCalled();
     expect(screen.queryByTestId('turn-undo-button')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /复制/ })).not.toBeInTheDocument();
   });

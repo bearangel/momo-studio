@@ -29,9 +29,8 @@ export function BubbleToolbar({ message, isStreaming, canUndo }: Props) {
         size="sm"
         className="ml-auto"
         onClick={() => {
-          if (message.streamSessionId) {
-            void ipc.agent.abortStream(message.streamSessionId);
-          }
+          // spec §7.1：回合级级联——中止本回合及其派生子链，不再只断单条流
+          void ipc.agent.abortTurn(message.sessionId);
         }}
       >
         <Square size={11} strokeWidth={1.75} aria-hidden /> 停止
