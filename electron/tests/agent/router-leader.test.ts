@@ -322,9 +322,9 @@ describe('契约③：接待者离线（lastRunning=false）→ 自动拉起后�
     // 错误气泡行（sender=接待者 agent 身份，renderer 经 StreamErrorBox 渲染）
     const msgs = listMessagesBySession(s.id);
     expect(msgs).toHaveLength(2);
-    expect(msgs[0].sender).toBe('owner');
-    expect(msgs[1].status).toBe('failed');
-    expect(msgs[1].sender).not.toBe('owner');
+    expect(msgs[0]!.sender).toBe('owner');
+    expect(msgs[1]!.status).toBe('failed');
+    expect(msgs[1]!.sender).not.toBe('owner');
   });
 });
 
