@@ -268,8 +268,12 @@ export class AgentRunner {
    *     触发任务行终态转换 + runtime 回收
    */
   async executeTask(task: TaskConfig): Promise<{ streamSessionId: string }> {
-    // A8：回合起点记在流派发入口——本回合内所有 idle 边沿共用同一窗口锚点
-    this.lastRoundStartedAt = Date.now();
+    // A8：回合起点记在流派发入口——本回合内所有 idle 边沿共用同一窗口锚点。
+    // Ruling-8：窗口锚点取存活回合并集——并发回合下取最早起点，防后回合覆写
+    // 使前回合窗口内 settle 的链逃出补投（搁浅方向）；串行场景（size===0）
+    // 行为与单字段原设计完全一致。
+    this.lastRoundStartedAt =
+      this.activeTasks.size === 0 ? Date.now() : Math.min(this.lastRoundStartedAt, Date.now());
     const runtime = await this.opts.warmPool.acquire(this.opts.agentAssignmentId);
 
     // 注册 message handler：过滤本 task 的 streamSessionId，按消息类型收尾

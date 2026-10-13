@@ -240,6 +240,62 @@ describe('AgentRunner', () => {
     expect(round2Reported).toBeGreaterThan(round1Reported);
   });
 
+  it('Ruling-8 回归锁：并发交叠回合的窗口锚点取存活并集（最早起点），后回合不覆写前回合锚点', async () => {
+    const child = mkMockChild();
+    const warmPool = new WarmPool({ spawn: vi.fn().mockResolvedValue(child) });
+    await warmPool.warm('inst1');
+    const onIdle = vi.fn();
+    const runner = new AgentRunner({
+      agentAssignmentId: 'inst1',
+      agentUserId: 'agent-bot-x1',
+      workspaceId: 'ws1',
+      warmPool,
+      onIdle,
+    });
+    const nthMessageHandler = (n: number): ((msg: unknown) => void) => {
+      const onCalls = (child.on as unknown as ReturnType<typeof vi.fn>).mock.calls;
+      const handlers = onCalls.filter((c) => c[0] === 'message').map((c) => c[1]) as
+        | ((msg: unknown) => void)[]
+        | undefined[];
+      const handler = handlers[n];
+      if (!handler) throw new Error(`message handler #${String(n)} 未注册`);
+      return handler;
+    };
+
+    // 回合 1 起跑（activeTasks 0→1，锚点 = 本行时刻）
+    const round1Before = Date.now();
+    await runner.executeTask({
+      taskId: null,
+      executionSessionId: '!r:home',
+      body: 'x',
+      streamSessionId: 'ss-a8-ov-r1',
+    });
+
+    // 回合 2 交叠起跑（activeTasks 1→2，旧行为锚点被覆写为新时刻）
+    await new Promise((r) => setTimeout(r, 25)); // 拉开墙钟，保证两锚点可分辨
+    const round2Before = Date.now();
+    await runner.executeTask({
+      taskId: null,
+      executionSessionId: '!r:home',
+      body: 'y',
+      streamSessionId: 'ss-a8-ov-r2',
+    });
+
+    // 后回合先结束（size 2→1，未归零不触发 idle）
+    nthMessageHandler(1)({ type: 'end', streamSessionId: 'ss-a8-ov-r2', finishReason: 'error', error: 'boom' });
+    expect(runner.activeTaskCount()).toBe(1);
+    expect(onIdle).not.toHaveBeenCalled();
+
+    // 前回合最后结束（size 1→0，触发 idle）——第三参必须仍是回合 1 锚点：
+    // 若被回合 2 覆写，[round1, round2) 窗口内 settle 的链将逃出补投（搁浅）
+    nthMessageHandler(0)({ type: 'end', streamSessionId: 'ss-a8-ov-r1', finishReason: 'error', error: 'boom' });
+    expect(runner.activeTaskCount()).toBe(0);
+    expect(onIdle).toHaveBeenCalledTimes(1);
+    const reported = (onIdle.mock.calls[0] as unknown[])[2] as number;
+    expect(reported).toBeGreaterThanOrEqual(round1Before);
+    expect(reported).toBeLessThan(round2Before); // 锚点未被后回合覆写——并集语义
+  });
+
   it('notifyTaskReply 转发给活跃 ephemeral task 的子进程（PM 等待 dispatch 场景）', async () => {
     const child = mkMockChild();
     const warmPool = new WarmPool({ spawn: vi.fn().mockResolvedValue(child) });
