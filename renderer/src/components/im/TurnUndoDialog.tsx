@@ -1,8 +1,9 @@
 // renderer/src/components/im/TurnUndoDialog.tsx
 //
 // 逐层撤回确认弹窗（rollback UI 重设计 2026-09-28）：
-//   - 打开即界定「一组对话」（latestTurn：owner 锚点 + 其后 agent 行）并
-//     匹配该组账本条目（base ssi 集合过滤 session scope 条目）
+//   - 打开即界定「一组对话」（latestTurn：锚点行 + 其后 agent 行；锚点 =
+//     owner 用户消息或 system 系统行）并匹配该组账本条目（base ssi 集合
+//     过滤 session scope 条目）
 //   - 组内有变更 → 警告弹窗 A：整体还原声明 + 预检分组清单（将还原/删除、
 //     漂移黄标、no-op 计数）+ 全局强制勾选；确认 = revert（组内全部 id，
 //     整体原子）→ 零 failed 才删气泡（deleteMessages）→ reloadMessages

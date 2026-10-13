@@ -1,7 +1,7 @@
 // renderer/src/lib/turn-segment.test.ts
 //
-// latestTurn 界定规则测试：owner 锚点 + 其后 agent 行、多组取最后、
-// #roll/#seg 后缀归一、纯 agent 会话 / 空列表边界。
+// latestTurn 界定规则测试：锚点（owner 用户消息 / system 系统行）+ 其后
+// agent 行、多组取最后、#roll/#seg 后缀归一、纯 agent 会话 / 空列表边界。
 import { describe, it, expect } from 'vitest';
 import type { ImMessage } from '../ipc/types';
 import { latestTurn } from './turn-segment';
@@ -34,9 +34,21 @@ describe('latestTurn — 组界定', () => {
       msg({ id: 'a2', sender: 'agent-sub', streamSessionId: 's-sub', parentStreamSessionId: 's-pm', createdAt: 3 }),
     ];
     const turn = latestTurn(msgs)!;
-    expect(turn.ownerMessageId).toBe('u1');
+    expect(turn.anchorMessageId).toBe('u1');
     expect(turn.messageIds).toEqual(['u1', 'a1', 'a2']);
     expect(turn.streamIds.sort()).toEqual(['s-pm', 's-sub'].sort());
+  });
+
+  it('system 回执行作为锚点自成撤回组（spec §5.3）', () => {
+    const msgs = [
+      msg({ id: 'm1', sender: 'owner', body: '用户问', createdAt: 1 }),
+      msg({ id: 'm2', sender: 'agent-a', body: '答', streamSessionId: 's-a', createdAt: 2 }),
+      msg({ id: 'm3', sender: 'system', body: '【dispatch 回执自动送达】…', createdAt: 3 }),
+      msg({ id: 'm4', sender: 'agent-a', body: '唤醒回复', streamSessionId: 's-b', createdAt: 4 }),
+    ];
+    const seg = latestTurn(msgs)!;
+    expect(seg.anchorMessageId).toBe('m3');
+    expect(seg.messageIds).toEqual(['m3', 'm4']);
   });
 
   it('多组取最后一组：更早组不混入', () => {
@@ -47,7 +59,7 @@ describe('latestTurn — 组界定', () => {
       msg({ id: 'a2', sender: 'agent-x', streamSessionId: 's2', createdAt: 4 }),
     ];
     const turn = latestTurn(msgs)!;
-    expect(turn.ownerMessageId).toBe('u2');
+    expect(turn.anchorMessageId).toBe('u2');
     expect(turn.messageIds).toEqual(['u2', 'a2']);
     expect(turn.streamIds).toEqual(['s2']);
   });
@@ -71,7 +83,7 @@ describe('latestTurn — 组界定', () => {
       msg({ id: 'u2', sender: 'owner', createdAt: 3 }),
     ];
     const turn = latestTurn(msgs)!;
-    expect(turn.ownerMessageId).toBe('u2');
+    expect(turn.anchorMessageId).toBe('u2');
     expect(turn.messageIds).toEqual(['u2']);
     expect(turn.streamIds).toEqual([]);
   });
