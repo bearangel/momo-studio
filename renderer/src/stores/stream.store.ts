@@ -99,6 +99,27 @@ interface StreamStoreState {
    */
   hydrateFromEvents: (messageId: string, events: MessageEventRow[], fallbackBody?: string) => void;
   /**
+   * thinking 全量展开（2026-10-14 P0-2，wire 截断配套）：用 getMessageThinking
+   * 拉回的全量游程（seq 与截断版同源）替换 eventLog 里的截断 thinking 与
+   * marker，重新聚合——截断标志自然消失，交错顺序（seq 序）保真。
+   * fallbackBody 语义同 hydrateFromEvents（零 text_delta 终态消息的正文回退）。
+   */
+  expandThinking: (
+    messageId: string,
+    runs: Array<{ seq: number; delta: string }>,
+    fallbackBody?: string,
+  ) => void;
+  /**
+   * 工具结果全量展开（wire 截断第二刀）：用 getMessageToolResults 拉回的全量
+   * （seq 与截断版同源）按 seq 替换 eventLog 里的截断 tool_call_result——新事件
+   * 不带 truncated 键，重聚合后标志自然消失；success 等兄弟 payload 字段从
+   * 原事件保留。零 text_delta 终态消息的正文回退从上次聚合结果继承（防洗白）。
+   */
+  expandToolResults: (
+    messageId: string,
+    results: Array<{ seq: number; callId: string; result: string }>,
+  ) => void;
+  /**
    * v2.4.x 网络信任卡路径置位入口（spec §6 防双弹）：ask 策略下网络失败由信任卡
    * 负责，本标志由信任卡出现时一并置位——与实时批次检测共用同一一次性语义。
    */
@@ -187,6 +208,95 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
       const text = useFallback ? fallbackBody : aggregated.text;
       const segments = useFallback
         ? [...aggregated.segments, { kind: 'text' as const, text: fallbackBody }]
+        : aggregated.segments;
+      newStreams.set(messageId, {
+        ...aggregated,
+        text,
+        segments,
+        messageId,
+        startedAt: merged[0]?.createdAt ?? Date.now(),
+      });
+      return { streams: newStreams };
+    });
+  },
+
+  expandThinking: (messageId, runs, fallbackBody) => {
+    const log = eventLogByMessage.get(messageId);
+    if (!log || runs.length === 0) return;
+    // seq → createdAt 保留映射：全量游程不携带 createdAt，沿用截断版的对应值
+    const createdAtBySeq = new Map(log.map((e) => [e.seq, e.createdAt]));
+    const lastCreatedAt = log[log.length - 1]?.createdAt ?? Date.now();
+    // 剔除截断版 thinking 与 marker，换入全量游程，按 seq 归并（交错顺序保真）
+    const kept = log.filter(
+      (e) => e.eventType !== 'thinking_delta' && e.eventType !== 'thinking_truncated',
+    );
+    const full = runs.map((r) => ({
+      id: `expand-${messageId}-${r.seq}`,
+      messageId,
+      seq: r.seq,
+      eventType: 'thinking_delta' as const,
+      payload: { delta: r.delta },
+      createdAt: createdAtBySeq.get(r.seq) ?? lastCreatedAt,
+    }));
+    const merged = [...kept, ...full].sort((a, b) => a.seq - b.seq);
+    eventLogByMessage.set(messageId, merged);
+    set((state) => {
+      const newStreams = new Map(state.streams);
+      const aggregated = aggregateEvents(merged);
+      // 正文回退语义与 hydrateFromEvents 一致：零 text_delta 终态消息正文以
+      // message.body 为单一真相源，防展开重聚合把静态正文洗掉
+      const useFallback =
+        fallbackBody !== undefined &&
+        fallbackBody.trim() !== '' &&
+        aggregated.status !== 'streaming' &&
+        aggregated.text === '';
+      const text = useFallback ? fallbackBody : aggregated.text;
+      const segments = useFallback
+        ? [...aggregated.segments, { kind: 'text' as const, text: fallbackBody }]
+        : aggregated.segments;
+      newStreams.set(messageId, {
+        ...aggregated,
+        text,
+        segments,
+        messageId,
+        startedAt: merged[0]?.createdAt ?? Date.now(),
+      });
+      return { streams: newStreams };
+    });
+  },
+
+  expandToolResults: (messageId, results) => {
+    const log = eventLogByMessage.get(messageId);
+    if (!log || results.length === 0) return;
+    // seq → 全量替换事件：payload 从原事件继承兄弟字段（success 等），
+    // 剥掉 truncated/fullLength 截断键——重聚合后标志自然消失
+    const oldBySeq = new Map(log.map((e) => [e.seq, e]));
+    const replaceBySeq = new Map<number, MessageEventRow>();
+    for (const r of results) {
+      const old = oldBySeq.get(r.seq);
+      const { truncated: _t, fullLength: _f, ...rest } = (old?.payload ?? {}) as Record<string, unknown>;
+      replaceBySeq.set(r.seq, {
+        id: old?.id ?? `expand-${messageId}-${r.seq}`,
+        messageId,
+        seq: r.seq,
+        eventType: 'tool_call_result',
+        payload: { ...rest, callId: r.callId, result: r.result },
+        createdAt: old?.createdAt ?? (log[log.length - 1]?.createdAt ?? Date.now()),
+      });
+    }
+    const merged = log.map((e) => replaceBySeq.get(e.seq) ?? e);
+    eventLogByMessage.set(messageId, merged);
+    set((state) => {
+      const newStreams = new Map(state.streams);
+      const aggregated = aggregateEvents(merged);
+      // 零 text_delta 终态消息的正文回退继承上次聚合（expandThinking 的
+      // fallbackBody 同款语义，此处无 body props——从 prev stream 继承）
+      const prev = state.streams.get(messageId);
+      const keepFallback =
+        aggregated.status !== 'streaming' && aggregated.text === '' && prev !== undefined && prev.text !== '';
+      const text = keepFallback ? prev.text : aggregated.text;
+      const segments = keepFallback
+        ? [...aggregated.segments, { kind: 'text' as const, text: prev.text }]
         : aggregated.segments;
       newStreams.set(messageId, {
         ...aggregated,

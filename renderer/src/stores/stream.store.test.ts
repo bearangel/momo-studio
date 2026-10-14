@@ -395,3 +395,147 @@ describe('stream.store：写拦截子串扫描防复活', () => {
     expect(src).not.toContain('toolchainWriteBlockedSeen');
   });
 });
+
+// === expandThinking：thinking wire 截断的全量展开归并（2026-10-14 P0-2）===
+// 契约：截断版 wire（预览 + marker）hydrate 后，expandThinking 用全量 runs
+// （seq 与截断版同源）按 seq 剔除替换重聚合——截断标志消失、thinking 全文在场、
+// 交错顺序保真、startedAt 不因展开游程缺 createdAt 而回退。
+describe('stream.store：expandThinking（P0-2 wire 截断展开）', () => {
+  beforeEach(() => {
+    useStreamStore.getState().reset();
+  });
+
+  /** 构造一段截断形态的 wire events：预览 thinking + text + final + marker */
+  function wireEvents(): MessageEventRow[] {
+    return [
+      mkEvent('m-trunc', 0, 'thinking_delta', { delta: '预'.repeat(2000) }),
+      mkEvent('m-trunc', 1, 'text_delta', { delta: '正文' }),
+      mkEvent('m-trunc', 2, 'final', { status: 'done' }),
+      mkEvent('m-trunc', 1_000_000_000, 'thinking_truncated', { fullChars: 8000 }),
+    ];
+  }
+
+  it('hydrate 截断版 → thinkingTruncated 置位；expandThinking 后全文在场 + 标志清除', () => {
+    useStreamStore.getState().hydrateFromEvents('m-trunc', wireEvents());
+    const before = useStreamStore.getState().streams.get('m-trunc')!;
+    expect(before.thinkingTruncated).toBe(true);
+    expect(before.thinking).toHaveLength(2000);
+    const startedAtBefore = before.startedAt;
+
+    const full = '全'.repeat(8000);
+    useStreamStore.getState().expandThinking('m-trunc', [{ seq: 0, delta: full }]);
+
+    const after = useStreamStore.getState().streams.get('m-trunc')!;
+    expect(after.thinkingTruncated).toBeUndefined();
+    expect(after.thinking).toBe(full);
+    expect(after.text).toBe('正文');
+    expect(after.status).toBe('done');
+    // startedAt 用截断版保留的 createdAt 映射，不回退
+    expect(after.startedAt).toBe(startedAtBefore);
+  });
+
+  it('多游程交错序保真：thinking(seq0) → tool(seq1) → thinking(seq2) 展开后 segments 顺序不变', () => {
+    useStreamStore.getState().hydrateFromEvents('m-mix', [
+      mkEvent('m-mix', 0, 'thinking_delta', { delta: '第一段预览' }),
+      mkEvent('m-mix', 1, 'tool_call_start', { callId: 'c1', toolName: 'bash', args: {} }),
+      mkEvent('m-mix', 2, 'thinking_delta', { delta: '第二段预览' }),
+      mkEvent('m-mix', 3, 'text_delta', { delta: '正文' }),
+      mkEvent('m-mix', 4, 'final', { status: 'done' }),
+      mkEvent('m-mix', 1_000_000_000, 'thinking_truncated', { fullChars: 8 }),
+    ]);
+    useStreamStore.getState().expandThinking('m-mix', [
+      { seq: 0, delta: '第一段全文' },
+      { seq: 2, delta: '第二段全文' },
+    ]);
+    const after = useStreamStore.getState().streams.get('m-mix')!;
+    expect(after.segments.map((s) => s.kind)).toEqual(['thinking', 'tool_call', 'thinking', 'text']);
+    expect(after.segments[0]).toEqual({ kind: 'thinking', text: '第一段全文' });
+    expect(after.segments[2]).toEqual({ kind: 'thinking', text: '第二段全文' });
+    // marker 从 segments/timeline 语义中不残留副作用
+    expect(after.thinkingTruncated).toBeUndefined();
+  });
+
+  it('零 text_delta 终态消息：fallbackBody 回退在展开后仍生效（防静态正文被洗掉）', () => {
+    useStreamStore.getState().hydrateFromEvents(
+      'm-fb',
+      [
+        mkEvent('m-fb', 0, 'thinking_delta', { delta: '预览' }),
+        mkEvent('m-fb', 1, 'final', { status: 'done' }),
+        mkEvent('m-fb', 1_000_000_000, 'thinking_truncated', { fullChars: 4000 }),
+      ],
+      '正文真相源',
+    );
+    expect(useStreamStore.getState().streams.get('m-fb')?.text).toBe('正文真相源');
+    useStreamStore.getState().expandThinking('m-fb', [{ seq: 0, delta: '全'.repeat(4000) }], '正文真相源');
+    const after = useStreamStore.getState().streams.get('m-fb')!;
+    expect(after.text).toBe('正文真相源');
+    expect(after.segments.at(-1)).toEqual({ kind: 'text', text: '正文真相源' });
+  });
+
+  it('未知 messageId 或空 runs → no-op（错误路径）', () => {
+    useStreamStore.getState().hydrateFromEvents('m-trunc', wireEvents());
+    const before = useStreamStore.getState().streams.get('m-trunc')!;
+    useStreamStore.getState().expandThinking('m-not-exist', [{ seq: 0, delta: 'x' }]);
+    useStreamStore.getState().expandThinking('m-trunc', []);
+    const after = useStreamStore.getState().streams.get('m-trunc')!;
+    expect(after.thinking).toBe(before.thinking);
+    expect(after.thinkingTruncated).toBe(true);
+  });
+});
+
+// === expandToolResults：tool 结果 wire 截断的全量展开（第二刀）===
+describe('stream.store：expandToolResults（wire 截断展开）', () => {
+  beforeEach(() => {
+    useStreamStore.getState().reset();
+  });
+
+  function hydrateTruncated(): void {
+    useStreamStore.getState().hydrateFromEvents('m-tools', [
+      mkEvent('m-tools', 0, 'tool_call_start', { callId: 'ca', toolName: 'bash', args: {} }),
+      mkEvent('m-tools', 1, 'tool_call_result', { callId: 'ca', result: '预'.repeat(800), success: true, truncated: true, fullLength: 5000 }),
+      mkEvent('m-tools', 2, 'text_delta', { delta: '正文' }),
+      mkEvent('m-tools', 3, 'final', { status: 'done' }),
+    ]);
+  }
+
+  it('hydrate 截断版 → 标志置位；expand 后全量在场 + 标志消失 + success 保留', () => {
+    hydrateTruncated();
+    const before = useStreamStore.getState().streams.get('m-tools')!;
+    expect(before.toolCalls[0]!.resultTruncated).toBe(true);
+
+    useStreamStore.getState().expandToolResults('m-tools', [
+      { seq: 1, callId: 'ca', result: 'A'.repeat(5000) },
+    ]);
+    const after = useStreamStore.getState().streams.get('m-tools')!;
+    expect(after.toolCalls[0]!.result).toHaveLength(5000);
+    expect(after.toolCalls[0]!.resultTruncated).toBeUndefined();
+    expect(after.toolCalls[0]!.success).toBe(true);
+    expect(after.text).toBe('正文');
+  });
+
+  it('零 text_delta 终态消息：正文回退从上次聚合继承（防洗白）', () => {
+    // 先造带回退的终态流（hydrate fallbackBody 路径）+ 截断工具结果
+    useStreamStore.getState().hydrateFromEvents(
+      'm-fb2',
+      [
+        mkEvent('m-fb2', 0, 'tool_call_start', { callId: 'c', toolName: 'bash', args: {} }),
+        mkEvent('m-fb2', 1, 'tool_call_result', { callId: 'c', result: 'x'.repeat(900), success: true, truncated: true, fullLength: 900 }),
+        mkEvent('m-fb2', 2, 'final', { status: 'done' }),
+      ],
+      '正文真相源',
+    );
+    expect(useStreamStore.getState().streams.get('m-fb2')?.text).toBe('正文真相源');
+    useStreamStore.getState().expandToolResults('m-fb2', [{ seq: 1, callId: 'c', result: 'full'.repeat(300) }]);
+    const after = useStreamStore.getState().streams.get('m-fb2')!;
+    expect(after.text).toBe('正文真相源');
+    expect(after.segments.at(-1)).toEqual({ kind: 'text', text: '正文真相源' });
+  });
+
+  it('未知 messageId / 空 results → no-op；未触及的其它事件保持原引用语义', () => {
+    hydrateTruncated();
+    useStreamStore.getState().expandToolResults('m-none', [{ seq: 1, callId: 'z', result: 'r' }]);
+    useStreamStore.getState().expandToolResults('m-tools', []);
+    const s = useStreamStore.getState().streams.get('m-tools')!;
+    expect(s.toolCalls[0]!.resultTruncated).toBe(true);
+  });
+});

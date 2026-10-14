@@ -4,10 +4,15 @@
 //   折叠行 = 状态图标 + 工具名 + describeToolCall 智能摘要 + 次要参数 chip + 耗时
 //   展开   = 结果优先（~10 行折叠 +「展开剩余 N 行」+ 次级「参数」开关）
 //   错误   = 压平单行（title 看全文）；「用户拒绝/permission denied」降级 warning
+// 2026-10-14 wire 截断第二刀：历史加载的终态结果只送 800 字符预览——
+// resultTruncated 置位时展开区提供「展开完整结果」，经 session:getMessageToolResults
+// 按消息批量拉全量、stream.store.expandToolResults 按 seq 替换（chip 随段重渲染）。
 import { useState } from 'react';
 import { CircleCheck, CircleX, ChevronDown, ChevronRight, Loader2, TriangleAlert } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { describeToolCall } from '../../lib/describe-tool-call';
+import { ipc } from '../../ipc/client';
+import { useStreamStore } from '../../stores/stream.store';
 
 interface Props {
   toolName: string;
@@ -17,6 +22,10 @@ interface Props {
   durationMs?: number;
   isExecuting?: boolean;
   defaultExpanded?: boolean;
+  /** wire 截断标志（段级 resultTruncated）：result 是预览，可展开拉全量 */
+  resultTruncated?: boolean;
+  /** 关联消息 id（截断展开拉取用；嵌套子流场景由上层传入） */
+  messageId?: string;
 }
 
 /** 结果折叠阈值：超过 N 行显示前 N 行 + 展开条 */
@@ -45,10 +54,28 @@ export function ToolCallChip({
   durationMs,
   isExecuting,
   defaultExpanded,
+  resultTruncated,
+  messageId,
 }: Props) {
   const [expanded, setExpanded] = useState(defaultExpanded ?? false);
   const [resultExpanded, setResultExpanded] = useState(false);
   const [argsExpanded, setArgsExpanded] = useState(false);
+  const [fetchingFull, setFetchingFull] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
+
+  async function loadFullResults(): Promise<void> {
+    if (!messageId || fetchingFull) return;
+    setFetchingFull(true);
+    setFetchError(false);
+    try {
+      const { results } = await ipc.session.getMessageToolResults(messageId);
+      useStreamStore.getState().expandToolResults(messageId, results);
+    } catch {
+      setFetchError(true); // 失败保留预览，可重试
+    } finally {
+      setFetchingFull(false);
+    }
+  }
 
   const denied =
     !isExecuting && success === false && result !== undefined && isPermissionDenied(result);
@@ -126,6 +153,16 @@ export function ToolCallChip({
                   className="mt-1 w-full cursor-pointer border-t border-subtle pt-1 text-center text-[11px] text-tertiary"
                 >
                   {resultExpanded ? '收起' : `展开剩余 ${resultLines.length - RESULT_FOLD_LINES} 行`}
+                </button>
+              )}
+              {resultTruncated && messageId && (
+                <button
+                  type="button"
+                  onClick={() => void loadFullResults()}
+                  disabled={fetchingFull}
+                  className="mt-1 w-full cursor-pointer text-center text-[11px] text-accent-600 dark:text-accent-300 hover:underline disabled:cursor-wait"
+                >
+                  {fetchingFull ? '加载完整结果…' : fetchError ? '加载失败，点击重试' : '展开完整结果'}
                 </button>
               )}
             </>

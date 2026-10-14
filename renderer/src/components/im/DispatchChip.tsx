@@ -26,6 +26,8 @@ export interface DispatchChild {
 interface DispatchChipProps {
   child: DispatchChild;
   subStream?: StreamState;
+  /** 子 agent 消息 id（wire 截断展开拉取用，2026-10-14 P0-2） */
+  subMessageId?: string;
 }
 
 /** 状态图标：executing 用旋转 Loader（活动指示）；delegated 用 Send（已派出后台） */
@@ -82,7 +84,7 @@ function ElapsedTimer({ since }: { since: number }) {
   );
 }
 
-export function DispatchChip({ child, subStream }: DispatchChipProps) {
+export function DispatchChip({ child, subStream, subMessageId }: DispatchChipProps) {
   const status = dispatchStatusStyle(child.status);
   const StatusIcon = STATUS_ICON[child.status];
   const isBusy = child.status === 'executing' || child.status === 'queued';
@@ -148,7 +150,9 @@ export function DispatchChip({ child, subStream }: DispatchChipProps) {
         </span>
       </button>
 
-      {expanded && subStream && <SubAgentSection stream={subStream} />}
+      {expanded && subStream && (
+        <SubAgentSection stream={subStream} messageId={subMessageId} />
+      )}
     </div>
   );
 }

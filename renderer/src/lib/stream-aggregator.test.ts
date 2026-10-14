@@ -553,3 +553,66 @@ describe('aggregateEvents：基础行为', () => {
     expect(s.events.map((e) => e.seq)).toEqual([0, 1, 2]);
   });
 });
+
+// === thinking wire 截断 marker（2026-10-14 P0-2，与 electron event-projection 同 commit）===
+describe('aggregateEvents：thinking_truncated marker', () => {
+  it('marker 置 thinkingTruncated + thinkingFullChars；thinking 正文不受影响', () => {
+    const s = aggregateEvents([
+      mkEvent(0, 'thinking_delta', { delta: '预览文本' }),
+      mkEvent(1, 'text_delta', { delta: '正文' }),
+      mkEvent(2, 'final', { status: 'done' }),
+      mkEvent(1_000_000_000, 'thinking_truncated', { fullChars: 8000 }),
+    ]);
+    expect(s.thinkingTruncated).toBe(true);
+    expect(s.thinkingFullChars).toBe(8000);
+    expect(s.thinking).toBe('预览文本');
+    expect(s.text).toBe('正文');
+  });
+
+  it('无 marker → 两字段均 undefined（流式/未截断路径零影响）', () => {
+    const s = aggregateEvents([mkEvent(0, 'thinking_delta', { delta: '完整思考' })]);
+    expect(s.thinkingTruncated).toBeUndefined();
+    expect(s.thinkingFullChars).toBeUndefined();
+  });
+
+  it('marker 缺 fullChars（畸形载荷防御）→ 只置标志不抛错', () => {
+    const s = aggregateEvents([mkEvent(1_000_000_000, 'thinking_truncated', {})]);
+    expect(s.thinkingTruncated).toBe(true);
+    expect(s.thinkingFullChars).toBeUndefined();
+  });
+});
+
+// === tool_call_result wire 截断标志透传（第二刀，与 electron event-projection 同 commit）===
+describe('aggregateEvents：tool 结果截断标志', () => {
+  it('truncated/fullLength → 段级与平铺 toolCalls 都带标志；result 为预览', () => {
+    const s = aggregateEvents([
+      mkEvent(0, 'tool_call_start', { callId: 'c1', toolName: 'bash', args: {} }),
+      mkEvent(1, 'tool_call_result', { callId: 'c1', result: '预'.repeat(800), success: true, truncated: true, fullLength: 20000 }),
+      mkEvent(2, 'final', { status: 'done' }),
+    ]);
+    const flat = s.toolCalls[0]!;
+    expect(flat.resultTruncated).toBe(true);
+    expect(flat.resultFullLength).toBe(20000);
+    expect(flat.result).toHaveLength(800);
+    const seg = s.segments[0]!;
+    expect(seg.kind).toBe('tool_call');
+    if (seg.kind === 'tool_call') {
+      expect(seg.resultTruncated).toBe(true);
+      expect(seg.resultFullLength).toBe(20000);
+    }
+  });
+
+  it('未截断事件（无 truncated 键）→ 标志 undefined；畸形 fullLength 防御不抛错', () => {
+    const s = aggregateEvents([
+      mkEvent(0, 'tool_call_start', { callId: 'c1', toolName: 'bash', args: {} }),
+      mkEvent(1, 'tool_call_result', { callId: 'c1', result: 'ok', success: true }),
+    ]);
+    expect(s.toolCalls[0]!.resultTruncated).toBeUndefined();
+    const s2 = aggregateEvents([
+      mkEvent(0, 'tool_call_start', { callId: 'c1', toolName: 'bash', args: {} }),
+      mkEvent(1, 'tool_call_result', { callId: 'c1', result: 'p', truncated: true }),
+    ]);
+    expect(s2.toolCalls[0]!.resultTruncated).toBe(true);
+    expect(s2.toolCalls[0]!.resultFullLength).toBeUndefined();
+  });
+});

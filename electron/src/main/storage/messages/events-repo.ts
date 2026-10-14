@@ -25,7 +25,10 @@ export interface MessageEventRow {
     // v2.6.0 断点续跑：runtime-entry 在 steer drain 时发 steer chunk，
     // stream-relay 落 event_type='steer' / payload={body, context?} 事件。
     // turn-reconstructor 据此重建 [用户中途补充] user 消息或入 steers[]。
-    | 'steer';
+    | 'steer'
+    // wire-only 合成事件（不落库）：thinking wire 截断的 marker——历史加载路径
+    // truncateThinkingForWire 追加，renderer 聚合出 thinkingTruncated 标志
+    | 'thinking_truncated';
   payload: Record<string, unknown>;
   createdAt: number;
 }

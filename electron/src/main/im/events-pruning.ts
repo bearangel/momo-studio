@@ -13,7 +13,10 @@
 //      保真）落 message_compact_events——thinking/正文/工具卡全量在场，正文
 //      无需 body 回退、thinking 无需异步补拉；缺失快照就地回填（分片让出
 //      事件循环，首访一次付出永久受益；boot 另有后台全量回填）
-//   4. 零事件消息省略 key（renderer 静态气泡渲染 body）
+//   4. 终态消息 thinking / tool_call_result wire 截断（2026-10-14 第二刀：
+//      thinking 预算 2000 字符 + marker；tool 结果每条 800 字符 + payload 内嵌
+//      truncated 标志——展开均走按需拉取，见 event-projection.ts 契约注释）
+//   5. 零事件消息省略 key（renderer 静态气泡渲染 body）
 //
 // 压缩事件直接喂 renderer 既有 aggregateEvents——聚合等价性由
 // tests/storage/event-compaction.test.ts 契约锁（全量 ≡ 压缩 逐字段相等）。
@@ -27,7 +30,19 @@ import {
   countEventsByMessage,
 } from '../storage/messages/events-repo';
 import { backfillCompactSnapshots } from '../storage/messages/event-compaction';
-import { projectEventsForWire } from '../storage/messages/event-projection';
+import {
+  projectEventsForWire,
+  truncateThinkingForWire,
+  truncateToolResultsForWire,
+} from '../storage/messages/event-projection';
+
+/**
+ * 初始加载窗口（2026-10-14 会话切换延迟修复 P0-1）：session:getMessages 首拉
+ * 只取最近 N 条——翻页走既有 loadOlder（压缩快照）。此前 ASC+LIMIT 1000 全量
+ * 拉取是大会话切换延迟主因之一，且 >1000 条会话实际取到的是「最早 1000 条」
+ * （永远看不到最新消息的潜伏 bug），本常量一并修复。
+ */
+export const INITIAL_MESSAGES_RECENT = 50;
 
 /** 最近窗口：最近 N 条消息携带全量事件（覆盖视口 + 流式候选） */
 export const FULL_EVENTS_RECENT_MESSAGES = 30;
@@ -91,7 +106,9 @@ export async function buildEventsByMessage(
 
   const eventsByMessage: Record<string, MessageEventRow[]> = {};
   for (const [messageId, events] of fullEvents) {
-    eventsByMessage[messageId] = projectEventsForWire(events);
+    eventsByMessage[messageId] = truncateToolResultsForWire(
+      truncateThinkingForWire(projectEventsForWire(events)),
+    );
   }
 
   // 降级集合分片回填压缩快照（缺失才读事件落库；已有走主键直读）
@@ -101,7 +118,9 @@ export async function buildEventsByMessage(
     for (const [messageId, events] of compacted) {
       // 零事件消息省略 key——renderer 对缺失 key 走静态 body 气泡
       if (events.length === 0) continue;
-      eventsByMessage[messageId] = projectEventsForWire(events);
+      eventsByMessage[messageId] = truncateToolResultsForWire(
+      truncateThinkingForWire(projectEventsForWire(events)),
+    );
     }
     // 首访重会话（千级降级消息 × 全量事件回填）时按片让出——主进程不冻结
     if (i + BACKFILL_CHUNK < degradedIds.length) await yieldToEventLoop();

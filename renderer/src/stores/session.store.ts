@@ -249,9 +249,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           for (const [msgId, evs] of Object.entries(eventsByMessage)) {
             evMap.set(msgId, evs);
           }
-          // hasMore 初始保持 undefined（视为 true）——listMessagesBySession 默认
-          // limit=1000，小会话也不能断定无更多历史。首次 loadOlder 调用会用 IPC 返回的
-          // hasMore 字段（基于本批是否填满 count）赋权威值。
+          // hasMore 初始保持 undefined（视为 true）——初始加载只取最近
+          // INITIAL_MESSAGES_RECENT 条（2026-10-14 P0-1），不能断定无更多历史。
+          // 首次 loadOlder 调用会用 IPC 返回的 hasMore 字段（基于本批是否
+          // 填满 count）赋权威值。
           return { messagesBySession: msgMap, eventsByMessage: evMap, loading: false };
         });
       } catch (err) {

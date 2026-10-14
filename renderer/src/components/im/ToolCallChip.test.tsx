@@ -1,9 +1,10 @@
 // renderer/src/components/im/ToolCallChip.test.tsx
 // ToolCallChip 单测（v2.1 重写）：摘要行（describeToolCall）+ 展开结果优先
 //（默认无参数）+ 10 行折叠 + 次级参数开关 + 错误单行 + 权限拒绝降级 warning。
-import { describe, it, expect } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ToolCallChip } from './ToolCallChip';
+import { useStreamStore } from '../../stores/stream.store';
 
 describe('ToolCallChip — 摘要行', () => {
   it('渲染工具名 + 智能摘要（read_file 只显文件名）+ 耗时', () => {
@@ -106,5 +107,63 @@ describe('ToolCallChip — 错误态', () => {
     );
     expect(container.querySelector('svg.lucide-triangle-alert')).not.toBeNull();
     expect(container.querySelector('button')?.classList.contains('bg-status-warning-tint')).toBe(true);
+  });
+});
+
+// === wire 截断第二刀：结果全量按需展开 ===
+describe('ToolCallChip — 结果截断展开', () => {
+  const getToolResultsMock = vi.fn();
+
+  beforeEach(() => {
+    getToolResultsMock.mockReset();
+    (globalThis as unknown as { window: { api: unknown } }).window.api = {
+      session: { getMessageToolResults: getToolResultsMock },
+    };
+    useStreamStore.getState().reset();
+  });
+
+  function hydrateTruncated(): void {
+    useStreamStore.getState().hydrateFromEvents('m-chip', [
+      { id: 'w0', messageId: 'm-chip', seq: 0, eventType: 'tool_call_start', payload: { callId: 'c1', toolName: 'bash', args: {} }, createdAt: 1 },
+      { id: 'w1', messageId: 'm-chip', seq: 1, eventType: 'tool_call_result', payload: { callId: 'c1', result: '预'.repeat(800), success: true, truncated: true, fullLength: 3000 }, createdAt: 2 },
+      { id: 'w2', messageId: 'm-chip', seq: 2, eventType: 'final', payload: { status: 'done' }, createdAt: 3 },
+    ]);
+  }
+
+  it('resultTruncated 置位 → 展开面板出现「展开完整结果」；点击拉全量并入 store', async () => {
+    hydrateTruncated();
+    getToolResultsMock.mockResolvedValueOnce({ results: [{ seq: 1, callId: 'c1', result: 'F'.repeat(3000) }] });
+    render(
+      <ToolCallChip toolName="bash" args={{}} result={'预'.repeat(800)} success={true}
+        resultTruncated messageId="m-chip" />,
+    );
+    fireEvent.click(screen.getByText('bash')); // 展开 chip
+    expect(screen.queryByText('展开完整结果')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('展开完整结果'));
+    await waitFor(() => expect(getToolResultsMock).toHaveBeenCalledWith('m-chip'));
+    await waitFor(() => {
+      const s = useStreamStore.getState().streams.get('m-chip');
+      expect(s?.toolCalls[0]?.result).toHaveLength(3000);
+      expect(s?.toolCalls[0]?.resultTruncated).toBeUndefined();
+    });
+  });
+
+  it('拉取失败 → 重试提示，预览保留', async () => {
+    hydrateTruncated();
+    getToolResultsMock.mockRejectedValueOnce(new Error('IPC down'));
+    render(
+      <ToolCallChip toolName="bash" args={{}} result={'预'.repeat(800)} success={true}
+        resultTruncated messageId="m-chip" />,
+    );
+    fireEvent.click(screen.getByText('bash'));
+    fireEvent.click(screen.getByText('展开完整结果'));
+    expect(await screen.findByText('加载失败，点击重试')).toBeInTheDocument();
+  });
+
+  it('未置 resultTruncated（实时/短结果）→ 无展开按钮、零拉取', () => {
+    render(<ToolCallChip toolName="bash" args={{}} result="ok" success={true} />);
+    fireEvent.click(screen.getByText('bash'));
+    expect(screen.queryByText('展开完整结果')).not.toBeInTheDocument();
+    expect(getToolResultsMock).not.toHaveBeenCalled();
   });
 });

@@ -23,9 +23,11 @@ import { TodoSection } from './TodoSection';
 interface Props {
   /** 子 agent 的流式聚合状态（从 streams Map 按 subStreamSessionId 查找后传入） */
   stream: StreamState;
+  /** 子 agent 消息 id（wire 截断 thinking 展开拉取用，2026-10-14 P0-2） */
+  messageId?: string;
 }
 
-export function SubAgentSection({ stream }: Props) {
+export function SubAgentSection({ stream, messageId }: Props) {
   const isStreaming = stream.status === 'streaming';
 
   return (
@@ -44,6 +46,8 @@ export function SubAgentSection({ stream }: Props) {
                 key={`sub-think-${i}`}
                 content={seg.text}
                 isStreaming={isStreaming && isLastSegment}
+                truncated={stream.thinkingTruncated}
+                messageId={messageId}
               />
             );
           case 'tool_call':
@@ -56,6 +60,8 @@ export function SubAgentSection({ stream }: Props) {
                 success={seg.success ?? true}
                 isExecuting={seg.result === null}
                 defaultExpanded={false}
+                resultTruncated={seg.resultTruncated}
+                messageId={messageId}
               />
             );
           case 'context-group':

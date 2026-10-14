@@ -1192,7 +1192,10 @@ export interface MessageEventRow {
     // v2.6.0 断点续跑：与 electron 主进程 events-repo.MessageEventRow 联合对齐——
     // steer 事件从主进程 IPC 推送过来时不会被 TS 类型拒绝。
     // renderer 聚合器对 steer 自然跳过（switch 无匹配 case）。
-    | 'steer';
+    | 'steer'
+    // wire-only 合成 marker（不落库）：thinking wire 截断标志——历史加载时终态
+    // 消息 thinking 超预算被截，展开经 session:getMessageThinking 按需取全量
+    | 'thinking_truncated';
   payload: Record<string, unknown>;
   createdAt: number;
 }
@@ -1317,15 +1320,42 @@ export interface SessionApiSurface {
    * renderer 用 stream-aggregator 重建 StreamState。
    *
    * 事件裁剪契约（2026-09-25 工作空间切换卡顿修复 + C 方案显示一致性）：
+   * - **初始窗口（2026-10-14 P0-1）**：只返回最近 50 条消息（INITIAL_MESSAGES_RECENT）；
+   *   更早历史走 loadOlder 翻页
    * - 最近 30 条消息携带全量事件；窗口内单消息事件数 > 2000 或更早消息
    *   走压缩快照（终态写时游程合并：连续 thinking/text delta 合一、结构
    *   事件保留——thinking/正文/工具卡全量保序，交错顺序与流式一致）
+   * - **thinking wire 截断（2026-10-14 P0-2）**：终态消息的 thinking 增量在
+   *   wire 上截断至预算（THINKING_WIRE_BUDGET 字符），末尾追加合成
+   *   thinking_truncated marker——聚合出 thinkingTruncated 标志，展开时经
+   *   getMessageThinking 按需取全量
+   * - **tool 结果 wire 截断（2026-10-14 第二刀）**：终态消息的
+   *   tool_call_result 每条截断至 TOOL_RESULT_WIRE_BUDGET 字符，payload 内嵌
+   *   truncated/fullLength 标志（无 marker 事件），展开时经
+   *   getMessageToolResults 按需取全量
    * - 快照缺失（历史数据）由主进程就地回填并落库（首访一次付出）
    * - 零事件消息省略 eventsByMessage key（静态气泡渲染 body）
    */
   getMessages(
     sessionId: string,
   ): Promise<{ messages: ImMessage[]; eventsByMessage: Record<string, MessageEventRow[]> }>;
+  /**
+   * thinking 全量按需拉取（2026-10-14 P0-2，wire 截断配套）：返回该消息全部
+   * thinking 游程（seq 升序，与 wire 截断版同 seq 源）。renderer expandThinking
+   * 按 seq 归并替换截断版并清除截断标志。
+   */
+  getMessageThinking(
+    messageId: string,
+  ): Promise<{ runs: Array<{ seq: number; delta: string }> }>;
+  /**
+   * 工具结果全量按需拉取（2026-10-14 wire 截断第二刀）：按消息批量返回该消息
+   * 全部 tool_call_result 的全量文本（seq 与截断版同源）。renderer
+   * expandToolResults 按 seq 替换截断事件（新事件无 truncated 键，success 等
+   * 兄弟字段保留），重聚合后截断标志自然消失。
+   */
+  getMessageToolResults(
+    messageId: string,
+  ): Promise<{ results: Array<{ seq: number; callId: string; result: string }> }>;
   /**
    * 逐层撤回（turn undo）的消息删除面：按会话归属过滤物理删除消息行
    * （message_events FK 级联 + message_compact_events 清理 + 会话

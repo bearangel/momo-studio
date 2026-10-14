@@ -590,13 +590,13 @@ describe('sanitizeMessageContext sessions（跨会话引用）', () => {
 
 describe('session:getMessages handler', () => {
   it('返回 messages + 每条消息的 eventsByMessage（最近窗口走批量全量查询）', async () => {
-    messagesRepoMocks.listMessagesBySession.mockReturnValueOnce([msgRow]);
+    messagesRepoMocks.listRecentMessagesBySession.mockReturnValueOnce([msgRow]);
     eventsRepoMocks.listEventsForMessages.mockReturnValueOnce(
       new Map([['msg-1', [{ id: 'evt-1', messageId: 'msg-1', seq: 1 }]]]),
     );
     eventsRepoMocks.countEventsByMessage.mockReturnValueOnce(new Map([['msg-1', 1]]));
     const res = await ipcHandlers.get('session:getMessages')!({} as never, 'sess-1');
-    expect(messagesRepoMocks.listMessagesBySession).toHaveBeenCalledWith('sess-1');
+    expect(messagesRepoMocks.listRecentMessagesBySession).toHaveBeenCalledWith('sess-1', 50);
     expect(eventsRepoMocks.listEventsForMessages).toHaveBeenCalledWith(['msg-1']);
     expect(res).toEqual({
       messages: [msgRow],
@@ -605,7 +605,7 @@ describe('session:getMessages handler', () => {
   });
 
   it('更早消息经压缩快照回填返回（backfillCompactSnapshots 批量）', async () => {
-    messagesRepoMocks.listMessagesBySession.mockReturnValueOnce([msgRow]);
+    messagesRepoMocks.listRecentMessagesBySession.mockReturnValueOnce([msgRow]);
     // 单消息但事件数超 cap（巨型路径）→ msg-1 走降级集合 → 压缩快照
     eventsRepoMocks.countEventsByMessage.mockReturnValueOnce(new Map([['msg-1', 99999]]));
     compactionMocks.backfillCompactSnapshots.mockReturnValueOnce(
@@ -624,7 +624,7 @@ describe('session:getMessages handler', () => {
   // 拉历史）不得携带 ExpandedContext 全文。此处 events-repo 是 mock（边界），
   // 投影本身走真实 event-projection 模块（momo-test-rules：mock 收窄 IO 边界）。
   it('I2：getMessages 返回的 steer 事件无 context 字段（wire 投影剥离）', async () => {
-    messagesRepoMocks.listMessagesBySession.mockReturnValueOnce([msgRow]);
+    messagesRepoMocks.listRecentMessagesBySession.mockReturnValueOnce([msgRow]);
     eventsRepoMocks.listEventsForMessages.mockReturnValueOnce(
       new Map([
         [
@@ -707,6 +707,62 @@ describe('session:loadOlder handler', () => {
       eventsByMessage: {},
       hasMore: false,
     });
+  });
+});
+
+// === P0-1 / P0-2（2026-10-14 会话切换延迟修复）契约锁 ===
+// P0-1：初始加载只取最近 INITIAL_MESSAGES_RECENT（50）条——此前 ASC+LIMIT 1000
+//       全量拉取是切换延迟主因，>1000 条会话还会拿到「最早 1000 条」（潜伏 bug）。
+// P0-2：thinking 全量按需拉取通道——wire 截断的展开侧数据源。
+describe('session:getMessages 初始窗口 + session:getMessageThinking（P0-1/P0-2）', () => {
+  it('P0-1：getMessages 委托 listRecentMessagesBySession(sessionId, 50)——不再全量 ASC 拉取', async () => {
+    messagesRepoMocks.listRecentMessagesBySession.mockReturnValueOnce([msgRow]);
+    eventsRepoMocks.countEventsByMessage.mockReturnValueOnce(new Map());
+    await ipcHandlers.get('session:getMessages')!({} as never, 'sess-1');
+    expect(messagesRepoMocks.listRecentMessagesBySession).toHaveBeenCalledWith('sess-1', 50);
+    expect(messagesRepoMocks.listMessagesBySession).not.toHaveBeenCalled();
+  });
+
+  it('P0-2：getMessageThinking 快照优先——只回 thinking 游程（seq 升序），其余事件剔除', () => {
+    compactionMocks.backfillCompactSnapshots.mockReturnValueOnce(
+      new Map([
+        [
+          'msg-big',
+          [
+            { id: 'e0', messageId: 'msg-big', seq: 0, eventType: 'thinking_delta', payload: { delta: '第一段思考' } },
+            { id: 'e1', messageId: 'msg-big', seq: 1, eventType: 'text_delta', payload: { delta: '正文' } },
+            { id: 'e2', messageId: 'msg-big', seq: 2, eventType: 'thinking_delta', payload: { delta: '第二段思考' } },
+            { id: 'e3', messageId: 'msg-big', seq: 3, eventType: 'final', payload: { status: 'done' } },
+          ],
+        ],
+      ]),
+    );
+    const res = ipcHandlers.get('session:getMessageThinking')!({} as never, 'msg-big') as {
+      runs: Array<{ seq: number; delta: string }>;
+    };
+    expect(res).toEqual({
+      runs: [
+        { seq: 0, delta: '第一段思考' },
+        { seq: 2, delta: '第二段思考' },
+      ],
+    });
+    expect(eventsRepoMocks.listEventsByMessage).not.toHaveBeenCalled();
+  });
+
+  it('P0-2：无快照时回退 listEventsByMessage 原始事件流', () => {
+    // backfill 无该消息条目（Map 空）→ get 返回 undefined → 触发回退
+    compactionMocks.backfillCompactSnapshots.mockReturnValueOnce(new Map());
+    eventsRepoMocks.listEventsByMessage.mockReturnValueOnce([
+      { id: 'r0', messageId: 'msg-raw', seq: 0, eventType: 'thinking_delta', payload: { delta: '原始思考' } },
+    ]);
+    const res = ipcHandlers.get('session:getMessageThinking')!({} as never, 'msg-raw') as {
+      runs: Array<{ seq: number; delta: string }>;
+    };
+    expect(res.runs).toEqual([{ seq: 0, delta: '原始思考' }]);
+  });
+
+  it('P0-2：非 string messageId 拒绝（错误路径）', () => {
+    expect(() => ipcHandlers.get('session:getMessageThinking')!({} as never, 123)).toThrow('参数非法');
   });
 });
 
@@ -808,5 +864,45 @@ describe('session:exportMessages 导出/显示对齐', () => {
 
     const exported = exporterMocks.formatRoomToMarkdown.mock.calls[0]![0] as Array<{ id: string; eventId: string }>;
     expect(exported.map((m) => m.eventId)).toEqual(['u0']);
+  });
+});
+
+describe('session:getMessageToolResults（wire 截断第二刀）', () => {
+  it('快照优先——只回带 result 字符串的 tool_call_result（dispatch 回执自然过滤）', () => {
+    compactionMocks.backfillCompactSnapshots.mockReturnValueOnce(
+      new Map([
+        [
+          'msg-tools',
+          [
+            { id: 't0', messageId: 'msg-tools', seq: 0, eventType: 'tool_call_result', payload: { callId: 'c1', result: '全量结果A' } },
+            { id: 't1', messageId: 'msg-tools', seq: 1, eventType: 'text_delta', payload: { delta: '正文' } },
+            { id: 't2', messageId: 'msg-tools', seq: 2, eventType: 'tool_call_result', payload: { callId: 'c2', subStatus: 'completed' } },
+            { id: 't3', messageId: 'msg-tools', seq: 3, eventType: 'tool_call_result', payload: { callId: 'c3', result: '全量结果B' } },
+          ],
+        ],
+      ]),
+    );
+    const res = ipcHandlers.get('session:getMessageToolResults')!({} as never, 'msg-tools') as {
+      results: Array<{ seq: number; callId: string; result: string }>;
+    };
+    expect(res).toEqual({
+      results: [
+        { seq: 0, callId: 'c1', result: '全量结果A' },
+        { seq: 3, callId: 'c3', result: '全量结果B' },
+      ],
+    });
+    expect(eventsRepoMocks.listEventsByMessage).not.toHaveBeenCalled();
+  });
+
+  it('无快照回退 listEventsByMessage；非 string messageId 拒绝', () => {
+    compactionMocks.backfillCompactSnapshots.mockReturnValueOnce(new Map());
+    eventsRepoMocks.listEventsByMessage.mockReturnValueOnce([
+      { id: 'r0', messageId: 'msg-raw2', seq: 0, eventType: 'tool_call_result', payload: { callId: 'k1', result: '原始结果' } },
+    ]);
+    const res = ipcHandlers.get('session:getMessageToolResults')!({} as never, 'msg-raw2') as {
+      results: Array<{ seq: number; callId: string; result: string }>;
+    };
+    expect(res.results).toEqual([{ seq: 0, callId: 'k1', result: '原始结果' }]);
+    expect(() => ipcHandlers.get('session:getMessageToolResults')!({} as never, null)).toThrow('参数非法');
   });
 });

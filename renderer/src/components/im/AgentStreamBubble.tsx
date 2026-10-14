@@ -105,7 +105,7 @@ function DispatchSegment({
   };
   return (
     <div style={{ marginBottom: 8 }}>
-      <DispatchChip child={child} subStream={subStream} />
+      <DispatchChip child={child} subStream={subStream} subMessageId={subMessageId} />
     </div>
   );
 }
@@ -143,9 +143,28 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
   // 子 agent 消息行带 parentStreamSessionId，被 MessageList 过滤出顶层列表，
   // 但仍留在 messagesBySession——此处全量取用。
   const sessionMessages = useSessionStore((s) => s.messagesBySession.get(message.sessionId));
-  // 族计数数据源：streams 整表。Map 引用在 store set 时才换新——无事件批次时
-  // selector 返回同一引用，不触发多余渲染（沿用 store 换新 Map 的现状语义）
-  const rawStreams = useStreamStore((s) => s.streams);
+  // P1-1（2026-10-14 流式期 O(n²) 修复）：不再整表订阅 rawStreams（每 50ms flush
+  // 换 Map 引用 → 全部已挂载气泡重渲染 + 族计数重算）。改为 selector 返回原始值
+  // 字符串——族内各流工具数不变时 Object.is 命中，零重渲染；计数变化只重渲染
+  // 受影响气泡。countFamilyToolCalls 的全量扫描由 key 变化门控。
+  const familyMessageIds = useMemo(() => {
+    if (!message.streamSessionId) return [];
+    const base = message.streamSessionId.split('#')[0]!;
+    const ids: string[] = [];
+    for (const m of sessionMessages ?? []) {
+      if (m.segmentOf !== null) continue;
+      const inFamily =
+        (m.parentStreamSessionId !== null && m.parentStreamSessionId.split('#')[0] === base) ||
+        (m.parentStreamSessionId === null && m.streamSessionId !== null && m.streamSessionId.split('#')[0] === base);
+      if (inFamily) ids.push(m.id);
+    }
+    return ids;
+  }, [sessionMessages, message.streamSessionId]);
+  const familyCountKey = useStreamStore((s) => {
+    let key = '';
+    for (const id of familyMessageIds) key += `${(s.streams.get(id)?.toolCalls.length ?? 0).toString()},`;
+    return key;
+  });
   const streamIdToMessageId = useMemo(() => {
     const map = new Map<string, string>();
     for (const m of sessionMessages ?? []) {
@@ -160,9 +179,11 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
   const familyCount = useMemo(
     () =>
       message.streamSessionId
-        ? countFamilyToolCalls(sessionMessages ?? [], rawStreams, message.streamSessionId)
+        ? countFamilyToolCalls(sessionMessages ?? [], useStreamStore.getState().streams, message.streamSessionId)
         : { own: stream.toolCalls.length, sub: 0 },
-    [sessionMessages, message.streamSessionId, rawStreams, stream.toolCalls.length],
+    // familyCountKey 门控：族内工具数无变化时不重算（streams 非响应式读取）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessionMessages, message.streamSessionId, stream.toolCalls.length, familyCountKey],
   );
   const familyTotal = familyCount.own + familyCount.sub;
 
@@ -212,6 +233,9 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
                 key={`seg-thinking-${i}`}
                 content={seg.text}
                 isStreaming={isStreaming && isLastSegment}
+                truncated={stream.thinkingTruncated}
+                messageId={message.id}
+                fallbackBody={message.body}
               />
             );
           case 'tool_call':
@@ -224,6 +248,8 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
                 success={seg.success ?? true}
                 isExecuting={seg.result === null}
                 defaultExpanded={false}
+                resultTruncated={seg.resultTruncated}
+                messageId={message.id}
               />
             );
           case 'dispatch':

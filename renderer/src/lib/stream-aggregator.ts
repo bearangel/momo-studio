@@ -17,6 +17,10 @@ export interface AggregatedToolCall {
   args: Record<string, unknown>;
   result: string | null; // null = 执行中
   success: boolean | null; // null = 执行中
+  /** wire 截断标志（历史加载路径）：result 是预览，展开经 getMessageToolResults 补全量 */
+  resultTruncated?: boolean;
+  /** 截断前的全量字符数（截断事件的 fullLength 携带；未截断为 undefined） */
+  resultFullLength?: number;
 }
 
 export interface AggregatedDispatch {
@@ -52,6 +56,14 @@ export interface AggregatedStream {
    * 带 reason='budget_exhausted'——呈现层以待续期卡替代错误框。
    */
   error?: string;
+  /**
+   * thinking wire 截断标志（2026-10-14 P0-2）：历史加载时终态消息的 thinking
+   * 只送了预览（THINKING_WIRE_BUDGET 字符）——thinking_truncated marker 置位。
+   * 展开折叠区经 getMessageThinking 拉全量、expandThinking 归并后标志清除。
+   */
+  thinkingTruncated?: boolean;
+  /** 截断前的 thinking 全量字符数（marker 携带；未截断为 undefined） */
+  thinkingFullChars?: number;
   events: Array<{ seq: number; type: string; content?: string }>;
   /**
    * 时间线分段：thinking / text / tool_call / dispatch 按事件实际发生顺序交错。
@@ -70,6 +82,9 @@ export type StreamSegment =
       args: Record<string, unknown>;
       result: string | null;
       success: boolean | null;
+      /** wire 截断标志（与 AggregatedToolCall 同义，chip 展开拉全量用） */
+      resultTruncated?: boolean;
+      resultFullLength?: number;
     }
   | {
       kind: 'dispatch';
@@ -97,11 +112,16 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
   let text = '';
   let status: AggregatedStream['status'] = 'streaming';
   let streamError: string | undefined;
+  let thinkingTruncated = false;
+  let thinkingFullChars: number | undefined;
   let todos: TodoItem[] = [];
 
   // tool_call / dispatch 按 callId 暂存 start payload，再被 result 配对
   const toolStarts = new Map<string, { toolName: string; args: Record<string, unknown> }>();
-  const toolResults = new Map<string, { result: string; success: boolean }>();
+  const toolResults = new Map<
+    string,
+    { result: string; success: boolean; resultTruncated?: boolean; resultFullLength?: number }
+  >();
   const dispatchStarts = new Map<string, Omit<AggregatedDispatch, 'status'>>();
   const dispatchStatuses = new Map<string, AggregatedDispatch['status']>();
 
@@ -187,6 +207,10 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
           toolResults.set(p.callId, {
             result: typeof p.result === 'string' ? p.result : '',
             success: p.success === true,
+            // wire 截断标志透传（未截断事件无 truncated 键 → undefined）
+            ...(p.truncated === true
+              ? { resultTruncated: true, ...(typeof p.fullLength === 'number' ? { resultFullLength: p.fullLength } : {}) }
+              : {}),
           });
           // 从尾部找最近的未配对同 callId tool 段（result 总在 start 之后）
           for (let i = segments.length - 1; i >= 0; i--) {
@@ -195,6 +219,10 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
               if (seg.result === null) {
                 seg.result = typeof p.result === 'string' ? p.result : '';
                 seg.success = p.success === true;
+                if (p.truncated === true) {
+                  seg.resultTruncated = true;
+                  if (typeof p.fullLength === 'number') seg.resultFullLength = p.fullLength;
+                }
               }
               break;
             }
@@ -247,6 +275,10 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
         break;
       case 'segment_boundary':
         // 仅时间线记录，不参与聚合
+        break;
+      case 'thinking_truncated':
+        thinkingTruncated = true;
+        if (typeof p.fullChars === 'number') thinkingFullChars = p.fullChars;
         break;
       case 'status_change':
         if (
@@ -326,6 +358,9 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
         args: start.args,
         result: result?.result ?? null,
         success: result?.success ?? null,
+        ...(result?.resultTruncated === true
+          ? { resultTruncated: true, ...(result.resultFullLength !== undefined ? { resultFullLength: result.resultFullLength } : {}) }
+          : {}),
       };
     },
   );
@@ -349,6 +384,7 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
     dispatches,
     status,
     ...(streamError !== undefined ? { error: streamError } : {}),
+    ...(thinkingTruncated ? { thinkingTruncated: true, thinkingFullChars } : {}),
     events: sortedTimeline,
     segments,
   };

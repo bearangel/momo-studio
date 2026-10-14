@@ -279,6 +279,18 @@ const api: ApiSurface = {
     // 命令注册表（v2.11，spec §6.1）——/ 菜单命令组数据源；commands.ts 单一真相源
     listCommands: () => invoke<Array<{ name: string; description: string }>>('session:listCommands'),
     getMessages: (sessionId: string) => invoke('session:getMessages', sessionId),
+    // thinking 全量按需拉取（P0-2 wire 截断配套，2026-10-14）：runs 按 seq 升序
+    getMessageThinking: (messageId: string) =>
+      invoke<{ runs: Array<{ seq: number; delta: string }> }>(
+        'session:getMessageThinking',
+        messageId,
+      ),
+    // 工具结果全量按需拉取（wire 截断第二刀）：按消息批量，seq 与截断版同源
+    getMessageToolResults: (messageId: string) =>
+      invoke<{ results: Array<{ seq: number; callId: string; result: string }> }>(
+        'session:getMessageToolResults',
+        messageId,
+      ),
     deleteMessages: (sessionId: string, ids: string[]) =>
       invoke('session:deleteMessages', sessionId, ids),
     loadOlder: (sessionId: string, beforeTs: number, count?: number) =>

@@ -29,7 +29,6 @@ import { sendUserMessage, handleSessionCommand } from './session-service';
 import { SESSION_COMMANDS } from './commands';
 import { getSession, type SessionRow } from '../storage/sessions/repo';
 import {
-  listMessagesBySession,
   listRecentMessagesBySession,
   listOlderMessages,
   countOwnerMessages,
@@ -41,7 +40,8 @@ import {
   listEventsByMessage,
   type MessageEventRow,
 } from '../storage/messages/events-repo';
-import { buildEventsByMessage } from './events-pruning';
+import { backfillCompactSnapshots } from '../storage/messages/event-compaction';
+import { buildEventsByMessage, INITIAL_MESSAGES_RECENT } from './events-pruning';
 import { exportAggregateEvents } from './export-aggregator';
 import { formatRoomToMarkdown, renderSubMessage, type ExportMessage } from './markdown-exporter';
 import { listMembers, getAgentDefinition } from '../agent/crud';
@@ -246,9 +246,58 @@ export function registerSessionIpcHandlers(): void {
   );
 
   // 历史读取：messages + 每条 message 的 events（renderer 用 stream-aggregator 重建）。
+  // P0-1（2026-10-14 会话切换延迟）：首拉只取最近 INITIAL_MESSAGES_RECENT 条，
+  // 更早历史走既有 loadOlder 翻页（压缩快照）——此前 ASC+LIMIT 1000 全量拉取
+  // 是大会话切换延迟主因，且 >1000 条会话实际取到「最早 1000 条」（潜伏 bug）。
   ipcMain.handle('session:getMessages', async (_evt, sessionId: string) => {
-    return withEvents(listMessagesBySession(sessionId));
+    return withEvents(listRecentMessagesBySession(sessionId, INITIAL_MESSAGES_RECENT));
   });
+
+  // thinking 全量按需拉取（P0-2 wire 截断配套）：历史加载时终态消息的 thinking
+  // 只送预览（THINKING_WIRE_BUDGET），用户展开折叠区时经本通道取全量游程。
+  // 快照优先（游程已合并，量小）；无快照回退原始 events。runs 按 seq 升序，
+  // renderer expandThinking 按 seq 归并替换截断版。
+  ipcMain.handle(
+    'session:getMessageThinking',
+    (_evt, messageId: string): { runs: Array<{ seq: number; delta: string }> } => {
+      if (typeof messageId !== 'string') {
+        throw new Error('session:getMessageThinking 参数非法：需要 (messageId: string)');
+      }
+      const events = backfillCompactSnapshots([messageId]).get(messageId) ?? listEventsByMessage(messageId);
+      const runs: Array<{ seq: number; delta: string }> = [];
+      for (const ev of events) {
+        if (ev.eventType === 'thinking_delta' && typeof ev.payload.delta === 'string') {
+          runs.push({ seq: ev.seq, delta: ev.payload.delta });
+        }
+      }
+      return { runs };
+    },
+  );
+
+  // 工具结果全量按需拉取（wire 截断第二刀配套）：终态消息的 tool_call_result
+  // 在 wire 上每条只送 800 字符预览，用户展开 chip 详情时经本通道按消息批量取
+  // 全量（一次 IPC 补齐该消息全部结果，避免逐 chip N+1）。dispatch 回执事件
+  // （subStatus 形态）不带 result 字符串，自然被过滤。
+  ipcMain.handle(
+    'session:getMessageToolResults',
+    (_evt, messageId: string): { results: Array<{ seq: number; callId: string; result: string }> } => {
+      if (typeof messageId !== 'string') {
+        throw new Error('session:getMessageToolResults 参数非法：需要 (messageId: string)');
+      }
+      const events = backfillCompactSnapshots([messageId]).get(messageId) ?? listEventsByMessage(messageId);
+      const results: Array<{ seq: number; callId: string; result: string }> = [];
+      for (const ev of events) {
+        if (
+          ev.eventType === 'tool_call_result' &&
+          typeof ev.payload.callId === 'string' &&
+          typeof ev.payload.result === 'string'
+        ) {
+          results.push({ seq: ev.seq, callId: ev.payload.callId, result: ev.payload.result });
+        }
+      }
+      return { results };
+    },
+  );
 
   // 逐层撤回（turn undo）的消息删除面：按会话归属过滤物理删除（事件级联 +
   // 压缩快照清理 + last_message_at 重算在 repo 内）。返回实际删除的 id——

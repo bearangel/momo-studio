@@ -12,10 +12,12 @@
 //   - dispatches 替代旧 dispatchChildren（AggregatedDispatch 结构）
 //   - subStream 查找留给 A9（本 task 不测嵌套子 agent 正文）
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { Profiler } from 'react';
 import type { StreamState, StreamSegment } from '../../stores/stream.store';
 import type { ImMessage, JournalEntryView } from '../../ipc/types';
 import { useStreamStore } from '../../stores/stream.store';
+import { useSessionStore } from '../../stores/session.store';
 import { AgentStreamBubble } from './AgentStreamBubble';
 
 const abortTurnMock = vi.fn().mockResolvedValue({ stoppedStream: true });
@@ -792,5 +794,84 @@ describe('AgentStreamBubble — 流族计数接线（spec §8.2 D4）', () => {
     expect(screen.getByText('工具 95 次（含子链 116）')).toBeInTheDocument();
     // 终态无「在途」段
     expect(screen.queryByText(/个子任务在途/)).not.toBeInTheDocument();
+  });
+});
+
+// === P1-1（2026-10-14 流式期 O(n²) 修复）：族计数键收窄 ===
+// rawStreams 整表订阅时代：任何无关流的 applyEventBatch（50ms flush）都换 Map
+// 引用 → 全部已挂载气泡重渲染 + countFamilyToolCalls 全量重扫。修复后 selector
+// 返回原始值字符串——族内工具数不变 → Object.is 命中零重渲染。Profiler 计数验证。
+describe('AgentStreamBubble：无关流事件不触发重渲染（P1-1）', () => {
+  /** 批量工具调用（只喂计数源 toolCalls，卡片渲染由显式 segments 控制） */
+  const mkTools = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      callId: `c-${i}`,
+      toolName: 'read_file',
+      args: {},
+      result: 'ok',
+      success: true,
+    }));
+
+  /** 自包含族种子：PM 流（95 工具 + 3 派单）+ 3 子流（32/30/54 工具，1 终态 2 流式） */
+  function seedPmFamily(): { pmStream: StreamState; pmMsg: ImMessage } {
+    const pmMsg = makeMessage({ id: 'm-pm', streamSessionId: 'pm-1' });
+    const dispatches = ['completed', 'executing', 'executing'].map((status, i) => ({
+      callId: `d-${i}`, toolName: `dispatch:子agent${i}`, subStreamSessionId: `sub-${i}`,
+      subAgentName: `子agent${i}`, task: '', status: status as 'completed' | 'executing',
+    }));
+    const pmStream = makeStream({
+      messageId: 'm-pm', status: 'streaming', toolCalls: mkTools(95),
+      dispatches, segments: dispatches.map((d) => ({ kind: 'dispatch' as const, ...d })),
+    });
+    const subMsgs = [32, 30, 54].map((_, i) =>
+      makeMessage({ id: `m-sub-${i}`, sender: '@sub:server', streamSessionId: `sub-${i}`, parentStreamSessionId: 'pm-1' }),
+    );
+    const subStreams = [32, 30, 54].map((n, i) =>
+      makeStream({ messageId: `m-sub-${i}`, status: i === 0 ? 'done' : 'streaming', toolCalls: mkTools(n), segments: [{ kind: 'text' as const, text: `子链 ${i}` }] }),
+    );
+    useSessionStore.setState({ messagesBySession: new Map([[pmMsg.sessionId, [pmMsg, ...subMsgs]]]) });
+    // m-sub-1 经真实 hydrate 路径种（30 个工具对事件）——后续 applyEventBatch
+    // 追加事件时从 eventLog 重聚合，与生产语义一致（setState 直种会被批次替换）
+    const sub1Pairs = Array.from({ length: 30 }, (_, i) => [
+      { id: `h1a-${i}`, messageId: 'm-sub-1', seq: i * 2, eventType: 'tool_call_start' as const, payload: { callId: `hc-${i}`, toolName: 'read_file', args: {} }, createdAt: i },
+      { id: `h1b-${i}`, messageId: 'm-sub-1', seq: i * 2 + 1, eventType: 'tool_call_result' as const, payload: { callId: `hc-${i}`, result: 'ok', success: true }, createdAt: i },
+    ]).flat();
+    useStreamStore.getState().hydrateFromEvents('m-sub-1', sub1Pairs);
+    const cur = useStreamStore.getState().streams;
+    useStreamStore.setState({ streams: new Map([['m-pm', pmStream], ...subStreams.filter((st) => st.messageId !== 'm-sub-1').map((st) => [st.messageId, st] as const), ['m-sub-1', cur.get('m-sub-1')!]]) });
+    return { pmStream, pmMsg };
+  }
+
+  it('无关 messageId 的事件批次 → 气泡零重渲染；族内工具数变化 → 恰好重渲染', () => {
+    const { pmStream, pmMsg } = seedPmFamily();
+    let commits = 0;
+    render(
+      <Profiler id="pm-bubble" onRender={() => { commits += 1; }}>
+        <AgentStreamBubble stream={pmStream} message={pmMsg} />
+      </Profiler>,
+    );
+    const baseline = commits;
+
+    // 1) 无关流的 thinking 增量批次（另一会话/另一链）——族计数键不变
+    act(() => {
+      useStreamStore.getState().applyEventBatch([
+        { id: 'x0', messageId: 'm-unrelated', seq: 0, eventType: 'thinking_delta', payload: { delta: '无关流思考' }, createdAt: 1 },
+        { id: 'x1', messageId: 'm-unrelated', seq: 1, eventType: 'text_delta', payload: { delta: '无关流正文' }, createdAt: 2 },
+      ]);
+    });
+    expect(commits).toBe(baseline); // 零重渲染（修复前：+1，每 50ms 一次全气泡）
+
+    // 2) 族内子流工具数 +1（tool_call_start 配对完成）——恰好重渲染一次
+    act(() => {
+      useStreamStore.getState().applyEventBatch([
+        { id: 's0', messageId: 'm-sub-1', seq: 60, eventType: 'tool_call_start', payload: { callId: 'new-c', toolName: 'bash', args: {} }, createdAt: 3 },
+        { id: 's1', messageId: 'm-sub-1', seq: 61, eventType: 'tool_call_result', payload: { callId: 'new-c', result: 'ok', success: true }, createdAt: 4 },
+      ]);
+    });
+    // Profiler 计子树提交：父气泡（族计数键变化）+ 受影响 DispatchSegment（子流
+    // 自身订阅）——均为本批合法更新；不变量是「无关流零提交」而非精确次数
+    expect(commits).toBeGreaterThan(baseline);
+    // 计数确实更新（116 → 117）
+    expect(screen.getByText(/含子链 117/)).toBeInTheDocument();
   });
 });
