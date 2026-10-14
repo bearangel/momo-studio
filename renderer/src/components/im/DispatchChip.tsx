@@ -8,13 +8,14 @@
 // abort_dispatch 广播 → 子流事件回流驱动（非本地乐观态）。
 import { useEffect, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { Brain, ChevronDown, ChevronRight, CircleCheck, CircleSlash, CircleX, Clock, Loader2, PenLine, Send, Square, Timer, Wrench } from 'lucide-react';
+import { Brain, ChevronDown, ChevronRight, CircleCheck, CircleSlash, CircleX, Clock, Loader2, PenLine, Send, ShieldQuestion, Square, Timer, Wrench } from 'lucide-react';
 import type { StreamState } from '../../stores/stream.store';
 import { ipc } from '../../ipc/client';
 import { Avatar } from '../ui/Avatar';
 import { showToast } from '../ui/Toast';
 import { dispatchStatusStyle, type DispatchStatus } from '../../lib/task-status';
 import { SubAgentSection } from './SubAgentSection';
+import { useWriteGrantStore } from '../../stores/write-grant.store';
 
 export interface DispatchChild {
   subStreamSessionId: string;
@@ -86,6 +87,8 @@ function ElapsedTimer({ since }: { since: number }) {
 
 export function DispatchChip({ child, subStream, subMessageId }: DispatchChipProps) {
   const status = dispatchStatusStyle(child.status);
+  // F3：等待授权态（原始值 selector——无等待流变化不重渲染）
+  const waitingNow = useWriteGrantStore((s) => s.waitingByStream.has(child.subStreamSessionId));
   const StatusIcon = STATUS_ICON[child.status];
   const isBusy = child.status === 'executing' || child.status === 'queued';
   const activity = isBusy ? deriveActivity(subStream) : null;
@@ -124,6 +127,14 @@ export function DispatchChip({ child, subStream, subMessageId }: DispatchChipPro
           <StatusIcon size={11} strokeWidth={1.75} aria-hidden className={child.status === 'executing' ? 'animate-spin' : undefined} />
           {status.label}
         </span>
+        {/* F3（2026-10-14 授权等待可见性）：子链等授权时叠加提示——处置入口在
+            在途面板（行内授权/拒绝）与全局授权卡 */}
+        {waitingNow && (
+          <span className="inline-flex items-center gap-0.5 text-[11px] text-status-warning">
+            <ShieldQuestion size={11} strokeWidth={1.75} aria-hidden />
+            等待授权
+          </span>
+        )}
         {activity && (
           <span className="inline-flex items-center gap-0.5 text-[11px] text-tertiary" data-testid="dispatch-activity">
             <activity.icon size={11} strokeWidth={1.75} aria-hidden />

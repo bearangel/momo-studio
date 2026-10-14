@@ -174,7 +174,7 @@ const api: ApiSurface = {
     listWriteGrants: () => invoke('sandbox:listWriteGrants'),
     revokeWrite: (arg: { scope: 'session' | 'workspace'; key: string; dir: string }) =>
       invoke('sandbox:revokeWrite', arg),
-    onWriteBlocked: (callback: (e: { sessionId: string | null; workspaceId: string | null; dirs: string[]; command: string }) => void) => {
+    onWriteBlocked: (callback: (e: { sessionId: string | null; workspaceId: string | null; dirs: string[]; command: string; streamSessionId: string | null; sourceAgentName: string | null; sessionTitle: string | null }) => void) => {
       type WriteBlockedPayload = Parameters<typeof callback>[0];
       const handler = (_e: IpcRendererEvent, payload: WriteBlockedPayload): void => callback(payload);
       ipcRenderer.on('sandbox:writeBlocked', handler);

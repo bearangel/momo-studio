@@ -8,6 +8,7 @@ import {
   waitForWriteGrant,
   notifyWriteGrantDenied,
   formatWriteDeniedResult,
+  formatWriteTimeoutResult,
   __clearDeniedWaitersForTest,
 } from '../../../src/main/agent/tools/write-grant-wait';
 
@@ -42,13 +43,13 @@ describe('waitForWriteGrant 出口三态（spec §5）', () => {
     expect(n).toBe(3);
   });
 
-  it('无预算：fake timers 推进 10 分钟仍挂起，直至 covered（锁死 120s 有界语义不复活）', async () => {
+  it('等待可跨超时前长时段：9 分钟时 covered 仍生效（F5 超时不提前误伤）', async () => {
     fakeFork();
     vi.useFakeTimers();
     let covered = false;
     const p = waitForWriteGrant({ dirs: ['/d'], isCovered: async () => covered, tickMs: 2_000 });
     const done = p.then((r) => expect(r).toEqual({ kind: 'covered' }));
-    await vi.advanceTimersByTimeAsync(10 * 60 * 1000); // 10 分钟——旧 120s 预算下此处已 timeout
+    await vi.advanceTimersByTimeAsync(9 * 60 * 1000); // 9 分钟 < 10 分钟超时边界
     covered = true;
     await vi.advanceTimersByTimeAsync(2_100);
     await done;
@@ -137,5 +138,39 @@ describe('文案与接线锁', () => {
     );
     expect(src).toContain("m.type === 'write-grant-denied'");
     expect(src).toContain('notifyWriteGrantDenied(msg)');
+  });
+});
+
+// === F5（2026-10-14 后台链授权卡死根因）：等待超时出口 ===
+// 无限等待对 dispatch_bg 后台链无「人在场」前提——超时按拒绝收敛。
+describe('waitForWriteGrant 超时出口（F5）', () => {
+  it('超过 timeoutMs 无 covered/denied/aborted → { kind: "timeout" }', async () => {
+    fakeFork();
+    const t0 = Date.now();
+    const r = await waitForWriteGrant({
+      dirs: ['/ws/out'],
+      isCovered: async () => false,
+      tickMs: 10,
+      timeoutMs: 60,
+    });
+    expect(r).toEqual({ kind: 'timeout' });
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(50);
+  });
+
+  it('covered 先于超时 → 正常返回 covered（超时不误伤）', async () => {
+    fakeFork();
+    const r = await waitForWriteGrant({
+      dirs: ['/ws/out'],
+      isCovered: async () => true,
+      tickMs: 10,
+      timeoutMs: 50,
+    });
+    expect(r).toEqual({ kind: 'covered' });
+  });
+
+  it('formatWriteTimeoutResult 文案含超时成因与目录', () => {
+    const text = formatWriteTimeoutResult(['/ws/out']);
+    expect(text).toContain('授权等待超时');
+    expect(text).toContain('/ws/out');
   });
 });

@@ -20,8 +20,18 @@ const SANDBOXED_TAG = /^(?:seatbelt|bwrap)\//;
 /** 路径 token：绝对路径（负向后顾防 ~/x、URL、变量拼接形态误吞） */
 const PATH_TOKEN = /(?<![\w~])(\/[^\s'"`:,;|<>()[\]]+)/g;
 
+/**
+ * 工具错误行 `<path>: <errno 文案>` 的路径捕获（相对/绝对皆可；取 errno 冒号前
+ * 紧邻 token——兼容 sed 的 `couldn't open temporary file <path>: <errno>` 多词形态）。
+ * 2026-10-14 后台链授权卡死根因配套：workspace 相对路径写目标（mkdir out/、
+ * cmd > file.txt）产生 `mkdir: out: Operation not permitted` 形态——旧 PATH_TOKEN
+ * 只认绝对路径 → 提取空 → 授权卡「未能定位」+ 拒绝记忆键塌缩成通配键。
+ */
+const UTILITY_ERROR_PATH =
+  /(?:^|\s)([^\s:]+):\s*(?:Operation not permitted|Permission denied|Read-only file system|EPERM)/;
+
 /** 只从「错误相关行」提路径：签名/失败动词所在行 */
-const ERROR_LINE = /(error|caused by|failed|cannot|denied|not permitted|permission)/i;
+const ERROR_LINE = /(error|caused by|failed|cannot|denied|not permitted|permission|read-only)/i;
 
 export function detectWriteBlocked(tag: string, command: string, stderr: string, stdout = ''): boolean {
   if (!SANDBOXED_TAG.test(tag)) return false;
@@ -29,13 +39,36 @@ export function detectWriteBlocked(tag: string, command: string, stderr: string,
   return WRITE_DENY_SIGNATURES.some((re) => re.test(combined));
 }
 
-export function extractBlockedPaths(command: string, stderr: string, stdout = ''): string[] {
+/**
+ * 提取被拦路径（最多 3 条）。cwd 提供时，相对路径按 cwd 归一为绝对路径
+ * （workspace 相对写目标的主形态）；缺省时相对 token 跳过（保持旧行为）。
+ */
+export function extractBlockedPaths(
+  command: string,
+  stderr: string,
+  stdout = '',
+  cwd?: string,
+): string[] {
   const combined = `${stderr}\n${stdout}`;
   if (!WRITE_DENY_SIGNATURES.some((re) => re.test(combined))) return [];
   const out: string[] = [];
+  const resolveToken = (raw: string): string | null => {
+    if (raw.startsWith('/')) return raw;
+    if (cwd !== undefined && raw.length > 0 && !raw.startsWith('-')) {
+      return path.resolve(cwd, raw);
+    }
+    return null; // 相对路径无 cwd 语境：跳过
+  };
   const collect = (text: string): void => {
     for (const line of text.split('\n')) {
       if (!ERROR_LINE.test(line)) continue;
+      // 先按工具错误格式捕获（相对/绝对皆可，路径完整性优于裸 token 扫描）
+      const utilMatch = UTILITY_ERROR_PATH.exec(line);
+      if (utilMatch !== null && utilMatch[1] !== undefined) {
+        const resolved = resolveToken(utilMatch[1]);
+        if (resolved !== null && !out.includes(resolved)) out.push(resolved);
+        if (out.length >= 3) return;
+      }
       for (const m of line.matchAll(PATH_TOKEN)) {
         const p = m[1];
         if (p === undefined) continue;

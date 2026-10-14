@@ -761,7 +761,7 @@ export class AgentRunner {
   abortStream(streamSessionId: string): void {
     const active = this.activeTasks.get(streamSessionId);
     if (!active) return;
-    active.runtime.child.send({ type: 'abort', streamSessionId });
+    this.safeSend(active.runtime.child, { type: 'abort', streamSessionId }, 'abort');
   }
 
   /**
@@ -801,7 +801,7 @@ export class AgentRunner {
     let hit = false;
     for (const active of this.activeTasks.values()) {
       if (active.executionSessionId !== executionSessionId) continue;
-      active.runtime.child.send({ type: 'abort', streamSessionId: active.streamSessionId });
+      this.safeSend(active.runtime.child, { type: 'abort', streamSessionId: active.streamSessionId }, 'abort-by-session');
       hit = true;
     }
     return hit;
@@ -833,7 +833,7 @@ export class AgentRunner {
    */
   async notifyTaskReply(reply: TaskReplyNotification): Promise<void> {
     for (const active of this.activeTasks.values()) {
-      active.runtime.child.send({ type: 'task-reply', reply });
+      this.safeSend(active.runtime.child, { type: 'task-reply', reply }, 'task-reply');
     }
   }
 
@@ -844,7 +844,26 @@ export class AgentRunner {
    */
   notifyWriteGrantDenied(dirs: string[]): void {
     for (const active of this.activeTasks.values()) {
-      active.runtime.child.send({ type: 'write-grant-denied', dirs });
+      this.safeSend(active.runtime.child, { type: 'write-grant-denied', dirs }, 'write-grant-denied');
+    }
+  }
+
+  /**
+   * 父→子发信护栏（2026-10-14 EPIPE 主进程崩溃修复）：中断级联/自然退出杀死
+   * 子进程后，在途 task_reply / 广播 / abort 仍会路由到该 runner——child.send
+   * 对已关闭的 IPC 通道同步抛 EPIPE，抛穿 IPC message handler（internal-event-
+   * bridge → ChildProcess emit）即 Uncaught Exception 弹窗。语义：目标已死 =
+   * 消息合法不可达（进程内等待者已随进程消失），warn 记痕丢弃。
+   */
+  private safeSend(child: ChildProcess, msg: Record<string, unknown>, label: string): void {
+    try {
+      child.send(msg as never);
+    } catch (err) {
+      logger.warn('父→子发信失败（目标 runtime 已退出，消息丢弃）', {
+        label,
+        pid: child.pid,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 

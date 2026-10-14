@@ -158,3 +158,42 @@ describe('WRITE_BLOCKED_HINT 文案（spec hard-gate §9 三态文案）', () =>
     expect(WRITE_BLOCKED_HINT).toContain('也勿在等待期间尝试其他写入路径');
   });
 });
+
+// === F6（2026-10-14 后台链授权卡死根因）：workspace 相对路径写目标提取 ===
+// 真机形态：`mkdir: out: Operation not permitted`（相对路径）——旧 PATH_TOKEN
+// 只认绝对路径 → 提取空 → 卡「未能定位」+ 拒绝记忆键塌缩。
+describe('extractBlockedPaths 相对路径 + cwd 语境（F6）', () => {
+  it('工具错误行相对路径 + cwd → 归一为绝对路径', () => {
+    const out = extractBlockedPaths(
+      'mkdir -p out/build',
+      'mkdir: out: Operation not permitted',
+      '',
+      '/ws/dape',
+    );
+    expect(out).toEqual(['/ws/dape/out']);
+  });
+
+  it('绝对路径形态不回归（旧行为保持）', () => {
+    const out = extractBlockedPaths(
+      'x',
+      'mkdir: /Users/u/.cache/pip: Operation not permitted',
+    );
+    expect(out).toEqual(['/Users/u/.cache/pip']);
+  });
+
+  it('相对路径无 cwd → 跳过（不伪造）', () => {
+    const out = extractBlockedPaths('mkdir -p out', 'mkdir: out: Operation not permitted');
+    expect(out).toEqual([]);
+  });
+
+  it('sed 临时文件形态（Read-only file system）+ 多行混合', () => {
+    const out = extractBlockedPaths(
+      'sed -i s/a/b/ src/main.ts',
+      "ls: ok\nsed: couldn't open temporary file out/sedXYZ: Read-only file system",
+      '',
+      '/ws/proj',
+    );
+    // sed 报的是临时文件全路径（提取层给确切目标；目录上溯由 normalizeGrantDirs 负责）
+    expect(out).toEqual(['/ws/proj/out/sedXYZ']);
+  });
+});

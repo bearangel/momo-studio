@@ -36,7 +36,7 @@ import {
   normalizeGrantDirs,
   WRITE_BLOCKED_HINT,
 } from './sandbox-write-hint';
-import { waitForWriteGrant, formatWriteDeniedResult } from './write-grant-wait';
+import { waitForWriteGrant, formatWriteDeniedResult, formatWriteTimeoutResult } from './write-grant-wait';
 
 /**
  * 命令黑名单。每条 = 危险模式 + 命中后给 LLM 的理由。
@@ -211,6 +211,7 @@ export class ShellTools implements ToolModule {
         throw e;
       }
       if (wait.kind === 'denied') return formatWriteDeniedResult(last.dirs);
+      if (wait.kind === 'timeout') return formatWriteTimeoutResult(last.dirs);
       last = await this.bashOnce(command, timeoutMs, ctx);
     }
     return last.text;
@@ -401,7 +402,10 @@ export class ShellTools implements ToolModule {
             text,
             blocked,
             dirs: blocked
-              ? normalizeGrantDirs(extractBlockedPaths(command, `${stderr}\n${stdout}`), os.homedir())
+              ? normalizeGrantDirs(
+                  extractBlockedPaths(command, `${stderr}\n${stdout}`, '', ctx.workspaceDir),
+                  os.homedir(),
+                )
               : [],
           });
         });

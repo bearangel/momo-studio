@@ -8,6 +8,7 @@
 import os from 'node:os';
 import type { MessageEventRow } from '../storage/messages/events-repo';
 import { getMessage, getLatestMessageByStreamSessionId } from '../storage/messages/repo';
+import { getSession } from '../storage/sessions/repo';
 import { loadElectronApis } from '../electron-access';
 import { detectWriteBlocked, extractBlockedPaths, normalizeGrantDirs } from '../agent/tools/sandbox-write-hint';
 
@@ -25,6 +26,32 @@ export interface WriteBlockedSignal {
   workspaceId: string | null;
   dirs: string[];
   command: string;
+  /** F4（2026-10-14 后台链授权卡死配套）：来源标注三件套——卡片据此指明
+   * 「谁在哪条流的哪个会话里等授权」，后台链场景用户才知道该不该放行 */
+  streamSessionId: string | null;
+  sourceAgentName: string | null;
+  sessionTitle: string | null;
+}
+
+/**
+ * F4 来源标注解析（两条上报链共用）：sender `agent-<slug>-<rand>` 提取 slug
+ * 作展示名（比 instance 反查轻量；解析失败降级 null，卡上不显示来源行）。
+ */
+function resolveSourceAnnotation(streamSessionId: string | null): {
+  sourceAgentName: string | null;
+  sessionTitle: string | null;
+} {
+  try {
+    if (streamSessionId === null) return { sourceAgentName: null, sessionTitle: null };
+    const msg = getLatestMessageByStreamSessionId(streamSessionId);
+    if (!msg) return { sourceAgentName: null, sessionTitle: null };
+    const senderMatch = /^agent-([a-z0-9-]+?)(?:-[a-z0-9]{6})?$/i.exec(msg.sender);
+    const sourceAgentName = senderMatch !== null && senderMatch[1] !== undefined ? senderMatch[1] : null;
+    const sessionTitle = getSession(msg.sessionId)?.title ?? null;
+    return { sourceAgentName, sessionTitle };
+  } catch {
+    return { sourceAgentName: null, sessionTitle: null };
+  }
 }
 
 export function __resetInspectStateForTest(): void {
@@ -72,11 +99,15 @@ export function inspectEventBatch(events: MessageEventRow[]): WriteBlockedSignal
     } catch {
       // DB 异常：信号仍发出（dirs/command 可用），键位 null → 卡按钮禁用
     }
+    const streamSessionId = getMessage(e.messageId)?.streamSessionId ?? null;
+    const annotation = resolveSourceAnnotation(streamSessionId);
     return {
       sessionId,
       workspaceId,
       dirs,
       command: command.length > COMMAND_PREVIEW_MAX ? command.slice(0, COMMAND_PREVIEW_MAX) : command,
+      streamSessionId,
+      ...annotation,
     };
   }
   return null;
@@ -106,6 +137,7 @@ export function writeBlockedFromChildMsg(msg: unknown): boolean {
   } catch {
     sessionId = null;
   }
+  const annotation = resolveSourceAnnotation(m.streamSessionId);
   const { BrowserWindow } = loadElectronApis();
   const win = BrowserWindow?.getAllWindows()[0];
   if (win && !win.isDestroyed()) {
@@ -114,6 +146,8 @@ export function writeBlockedFromChildMsg(msg: unknown): boolean {
       workspaceId: typeof m.workspaceId === 'string' ? m.workspaceId : null,
       dirs: m.dirs,
       command: m.command.length > 200 ? m.command.slice(0, 200) : m.command,
+      streamSessionId: m.streamSessionId,
+      ...annotation,
     });
   }
   return true;

@@ -147,6 +147,10 @@ describe('writeBlockedFromChildMsg（spec §12）', () => {
       workspaceId: 'w-rep',
       dirs: [path.join(os.homedir(), '.cargo')],
       command: 'cargo build',
+      // F4 来源标注三件套（sender `agent-x` 无 -XXXXXX 后缀 → slug 'x'；会话行缺失 → title null）
+      streamSessionId: 'ss-rep',
+      sourceAgentName: 'x',
+      sessionTitle: null,
     });
   });
 
@@ -154,5 +158,57 @@ describe('writeBlockedFromChildMsg（spec §12）', () => {
     expect(writeBlockedFromChildMsg({ type: 'other' })).toBe(false);
     expect(writeBlockedFromChildMsg('not-an-object')).toBe(false);
     expect(writeBlockedFromChildMsg({ type: 'write-blocked-report', dirs: 42 })).toBe(false);
+  });
+});
+
+// === F4（2026-10-14 后台链授权卡死配套）：载荷来源标注三件套 ===
+// streamSessionId / sourceAgentName / sessionTitle——两条上报链同源解析，
+// 卡片与在途面板据此指明「谁在哪条流等授权」。
+describe('writeBlockedFromChildMsg 载荷来源标注（F4）', () => {
+  it('推送载荷带 streamSessionId + sender 提取的 agent 名 + 会话标题', () => {
+    // seed：会话 + 子 agent 消息行（sender agent-<slug>-<rand> 形态）
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO workspaces (id, name, directory_path, owner_id)
+       VALUES ('ws-1', 'dape', '/ws/dape', 'u-test')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO sessions (id, workspace_id, title, title_auto, kind, created_at, updated_at)
+       VALUES ('s-f4', 'ws-1', '团队功能与分工介绍', 0, 'chat', 1, 1)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO messages (id, session_id, sender, event_type, body, stream_session_id, status, source, created_at, updated_at)
+       VALUES ('m-f4-sub', 's-f4', 'agent-coder-66XMEw', 'm.room.message', '', 'ss-f4-sub', 'streaming', 'local', 1, 1)`,
+    ).run();
+
+    mockSend.mockClear();
+    const handled = writeBlockedFromChildMsg({
+      type: 'write-blocked-report',
+      streamSessionId: 'ss-f4-sub',
+      workspaceId: 'ws-1',
+      dirs: ['/ws/out'],
+      command: 'mkdir -p out',
+    });
+    expect(handled).toBe(true);
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    const payload = mockSend.mock.calls[0]![1] as Record<string, unknown>;
+    expect(payload.streamSessionId).toBe('ss-f4-sub');
+    expect(payload.sourceAgentName).toBe('coder');
+    expect(payload.sessionTitle).toBe('团队功能与分工介绍');
+  });
+
+  it('流查无消息行 → 三件套降级 null（不抛错不阻断推送）', () => {
+    mockSend.mockClear();
+    writeBlockedFromChildMsg({
+      type: 'write-blocked-report',
+      streamSessionId: 'ss-ghost',
+      workspaceId: 'ws-1',
+      dirs: ['/x'],
+      command: 'true',
+    });
+    const payload = mockSend.mock.calls[0]![1] as Record<string, unknown>;
+    expect(payload.streamSessionId).toBe('ss-ghost');
+    expect(payload.sourceAgentName).toBeNull();
+    expect(payload.sessionTitle).toBeNull();
   });
 });

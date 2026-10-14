@@ -8,14 +8,18 @@
 // 注：brief 骨架的徽标前景 text-status-error-foreground 在 token 表中不存在（会静默
 // 生成空样式），按 Button danger 既有惯例改为 text-inverse——唯一偏离 verbatim 处。
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2, Square, Zap } from 'lucide-react';
+import { Loader2, Square, Zap, ShieldQuestion } from 'lucide-react';
 import { ipc } from '../../ipc/client';
-import type { InFlightChainView } from '../../ipc/types';
+import { useWriteGrantStore } from '../../stores/write-grant.store';
+import type { InFlightChainView, WriteBlockedEvent } from '../../ipc/types';
 
 export function InFlightPanel({ sessionId }: { sessionId: string }) {
   const [open, setOpen] = useState(false);
   const [chains, setChains] = useState<InFlightChainView[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // F3（2026-10-14 授权等待可见性）：等待授权的流位图——面板行区分「执行中/等待授权」
+  const waitingByStream = useWriteGrantStore((s) => s.waitingByStream);
+  const clearWaiting = useWriteGrantStore((s) => s.clearWaiting);
 
   const refresh = useCallback(async () => {
     // renderer 面按 preload 契约传位置参数（preload 内部序列化 {sessionId} 上线；
@@ -30,6 +34,20 @@ export function InFlightPanel({ sessionId }: { sessionId: string }) {
     timerRef.current = setInterval(() => void refresh(), 2000);
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [open, refresh]);
+
+  // F3 行内处置：授权（本会话作用域）——key 缺失或空 dirs 时按钮禁用兜底
+  const grantWaiting = (ev: WriteBlockedEvent): void => {
+    if (ev.sessionId === null || ev.dirs.length === 0) return;
+    void ipc.sandbox
+      .grantWrite({ scope: 'session', key: ev.sessionId, dirs: ev.dirs })
+      .then(() => clearWaiting(ev.streamSessionId ?? ''))
+      .catch(() => {});
+  };
+  // F3 行内处置：拒绝——广播解除子进程等待（sessionId null 也有效：dirs 匹配在子进程侧）
+  const denyWaiting = (ev: WriteBlockedEvent): void => {
+    void ipc.sandbox.denyWrite({ sessionId: ev.sessionId, dirs: ev.dirs }).catch(() => {});
+    clearWaiting(ev.streamSessionId ?? '');
+  };
 
   return (
     <div className="relative">
@@ -49,22 +67,56 @@ export function InFlightPanel({ sessionId }: { sessionId: string }) {
         <div className="absolute right-0 top-7 z-20 w-72 rounded border border-subtle bg-surface-1 p-2 shadow-lg">
           <p className="mb-1.5 text-xs font-medium text-primary">在途子任务（{chains.length}）</p>
           {chains.length === 0 && <p className="py-2 text-center text-xs text-tertiary">当前没有运行中的子任务</p>}
-          {chains.map((c) => (
-            <div key={c.taskId} className="flex items-center gap-1.5 rounded px-1 py-1 text-xs hover:bg-surface-active">
-              <Loader2 size={11} strokeWidth={1.75} aria-hidden className="animate-spin text-accent-500" />
-              <span className="text-secondary">{c.subAgentName ?? c.taskId.slice(0, 8)}</span>
-              <span className="text-tertiary">第 {c.round} 轮</span>
-              <span className="ml-auto text-tertiary">{Math.round((Date.now() - c.startedAt) / 60000)}m</span>
-              <button
-                type="button"
-                aria-label={`停止 ${c.subAgentName ?? c.taskId.slice(0, 8)} 的任务`}
-                className="cursor-pointer text-tertiary hover:text-status-error"
-                onClick={() => void ipc.dispatch.cancelChain({ taskId: c.taskId })}
-              >
-                <Square size={11} strokeWidth={1.75} aria-hidden />
-              </button>
-            </div>
-          ))}
+          {chains.map((c) => {
+            const waiting = c.subStreamSessionId != null ? waitingByStream.get(c.subStreamSessionId) : undefined;
+            const ev = waiting?.event;
+            return (
+              <div key={c.taskId} className="flex items-center gap-1.5 rounded px-1 py-1 text-xs hover:bg-surface-active">
+                {ev !== undefined ? (
+                  <ShieldQuestion size={11} strokeWidth={1.75} aria-hidden className="shrink-0 text-status-warning" />
+                ) : (
+                  <Loader2 size={11} strokeWidth={1.75} aria-hidden className="animate-spin text-accent-500" />
+                )}
+                <span className="text-secondary">{c.subAgentName ?? c.taskId.slice(0, 8)}</span>
+                {ev !== undefined ? (
+                  <span className="text-status-warning">等待授权</span>
+                ) : (
+                  <span className="text-tertiary">第 {c.round} 轮</span>
+                )}
+                <span className="ml-auto text-tertiary">{Math.round((Date.now() - c.startedAt) / 60000)}m</span>
+                {ev !== undefined ? (
+                  <>
+                    <button
+                      type="button"
+                      aria-label={`授权 ${c.subAgentName ?? c.taskId.slice(0, 8)} 的写入`}
+                      disabled={ev.sessionId === null || ev.dirs.length === 0}
+                      onClick={() => grantWaiting(ev)}
+                      className="shrink-0 cursor-pointer rounded bg-status-success-tint px-1.5 py-0.5 text-[10px] text-status-success disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      授权
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`拒绝 ${c.subAgentName ?? c.taskId.slice(0, 8)} 的写入`}
+                      onClick={() => denyWaiting(ev)}
+                      className="shrink-0 cursor-pointer rounded bg-status-error-tint px-1.5 py-0.5 text-[10px] text-status-error"
+                    >
+                      拒绝
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    aria-label={`停止 ${c.subAgentName ?? c.taskId.slice(0, 8)} 的任务`}
+                    className="cursor-pointer text-tertiary hover:text-status-error"
+                    onClick={() => void ipc.dispatch.cancelChain({ taskId: c.taskId })}
+                  >
+                    <Square size={11} strokeWidth={1.75} aria-hidden />
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

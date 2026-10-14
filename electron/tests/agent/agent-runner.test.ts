@@ -86,6 +86,20 @@ function mkMockChild(): ChildProcess & { kill: ReturnType<typeof vi.fn>; send: R
   } as unknown as ChildProcess & { kill: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn>; on: ReturnType<typeof vi.fn>; off: ReturnType<typeof vi.fn> };
 }
 
+/** 死通道 mock：task-config 握手正常，其余消息 send 同步抛 EPIPE（真实死亡形态） */
+function mkDeadChannelChild(): ChildProcess & { kill: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn>; on: ReturnType<typeof vi.fn>; off: ReturnType<typeof vi.fn> } {
+  const base = mkMockChild();
+  const origSend = base.send as unknown as ReturnType<typeof vi.fn>;
+  base.send = vi.fn((msg: unknown) => {
+    const type = (msg as { type?: string } | null)?.type;
+    if (type === 'task-config') return origSend(msg);
+    const e = new Error('write EPIPE');
+    (e as NodeJS.ErrnoException).code = 'EPIPE';
+    throw e;
+  }) as unknown as typeof base.send;
+  return base;
+}
+
 /** 从 mock child 的 on() 调用记录里取回注册的 message handler */
 function getMessageHandler(child: ChildProcess): (msg: unknown) => void {
   const onCalls = (child.on as unknown as ReturnType<typeof vi.fn>).mock.calls;
@@ -973,3 +987,56 @@ describe('AgentRunner child exit 清理链（C2）', () => {
       __clearRegistryForTest();
     }
   });
+
+
+// === 2026-10-14 EPIPE 主进程崩溃回归锁（第二轮终止验收实录）===
+// 时序：中断级联杀死 PM runtime → 子链 settle 的 task_reply 在途 →
+// routeTaskReply → notifyTaskReply → child.send 打向已死通道 → EPIPE 同步
+// 抛穿 IPC handler → Uncaught Exception 弹窗。护栏语义：目标已死 = 消息合法
+// 不可达，warn 记痕丢弃，绝不抛穿。
+describe('AgentRunner 父→子发信护栏（EPIPE 死通道）', () => {
+  async function startWithDeadChannel(): Promise<{
+    runner: AgentRunner;
+    child: ReturnType<typeof mkDeadChannelChild>;
+  }> {
+    const child = mkDeadChannelChild();
+    const warmPool = new WarmPool({ spawn: vi.fn().mockResolvedValue(child) });
+    await warmPool.warm('inst1');
+    const runner = mkRunner(warmPool);
+    await runner.executeTask({
+      taskId: null,
+      executionSessionId: '!room:home',
+      body: 'hi',
+      streamSessionId: 'ss-epipe',
+    });
+    expect(runner.activeTaskCount()).toBe(1);
+    return { runner, child };
+  }
+
+  it('notifyTaskReply 打向死通道 → 不抛穿（resolved）+ 消息已尝试投递', async () => {
+    const { runner, child } = await startWithDeadChannel();
+    await expect(
+      runner.notifyTaskReply({ taskId: 't1', status: 'completed', body: '结果' } as never),
+    ).resolves.toBeUndefined();
+    expect(child.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'task-reply' }));
+    runner.destroy();
+  });
+
+  it('notifyWriteGrantDenied 打向死通道 → 不抛穿', async () => {
+    const { runner } = await startWithDeadChannel();
+    expect(() => runner.notifyWriteGrantDenied(['/ws/out'])).not.toThrow();
+    runner.destroy();
+  });
+
+  it('abortStream 打向死通道 → 不抛穿（中断级联主路径）', async () => {
+    const { runner } = await startWithDeadChannel();
+    expect(() => runner.abortStream('ss-epipe')).not.toThrow();
+    runner.destroy();
+  });
+
+  it('abortTasksBySession 打向死通道 → 命中仍计 true 且不抛穿', async () => {
+    const { runner } = await startWithDeadChannel();
+    expect(runner.abortTasksBySession('!room:home')).toBe(true);
+    runner.destroy();
+  });
+});

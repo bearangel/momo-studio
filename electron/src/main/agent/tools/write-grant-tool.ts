@@ -6,7 +6,7 @@
 import os from 'node:os';
 import { normalizeGrantDirs } from './sandbox-write-hint';
 import { requestEffectiveNetwork } from './net-trust-bridge';
-import { waitForWriteGrant, formatWriteDeniedResult } from './write-grant-wait';
+import { waitForWriteGrant, formatWriteDeniedResult, formatWriteTimeoutResult } from './write-grant-wait';
 import type { ToolContext } from './types';
 
 /** WorkspaceFS 越界异常文案（文案锁见 workspace-fs.test.ts——本 regex 是其消费契约；
@@ -75,6 +75,7 @@ export async function runWithWriteGrant<T>(
       throw e;
     }
     if (wait.kind === 'denied') return formatWriteDeniedResult(dirs);
+    if (wait.kind === 'timeout') return formatWriteTimeoutResult(dirs);
     // covered：刷新 extra 根（三层合成）→ 循环头重执行
     try {
       const eff = await queryNet(ctx.streamSessionId, ctx.workspaceId);

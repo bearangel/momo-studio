@@ -539,7 +539,7 @@ describe('SandboxNotice：netOff 拦截卡', () => {
 
 // ═══ 通用写授权卡（spec 2026-10-03 §7）═══
 describe('SandboxNotice：通用写授权卡', () => {
-  const EVT: WriteBlockedEvent = { sessionId: 's-1', workspaceId: 'w-1', dirs: ['/Users/x/.cargo'], command: 'cargo build' };
+  const EVT: WriteBlockedEvent = { sessionId: 's-1', workspaceId: 'w-1', dirs: ['/Users/x/.cargo'], command: 'cargo build', streamSessionId: 'ss-1', sourceAgentName: null, sessionTitle: null };
 
   // 本 describe 无既有 mock 重置先例，deny 断言用 toHaveBeenCalledWith 需防跨用例
   // 调用累积误绿——补 beforeEach 单独重置 denyWriteMock；默认给 resolved：真实

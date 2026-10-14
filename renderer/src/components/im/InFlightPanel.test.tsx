@@ -15,6 +15,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import type { InFlightChainView } from '../../ipc/types';
 import { InFlightPanel } from './InFlightPanel';
+import { useWriteGrantStore } from '../../stores/write-grant.store';
 
 // IPC 边界 mock：window.api.dispatch 只含被测面（listInFlight / cancelChain）
 const listInFlightMock = vi.fn();
@@ -197,6 +198,85 @@ describe('InFlightPanel — 卸载清理（focus 5）', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(6000);
     });
+    // spy 必须还原：fakeTimers + spyOn 组合下残留会让后续用例的组件卸载
+    // 调 clearInterval 时抛 ReferenceError（2026-10-14 F3 用例暴露）
+    clearIntervalSpy.mockRestore();
     expect(listInFlightMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+// === F3（2026-10-14 后台链授权卡死配套）：等待授权态 + 行内处置 ===
+describe('InFlightPanel 等待授权（F3）', () => {
+  const grantWriteMock = vi.fn();
+  const denyWriteMock = vi.fn();
+
+  beforeEach(() => {
+    (globalThis as unknown as { window: { api: unknown } }).window.api = {
+      dispatch: { listInFlight: listInFlightMock, cancelChain: cancelChainMock },
+      sandbox: { grantWrite: grantWriteMock, denyWrite: denyWriteMock },
+    };
+    grantWriteMock.mockReset().mockResolvedValue(undefined);
+    denyWriteMock.mockReset().mockResolvedValue(undefined);
+    useWriteGrantStore.getState().__resetForTest();
+  });
+
+  function seedWaiting(): void {
+    useWriteGrantStore.getState().receiveWriteBlocked({
+      sessionId: 'sess-1',
+      workspaceId: 'ws-1',
+      dirs: ['/ws/out'],
+      command: 'mkdir -p out',
+      streamSessionId: 's-sub-1',
+      sourceAgentName: 'coder',
+      sessionTitle: '团队功能与分工介绍',
+    });
+  }
+
+  it('等待中的链：显示「等待授权」替代「第 N 轮」，出现授权/拒绝按钮、无停止按钮', async () => {
+    listInFlightMock.mockResolvedValue([makeChain()]);
+    render(<InFlightPanel sessionId="sess-1" />);
+    seedWaiting();
+    await openPanel();
+    expect(screen.getByText('等待授权')).toBeInTheDocument();
+    expect(screen.getByText('授权')).toBeInTheDocument();
+    expect(screen.getByText('拒绝')).toBeInTheDocument();
+    expect(screen.queryByLabelText(/停止 .+ 的任务/)).not.toBeInTheDocument();
+  });
+
+  it('点击授权 → sandbox.grantWrite(session 作用域) + 等待条目清除', async () => {
+    listInFlightMock.mockResolvedValue([makeChain()]);
+    render(<InFlightPanel sessionId="sess-1" />);
+    seedWaiting();
+    await openPanel();
+    await act(async () => {
+      fireEvent.click(screen.getByText('授权'));
+    });
+    expect(grantWriteMock).toHaveBeenCalledWith({ scope: 'session', key: 'sess-1', dirs: ['/ws/out'] });
+    await act(async () => {});
+    expect(useWriteGrantStore.getState().waitingByStream.has('s-sub-1')).toBe(false);
+  });
+
+  it('点击拒绝 → sandbox.denyWrite 广播 + 等待条目清除', async () => {
+    listInFlightMock.mockResolvedValue([makeChain()]);
+    render(<InFlightPanel sessionId="sess-1" />);
+    seedWaiting();
+    await openPanel();
+    await act(async () => {
+      fireEvent.click(screen.getByText('拒绝'));
+    });
+    expect(denyWriteMock).toHaveBeenCalledWith({ sessionId: 'sess-1', dirs: ['/ws/out'] });
+    expect(useWriteGrantStore.getState().waitingByStream.has('s-sub-1')).toBe(false);
+  });
+
+  it('空 dirs 等待事件：授权禁用（提取失败防误授根目录），拒绝可用', async () => {
+    listInFlightMock.mockResolvedValue([makeChain()]);
+    render(<InFlightPanel sessionId="sess-1" />);
+    useWriteGrantStore.getState().receiveWriteBlocked({
+      sessionId: null, workspaceId: 'ws-1', dirs: [], command: 'x',
+      streamSessionId: 's-sub-1', sourceAgentName: null, sessionTitle: null,
+    });
+    await openPanel();
+    expect(screen.getByText('授权')).toBeDisabled();
+    expect(screen.getByText('拒绝')).toBeEnabled();
   });
 });

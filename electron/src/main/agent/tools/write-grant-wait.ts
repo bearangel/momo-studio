@@ -12,10 +12,18 @@
 export type WriteWaitOutcome =
   | { kind: 'covered' }
   | { kind: 'denied' }
-  | { kind: 'aborted' };
+  | { kind: 'aborted' }
+  | { kind: 'timeout' };
 
 /** 轮询节拍（每拍一次 effective 桥查询，IPC 开销可忽略） */
 export const WRITE_GRANT_WAIT_TICK_MS = 2_000;
+
+/**
+ * 等待超时（2026-10-14 后台链授权卡死根因配套 F5）：无限等待对前台交互成立
+ * （人在场），dispatch_bg 后台链无「人在场」前提——真机实录：子链等待 13 分钟
+ * 靠用户手动 cancelChain 救援。超时按拒绝收敛（agent 收到超时文案自行改道）。
+ */
+export const WRITE_GRANT_WAIT_TIMEOUT_MS = 10 * 60_000;
 
 /** 拒绝广播的等待方匹配（spec §4.4）：dirs 有交集，或两侧均为空（降级卡关闭意图） */
 function denialMatches(waitDirs: string[], denyDirs: string[]): boolean {
@@ -56,11 +64,14 @@ export async function waitForWriteGrant(opts: {
   /** 覆盖判定（生产 = effective 桥轮询：dirs ⊆ extraDirs 三层合成） */
   isCovered: () => Promise<boolean>;
   tickMs?: number;
+  /** 等待上限（默认 WRITE_GRANT_WAIT_TIMEOUT_MS；测试可缩短） */
+  timeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<WriteWaitOutcome> {
   // 非 fork 短路（原 §12 timeout 短路的拒绝语义迁移）
   if (typeof process.send !== 'function') return { kind: 'denied' };
   const tick = opts.tickMs ?? WRITE_GRANT_WAIT_TICK_MS;
+  const deadline = Date.now() + (opts.timeoutMs ?? WRITE_GRANT_WAIT_TIMEOUT_MS);
 
   let deniedFired = false;
   let deniedResolve!: () => void;
@@ -84,6 +95,7 @@ export async function waitForWriteGrant(opts: {
       await Promise.race([deniedPromise, sleepInterruptible(tick, opts.signal)]);
       if (opts.signal?.aborted) return { kind: 'aborted' };
       if (deniedFired) return { kind: 'denied' };
+      if (Date.now() >= deadline) return { kind: 'timeout' };
     }
   } finally {
     deniedWaiters.delete(waiter);
@@ -111,4 +123,9 @@ function sleepInterruptible(ms: number, signal?: AbortSignal): Promise<void> {
 /** denied 出口回给 LLM 的统一文案（bash 与文件工具共用，spec §7 逐字） */
 export function formatWriteDeniedResult(dirs: string[]): string {
   return `用户已拒绝授权（目录：${dirs.join('、') || '未能定位'}）。请勿重试同一目标；如确需写入请与用户协商其他方案。`;
+}
+
+/** timeout 出口文案（F5）：按拒绝收敛但区分成因——agent 知道是超时而非用户意志 */
+export function formatWriteTimeoutResult(dirs: string[]): string {
+  return `授权等待超时（10 分钟无响应），已按拒绝处理（目录：${dirs.join('、') || '未能定位'}）。请勿原地重试；如确需写入请在回复中说明，等用户主动授权后再试。`;
 }

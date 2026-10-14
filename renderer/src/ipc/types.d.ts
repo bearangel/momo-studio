@@ -1596,6 +1596,15 @@ export interface WriteBlockedEvent {
   workspaceId: string | null;
   dirs: string[];
   command: string;
+  /**
+   * F4（2026-10-14 后台链授权卡死配套）：等待授权的流 id——在途面板/派单 chip
+   * 据此呈现「等待授权」态（write-grant.store.waitingByStream 键）。
+   */
+  streamSessionId: string | null;
+  /** 来源 agent 展示名（sender `agent-<slug>-<rand>` 提取；解析失败 null） */
+  sourceAgentName: string | null;
+  /** 来源会话标题（解析失败 null——卡上不显示来源行） */
+  sessionTitle: string | null;
 }
 
 /** v2.5 变更操作四值域。与 electron 端 journal/types.ts 的 JournalOp 对齐（spec §5.2）。 */

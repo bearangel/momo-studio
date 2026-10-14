@@ -175,6 +175,13 @@ export function SandboxNotice() {
           <X size={16} strokeWidth={1.75} aria-hidden />
         </button>
       </div>
+      {/* F4（2026-10-14）：来源标注——后台链场景用户需知道「谁在等」再决定放行 */}
+      {showWriteBlocked && writePending !== null && writePending.sourceAgentName !== null && (
+        <p className="mb-2 text-xs text-tertiary">
+          来自 {writePending.sourceAgentName}
+          {writePending.sessionTitle !== null ? ` · 会话「${writePending.sessionTitle}」` : ''} 的后台任务
+        </p>
+      )}
       {showNetOff ? (
         <>
           <p className="mb-3 leading-relaxed">
