@@ -493,8 +493,21 @@ export class RouterService {
       return;
     }
 
-    const runner = this.opts.runners.get(assignmentId);
-    if (!runner) {
+    // D1 修复（2026-10-15 验收 P0）：有效成员无 runner 时经 ensureRunner 自动拉起
+    // （同 routeUserChat 语义，spec v25 §4.6）；失败回执延后到 B2 校验之后统一
+    // 上报（未校验事件不得触发 PM 通知）；ensureRunner 未注入保持旧 warn 语义。
+    let runner = this.opts.runners.get(assignmentId);
+    let pullUpError: string | undefined;
+    if (!runner && this.opts.ensureRunner) {
+      try {
+        await this.opts.ensureRunner(assignmentId);
+        runner = this.opts.runners.get(assignmentId);
+      } catch (err) {
+        pullUpError = err instanceof Error ? err.message : String(err);
+        logger.warn('routeDispatch 自动拉起失败', { assignmentId, taskId, error: pullUpError });
+      }
+    }
+    if (!runner && !this.opts.ensureRunner) {
       logger.warn('routeDispatch 未找到 runner', { assignmentId, dispatchTo: content.dispatch_to });
       return;
     }
@@ -523,6 +536,26 @@ export class RouterService {
         dispatchFrom,
         outcome: senderLookup.outcome,
       });
+      return;
+    }
+    // D1 失败回执：拉起失败 / 拉起后仍未注册 → 复用 routeTaskReply 的
+    // notifyTaskReply 通道向 PM 回 failed（打破等待死锁）；链未注册即返回，
+    // DispatchRegistry 零泄漏。
+    if (!runner) {
+      const reason = pullUpError ?? `runner 未找到（assignmentId=${assignmentId}）`;
+      logger.error('routeDispatch 目标 runner 不可用，向 PM 回执失败', {
+        assignmentId,
+        taskId,
+        reason,
+      });
+      const pmRunner = this.opts.runners.get(dispatchFrom);
+      if (pmRunner) {
+        await pmRunner.notifyTaskReply({
+          taskId,
+          status: 'failed',
+          body: `【系统回执】子 agent 未能启动，任务未执行。原因：${reason}`,
+        });
+      }
       return;
     }
     const chainStreamId =
