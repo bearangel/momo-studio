@@ -22,6 +22,11 @@ import {
   readAssignmentDeltas,
 } from './capability-merger';
 import { resolveSkillsDir } from '../paths';
+import {
+  buildPluginToolRefs,
+  buildPluginSkillRefs,
+  filterDisabledPluginMcps,
+} from '../plugin/assembly';
 import { getProvider, type ModelProvider } from './provider-crud';
 import { getSecret } from '../storage/keychain';
 import { getDb } from '../storage/db';
@@ -396,9 +401,15 @@ export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentR
     // LspTools.create 门控随之恒 null，agent 工具面不再注册 lsp_*。子系统代码
     // 全保留（manager/detect/registry/ipc/panel/工具），恢复 = 还原本行注入 +
     // catalog.ts 目录项 + 设置页导航三处（见 spec 头部下架横幅）。
-    skills: resolveSkillSlugs(merged.skills),
-    // 组⑤启停：禁用的 MCP 不进 agent 工具面
-    mcpNames: filterEnabledMcps(merged.mcps),
+    skills: [
+      ...resolveSkillSlugs(merged.skills),
+      // 插件 skills（spec §4 声明式激活）：零复制 refs 直指插件目录
+      ...buildPluginSkillRefs(workspaceId),
+    ],
+    // 组⑤启停：禁用的 MCP 不进 agent 工具面；再滤禁用插件的贡献名（P2）
+    mcpNames: filterDisabledPluginMcps(filterEnabledMcps(merged.mcps), workspaceId),
+    // 插件工具装配快照（spec §4.2）：workspace 级启停在此过滤——spawn 时定型
+    pluginTools: buildPluginToolRefs(workspaceId),
     isLeader,
     // v1.4 嵌套：传 bot 展示信息，子 agent start chunk 据此填充 chip 头部
     botName: def.name,
