@@ -6,6 +6,30 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 插件系统 P2：工具扩展点 + 声明式组件激活 + reload
+
+平台扩展机制第二期（2026-10-15，spec `docs/specs/2026-10-15-plugin-system-design.md` §4 / 计划 `docs/plans/2026-10-15-plugin-system-p2.md`）。「用得上」：agent 能调用插件工具、插件 skills/agents/MCP 三面激活、改码→重载即生效。
+
+### 新增
+- **子进程插件工具加载器**（`agent/tools/plugin-tools.ts`）：纯 tsc CJS 无 bundle → `require(绝对路径)` 原生可行；命名空间强制 `plugin:<id>/<短名>`（拒绝自带前缀 / 内置重名——防跨插件仿冒与目录污染）；坏模块降级进 failures 不拖垮 runtime；`pluginCtx`（getConfig/getDataDir/logger）注入；插件工具与内置 14 个同环境同治理（per-call ToolContext 全套：wsFs 沙箱/权限/readTracker/流式/中断）
+- **AGENT_CONFIG 装配**：`PluginToolRef` 线协议（rootDir/modulePaths/dataDir/config 快照）+ `buildSpawnOpts` 按 workspace 启停过滤（快照冻结语义继承）；skills 零复制追加（`SkillRegistry.register` 直指插件目录）；MCP 贡献名双滤（`filterDisabledPluginMcps`）
+- **审计溯源**：迁移 058 `tool_calls.source`（builtin/plugin）四点透传（logToolCall 载荷 → spawner 桥 → insert → 落库）
+- **声明式激活**：agents 落库 `source='plugin'`（id=`plugin:<id>:<slug>`，幂等，卸载级联清成员行）；MCP 注册 `plugin_id` 归属列（迁移 059，卸载精确级联 + 清 agent 引用）；安装/卸载钩子双向接线
+- **manifest 校验步骤 5**（交叉引用）：agents YAML 的 `plugin:` 前缀工具 ref 与 defaultSkills 引用存在性检查（短名域 = tools 文件名约定）
+- **plugin:reload**：重读 manifest → 组件重激活 → 受影响 workspace 的 lastRunning 实例 stop→start 重建（镜像 init-runtime 装配链）；详情面板「重载」按钮 + 横幅反馈
+- **pluginTools 对 allowed/denied 的语义**：插件工具不进精确白名单（可见性=装配面）；`plugin:<id>/*` 前缀 deny 整插件禁用（P2 一档）
+
+### 设计取舍
+- `RuntimeConfig.pluginTools` 可选（线协议向后兼容——必填破坏 20+ 存量测试夹具）
+- MCP 归属用真 schema 列（plugin_id）而非「source 全删+重放收敛」——避免闪断他插件条目
+- 交叉校验短名域取模块文件名（静态近似；运行时真名以 getDefs 为准）——覆盖绝大多数插件形态，注释记录约定
+- WarmPool 一 task 一进程 → 子进程 require 缓存无失效需求；真失效面 = spawn 闭包旧 opts，reload 走现成 stop→start 链，不发明 pool eviction API
+- pluginCtx.callService 留 P3（service 组件期）；config 敏感值 keytar 与设置表单留 P4（面板协议期）
+
+### 已知遗留
+- 同 P1 的预存失败域与 SIGSEGV 家族（本次全量对照基线一致，零新增）
+- P1 的 6 条 minor 未动（handler async 一致性 / setEnabled 中文错误 / 竞态兜底 / DRY / 空转测试 / 启停无反馈）——建议 P3 开工顺手清
+
 ## [未发布] — 插件系统 P1：注册表 + 安装链 + 资源库插件页
 
 平台级扩展机制第一期（2026-10-15，spec `docs/specs/2026-10-15-plugin-system-design.md` / 计划 `docs/plans/2026-10-15-plugin-system-p1.md`）。momo-studio 获得统一插件单元：一个目录 + `momo-plugin.json` 清单，P1 交付「装得上、管得了」——manifest 校验管线、zip / dev 目录两条安装链、机器级注册 + workspace 级启停、资源库第四类型页。工具 / hooks / service / 面板的**运行时激活在 P2-P4**（P1 插件卡仅注册与展示）。
