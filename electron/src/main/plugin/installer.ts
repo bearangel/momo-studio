@@ -133,6 +133,32 @@ export async function installPluginZip(data: Buffer, currentAppVersion: string):
   }
 }
 
+/** dev 目录注册：不拷贝，直读源目录（改码→重载即生效的开发流，spec §7.2） */
+export function installPluginDevDir(dir: string, currentAppVersion: string): PluginRecord {
+  const abs = path.resolve(dir);
+  if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
+    throw new Error(`dev 插件目录不存在: ${abs}`);
+  }
+  const manifestPath = path.join(abs, MANIFEST_NAME);
+  if (!fs.existsSync(manifestPath)) {
+    throw new Error(`目录内未找到 momo-plugin.json: ${manifestPath}`);
+  }
+  const manifest = parseManifest(fs.readFileSync(manifestPath, 'utf-8'));
+  assertMinAppVersion(manifest.minAppVersion, currentAppVersion);
+  validateManifest(manifest, abs);
+  const rec: PluginRecord = {
+    id: manifest.id,
+    version: manifest.version,
+    manifestJson: JSON.stringify(manifest),
+    state: 'active',
+    source: 'dev',
+    sourcePath: abs,
+    installedAt: new Date().toISOString(),
+  };
+  upsertPlugin(rec);
+  return rec;
+}
+
 /**
  * 卸载：删注册行 + 删 installed 目录（zip 源；dev 源保留用户源目录——只解除注册）
  * + 按 keepData 决定 data 目录去留（spec §7.2）。
