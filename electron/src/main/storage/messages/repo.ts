@@ -233,6 +233,40 @@ export function listMessagesByStreamSessionId(streamSessionId: string): MessageR
 }
 
 /**
+ * 流归属解析（2026-10-15 会话验收 P1-1/P1-3 根因修复）：按流 id 解析
+ * {sessionId, workspaceId, sender}——与 getLatestMessageByStreamSessionId 的
+ * 差异是**不排除子链行**（parent_stream_session_id IS NULL 过滤在此移除）：
+ * dispatch 子链消息行的 parent 恒非 NULL（P0-8 语义：子行落用户会话 +
+ * parent 指向 PM 流），旧解析对子链流恒 null → 授权卡「会话允许」禁用、
+ * covered 轮询查不到 session 层授权（network-trust 同源传染）。
+ * roll 族语义保留（base + #roll{n} 取最新）；sender 仍限 agent-%（owner
+ * 解析只关心 agent 流行；用户行不带 agent 流 id）。
+ */
+export interface StreamOwner {
+  sessionId: string;
+  workspaceId: string | null;
+  sender: string;
+}
+
+export function resolveStreamOwner(streamSessionId: string): StreamOwner | null {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `SELECT session_id, workspace_id, sender FROM messages
+       WHERE (stream_session_id = ? OR stream_session_id LIKE ? || '#%')
+         AND sender LIKE 'agent-%'
+         AND segment_of IS NULL
+       ORDER BY created_at DESC, rowid DESC
+       LIMIT 1`,
+    )
+    .get(streamSessionId, streamSessionId) as
+    | { session_id: string; workspace_id: string | null; sender: string }
+    | undefined;
+  if (!row) return null;
+  return { sessionId: row.session_id, workspaceId: row.workspace_id, sender: row.sender };
+}
+
+/**
  * 是否已存在该链回执行（投递前查重兜底，spec §6.3）——system 行 + 同 taskId。
  * 回执行无 parent（deliverChainResult 落库不带 parentStreamSessionId）；
  * followup 追问行（appendFollowupQuestionRow）同为 system + taskId 但

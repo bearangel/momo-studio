@@ -29,6 +29,11 @@ export interface SubAgentRef {
   slug: string;
   /** 子 agent 的 assignmentId（dispatch 消息 dispatch_to 字段的值，v2 Task 10 起直接作 runners key） */
   assignmentId: string;
+  /**
+   * 子 agent 展示名（agent_definitions.name，P2-2 2026-10-15）：dispatch chip/
+   * 在途面板显示用。可缺省（旧快照/测试构造）——消费方回退 slug。
+   */
+  name?: string;
   description: string;
 }
 

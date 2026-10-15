@@ -6,7 +6,7 @@
 // B5：isBusy（executing/queued）头行提供链级停止按钮——直调
 // ipc.dispatch.cancelChain（by subStreamSessionId），取消后状态翻转由
 // abort_dispatch 广播 → 子流事件回流驱动（非本地乐观态）。
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type KeyboardEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { Brain, ChevronDown, ChevronRight, CircleCheck, CircleSlash, CircleX, Clock, Loader2, PenLine, Send, ShieldQuestion, Square, Timer, Wrench } from 'lucide-react';
 import type { StreamState } from '../../stores/stream.store';
@@ -108,12 +108,23 @@ export function DispatchChip({ child, subStream, subMessageId }: DispatchChipPro
     setExpanded((prev) => !prev);
   };
 
+  // P3-1（2026-10-15）：头行改 div[role=button]——嵌套 <button>（validateDOMNesting
+  // 持续告警）；tabIndex + onKeyDown 保留键盘可达（Enter/Space 触发 toggle）
+  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      handleToggle();
+    }
+  };
+
   return (
     <div className="mb-1">
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         aria-expanded={expanded}
         onClick={handleToggle}
+        onKeyDown={handleKeyDown}
         className="flex w-full items-center gap-1.5 rounded border border-strong bg-status-violet-tint px-2 py-1 text-left text-xs cursor-pointer transition-colors"
       >
         <Send size={12} strokeWidth={1.75} aria-hidden className="shrink-0 text-accent-500" />
@@ -159,7 +170,7 @@ export function DispatchChip({ child, subStream, subMessageId }: DispatchChipPro
         <span className="ml-auto shrink-0 text-tertiary" aria-hidden>
           {expanded ? <ChevronDown size={12} strokeWidth={1.75} /> : <ChevronRight size={12} strokeWidth={1.75} />}
         </span>
-      </button>
+      </div>
 
       {expanded && subStream && (
         <SubAgentSection stream={subStream} messageId={subMessageId} />

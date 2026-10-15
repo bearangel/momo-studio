@@ -4,7 +4,7 @@
 // covered 刷新 extra 根后重执行。bash 不走本 helper（shell-tools 自带轮次循环
 // ——其检测在结果文本侧）。
 import os from 'node:os';
-import { normalizeGrantDirs } from './sandbox-write-hint';
+import { normalizeGrantDirs, isDirCovered } from './sandbox-write-hint';
 import { requestEffectiveNetwork } from './net-trust-bridge';
 import { waitForWriteGrant, formatWriteDeniedResult, formatWriteTimeoutResult } from './write-grant-wait';
 import type { ToolContext } from './types';
@@ -63,7 +63,8 @@ export async function runWithWriteGrant<T>(
       isCovered: async () => {
         try {
           const eff = await queryNet(ctx.streamSessionId, ctx.workspaceId);
-          return dirs.some((d) => eff.extraDirs.includes(d));
+          // P1-3：子路径包含（授权父目录覆盖其下路径，与 OS 沙箱 subpath 语义对齐）
+          return dirs.some((d) => isDirCovered(d, eff.extraDirs));
         } catch {
           return false;
         }

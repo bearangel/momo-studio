@@ -31,7 +31,8 @@ export function WorkspaceStep({ ctx }: Props) {
 
   return (
     <div className="w-[440px]">
-      <h2 className="text-[15px] font-semibold text-primary mb-1">创建工作空间</h2>
+      {/* P3-4（2026-10-15）：h3——embedded 卡片自带 h2「新建工作空间」，双 h2 同层冗余 */}
+      <h3 className="text-[15px] font-semibold text-primary mb-1">创建工作空间</h3>
       <p className="text-xs text-tertiary mb-4">agent 的文件操作都发生在这个目录里</p>
       <CreateWorkspaceDialog onClose={() => undefined} embedded />
     </div>

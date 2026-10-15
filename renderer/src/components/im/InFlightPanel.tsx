@@ -7,7 +7,7 @@
 //
 // 注：brief 骨架的徽标前景 text-status-error-foreground 在 token 表中不存在（会静默
 // 生成空样式），按 Button danger 既有惯例改为 text-inverse——唯一偏离 verbatim 处。
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Loader2, Square, Zap, ShieldQuestion } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useWriteGrantStore } from '../../stores/write-grant.store';
@@ -16,7 +16,6 @@ import type { InFlightChainView, WriteBlockedEvent } from '../../ipc/types';
 export function InFlightPanel({ sessionId }: { sessionId: string }) {
   const [open, setOpen] = useState(false);
   const [chains, setChains] = useState<InFlightChainView[]>([]);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // F3（2026-10-14 授权等待可见性）：等待授权的流位图——面板行区分「执行中/等待授权」
   const waitingByStream = useWriteGrantStore((s) => s.waitingByStream);
   const clearWaiting = useWriteGrantStore((s) => s.clearWaiting);
@@ -28,11 +27,20 @@ export function InFlightPanel({ sessionId }: { sessionId: string }) {
     setChains(rows);
   }, [sessionId]);
 
+  // P1-2（2026-10-15 会话验收）：徽标计数不能只在面板 open 时刷新——关闭态恒 0
+  // 会让后台 dispatch 进行中用户毫无感知。挂载/会话切换即拉一次；打开瞬间即拉
+  // （打开面板立刻见数据）；关闭态 10s 低频轮询（徽标是提示性，≤10s 延迟足够），
+  // 打开态维持 2s 轮询不变。
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
   useEffect(() => {
     if (!open) return;
     void refresh();
-    timerRef.current = setInterval(() => void refresh(), 2000);
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [open, refresh]);
+  useEffect(() => {
+    const interval = setInterval(() => void refresh(), open ? 2_000 : 10_000);
+    return () => clearInterval(interval);
   }, [open, refresh]);
 
   // F3 行内处置：授权（本会话作用域）——key 缺失或空 dirs 时按钮禁用兜底

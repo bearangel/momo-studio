@@ -7,7 +7,8 @@
 // session 映射），解析失败降级 null——卡按钮据此禁用。
 import os from 'node:os';
 import type { MessageEventRow } from '../storage/messages/events-repo';
-import { getMessage, getLatestMessageByStreamSessionId } from '../storage/messages/repo';
+import { getMessage } from '../storage/messages/repo';
+import { resolveStreamOwner } from '../storage/messages/repo';
 import { getSession } from '../storage/sessions/repo';
 import { loadElectronApis } from '../electron-access';
 import { detectWriteBlocked, extractBlockedPaths, normalizeGrantDirs } from '../agent/tools/sandbox-write-hint';
@@ -34,23 +35,36 @@ export interface WriteBlockedSignal {
 }
 
 /**
- * F4 来源标注解析（两条上报链共用）：sender `agent-<slug>-<rand>` 提取 slug
- * 作展示名（比 instance 反查轻量；解析失败降级 null，卡上不显示来源行）。
+ * F4 来源标注 + 归属解析（两条上报链共用，2026-10-15 会话验收修复合并）：
+ * 换用 resolveStreamOwner（不排除子链行）——dispatch 子链场景 sessionId/
+ * workspaceId/sourceAgentName/sessionTitle 四件套全解出；sender `agent-<slug>-<rand>`
+ * 提取 slug 作展示名。解析失败降级 null（sessionId null → 卡按钮禁用，防线不变）。
  */
-function resolveSourceAnnotation(streamSessionId: string | null): {
+function resolveStreamContext(streamSessionId: string | null): {
+  sessionId: string | null;
+  workspaceId: string | null;
   sourceAgentName: string | null;
   sessionTitle: string | null;
 } {
   try {
-    if (streamSessionId === null) return { sourceAgentName: null, sessionTitle: null };
-    const msg = getLatestMessageByStreamSessionId(streamSessionId);
-    if (!msg) return { sourceAgentName: null, sessionTitle: null };
-    const senderMatch = /^agent-([a-z0-9-]+?)(?:-[a-z0-9]{6})?$/i.exec(msg.sender);
+    if (streamSessionId === null) {
+      return { sessionId: null, workspaceId: null, sourceAgentName: null, sessionTitle: null };
+    }
+    const owner = resolveStreamOwner(streamSessionId);
+    if (!owner) {
+      return { sessionId: null, workspaceId: null, sourceAgentName: null, sessionTitle: null };
+    }
+    const senderMatch = /^agent-([a-z0-9-]+?)(?:-[a-z0-9]{6})?$/i.exec(owner.sender);
     const sourceAgentName = senderMatch !== null && senderMatch[1] !== undefined ? senderMatch[1] : null;
-    const sessionTitle = getSession(msg.sessionId)?.title ?? null;
-    return { sourceAgentName, sessionTitle };
+    const sessionTitle = getSession(owner.sessionId)?.title ?? null;
+    return {
+      sessionId: owner.sessionId,
+      workspaceId: owner.workspaceId,
+      sourceAgentName,
+      sessionTitle,
+    };
   } catch {
-    return { sourceAgentName: null, sessionTitle: null };
+    return { sessionId: null, workspaceId: null, sourceAgentName: null, sessionTitle: null };
   }
 }
 
@@ -85,29 +99,24 @@ export function inspectEventBatch(events: MessageEventRow[]): WriteBlockedSignal
     const command = typeof callId === 'string' ? commandByCallId.get(callId) ?? '' : '';
     if (!detectWriteBlocked('seatbelt/x', command, result)) continue;
     const dirs = normalizeGrantDirs(extractBlockedPaths(command, result), os.homedir());
-    // 3) 会话/工作空间解析（消息行）——异常降级 null，绝不阻断消息主路径
-    let sessionId: string | null = null;
-    let workspaceId: string | null = null;
-    try {
-      const msg = getMessage(e.messageId);
-      if (msg) {
-        workspaceId = msg.workspaceId ?? null;
-        if (msg.streamSessionId !== null) {
-          sessionId = getLatestMessageByStreamSessionId(msg.streamSessionId)?.sessionId ?? null;
-        }
+    // 3) 归属解析（resolveStreamContext——含子链行，2026-10-15 P1-1 修复）——
+    //    异常降级 null，绝不阻断消息主路径
+    const streamSessionId = (() => {
+      try {
+        return getMessage(e.messageId)?.streamSessionId ?? null;
+      } catch {
+        return null;
       }
-    } catch {
-      // DB 异常：信号仍发出（dirs/command 可用），键位 null → 卡按钮禁用
-    }
-    const streamSessionId = getMessage(e.messageId)?.streamSessionId ?? null;
-    const annotation = resolveSourceAnnotation(streamSessionId);
+    })();
+    const ctx = resolveStreamContext(streamSessionId);
     return {
-      sessionId,
-      workspaceId,
+      sessionId: ctx.sessionId,
+      workspaceId: ctx.workspaceId,
       dirs,
       command: command.length > COMMAND_PREVIEW_MAX ? command.slice(0, COMMAND_PREVIEW_MAX) : command,
       streamSessionId,
-      ...annotation,
+      sourceAgentName: ctx.sourceAgentName,
+      sessionTitle: ctx.sessionTitle,
     };
   }
   return null;
@@ -131,23 +140,20 @@ export function writeBlockedFromChildMsg(msg: unknown): boolean {
   if (typeof m.streamSessionId !== 'string' || m.streamSessionId === '') return false;
   if (!Array.isArray(m.dirs) || m.dirs.some((d) => typeof d !== 'string')) return false;
   if (typeof m.command !== 'string') return false;
-  let sessionId: string | null = null;
-  try {
-    sessionId = getLatestMessageByStreamSessionId(m.streamSessionId)?.sessionId ?? null;
-  } catch {
-    sessionId = null;
-  }
-  const annotation = resolveSourceAnnotation(m.streamSessionId);
+  // 归属解析（resolveStreamContext 含子链行——2026-10-15 P1-1：旧 getLatest
+  // 对子链流恒 null，会话允许禁用 + covered 查不到 session 授权）
+  const ctx = resolveStreamContext(m.streamSessionId);
   const { BrowserWindow } = loadElectronApis();
   const win = BrowserWindow?.getAllWindows()[0];
   if (win && !win.isDestroyed()) {
     win.webContents.send('sandbox:writeBlocked', {
-      sessionId,
-      workspaceId: typeof m.workspaceId === 'string' ? m.workspaceId : null,
+      sessionId: ctx.sessionId,
+      workspaceId: typeof m.workspaceId === 'string' ? m.workspaceId : ctx.workspaceId,
       dirs: m.dirs,
       command: m.command.length > 200 ? m.command.slice(0, 200) : m.command,
       streamSessionId: m.streamSessionId,
-      ...annotation,
+      sourceAgentName: ctx.sourceAgentName,
+      sessionTitle: ctx.sessionTitle,
     });
   }
   return true;

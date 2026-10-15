@@ -65,8 +65,8 @@ const mockApi = { dispatch: { cancelChain: cancelChainMock } };
 /** 头行 chip 本体按钮：isBusy 态下 DOM 另有停止按钮，getByRole('button') 会命中
  *  多个——头行是唯一带 aria-expanded 的 button，按该属性精确定位 */
 function getHeaderButton(): HTMLElement {
-  const btn = document.querySelector<HTMLElement>('button[aria-expanded]');
-  if (!btn) throw new Error('头行按钮未渲染（button[aria-expanded]）');
+  const btn = document.querySelector<HTMLElement>('[role=button][aria-expanded]');
+  if (!btn) throw new Error('头行按钮未渲染（[role=button][aria-expanded]）');
   return btn;
 }
 

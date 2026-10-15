@@ -8,6 +8,7 @@ import path from 'node:path';
 import {
   detectWriteBlocked,
   extractBlockedPaths,
+  isDirCovered,
   normalizeGrantDirs,
   WRITE_BLOCKED_HINT,
 } from '../../../src/main/agent/tools/sandbox-write-hint';
@@ -195,5 +196,23 @@ describe('extractBlockedPaths 相对路径 + cwd 语境（F6）', () => {
     );
     // sed 报的是临时文件全路径（提取层给确切目标；目录上溯由 normalizeGrantDirs 负责）
     expect(out).toEqual(['/ws/proj/out/sedXYZ']);
+  });
+});
+
+// === 2026-10-15 会话验收 P1-3 回归锁：授权覆盖子路径语义（与 OS 沙箱 subpath 对齐）===
+describe('isDirCovered（授权目录覆盖判定）', () => {
+  it('精确命中', () => {
+    expect(isDirCovered('/private/tmp', ['/private/tmp'])).toBe(true);
+  });
+  it('子路径命中（授权父目录覆盖其下路径——旧成员判定此处 false，P1-3 根因）', () => {
+    expect(isDirCovered('/private/tmp/momo-grant-live', ['/private/tmp'])).toBe(true);
+    expect(isDirCovered('/private/tmp/a/b/c.txt', ['/private/tmp'])).toBe(true);
+  });
+  it('非子路径不命中（前缀字符串陷阱：/private/tmp-x 不是 /private/tmp 子路径）', () => {
+    expect(isDirCovered('/private/tmp-x', ['/private/tmp'])).toBe(false);
+    expect(isDirCovered('/private/var/tmp', ['/private/tmp'])).toBe(false);
+  });
+  it('空授权清单恒 false', () => {
+    expect(isDirCovered('/anything', [])).toBe(false);
   });
 });

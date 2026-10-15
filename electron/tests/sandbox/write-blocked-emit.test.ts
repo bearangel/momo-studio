@@ -212,3 +212,58 @@ describe('writeBlockedFromChildMsg 载荷来源标注（F4）', () => {
     expect(payload.sessionTitle).toBeNull();
   });
 });
+
+// === 2026-10-15 会话验收 P1-1 回归锁：子链行（parent_stream_session_id 非 NULL）
+// 的归属解析——旧 getLatestMessageByStreamSessionId 的 parent IS NULL 过滤对子链流
+// 恒 null（会话允许禁用 + 来源标注丢失），resolveStreamContext 换 resolveStreamOwner
+// 后四件套全解出。
+describe('writeBlockedFromChildMsg 子链行归属解析（P1-1）', () => {
+  function seedSubChainRow(): void {
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO workspaces (id, name, directory_path, owner_id)
+       VALUES ('ws-p11', 'ws-p11', '/ws/p11', 'u-test')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO sessions (id, workspace_id, title, title_auto, kind, created_at, updated_at)
+       VALUES ('s-p11', 'ws-p11', '团队协作创建问候文件', 0, 'chat', 1, 1)`,
+    ).run();
+    // 子链行形态（DB 实测）：parent_stream_session_id = PM 流 id（非 NULL）——
+    // 旧解析的排除条件正中此行
+    db.prepare(
+      `INSERT INTO messages (id, session_id, sender, event_type, body, stream_session_id, parent_stream_session_id, workspace_id, status, source, created_at, updated_at)
+       VALUES ('m-p11-sub', 's-p11', 'agent-general-assistant-Bu1uQw', 'm.room.message', '', 'ss-p11-sub', 'ss-p11-pm', 'ws-p11', 'streaming', 'local', 1, 1)`,
+    ).run();
+  }
+
+  it('子链上报 → sessionId 非 null（会话允许可用）+ workspace 兜底解出 + 来源标注', () => {
+    seedSubChainRow();
+    mockSend.mockClear();
+    const handled = writeBlockedFromChildMsg({
+      type: 'write-blocked-report',
+      streamSessionId: 'ss-p11-sub',
+      // 子进程载荷缺 workspaceId（历史形态）→ 解析链兜底 ws-p11
+      dirs: ['/private/tmp/momo-out'],
+      command: 'write_file /tmp/momo-out/x.txt',
+    });
+    expect(handled).toBe(true);
+    const payload = mockSend.mock.calls[0]![1] as Record<string, unknown>;
+    expect(payload.sessionId).toBe('s-p11');
+    expect(payload.workspaceId).toBe('ws-p11');
+    expect(payload.sourceAgentName).toBe('general-assistant');
+    expect(payload.sessionTitle).toBe('团队协作创建问候文件');
+  });
+
+  it('inspectEventBatch 迟到兜底链：子链 tool_call_result → sessionId 同样解出', () => {
+    seedSubChainRow();
+    // 事件行挂子链消息 id（真实时序：tool_call_result 落子链流的 messageId）
+    const mkSubStart = mkStart('c-p11', 'write_file /tmp/momo-out/x.txt');
+    const mkSubResult = mkResult('c-p11', CARGO_FAIL);
+    const sig = inspectEventBatch([mkSubStart, mkSubResult].map((e) => ({
+      ...e,
+      messageId: 'm-p11-sub',
+    })));
+    expect(sig?.sessionId).toBe('s-p11');
+    expect(sig?.sourceAgentName).toBe('general-assistant');
+  });
+});

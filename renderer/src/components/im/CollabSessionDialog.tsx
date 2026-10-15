@@ -12,6 +12,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Crown } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
+import { useUiStore } from '../../stores/ui.store';
 import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { Avatar } from '../ui/Avatar';
@@ -196,8 +197,18 @@ export function CollabSessionDialog({ onClose }: Props) {
           <fieldset className="flex flex-col gap-1.5">
             <legend className="text-sm text-secondary">选择团队</legend>
             {teams.length === 0 && (
-              <div className="text-xs text-tertiary">
-                暂无团队，请先到「智能体 → 团队」组建
+              <div className="flex items-center gap-2 text-xs text-tertiary">
+                <span>暂无团队</span>
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    // P3-3（2026-10-15）：空态直通——跳智能体页（团队 tab 由该页入口进入）
+                    useUiStore.getState().setActiveView('agents');
+                    onClose();
+                  }}
+                >
+                  去创建团队
+                </Button>
               </div>
             )}
             {teams.map((t) => (

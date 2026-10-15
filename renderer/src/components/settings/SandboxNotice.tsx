@@ -199,7 +199,11 @@ export function SandboxNotice() {
       ) : showWriteBlocked && writePending ? (
         <>
           <p className="mb-3 leading-relaxed">
-            agent 的 shell 命令被沙箱拦截（工作空间外写入）。可放行下列目录（本会话或本工作空间），或拒绝。
+            {/* P3-7（2026-10-15）：按拦截源区分——write-grant-tool 的上报 command
+                是「工具名 路径」形态（write_file /x），bash 是 shell 命令形态 */}
+            {/^(write_file|edit_file|apply_patch|move|mkdir)\s+\//.test(writePending.command.trim())
+              ? 'agent 的文件写入操作被沙箱拦截（工作空间外路径）。可放行下列目录（本会话或本工作空间），或拒绝。'
+              : 'agent 的 shell 命令被沙箱拦截（工作空间外写入）。可放行下列目录（本会话或本工作空间），或拒绝。'}
           </p>
           {writePending.dirs.length > 0 ? (
             <ul className="mb-3 space-y-1">

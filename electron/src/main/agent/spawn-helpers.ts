@@ -58,6 +58,7 @@ interface SnapshotRow {
   session_id: string;
   instance_id: string;
   slug: string;
+  name: string;
   description: string;
 }
 
@@ -90,7 +91,7 @@ export function buildDispatchSnapshot(
 ): DispatchSnapshot {
   const rows = getDb()
     .prepare(
-      `SELECT m.session_id, m.instance_id, d.slug, d.description
+      `SELECT m.session_id, m.instance_id, d.slug, d.name, d.description
        FROM session_members m
        JOIN sessions s ON s.id = m.session_id
        JOIN workspace_agent_members a ON a.instance_id = m.instance_id
@@ -127,6 +128,7 @@ export function buildDispatchSnapshot(
       subAgents.push({
         slug: member.slug,
         assignmentId: member.instance_id,
+        name: member.name,
         description: member.description,
       });
     }

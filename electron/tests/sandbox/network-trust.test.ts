@@ -190,3 +190,25 @@ describe('effective extraDirs 两层合成（spec §6.1，2026-10-04 工具链�
     }
   });
 });
+// === 2026-10-15 会话验收 P1-3 回归锁：子链流（parent 非 NULL 行）的 session 层
+// 授权合成——旧 getLatestMessageByStreamSessionId 对子链恒 null，子链 covered
+// 轮询查不到 session 授权（授权了也白授）。resolveStreamOwner 含子链行。
+describe('effective extraDirs 子链流合成（P1-3，2026-10-15）', () => {
+  it('子链流（parent_stream_session_id 非 NULL）→ session 层授权命中', async () => {
+    grantWriteDirs('session', 's-sub', ['/tmp/sub-grant']);
+    getDb()
+      .prepare(
+        `INSERT INTO messages (id, session_id, sender, event_type, body, stream_session_id, parent_stream_session_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run('m-sub', 's-sub', 'agent-coder-Ab12Cd', 'message', '', 'ss-sub-chain', 'ss-pm-flow', Date.now(), Date.now());
+    const r = await handleNetTrustOp({
+      type: 'net-trust-op', requestId: 'e-sub', op: 'effective',
+      streamSessionId: 'ss-sub-chain', workspaceId: 'ws-a',
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.payload.extraDirs).toContain('/tmp/sub-grant');
+    }
+  });
+});

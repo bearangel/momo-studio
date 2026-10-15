@@ -641,7 +641,7 @@ describe('v1.4 嵌套：dispatch 流式 chip', () => {
 
     const config = makeConfig({
       role: 'main',
-      subAgents: [{ slug: 'researcher', assignmentId: 'inst-researcher', description: '研究员' }],
+      subAgents: [{ slug: 'researcher', assignmentId: 'inst-researcher', name: '研究员', description: '查资料、读文档' }],
     });
 
     await runChatLoop(nestedSessId, '帮我查资料', config, makeContext());
@@ -661,6 +661,52 @@ describe('v1.4 嵌套：dispatch 流式 chip', () => {
     expect(toolCallChunk.subStreamSessionId).toBeTruthy();
     expect(toolCallChunk.subAgentName).toBe('研究员');
     expect(toolCallChunk.subAgentAvatar).toBe('🤖');
+  });
+
+  // P2-2（2026-10-15 会话验收）：name 缺省（旧快照）→ 回退 slug；description 全文
+  // 永不冒充显示名（验收实录：chip 显示「什么都可以问：问答、写作…」整段描述）
+  it('dispatch chip 显示名：name 缺省回退 slug，description 不进名字', async () => {
+    const toolCall = {
+      id: 'c-p22',
+      name: 'dispatch:researcher',
+      arguments: { task: '查资料' },
+    };
+    mockProviderMultiRound([
+      [{ type: 'tool_use', toolCall }, { type: 'done', finishReason: 'tool_use' }],
+      [{ type: 'text', content: '汇总完成' }, { type: 'done', finishReason: 'stop' }],
+    ]);
+    const dispatchInterceptor = (msg: unknown): boolean => {
+      const m = msg as { type?: string; eventType?: string; content?: { task_id?: string } };
+      if (m?.type === 'momo-internal-event' && m.eventType === 'io.momo-studio.dispatch') {
+        const taskId = m.content?.task_id;
+        if (taskId) {
+          setTimeout(() => {
+            handleTaskReply({
+              task_id: taskId,
+              body: '资料已找到',
+              status: 'completed',
+              tool_calls_used: 0,
+            });
+          }, 0);
+        }
+      }
+      sentChunks.push(msg);
+      return true;
+    };
+    process.send = dispatchInterceptor as NonNullable<typeof process.send>;
+
+    // 旧快照形态：SubAgentRef 无 name（name?: string 可缺省）
+    const config = makeConfig({
+      role: 'main',
+      subAgents: [{ slug: 'researcher', assignmentId: 'inst-researcher', description: '什么都可以问：问答、写作、日常小任务' }],
+    });
+
+    await runChatLoop(nestedSessId, '帮我查资料', config, makeContext());
+
+    const chunks = streamChunks();
+    const toolCallChunk = chunks.find((c) => c.type === 'tool_call') as { subAgentName?: string };
+    expect(toolCallChunk.subAgentName).toBe('researcher');
+    expect(toolCallChunk.subAgentName).not.toContain('什么都可以问');
   });
 
   it('dispatch 成功后 tool_result chunk 携带 subStatus=completed', async () => {

@@ -33,6 +33,7 @@ import {
 import {
   detectWriteBlocked,
   extractBlockedPaths,
+  isDirCovered,
   normalizeGrantDirs,
   WRITE_BLOCKED_HINT,
 } from './sandbox-write-hint';
@@ -198,8 +199,9 @@ export class ShellTools implements ToolModule {
         isCovered: async () => {
           try {
             const eff = await queryNet(ctx.streamSessionId, ctx.workspaceId);
-            // spec hard-gate §4.2 纯成员判定：toolchainOn 与被拦目录是否放行无关
-            return last.dirs.some((d) => eff.extraDirs.includes(d));
+            // spec hard-gate §4.2：toolchainOn 与被拦目录是否放行无关；
+            // P1-3：子路径包含（授权父目录覆盖其下路径，与 OS 沙箱 subpath 语义对齐）
+            return last.dirs.some((d) => isDirCovered(d, eff.extraDirs));
           } catch {
             return false;
           }

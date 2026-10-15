@@ -1141,7 +1141,9 @@ export async function runChatLoop(
     const subStreamSessionId = randomUUID();
     const subSlug = tc.name.slice('dispatch:'.length);
     const subRef = config.subAgents.find((s) => s.slug === subSlug);
-    const subAgentName = subRef?.description ?? subRef?.slug ?? tc.name;
+    // P2-2（2026-10-15 会话验收）：chip 显示名优先 name（agent_definitions.name），
+    // 描述全文不再冒充名字；description 兜底链保留给无 name 的旧快照
+    const subAgentName = subRef?.name ?? subRef?.slug ?? tc.name;
     sendStreamChunk({
       type: 'tool_call',
       streamSessionId,
@@ -2328,7 +2330,7 @@ export async function doExecuteTool(
       args: call.arguments,
       isDispatch: true,
       subStreamSessionId,
-      subAgentName: subRef?.description ?? subRef?.slug ?? name,
+      subAgentName: subRef?.name ?? subRef?.slug ?? name,
       subAgentAvatar: '🤖',
     });
     let bgResult: { taskId: string };

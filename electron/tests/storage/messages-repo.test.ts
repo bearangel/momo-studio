@@ -18,6 +18,7 @@ import {
   deleteMessages,
   countMessagesBySession,
   getFirstUserMessage,
+  resolveStreamOwner,
   type MessageRow,
 } from '../../src/main/storage/messages/repo';
 import { insertEvent } from '../../src/main/storage/messages/events-repo';
@@ -348,5 +349,41 @@ describe('getLatestMessageByStreamSessionId（A4 双行同 ssi 恒返 agent 行�
     // 按 base ssi 查询命中 #roll 后缀行（LIKE 分支）
     const row = getLatestMessageByStreamSessionId('ssi-dual-2');
     expect(row?.sender).toBe('agent-pm-1');
+  });
+});
+
+// === 2026-10-15 会话验收 P1-1/P1-3 配套：resolveStreamOwner（子链行归属解析）===
+// 与 getLatestMessageByStreamSessionId 的差异契约：不排除 parent_stream_session_id
+// 非 NULL 的子链行（dispatch 子行落用户会话 + parent 指向 PM 流——P0-8 语义）。
+describe('resolveStreamOwner（子链行归属，2026-10-15）', () => {
+  it('子链行（parent 非 NULL）→ 解出 sessionId/workspaceId/sender（getLatest 对同流恒 null）', () => {
+    insertMessage({
+      sessionId: 's-owner', sender: 'agent-general-assistant-Bu1uQw', eventType: 'message', body: '',
+      streamSessionId: 'ss-own-sub', parentStreamSessionId: 'ss-own-pm', workspaceId: 'ws-owner',
+    });
+    const owner = resolveStreamOwner('ss-own-sub');
+    expect(owner).toEqual({
+      sessionId: 's-owner',
+      workspaceId: 'ws-owner',
+      sender: 'agent-general-assistant-Bu1uQw',
+    });
+    // 差异契约锚定：旧解析（主行语义）对同流返回 null
+    expect(getLatestMessageByStreamSessionId('ss-own-sub')).toBeNull();
+  });
+
+  it('主链行同样命中（roll 族最新语义保留）', () => {
+    insertMessage({
+      sessionId: 's-owner2', sender: 'agent-pm-kEkQrQ', eventType: 'message', body: 'v1',
+      streamSessionId: 'ss-own2#roll0', workspaceId: 'ws-owner2',
+    });
+    insertMessage({
+      sessionId: 's-owner2', sender: 'agent-pm-kEkQrQ', eventType: 'message', body: 'v2',
+      streamSessionId: 'ss-own2#roll1', workspaceId: 'ws-owner2',
+    });
+    expect(resolveStreamOwner('ss-own2')?.sessionId).toBe('s-owner2');
+  });
+
+  it('无行/幽灵流 → null（降级语义，调用方据此禁用卡按钮）', () => {
+    expect(resolveStreamOwner('ss-ghost')).toBeNull();
   });
 });

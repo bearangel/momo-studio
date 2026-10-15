@@ -137,7 +137,7 @@ function makeMainConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return makeConfig({
     isLeader: true,
     subAgents: [
-      { slug: 'researcher', assignmentId: 'inst-researcher', description: '研究员' },
+      { slug: 'researcher', assignmentId: 'inst-researcher', name: '研究员', description: '查资料、读文档' },
       { slug: 'writer', assignmentId: 'inst-writer', description: '撰稿人' },
     ],
     ...overrides,
@@ -562,7 +562,7 @@ describe('doExecuteTool F2 状态回链（bg 委派终态经 patch 事件回写 
 
 describe('getOrchestrationToolDefs 工具面（spec §5）', () => {
   const subs = [
-    { slug: 'researcher', assignmentId: 'inst-r', description: '研究员' },
+    { slug: 'researcher', assignmentId: 'inst-r', name: '研究员', description: '查资料、读文档' },
     { slug: 'writer', assignmentId: 'inst-w', description: '撰稿人' },
   ];
 
@@ -814,3 +814,4 @@ describe('runChatLoop 注入面 + isDispatch 防御', () => {
     expect(vi.mocked(executeStatus).mock.calls[0]![0]).toBe('h1');
   });
 });
+

@@ -142,3 +142,14 @@ export function normalizeGrantDirs(paths: string[], home: string): string[] {
 
 export const WRITE_BLOCKED_HINT =
   '⚠ 工作空间外路径写入被沙箱拦截。系统已弹出授权卡并暂停等待用户处置：用户放行后本命令会自动重试；用户拒绝时你会收到明确的拒绝结果。请勿用临时目录或缓存重定向绕过，也勿在等待期间尝试其他写入路径。';
+
+/**
+ * 授权目录覆盖判定（2026-10-15 会话验收 P1-3 修复）：dir 被授权当且仅当
+ * 精确等于某授权目录，或是其子路径（`g + '/'` 前缀）——与 OS 沙箱 profile 层
+ * 的 subpath 语义对齐。旧成员判定（includes）下「授权 /private/tmp 后写
+ * /private/tmp/子目录 再弹卡」双层语义不一致（等待循环比 OS 层更严）。
+ * 两侧均经 realpath 归一（normalizeGrantDirs / expandToolchainDirs），精确比对可靠。
+ */
+export function isDirCovered(dir: string, granted: readonly string[]): boolean {
+  return granted.some((g) => dir === g || dir.startsWith(g.endsWith('/') ? g : `${g}/`));
+}

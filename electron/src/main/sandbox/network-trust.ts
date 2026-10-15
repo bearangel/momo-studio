@@ -18,7 +18,7 @@
 // 子进程执行，策略读取必须代理回主进程（子进程不可见 DB 单例）。
 import { getSandboxSettings } from './settings';
 import { getGrantedDirs } from './write-grant';
-import { getLatestMessageByStreamSessionId } from '../storage/messages/repo';
+import { resolveStreamOwner } from '../storage/messages/repo';
 
 export type { NetworkPolicy } from './settings';
 
@@ -63,12 +63,13 @@ export async function handleNetTrustOp(msg: unknown): Promise<NetTrustOpResult> 
     const settings = getSandboxSettings();
     const netOn = settings.networkPolicy === 'allow';
     // extraDirs（spec §6.1）：streamSessionId → 聊天会话映射在主进程单点解析
-    //（子进程请求载荷零改动）。roll 语义（终审 I1）：流轮转时消息行的
-    // stream_session_id 被改写为 #roll{n} 后缀——用「流族 = base + #roll 取
-    // 最新行」（getLatestMessageByStreamSessionId），否则 rename 后授权失效。
+    //（子进程请求载荷零改动）。roll 语义（终审 I1）+ 子链语义（2026-10-15
+    // P1-3 修复）：流族 = base + #roll 取最新行，且**不排除子链行**——
+    // resolveStreamOwner 对 dispatch 子链流也能解出 sessionId，子链的 covered
+    // 轮询才能查到 session 层授权（旧 getLatest 对子链恒 null → 授权了也白授）。
     let sessionId: string | null = null;
     try {
-      sessionId = getLatestMessageByStreamSessionId(parsed.streamSessionId)?.sessionId ?? null;
+      sessionId = resolveStreamOwner(parsed.streamSessionId)?.sessionId ?? null;
     } catch {
       sessionId = null;
     }

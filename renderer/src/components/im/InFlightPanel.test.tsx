@@ -87,14 +87,14 @@ describe('InFlightPanel — 2s 轮询（focus 2）', () => {
   it('打开 → 立即拉取 + 2s 周期轮询；链转终态后下一帧从列表消失', async () => {
     vi.useFakeTimers();
     const running = makeChain();
-    // 第 1 帧：1 条在途；第 2 帧（+2s）：链已终态，主进程不再返回
-    listInFlightMock.mockResolvedValueOnce([running]).mockResolvedValue([]);
+    // 帧序（P1-2 挂载即拉改造）：挂载①空 → 打开②[running] → +2s③[]（终态消失）
+    listInFlightMock.mockResolvedValueOnce([]).mockResolvedValueOnce([running]).mockResolvedValue([]);
 
     render(<InFlightPanel sessionId="sess-1" />);
     await openPanel();
 
-    // 打开即拉取（按会话过滤——preload 位置参数契约）
-    expect(listInFlightMock).toHaveBeenCalledTimes(1);
+    // 挂载即拉 + 打开即拉 = 2 次（P1-2 关闭态刷新改造后基线；按会话过滤——preload 位置参数契约）
+    expect(listInFlightMock).toHaveBeenCalledTimes(2);
     expect(listInFlightMock).toHaveBeenCalledWith('sess-1');
     expect(screen.getByText('码农')).toBeInTheDocument();
 
@@ -102,7 +102,7 @@ describe('InFlightPanel — 2s 轮询（focus 2）', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2000);
     });
-    expect(listInFlightMock).toHaveBeenCalledTimes(2);
+    expect(listInFlightMock).toHaveBeenCalledTimes(3);
     expect(screen.queryByText('码农')).not.toBeInTheDocument();
     expect(screen.getByText('当前没有运行中的子任务')).toBeInTheDocument();
   });
@@ -114,7 +114,8 @@ describe('InFlightPanel — 单链取消（focus 3）', () => {
     const chain = makeChain({ taskId: 'task-cancel-me-1' });
     // 取消后首帧仍返回该链（主进程摘除有延迟）→ 再下一帧才消失：
     // 证明 UI 不乐观锁死（不本地删行），一切以轮询真值为准
-    listInFlightMock.mockResolvedValueOnce([chain]).mockResolvedValueOnce([chain]).mockResolvedValue([]);
+    // 挂载①吃掉首个 Once（P1-2 挂载即拉）——前置空帧保打开②见 [chain]
+    listInFlightMock.mockResolvedValueOnce([]).mockResolvedValueOnce([chain]).mockResolvedValueOnce([chain]).mockResolvedValue([]);
 
     render(<InFlightPanel sessionId="sess-1" />);
     await openPanel();
@@ -183,13 +184,13 @@ describe('InFlightPanel — 卸载清理（focus 5）', () => {
 
     const { unmount } = render(<InFlightPanel sessionId="sess-1" />);
     await openPanel();
-    expect(listInFlightMock).toHaveBeenCalledTimes(1);
+    expect(listInFlightMock).toHaveBeenCalledTimes(2);
 
-    // 轮询窗口内一次正常刷新，随后卸载
+    // 轮询窗口内一次正常刷新，随后卸载（挂载①+打开②+2s 帧③）
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2000);
     });
-    expect(listInFlightMock).toHaveBeenCalledTimes(2);
+    expect(listInFlightMock).toHaveBeenCalledTimes(3);
 
     unmount();
     expect(clearIntervalSpy).toHaveBeenCalled();
@@ -201,7 +202,12 @@ describe('InFlightPanel — 卸载清理（focus 5）', () => {
     // spy 必须还原：fakeTimers + spyOn 组合下残留会让后续用例的组件卸载
     // 调 clearInterval 时抛 ReferenceError（2026-10-14 F3 用例暴露）
     clearIntervalSpy.mockRestore();
-    expect(listInFlightMock).toHaveBeenCalledTimes(2);
+    // 相对断言（P1-2 改造后基线漂移防脆）：卸载推进后调用数不再增长
+    const afterUnmount = listInFlightMock.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000);
+    });
+    expect(listInFlightMock).toHaveBeenCalledTimes(afterUnmount);
   });
 });
 
@@ -278,5 +284,45 @@ describe('InFlightPanel 等待授权（F3）', () => {
     await openPanel();
     expect(screen.getByText('授权')).toBeDisabled();
     expect(screen.getByText('拒绝')).toBeEnabled();
+  });
+});
+
+// === P1-2（2026-10-15 会话验收）：关闭态徽标刷新 ===
+// 旧行为：chains 仅在 open 时轮询 → 面板关闭徽标恒 0，后台 dispatch 进行中
+// 用户毫无感知。新行为：挂载即拉 + 关闭态 10s 低频轮询（打开态 2s 不变）。
+describe('InFlightPanel — 关闭态徽标刷新（P1-2）', () => {
+  it('面板未打开：挂载即拉一次 + 10s 周期轮询（徽标随真值更新）', async () => {
+    vi.useFakeTimers();
+    const running = makeChain();
+    listInFlightMock.mockResolvedValueOnce([]).mockResolvedValueOnce([running]);
+
+    const { container } = render(<InFlightPanel sessionId="sess-1" />);
+
+    // 挂载即拉（不开面板）
+    expect(listInFlightMock).toHaveBeenCalledTimes(1);
+
+    // +10s 关闭态轮询拉到在途链 → 徽标 1（面板未开，无列表内容）
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(listInFlightMock).toHaveBeenCalledTimes(2);
+    const badge = getToggleButton().querySelector('span');
+    expect(badge).not.toBeNull();
+    expect(badge?.textContent).toBe('1');
+    expect(container.textContent).not.toMatch(/在途子任务（/);
+  });
+
+  it('打开态维持 2s 节拍（不退化为 10s）', async () => {
+    vi.useFakeTimers();
+    listInFlightMock.mockResolvedValue([]);
+
+    render(<InFlightPanel sessionId="sess-1" />);
+    await openPanel();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    // 挂载 1 次 + 打开即拉 1 次 + 2s 帧 1 次 = 3（10s 节拍下此处只会是 2）
+    expect(listInFlightMock.mock.calls.length).toBeGreaterThanOrEqual(3);
   });
 });
