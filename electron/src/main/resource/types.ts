@@ -6,8 +6,8 @@
 // 这是 v1.7 整个 UI + IPC 重构的核心类型——后续 14 个 task（registry / IPC /
 // store / UI 组件）都引用本文件导出的符号。字段名严格按 brief 定义，不要改名。
 
-/** 资源类型：agent（子 agent 定义）/ mcp（MCP server 包）/ skill（技能包） */
-export type ResourceType = 'agent' | 'mcp' | 'skill';
+/** 资源类型：agent（子 agent 定义）/ mcp（MCP server 包）/ skill（技能包）/ plugin（插件包，P1） */
+export type ResourceType = 'agent' | 'mcp' | 'skill' | 'plugin';
 
 /**
  * 资源来源：
@@ -31,6 +31,8 @@ export type ResourceSource =
 export interface ResourceFilter {
   type?: ResourceType;
   source?: ResourceSource;
+  /** workspace 级启停解析用（plugin 行 enabled；缺省按启用展示） */
+  workspaceId?: string;
 }
 
 /**
@@ -95,6 +97,16 @@ export interface ResourceItem {
    * builtin catalog 项无 DB 行不带该段；禁用 = 定义保留、运行时切断。
    */
   mcp?: { enabled: boolean };
+  /** plugin 项的扩展元数据（P1：注册与展示；组件运行时激活在 P2+，spec §10） */
+  plugin?: {
+    state: 'active' | 'missing';
+    devSource: boolean;
+    sourcePath: string | null;
+    /** manifest.components 声明的组件键列表（UI 详情展示） */
+    components: string[];
+    /** 当前 workspace 启停态（行缺失 = 启用） */
+    enabled: boolean;
+  };
 };
 
 /** sourceLabel 的中文文案表，UI 列表 / Tab / 徽标共用。custom 与来源筛选 chip 同名（2026-10-09 走查 A1 术语统一，旧名「我的上传」退役） */
@@ -132,7 +144,7 @@ export function buildResourceId(source: ResourceSource, type: ResourceType, slug
  */
 export function parseResourceId(id: string): { source: ResourceSource; type: ResourceType; slug: string } | null {
   // slug 部分允许任意非空字符（包括 UUID 中的连字符），用贪婪匹配
-  const m = id.match(/^(builtin|marketplace|custom|p2p|smithery)-(agent|mcp|skill)-(.+)$/);
+  const m = id.match(/^(builtin|marketplace|custom|p2p|smithery)-(agent|mcp|skill|plugin)-(.+)$/);
   if (!m || !m[3]) return null;
   return {
     source: m[1] as ResourceSource,

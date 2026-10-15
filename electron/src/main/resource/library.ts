@@ -15,6 +15,7 @@ import { listBuiltinResources } from './builtin';
 import { listMarketplaceResources } from './marketplace';
 import { listCustomResources } from './custom';
 import { listHubInstalledResources } from './hub-install';
+import { listPluginResourceRows } from '../plugin/resources';
 import {
   buildResourceId,
   parseResourceId,
@@ -121,7 +122,20 @@ export async function listResources(filter?: ResourceFilter): Promise<ResourceIt
     hubItems = listHubInstalledResources(filter?.type);
   }
 
-  let items = [...builtinItems, ...marketplaceItems, ...customItems, ...p2pItems, ...hubItems];
+  // 插件（plugins 表同步读，spec 2026-10-15 §8.1）：source 归 custom 轨，
+  // 特有元数据走 plugin namespace；workspaceId 供启停态解析（缺省按启用展示）。
+  let pluginItems: ResourceItem[] = [];
+  if (!filter?.type || filter.type === 'plugin') {
+    try {
+      pluginItems = listPluginResourceRows(filter?.workspaceId);
+    } catch (err) {
+      logger.warn('listResources: 插件行读取失败，跳过', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  let items = [...builtinItems, ...marketplaceItems, ...customItems, ...p2pItems, ...hubItems, ...pluginItems];
 
   // 按 type 过滤
   if (filter?.type) {
