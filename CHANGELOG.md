@@ -6,6 +6,29 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 插件系统 P1：注册表 + 安装链 + 资源库插件页
+
+平台级扩展机制第一期（2026-10-15，spec `docs/specs/2026-10-15-plugin-system-design.md` / 计划 `docs/plans/2026-10-15-plugin-system-p1.md`）。momo-studio 获得统一插件单元：一个目录 + `momo-plugin.json` 清单，P1 交付「装得上、管得了」——manifest 校验管线、zip / dev 目录两条安装链、机器级注册 + workspace 级启停、资源库第四类型页。工具 / hooks / service / 面板的**运行时激活在 P2-P4**（P1 插件卡仅注册与展示）。
+
+### 新增
+- **DB 迁移 057**：`plugins`（机器级注册表：id/version/manifest_json/state/source）+ `plugin_enablements`（workspace 级启停，**行缺失 = 启用**默认语义）；dev 源目录消失由读路径自愈标 `missing`、恢复即回 `active`
+- **manifest 解析校验管线**（`plugin/manifest.ts`）：JSON 形状 → id/version 白名单（复用 marketplace 的 `SLUG_PATTERN`/`VERSION_PATTERN` 注入防线）→ components 路径安全（`./` 前缀、拒 `..` 与反斜杠、锁插件根内——Claude Code path traversal 同款防线）→ 组件存在性；违规聚合抛 `PluginManifestError`（错误带字段路径）
+- **zip 安装器**（`plugin/installer.ts`）：AdmZip 复用 skill 链骨架（`isIgnoredEntry` + 路径防御），新增 **zip bomb 守卫**（累计解压 200MB / entry 5000 上限——skill 链没有的缺口）、单层包裹目录支持（macOS 压缩产物）、`minAppVersion` 硬校验、staging 原子落位 `installed/<id>/<version>/`（单版本驻留、失败零残留）、卸载（zip 源删目录 / dev 源仅解注册 + keepData 问询）
+- **dev 目录注册**：不拷贝直读源目录，重复注册刷新版本——插件开发日常流（改码→重载，重载动作 P2 提供）
+- **plugin:* IPC 四通道**：`installZip`（Uint8Array→Buffer 归一）/ `installDevDir` / `setEnabled` / `uninstall`
+- **资源库第四类型页「插件」**：侧栏「扩展」分组 + Blocks 图标；行级 dev 源 / 目录缺失徽标；详情面板组件 chips（`组件（N）——运行时激活将在后续版本逐步开放`）+ dev 源目录路径；「安装插件 zip…」「注册开发目录…」双入口弹窗（校验错误逐条内联不关弹窗）；启停开关（workspace 级）；keepData 双按钮卸载弹窗
+- **ResourceFilter.workspaceId** 透传（插件行启停态解析；可选字段对既有调用方零破坏）
+
+### 设计取舍
+- 插件行映射进现有 `ResourceItem`（type='plugin', source='custom'，特有信息走新增 `plugin` namespace）而非独立列表体系——复用资源库全部同构 UI 与筛选；`parseResourceId` 正则同步扩展
+- 组件激活不在 P1：skills/agents/mcp 走现有管线的激活属 P2（与 ToolModule 扩展点同期），P1 插件卡展示 manifest 元信息
+- `isSafeEntryRelPath` 纯函数直测锁穿越防御——adm-zip `addFile` 写侧会把 `../x` 规范化为 `x`（实证），集成测试无法构造真实穿越 entry，读外部恶意 zip 时该分支是真防线
+- 信任模型 v1「装了即信」：进程内 JS = 完整权限，与 dsh / Claude Code hooks 同档；强制项为命名空间隔离 / 路径安全 / minAppVersion / bomb 守卫（spec §7.3 诚实清单）
+
+### 已知遗留
+- electron 全量套件在本机存在预存间歇 SIGSEGV（ABI 横跳后签名态损伤家族，基线复现；单文件/分域运行稳定）与 7 个预存失败域（marketplace catalog 计数漂移 / dispatch-parallel pm-agent 文案 / events-pruning / hub-install / sessions-repo / office / sandbox——全部基线实证，与本次无关）
+- 「重载插件」动作、settings 页插件面板留 P2；p2p 分享协议扩展插件包类型留生态阶段
+
 ## [未发布] — 智能体命名统一 + 创建表单收敛 + 工具名中文化
 
 UX 一致性批（2026-10-12）。三件事：同一实体两套叫法（智能体管理视图=英文 Agent / 资源库=中文智能体，交叉引用混乱）、两份字段几乎相同的创建表单（单屏 Dialog vs 四步向导，preset/守卫逻辑已双份漂移维护）、能力列表 ~60 个工具全是英文 id 对中文用户不友好。
