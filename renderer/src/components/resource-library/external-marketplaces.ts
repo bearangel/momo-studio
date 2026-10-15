@@ -23,4 +23,5 @@ export const MARKETPLACES: Record<ResourceType, MarketplaceLink[]> = {
     { name: 'ClawHub', description: 'clawhub.ai 技能社区', url: 'https://clawhub.ai' },
   ],
   agent: [{ name: 'momo hub', description: '官方统一市场 · 即将上线' }],
+  plugin: [{ name: 'momo hub', description: '官方统一市场 · 即将上线' }],
 };

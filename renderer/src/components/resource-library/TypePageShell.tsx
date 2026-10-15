@@ -50,6 +50,7 @@ const EMPTY_COPY: Record<ResourceType, string> = {
   agent: '还没有智能体',
   mcp: '还没有 MCP 服务器',
   skill: '还没有技能',
+  plugin: '还没有安装插件',
 };
 
 /** 每类页的 AddMenu 按钮文案（lucide Plus 图标单独承担「+」语义） */
@@ -57,6 +58,7 @@ const ADD_LABEL: Record<ResourceType, string> = {
   agent: '新建 / 导入',
   mcp: '添加服务器',
   skill: '添加技能',
+  plugin: '安装插件',
 };
 
 const DETAIL_WIDTH_KEY = 'momo.resourceLibrary.detailWidth';

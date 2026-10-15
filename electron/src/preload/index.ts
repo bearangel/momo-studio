@@ -37,6 +37,7 @@ import type {
   SmitheryInstallResult,
   TaskRow,
   UploadedSkill,
+  PluginSummary,
 } from '../../../renderer/src/ipc/types';
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -496,6 +497,15 @@ const api: ApiSurface = {
   // P2.3：misc 命名空间首个通道——外链转系统浏览器（主进程侧强制 https 校验）
   misc: {
     openExternal: (url: string) => invoke<void>('misc:openExternal', url),
+  },
+  // 插件系统 P1（spec 2026-10-15）：安装 / 启停 / 卸载
+  plugin: {
+    installZip: (data: Uint8Array, filename: string) =>
+      invoke<PluginSummary>('plugin:installZip', data, filename),
+    installDevDir: (dir: string) => invoke<PluginSummary>('plugin:installDevDir', dir),
+    setEnabled: (id: string, workspaceId: string, enabled: boolean) =>
+      invoke<void>('plugin:setEnabled', id, workspaceId, enabled),
+    uninstall: (id: string, keepData: boolean) => invoke<void>('plugin:uninstall', id, keepData),
   },
   p2p: {
     // C8：P2P 节点发现 + 信任管理

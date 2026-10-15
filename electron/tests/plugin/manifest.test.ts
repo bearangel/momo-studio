@@ -54,7 +54,7 @@ describe('validateManifest', () => {
       throw new Error('应当抛错');
     } catch (err) {
       expect(err).toBeInstanceOf(PluginManifestError);
-      expect((err as PluginManifestError).issues[0].field).toBe('id');
+      expect((err as PluginManifestError).issues[0]!.field).toBe('id');
     }
   });
 

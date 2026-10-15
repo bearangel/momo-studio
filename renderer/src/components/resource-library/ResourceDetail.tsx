@@ -24,7 +24,7 @@
 // 与 View 层 handleEditAgent 同口径），YAML-ish 只读渲染 systemPrompt 前 200 字。
 import { useEffect, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { Bot, Check, Copy, Package, Pencil, Power, Puzzle, Settings2, Trash2, X } from 'lucide-react';
+import { Bot, Blocks, Check, Copy, Package, Pencil, Power, Puzzle, Settings2, Trash2, X } from 'lucide-react';
 import type { BuiltinPresetPreview, ResourceItem } from '../../ipc/types';
 import { ipc } from '../../ipc/client';
 import { Button } from '../ui/Button';
@@ -61,6 +61,7 @@ const TYPE_ICON: Record<ResourceItem['type'], LucideIcon> = {
   agent: Bot,
   mcp: Puzzle,
   skill: Package,
+  plugin: Blocks,
 };
 
 /** 类型中文标签（状态段文字行用；来源已由 SourceBadge 表达，不再重复，走查 N3） */
@@ -68,6 +69,7 @@ const TYPE_LABEL: Record<ResourceItem['type'], string> = {
   agent: '智能体',
   mcp: 'MCP',
   skill: '技能',
+  plugin: '插件',
 };
 
 /** 校验状态本地化（走查 A4：禁原始枚举直出；tone 对齐设计系统状态徽标） */

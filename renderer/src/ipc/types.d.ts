@@ -854,10 +854,11 @@ export interface SkillCreateInput {
 }
 
 /**
- * v1.7 资源类型：agent（子 agent 定义）/ mcp（MCP server 包）/ skill（技能包）。
+ * v1.7 资源类型：agent（子 agent 定义）/ mcp（MCP server 包）/ skill（技能包）/
+ * plugin（插件包——P1 注册与展示，组件激活在 P2+，spec 2026-10-15）。
  * 与 electron 端 resource/types.ts 的 ResourceType 对齐。
  */
-export type ResourceType = 'agent' | 'mcp' | 'skill';
+export type ResourceType = 'agent' | 'mcp' | 'skill' | 'plugin';
 
 /**
  * v1.7 资源来源：
@@ -878,6 +879,8 @@ export type ResourceSource = 'builtin' | 'marketplace' | 'custom' | 'p2p' | 'smi
 export interface ResourceFilter {
   type?: ResourceType;
   source?: ResourceSource;
+  /** workspace 级启停解析用（plugin 行 enabled；缺省按启用展示） */
+  workspaceId?: string;
 }
 
 /**
@@ -972,6 +975,39 @@ export interface ResourceItem {
    * builtin catalog 项无 DB 行不带该段；禁用 = 定义保留、运行时切断。
    */
   mcp?: { enabled: boolean };
+  /** plugin 项的扩展元数据（P1：注册与展示；组件运行时激活在 P2+，spec §10） */
+  plugin?: {
+    state: 'active' | 'missing';
+    devSource: boolean;
+    sourcePath: string | null;
+    /** manifest.components 声明的组件键列表（UI 详情展示） */
+    components: string[];
+    /** 当前 workspace 启停态（行缺失 = 启用） */
+    enabled: boolean;
+  };
+}
+
+/**
+ * 插件安装结果摘要（plugin:installZip / installDevDir 返回形状）。
+ * 与 electron 端 plugin/ipc.handlers.ts 的 PluginSummary 结构对齐
+ * （renderer 独立定义，仅结构对齐——同 ResourceItem 惯例）。
+ */
+export interface PluginSummary {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  state: 'active' | 'missing';
+  source: 'zip' | 'dev';
+  components: string[];
+}
+
+/** 插件域 IPC 面（P1：安装 / 启停 / 卸载；重载动作 P2 工具激活时引入） */
+export interface PluginApiSurface {
+  installZip(data: Uint8Array, filename: string): Promise<PluginSummary>;
+  installDevDir(dir: string): Promise<PluginSummary>;
+  setEnabled(id: string, workspaceId: string, enabled: boolean): Promise<void>;
+  uninstall(id: string, keepData: boolean): Promise<void>;
 }
 
 /**
@@ -2268,6 +2304,11 @@ export interface ApiSurface {
     /** P4 Task 3：远端节点任务只读镜像（内存缓存；轮询点顺带清理超时条目） */
     getRemoteTasks(): Promise<RemoteNodeTasks[]>;
   };
+  /**
+   * 插件系统 P1（spec 2026-10-15）：安装 / 启停 / 卸载四通道。
+   * 契约与 electron 端 plugin/ipc.handlers.ts 对齐。
+   */
+  plugin: PluginApiSurface;
   /**
    * P2 Task 1：窗口控制（自绘 titlebar 控件调用）。
    * minimize/toggleMaximize/close 为单向 send；isMaximized 为 invoke 查询；

@@ -15,6 +15,7 @@ const PANEL_TITLE: Record<ResourceType, string> = {
   agent: '智能体市场',
   mcp: 'MCP 市场',
   skill: 'Skill 市场',
+  plugin: '插件市场',
 };
 
 /** 面板底部两行常驻小字（回流指引与各页 AddMenu 实际菜单项同名——走查 A6 文案对齐） */

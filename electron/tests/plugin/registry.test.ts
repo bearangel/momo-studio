@@ -95,10 +95,10 @@ describe('dev 源 missing 检测', () => {
     const devDir = path.join(tmpRoot, 'my-plugin');
     fs.mkdirSync(devDir, { recursive: true });
     upsertPlugin(mkRec({ source: 'dev', sourcePath: devDir }));
-    expect(listPlugins()[0].state).toBe('active');
+    expect(listPlugins()[0]!.state).toBe('active');
     fs.rmSync(devDir, { recursive: true, force: true });
-    expect(listPlugins()[0].state).toBe('missing');
+    expect(listPlugins()[0]!.state).toBe('missing');
     fs.mkdirSync(devDir, { recursive: true });
-    expect(listPlugins()[0].state).toBe('active');
+    expect(listPlugins()[0]!.state).toBe('active');
   });
 });

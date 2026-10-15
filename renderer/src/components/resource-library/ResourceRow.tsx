@@ -6,7 +6,7 @@
 // 键盘可达（组④ C11）：行 role=button 可聚焦，Enter/Space 选中，↑/↓/Home/End 在行间移动焦点。
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { Bot, Check, Package, Puzzle, Trash2 } from 'lucide-react';
+import { Bot, Blocks, Check, Package, Puzzle, Trash2 } from 'lucide-react';
 import type { ResourceItem, ResourceType } from '../../ipc/types';
 import { cn } from '../../lib/cn';
 import { SourceBadge } from './SourceBadge';
@@ -34,6 +34,7 @@ export const TYPE_ICON: Record<ResourceType, LucideIcon> = {
   agent: Bot,
   mcp: Puzzle,
   skill: Package,
+  plugin: Blocks,
 };
 
 /** 行间焦点移动（组④ C11）：pick 基于全量行数组与当前索引给出目标行 */

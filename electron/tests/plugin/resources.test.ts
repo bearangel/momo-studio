@@ -49,7 +49,7 @@ describe('listPluginResourceRows', () => {
     });
     const rows = listPluginResourceRows('ws1');
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({
+    expect(rows[0]!).toMatchObject({
       id: 'custom-plugin-cg',
       type: 'plugin',
       source: 'custom',
@@ -58,7 +58,7 @@ describe('listPluginResourceRows', () => {
       installed: true,
       removable: true,
     });
-    expect(rows[0].plugin).toMatchObject({
+    expect(rows[0]!.plugin).toMatchObject({
       state: 'active',
       devSource: false,
       sourcePath: null,
@@ -79,9 +79,9 @@ describe('listPluginResourceRows', () => {
       installedAt: 'x',
     });
     setPluginEnabled('cg', 'ws1', false);
-    expect(listPluginResourceRows('ws1')[0].plugin?.enabled).toBe(false);
-    expect(listPluginResourceRows('ws2')[0].plugin?.enabled).toBe(true);
-    expect(listPluginResourceRows()[0].plugin?.enabled).toBe(true);
+    expect(listPluginResourceRows('ws1')[0]!.plugin?.enabled).toBe(false);
+    expect(listPluginResourceRows('ws2')[0]!.plugin?.enabled).toBe(true);
+    expect(listPluginResourceRows()[0]!.plugin?.enabled).toBe(true);
   });
 
   it('manifest_json 损坏时降级为最小元数据行（不崩列表）', () => {
@@ -95,9 +95,9 @@ describe('listPluginResourceRows', () => {
       installedAt: 'x',
     });
     const rows = listPluginResourceRows();
-    expect(rows[0].name).toBe('broken');
-    expect(rows[0].plugin?.components).toEqual([]);
-    expect(rows[0].plugin?.devSource).toBe(true);
+    expect(rows[0]!.name).toBe('broken');
+    expect(rows[0]!.plugin?.components).toEqual([]);
+    expect(rows[0]!.plugin?.devSource).toBe(true);
   });
 });
 
@@ -122,7 +122,7 @@ describe('listResources 接入', () => {
     setPluginEnabled('cg', 'ws1', false);
     const rows = await listResources({ type: 'plugin', workspaceId: 'ws1' });
     expect(rows).toHaveLength(1);
-    expect(rows[0].id).toBe('custom-plugin-cg');
-    expect(rows[0].plugin?.enabled).toBe(false);
+    expect(rows[0]!.id).toBe('custom-plugin-cg');
+    expect(rows[0]!.plugin?.enabled).toBe(false);
   });
 });
