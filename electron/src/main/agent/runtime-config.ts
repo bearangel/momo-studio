@@ -5,6 +5,23 @@
 // 经 AGENT_CONFIG 环境变量 JSON 序列化传入子进程（runtime-entry parseConfig 消费）。
 
 import type { SubAgentRef, RuntimeSkillRef } from './builtin-tools';
+
+/**
+ * 插件系统 P2（spec §4.2）：启用插件的工具装配快照。buildSpawnOpts 定型、
+ * 子进程据此 require 外部模块；插件工具不进 allowed/denied 精确白名单——
+ * 可见性 = 装配面，deniedTools 支持 plugin:<id>/* 整插件禁用前缀。
+ */
+export interface PluginToolRef {
+  pluginId: string;
+  /** 插件根目录（zip=installed/<id>/<version>/；dev=源目录） */
+  rootDir: string;
+  /** components.tools 下待加载模块的绝对路径 */
+  modulePaths: string[];
+  /** 跨更新持久数据目录（pluginCtx.getDataDir()） */
+  dataDir: string;
+  /** manifest.config 的当前值（<dataDir>/config.json 解析；缺省 {}） */
+  config: Record<string, unknown>;
+}
 import type { LLMMessage } from './llm-provider';
 import { isThinkingRequest, type ThinkingRequest } from '../llm/provider-presets';
 
@@ -44,6 +61,12 @@ export interface AgentRuntimeOpts {
   skills?: RuntimeSkillRef[];
   /** 该 agent 可用的 MCP server 名列表，工具定义在启动时通过 IPC 向主进程发现 */
   mcpNames?: string[];
+  /**
+   * 插件系统 P2（spec §4.2）：启用插件的工具装配快照（buildSpawnOpts 定型；
+   * 子进程据此 require 外部模块——插件工具不进 allowed/denied 白名单，
+   * 可见性 = 装配面，deniedTools 支持 plugin:<id>/* 整插件禁用前缀）
+   */
+  pluginTools?: PluginToolRef[];
   // === M3 工具权限白名单 ===
   /** 允许的工具名列表；空/缺省 = 不启用白名单（全部放行） */
   allowedTools?: string[];
@@ -121,6 +144,8 @@ export interface RuntimeConfig {
   subAgents: SubAgentRef[];
   skills: RuntimeSkillRef[];
   mcpNames: string[];
+  /** 插件系统 P2：装配快照（可选——存量配置/测试夹具无此字段；子进程按 [] 处理） */
+  pluginTools?: PluginToolRef[];
   // === M3 工具权限白名单 ===
   /** 允许的工具名列表；空数组表示不启用白名单（全部放行，仅 deniedTools 生效） */
   allowedTools: string[];
@@ -381,6 +406,7 @@ export function parseConfig(raw: unknown): RuntimeConfig {
     subAgents,
     skills,
     mcpNames,
+    pluginTools,
     allowedTools,
     deniedTools,
     isLeader,
@@ -412,6 +438,17 @@ export function parseConfig(raw: unknown): RuntimeConfig {
   const resolvedMcpNames = Array.isArray(mcpNames)
     ? mcpNames.filter((n): n is string => typeof n === 'string')
     : [];
+  // 插件系统 P2：pluginTools 形状过滤（坏条目剔除不炸启动——子进程降级面）
+  const resolvedPluginTools = Array.isArray(pluginTools)
+    ? (pluginTools.filter(
+        (p): p is PluginToolRef =>
+          typeof p === 'object' &&
+          p !== null &&
+          typeof (p as PluginToolRef).pluginId === 'string' &&
+          typeof (p as PluginToolRef).rootDir === 'string' &&
+          Array.isArray((p as PluginToolRef).modulePaths),
+      ) as PluginToolRef[])
+    : [];
   // M3 工具权限：缺省/不合法时按"不限制"处理（空 allowedTools = 全放行，空 deniedTools = 无禁用）
   const resolvedAllowedTools = Array.isArray(allowedTools)
     ? allowedTools.filter((n): n is string => typeof n === 'string')
@@ -437,6 +474,7 @@ export function parseConfig(raw: unknown): RuntimeConfig {
     subAgents: resolvedSubAgents,
     skills: resolvedSkills,
     mcpNames: resolvedMcpNames,
+    pluginTools: resolvedPluginTools,
     allowedTools: resolvedAllowedTools,
     deniedTools: resolvedDeniedTools,
     // v25：isLeader 缺省/类型不符时按「非 leader」处理（旧配置无旧兼容负担）

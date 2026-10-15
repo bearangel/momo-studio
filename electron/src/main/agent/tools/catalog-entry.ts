@@ -18,6 +18,8 @@ export interface ToolCatalogEntry {
   riskNote?: string;
   /** 条件可用说明（LSP：仅 TS/JS workspace 注册） */
   conditional?: string;
+  /** 插件系统 P2：目录来源（内置缺省；插件工具标记供 UI 分组与审计对照） */
+  source?: 'builtin' | 'plugin';
 }
 
 /** per-tool 元数据（name/description 从 DEFS 取，不重复） */
