@@ -41,3 +41,19 @@ export function resolveTmpDir(): string {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
+
+/** 插件子系统根目录 <userData>/plugins/（spec 2026-10-15 §7.1，AP_USER_DATA_DIR 注入可测） */
+export function resolvePluginsDir(): string {
+  const dir = path.join(resolveUserDataDir(), 'plugins');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+export function resolvePluginInstalledDir(id: string, version: string): string {
+  return path.join(resolvePluginsDir(), 'installed', id, version);
+}
+
+/** 跨更新持久数据目录 <userData>/plugins/data/<id>/（卸载时按 keepData 决定去留） */
+export function resolvePluginDataDir(id: string): string {
+  return path.join(resolvePluginsDir(), 'data', id);
+}
