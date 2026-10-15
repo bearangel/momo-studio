@@ -1,21 +1,21 @@
 // renderer/src/components/resource-library/RegisterPluginDirDialog.tsx
-// 插件 dev 目录注册弹窗（spec 2026-10-15 §7.2，P1 预览确认稿 §5）：不拷贝、
-// 直读源目录；同名重复注册 = 刷新版本。失败错误内联展示不关弹窗。
+// 插件 dev 目录注册弹窗（spec 2026-10-15 §7.2）：不拷贝、直读源目录；同名重复注册
+// = 刷新版本。成功即自动关闭（反馈走 View 层 installNotice 横幅）；失败错误内联不关弹窗。
 import { useState } from 'react';
 import { ipc } from '../../ipc/client';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { Input } from '../ui/Input';
+import type { PluginSummary } from '../../ipc/types';
 
 interface Props {
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (summary: PluginSummary) => void;
 }
 
 export function RegisterPluginDirDialog({ onClose, onSuccess }: Props) {
   const [dir, setDir] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [registering, setRegistering] = useState(false);
 
   const trimmed = dir.trim();
@@ -24,11 +24,10 @@ export function RegisterPluginDirDialog({ onClose, onSuccess }: Props) {
     if (!trimmed || registering) return;
     setRegistering(true);
     setError(null);
-    setSuccessMsg(null);
     try {
       const summary = await ipc.plugin.installDevDir(trimmed);
-      setSuccessMsg(`已注册：${summary.name}（dev 源 v${summary.version}）`);
-      onSuccess();
+      onSuccess(summary);
+      onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -49,7 +48,6 @@ export function RegisterPluginDirDialog({ onClose, onSuccess }: Props) {
             onChange={(e) => {
               setDir(e.target.value);
               setError(null);
-              setSuccessMsg(null);
             }}
             disabled={registering}
           />
@@ -58,9 +56,6 @@ export function RegisterPluginDirDialog({ onClose, onSuccess }: Props) {
             = 刷新版本。
           </p>
         </div>
-        {successMsg && (
-          <div className="text-status-success text-sm break-all">{successMsg}</div>
-        )}
         {error && (
           <div className="text-status-error text-sm whitespace-pre-wrap break-all">{error}</div>
         )}

@@ -49,9 +49,10 @@ describe('InstallPluginZipDialog', () => {
     expect(await screen.findByText('codegraph-0.1.0.zip')).toBeTruthy();
   });
 
-  it('安装调 plugin.installZip 且成功展示名称与组件数，触发 onSuccess', async () => {
+  it('安装调 plugin.installZip 成功后自动关闭（onSuccess 带 summary + onClose）', async () => {
     const onSuccess = vi.fn();
-    render(<InstallPluginZipDialog onClose={vi.fn()} onSuccess={onSuccess} />);
+    const onClose = vi.fn();
+    render(<InstallPluginZipDialog onClose={onClose} onSuccess={onSuccess} />);
     pickZip();
     await screen.findByText('codegraph-0.1.0.zip');
     fireEvent.click(screen.getByRole('button', { name: '安装' }));
@@ -59,10 +60,8 @@ describe('InstallPluginZipDialog', () => {
     const [data, filename] = installZip.mock.calls[0] as [Uint8Array, string];
     expect(data).toBeInstanceOf(Uint8Array);
     expect(filename).toBe('codegraph-0.1.0.zip');
-    expect(
-      await screen.findByText(/已安装：Codegraph 代码图谱（cg v0\.1\.0，组件 5 项）/),
-    ).toBeTruthy();
-    await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledWith(SUMMARY));
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
   it('校验失败错误内联多行展示且弹窗不关', async () => {

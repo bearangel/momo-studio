@@ -54,6 +54,14 @@ const EMPTY_COPY: Record<ResourceType, string> = {
   plugin: '还没有安装插件',
 };
 
+/** 每类页工具栏标题（冒烟修复：原内联三元漏 plugin 分支落入「技能」） */
+const PAGE_TITLE: Record<ResourceType, string> = {
+  agent: '智能体',
+  mcp: 'MCP 服务器',
+  skill: '技能',
+  plugin: '插件',
+};
+
 /** 每类页的 AddMenu 按钮文案（lucide Plus 图标单独承担「+」语义） */
 const ADD_LABEL: Record<ResourceType, string> = {
   agent: '新建 / 导入',
@@ -289,7 +297,7 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
       <div className="px-4 py-2.5 border-b border-subtle flex items-center gap-2 min-w-0">
         <h2 className="flex items-center gap-1.5 text-sm font-semibold text-primary shrink-0">
           <Icon size={14} strokeWidth={1.75} aria-hidden />
-          {type === 'agent' ? '智能体' : type === 'mcp' ? 'MCP 服务器' : '技能'}
+          {PAGE_TITLE[type]}
         </h2>
         <div className="flex-1 min-w-0">
           <Input placeholder="搜索名称 / 描述 / slug…" value={query} onChange={(e) => setQuery(e.target.value)} />

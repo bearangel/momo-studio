@@ -244,17 +244,26 @@ export function ResourceLibraryView() {
       {gitImportOpen && (
         <GitImportDialog onClose={() => setGitImportOpen(false)} onSuccess={() => void load()} />
       )}
-      {/* 插件系统 P1（spec 2026-10-15）：zip 安装 / dev 目录注册弹窗 */}
+      {/* 插件系统 P1（spec 2026-10-15）：zip 安装 / dev 目录注册弹窗（成功即关，
+          反馈走 installNotice 横幅——冒烟修复） */}
       {pluginZipOpen && (
         <InstallPluginZipDialog
           onClose={() => setPluginZipOpen(false)}
-          onSuccess={() => void load()}
+          onSuccess={(s) => {
+            useResourceStore.setState({
+              installNotice: `已安装插件「${s.name}」（v${s.version}，组件 ${s.components.length} 项）`,
+            });
+            void load();
+          }}
         />
       )}
       {pluginDevOpen && (
         <RegisterPluginDirDialog
           onClose={() => setPluginDevOpen(false)}
-          onSuccess={() => void load()}
+          onSuccess={(s) => {
+            useResourceStore.setState({ installNotice: `已注册插件「${s.name}」（dev 源 v${s.version}）` });
+            void load();
+          }}
         />
       )}
       {importYamlOpen && (

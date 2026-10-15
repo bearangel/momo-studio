@@ -36,9 +36,10 @@ describe('RegisterPluginDirDialog', () => {
     expect(screen.getByRole('button', { name: '注册' })).toBeDisabled();
   });
 
-  it('注册调 plugin.installDevDir 且成功展示摘要，触发 onSuccess', async () => {
+  it('注册调 plugin.installDevDir 成功后自动关闭（onSuccess 带 summary + onClose）', async () => {
     const onSuccess = vi.fn();
-    render(<RegisterPluginDirDialog onClose={vi.fn()} onSuccess={onSuccess} />);
+    const onClose = vi.fn();
+    render(<RegisterPluginDirDialog onClose={onClose} onSuccess={onSuccess} />);
     fireEvent.change(screen.getByLabelText('插件源码目录'), {
       target: { value: '/Users/x/dev/plugins/codegraph-plugin' },
     });
@@ -46,8 +47,8 @@ describe('RegisterPluginDirDialog', () => {
     await waitFor(() =>
       expect(installDevDir).toHaveBeenCalledWith('/Users/x/dev/plugins/codegraph-plugin'),
     );
-    expect(await screen.findByText(/已注册：Codegraph 代码图谱（dev 源 v0\.2\.0）/)).toBeTruthy();
-    await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledWith(SUMMARY));
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
   it('失败错误内联展示且弹窗不关', async () => {

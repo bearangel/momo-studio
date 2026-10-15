@@ -1,15 +1,17 @@
 // renderer/src/components/resource-library/InstallPluginZipDialog.tsx
 // 插件 zip 安装弹窗（spec 2026-10-15 §7.2，P1 预览确认稿 §4）：FileReader 读
-// ArrayBuffer → Uint8Array → plugin.installZip（contextBridge 下 Node Buffer 跨
-// structured clone 会损坏，主进程侧归一）。校验失败错误逐条内联展示不关弹窗。
+// ArrayBuffer → Uint8Array → plugin.installZip（contextbridge 下 Node Buffer 跨
+// structured clone 会损坏，主进程侧归一）。成功即自动关闭（反馈走 View 层横幅）；
+// 校验失败错误逐条内联展示不关弹窗。
 import { useRef, useState, type ChangeEvent } from 'react';
 import { ipc } from '../../ipc/client';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
+import type { PluginSummary } from '../../ipc/types';
 
 interface Props {
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (summary: PluginSummary) => void;
 }
 
 /** FileReader 读 ArrayBuffer（jsdom 未实现 File.arrayBuffer()——UploadSkillDialog 同款约束） */
@@ -28,7 +30,6 @@ const noop = (): void => undefined;
 export function InstallPluginZipDialog({ onClose, onSuccess }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -37,21 +38,17 @@ export function InstallPluginZipDialog({ onClose, onSuccess }: Props) {
     if (!picked) return;
     setFile(picked);
     setError(null);
-    setSuccessMsg(null);
   };
 
   const handleInstall = async (): Promise<void> => {
     if (!file || installing) return;
     setInstalling(true);
     setError(null);
-    setSuccessMsg(null);
     try {
       const buffer = await readFileAsArrayBuffer(file);
       const summary = await ipc.plugin.installZip(new Uint8Array(buffer), file.name);
-      setSuccessMsg(
-        `已安装：${summary.name}（${summary.id} v${summary.version}，组件 ${summary.components.length} 项）`,
-      );
-      onSuccess();
+      onSuccess(summary);
+      onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -90,9 +87,6 @@ export function InstallPluginZipDialog({ onClose, onSuccess }: Props) {
             安装时校验 momo-plugin.json（白名单 / 路径安全 / 组件存在性），通过后落位并注册。
           </p>
         </div>
-        {successMsg && (
-          <div className="text-status-success text-sm break-all">{successMsg}</div>
-        )}
         {error && (
           <div className="text-status-error text-sm whitespace-pre-wrap break-all">{error}</div>
         )}
