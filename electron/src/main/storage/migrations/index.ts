@@ -31,6 +31,7 @@ import { migration053 } from './053_mcp_enabled';
 import { migration054 } from './054_global_tool_budget_default_50';
 import { migration055 } from './055_provider_last_verified_at';
 import { migration056 } from './056_system_sender_flip';
+import { migration057 } from './057_plugin_registry';
 
 export interface Migration {
   version: number;
@@ -1069,6 +1070,13 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // SQL 住在独立模块 056_system_sender_flip.ts（约定同 032-055）。
     version: migration056.version,
     sql: migration056.up,
+  },
+  {
+    // 插件系统 P1（spec 2026-10-15 §7.1）：plugins + plugin_enablements 两表
+    // （机器级注册 + workspace 级启停，行缺失 = 启用）。SQL 住在独立模块
+    // 057_plugin_registry.ts（约定同 032-056）。
+    version: migration057.version,
+    sql: migration057.up,
   },
 ];
 
