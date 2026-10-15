@@ -38,6 +38,7 @@ import {
   getBuiltinLoopToolDefs,
 } from './builtin-tools';
 import { buildToolRegistry, executeTool as executeToolModule, getAllToolDefs } from './tools';
+import { assembleToolModules } from './tools/plugin-tools';
 import type { ToolModule, ToolContext } from './tools/types';
 import { ReadTracker } from './tools/shared/read-tracker';
 import { SkillRegistry } from '../skill/registry';
@@ -446,23 +447,27 @@ ${skillIndex}`
   //   doExecuteTool 前置 assertToolAllowed 时校验（注册中心仅持有模块列表，不重复）。
   //   wire format 必须保持 { type, ... }——主进程 handleChildMessage 据 m.type
   //   分发，包成 { type: 'stream:chunk', chunk } 会丢 type 导致不转发。
-  const toolModules = buildToolRegistry({
-    wsFs,
-    workspaceId: config.workspaceId,
-    workspaceDir: config.workspaceDir,
-    skillRegistry,
-    streamSessionId: config.streamSessionId ?? '',
-    parentStreamSessionId: config.parentStreamSessionId,
-    roomId: config.roomId ?? '',
-    sendStreamChunk,
-    permissionConfig: { allowedTools: config.allowedTools, deniedTools: config.deniedTools },
-    // v2.3 任务工具注入：creatorUserId 从 workspaces.owner_id 派生，LLM 不可覆盖
-    creatorUserId: getWorkspace(config.workspaceId)?.ownerId ?? 'unknown',
-    // v2.3 Read-before-Edit：进程级单例注入（终审 C1——缺此字段守门静默失效）
-    readTracker,
-    // 多语言 LSP（Task 5）：检测快照透传，LspTools.create 以非空为注册门控
-    lspLanguages: config.lspLanguages,
-  });
+  const toolModules = assembleToolModules(
+    buildToolRegistry({
+      wsFs,
+      workspaceId: config.workspaceId,
+      workspaceDir: config.workspaceDir,
+      skillRegistry,
+      streamSessionId: config.streamSessionId ?? '',
+      parentStreamSessionId: config.parentStreamSessionId,
+      roomId: config.roomId ?? '',
+      sendStreamChunk,
+      permissionConfig: { allowedTools: config.allowedTools, deniedTools: config.deniedTools },
+      // v2.3 任务工具注入：creatorUserId 从 workspaces.owner_id 派生，LLM 不可覆盖
+      creatorUserId: getWorkspace(config.workspaceId)?.ownerId ?? 'unknown',
+      // v2.3 Read-before-Edit：进程级单例注入（终审 C1——缺此字段守门静默失效）
+      readTracker,
+      // 多语言 LSP（Task 5）：检测快照透传，LspTools.create 以非空为注册门控
+      lspLanguages: config.lspLanguages,
+    }),
+    config.pluginTools ?? [],
+    (msg, meta) => process.stderr.write(`${msg} ${JSON.stringify(meta ?? {})}\n`),
+  ).modules;
 
   const tools: LLMToolDef[] = [
     ...getAllToolDefs(toolModules),

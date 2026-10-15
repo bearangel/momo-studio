@@ -121,3 +121,22 @@ function stripPrefix(pluginId: string, name: string): string {
   const prefix = `plugin:${pluginId}/`;
   return name.startsWith(prefix) ? name.slice(prefix.length) : name;
 }
+
+export interface AssembledToolModules {
+  modules: ToolModule[];
+  failures: Array<{ pluginId: string; modulePath: string; error: string }>;
+}
+
+/**
+ * runtime 注册中心组装（spec §4.3 治理等价）：内置在前、插件在后并入同一
+ * ToolModule 列表——doExecuteTool 的 handles 路由与 per-call ToolContext
+ * 注入对插件模块天然生效。loader failures 携带返回（启动日志观测面）。
+ */
+export function assembleToolModules(
+  baseModules: ToolModule[],
+  refs: PluginToolRef[],
+  log: (msg: string, meta?: unknown) => void,
+): AssembledToolModules {
+  const { modules: pluginModules, failures } = loadPluginToolModules(refs, log);
+  return { modules: [...baseModules, ...pluginModules], failures };
+}
