@@ -32,7 +32,7 @@ export interface McpServerConfig {
   env?: Record<string, string>;
   /** stdio 子进程工作目录（DXT/MCPB bundle 类命令需要；缺省 = 继承当前进程，零变化） */
   cwd?: string;
-  /** remote 端点（transport='streamable_http' 必填，强制 https） */
+  /** remote 端点（transport='streamable_http' 必填，http/https；http 供自建/本地测试） */
   url?: string;
   /** remote 请求头（token 等；不落日志） */
   headers?: Record<string, string>;
@@ -63,7 +63,7 @@ export interface McpEntryUpdateInput {
   command: string;
   args?: string[];
   env?: Record<string, string>;
-  /** 远程端点（transport='streamable_http' 必填，强制 https） */
+  /** 远程端点（transport='streamable_http' 必填，http/https；http 供自建/本地测试） */
   url?: string;
   /** 远程请求头（token 等；不落日志） */
   headers?: Record<string, string>;

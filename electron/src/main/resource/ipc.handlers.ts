@@ -100,7 +100,7 @@ export interface RegisterMcpInput {
   version?: string;
   /** 传输形态；缺省 'stdio'。远程条目传 'streamable_http' + url（P2 Task 7 二态透传） */
   transport?: 'stdio' | 'streamable_http';
-  /** 远程端点（transport='streamable_http' 必填，强制 https；remote 时 command 空串占位） */
+  /** 远程端点（transport='streamable_http' 必填，http/https 均可，http 供自建/本地测试；remote 时 command 空串占位） */
   url?: string;
   /** P2.4：远程条目请求头（含鉴权 key，沿用不落日志纪律） */
   headers?: Record<string, string>;

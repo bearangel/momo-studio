@@ -45,7 +45,7 @@
 | D5 | `ResourceSource` 枚举扩展 `'smithery' | 'modelscope'`（非 marketplace 子标记） | 对齐「三类 × 多来源」心智；UI 徽标 / 过滤 / 卸载语义按 source 路由清晰 |
 | D6 | streamableHttp 客户端手写（JSON-RPC over HTTP POST），不引 @modelcontextprotocol/sdk | 与现有手写 stdio McpClient 风格一致、零新依赖；魔搭 hosted 简单 POST 即可；SSE 流式响应留 P3 |
 | D7 | Smithery stdio 安装走 install profile → npx 命令，不做 MCPB bundle 下载 | npx 覆盖 80% 场景；MCPB 解包/落地复杂度高，P3 |
-| D8 | S1 注入防线全链路复用 | hub 条目的 slug/version/command 同样过白名单校验（`marketplace/types.ts` 现有 pattern），remote url 强制 https |
+| D8 | S1 注入防线全链路复用 | hub 条目的 slug/version/command 同样过白名单校验（`marketplace/types.ts` 现有 pattern），remote url 校验 scheme（2026-10-12 修订：原「强制 https」放宽为 http/https 均放行——自建/本地测试 MCP 无 TLS 是正当用例；http 的凭证明文风险由 UI 非阻断告警承担，非 http(s) scheme 仍拒绝，见 §7） |
 
 ## 4. 架构
 
@@ -102,7 +102,7 @@ resource.store                     ├─ smitheryProvider  ──► api.smithe
 
 - 魔搭 token 只存 keychain，主进程取用，renderer 仅见「已配置/未配置」布尔
 - Smithery install profile 的 command/args/env 过 S1 白名单（slug/version/npm 包名 pattern 现成）
-- remote url 强制 https；headers 不打日志
+- remote url scheme 校验 http/https 均放行（2026-10-12 修订，原强制 https）：http 供自建/本地测试（业界 Claude Desktop/Cursor 同例），注册/编辑表单与 JSON 导入 review 阶段对 http 条目给非阻断明文告警；非 http(s) scheme（含空/缺 url）双防线拒绝；headers 不打日志
 
 ## 8. 测试策略
 

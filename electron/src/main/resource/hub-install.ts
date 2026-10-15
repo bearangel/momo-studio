@@ -18,7 +18,7 @@
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
-import { registerMcpDefinition, listRegistered, deleteRegistered } from '../mcp/host-manager';
+import { registerMcpDefinition, listRegistered, deleteRegistered, isAllowedRemoteUrl } from '../mcp/host-manager';
 import { removeMcpRefsFromAgents } from '../agent/crud';
 import type { McpConfigSchema } from '../mcp/types';
 import { buildResourceId, type ResourceItem, type ResourceType } from './types';
@@ -73,15 +73,16 @@ export async function fetchSmitheryDetail(slug: string): Promise<SmitheryServerD
 }
 
 /** 安装/编辑共用的 x-from 分流组装（spec §5.2）。空串值剔除（编辑链表单可选
- *  字段留空不产生占位项）；非 https 拒绝。Task 4 编辑链消费——返回形状变更
+ *  字段留空不产生占位项）；url scheme 与注册同防线（isAllowedRemoteUrl：http/https
+ *  放行，http 供自建/本地测试）。Task 4 编辑链消费——返回形状变更
  *  需同步 compose-remote-config.test.ts 契约锁。 */
 export function composeRemoteConfig(
   url: string,
   config: Record<string, string>,
   schema?: McpConfigSchema,
 ): { finalUrl: string; headers: Record<string, string> } {
-  if (!url.startsWith('https://')) {
-    throw new Error(`远程 MCP url 必须以 https:// 开头: ${url}`);
+  if (!isAllowedRemoteUrl(url)) {
+    throw new Error(`远程 MCP url 必须以 http:// 或 https:// 开头: ${url}`);
   }
   const headers: Record<string, string> = {};
   const queryParts: string[] = [];

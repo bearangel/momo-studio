@@ -5,7 +5,7 @@
 //   - stdio 定义缺省 transport 不受影响（存量行为兼容）
 //   - listRegistered 返回二态字段与 source 扩展值（smithery）
 //   - 错误路径专项（momo-test-rules 铁律 3）：
-//       remote url 非 https → 注册抛错
+//       remote url 非 http(s) scheme → 注册抛错（http 放行——自建/本地测试）
 //       DB 行 transport 非法值 → 读回白名单外回退 'stdio'
 //       DB 行 headers_json 坏 JSON → 读回 undefined 不抛（+ warn）
 //       DB 行 headers_json 合法 JSON 但非 plain object（数组等）→ 同上
@@ -85,14 +85,25 @@ describe('mcp_definitions 二态读写（P2 remote transport）', () => {
     expect(row?.url).toBe('https://x.test/mcp');
   });
 
-  it('remote url 非 https → 注册抛错（安全边界）', () => {
+  it('remote url http → 注册放行落库（自建/本地测试）', () => {
+    registerMcpDefinition({
+      id: 'r3', name: 'self-hosted', version: '1.0.0',
+      transport: 'streamable_http', command: '', args: [],
+      url: 'http://localhost:8931/mcp', source: 'custom',
+    });
+    const cfg = getMcpConfig('self-hosted');
+    expect(cfg?.transport).toBe('streamable_http');
+    expect(cfg?.url).toBe('http://localhost:8931/mcp');
+  });
+
+  it('remote url 非 http(s) scheme → 注册抛错（安全边界）', () => {
     expect(() =>
       registerMcpDefinition({
         id: 'bad', name: 'bad-remote', version: '1.0.0',
         transport: 'streamable_http', command: '', args: [],
-        url: 'http://x.test/mcp',
+        url: 'ftp://x.test/mcp',
       }),
-    ).toThrow(/https/);
+    ).toThrow(/http:\/\/ 或 https:\/\//);
     // 校验失败的定义不得落库
     expect(getMcpConfig('bad-remote')).toBeNull();
   });

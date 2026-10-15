@@ -241,10 +241,25 @@ describe('updateRemoteMcpDefinition（P2.2 Task 3）', () => {
     expect(cfg?.command).toBe('npx');
   });
 
-  it('非 https url → 拒绝且不落库', () => {
+  it('http url → 放行落库（自建/本地测试）', () => {
     registerMcpDefinition({
       id: 'u5',
-      name: 'https-guard',
+      name: 'scheme-guard',
+      version: '1.0.0',
+      transport: 'streamable_http',
+      command: '',
+      args: [],
+      url: 'https://old.test/mcp',
+      source: 'custom',
+    });
+    updateRemoteMcpDefinition('scheme-guard', 'http://plain.test/mcp', {});
+    expect(getMcpConfig('scheme-guard')?.url).toBe('http://plain.test/mcp');
+  });
+
+  it('非 http(s) scheme url → 拒绝且不落库', () => {
+    registerMcpDefinition({
+      id: 'u6',
+      name: 'scheme-guard-2',
       version: '1.0.0',
       transport: 'streamable_http',
       command: '',
@@ -253,10 +268,10 @@ describe('updateRemoteMcpDefinition（P2.2 Task 3）', () => {
       source: 'custom',
     });
     expect(() =>
-      updateRemoteMcpDefinition('https-guard', 'http://plain.test/mcp', {}),
-    ).toThrow(/https/);
+      updateRemoteMcpDefinition('scheme-guard-2', 'ftp://plain.test/mcp', {}),
+    ).toThrow(/http:\/\/ 或 https:\/\//);
     // 校验失败的定义不得被改写
-    expect(getMcpConfig('https-guard')?.url).toBe('https://old.test/mcp');
+    expect(getMcpConfig('scheme-guard-2')?.url).toBe('https://old.test/mcp');
   });
 });
 

@@ -78,8 +78,15 @@ describe('headers 校验（远程条目）', () => {
     expect(() => parseMcpServersJson('{"x":{"url":"https://x.com/m","headers":{"k":1}}}')).toThrow(/headers\.k/);
   });
 
-  it('非 https url → 报错（既有）', () => {
-    expect(() => parseMcpServersJson('{"x":{"url":"http://x.com/m"}}')).toThrow(/https/);
+  it('http url → 放行（自建/本地测试；明文告警归弹窗）', () => {
+    const entries = parseMcpServersJson('{"x":{"url":"http://localhost:8931/mcp"}}');
+    expect(entries[0]!.url).toBe('http://localhost:8931/mcp');
+  });
+
+  it('非 http(s) scheme url → 报错', () => {
+    expect(() => parseMcpServersJson('{"x":{"url":"ftp://x.com/m"}}')).toThrow(
+      /必须以 http:\/\/ 或 https:\/\//,
+    );
   });
 
   it('stdio 条目带 headers → 静默忽略（仅远程有意义）', () => {
@@ -155,10 +162,10 @@ describe('parseMcpServersJson', () => {
     expect(entries[0]!.command).toBe('');
   });
 
-  it('非 https url 拒绝', () => {
+  it('非 http(s) url 拒绝', () => {
     expect(() =>
-      parseMcpServersJson('{"mcpServers": {"bad": {"url": "http://x.test"}}}'),
-    ).toThrow(/https/);
+      parseMcpServersJson('{"mcpServers": {"bad": {"url": "ftp://x.test"}}}'),
+    ).toThrow(/必须以 http:\/\/ 或 https:\/\//);
   });
 
   it('url 空串视为未提供（走 stdio 校验，缺 command 抛错）', () => {

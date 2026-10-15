@@ -396,3 +396,25 @@ describe('HttpMcpClient streamable-HTTP 合规（Accept 双声明 / SSE 响应�
     }
   });
 });
+
+// === 2026-10-12 spec D8 修订配套：http:// 端点连接契约（自建/本地测试场景）===
+// 注册/编辑/导入链均已放宽 http（isAllowedRemoteUrl），连接层（fetch 透传）
+// 需锁住「http url 原样连接不阻断」——防未来在 client 层误加 scheme 白名单回退。
+describe('HttpMcpClient http:// 端点（spec D8 修订）', () => {
+  it('http:// url → connect 正常握手（url 原样透传 fetch，无 scheme 阻断）', async () => {
+    // connect = initialize + initialized notification 两请求（既有用例同款双桩形态）
+    fetchSpy
+      .mockImplementationOnce(async () => rpcResult({
+        protocolVersion: '2025-03-26',
+        capabilities: {},
+        serverInfo: { name: 'local-http-mcp', version: '1.0.0' },
+      }))
+      .mockImplementationOnce(async () => new Response(null, { status: 202 }));
+    const client = new HttpMcpClient({ ...cfg, url: 'http://127.0.0.1:3927/mcp' });
+    await client.connect();
+    expect(client.isConnected).toBe(true);
+    const calledUrl = fetchSpy.mock.calls[0]?.[0];
+    expect(String(calledUrl)).toBe('http://127.0.0.1:3927/mcp');
+    await client.disconnect();
+  });
+});

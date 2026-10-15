@@ -1,7 +1,7 @@
 // renderer/src/components/agent/RegisterMcpDialog.tsx
 // P2.4：快速创建 MCP（spec §4，D7 原地升级——文件/组件名保留）。
 // 传输二态（Segmented）：本地 stdio（名称/命令/参数一行一个/高级：env+cwd）；
-// 远程 streamable HTTP（名称/URL https/高级：headers）。切换清空对方态字段。
+// 远程 streamable HTTP（名称/URL http(s)/高级：headers）。切换清空对方态字段。
 // env/headers 用 KeyValueRows（D5）；同名二段确认（D2：预检命中 → 警示条 +
 // 「确认覆盖」，改任一字段重置）。提交 → resource:registerMcp → mcp:start →
 // onSuccess 刷新 + onClose。
@@ -12,6 +12,7 @@
 // 与非缺省回显回传恰好闭环，避免全字段 UPDATE 静默降级）。
 import { useEffect, useState, type FormEvent } from 'react';
 import { ipc } from '../../ipc/client';
+import { isSupportedRemoteUrl } from '../../lib/mcp-json';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
@@ -104,11 +105,13 @@ export function RegisterMcpDialog({
     };
   }, [edit]);
 
-  const urlInvalid = transport === 'http' && url.trim() !== '' && !url.trim().startsWith('https://');
+  // scheme 双态：非 http(s) 才阻断；http（自建/本地测试）放行但给明文告警
+  const urlInvalid = transport === 'http' && url.trim() !== '' && !isSupportedRemoteUrl(url.trim());
+  const urlInsecure = transport === 'http' && url.trim().startsWith('http://');
   const valid =
     transport === 'stdio'
       ? name.trim() !== '' && command.trim() !== ''
-      : name.trim() !== '' && url.trim().startsWith('https://');
+      : name.trim() !== '' && isSupportedRemoteUrl(url.trim());
 
   const switchTransport = (next: Transport): void => {
     if (next === transport) return;
@@ -221,8 +224,13 @@ export function RegisterMcpDialog({
           </>
         ) : (
           <>
-            <Input label="URL" value={url} onChange={(e) => { setOverwriteWarning(null); setUrl(e.target.value); }} placeholder="https://mcp.example.com/mcp" />
-            {urlInvalid && <div className="text-status-error text-sm">URL 必须以 https:// 开头</div>}
+            <Input label="URL" value={url} onChange={(e) => { setOverwriteWarning(null); setUrl(e.target.value); }} placeholder="https://mcp.example.com/mcp（自建本地服务可用 http://）" />
+            {urlInvalid && <div className="text-status-error text-sm">URL 必须以 http:// 或 https:// 开头</div>}
+            {urlInsecure && (
+              <div className="text-status-warning text-sm">
+                当前为非加密 http 连接，请求头（含 API Key）将明文传输，建议仅用于本地或可信内网的自建服务
+              </div>
+            )}
             <details className="border border-subtle rounded-md px-3 py-2">
               <summary className="text-sm text-secondary cursor-pointer select-none">高级：请求头</summary>
               <div className="pt-2">

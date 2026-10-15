@@ -111,14 +111,16 @@ describe('composeRemoteConfig x-from 分流', () => {
     expect(headers).toEqual({});
   });
 
-  it('http:// url → 抛中文错误（含原始 url）', () => {
-    expect(() => composeRemoteConfig('http://insecure.run.tools', {})).toThrow(
-      '远程 MCP url 必须以 https:// 开头: http://insecure.run.tools',
-    );
+  it('http:// url → 放行（自建/本地测试；url 原样透传）', () => {
+    const { finalUrl, headers } = composeRemoteConfig('http://insecure.run.tools', {
+      token: 't1',
+    });
+    expect(finalUrl).toBe('http://insecure.run.tools');
+    expect(headers).toEqual({ token: 't1' });
   });
 
-  it('空 url / 非 http scheme → 同一防线拒绝', () => {
-    expect(() => composeRemoteConfig('', {})).toThrow(/https/);
-    expect(() => composeRemoteConfig('ftp://srv.run.tools', {})).toThrow(/https/);
+  it('空 url / 非 http(s) scheme → 同一防线拒绝', () => {
+    expect(() => composeRemoteConfig('', {})).toThrow(/http:\/\/ 或 https:\/\//);
+    expect(() => composeRemoteConfig('ftp://srv.run.tools', {})).toThrow(/http:\/\/ 或 https:\/\//);
   });
 });

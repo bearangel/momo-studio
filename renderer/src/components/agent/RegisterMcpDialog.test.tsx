@@ -99,13 +99,23 @@ describe('RegisterMcpDialog — 快速创建 MCP：传输二态', () => {
     expect((screen.getByLabelText('命令') as HTMLInputElement).value).toBe('');
   });
 
-  it('远程态 URL 非 https → 提交 disabled + 提示', () => {
+  it('远程态 URL 非 http(s)（如 ftp）→ 提交 disabled + 错误提示', () => {
     render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
     fireEvent.click(screen.getByRole('radio', { name: '远程（HTTP）' }));
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'm' } });
-    fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'http://x.example.com' } });
+    fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'ftp://x.example.com' } });
     expect(screen.getByRole('button', { name: '注册并启动' })).toBeDisabled();
-    expect(screen.getByText('URL 必须以 https:// 开头')).toBeInTheDocument();
+    expect(screen.getByText('URL 必须以 http:// 或 https:// 开头')).toBeInTheDocument();
+  });
+
+  it('远程态 http URL → 明文告警但不阻断提交（自建/本地测试）', () => {
+    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
+    fireEvent.click(screen.getByRole('radio', { name: '远程（HTTP）' }));
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'm' } });
+    fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'http://localhost:8931/mcp' } });
+    expect(screen.getByRole('button', { name: '注册并启动' })).toBeEnabled();
+    expect(screen.getByText(/非加密 http 连接/)).toBeInTheDocument();
+    expect(screen.queryByText(/必须以 http/)).toBeNull();
   });
 });
 

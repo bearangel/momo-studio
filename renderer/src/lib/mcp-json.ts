@@ -6,6 +6,8 @@
 //     'http'/'streamable-http'/'streamable_http' 归一远程；'stdio' 本地；
 //     缺失时按 url 有无推断（既有语义）
 //   - 远程条目支持 headers（Record<string,string> 校验后透传）
+//   - 远程 url scheme：http/https 均放行（http 供自建/本地测试；明文风险
+//     由 McpJsonPasteDialog review 阶段告警，解析器不阻断）
 // stdio 条目带 headers 静默忽略（仅远程有意义）。
 
 /** 解析后的单条服务器定义（与 RegisterMcpInput 对齐的子集）。url 非空即远程条目。 */
@@ -14,10 +16,19 @@ export interface ParsedMcpEntry {
   command: string;
   args?: string[];
   env?: Record<string, string>;
-  /** 远程端点（https）；stdio 条目无此字段 */
+  /** 远程端点（http/https）；stdio 条目无此字段 */
   url?: string;
   /** 远程条目请求头（P2.4） */
   headers?: Record<string, string>;
+}
+
+/**
+ * 远程 url 合法 scheme：https（推荐）与 http（自建/本地测试）。
+ * 与主进程 host-manager.isAllowedRemoteUrl 同构（双端契约）；
+ * http 的凭证明文风险由弹窗告警提示，此处不阻断。
+ */
+export function isSupportedRemoteUrl(url: string): boolean {
+  return url.startsWith('http://') || url.startsWith('https://');
 }
 
 /** 远程 type 的三种拼写（各家工具不统一，归一处理） */
@@ -88,8 +99,8 @@ function parseEntry(name: string, value: unknown): ParsedMcpEntry {
 
   if (isRemote) {
     if (!urlPresent) throw new Error(`服务器 "${name}" 缺少 url 字段（远程条目必填）`);
-    if (!url.startsWith('https://')) {
-      throw new Error(`服务器 "${name}" 的 url 必须以 https:// 开头（远程 MCP 仅支持 https）`);
+    if (!isSupportedRemoteUrl(url)) {
+      throw new Error(`服务器 "${name}" 的 url 必须以 http:// 或 https:// 开头`);
     }
     if (typeof v.command === 'string' && v.command.trim() !== '') {
       throw new Error(`服务器 "${name}"：type 为远程但携带 command，请二选一`);

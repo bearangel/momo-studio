@@ -23,6 +23,7 @@ import { logger } from '../logger';
 import {
   evictMcpByName,
   getMcpConfig,
+  isAllowedRemoteUrl,
   listRegistered,
   setMcpEnabledDefinition,
   updateMcpEntryDefinition,
@@ -55,7 +56,7 @@ export interface McpConfigView {
 
 /** resource:updateMcpConfig 入参形状（spec §4.2） */
 export interface McpConfigUpdateInput {
-  /** 须 https（与安装链同防线，主进程双防线拒绝） */
+  /** 须 http(s)（与安装链同防线，主进程双防线拒绝；http 供自建/本地测试） */
   url: string;
   /** schema 模式：字段级值（trim 后空串剔除——可选字段留空不下发） */
   config: Record<string, string>;
@@ -150,9 +151,9 @@ export async function updateRemoteMcpConfig(
   name: string,
   input: McpConfigUpdateInput,
 ): Promise<void> {
-  // https 校验先行——非法输入不触发任何 DB/网络副作用
-  if (!input.url.startsWith('https://')) {
-    throw new Error(`远程 MCP ${name} 配置更新失败：url 必须以 https:// 开头`);
+  // url scheme 校验先行（isAllowedRemoteUrl：http/https 放行）——非法输入不触发任何 DB/网络副作用
+  if (!isAllowedRemoteUrl(input.url)) {
+    throw new Error(`远程 MCP ${name} 配置更新失败：url 必须以 http:// 或 https:// 开头`);
   }
   const def = getMcpConfig(name) as RegisteredMcp | null;
   if (!def) throw new Error(`MCP ${name} 未注册`);

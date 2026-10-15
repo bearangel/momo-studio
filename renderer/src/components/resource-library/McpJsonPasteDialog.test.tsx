@@ -217,6 +217,26 @@ describe('P2.4：导入 JSON 升级', () => {
     });
   });
 
+  it('http 远程条目 → review 阶段明文告警且可正常导入（自建/本地测试）', async () => {
+    const onClose = vi.fn();
+    render(<McpJsonPasteDialog onClose={onClose} onSuccess={() => {}} />);
+    fireEvent.change(screen.getByLabelText('导入 JSON'), {
+      target: { value: '{"mcpServers":{"dape-mcp":{"type":"http","url":"http://localhost:8931/mcp"}}}' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '解析' }));
+    expect(await screen.findByText(/1 条使用非加密 http 连接/)).toBeInTheDocument();
+    expect(screen.getByText('http://localhost:8931/mcp')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '确认导入' }));
+    await waitFor(() => expect(resourceRegisterMcp).toHaveBeenCalledTimes(1));
+    expect(resourceRegisterMcp.mock.calls[0]![0]).toMatchObject({
+      name: 'dape-mcp',
+      transport: 'streamable_http',
+      url: 'http://localhost:8931/mcp',
+    });
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(useResourceStore.getState().installNotice).toBe('导入成功 1 条 MCP');
+  });
+
   it('VS Code servers 格式 → 走通导入', async () => {
     render(<McpJsonPasteDialog onClose={() => {}} onSuccess={() => {}} />);
     fireEvent.change(screen.getByLabelText('导入 JSON'), {

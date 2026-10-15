@@ -118,6 +118,12 @@ export function McpJsonPasteDialog({ onClose, onSuccess }: Props) {
     }
   };
 
+  // http 条目放行但逐条点名告警（自建/本地测试；凭证明文风险不阻断导入）
+  const insecureNames =
+    phase.kind === 'review'
+      ? phase.entries.filter((e) => e.url?.startsWith('http://')).map((e) => e.name)
+      : [];
+
   return (
     // 容器可访问名与 textarea aria-label「导入 JSON」区分（否则 getByLabelText 撞名）
     <Dialog open onClose={onClose} title="导入 JSON" ariaLabel="批量导入 MCP" width={640}>
@@ -125,7 +131,7 @@ export function McpJsonPasteDialog({ onClose, onSuccess }: Props) {
         {phase.kind === 'input' && (
           <>
             <label htmlFor="mcp-json-input" className="text-sm text-secondary">
-              导入 JSON（支持 mcpServers / servers（VS Code）/ 裸对象；远程条目写 url，须 https；导入后可在「配置」里替换占位 key）
+              导入 JSON（支持 mcpServers / servers（VS Code）/ 裸对象；远程条目写 url，http/https 均可（自建本地服务常用 http）；导入后可在「配置」里替换占位 key）
             </label>
             <textarea
               id="mcp-json-input"
@@ -171,6 +177,11 @@ export function McpJsonPasteDialog({ onClose, onSuccess }: Props) {
             {phase.conflicts.length > 0 && (
               <div className="text-xs text-status-warning">
                 将覆盖 {phase.conflicts.length} 个同名服务器：{phase.conflicts.join('、')}
+              </div>
+            )}
+            {insecureNames.length > 0 && (
+              <div className="text-xs text-status-warning">
+                {insecureNames.length} 条使用非加密 http 连接（请求头凭证明文传输）：{insecureNames.join('、')}
               </div>
             )}
             <div className="flex gap-2 justify-end">

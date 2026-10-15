@@ -891,9 +891,9 @@ describe('registerResourceHandlers', () => {
       expect(mcpConfigMocks.updateRemoteMcpConfig).not.toHaveBeenCalled();
     });
 
-    it('resource:updateMcpConfig 服务层中文错误原样上抛（https 防线文案）', async () => {
+    it('resource:updateMcpConfig 服务层中文错误原样上抛（url scheme 防线文案）', async () => {
       mcpConfigMocks.updateRemoteMcpConfig.mockRejectedValueOnce(
-        new Error('远程 MCP brave 配置更新失败：url 必须以 https:// 开头'),
+        new Error('远程 MCP brave 配置更新失败：url 必须以 http:// 或 https:// 开头'),
       );
       const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
       const updateCall = calls.find((c: unknown[]) => c[0] === 'resource:updateMcpConfig');
@@ -902,8 +902,8 @@ describe('registerResourceHandlers', () => {
         name: string,
         input: unknown,
       ) => Promise<unknown>;
-      await expect(handler({}, 'brave', { url: 'http://insecure', config: {} })).rejects.toThrow(
-        /必须以 https:\/\/ 开头/,
+      await expect(handler({}, 'brave', { url: 'ftp://insecure', config: {} })).rejects.toThrow(
+        /必须以 http:\/\/ 或 https:\/\//,
       );
     });
 

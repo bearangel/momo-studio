@@ -448,20 +448,32 @@ describe('updateRemoteMcpConfig', () => {
     expect(cfg?.command).toBe('npx');
   });
 
-  it('错误路径：非 https url → 中文拒绝且行不动（主进程双防线）', async () => {
+  it('错误路径：非 http(s) scheme url → 中文拒绝且行不动（主进程双防线）', async () => {
     registerMcpDefinition(
       remoteRow({ name: 'https-guard', url: 'https://old.test/mcp' }),
     );
 
     await expect(
       updateRemoteMcpConfig('https-guard', {
-        url: 'http://plain.test/mcp',
+        url: 'ftp://plain.test/mcp',
         config: {},
       }),
-    ).rejects.toThrow(/https/);
+    ).rejects.toThrow(/http:\/\/ 或 https:\/\//);
     // 校验失败不得改写定义，也不产生网络副作用
     expect(getMcpConfig('https-guard')?.url).toBe('https://old.test/mcp');
     expect(fetchSmitheryDetail).not.toHaveBeenCalled();
+  });
+
+  it('http url → 放行更新（自建/本地测试，裸模式直写）', async () => {
+    registerMcpDefinition(
+      remoteRow({ name: 'http-allow', url: 'https://old.test/mcp' }),
+    );
+
+    await updateRemoteMcpConfig('http-allow', {
+      url: 'http://plain.test/mcp',
+      config: {},
+    });
+    expect(getMcpConfig('http-allow')?.url).toBe('http://plain.test/mcp');
   });
 });
 

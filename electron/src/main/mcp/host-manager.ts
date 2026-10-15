@@ -305,17 +305,27 @@ export function getMcpConfig(mcpName: string): McpServerConfig | null {
 }
 
 /**
+ * 远程 MCP url 允许的 scheme：https（推荐）与 http（自建/本地测试场景）。
+ * http 的凭证明文风险由 renderer 表单/导入弹窗告警提示，主进程不阻断；
+ * 其余 scheme（ftp://、空串、缺 url）一律拒绝。注册/编辑链共用本单点。
+ */
+export function isAllowedRemoteUrl(url: string): boolean {
+  return url.startsWith('http://') || url.startsWith('https://');
+}
+
+/**
  * 注册（或覆盖）一条 MCP server 定义到 SQLite。二态：
  *   - stdio（缺省）：command/args/env 启动子进程
- *   - streamable_http：url（强制 https）+ headers 远程连接，command 写空串占位
- *     （DB 列 NOT NULL，migration 038 不重建表），url/headers_json 仅 remote 形态落值。
+ *   - streamable_http：url（http/https，见 isAllowedRemoteUrl）+ headers
+ *     远程连接，command 写空串占位（DB 列 NOT NULL，migration 038 不重建表），
+ *     url/headers_json 仅 remote 形态落值。
  * name 唯一冲突时整体替换。source 缺省按 'marketplace' 写入（与 DB 列默认值一致），
  * installed_at 由 DB 默认值填充。
  */
 export function registerMcpDefinition(config: McpServerConfig): void {
   const transport = config.transport ?? 'stdio';
-  if (transport === 'streamable_http' && !config.url?.startsWith('https://')) {
-    throw new Error(`远程 MCP ${config.name} 注册失败：url 必须是 https 地址`);
+  if (transport === 'streamable_http' && !isAllowedRemoteUrl(config.url ?? '')) {
+    throw new Error(`远程 MCP ${config.name} 注册失败：url 必须以 http:// 或 https:// 开头`);
   }
   const db = getDb();
   db.prepare(
@@ -346,7 +356,7 @@ export function registerMcpDefinition(config: McpServerConfig): void {
 /**
  * P2.2：编辑已装远程 MCP 定义（专用 UPDATE——保 id/installed_at，不走
  * INSERT OR REPLACE 换行；Task 4 resource 层编辑服务消费）。仅限
- * streamable_http 条目；url 强制 https（与注册同安全边界）；configSchema
+ * streamable_http 条目；url scheme 校验与注册同构（isAllowedRemoteUrl）；configSchema
  * 缺省时保留原列值（表单未动 schema 就不覆盖）。
  */
 export function updateRemoteMcpDefinition(
@@ -355,8 +365,8 @@ export function updateRemoteMcpDefinition(
   headers: Record<string, string>,
   configSchema?: McpConfigSchema,
 ): void {
-  if (!url.startsWith('https://')) {
-    throw new Error(`远程 MCP ${name} 配置更新失败：url 必须以 https:// 开头`);
+  if (!isAllowedRemoteUrl(url)) {
+    throw new Error(`远程 MCP ${name} 配置更新失败：url 必须以 http:// 或 https:// 开头`);
   }
   const db = getDb();
   const row = db
@@ -377,7 +387,7 @@ export function updateRemoteMcpDefinition(
 /**
  * P2.5：全字段编辑 UPDATE（保 id/source/installed_at/config_schema——与
  * registerMcpDefinition 的 INSERT OR REPLACE 整行覆盖语义不同）。字段组装/
- * https 校验与注册同构；池驱逐由服务层（mcp-config.updateMcpEntry）负责。
+ * url scheme 校验与注册同构（isAllowedRemoteUrl）；池驱逐由服务层（mcp-config.updateMcpEntry）负责。
  */
 export function updateMcpEntryDefinition(name: string, config: McpEntryUpdateInput): void {
   const db = getDb();
@@ -386,8 +396,8 @@ export function updateMcpEntryDefinition(name: string, config: McpEntryUpdateInp
     | undefined;
   if (!row) throw new Error(`MCP ${name} 未注册`);
   const transport = config.transport ?? 'stdio';
-  if (transport === 'streamable_http' && !config.url?.startsWith('https://')) {
-    throw new Error(`远程 MCP ${name} 更新失败：url 必须是 https 地址`);
+  if (transport === 'streamable_http' && !isAllowedRemoteUrl(config.url ?? '')) {
+    throw new Error(`远程 MCP ${name} 更新失败：url 必须以 http:// 或 https:// 开头`);
   }
   db.prepare(
     `UPDATE mcp_definitions SET version = ?, transport = ?, command = ?, args = ?, env = ?, url = ?, headers_json = ?, cwd = ? WHERE name = ?`,
