@@ -32,6 +32,7 @@ import { migration054 } from './054_global_tool_budget_default_50';
 import { migration055 } from './055_provider_last_verified_at';
 import { migration056 } from './056_system_sender_flip';
 import { migration057 } from './057_plugin_registry';
+import { migration058 } from './058_tool_call_source';
 
 export interface Migration {
   version: number;
@@ -1077,6 +1078,11 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 057_plugin_registry.ts（约定同 032-056）。
     version: migration057.version,
     sql: migration057.up,
+  },
+  {
+    // 插件系统 P2（spec 2026-10-15 §4.3）：tool_calls 审计溯源列（builtin/plugin）。
+    version: migration058.version,
+    sql: migration058.up,
   },
 ];
 
