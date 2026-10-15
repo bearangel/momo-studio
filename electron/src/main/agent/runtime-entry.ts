@@ -509,7 +509,11 @@ ${skillIndex}`
   const visibleTools: LLMToolDef[] = tools.filter(
     (t) =>
       !deniedVisible.has(t.name) &&
-      (allowedVisible.size === 0 || allowedVisible.has(t.name)),
+      // 插件工具豁免 allowed 白名单（spec §4.2 可见性=装配面；执行期
+      // assertToolAllowed 对 plugin: 前缀同款豁免 + denied 兜底）
+      t.name.startsWith('plugin:') ||
+      (!t.name.startsWith('plugin:') &&
+        (allowedVisible.size === 0 || allowedVisible.has(t.name))),
   );
 
   return {

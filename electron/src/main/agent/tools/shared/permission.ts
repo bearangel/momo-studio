@@ -21,6 +21,10 @@ export function assertToolAllowed(name: string, config: ToolPermissionConfig): v
       throw new Error(`工具 ${name} 被禁止使用（匹配 denied 模式 ${pattern}）`);
     }
   }
+  // 插件系统 P2（spec §4.2）：插件工具可见性 = 装配面（pluginTools ref 在
+  // buildSpawnOpts 已按 workspace 启停过滤）——allowed 精确白名单不再筛
+  // plugin: 前缀名；denied 全量生效（含 plugin:<id>/* 整插件前缀禁用）
+  if (name.startsWith('plugin:')) return;
   if (config.allowedTools.length > 0) {
     const allowed = config.allowedTools.some((p) => matchToolPattern(name, p));
     if (!allowed) {

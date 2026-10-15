@@ -30,3 +30,22 @@ describe('assertToolAllowed - 通配符', () => {
     expect(() => assertToolAllowed('bash', config(['ls'], []))).toThrow(/不在允许列表/);
   });
 });
+
+// ── 插件工具豁免（P2，spec §4.2：可见性=装配面；allowed 不筛插件名，denied 生效）──
+
+describe('插件工具权限豁免（P2）', () => {
+  it('allowedTools 白名单不含插件名时不阻断', () => {
+    expect(() =>
+      assertToolAllowed('plugin:sample-echo/echo', { allowedTools: ['read_file'], deniedTools: [] }),
+    ).not.toThrow();
+  });
+
+  it('deniedTools 精确名 / plugin:<id>/* 前缀仍禁用', () => {
+    expect(() =>
+      assertToolAllowed('plugin:sample-echo/echo', { allowedTools: [], deniedTools: ['plugin:sample-echo/*'] }),
+    ).toThrow(/被禁止/);
+    expect(() =>
+      assertToolAllowed('plugin:sample-echo/echo', { allowedTools: [], deniedTools: ['plugin:sample-echo/echo'] }),
+    ).toThrow(/被禁止/);
+  });
+});
