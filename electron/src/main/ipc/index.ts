@@ -26,6 +26,7 @@ import { registerSandboxIpc } from '../sandbox/ipc.handlers';
 import { registerMemoryIpc } from '../memory/ipc.handlers';
 import { registerJournalIpc } from '../journal/ipc.handlers';
 import { registerResourceHandlers } from '../resource/ipc.handlers';
+import { registerPluginHandlers } from '../plugin/ipc.handlers';
 import { registerTaskHandlers } from '../task/ipc.handlers';
 import { registerTaskGroupHandlers } from '../task/groups.ipc.handlers';
 import { registerP2pHandlers } from '../p2p';
@@ -78,6 +79,8 @@ export function registerIpcHandlers(opts: WorkspaceIpcOpts = {}): void {
   // v2.5：变更账本通道（journal/ipc.handlers.ts）——list / revert / scan / 组合回滚
   registerJournalIpc();
   registerResourceHandlers();
+  // 插件系统 P1（spec 2026-10-15）：installZip / installDevDir / setEnabled / uninstall
+  registerPluginHandlers();
   registerTaskHandlers();
   // 看板重构 Task 7：taskGroup 命名空间（组 CRUD + 归档级联 + abort 补偿）
   registerTaskGroupHandlers();
