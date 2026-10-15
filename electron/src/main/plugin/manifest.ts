@@ -5,6 +5,7 @@
 // 激活时补——P1 尚不解析 agent YAML 内容。
 import fs from 'node:fs';
 import path from 'node:path';
+import { load as yamlLoad } from 'js-yaml';
 import { isValidSlug, isValidVersion } from '../marketplace/types';
 import type { PluginManifest, PluginManifestComponents } from './types';
 
@@ -127,5 +128,90 @@ export function validateManifest(manifest: PluginManifest, pluginRoot: string): 
     }
   }
 
+  issues.push(...validateManifestCrossRefs(manifest, pluginRoot));
   if (issues.length > 0) throw new PluginManifestError(issues);
+}
+
+/**
+ * 校验步骤 5（spec §2.4，P2）：agents YAML 的交叉引用——
+ *  - defaultTools 里 `plugin:<本插件id>/` 前缀 ref 的短名，须在本插件
+ *    components.tools 目录的模块文件名（去 .js）集合内（静态近似：运行时
+ *    真名以模块 getDefs 为准，文件名约定覆盖绝大多数插件）
+ *  - defaultSkills 的 ref 须在本插件 components.skills 子目录集合内
+ *  - YAML 解析失败 → issue（不抛裸错）
+ */
+export function validateManifestCrossRefs(
+  manifest: PluginManifest,
+  pluginRoot: string,
+): ManifestIssue[] {
+  const issues: ManifestIssue[] = [];
+  const agentsRel = manifest.components?.agents;
+  if (typeof agentsRel !== 'string') return issues;
+  const agentsDir = path.resolve(pluginRoot, agentsRel);
+
+  // 短名域：tools 模块文件名（若声明）；skills 子目录名（若声明）
+  const shortToolNames = new Set<string>();
+  const toolsRel = manifest.components?.tools;
+  if (typeof toolsRel === 'string') {
+    try {
+      for (const f of fs.readdirSync(path.resolve(pluginRoot, toolsRel))) {
+        if (f.endsWith('.js')) shortToolNames.add(f.slice(0, -3));
+      }
+    } catch {
+      // 目录缺失已由步骤 4 存在性检查报告
+    }
+  }
+  const skillSlugs = new Set<string>();
+  const skillsRel = manifest.components?.skills;
+  if (typeof skillsRel === 'string') {
+    try {
+      for (const e of fs.readdirSync(path.resolve(pluginRoot, skillsRel), { withFileTypes: true })) {
+        if (e.isDirectory()) skillSlugs.add(e.name);
+      }
+    } catch {
+      // 同上
+    }
+  }
+
+  let files: string[] = [];
+  try {
+    files = fs.readdirSync(agentsDir).filter((f) => f.endsWith('.yaml'));
+  } catch {
+    return issues; // 步骤 4 已报
+  }
+  const prefix = `plugin:${manifest.id}/`;
+  for (const file of files) {
+    const filePath = path.join(agentsDir, file);
+    let raw: unknown;
+    try {
+      raw = yamlLoad(fs.readFileSync(filePath, 'utf-8'));
+    } catch (err) {
+      issues.push({
+        field: `agents.${file}`,
+        message: `YAML 解析失败: ${err instanceof Error ? err.message : String(err)}`,
+      });
+      continue;
+    }
+    const spec = (raw as { spec?: { defaultTools?: Array<{ ref?: string }>; defaultSkills?: Array<{ ref?: string }> } }).spec;
+    for (const t of spec?.defaultTools ?? []) {
+      if (typeof t?.ref === 'string' && t.ref.startsWith(prefix)) {
+        const short = t.ref.slice(prefix.length);
+        if (!shortToolNames.has(short)) {
+          issues.push({
+            field: `agents.${file}.defaultTools`,
+            message: `引用本插件未声明的工具短名: ${short}（tools 目录无 ${short}.js）`,
+          });
+        }
+      }
+    }
+    for (const s of spec?.defaultSkills ?? []) {
+      if (typeof s?.ref === 'string' && !skillSlugs.has(s.ref)) {
+        issues.push({
+          field: `agents.${file}.defaultSkills`,
+          message: `引用本插件不存在的 skill 子目录: ${s.ref}`,
+        });
+      }
+    }
+  }
+  return issues;
 }

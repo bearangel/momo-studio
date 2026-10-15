@@ -498,7 +498,7 @@ const api: ApiSurface = {
   misc: {
     openExternal: (url: string) => invoke<void>('misc:openExternal', url),
   },
-  // 插件系统 P1（spec 2026-10-15）：安装 / 启停 / 卸载
+  // 插件系统 P1（spec 2026-10-15）：安装 / 启停 / 卸载；P2 加 reload
   plugin: {
     installZip: (data: Uint8Array, filename: string) =>
       invoke<PluginSummary>('plugin:installZip', data, filename),
@@ -506,6 +506,7 @@ const api: ApiSurface = {
     setEnabled: (id: string, workspaceId: string, enabled: boolean) =>
       invoke<void>('plugin:setEnabled', id, workspaceId, enabled),
     uninstall: (id: string, keepData: boolean) => invoke<void>('plugin:uninstall', id, keepData),
+    reload: (id: string) => invoke<PluginSummary>('plugin:reload', id),
   },
   p2p: {
     // C8：P2P 节点发现 + 信任管理

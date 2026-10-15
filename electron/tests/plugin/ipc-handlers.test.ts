@@ -23,6 +23,9 @@ const registryFns = vi.hoisted(() => ({
 }));
 vi.mock('../../src/main/plugin/registry', () => registryFns);
 
+const reloadFns = vi.hoisted(() => ({ reloadPlugin: vi.fn() }));
+vi.mock('../../src/main/plugin/reload', () => reloadFns);
+
 import { ipcMain } from 'electron';
 import { registerPluginHandlers } from '../../src/main/plugin/ipc.handlers';
 
@@ -119,5 +122,19 @@ describe('registerPluginHandlers', () => {
       throw new Error('插件不存在: nope');
     });
     await expect(handlerOf('plugin:uninstall')({}, 'nope', true)).rejects.toThrow(/不存在/);
+  });
+});
+
+
+describe('registerPluginHandlers - reload 通道（P2）', () => {
+  it('reload 透传 id 并返回摘要', async () => {
+    reloadFns.reloadPlugin.mockResolvedValueOnce({
+      id: 'cg', version: '0.2.0', manifestJson: JSON.stringify({
+        id: 'cg', name: 'Codegraph', version: '0.2.0', description: '', components: {},
+      }), state: 'active', source: 'dev', sourcePath: '/x', installedAt: 'x',
+    });
+    const summary = (await handlerOf('plugin:reload')({}, 'cg')) as { version: string };
+    expect(reloadFns.reloadPlugin).toHaveBeenCalledWith('cg');
+    expect(summary.version).toBe('0.2.0');
   });
 });

@@ -24,7 +24,7 @@
 // 与 View 层 handleEditAgent 同口径），YAML-ish 只读渲染 systemPrompt 前 200 字。
 import { useEffect, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { Bot, Blocks, Check, Copy, Package, Pencil, Power, Puzzle, Settings2, Trash2, X } from 'lucide-react';
+import { Bot, Blocks, Check, Copy, Package, Pencil, Power, Puzzle, RotateCw, Settings2, Trash2, X } from 'lucide-react';
 import type { BuiltinPresetPreview, ResourceItem } from '../../ipc/types';
 import { ipc } from '../../ipc/client';
 import { Button } from '../ui/Button';
@@ -52,6 +52,8 @@ interface Props {
   onToggleMcp?: (item: ResourceItem, next: boolean) => void;
   /** 插件启停（workspace 级；View 层接 store.setPluginEnabled，spec 2026-10-15 §7.1） */
   onTogglePlugin?: (item: ResourceItem, next: boolean) => void;
+  /** 插件重载（dev 源改码后手动生效；View 层接 ipc.plugin.reload，P2） */
+  onReloadPlugin?: (item: ResourceItem) => void;
   /** builtin agent 薄 fork（2026-10-08 预设可见化）：全量 preview 交 View 层预填创建向导 */
   onForkPreset?: (preview: BuiltinPresetPreview) => void;
   /** builtin agent 停用（2026-10-10）：View 层挂影响面披露确认框后走 disablePreset 级联 */
@@ -91,7 +93,7 @@ function TypeIcon({ type }: { type: ResourceItem['type'] }) {
   return <Icon size={16} strokeWidth={1.75} aria-hidden />;
 }
 
-export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onEnable, onConfigure, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onTogglePlugin, onForkPreset, onDisable }: Props) {
+export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onEnable, onConfigure, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onTogglePlugin, onReloadPlugin, onForkPreset, onDisable }: Props) {
   const mcpEnv = item.custom?.mcpConfig?.env;
   const envEntries = mcpEnv ? Object.entries(mcpEnv) : [];
 
@@ -479,6 +481,18 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
           >
             <Power size={12} strokeWidth={1.75} aria-hidden />
             {item.plugin.enabled ? '禁用' : '启用'}
+          </Button>
+        )}
+        {/* 插件重载（P2 §3.3：改码→重载即生效，dev 源日常流） */}
+        {item.type === 'plugin' && item.installed && onReloadPlugin && (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => onReloadPlugin(item)}
+            className="inline-flex items-center gap-1"
+          >
+            <RotateCw size={12} strokeWidth={1.75} aria-hidden />
+            重载
           </Button>
         )}
         {/* 删除按钮：仅 installed 且 removable 时显示（custom 上传项；plugin 显示「卸载…」） */}

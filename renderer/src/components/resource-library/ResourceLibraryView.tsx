@@ -219,6 +219,21 @@ export function ResourceLibraryView() {
           onTogglePlugin={(item, next) => {
             if (activeWorkspaceId) void setPluginEnabled(item.slug, activeWorkspaceId, next);
           }}
+          onReloadPlugin={(item) => {
+            void ipc.plugin
+              .reload(item.slug)
+              .then((s) => {
+                useResourceStore.setState({
+                  installNotice: `已重载「${s.name}」（v${s.version}，受影响的运行实例已重建）`,
+                });
+                void load();
+              })
+              .catch((err: unknown) => {
+                useResourceStore.setState({
+                  error: `重载失败：${err instanceof Error ? err.message : String(err)}`,
+                });
+              });
+          }}
         onForkPreset={handleForkPreset}
         onDisableAgent={handleDisablePreset}
       />

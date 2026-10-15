@@ -126,13 +126,15 @@ interface TypePageShellProps {
   onToggleMcp?: (item: ResourceItem, next: boolean) => void;
   /** 插件启停入口（workspace 级；View 层接 store.setPluginEnabled，spec 2026-10-15 §7.1） */
   onTogglePlugin?: (item: ResourceItem, next: boolean) => void;
+  /** 插件重载入口（View 层接 ipc.plugin.reload，P2 §3.3） */
+  onReloadPlugin?: (item: ResourceItem) => void;
   /** builtin agent 薄 fork 入口（AgentCreateWizard 预填挂载在 View 层；2026-10-08） */
   onForkPreset?: (preview: BuiltinPresetPreview) => void;
   /** builtin agent 停用入口（2026-10-10 披露式级联：View 层挂影响面确认框） */
   onDisableAgent?: (id: string) => void;
 }
 
-export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPreset, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onTogglePlugin, onForkPreset, onDisableAgent }: TypePageShellProps) {
+export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPreset, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onTogglePlugin, onReloadPlugin, onForkPreset, onDisableAgent }: TypePageShellProps) {
   const {
     items, loading, error, installNotice, catalogDegraded, sourceFilter, query,
     setSourceFilter, setQuery, deleteResource, load, loadCatalogStatus,
@@ -424,6 +426,7 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
               onEditMcpEntry={onEditMcpEntry}
               onToggleMcp={onToggleMcp}
               onTogglePlugin={onTogglePlugin}
+              onReloadPlugin={onReloadPlugin}
               onForkPreset={onForkPreset}
               onDisable={onDisableAgent}
             />

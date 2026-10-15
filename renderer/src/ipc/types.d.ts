@@ -1002,12 +1002,13 @@ export interface PluginSummary {
   components: string[];
 }
 
-/** 插件域 IPC 面（P1：安装 / 启停 / 卸载；重载动作 P2 工具激活时引入） */
+/** 插件域 IPC 面（P1：安装 / 启停 / 卸载；P2：reload——dev 源改码后手动生效） */
 export interface PluginApiSurface {
   installZip(data: Uint8Array, filename: string): Promise<PluginSummary>;
   installDevDir(dir: string): Promise<PluginSummary>;
   setEnabled(id: string, workspaceId: string, enabled: boolean): Promise<void>;
   uninstall(id: string, keepData: boolean): Promise<void>;
+  reload(id: string): Promise<PluginSummary>;
 }
 
 /**

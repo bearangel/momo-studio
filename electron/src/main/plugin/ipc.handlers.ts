@@ -7,6 +7,7 @@
 import { ipcMain, app } from 'electron';
 import { installPluginZip, installPluginDevDir, uninstallPlugin } from './installer';
 import { setPluginEnabled } from './registry';
+import { reloadPlugin } from './reload';
 import type { PluginManifest, PluginRecord } from './types';
 
 /** 安装结果摘要（renderer 展示用；跨 IPC 纯数据，renderer types.d.ts 有同形定义） */
@@ -61,5 +62,9 @@ export function registerPluginHandlers(): void {
 
   ipcMain.handle('plugin:uninstall', async (_evt, id: string, keepData: boolean) => {
     uninstallPlugin(id, keepData);
+  });
+
+  ipcMain.handle('plugin:reload', async (_evt, id: string) => {
+    return toSummary(await reloadPlugin(id));
   });
 }
