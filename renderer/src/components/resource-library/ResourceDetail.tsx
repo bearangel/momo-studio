@@ -50,6 +50,8 @@ interface Props {
   onEditMcpEntry?: (item: ResourceItem) => void;
   /** 组⑤：MCP 启停（mcp DB 行派生项；View 层接 store.setMcpEnabled） */
   onToggleMcp?: (item: ResourceItem, next: boolean) => void;
+  /** 插件启停（workspace 级；View 层接 store.setPluginEnabled，spec 2026-10-15 §7.1） */
+  onTogglePlugin?: (item: ResourceItem, next: boolean) => void;
   /** builtin agent 薄 fork（2026-10-08 预设可见化）：全量 preview 交 View 层预填创建向导 */
   onForkPreset?: (preview: BuiltinPresetPreview) => void;
   /** builtin agent 停用（2026-10-10）：View 层挂影响面披露确认框后走 disablePreset 级联 */
@@ -89,7 +91,7 @@ function TypeIcon({ type }: { type: ResourceItem['type'] }) {
   return <Icon size={16} strokeWidth={1.75} aria-hidden />;
 }
 
-export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onEnable, onConfigure, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onForkPreset, onDisable }: Props) {
+export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onEnable, onConfigure, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onTogglePlugin, onForkPreset, onDisable }: Props) {
   const mcpEnv = item.custom?.mcpConfig?.env;
   const envEntries = mcpEnv ? Object.entries(mcpEnv) : [];
 
@@ -200,8 +202,11 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
             <span className="text-xs text-tertiary">
               {TYPE_LABEL[item.type]}{item.version && ` · v${item.version}`}
             </span>
-            {/* 组⑤：禁用态徽章（mcp DB 行派生项） */}
+            {/* 组⑤：禁用态徽章（mcp DB 行派生项 / plugin workspace 级启停） */}
             {item.mcp && !item.mcp.enabled && <Badge tone="warning">已禁用</Badge>}
+            {item.plugin && !item.plugin.enabled && <Badge tone="warning">已禁用</Badge>}
+            {/* dev 源插件目录缺失降级态（读路径自愈：目录恢复即消） */}
+            {item.plugin?.state === 'missing' && <Badge tone="warning">目录缺失</Badge>}
           </div>
         </section>
 
@@ -248,6 +253,36 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
                   )}
                 </div>
               </div>
+            )}
+
+            {/* 插件：组件清单 + dev 源目录（spec 2026-10-15 §8.1——P1 仅注册与展示） */}
+            {item.type === 'plugin' && item.plugin && (
+              <>
+                <div>
+                  <div className="text-xs text-tertiary mb-1">
+                    组件（{item.plugin.components.length}）——运行时激活将在后续版本逐步开放
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {item.plugin.components.map((c) => (
+                      <code
+                        key={c}
+                        className="rounded-md border border-subtle bg-surface-2 px-2 py-0.5 text-xs text-secondary"
+                      >
+                        {c}
+                      </code>
+                    ))}
+                    {item.plugin.components.length === 0 && (
+                      <span className="text-xs text-tertiary">（无声明组件）</span>
+                    )}
+                  </div>
+                </div>
+                {item.plugin.sourcePath && (
+                  <div>
+                    <div className="text-xs text-tertiary mb-1">源目录</div>
+                    <code className="text-xs text-secondary break-all">{item.plugin.sourcePath}</code>
+                  </div>
+                )}
+              </>
             )}
 
             {/* custom Agent：定义预览（YAML-ish 只读，反查 def 结果） */}
@@ -434,7 +469,19 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
             {item.mcp.enabled ? '禁用' : '启用'}
           </Button>
         )}
-        {/* 删除按钮：仅 installed 且 removable 时显示（custom 上传项） */}
+        {/* 插件启停（workspace 级，spec 2026-10-15 §7.1）——对齐 MCP 启停形态 */}
+        {item.type === 'plugin' && item.installed && item.plugin && onTogglePlugin && (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => onTogglePlugin(item, !item.plugin?.enabled)}
+            className="inline-flex items-center gap-1"
+          >
+            <Power size={12} strokeWidth={1.75} aria-hidden />
+            {item.plugin.enabled ? '禁用' : '启用'}
+          </Button>
+        )}
+        {/* 删除按钮：仅 installed 且 removable 时显示（custom 上传项；plugin 显示「卸载…」） */}
         {item.installed && item.removable && onDelete && (
           <Button
             size="sm"
@@ -443,7 +490,7 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
             className="inline-flex items-center gap-1"
           >
             <Trash2 size={12} strokeWidth={1.75} aria-hidden />
-            删除
+            {item.type === 'plugin' ? '卸载…' : '删除'}
           </Button>
         )}
         {/* 已启用标记：builtin agent def 已在库（区别于「已安装」的随应用分发语义） */}

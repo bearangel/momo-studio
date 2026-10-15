@@ -22,6 +22,7 @@
 // 关键词搜索在前端 in-memory 完成（name/description/slug 模糊匹配，见 View 层）。
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
+import { useWorkspaceStore } from './workspace.store';
 import type { ViewKey } from './ui.store';
 import type {
   ResourceItem,
@@ -78,6 +79,11 @@ interface ResourceStore {
    */
   setMcpEnabled: (name: string, enabled: boolean) => Promise<void>;
   /**
+   * 插件启停（spec 2026-10-15 §7.1，workspace 级）：调 plugin.setEnabled 后
+   * 刷新列表（启停态经 resource:list 的 workspaceId 解析）。失败落 error。
+   */
+  setPluginEnabled: (id: string, workspaceId: string, enabled: boolean) => Promise<void>;
+  /**
    * 安装某资源后刷新；返回成功布尔（false 时错误在 error 字段）——marketplace
    * agent 安装引导据此触发。P2.1 Task 3：smithery needsConfig:true 时原样透传
    * SmitheryInstallResult（对象对旧布尔消费方恒真，语义兼容）；横幅精修归 Task 6。
@@ -99,10 +105,13 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   load: async () => {
     set({ loading: true, error: null });
     try {
-      // 来源筛选在前端做（计数需要全量）——IPC filter 只下发 type 维度
+      // 来源筛选在前端做（计数需要全量）——IPC filter 只下发 type 维度；
+      // workspaceId 供插件行启停态解析（无活跃 workspace 时缺省 = 按启用展示）
       const filter: ResourceFilter = {};
       const { typeFilter } = get();
       if (typeFilter !== 'all') filter.type = typeFilter;
+      const wsId = useWorkspaceStore.getState().activeWorkspaceId;
+      if (wsId) filter.workspaceId = wsId;
       const items = await ipc.resource.list(filter);
       set({ items, loading: false });
     } catch (err) {
@@ -163,6 +172,18 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
     await get().load();
   },
 
+  setPluginEnabled: async (id, workspaceId, enabled) => {
+    set({ error: null });
+    try {
+      await ipc.plugin.setEnabled(id, workspaceId, enabled);
+    } catch (err) {
+      set({ error: `启停失败：${(err as Error).message}` });
+      return;
+    }
+    set({ installNotice: enabled ? `已启用插件「${id}」` : `已禁用插件「${id}」` });
+    await get().load();
+  },
+
   installResource: async (id) => {
     set({ error: null });
     try {
@@ -196,7 +217,9 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
     }
   })();
   const valid: ResourceType =
-    persisted === 'agent' || persisted === 'mcp' || persisted === 'skill' ? persisted : 'agent';
+    persisted === 'agent' || persisted === 'mcp' || persisted === 'skill' || persisted === 'plugin'
+      ? persisted
+      : 'agent';
   useResourceStore.setState({ activeType: valid, typeFilter: valid });
 }
 

@@ -26,10 +26,12 @@ import { ImportBundleDialog } from './ImportBundleDialog';
 import { SkillCreateDialog } from './SkillCreateDialog';
 import { ImportAgentYamlDialog } from './ImportAgentYamlDialog';
 import { GitImportDialog } from './GitImportDialog';
+import { InstallPluginZipDialog } from './InstallPluginZipDialog';
+import { RegisterPluginDirDialog } from './RegisterPluginDirDialog';
 import type { AgentDefinition, BuiltinPresetPreview, DefinitionImpact, McpConfigUpdateInput, ResourceItem, ResourceType } from '../../ipc/types';
 
 export function ResourceLibraryView() {
-  const { activeType, setActiveType, items, installResource, load, setMcpEnabled } = useResourceStore();
+  const { activeType, setActiveType, items, installResource, load, setMcpEnabled, setPluginEnabled } = useResourceStore();
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const loadDefinitions = useAgentStore((s) => s.loadDefinitions);
   const loadMembers = useAgentStore((s) => s.loadMembers);
@@ -45,6 +47,9 @@ export function ResourceLibraryView() {
   const [presetTarget, setPresetTarget] = useState<{ slug: string; name: string; def?: AgentDefinition } | null>(null);
   // P2.6 Task 3：Git 仓库导入弹窗开关（入口仅 skill 页组装）
   const [gitImportOpen, setGitImportOpen] = useState(false);
+  // 插件系统 P1（spec 2026-10-15）：zip 安装 / dev 目录注册弹窗开关
+  const [pluginZipOpen, setPluginZipOpen] = useState(false);
+  const [pluginDevOpen, setPluginDevOpen] = useState(false);
   // P2.2 Task 7：远程 MCP 配置编辑目标（null = 弹窗关）。name 是 MCP 定义名
   // （ResourceItem.slug），displayName 是展示名——getMcpConfig/updateMcpConfig
   // 入参走 name（spec §6.2），弹窗标题用 displayName。
@@ -185,6 +190,12 @@ export function ResourceLibraryView() {
         { key: 'import-bundle', title: '导入 DXT / MCPB 包', hint: '本地 .dxt / .mcpb 文件', onSelect: () => setBundleOpen(true) },
       ];
     }
+    if (type === 'plugin') {
+      return [
+        { key: 'zip', title: '安装插件 zip…', hint: '校验 momo-plugin.json 后落位注册', onSelect: () => setPluginZipOpen(true) },
+        { key: 'dev', title: '注册开发目录…', hint: '指向本地源码目录，改码后重载生效', onSelect: () => setPluginDevOpen(true) },
+      ];
+    }
     return [
       { key: 'zip', title: '导入 zip 包…', hint: '拖放或选择文件（SKILL.md 打包）', onSelect: () => setUploadSkillOpen(true) },
       { key: 'create', title: '新建 SKILL.md…', hint: 'frontmatter（name/description）+ Markdown 正文', onSelect: () => setSkillCreateOpen(true) },
@@ -205,6 +216,9 @@ export function ResourceLibraryView() {
         onEditMcpConfig={handleEditMcpConfig}
           onEditMcpEntry={(item) => setMcpEditTarget(item.slug)}
           onToggleMcp={(item, next) => void setMcpEnabled(item.slug, next)}
+          onTogglePlugin={(item, next) => {
+            if (activeWorkspaceId) void setPluginEnabled(item.slug, activeWorkspaceId, next);
+          }}
         onForkPreset={handleForkPreset}
         onDisableAgent={handleDisablePreset}
       />
@@ -229,6 +243,19 @@ export function ResourceLibraryView() {
       {/* P2.6 Task 3：Git 仓库导入弹窗（扫描 → 预览 → 确认导入，弹窗内部自治） */}
       {gitImportOpen && (
         <GitImportDialog onClose={() => setGitImportOpen(false)} onSuccess={() => void load()} />
+      )}
+      {/* 插件系统 P1（spec 2026-10-15）：zip 安装 / dev 目录注册弹窗 */}
+      {pluginZipOpen && (
+        <InstallPluginZipDialog
+          onClose={() => setPluginZipOpen(false)}
+          onSuccess={() => void load()}
+        />
+      )}
+      {pluginDevOpen && (
+        <RegisterPluginDirDialog
+          onClose={() => setPluginDevOpen(false)}
+          onSuccess={() => void load()}
+        />
       )}
       {importYamlOpen && (
         <ImportAgentYamlDialog onClose={() => setImportYamlOpen(false)} onSuccess={() => void load()} />

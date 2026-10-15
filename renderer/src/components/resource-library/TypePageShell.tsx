@@ -15,6 +15,7 @@ import { EmptyState } from '../ui/EmptyState';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { Select } from '../ui/Select';
+import { Dialog } from '../ui/Dialog';
 import { AddMenu } from './AddMenu';
 import type { AddMenuItem } from './AddMenu';
 import { ExternalMarketplacePopover } from './ExternalMarketplacePopover';
@@ -115,13 +116,15 @@ interface TypePageShellProps {
   onEditMcpEntry?: (item: ResourceItem) => void;
   /** 组⑤：MCP 启停入口（View 层接 store.setMcpEnabled） */
   onToggleMcp?: (item: ResourceItem, next: boolean) => void;
+  /** 插件启停入口（workspace 级；View 层接 store.setPluginEnabled，spec 2026-10-15 §7.1） */
+  onTogglePlugin?: (item: ResourceItem, next: boolean) => void;
   /** builtin agent 薄 fork 入口（AgentCreateWizard 预填挂载在 View 层；2026-10-08） */
   onForkPreset?: (preview: BuiltinPresetPreview) => void;
   /** builtin agent 停用入口（2026-10-10 披露式级联：View 层挂影响面确认框） */
   onDisableAgent?: (id: string) => void;
 }
 
-export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPreset, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onForkPreset, onDisableAgent }: TypePageShellProps) {
+export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPreset, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onTogglePlugin, onForkPreset, onDisableAgent }: TypePageShellProps) {
   const {
     items, loading, error, installNotice, catalogDegraded, sourceFilter, query,
     setSourceFilter, setQuery, deleteResource, load, loadCatalogStatus,
@@ -129,6 +132,8 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
   const setActiveView = useUiStore((s) => s.setActiveView);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<ResourceItem | null>(null);
+  /** 插件卸载目标（keepData 双按钮弹窗，spec §7.2——与通用删除确认分流） */
+  const [pendingPluginDelete, setPendingPluginDelete] = useState<ResourceItem | null>(null);
   /** agent 删除的影响面（披露式级联确认文案）；null = 非 agent 或预查失败回落通用文案 */
   const [deleteImpact, setDeleteImpact] = useState<DefinitionImpact | null>(null);
   const [detailWidth, setDetailWidth] = useState<number>(readInitialDetailWidth);
@@ -200,11 +205,16 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
   };
 
   /** 拦截行/详情删除 → 二次确认（P2.5 D5；三类型统一）。
-   *  agent 类型先做影响面预查（披露式级联），预查失败回落通用文案不阻断删除。 */
+   *  agent 类型先做影响面预查（披露式级联），预查失败回落通用文案不阻断删除。
+   *  plugin 类型分流到 keepData 双按钮卸载弹窗（spec 2026-10-15 §7.2）。 */
   const requestDelete = (id: string): void => {
     const item = items.find((i) => i.id === id);
     if (!item) {
       void deleteResource(id); // 列表已无此行（竞态兜底）——直删
+      return;
+    }
+    if (item.type === 'plugin') {
+      setPendingPluginDelete(item);
       return;
     }
     if (item.type === 'agent') {
@@ -223,6 +233,21 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
     }
     setDeleteImpact(null);
     setPendingDelete(item);
+  };
+
+  /** 插件卸载执行（keepData 双按钮弹窗确认后）：失败落 error 红条，成功横幅 + 刷新 */
+  const doPluginUninstall = async (item: ResourceItem, keepData: boolean): Promise<void> => {
+    setPendingPluginDelete(null);
+    try {
+      await ipc.plugin.uninstall(item.slug, keepData);
+      useResourceStore.setState({ installNotice: `已卸载「${item.name}」` });
+      if (selectedId === item.id) setSelectedId(null);
+      await load();
+    } catch (err) {
+      useResourceStore.setState({
+        error: `卸载失败：${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
   };
 
   // 前端过滤（搜索与来源筛选同语义，内存过滤——来源计数需全量 items）
@@ -390,6 +415,7 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
               onEditMcpConfig={onEditMcpConfig}
               onEditMcpEntry={onEditMcpEntry}
               onToggleMcp={onToggleMcp}
+              onTogglePlugin={onTogglePlugin}
               onForkPreset={onForkPreset}
               onDisable={onDisableAgent}
             />
@@ -425,6 +451,43 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
             setDeleteImpact(null);
           }}
         />
+      )}
+
+      {/* 插件卸载弹窗（spec 2026-10-15 §7.2）：keepData 双按钮——完全卸载删数据目录，
+          保留数据留待重装。dev 源卸载只解除注册（用户源目录不动）。 */}
+      {pendingPluginDelete && (
+        <Dialog open onClose={() => setPendingPluginDelete(null)} title="卸载插件" width={400}>
+          <div className="flex flex-col gap-3">
+            <p className="text-sm text-primary">
+              卸载「{pendingPluginDelete.name}
+              {pendingPluginDelete.version ? ` v${pendingPluginDelete.version}` : ''}」？
+            </p>
+            <p className="text-xs text-tertiary">
+              {pendingPluginDelete.plugin?.devSource
+                ? 'dev 源插件：仅解除注册，你的源码目录不受影响。'
+                : '注册与安装副本将被移除；是否保留插件数据目录（索引缓存等）？'}
+            </p>
+            <div className="flex gap-2 justify-end">
+              <Button variant="ghost" type="button" onClick={() => setPendingPluginDelete(null)}>
+                取消
+              </Button>
+              <Button
+                variant="ghost"
+                type="button"
+                onClick={() => void doPluginUninstall(pendingPluginDelete, true)}
+              >
+                卸载并保留数据
+              </Button>
+              <Button
+                variant="danger"
+                type="button"
+                onClick={() => void doPluginUninstall(pendingPluginDelete, false)}
+              >
+                完全卸载
+              </Button>
+            </div>
+          </div>
+        </Dialog>
       )}
     </div>
   );

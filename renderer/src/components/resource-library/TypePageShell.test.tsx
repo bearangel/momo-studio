@@ -575,3 +575,71 @@ describe('buildImpactMessage — 披露式级联文案契约（2026-10-10）', (
     expect(msg).toContain('从 1 个工作空间移出该智能体（空间A）');
   });
 });
+
+// ── 插件页（spec 2026-10-15 P1）：启停透传 + 卸载 keepData 双按钮 ──────────────
+
+describe('TypePageShell - 插件启停与卸载（P1）', () => {
+  const pluginItem: ResourceItem = {
+    id: 'custom-plugin-cg', type: 'plugin', source: 'custom', slug: 'cg',
+    name: 'Codegraph 代码图谱', description: '图谱', version: '0.1.0',
+    installed: true, installable: false, removable: true,
+    plugin: {
+      state: 'active', devSource: false, sourcePath: null,
+      components: ['tools', 'service', 'agents', 'skills', 'panel'], enabled: true,
+    },
+  };
+
+  it('插件页空列表渲染插件空态文案', () => {
+    useResourceStore.setState({ typeFilter: 'plugin', activeType: 'plugin', items: [] });
+    render(<TypePageShell type="plugin" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />);
+    expect(screen.getByText('还没有安装插件')).toBeTruthy();
+  });
+
+  it('选中插件行 → 详情面板出现组件 chips 与启停按钮，点击启停透传回调', async () => {
+    useResourceStore.setState({ typeFilter: 'plugin', activeType: 'plugin', items: [pluginItem] });
+    const onTogglePlugin = vi.fn();
+    render(<TypePageShell type="plugin" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} onTogglePlugin={onTogglePlugin} />);
+    fireEvent.click(screen.getByText('Codegraph 代码图谱'));
+    expect(await screen.findByText('tools')).toBeTruthy();
+    expect(screen.getByText('service')).toBeTruthy();
+    expect(screen.getByText(/组件（5）/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /禁用/ }));
+    expect(onTogglePlugin).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'custom-plugin-cg' }),
+      false,
+    );
+  });
+
+  it('dev 源插件详情显示源目录路径；missing 态显示降级徽章', async () => {
+    const devItem: ResourceItem = {
+      ...pluginItem,
+      id: 'custom-plugin-dtb', slug: 'dtb', name: '内部部署工具箱',
+      plugin: {
+        state: 'missing', devSource: true, sourcePath: '/Users/x/dev/deploy-toolbox',
+        components: ['tools'], enabled: false,
+      },
+    };
+    useResourceStore.setState({ typeFilter: 'plugin', activeType: 'plugin', items: [devItem] });
+    render(<TypePageShell type="plugin" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />);
+    fireEvent.click(screen.getByText('内部部署工具箱'));
+    expect(await screen.findByText('/Users/x/dev/deploy-toolbox')).toBeTruthy();
+    expect(screen.getByText('目录缺失')).toBeTruthy();
+  });
+
+  it('插件卸载走 keepData 双按钮弹窗：完全卸载传 (id, false)，保留数据传 (id, true)', async () => {
+    const uninstallMock = vi.fn().mockResolvedValue(undefined);
+    (window as unknown as { api: Record<string, unknown> }).api = {
+      ...((window as unknown as { api: Record<string, unknown> }).api ?? {}),
+      plugin: { uninstall: uninstallMock, setEnabled: vi.fn(), installZip: vi.fn(), installDevDir: vi.fn() },
+    };
+    useResourceStore.setState({ typeFilter: 'plugin', activeType: 'plugin', items: [pluginItem] });
+    render(<TypePageShell type="plugin" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />);
+    fireEvent.click(screen.getByText('Codegraph 代码图谱'));
+    fireEvent.click(await screen.findByRole('button', { name: /卸载/ }));
+    expect(await screen.findByText(/卸载「Codegraph 代码图谱 v0\.1\.0」/)).toBeTruthy();
+    expect(uninstallMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '卸载并保留数据' }));
+    await waitFor(() => expect(uninstallMock).toHaveBeenCalledWith('cg', true));
+    expect(await screen.findByText(/已卸载/)).toBeTruthy();
+  });
+});
