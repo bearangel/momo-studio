@@ -39,7 +39,7 @@ export interface AgentDefinition {
   runtime: 'declarative';
   systemPrompt: string;
   defaultTools: ToolRef[];
-  source: 'builtin' | 'custom' | 'marketplace';
+  source: 'builtin' | 'custom' | 'marketplace' | 'plugin';
   description: string;
   iconEmoji: string;
 

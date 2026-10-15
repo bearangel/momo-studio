@@ -330,8 +330,8 @@ export function registerMcpDefinition(config: McpServerConfig): void {
   const db = getDb();
   db.prepare(
     `INSERT OR REPLACE INTO mcp_definitions
-       (id, name, version, transport, command, args, env, source, url, headers_json, cwd, config_schema)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, name, version, transport, command, args, env, source, url, headers_json, cwd, config_schema, plugin_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     config.id,
     config.name,
@@ -345,6 +345,7 @@ export function registerMcpDefinition(config: McpServerConfig): void {
     transport === 'streamable_http' ? JSON.stringify(config.headers ?? {}) : null,
     config.cwd ?? null,
     JSON.stringify(config.configSchema ?? {}),
+    config.pluginId ?? null,
   );
   logger.info('MCP 定义已注册', {
     name: config.name,

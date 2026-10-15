@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
 import { isIgnoredEntry } from '../skill/zip-uploader';
+import { logger } from '../logger';
 import {
   resolvePluginsDir,
   resolvePluginInstalledDir,
@@ -17,6 +18,8 @@ import {
 } from '../paths';
 import { parseManifest, validateManifest } from './manifest';
 import { upsertPlugin, getPlugin, removePluginRecord } from './registry';
+import { registerPluginAgents, removePluginAgents } from './agent-sync';
+import { syncPluginMcps, removePluginMcps } from './mcp-sync';
 import type { PluginRecord } from './types';
 
 /** zip bomb 守卫：累计解压上限 200MB */
@@ -129,7 +132,7 @@ export async function installPluginZip(data: Buffer, currentAppVersion: string):
         fs.rmSync(path.join(versionRoot, dir), { recursive: true, force: true });
       }
     }
-    return {
+    const rec: PluginRecord = {
       id: manifest.id,
       version: manifest.version,
       manifestJson: JSON.stringify(manifest),
@@ -138,6 +141,9 @@ export async function installPluginZip(data: Buffer, currentAppVersion: string):
       sourcePath: null,
       installedAt: new Date().toISOString(),
     };
+    upsertPlugin(rec);
+    activateDeclarativeComponents(rec);
+    return rec;
   } catch (err) {
     fs.rmSync(staging, { recursive: true, force: true });
     throw err;
@@ -167,7 +173,28 @@ export function installPluginDevDir(dir: string, currentAppVersion: string): Plu
     installedAt: new Date().toISOString(),
   };
   upsertPlugin(rec);
+  activateDeclarativeComponents(rec);
   return rec;
+}
+
+/** 声明式组件激活（agents 落库 / mcp 注册；skills 零复制无激活步）。整层异常降级为 warn——安装不因单个组件面失败 */
+function activateDeclarativeComponents(rec: PluginRecord): void {
+  try {
+    registerPluginAgents(rec);
+  } catch (err) {
+    logger.warn('插件 agents 激活失败（可重载重试）', {
+      pluginId: rec.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  try {
+    syncPluginMcps(rec);
+  } catch (err) {
+    logger.warn('插件 MCP 激活失败（可重载重试）', {
+      pluginId: rec.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**
@@ -177,6 +204,23 @@ export function installPluginDevDir(dir: string, currentAppVersion: string): Plu
 export function uninstallPlugin(id: string, keepData: boolean): void {
   const rec = getPlugin(id);
   if (!rec) throw new Error(`插件不存在: ${id}`);
+  // 级联先行（成员/定义行、MCP 定义与 agent 引用）——DB 行删除后再清目录
+  try {
+    removePluginAgents(id);
+  } catch (err) {
+    logger.warn('插件卸载：agents 级联清理失败（残留行需手动清理）', {
+      pluginId: id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  try {
+    removePluginMcps(id);
+  } catch (err) {
+    logger.warn('插件卸载：MCP 级联清理失败', {
+      pluginId: id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
   removePluginRecord(id);
   if (rec.source === 'zip') {
     fs.rmSync(path.join(resolvePluginsDir(), 'installed', id), { recursive: true, force: true });

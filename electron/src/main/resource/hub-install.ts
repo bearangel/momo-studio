@@ -131,9 +131,9 @@ export function listHubInstalledResources(type?: ResourceType): ResourceItem[] {
   return listRegistered()
     .filter((m) => m.source === 'smithery' && (!type || type === 'mcp'))
     .map((m) => ({
-      id: buildResourceId(m.source, 'mcp', m.name),
+      id: buildResourceId('smithery', 'mcp', m.name),
       type: 'mcp' as const,
-      source: m.source,
+      source: 'smithery' as const,
       slug: m.name,
       name: m.name.replace(/^@/, ''),
       description: m.transport === 'streamable_http' ? `远程 MCP（${m.url ?? ''}）` : `Smithery MCP（${m.command}）`,

@@ -33,6 +33,7 @@ import { migration055 } from './055_provider_last_verified_at';
 import { migration056 } from './056_system_sender_flip';
 import { migration057 } from './057_plugin_registry';
 import { migration058 } from './058_tool_call_source';
+import { migration059 } from './059_mcp_plugin_id';
 
 export interface Migration {
   version: number;
@@ -1083,6 +1084,11 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 插件系统 P2（spec 2026-10-15 §4.3）：tool_calls 审计溯源列（builtin/plugin）。
     version: migration058.version,
     sql: migration058.up,
+  },
+  {
+    // 插件系统 P2（spec §10）：mcp_definitions 归属列（source='plugin' 行的卸载级联）
+    version: migration059.version,
+    sql: migration059.up,
   },
 ];
 
