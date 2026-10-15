@@ -21,7 +21,7 @@ import type { ThinkingRequest } from '../llm/provider-presets';
 import { parseConfig, type RuntimeConfig, type TaskConfig, type ExpandedContext, type ExpandedImageItem } from './runtime-config';
 import { formatBudgetHint, formatDispatchHint, formatTaskHint, buildMandateHint, formatClockHint, formatWorkspaceHygieneHint } from './prompt-hints';
 import { logToolCall } from './tools/shared/audit';
-import { assertToolAllowed } from './tools/shared/permission';
+import { assertToolAllowed, filterVisibleToolDefs } from './tools/shared/permission';
 import {
   estimateTokens,
   estimateConversation,
@@ -504,16 +504,10 @@ ${skillIndex}`
   // 否则 loadSkill / mcp:* / dispatch:* / task_complete 会被先滤掉而进不了白名单。
   // 执行期 assertToolAllowed（doExecuteTool 每次现读 config.allowedTools）仍是
   // 独立兜底——两道闸互不依赖。
-  const deniedVisible = new Set(config.deniedTools);
-  const allowedVisible = new Set(config.allowedTools);
-  const visibleTools: LLMToolDef[] = tools.filter(
-    (t) =>
-      !deniedVisible.has(t.name) &&
-      // 插件工具豁免 allowed 白名单（spec §4.2 可见性=装配面；执行期
-      // assertToolAllowed 对 plugin: 前缀同款豁免 + denied 兜底）
-      t.name.startsWith('plugin:') ||
-      (!t.name.startsWith('plugin:') &&
-        (allowedVisible.size === 0 || allowedVisible.has(t.name))),
+  const visibleTools: LLMToolDef[] = filterVisibleToolDefs(
+    tools,
+    config.allowedTools,
+    config.deniedTools,
   );
 
   return {

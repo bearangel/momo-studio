@@ -75,7 +75,11 @@ describe('loadPluginToolModules', () => {
     expect(m.pluginSource).toBe('plugin');
     expect(m.getDefs().map((d) => d.name)).toEqual(['plugin:cg/explore', 'plugin:cg/status']);
     expect(m.handles('plugin:cg/explore')).toBe(true);
-    expect(m.handles('explore')).toBe(true); // 短名也命中（wrapper 剥前缀后路由）
+    // C1 修复：wrapper 前缀门禁——短名/他插件名/虚拟工具名一律不命中
+    expect(m.handles('explore')).toBe(false);
+    expect(m.handles('plugin:other/explore')).toBe(false);
+    expect(m.handles('loadSkill')).toBe(false);
+    expect(m.handles('mcp:github/x')).toBe(false);
     const result = JSON.parse(
       (await m.execute('plugin:cg/explore', { q: 'x' }, mkCtx())) as string,
     ) as { name: string; config: { greeting: string }; dataDir: string };
@@ -164,6 +168,9 @@ describe('loadPluginToolModules', () => {
     expect(modules).toHaveLength(3);
     expect(modules[1]!.getDefs()[0]!.name).toBe('plugin:cg/ping');
     expect(modules[2]!.getDefs()[0]!.name).toBe('plugin:other/ping');
+    // 贪心 handles（恒 true）在 C1 门禁下也只收本插件前缀
+    expect(modules[1]!.handles('mcp:any/thing')).toBe(false);
+    expect(modules[1]!.handles('plugin:cg/ping')).toBe(true);
     void modules[1]!.execute('plugin:cg/ping', {}, mkCtx());
     expect(log).toHaveBeenCalledWith(expect.stringContaining('[plugin:cg] watch me'), undefined);
   });

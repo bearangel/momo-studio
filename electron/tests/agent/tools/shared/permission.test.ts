@@ -7,7 +7,7 @@
 //   - 精确匹配仍然有效（向后兼容）
 
 import { describe, it, expect } from 'vitest';
-import { assertToolAllowed } from '../../../../src/main/agent/tools/shared/permission';
+import { assertToolAllowed, filterVisibleToolDefs } from '../../../../src/main/agent/tools/shared/permission';
 
 describe('assertToolAllowed - 通配符', () => {
   const config = (allowed: string[], denied: string[]) => ({ allowedTools: allowed, deniedTools: denied });
@@ -47,5 +47,40 @@ describe('插件工具权限豁免（P2）', () => {
     expect(() =>
       assertToolAllowed('plugin:sample-echo/echo', { allowedTools: [], deniedTools: ['plugin:sample-echo/echo'] }),
     ).toThrow(/被禁止/);
+  });
+});
+
+// ── I1：可见面过滤（filterVisibleToolDefs 纯函数，含 plugin 豁免与通配 denied）──
+
+describe('filterVisibleToolDefs（P2 审查 I1）', () => {
+  const defs = [
+    { name: 'read_file', description: 'a', inputSchema: {} },
+    { name: 'bash', description: 'a', inputSchema: {} },
+    { name: 'plugin:cg/echo', description: 'a', inputSchema: {} },
+  ];
+
+  it('非插件 denied：allowed 空或含该名都必须隐藏（回归锁——运算符优先级）', () => {
+    expect(filterVisibleToolDefs(defs, [], ['bash']).map((d) => d.name)).toEqual([
+      'read_file',
+      'plugin:cg/echo',
+    ]);
+    // denied+allowed 同含 bash → deny 胜出隐藏；read_file 不在白名单亦隐藏；
+    // 插件工具豁免白名单保持可见
+    expect(filterVisibleToolDefs(defs, ['bash'], ['bash']).map((d) => d.name)).toEqual([
+      'plugin:cg/echo',
+    ]);
+  });
+
+  it('插件工具豁免 allowed 白名单；精确名与 plugin:<id>/* 通配 denied 生效', () => {
+    expect(filterVisibleToolDefs(defs, ['read_file'], []).map((d) => d.name)).toEqual([
+      'read_file',
+      'plugin:cg/echo',
+    ]);
+    expect(
+      filterVisibleToolDefs(defs, [], ['plugin:cg/*']).map((d) => d.name),
+    ).toEqual(['read_file', 'bash']);
+    expect(
+      filterVisibleToolDefs(defs, [], ['plugin:cg/echo']).map((d) => d.name),
+    ).toEqual(['read_file', 'bash']);
   });
 });

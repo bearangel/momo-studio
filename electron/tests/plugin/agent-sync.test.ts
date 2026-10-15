@@ -54,9 +54,10 @@ function mkPlugin(id: string, yaml: string): PluginRecord {
 }
 
 function defsOf(pluginId: string): Array<{ id: string; source: string; name: string }> {
+  const prefix = `plugin:${pluginId}:`;
   return getDb()
-    .prepare(`SELECT id, source, name FROM agent_definitions WHERE id LIKE 'plugin:${pluginId}:%'`)
-    .all() as Array<{ id: string; source: string; name: string }>;
+    .prepare(`SELECT id, source, name FROM agent_definitions WHERE substr(id, 1, ?) = ?`)
+    .all(prefix.length, prefix) as Array<{ id: string; source: string; name: string }>;
 }
 
 beforeEach(() => {
@@ -142,5 +143,63 @@ describe('removePluginAgents', () => {
 
   it('无行时 no-op 不抛', () => {
     expect(() => removePluginAgents('nope')).not.toThrow();
+  });
+});
+
+describe('I2：LIKE _ 通配与 I3：reload 收敛（审查修复）', () => {
+  function mkRecWithAgents(id: string, slugs: string[]): PluginRecord {
+    const root = path.join(tmpRoot, 'plugins', 'installed', id, '0.1.0');
+    fs.mkdirSync(path.join(root, 'agents'), { recursive: true });
+    for (const slug of slugs) {
+      fs.writeFileSync(
+        path.join(root, 'agents', `${slug}.yaml`),
+        AGENT_YAML.replace('code-navigator', slug),
+      );
+    }
+    fs.writeFileSync(
+      path.join(root, 'momo-plugin.json'),
+      JSON.stringify({
+        id,
+        name: id,
+        version: '0.1.0',
+        description: '',
+        components: { agents: './agents' },
+      }),
+    );
+    return {
+      id,
+      version: '0.1.0',
+      manifestJson: fs.readFileSync(path.join(root, 'momo-plugin.json'), 'utf-8'),
+      state: 'active',
+      source: 'zip',
+      sourcePath: null,
+      installedAt: 'x',
+    };
+  }
+
+  it('I2：卸载 a_b 不误删 a-b 的定义行（LIKE _ 通配）', () => {
+    const a = mkRecWithAgents('a_b', ['nav']);
+    const b = mkRecWithAgents('a-b', ['nav']);
+    upsertPlugin(a);
+    upsertPlugin(b);
+    registerPluginAgents(a);
+    registerPluginAgents(b);
+    removePluginAgents('a_b');
+    expect(defsOf('a_b')).toHaveLength(0);
+    expect(defsOf('a-b')).toHaveLength(1);
+  });
+
+  it('I3：register 收敛——插件删掉某 agent YAML 后重注册，幽灵行被清', () => {
+    const rec = mkRecWithAgents('cg', ['nav', 'old']);
+    upsertPlugin(rec);
+    registerPluginAgents(rec);
+    expect(defsOf('cg')).toHaveLength(2);
+    // 模拟 dev 改动：删 old.yaml（保持 manifest 不变——agents 目录内容即真相）
+    const root = path.join(tmpRoot, 'plugins', 'installed', 'cg', '0.1.0');
+    fs.rmSync(path.join(root, 'agents', 'old.yaml'));
+    registerPluginAgents(rec); // reload 链重注册
+    const defs = defsOf('cg');
+    expect(defs).toHaveLength(1);
+    expect(defs[0]!.id).toBe('plugin:cg:nav');
   });
 });

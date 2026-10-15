@@ -18,7 +18,8 @@ interface PluginManifestShape {
   components?: { agents?: string };
 }
 
-/** 注册插件 agents（幂等）。返回写入数；坏 YAML 逐文件跳过带日志。 */
+/** 注册插件 agents（幂等 + 收敛：目录中已消失的 slug 行连带成员行清理——
+ * dev 工作流「删 YAML→重载即生效」与 install/reload 共用本语义，审查 I3）。返回写入数。 */
 export function registerPluginAgents(rec: PluginRecord): number {
   const root = resolvePluginRoot(rec);
   if (root === null) return 0;
@@ -37,6 +38,18 @@ export function registerPluginAgents(rec: PluginRecord): number {
   } catch {
     return 0;
   }
+  const liveDefIds: string[] = [];
+  const registered = registerAgentFiles(rec, dir, files, liveDefIds);
+  pruneStaleAgentDefs(rec.id, liveDefIds);
+  return registered;
+}
+
+function registerAgentFiles(
+  rec: PluginRecord,
+  dir: string,
+  files: string[],
+  liveDefIds: string[],
+): number {
   let count = 0;
   for (const file of files) {
     try {
@@ -50,6 +63,7 @@ export function registerPluginAgents(rec: PluginRecord): number {
         modelProviderId: null,
       };
       saveAgentDefinition(def);
+      liveDefIds.push(def.id);
       count += 1;
     } catch (err) {
       logger.warn('插件 agent 解析失败（已跳过）', {
@@ -62,14 +76,41 @@ export function registerPluginAgents(rec: PluginRecord): number {
   return count;
 }
 
-/** 卸载级联：清该插件全部定义的成员行与定义行（单事务；no-op 安全） */
+/** 清理本插件下已不在目录中的幽灵定义行（含成员行）——substr 精确前缀匹配
+ * （LIKE 的 _ 是单字符通配，会跨插件误删，审查 I2） */
+function pruneStaleAgentDefs(pluginId: string, liveDefIds: string[]): void {
+  const db = getDb();
+  const prefix = `plugin:${pluginId}:`;
+  const rows = db
+    .prepare(`SELECT id FROM agent_definitions WHERE substr(id, 1, ?) = ?`)
+    .all(prefix.length, prefix) as Array<{ id: string }>;
+  for (const { id } of rows) {
+    if (liveDefIds.includes(id)) continue;
+    const instances = db
+      .prepare(`SELECT instance_id FROM workspace_agent_members WHERE agent_definition_id = ?`)
+      .all(id) as Array<{ instance_id: string }>;
+    db.transaction(() => {
+      if (instances.length > 0) {
+        const ph = instances.map(() => '?').join(', ');
+        db.prepare(
+          `UPDATE workspaces SET default_agent_instance_id = NULL WHERE default_agent_instance_id IN (${ph})`,
+        ).run(...instances.map((i) => i.instance_id));
+      }
+      db.prepare(`DELETE FROM workspace_agent_members WHERE agent_definition_id = ?`).run(id);
+      db.prepare(`DELETE FROM agent_definitions WHERE id = ?`).run(id);
+    })();
+  }
+}
+
+/** 卸载级联：清该插件全部定义的成员行与定义行（单事务；no-op 安全）。
+ * substr 精确前缀匹配——同 pruneStaleAgentDefs（审查 I2）。 */
 export function removePluginAgents(pluginId: string): void {
   const db = getDb();
-  const prefix = `plugin:${pluginId}:%`;
+  const prefix = `plugin:${pluginId}:`;
   db.transaction(() => {
     const defs = db
-      .prepare(`SELECT id FROM agent_definitions WHERE id LIKE ?`)
-      .all(prefix) as Array<{ id: string }>;
+      .prepare(`SELECT id FROM agent_definitions WHERE substr(id, 1, ?) = ?`)
+      .all(prefix.length, prefix) as Array<{ id: string }>;
     for (const { id } of defs) {
       const instances = db
         .prepare(

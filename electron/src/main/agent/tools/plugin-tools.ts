@@ -78,7 +78,11 @@ export function loadPluginToolModules(
           pluginSource: 'plugin',
           getDefs: () => namespaced,
           getCatalog: () => catalogFor(ref.pluginId, inner, namespaced),
-          handles: (name) => inner.handles(stripPrefix(ref.pluginId, name)),
+          // 前缀门禁（审查 C1）：只认本插件命名空间名——短名 / 他插件名 /
+          // loadSkill·dispatch·mcp 等虚拟名不路由进来（贪心 inner.handles 也不放行）
+          handles: (name) =>
+            name.startsWith(`plugin:${ref.pluginId}/`) &&
+            inner.handles(stripPrefix(ref.pluginId, name)),
           execute: async (name, args, ctx: ToolContext) =>
             inner.execute(stripPrefix(ref.pluginId, name), args, ctx),
         });

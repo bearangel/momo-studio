@@ -121,7 +121,21 @@ export function syncPluginMcps(rec: PluginRecord): string[] {
       });
     }
   }
+  pruneStaleMcpDefs(rec.id, registered);
   return registered;
+}
+
+/** 收敛：清理本插件下已不在 mcp.json 中的幽灵定义（含 agent 引用）——审查 I3 */
+function pruneStaleMcpDefs(pluginId: string, liveNames: string[]): void {
+  const db = getDb();
+  const rows = db
+    .prepare(`SELECT name FROM mcp_definitions WHERE plugin_id = ?`)
+    .all(pluginId) as Array<{ name: string }>;
+  for (const { name } of rows) {
+    if (liveNames.includes(name)) continue;
+    removeMcpRefsFromAgents(name);
+    db.prepare(`DELETE FROM mcp_definitions WHERE name = ?`).run(name);
+  }
 }
 
 /** 卸载级联：删本插件（plugin_id 归属）的 MCP 定义 + 清 agent 引用 */

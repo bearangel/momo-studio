@@ -32,3 +32,29 @@ export function assertToolAllowed(name: string, config: ToolPermissionConfig): v
     }
   }
 }
+
+export interface ToolDefLike {
+  name: string;
+  description: string;
+  inputSchema: unknown;
+}
+
+/**
+ * 可见面过滤（chatStream 工具目录收敛，P2 审查 I1 抽取纯函数化）：
+ *  - denied（含通配后缀，matchToolPattern 同执行期语义）优先剔除——含插件工具
+ *  - plugin: 前缀豁免 allowed 精确白名单（可见性=装配面，spec §4.2）
+ *  - 其余按 allowed 白名单（空 = 全放行）
+ */
+export function filterVisibleToolDefs<T extends ToolDefLike>(
+  tools: T[],
+  allowedTools: string[],
+  deniedTools: string[],
+): T[] {
+  return tools.filter(
+    (t) =>
+      !deniedTools.some((p) => matchToolPattern(t.name, p)) &&
+      (t.name.startsWith('plugin:') ||
+        allowedTools.length === 0 ||
+        allowedTools.some((p) => matchToolPattern(t.name, p))),
+  );
+}
