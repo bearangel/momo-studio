@@ -66,14 +66,48 @@ export function parseManifest(raw: string): PluginManifest {
 export function validateManifest(manifest: PluginManifest, pluginRoot: string): void {
   const issues: ManifestIssue[] = [];
 
-  if (!isValidSlug(manifest.id)) {
-    issues.push({ field: 'id', message: `非法插件 id（白名单外字符）: ${manifest.id}` });
+  // 顶层类型检查（spec §2.4 步骤 1「JSON Schema 校验」的运行时落地——renderer
+  // 会透传 name/description，非字符串能直接崩 React 树；components 非对象会让
+  // 下方键访问抛英文 TypeError 而非带字段路径的中文错误）
+  for (const field of ['id', 'name', 'version', 'description'] as const) {
+    if (typeof manifest[field] !== 'string') {
+      issues.push({ field, message: `必须是字符串` });
+    }
   }
-  if (!isValidVersion(manifest.version)) {
-    issues.push({ field: 'version', message: `非法版本号: ${manifest.version}` });
+  if (
+    typeof manifest.components !== 'object' ||
+    manifest.components === null ||
+    Array.isArray(manifest.components)
+  ) {
+    issues.push({ field: 'components', message: '必须是对象（组件键 → 相对路径）' });
+  }
+  if (manifest.minAppVersion !== undefined && typeof manifest.minAppVersion !== 'string') {
+    issues.push({ field: 'minAppVersion', message: '必须是字符串' });
   }
 
+  if (typeof manifest.id === 'string' && !isValidSlug(manifest.id)) {
+    issues.push({ field: 'id', message: `非法插件 id（白名单外字符）: ${manifest.id}` });
+  }
+  if (typeof manifest.version === 'string') {
+    if (!isValidVersion(manifest.version)) {
+      issues.push({ field: 'version', message: `非法版本号: ${manifest.version}` });
+    } else if (manifest.version === '.' || manifest.version === '..') {
+      // VERSION_PATTERN 允许纯点号，但 path.join 会把 '..' 段归一化为上级目录——
+      // 安装链 target/versionRoot 会被劫持摧毁 plugins 目录（审查 C1）。id 侧
+      // SLUG_PATTERN 首字符锁字母数字，天然无此洞。
+      issues.push({
+        field: 'version',
+        message: `版本号不能为 '.' 或 '..'（路径归一化穿越）: ${manifest.version}`,
+      });
+    }
+  }
+
+  const componentsValid =
+    typeof manifest.components === 'object' &&
+    manifest.components !== null &&
+    !Array.isArray(manifest.components);
   for (const key of COMPONENT_KEYS) {
+    if (!componentsValid) continue;
     const declared = manifest.components[key];
     if (declared === undefined) continue;
     if (typeof declared !== 'string' || declared === '') {

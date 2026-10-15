@@ -73,6 +73,31 @@ describe('installPluginZip', () => {
     await expect(installPluginZip(zip.toBuffer(), '2.1.0')).rejects.toThrow(/解压总量超限/);
   });
 
+  it('说谎的 zip 头（声明小于实际）：拒装 + 零残留 + 不落库（审查 I2）', async () => {
+    const zip = new AdmZip();
+    zip.addFile(
+      'momo-plugin.json',
+      Buffer.from(
+        JSON.stringify({ id: 'liar', name: 'L', version: '0.1.0', description: '', components: {} }),
+      ),
+    );
+    const big = Buffer.alloc(110 * 1024 * 1024, 1);
+    zip.addFile('a.bin', big);
+    zip.addFile('b.bin', big);
+    // 篡改声明解压尺寸 90MB×2=180MB（< 200MB 声明上限）——声明值预检放行，
+    // 实际 220MB 必须在解压层（adm-zip 尺寸校验）或实际尺寸守卫处被拒
+    for (const e of zip.getEntries()) {
+      if (e.entryName.endsWith('.bin')) e.header.size = 90 * 1024 * 1024;
+    }
+    await expect(installPluginZip(zip.toBuffer(), '2.1.0')).rejects.toThrow();
+    expect(getPlugin('liar')).toBeNull();
+    const staging = fs
+      .readdirSync(path.join(tmpRoot, 'plugins'))
+      .filter((f) => f.startsWith('.staging'));
+    expect(staging).toHaveLength(0);
+    expect(fs.existsSync(resolvePluginInstalledDir('liar', '0.1.0'))).toBe(false);
+  });
+
   it('entry 路径穿越（../）防御：adm-zip 写侧已规范化为普通文件名，合法落位', async () => {
     // adm-zip addFile 会把 '../escape.txt' 规范化存储为 'escape.txt'（实证），
     // 故无法经 adm-zip 构造真实穿越 entry——穿越防御由下方 isSafeEntryRelPath

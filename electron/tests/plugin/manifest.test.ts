@@ -88,6 +88,40 @@ describe('validateManifest', () => {
     ).toThrow(PluginManifestError);
   });
 
+  it('version 为 . 或 .. 拒绝（path.join 归一化穿越防线，审查 C1）', () => {
+    const root = mkRoot({ 'tools/cg.js': '' });
+    for (const evil of ['.', '..']) {
+      try {
+        validateManifest(parseManifest(JSON.stringify({ ...BASE, version: evil })), root);
+        throw new Error('应当抛错');
+      } catch (err) {
+        expect(err).toBeInstanceOf(PluginManifestError);
+        expect((err as PluginManifestError).issues.some((i) => i.field === 'version')).toBe(true);
+      }
+    }
+  });
+
+  it('顶层字段类型错误拒绝且 issue 带字段路径（审查 I3：components null / name 对象 / id 数字 / minAppVersion 数字）', () => {
+    const root = mkRoot({ 'tools/cg.js': '' });
+    const bads: Array<Record<string, unknown>> = [
+      { ...BASE, components: null },
+      { ...BASE, components: 'tools' },
+      { ...BASE, name: { zh: 'x' } },
+      { ...BASE, id: 42 },
+      { ...BASE, description: 123 },
+      { ...BASE, minAppVersion: 3 },
+    ];
+    for (const bad of bads) {
+      try {
+        validateManifest(parseManifest(JSON.stringify(bad)), root);
+        throw new Error('应当抛错');
+      } catch (err) {
+        expect(err).toBeInstanceOf(PluginManifestError);
+        expect((err as PluginManifestError).issues.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
   it('多个违规聚合在同一次 PluginManifestError 里', () => {
     const root = mkRoot({});
     const bad = { ...BASE, id: 'X!', version: 'a b' };

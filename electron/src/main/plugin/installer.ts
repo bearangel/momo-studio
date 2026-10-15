@@ -87,14 +87,25 @@ export async function installPluginZip(data: Buffer, currentAppVersion: string):
   const target = resolvePluginInstalledDir(manifest.id, manifest.version);
   try {
     fs.mkdirSync(staging, { recursive: true });
+    // 实际解压尺寸守卫（审查 I2 纵深防御）：zip 头声明的 size 可说谎——声明值
+    // 预检只拦诚实大包；此处按 getData() 实际长度累计，单 entry 或累计超限即抛。
+    let actualTotal = 0;
     for (const e of entries) {
       let rel = e.entryName;
       if (prefix && rel.startsWith(prefix)) rel = rel.slice(prefix.length);
       if (!isSafeEntryRelPath(rel)) continue;
       const abs = path.resolve(staging, rel);
       if (abs !== staging && !abs.startsWith(staging + path.sep)) continue;
+      const buf = e.getData();
+      if (buf.length > MAX_TOTAL_UNCOMPRESSED) {
+        throw new Error(`单文件实际解压超限（${buf.length} > ${MAX_TOTAL_UNCOMPRESSED} 字节）`);
+      }
+      actualTotal += buf.length;
+      if (actualTotal > MAX_TOTAL_UNCOMPRESSED) {
+        throw new Error(`实际解压超限（${actualTotal} > ${MAX_TOTAL_UNCOMPRESSED} 字节）`);
+      }
       fs.mkdirSync(path.dirname(abs), { recursive: true });
-      fs.writeFileSync(abs, e.getData());
+      fs.writeFileSync(abs, buf);
     }
     validateManifest(manifest, staging);
 
