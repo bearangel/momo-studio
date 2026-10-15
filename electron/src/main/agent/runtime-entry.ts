@@ -38,7 +38,7 @@ import {
   getBuiltinLoopToolDefs,
 } from './builtin-tools';
 import { buildToolRegistry, executeTool as executeToolModule, getAllToolDefs } from './tools';
-import { assembleToolModules } from './tools/plugin-tools';
+import { assembleToolModules, toolSourceFor } from './tools/plugin-tools';
 import type { ToolModule, ToolContext } from './tools/types';
 import { ReadTracker } from './tools/shared/read-tracker';
 import { SkillRegistry } from '../skill/registry';
@@ -2213,6 +2213,7 @@ async function executeTool(
       outputSummary: output,
       success,
       durationMs: Date.now() - startTime,
+      source: toolSourceFor(call.name, ctx.toolModules),
     });
   }
 }

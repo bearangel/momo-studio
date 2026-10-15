@@ -19,6 +19,8 @@ export interface ToolCallAudit {
   outputSummary: string;
   success: boolean;
   durationMs: number;
+  /** 插件系统 P2（spec §4.3）：溯源标记——插件工具 'plugin'，缺省 'builtin' */
+  source?: 'builtin' | 'plugin';
 }
 
 /** 审计摘要最大长度（字符） */
@@ -36,5 +38,6 @@ export function logToolCall(audit: ToolCallAudit): void {
     outputSummary: audit.outputSummary.slice(0, AUDIT_SUMMARY_MAX),
     success: audit.success,
     durationMs: audit.durationMs,
+    source: audit.source ?? 'builtin',
   });
 }

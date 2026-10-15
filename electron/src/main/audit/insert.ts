@@ -17,6 +17,8 @@ export interface InsertToolCallInput {
   durationMs: number;
   /** 关联任务 ID（当前插桩恒为 null，预留字段） */
   taskId?: string | null;
+  /** 插件系统 P2：溯源（插件工具 'plugin'，缺省 'builtin'） */
+  source?: 'builtin' | 'plugin';
 }
 
 /** 插入一条工具调用审计记录；id 随机生成，timestamp 由 SQLite datetime('now') 产出（UTC） */
@@ -25,8 +27,8 @@ export function insertToolCall(input: InsertToolCallInput): void {
     .prepare(
       `INSERT INTO tool_calls
          (id, workspace_id, agent_bot_user_id, task_id, tool_name,
-          input_summary, output_summary, success, duration_ms, timestamp)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+          input_summary, output_summary, success, duration_ms, source, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
     )
     .run(
       randomUUID(),
@@ -38,5 +40,6 @@ export function insertToolCall(input: InsertToolCallInput): void {
       input.outputSummary,
       input.success ? 1 : 0,
       input.durationMs,
+      input.source ?? 'builtin',
     );
 }

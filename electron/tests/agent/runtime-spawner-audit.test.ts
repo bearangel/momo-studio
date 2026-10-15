@@ -94,6 +94,7 @@ describe('runtime-spawner audit:toolCall 桥', () => {
       outputSummary: '内容',
       success: true,
       durationMs: 42,
+      source: 'builtin',
     });
   });
 
@@ -108,6 +109,7 @@ describe('runtime-spawner audit:toolCall 桥', () => {
       outputSummary: '',
       success: false,
       durationMs: 0,
+      source: 'builtin',
     });
   });
 

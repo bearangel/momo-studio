@@ -127,6 +127,13 @@ export interface AssembledToolModules {
   failures: Array<{ pluginId: string; modulePath: string; error: string }>;
 }
 
+/** 审计溯源判定：命中的模块带 pluginSource 标记 → 'plugin'，否则 'builtin' */
+export function toolSourceFor(name: string, modules: ToolModule[]): 'builtin' | 'plugin' {
+  return modules.some((m) => m.handles(name) && (m as PluginToolModule).pluginSource === 'plugin')
+    ? 'plugin'
+    : 'builtin';
+}
+
 /**
  * runtime 注册中心组装（spec §4.3 治理等价）：内置在前、插件在后并入同一
  * ToolModule 列表——doExecuteTool 的 handles 路由与 per-call ToolContext
