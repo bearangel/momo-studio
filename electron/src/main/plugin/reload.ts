@@ -13,6 +13,9 @@ import { stopAgentRuntime, startAgentRuntime } from '../agent/runtime-registry';
 import { getPlugin, upsertPlugin, isPluginEnabled } from './registry';
 import { registerPluginAgents } from './agent-sync';
 import { syncPluginMcps } from './mcp-sync';
+import { syncPluginHooks, removePluginHooks } from './hook-sync';
+import { startPluginService, stopPluginService } from './service-manager';
+import { getPluginBus } from './bus-instance';
 import { resolvePluginRoot } from './assembly';
 import { parseManifest, validateManifest } from './manifest';
 import { getDb } from '../storage/db';
@@ -30,6 +33,28 @@ export async function reloadPlugin(id: string): Promise<PluginRecord> {
   const refreshed: PluginRecord = { ...rec, version: manifest.version, manifestJson: JSON.stringify(manifest), state: 'active' };
   upsertPlugin(refreshed);
 
+  try {
+    removePluginHooks(id, getPluginBus());
+  } catch {
+    // 注销失败不阻断——后续 register 同 pluginId 同 modulePath 会覆盖
+  }
+  try {
+    syncPluginHooks(refreshed, getPluginBus());
+  } catch (err) {
+    logger.warn('reload：hooks 重激活失败', { pluginId: id, error: String(err) });
+  }
+  try {
+    await stopPluginService(id);
+    const started = await startPluginService(refreshed);
+    if (!started) {
+      logger.warn('reload：service 重启失败（可再次重载重试）', { pluginId: id });
+    }
+  } catch (err) {
+    logger.warn('reload：service 重启异常', {
+      pluginId: id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
   try {
     registerPluginAgents(refreshed);
   } catch (err) {

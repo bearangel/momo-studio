@@ -6,7 +6,10 @@
 // 此处归一 Buffer。
 import { ipcMain, app } from 'electron';
 import { installPluginZip, installPluginDevDir, uninstallPlugin } from './installer';
-import { setPluginEnabled } from './registry';
+import { setPluginEnabled, getPlugin as getPluginRecord } from './registry';
+import { getPluginBus } from './bus-instance';
+import { startPluginService, stopPluginService } from './service-manager';
+import { getDb } from '../storage/db';
 import { reloadPlugin } from './reload';
 import type { PluginManifest, PluginRecord } from './types';
 
@@ -57,6 +60,22 @@ export function registerPluginHandlers(): void {
     'plugin:setEnabled',
     async (_evt, id: string, workspaceId: string, enabled: boolean) => {
       setPluginEnabled(id, workspaceId, enabled);
+      const bus = getPluginBus();
+      bus.dispatch(enabled ? 'pluginEnabled' : 'pluginDisabled', { id, workspaceId });
+      // service 联动（spec §5.3）：启用即起；禁用时仍被其他 workspace 启用则不停
+      if (enabled) {
+        const rec = getPluginRecord(id);
+        if (rec) void startPluginService(rec).catch(() => undefined);
+      } else {
+        const stillEnabled = getDb()
+          .prepare(
+            `SELECT COUNT(*) AS n FROM workspaces w
+             LEFT JOIN plugin_enablements e ON e.workspace_id = w.id AND e.plugin_id = ?
+             WHERE e.enabled IS NULL OR e.enabled = 1`,
+          )
+          .get(id) as { n: number };
+        if (stillEnabled.n === 0) void stopPluginService(id).catch(() => undefined);
+      }
     },
   );
 

@@ -19,6 +19,9 @@ import {
 import { parseManifest, validateManifest } from './manifest';
 import { upsertPlugin, getPlugin, removePluginRecord } from './registry';
 import { registerPluginAgents, removePluginAgents } from './agent-sync';
+import { syncPluginHooks, removePluginHooks } from './hook-sync';
+import { startPluginService, stopPluginService } from './service-manager';
+import { getPluginBus } from './bus-instance';
 import { syncPluginMcps, removePluginMcps } from './mcp-sync';
 import type { PluginRecord } from './types';
 
@@ -177,8 +180,18 @@ export function installPluginDevDir(dir: string, currentAppVersion: string): Plu
   return rec;
 }
 
-/** 声明式组件激活（agents 落库 / mcp 注册；skills 零复制无激活步）。整层异常降级为 warn——安装不因单个组件面失败 */
+/** 声明式组件激活（hooks 订阅 / service 启动 / agents 落库 / mcp 注册；
+ * skills 零复制无激活步）。整层异常降级为 warn——安装不因单个组件面失败 */
 function activateDeclarativeComponents(rec: PluginRecord): void {
+  try {
+    syncPluginHooks(rec, getPluginBus());
+  } catch (err) {
+    logger.warn('插件 hooks 激活失败（可重载重试）', {
+      pluginId: rec.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  void startPluginService(rec).catch(() => undefined);
   try {
     registerPluginAgents(rec);
   } catch (err) {
@@ -204,7 +217,9 @@ function activateDeclarativeComponents(rec: PluginRecord): void {
 export function uninstallPlugin(id: string, keepData: boolean): void {
   const rec = getPlugin(id);
   if (!rec) throw new Error(`插件不存在: ${id}`);
-  // 级联先行（成员/定义行、MCP 定义与 agent 引用）——DB 行删除后再清目录
+  // 级联先行（hooks 订阅、service 实例、成员/定义行、MCP 定义与 agent 引用）
+  removePluginHooks(id, getPluginBus());
+  void stopPluginService(id).catch(() => undefined);
   try {
     removePluginAgents(id);
   } catch (err) {

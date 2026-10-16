@@ -8,11 +8,14 @@ import { ALL_BUILTIN_TOOLS } from './catalog';
 import type { ToolCatalogEntry } from './catalog-entry';
 import type { ToolModule, ToolContext } from './types';
 import type { PluginToolRef } from '../runtime-config';
+import { requestPluginCallService } from '../plugin-hook-bridge';
 
 export interface PluginToolCtx {
   getConfig(): Record<string, unknown>;
   getDataDir(): string;
   logger: { warn(msg: string, meta?: unknown): void; info(msg: string, meta?: unknown): void };
+  /** P3（spec §5.3）：service RPC——走 plugin:callService 子进程桥 */
+  callService(method: string, params: unknown): Promise<unknown>;
 }
 
 export interface PluginToolModule extends ToolModule {
@@ -54,6 +57,7 @@ export function loadPluginToolModules(
             warn: (msg, meta) => log(`[plugin:${ref.pluginId}] ${msg}`, meta),
             info: (msg, meta) => log(`[plugin:${ref.pluginId}] ${msg}`, meta),
           },
+          callService: (method, params) => requestPluginCallService(ref.pluginId, method, params),
         };
         const created = mod.createTools(pluginCtx);
         if (created === null || typeof created !== 'object') {

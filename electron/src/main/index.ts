@@ -11,6 +11,9 @@ import { app, BrowserWindow, ipcMain, protocol } from 'electron';
 import { createMainWindow } from './window';
 import { registerIpcHandlers } from './ipc';
 import { runMigrations } from './storage/db';
+import { initPluginBus, getPluginBus } from './plugin/bus-instance';
+import { wireHookBridgeAudit } from './plugin/hook-bridge-main';
+import { stopAllPluginServices } from './plugin/service-manager';
 import { runLegacyUpgradeIfNeeded, writeLegacyUpgradeNotice } from './upgrade/legacy-upgrade';
 import { setSessionMainWindow, broadcastRuntimeChanged } from './im/session-service';
 import { initP2p, stopP2p } from './p2p';
@@ -74,6 +77,8 @@ if (!app.requestSingleInstanceLock()) {
       }
 
       runMigrations();
+  // 插件系统 P3：HookBus 单例 + hook_calls 审计接线（spec §5.4）
+  wireHookBridgeAudit(initPluginBus());
       logger.info('Migrations complete');
 
       // v2.1 预设 agent 启用链路（spec 2026-09-22）：启动只填 suggestions Map（平台
@@ -202,6 +207,7 @@ if (!app.requestSingleInstanceLock()) {
       // 是唯一状态源（Task 5：仅恢复用户意图为「在线」的 agent）
       try {
         await initTaskDrivenRuntime();
+  getPluginBus().dispatch('appReady', {});
         logger.info('Task-driven runtime initialized');
         broadcastRuntimeChanged();
       } catch (err) {
@@ -233,6 +239,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.on('before-quit', () => {
+  void stopAllPluginServices().catch(() => undefined);
     destroyAllTaskDrivenRuntimes();
     destroyRouterService();
     stopTaskRuntime();

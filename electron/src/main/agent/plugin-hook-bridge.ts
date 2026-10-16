@@ -76,3 +76,37 @@ export function notifyPostToolUse(notice: PostToolUseNotice): void {
   const send = (process as { send?: (m: unknown) => void }).send;
   send?.({ type: 'plugin:postToolUse', ...notice });
 }
+
+/** callService 子进程桥：无 IPC 明确 reject（区别于 preToolUse 的直通语义——
+ * 工具需要拿到错误结果而不是静默跳过）；id 配对 + 10s 超时 */
+export function requestPluginCallService(
+  pluginId: string,
+  method: string,
+  params: unknown,
+): Promise<unknown> {
+  const send = (process as { send?: (m: unknown) => void }).send;
+  if (typeof send !== 'function') {
+    return Promise.reject(new Error(`插件 ${pluginId} 的 callService 桥不可用（无 IPC 通道）`));
+  }
+  return new Promise((resolve, reject) => {
+    const id = randomUUID();
+    const timer = setTimeout(() => {
+      process.off('message', handler);
+      reject(new Error(`插件 ${pluginId} callService 超时`));
+    }, 10_000);
+    timer.unref?.();
+    const handler = (msg: unknown): void => {
+      const m = msg as { id?: unknown; result?: unknown; error?: unknown };
+      if (m?.id !== id) return;
+      process.off('message', handler);
+      clearTimeout(timer);
+      if (m.error !== undefined) {
+        reject(new Error(String(m.error)));
+        return;
+      }
+      resolve(m.result ?? null);
+    };
+    process.on('message', handler);
+    send({ type: 'plugin:callService', id, pluginId, method, params });
+  });
+}
