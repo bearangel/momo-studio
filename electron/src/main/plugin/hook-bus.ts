@@ -89,10 +89,13 @@ export interface HookDispatchRecord {
 export class HookBus {
   private readonly subs: HookSubscription[] = [];
   private readonly log: BusLogger;
+  /** workspace 级启用判定（index.ts 注入 registry 实现；缺省全放行——测试态） */
+  private readonly isPluginEnabled?: (pluginId: string, workspaceId: string) => boolean;
   private observer: ((rec: HookDispatchRecord) => void) | null = null;
 
-  constructor(opts: { logger?: BusLogger } = {}) {
+  constructor(opts: { logger?: BusLogger; isPluginEnabled?: (pluginId: string, workspaceId: string) => boolean } = {}) {
     this.log = opts.logger ?? mainLogger;
+    this.isPluginEnabled = opts.isPluginEnabled;
   }
 
   /** 注册分发观察者（hook_calls 审计落库方使用；单一槽位） */
@@ -109,7 +112,11 @@ export class HookBus {
   dispatch(event: PluginHookEvent, payload: unknown): void {
     for (const sub of this.subs) {
       if (sub.event !== event) continue;
-      void this.runOne(sub, event, payload).catch(() => undefined);
+      // 微任务化（审查 I2）：runOne 同步前缀会执行 handler 调用本身——
+      // 直接调用会把 handler 同步前缀留在调用方栈内（含 better-sqlite3 事务内）
+      queueMicrotask(() => {
+        void this.runOne(sub, event, payload).catch(() => undefined);
+      });
     }
   }
 
@@ -126,6 +133,12 @@ export class HookBus {
     let running: PreToolUsePayload = payload;
     for (const sub of this.subs) {
       if (sub.event !== 'preToolUse') continue;
+      if (
+        this.isPluginEnabled &&
+        !this.isPluginEnabled(sub.pluginId, payload.workspaceId)
+      ) {
+        continue; // 禁用插件的订阅不参与（审查 C2——deny 权限面必须随禁用失效）
+      }
       if (sub.matcher && !matchPattern(running.toolName, sub.matcher)) continue;
       const t0 = Date.now();
       try {

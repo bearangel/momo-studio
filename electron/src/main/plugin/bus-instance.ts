@@ -4,11 +4,16 @@
 // 生命周期接线共用同一实例。initPluginBus 在 app 启动序列（runMigrations 后）
 // 调用；测试用 resetPluginBusForTest 换新实例。
 import { HookBus } from './hook-bus';
+import { isPluginEnabled } from './registry';
 
 let instance: HookBus | null = null;
 
 export function initPluginBus(): HookBus {
-  if (instance === null) instance = new HookBus();
+  if (instance === null) {
+    // 生产实例带 workspace 级启用判定（审查 C2）；测试 resetPluginBusForTest
+    // 同样带——需要无过滤语义的测试直接 new HookBus()
+    instance = new HookBus({ isPluginEnabled });
+  }
   return instance;
 }
 
@@ -17,6 +22,6 @@ export function getPluginBus(): HookBus {
 }
 
 export function resetPluginBusForTest(): HookBus {
-  instance = new HookBus();
+  instance = new HookBus({ isPluginEnabled });
   return instance;
 }

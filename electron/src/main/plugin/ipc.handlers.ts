@@ -9,6 +9,7 @@ import { installPluginZip, installPluginDevDir, uninstallPlugin } from './instal
 import { setPluginEnabled, getPlugin as getPluginRecord } from './registry';
 import { getPluginBus } from './bus-instance';
 import { startPluginService, stopPluginService } from './service-manager';
+import { syncPluginHooks, removePluginHooks } from './hook-sync';
 import { getDb } from '../storage/db';
 import { reloadPlugin } from './reload';
 import type { PluginManifest, PluginRecord } from './types';
@@ -62,6 +63,27 @@ export function registerPluginHandlers(): void {
       setPluginEnabled(id, workspaceId, enabled);
       const bus = getPluginBus();
       bus.dispatch(enabled ? 'pluginEnabled' : 'pluginDisabled', { id, workspaceId });
+      // 摘/挂钩（审查 C2）：禁用即失效——hooks 订阅跟随 enablement；
+      // 机器级单例语义：任一 workspace 仍启用则保留订阅（与 service 联动同判定）
+      const rec = getPluginRecord(id);
+      if (rec) {
+        if (enabled) {
+          try {
+            syncPluginHooks(rec, bus);
+          } catch {
+            // 挂钩失败可重载重试
+          }
+        } else {
+          const stillEnabled = getDb()
+            .prepare(
+              `SELECT COUNT(*) AS n FROM workspaces w
+               LEFT JOIN plugin_enablements e ON e.workspace_id = w.id AND e.plugin_id = ?
+               WHERE e.enabled IS NULL OR e.enabled = 1`,
+            )
+            .get(id) as { n: number };
+          if (stillEnabled.n === 0) removePluginHooks(id, bus);
+        }
+      }
       // service 联动（spec §5.3）：启用即起；禁用时仍被其他 workspace 启用则不停
       if (enabled) {
         const rec = getPluginRecord(id);

@@ -113,3 +113,45 @@ describe('doExecuteTool preToolUse 拦截', () => {
 function __setPreHookForTest(fn: (() => Promise<{ action: string; reason?: string; args?: Record<string, unknown> } | null>) | null): void {
   __setPreToolUseHookForTest(fn as never);
 }
+
+describe('I1：effectiveArgs 终值透传', () => {
+  it('rewrite 后 decisionSink.effectiveArgs 为改写值（审计与 postToolUse 的取值源）', async () => {
+    __setPreHookForTest(async () => ({ action: 'rewrite', args: { path: 'b.txt', content: 'x' } }));
+    const sink: { decision: unknown; effectiveArgs: Record<string, unknown> | null } = {
+      decision: null,
+      effectiveArgs: null,
+    };
+    await doExecuteTool(
+      { id: 'c1', name: 'write_file', arguments: { path: 'a.txt', content: 'x' } },
+      ctx,
+      config(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      sink as never,
+    );
+    expect(sink.effectiveArgs).toEqual({ path: 'b.txt', content: 'x' });
+  });
+
+  it('无 rewrite 时 effectiveArgs 保持 null（审计回退原始 args）', async () => {
+    __setPreHookForTest(async () => null);
+    const sink: { decision: unknown; effectiveArgs: Record<string, unknown> | null } = {
+      decision: null,
+      effectiveArgs: null,
+    };
+    await doExecuteTool(
+      { id: 'c1', name: 'exists', arguments: { path: 'z.txt' } },
+      ctx,
+      config(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      sink as never,
+    );
+    expect(sink.effectiveArgs).toBeNull();
+  });
+});

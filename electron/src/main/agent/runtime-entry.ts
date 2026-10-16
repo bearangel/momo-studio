@@ -2212,7 +2212,10 @@ async function executeTool(
   let success = true;
   let output = '';
   // preToolUse 决策容器：doExecuteTool 前置钩子写入，本层 finally 审计消费
-  const decisionSink: { decision: PreToolUseDecision | null } = { decision: null };
+  const decisionSink: { decision: PreToolUseDecision | null; effectiveArgs: Record<string, unknown> | null } = {
+    decision: null,
+    effectiveArgs: null,
+  };
   trace(`→ 工具: ${call.name}`, { input: `${JSON.stringify(call.arguments).length}字` });
   try {
     output = await doExecuteTool(call, ctx, config, toolBudget, dispatchInfo, toolStreamSessionId, pmStreamSessionId, executionSessionId, decisionSink);
@@ -2268,7 +2271,7 @@ export async function doExecuteTool(
   pmStreamSessionId?: string,
   executionSessionId?: string,
   /** preToolUse 决策容器（executeTool 注入——审计终值消费；直调测试不传则跳过审计面） */
-  decisionSink?: { decision: PreToolUseDecision | null },
+  decisionSink?: { decision: PreToolUseDecision | null; effectiveArgs?: Record<string, unknown> | null },
 ): Promise<string> {
   let name = call.name;
 
@@ -2291,6 +2294,7 @@ export async function doExecuteTool(
   if (hookDecision?.action === 'rewrite' && hookDecision.args) {
     call = { ...call, arguments: hookDecision.args };
     name = call.name;
+    if (decisionSink) decisionSink.effectiveArgs = call.arguments;
   }
 
   // M3 工具权限强制：deniedTools 优先于 allowedTools。抛错由 executeTool 的审计

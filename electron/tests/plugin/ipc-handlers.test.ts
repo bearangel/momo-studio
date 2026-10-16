@@ -21,7 +21,11 @@ vi.mock('../../src/main/plugin/installer', () => installFns);
 const registryFns = vi.hoisted(() => ({
   setPluginEnabled: vi.fn(),
 }));
-vi.mock('../../src/main/plugin/registry', () => registryFns);
+vi.mock('../../src/main/plugin/registry', () => ({
+  ...registryFns,
+  getPlugin: vi.fn().mockReturnValue(null),
+  isPluginEnabled: vi.fn().mockReturnValue(true),
+}));
 
 const reloadFns = vi.hoisted(() => ({ reloadPlugin: vi.fn() }));
 vi.mock('../../src/main/plugin/reload', () => reloadFns);

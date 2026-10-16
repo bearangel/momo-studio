@@ -12,6 +12,8 @@ import { createMainWindow } from './window';
 import { registerIpcHandlers } from './ipc';
 import { runMigrations } from './storage/db';
 import { initPluginBus, getPluginBus } from './plugin/bus-instance';
+import { wirePluginEventSources } from './plugin/event-sources';
+import { reactivatePluginsOnBoot } from './plugin/boot';
 import { wireHookBridgeAudit } from './plugin/hook-bridge-main';
 import { stopAllPluginServices } from './plugin/service-manager';
 import { runLegacyUpgradeIfNeeded, writeLegacyUpgradeNotice } from './upgrade/legacy-upgrade';
@@ -79,6 +81,9 @@ if (!app.requestSingleInstanceLock()) {
       runMigrations();
   // 插件系统 P3：HookBus 单例 + hook_calls 审计接线（spec §5.4）
   wireHookBridgeAudit(initPluginBus());
+  // C3：15 事件源接线（emit 不再缺省 no-op）+ C1：重启再激活 hooks/service
+  wirePluginEventSources(getPluginBus());
+  void reactivatePluginsOnBoot().catch(() => undefined);
       logger.info('Migrations complete');
 
       // v2.1 预设 agent 启用链路（spec 2026-09-22）：启动只填 suggestions Map（平台
