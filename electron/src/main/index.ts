@@ -14,6 +14,7 @@ import { runMigrations } from './storage/db';
 import { initPluginBus, getPluginBus } from './plugin/bus-instance';
 import { wirePluginEventSources } from './plugin/event-sources';
 import { reactivatePluginsOnBoot } from './plugin/boot';
+import { PLUGIN_PANEL_SCHEME, registerPluginPanelProtocol } from './plugin/protocol';
 import { wireHookBridgeAudit } from './plugin/hook-bridge-main';
 import { stopAllPluginServices } from './plugin/service-manager';
 import { runLegacyUpgradeIfNeeded, writeLegacyUpgradeNotice } from './upgrade/legacy-upgrade';
@@ -62,6 +63,8 @@ if (!app.requestSingleInstanceLock()) {
   // （模块顶层即本进程最早时机；handler 注册在 whenReady 内 boot 组装时进行）。
   protocol.registerSchemesAsPrivileged([
     { scheme: BROWSER_SHOT_SCHEME, privileges: { standard: true, stream: true } },
+    // 插件面板 P4：momo-plugin:// standard（origin = momo-plugin://<id>，插件间隔离）
+    { scheme: PLUGIN_PANEL_SCHEME, privileges: { standard: true } },
   ]);
 
   app.whenReady().then(async () => {
@@ -84,6 +87,8 @@ if (!app.requestSingleInstanceLock()) {
   // C3：15 事件源接线（emit 不再缺省 no-op）+ C1：重启再激活 hooks/service
   wirePluginEventSources(getPluginBus());
   void reactivatePluginsOnBoot().catch(() => undefined);
+  // P4：momo-plugin:// 静态面板协议（只放行插件安装目录内，spec §6.1）
+  registerPluginPanelProtocol(protocol);
       logger.info('Migrations complete');
 
       // v2.1 预设 agent 启用链路（spec 2026-09-22）：启动只填 suggestions Map（平台
