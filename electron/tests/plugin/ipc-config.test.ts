@@ -51,6 +51,7 @@ import { ipcMain } from 'electron';
 import { registerPluginHandlers } from '../../src/main/plugin/ipc.handlers';
 import { setKeychainImpl } from '../../src/main/storage/keychain';
 import { resetPluginConfigCacheForTest } from '../../src/main/plugin/config-store';
+import { closeDb as closeDbForIpc } from '../../src/main/storage/db';
 
 // keychain 隔离：真机冒烟可能在本机真实钥匙串留有同名键（一次性假值）——
 // 不 mock 会串扰 sensitiveConfigured 断言（内存 vault 保真 set/get/delete 语义）
@@ -179,6 +180,30 @@ describe('setConfig 保存即生效联动', () => {
     svcFns.isServiceRunning.mockReturnValue(false);
     await handlerOf('plugin:setConfig')(null, 'cg', { indexCommand: 'x' });
     await vi.waitFor(() => expect(svcFns.startPluginService).toHaveBeenCalledWith(CG_REC));
+  });
+
+  it('I2 回归锁：全 workspace 禁用的插件 setConfig 不拉起 service（§8.6）', async () => {
+    // 用真实 DB 播种 enablement（ipc.handlers 的 gate 直查 plugin_enablements）
+    const { closeDb: _c, runMigrations, getDb } = await import('../../src/main/storage/db');
+    runMigrations();
+    getDb()
+      .prepare(`INSERT OR IGNORE INTO workspaces (id, name, directory_path, owner_id) VALUES ('wsD', 'T', '/x', '@o')`)
+      .run();
+    // FK：plugin_enablements.plugin_id 引用 plugins 表——先落 CG_REC 行再禁用
+    getDb()
+      .prepare(
+        `INSERT OR REPLACE INTO plugins (id, version, manifest_json, state, source, source_path, installed_at)
+         VALUES ('cg', ?, ?, 'active', 'zip', NULL, 'x')`,
+      )
+      .run(CG_REC.version, CG_REC.manifestJson);
+    getDb()
+      .prepare(`INSERT OR REPLACE INTO plugin_enablements (workspace_id, plugin_id, enabled) VALUES ('wsD', 'cg', 0)`)
+      .run();
+    // registryFns.getPlugin 被 mock——gate 走 getDb（真实）→ wsD 禁用 + 无其他 ws → n=0
+    await handlerOf('plugin:setConfig')(null, 'cg', { indexCommand: 'x' });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(svcFns.startPluginService).not.toHaveBeenCalled();
+    closeDbForIpc();
   });
 
   it('校验失败 → throw 且不触发联动', async () => {

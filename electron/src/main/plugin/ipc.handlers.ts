@@ -169,12 +169,26 @@ export function registerPluginHandlers(): void {
       } catch (err) {
         logger.warn('setConfig 后 MCP 重装配失败', { pluginId, error: String(err) });
       }
-      // service 重启语义（P5 §8.2 真机发现）：无条件 stop→start——
-      // 注册期因 config 缺失而启动失败的插件，补配置后必须被拉起
-      //（stop 对未运行实例幂等 no-op）；已在运行则换新 config 重启
+      // service 重启语义（P5 §8.2 真机发现 + 审查 I2）：无条件 stop，但 start 须
+      // gate on enablement——注册期缺配置的插件补配置后复活（F1）；全 workspace
+      // 禁用的插件保持熄灭（§8.6 禁用即消失，stop 对未运行实例幂等）
+      const stillEnabled = (() => {
+        try {
+          const row = getDb()
+            .prepare(
+              `SELECT COUNT(*) AS n FROM workspaces w
+               LEFT JOIN plugin_enablements e ON e.workspace_id = w.id AND e.plugin_id = ?
+               WHERE e.enabled IS NULL OR e.enabled = 1`,
+            )
+            .get(pluginId) as { n: number };
+          return row.n > 0;
+        } catch {
+          return true; // 判定失败按启用处理（保守拉起——F1 场景不受损）
+        }
+      })();
       void stopPluginService(pluginId)
         .catch(() => undefined)
-        .then(() => startPluginService(rec))
+        .then(() => (stillEnabled ? startPluginService(rec) : Promise.resolve(false)))
         .catch(() => undefined);
       // 回包完整 PluginConfigView（schema 必带——renderer 表单保存后原地重渲染）
       return { schema, ...getPluginConfigView(pluginId, schema) };

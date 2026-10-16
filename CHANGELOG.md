@@ -22,7 +22,7 @@
 - **F1** setConfig 无条件 stop→start service（注册期缺配置的插件补配置后复活——§8.2 真机发现）
 - **F2** indexer 单遍重写：全仓全量 97 秒（同步阻塞主进程，boot 冻结+SIGKILL 事故期确证）→ **0.8 秒**
 - **F3** plugin-hook-bridge 三处 `process.send` 解构病（真实子进程 `this.connected` 抛错；P3 潜伏、mock 不炸）→ `?.bind(process)` + this 语义回归锁
-- **F4** 工具错误 output 带栈前 3 帧（`[at]`——可观测性补课）
+- **F4** 工具/压缩错误 output 带栈前 3 帧（`[at]`，chat loop 与 executeTool 审计终值两处——可观测性补课；审查 I1 修正初版只覆盖压缩路径的漂移）
 
 ## [未发布] — 插件系统 P4：面板协议 + 设置页 config 表单
 

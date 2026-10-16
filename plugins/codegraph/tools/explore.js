@@ -59,8 +59,6 @@ module.exports.createTools = function (pluginCtx) {
     return idx;
   }
 
-  module.exports._indexer = indexer;
-
   return {
     getDefs() {
       return [

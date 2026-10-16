@@ -159,6 +159,18 @@ export interface RuntimeContext {
 
 let traceEnabled = false;
 
+/** 错误带栈前 3 帧（工具/压缩错误可观测性——D-P5-2 排障依据，审查 I1） */
+function errWithTrace(err: unknown): string {
+  if (err instanceof Error) {
+    const frames = String(err.stack ?? '')
+      .split('\n')
+      .slice(1, 4)
+      .join(' <= ');
+    return frames ? `${err.message}\n[at] ${frames}` : err.message;
+  }
+  return String(err);
+}
+
 // v2.3 Read-before-Edit：进程级 ReadTracker 单例。
 // task-driven runtime = 一任务一进程（WarmPool.release 也是销毁不复用），进程退出即
 // 生命周期终点，故无需 clear()。buildRuntimeContext 与 doExecuteTool 两处 ctx 组装点
@@ -905,13 +917,7 @@ export async function runChatLoop(
     try {
       summary = await requestCompaction(roomId, serializeMessages(head), coveredUntil);
     } catch (err) {
-      return {
-        ok: false,
-        error:
-          err instanceof Error
-            ? `${err.message}\n[at] ${String(err.stack ?? '').split('\n').slice(1, 4).join(' <= ')}`
-            : String(err),
-      };
+      return { ok: false, error: errWithTrace(err) };
     }
 
     // 双态判定（沿 turn-mandate spec §5.1）：仅顶层 chat 路径 mandate 门控；
@@ -1196,7 +1202,7 @@ export async function runChatLoop(
       })
       .catch((err: unknown) => {
         if ((err as Error).name === 'AbortError' || abortController.signal.aborted) throw err;
-        const errMsg = err instanceof Error ? err.message : String(err);
+        const errMsg = errWithTrace(err); // I1：工具失败带栈（LLM 侧可见真因）
         const result = `工具执行失败: ${errMsg}`;
         // dispatch 超时（executeDispatch 渐进式计时器 reject）→ 'timeout'；其它 → 'failed'
         const subStatus = errMsg.includes('超时') ? ('timeout' as const) : ('failed' as const);
@@ -2229,7 +2235,8 @@ async function executeTool(
     return output;
   } catch (err) {
     success = false;
-    output = err instanceof Error ? err.message : String(err);
+    // I1：抛出的错误保留原对象（栈在 chat loop 层带）；审计终值带栈（D-P5-2 定位依据）
+    output = errWithTrace(err);
     trace(`← 工具: ${call.name}`, { ms: Date.now() - startTime, ok: '✗' });
     throw err;
   } finally {

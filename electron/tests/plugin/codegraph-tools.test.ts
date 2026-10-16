@@ -65,12 +65,14 @@ describe('codegraph 工具面', () => {
     await expect(t.execute('explore', { symbol: 'ghost' })).rejects.toThrow(/未收录/);
   });
 
-  it('status：摘要含 root 与统计', async () => {
+  it('status：摘要含 root 与非零统计（C1 回归锁——零值输出=诊断面说谎）', async () => {
     fs.writeFileSync(path.join(root, 'a.ts'), 'export function alpha() {}');
     const t = createStatus(mkCtx({ workspaceRoot: root, indexCommand: '' }));
     const out = (await t.execute('status', {})) as string;
     expect(out).toContain(root);
-    expect(out).toContain('symbols');
+    expect(out).toMatch(/files: [1-9]/);
+    expect(out).toMatch(/symbols: [1-9]/);
+    expect(out).not.toMatch(/1970-01-01/);
   });
 
   it('workspaceRoot 未配置 → 明确错误（config required 语义兜底）', async () => {

@@ -38,7 +38,7 @@ module.exports.createService = function (pluginCtx) {
     if (!r || typeof r !== 'string') {
       throw new Error('codegraph service：workspaceRoot 未配置（设置 → 插件 → Codegraph）');
     }
-    return r;
+    return require('node:path').resolve(r); // M2：尾斜杠/相对路径归一（守卫的 startsWith 前提）
   }
 
   function ensureIndexer() {
@@ -71,6 +71,15 @@ module.exports.createService = function (pluginCtx) {
       if (abs === root || abs.startsWith(root + path.sep)) i.scanFile(abs);
     }
     if (ready) pluginCtx.logger.info('codegraph：队列增量重扫完成', { count: paths.length });
+    // I3：read→rm 竞态兜底——处理期间若又有 hook 原子写（被 rm 连带删掉），重读非空则再消费
+    try {
+      const again = JSON.parse(fs.readFileSync(queuePath(), 'utf-8'));
+      if (Array.isArray(again.paths) && again.paths.length > 0) {
+        setTimeout(consumeQueue, 60);
+      }
+    } catch {
+      // 无新队列
+    }
   }
 
   function watchQueue() {

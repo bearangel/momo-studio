@@ -1,6 +1,8 @@
 // plugins/codegraph/tools/status.js
 //
 // codegraph status 工具——索引摘要（root/文件/符号/边/最近索引时间）。
+// C1 修复：与 explore 同款按需扫描（私有实例须自己扫——status 是 LLM 的
+// 诊断面，零值输出会系统性误导「索引为空」）。
 'use strict';
 
 const { createIndexer } = require('../lib/indexer.js');
@@ -8,6 +10,8 @@ const { createIndexer } = require('../lib/indexer.js');
 module.exports.createTools = function (pluginCtx) {
   let cachedRoot = null;
   let idx = null;
+  let lastScanAt = 0;
+  const RESCAN_INTERVAL_MS = 15_000;
 
   function indexer() {
     const cfg = pluginCtx.getConfig() || {};
@@ -18,6 +22,10 @@ module.exports.createTools = function (pluginCtx) {
     if (!idx || cachedRoot !== root) {
       idx = createIndexer({ root, maxFiles: typeof cfg.maxFiles === 'number' ? cfg.maxFiles : undefined });
       cachedRoot = root;
+    }
+    if (Date.now() - lastScanAt > RESCAN_INTERVAL_MS) {
+      idx.scanFull();
+      lastScanAt = Date.now();
     }
     return idx;
   }

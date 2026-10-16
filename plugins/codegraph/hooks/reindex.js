@@ -12,7 +12,7 @@ const path = require('node:path');
 module.exports.handle = async function (payload, pluginCtx) {
   try {
     const cfg = pluginCtx.getConfig() || {};
-    const root = cfg.workspaceRoot;
+    const root = require('node:path').resolve(String(cfg.workspaceRoot)); // M2：归一（尾斜杠守卫前提）
     if (!root || typeof root !== 'string') return null; // 未配置——链路静默待命
     const ev = payload || {};
     // postToolUse 载荷（P3 spec §5.4）：{ toolName, args, success, workspaceId }
