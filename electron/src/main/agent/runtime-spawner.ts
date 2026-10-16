@@ -21,6 +21,8 @@ import { handleChildMessage } from './internal-event-bridge';
 import { registerFromChildMsg } from '../sandbox/process-registry';
 import { writeBlockedFromChildMsg } from '../sandbox/write-blocked-emit';
 import { insertToolCall } from '../audit/insert';
+import { handlePluginBridgeMsg } from '../plugin/hook-bridge-main';
+import { getPluginBus } from '../plugin/bus-instance';
 import { enforceAuditQuota } from '../audit/quota';
 import { getOrStartMcp, getMcpConfig, listMcpTools, callMcpTool } from '../mcp/host-manager';
 import type { McpToolInfo } from '../mcp/types';
@@ -351,6 +353,14 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
     if (handleChildMessage(msg, runtimeConfig.agentUserId)) return;
     if (typeof msg !== 'object' || msg === null) return;
     const m = msg as AuditToolCallChildMsg & McpChildRequestMsg;
+    // 插件桥三分支（P3 spec §5.2-5.3）：preToolUse/callService id 配对回包，
+    // postToolUse fire-and-forget——已消费则不进 chunk 通道。前缀同步门卫：
+    // 非插件消息零 await 让步（audit:toolCall 的同步落库线契约依赖此顺序）
+    if (typeof m.type === 'string' && m.type.startsWith('plugin:')) {
+      if (await handlePluginBridgeMsg(msg, (payload) => sendMcpResponse(payload as McpBridgeResponse), getPluginBus())) {
+        return;
+      }
+    }
     // 沙箱进程组登记（2026-09-25 生命周期立项）：shell 工具 spawn 后上报 pgid，
     // 主进程 registry 是回合收割（finalizeActiveTask）的唯一真相源
     if (registerFromChildMsg(m)) return;

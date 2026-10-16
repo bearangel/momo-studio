@@ -76,12 +76,28 @@ function matchPattern(name: string, pattern: string): boolean {
   return false;
 }
 
+/** 分发观察记录（hook_calls 审计归因面——每 handler 一条，spec §5.4） */
+export interface HookDispatchRecord {
+  pluginId: string;
+  event: PluginHookEvent;
+  matcher?: string;
+  decision?: HookDecision | null;
+  durationMs: number;
+  success: boolean;
+}
+
 export class HookBus {
   private readonly subs: HookSubscription[] = [];
   private readonly log: BusLogger;
+  private observer: ((rec: HookDispatchRecord) => void) | null = null;
 
   constructor(opts: { logger?: BusLogger } = {}) {
     this.log = opts.logger ?? mainLogger;
+  }
+
+  /** 注册分发观察者（hook_calls 审计落库方使用；单一槽位） */
+  setDispatchObserver(fn: ((rec: HookDispatchRecord) => void) | null): void {
+    this.observer = fn;
   }
 
   register(sub: HookSubscription): void {
@@ -111,13 +127,29 @@ export class HookBus {
     for (const sub of this.subs) {
       if (sub.event !== 'preToolUse') continue;
       if (sub.matcher && !matchPattern(running.toolName, sub.matcher)) continue;
+      const t0 = Date.now();
       try {
         const d = await sub.handler('preToolUse', sub.pluginCtx ?? ctxStub, running);
+        this.observer?.({
+          pluginId: sub.pluginId,
+          event: 'preToolUse',
+          matcher: sub.matcher,
+          decision: d,
+          durationMs: Date.now() - t0,
+          success: true,
+        });
         if (d?.action === 'deny') return d;
         if (d?.action === 'rewrite' && d.args) {
           running = { ...running, args: d.args };
         }
       } catch (err) {
+        this.observer?.({
+          pluginId: sub.pluginId,
+          event: 'preToolUse',
+          matcher: sub.matcher,
+          durationMs: Date.now() - t0,
+          success: false,
+        });
         this.log.error('插件 hook 处理失败（fail-open 跳过该层）', {
           pluginId: sub.pluginId,
           event: 'preToolUse',
@@ -147,9 +179,24 @@ export class HookBus {
   }
 
   private async runOne(sub: HookSubscription, event: PluginHookEvent, payload: unknown): Promise<void> {
+    const t0 = Date.now();
     try {
       await sub.handler(event, sub.pluginCtx ?? ctxStub, payload);
+      this.observer?.({
+        pluginId: sub.pluginId,
+        event,
+        matcher: sub.matcher,
+        durationMs: Date.now() - t0,
+        success: true,
+      });
     } catch (err) {
+      this.observer?.({
+        pluginId: sub.pluginId,
+        event,
+        matcher: sub.matcher,
+        durationMs: Date.now() - t0,
+        success: false,
+      });
       this.log.error('插件 hook 处理失败（fail-open）', {
         pluginId: sub.pluginId,
         event,
