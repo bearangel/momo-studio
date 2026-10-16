@@ -141,6 +141,7 @@ interface AuditToolCallChildMsg {
   success?: unknown;
   durationMs?: unknown;
   source?: unknown;
+  preToolUse?: unknown;
 }
 
 /**
@@ -401,6 +402,7 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
           outputSummary: String(m.outputSummary ?? ''),
           success: m.success === true,
           source: m.source === 'plugin' ? 'plugin' : 'builtin',
+          preToolUse: typeof m.preToolUse === 'string' ? m.preToolUse : null,
           durationMs: Number.isFinite(rawDuration) ? Math.trunc(rawDuration) : 0,
         });
         // 每 200 次写入触发一次配额巡检（模块级计数器）

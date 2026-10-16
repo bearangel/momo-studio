@@ -105,3 +105,44 @@ describe('insertToolCall 落库', () => {
     expect(rows.find((r) => r.tool_name === 'read_file')!.source).toBe('builtin');
   });
 });
+
+// ── P3：preToolUse 决策透传（hook_calls 归因见 hook-bridge-main.test）──
+
+describe('insertToolCall preToolUse（P3）', () => {
+  beforeEach(() => {
+    fs.mkdirSync(tmpRoot, { recursive: true });
+    process.env.AP_USER_DATA_DIR = tmpRoot;
+    runMigrations();
+  });
+  afterEach(() => {
+    closeDb();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    delete process.env.AP_USER_DATA_DIR;
+  });
+  it('决策写入 pre_tool_use 列；缺省 null', () => {
+    insertToolCall({
+      workspaceId: 'ws1',
+      agentBotUserId: 'u1',
+      toolName: 'bash',
+      inputSummary: 'i',
+      outputSummary: 'o',
+      success: false,
+      durationMs: 3,
+      preToolUse: '{"action":"deny","reason":"保护分支"}',
+    });
+    insertToolCall({
+      workspaceId: 'ws1',
+      agentBotUserId: 'u1',
+      toolName: 'read_file',
+      inputSummary: 'i',
+      outputSummary: 'o',
+      success: true,
+      durationMs: 1,
+    });
+    const rows = getDb()
+      .prepare(`SELECT tool_name, pre_tool_use FROM tool_calls ORDER BY tool_name`)
+      .all() as Array<{ tool_name: string; pre_tool_use: string | null }>;
+    expect(rows.find((r) => r.tool_name === 'bash')!.pre_tool_use).toContain('deny');
+    expect(rows.find((r) => r.tool_name === 'read_file')!.pre_tool_use).toBeNull();
+  });
+});
