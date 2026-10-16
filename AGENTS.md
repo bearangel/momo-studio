@@ -112,6 +112,7 @@ docs/       — 设计文档(specs) + 实施计划(plans) + 开发指南(dev)
 | Electron native binding 不匹配 | 启动 Electron 时 `NODE_MODULE_VERSION 115 vs 123` | `cd electron && npx electron-rebuild -f -w better-sqlite3`。冒烟后如需回 Node ABI 跑测试，同上行注意事项 |
 | ABI 反复横跳后 vitest 全仓 SIGKILL | electron-rebuild ↔ prebuild-install 来回替换 `better_sqlite3.node` 后，macOS AMFI 签名态损坏——vitest worker（含 forks）加载即被击杀，但裸 `node -e "new Database(...)"` 正常 | `codesign --force --sign - node_modules/.pnpm/better-sqlite3@11.10.0/node_modules/better-sqlite3/build/Release/better_sqlite3.node`（ad-hoc 重签即愈）。判别特征：SIGKILL 而非 SIGSEGV、瞬死无测试输出、`codesign -v` 可能仍报通过 |
 | 容器内启动 Electron | `chrome-sandbox SUID` 错误 | 加 `--no-sandbox` 参数 |
+| vitest 崩溃运行孤儿化 worker | 主机变慢；`ps` 里一堆 `node (vitest N)` 进程 PPID=1 挂后台，持续占内存/CPU | vitest 进程被信号杀死（SIGSEGV/SIGKILL，见上两行）时 tinypool worker 子进程被 launchd 收养成孤儿。**每次 vitest 非正常退出（exit 139/137、Segmentation fault）后必须检查并清理**：`ps -axo pid,ppid,command | grep vitest | grep -v grep`，对 PPID=1 者逐个 `kill <pid>`。预防：DB 重度目录（tests/plugin、tests/storage 等）跑测试**显式加 `--pool=forks`**（threads 池 worker 线程析构期 GC weak callback 崩溃；且 vitest 1.6.1 的 poolMatchGlobs 对 run 模式整体失效——config 里 22 条 glob 目录跑从未生效，勿信） |
 | `git add docs/foo.md` 无输出 | `.gitignore` 历史遗留条目 | 先 `git add docs/` 或 `git add -f docs/foo.md`（v2.0.0 后该裸 `docs` 条目已删，正常 `git add` 即可） |
 
 ## 研发红线（2.0.0 主机验收 8 个 P0 教训沉淀）
