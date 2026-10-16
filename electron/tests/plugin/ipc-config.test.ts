@@ -175,11 +175,10 @@ describe('setConfig 保存即生效联动', () => {
     expect(JSON.stringify(view)).not.toContain('sk-9');
   });
 
-  it('service 未运行 → 不触发重启', async () => {
+  it('service 未运行（注册期启动失败）→ 保存配置后拉起（P5 §8.2 真机语义）', async () => {
     svcFns.isServiceRunning.mockReturnValue(false);
     await handlerOf('plugin:setConfig')(null, 'cg', { indexCommand: 'x' });
-    expect(svcFns.stopPluginService).not.toHaveBeenCalled();
-    expect(svcFns.startPluginService).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(svcFns.startPluginService).toHaveBeenCalledWith(CG_REC));
   });
 
   it('校验失败 → throw 且不触发联动', async () => {

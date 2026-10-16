@@ -19,29 +19,22 @@ const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.momo', 'build', 'ou
 const CODE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']);
 const BINARY_HEAD = Buffer.from([0x89, 0x50]); // PNG 头样本（够用近似）
 
-/** 单文件扫描产物：defs 与 calls */
+/** 符号提取：function / class / 箭头 const / 类方法（非函数 const 不收） */
 function scanSource(text) {
   const defs = [];
   const lines = text.split('\n');
   lines.forEach((line, i) => {
     const ln = i + 1;
     let m;
-    // function 声明（含 export async 前缀）
     if ((m = line.match(/(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/))) {
       defs.push({ symbol: m[1], line: ln, kind: 'function' });
-    }
-    // class 声明
-    else if ((m = line.match(/(?:export\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/))) {
+    } else if ((m = line.match(/(?:export\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/))) {
       defs.push({ symbol: m[1], line: ln, kind: 'class' });
-    }
-    // 箭头/函数表达式 const（const x = (...) => 或 const x = function）
-    else if (
+    } else if (
       (m = line.match(/(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?[\w$]*\s*(?:=>|\()/))
     ) {
       defs.push({ symbol: m[1], line: ln, kind: 'arrow' });
-    }
-    // 类方法（缩进 2+ 的 name(...) {）——避开关键字与声明行
-    else if (
+    } else if (
       (m = line.match(/^\s{2,}([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/)) &&
       !['if', 'for', 'while', 'switch', 'catch', 'function', 'return'].includes(m[1])
     ) {
@@ -51,17 +44,18 @@ function scanSource(text) {
   return defs;
 }
 
-/** 文本内符号调用点行号（排除声明行自身） */
-function findCallLines(text, symbol) {
+/** 单遍调用点提取：所有 identifier( 出现（名称+行号）——O(文本长度) */
+function extractCallSites(text) {
   const out = [];
-  const re = new RegExp('(?:^|[^\\w$])' + symbol + '\\s*\\(', 'g');
+  const re = /([A-Za-z_$][\w$]*)\s*\(/g;
   const lines = text.split('\n');
-  lines.forEach((line, i) => {
+  for (let i = 0; i < lines.length; i++) {
     re.lastIndex = 0;
-    if (re.test(line) && !new RegExp('(?:function|class|const|method)\\s+' + symbol + '\\b').test(line)) {
-      out.push(i + 1);
+    let m;
+    while ((m = re.exec(lines[i])) !== null) {
+      out.push({ name: m[1], line: i + 1 });
     }
-  });
+  }
   return out;
 }
 
@@ -118,39 +112,32 @@ function walk(root, maxFiles, out) {
 function createIndexer(opts) {
   const root = path.resolve(opts.root);
   const maxFiles = opts.maxFiles ?? DEFAULT_MAX_FILES;
-  const fileEntry = new Map();
-  const symbols = new Map();
-  const fileCalls = new Map();
+  const fileEntry = new Map(); // abs -> { mtimeMs, defs, callSites: [{name,line}] }
+  const symbols = new Map(); // symbol -> {file,line,kind,snippet}
+  const fileCalls = new Map(); // fromFile -> Map<toSymbol, count>（已知符号过滤后）
   let lastIndexedAt = 0;
 
   function ingest(abs, text, mtimeMs) {
-    fileEntry.set(abs, { mtimeMs, text, defs: [] });
     const defs = scanSource(text);
-    fileEntry.get(abs).defs = defs;
+    const callSites = extractCallSites(text);
+    fileEntry.set(abs, { mtimeMs, defs, callSites });
     for (const d of defs) {
-      const snippet = String(text)
-        .split('\n')
-        .slice(d.line - 1, d.line)
-        .join('')
-        .trim()
-        .slice(0, 200);
+      const snippet = text.split('\n').slice(d.line - 1, d.line).join('').trim().slice(0, 200);
       symbols.set(d.symbol, { file: abs, line: d.line, kind: d.kind, snippet });
     }
   }
 
   function rebuildCalls() {
+    // 单遍：每文件的调用点过滤到已知符号（P5 §8 自食发现的 O(文件×符号×行)
+    // 二次方炸弹重写——本仓 4000+ 符号曾致单次全量 90s 阻塞主进程 SIGKILL）
     fileCalls.clear();
-    const symbolNames = [...symbols.keys()];
     for (const [abs, entry] of fileEntry) {
+      const ownDefs = new Set(entry.defs.map((d) => d.symbol));
       const calls = new Map();
-      for (const name of symbolNames) {
-        const lines = findCallLines(entry.text, name);
-        if (lines.length > 0) {
-          // 排除「本文件声明的该符号」自引用
-          const own = entry.defs.some((d) => d.symbol === name);
-          if (own && lines.length === 1 && lines[0] === symbols.get(name)?.line) continue;
-          calls.set(name, lines.length);
-        }
+      for (const site of entry.callSites) {
+        if (!symbols.has(site.name)) continue;
+        if (ownDefs.has(site.name) && site.line === symbols.get(site.name).line) continue; // 声明行自引用
+        calls.set(site.name, (calls.get(site.name) ?? 0) + 1);
       }
       if (calls.size > 0) fileCalls.set(abs, calls);
     }
@@ -184,8 +171,7 @@ function createIndexer(opts) {
   function scanFull() {
     const files = [];
     walk(root, maxFiles, files);
-    // 全量重建（保留仍有文件条目的 mtime 以便后续增量）
-    const kept = new Map();
+    const kept = new Set();
     for (const abs of files) {
       const prev = fileEntry.get(abs);
       let st;
@@ -194,27 +180,34 @@ function createIndexer(opts) {
       } catch {
         continue;
       }
-      if (prev && prev.mtimeMs === st.mtimeMs) {
-        kept.set(abs, prev);
-        for (const d of prev.defs) {
-          symbols.set(d.symbol, { file: abs, line: d.line, kind: d.kind, snippet: d.snippet ?? '' });
-        }
-        continue;
-      }
+      kept.add(abs);
+      if (prev && prev.mtimeMs === st.mtimeMs) continue; // 未变——复用
       let text;
       try {
         text = fs.readFileSync(abs, 'utf-8');
       } catch {
         continue;
       }
-      kept.set(abs, { mtimeMs: st.mtimeMs, text, defs: scanSource(text) });
-      for (const d of kept.get(abs).defs) {
-        const snippet = text.split('\n').slice(d.line - 1, d.line).join('').trim().slice(0, 200);
-        symbols.set(d.symbol, { file: abs, line: d.line, kind: d.kind, snippet });
+      // 变更文件：先摘旧 defs（符号可能改名/消失）
+      if (prev) {
+        for (const d of prev.defs) {
+          const cur = symbols.get(d.symbol);
+          if (cur && cur.file === abs) symbols.delete(d.symbol);
+        }
+      }
+      ingest(abs, text, st.mtimeMs);
+    }
+    // 消失的文件摘除
+    for (const abs of [...fileEntry.keys()]) {
+      if (!kept.has(abs)) {
+        const old = fileEntry.get(abs);
+        for (const d of old.defs) {
+          const cur = symbols.get(d.symbol);
+          if (cur && cur.file === abs) symbols.delete(d.symbol);
+        }
+        fileEntry.delete(abs);
       }
     }
-    fileEntry.clear();
-    for (const [k, v] of kept) fileEntry.set(k, v);
     rebuildCalls();
     lastIndexedAt = Date.now();
     return { files: fileEntry.size, symbols: symbols.size, edges: countEdges() };
@@ -244,13 +237,10 @@ function createIndexer(opts) {
     if (!symbols.has(symbol)) return null;
     const def = symbols.get(symbol);
     const callers = [];
-    for (const [fromFile, calls] of fileCalls) {
-      const lines = findCallLines(fileEntry.get(fromFile)?.text ?? '', symbol);
-      if (lines.length > 0 && fromFile !== def.file) {
-        callers.push({ file: fromFile, lines });
-      } else if (calls.has(symbol) && fromFile !== def.file) {
-        callers.push({ file: fromFile, lines: [] });
-      }
+    for (const [fromFile, entry] of fileEntry) {
+      if (fromFile === def.file) continue;
+      const lines = entry.callSites.filter((c) => c.name === symbol).map((c) => c.line);
+      if (lines.length > 0) callers.push({ file: fromFile, lines });
     }
     // blast radius：从定义文件沿上游邻接传递闭包
     const adj = fileAdjacency();

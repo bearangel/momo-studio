@@ -11,7 +11,7 @@ import { getPluginBus } from './bus-instance';
 import { startPluginService, stopPluginService } from './service-manager';
 import { syncPluginHooks, removePluginHooks } from './hook-sync';
 import { notifyPanelsChanged, listPluginPanels } from './panel-sync';
-import { callPluginService, isServiceRunning } from './service-manager';
+import { callPluginService } from './service-manager';
 import {
   normalizeConfigSchema,
   writePluginConfig,
@@ -169,11 +169,13 @@ export function registerPluginHandlers(): void {
       } catch (err) {
         logger.warn('setConfig 后 MCP 重装配失败', { pluginId, error: String(err) });
       }
-      if (isServiceRunning(pluginId)) {
-        void stopPluginService(pluginId)
-          .then(() => startPluginService(rec))
-          .catch(() => undefined);
-      }
+      // service 重启语义（P5 §8.2 真机发现）：无条件 stop→start——
+      // 注册期因 config 缺失而启动失败的插件，补配置后必须被拉起
+      //（stop 对未运行实例幂等 no-op）；已在运行则换新 config 重启
+      void stopPluginService(pluginId)
+        .catch(() => undefined)
+        .then(() => startPluginService(rec))
+        .catch(() => undefined);
       // 回包完整 PluginConfigView（schema 必带——renderer 表单保存后原地重渲染）
       return { schema, ...getPluginConfigView(pluginId, schema) };
     },
