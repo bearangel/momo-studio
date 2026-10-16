@@ -8,28 +8,27 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-const require_ = createRequire(import.meta.url);
-// 插件 CJS 域产物——直 require（不进 tsc 编译面，计划 §3）
-const {
-  createIndexer,
-} = require_('../../../plugins/codegraph/lib/indexer.js') as {
-  createIndexer: (opts: { root: string; maxFiles?: number }) => {
-    scanFull(): { files: number; symbols: number; edges: number };
-    scanFile(abs: string): void;
-    explore(symbol: string): {
-      symbol: string;
-      definition: { file: string; line: number; kind: string; snippet: string } | null;
-      callers: { file: string; lines: number[] }[];
-      blastRadius: string[];
-      approximate: true;
-    } | null;
-    graph(symbol?: string, limit?: number): {
-      nodes: { id: string; kind: string }[];
-      edges: { from: string; to: string }[];
-      stats: { files: number; symbols: number; edges: number; lastIndexedAt: number };
-    };
+// 插件 CJS 域产物——动态 import（vitest CJS 互操作；tsc CommonJS 下合法）
+type Indexer = {
+  scanFull(): { files: number; symbols: number; edges: number };
+  scanFile(abs: string): void;
+  explore(symbol: string): {
+    symbol: string;
+    definition: { file: string; line: number; kind: string; snippet: string } | null;
+    callers: { file: string; lines: number[] }[];
+    blastRadius: string[];
+    approximate: true;
+  } | null;
+  graph(symbol?: string, limit?: number): {
+    nodes: { id: string; kind: string }[];
+    edges: { from: string; to: string }[];
+    stats: { files: number; symbols: number; edges: number; lastIndexedAt: number };
   };
 };
+let createIndexer: typeof import('../../../plugins/codegraph/lib/indexer.js').createIndexer;
+beforeEach(async () => {
+  ({ createIndexer } = await import('../../../plugins/codegraph/lib/indexer.js'));
+});
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-cgidx-'));
 const root = path.join(tmp, 'ws');
@@ -123,7 +122,8 @@ describe('增量与守卫', () => {
     write('src/ok.ts', 'export function ok() {}');
     write('node_modules/pkg/x.ts', 'export function hidden1() {}');
     write('dist/x.ts', 'export function hidden2() {}');
-    write('bin/blob.png', Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    fs.mkdirSync(path.join(root, 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'bin', 'blob.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
     const idx = createIndexer({ root });
     const s = idx.scanFull();
     expect(s.files).toBe(1);

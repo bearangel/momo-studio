@@ -5,22 +5,16 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createRequire } from 'node:module';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-const require_ = createRequire(import.meta.url);
 type Tools = {
   getDefs(): { name: string; description: string; inputSchema: unknown }[];
   getCatalog(): { name: string }[];
   handles(name: string): boolean;
   execute(name: string, args: unknown): Promise<unknown>;
 };
-const { createTools: createExplore } = require_('../../../plugins/codegraph/tools/explore.js') as {
-  createTools: (ctx: unknown) => Tools;
-};
-const { createTools: createStatus } = require_('../../../plugins/codegraph/tools/status.js') as {
-  createTools: (ctx: unknown) => Tools;
-};
+let createExplore: typeof import('../../../plugins/codegraph/tools/explore.js').createTools;
+let createStatus: typeof import('../../../plugins/codegraph/tools/status.js').createTools;
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-cgtool-'));
 const root = path.join(tmp, 'ws');
@@ -29,8 +23,10 @@ function mkCtx(config: Record<string, unknown> = {}): unknown {
   return { getConfig: () => config, getDataDir: () => path.join(tmp, 'data') };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   fs.mkdirSync(root, { recursive: true });
+  ({ createTools: createExplore } = await import('../../../plugins/codegraph/tools/explore.js'));
+  ({ createTools: createStatus } = await import('../../../plugins/codegraph/tools/status.js'));
 });
 afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });

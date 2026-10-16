@@ -5,20 +5,19 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createRequire } from 'node:module';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-const require_ = createRequire(import.meta.url);
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { installPluginDevDir, uninstallPlugin } from '../../src/main/plugin/installer';
 import { listPluginPanels } from '../../src/main/plugin/panel-sync';
 
-const { createService } = require_('../../../plugins/codegraph/service/index.js') as {
-  createService: (ctx: ServiceCtx) => Service;
-};
-const reindexHook = require_('../../../plugins/codegraph/hooks/reindex.js') as {
-  handle: (payload: unknown, ctx: unknown) => Promise<null>;
-};
+// 插件 CJS 域产物——动态 import（vitest CJS 互操作；tsc CommonJS 下合法）
+let createService: typeof import('../../../plugins/codegraph/service/index.js').createService;
+let handleHook: typeof import('../../../plugins/codegraph/hooks/reindex.js').handle;
+beforeEach(async () => {
+  ({ createService } = await import('../../../plugins/codegraph/service/index.js'));
+  ({ handle: handleHook } = await import('../../../plugins/codegraph/hooks/reindex.js'));
+});
 
 interface ServiceCtx {
   getConfig(): Record<string, unknown>;
@@ -103,14 +102,14 @@ describe('service 面', () => {
 describe('postToolUse → 队列 → 增量链（§8.5）', () => {
   it('hook 生产队列文件（仅 workspaceRoot 内路径，原子写）', async () => {
     fs.writeFileSync(path.join(root, 'a.ts'), 'x');
-    await reindexHook.handle(
+    await handleHook(
       { toolName: 'write_file', args: { path: path.join(root, 'a.ts') }, success: true },
       mkCtx(),
     );
     const q = JSON.parse(fs.readFileSync(path.join(dataDir, 'reindex-queue.json'), 'utf-8'));
     expect(q.paths).toEqual([path.join(root, 'a.ts')]);
     // 越界路径不收
-    await reindexHook.handle(
+    await handleHook(
       { toolName: 'write_file', args: { path: '/etc/hosts' }, success: true },
       mkCtx(),
     );
@@ -125,7 +124,7 @@ describe('postToolUse → 队列 → 增量链（§8.5）', () => {
     await waitFor(async () => (await (svc.handle('stats', {}) as Promise<{ files: number }>)).files >= 1);
     // 模拟 agent 改文件 → hook 入队
     fs.writeFileSync(path.join(root, 'a.ts'), 'export function alpha() { return 42; }');
-    await reindexHook.handle(
+    await handleHook(
       { toolName: 'write_file', args: { path: path.join(root, 'a.ts') }, success: true },
       mkCtx(),
     );
@@ -153,7 +152,7 @@ describe('T1 注册走查：真插件过安装链全校验（manifest/config/pan
       .run();
     const panels = listPluginPanels('ws1');
     expect(panels.some((x) => x.pluginId === 'codegraph' && x.panelId === 'graph')).toBe(true);
-    expect(panels[0].entryUrl.startsWith('momo-plugin://codegraph/')).toBe(true);
+    expect(panels.find((x) => x.panelId === 'graph')?.entryUrl.startsWith('momo-plugin://codegraph/')).toBe(true);
     uninstallPlugin('codegraph', false);
     closeDb();
   });
