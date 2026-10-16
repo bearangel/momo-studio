@@ -31,7 +31,7 @@ const PLUGINS: ResourceItem[] = [
     description: '',
     source: 'custom',
     enabled: true,
-    plugin: { state: 'active', devSource: false, sourcePath: null, components: [], enabled: true },
+    plugin: { id: 'cg', state: 'active', devSource: false, sourcePath: null, components: [], enabled: true },
   },
 ] as unknown as ResourceItem[];
 

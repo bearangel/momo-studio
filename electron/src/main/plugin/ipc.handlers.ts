@@ -171,7 +171,8 @@ export function registerPluginHandlers(): void {
           .then(() => startPluginService(rec))
           .catch(() => undefined);
       }
-      return getPluginConfigView(pluginId, schema);
+      // 回包完整 PluginConfigView（schema 必带——renderer 表单保存后原地重渲染）
+      return { schema, ...getPluginConfigView(pluginId, schema) };
     },
   );
 }

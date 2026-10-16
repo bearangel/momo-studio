@@ -12,6 +12,7 @@ import {
 
 const PLUGIN_ID = 'cg';
 const ORIGIN = `momo-plugin://${PLUGIN_ID}`;
+const SANDBOX_ORIGIN = 'null'; // 沙箱不透明 origin（真机实证 2026-10-16）
 
 interface FakeWindow {
   postMessage: ReturnType<typeof vi.fn>;
@@ -41,7 +42,7 @@ function setup(overrides: Partial<PanelHostHandlers> = {}): void {
   d = (data: unknown, opts: { origin?: string; source?: unknown } = {}) => {
     const ev = {
       data,
-      origin: opts.origin ?? ORIGIN,
+      origin: opts.origin ?? SANDBOX_ORIGIN,
       source: (opts.source === undefined ? fakeIframe : opts.source) as MessageEventSource | null,
     } as MessageEvent;
     ch?.receiveTest(ev);
@@ -59,10 +60,15 @@ afterEach(() => {
 });
 
 describe('入站硬校验', () => {
-  it('origin 不符 → 违规计数，不回包', () => {
+  it('origin 非 {null, 插件 scheme} → 违规计数，不回包', () => {
     d({ type: 'ready', id: 1 }, { origin: 'https://evil.example' });
     expect(handlers.onDisconnect).not.toHaveBeenCalled();
     expect(fakeIframe.postMessage).not.toHaveBeenCalled();
+  });
+
+  it('scheme origin（前向兼容 allow-same-origin 态）→ 放行', () => {
+    d({ type: 'ready', id: 1 }, { origin: ORIGIN });
+    expect(fakeIframe.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'rpc:result' }), '*');
   });
 
   it('source 不符（非本 iframe）→ 违规计数', () => {
@@ -114,7 +120,7 @@ describe('五消息语义', () => {
         id: 7,
         result: { theme: 'light', tokens: { '--bg-canvas': 'rgb(255 255 255)' } },
       },
-      ORIGIN,
+      '*',
     );
   });
 
@@ -122,7 +128,7 @@ describe('五消息语义', () => {
     d({ type: 'app:getContext', id: 8 });
     expect(fakeIframe.postMessage).toHaveBeenCalledWith(
       { type: 'rpc:result', id: 8, result: { workspaceId: 'ws1', workspaceName: '主仓', sessionId: 's1' } },
-      ORIGIN,
+      '*',
     );
   });
 
@@ -133,7 +139,7 @@ describe('五消息语义', () => {
     await vi.waitFor(() => {
       expect(fakeIframe.postMessage).toHaveBeenCalledWith(
         { type: 'rpc:result', id: 9, result: { ok: ['taskCompleted'], rejected: ['appReady'] } },
-        ORIGIN,
+        '*',
       );
     });
     expect(sub).toHaveBeenCalledWith(['taskCompleted']);
@@ -144,7 +150,7 @@ describe('五消息语义', () => {
     await vi.waitFor(() => {
       expect(fakeIframe.postMessage).toHaveBeenCalledWith(
         { type: 'rpc:result', id: 10, result: { graph: true } },
-        ORIGIN,
+        '*',
       );
     });
     expect(handlers.callService).toHaveBeenCalledWith('query', { q: 'HookBus' });
@@ -156,7 +162,7 @@ describe('五消息语义', () => {
     await vi.waitFor(() => {
       expect(fakeIframe.postMessage).toHaveBeenCalledWith(
         expect.objectContaining({ type: 'rpc:result', id: 11, error: 'service 未运行' }),
-        ORIGIN,
+        '*',
       );
     });
   });
@@ -170,7 +176,7 @@ describe('出站', () => {
     ch?.pushEvent('taskCompleted', { id: 't1' });
     expect(fakeIframe.postMessage).toHaveBeenCalledWith(
       { type: 'event', event: 'taskCompleted', payload: { id: 't1' } },
-      ORIGIN,
+      '*',
     );
   });
 
@@ -180,7 +186,7 @@ describe('出站', () => {
     ch?.pushEvent('resourceInstalled', { id: 'r1' });
     expect(fakeIframe.postMessage).not.toHaveBeenCalledWith(
       expect.objectContaining({ event: 'resourceInstalled' }),
-      ORIGIN,
+      '*',
     );
   });
 });

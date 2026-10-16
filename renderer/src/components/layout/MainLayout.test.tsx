@@ -52,6 +52,13 @@ const mockApi = {
   task: {
     list: vi.fn().mockResolvedValue([]),
   },
+  // P4：ActivityBar 扩展区——面板清单拉取 + panelsChanged 订阅（no-op 桩不扰动既有断言）
+  plugin: {
+    listPanels: vi.fn().mockResolvedValue([]),
+    onPanelsChanged: vi.fn().mockReturnValue(() => {}),
+    onPanelEvent: vi.fn().mockReturnValue(() => {}),
+    callService: vi.fn().mockResolvedValue(null),
+  },
   // 设置视图默认挂 ProviderSettings（mount 即调 provider.list）——
   // 缺桩会以 unhandled rejection 污染测试运行（vitest 判 exit 1）
   provider: {

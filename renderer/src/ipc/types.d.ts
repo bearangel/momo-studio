@@ -977,6 +977,8 @@ export interface ResourceItem {
   mcp?: { enabled: boolean };
   /** plugin 项的扩展元数据（P1：注册与展示；组件运行时激活在 P2+，spec §10） */
   plugin?: {
+    /** 插件域 id（config 通道入参用——资源 id 有 custom-plugin- 前缀不可直用） */
+    id: string;
     state: 'active' | 'missing';
     devSource: boolean;
     sourcePath: string | null;

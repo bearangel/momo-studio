@@ -13,7 +13,7 @@
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://localhost:* http://localhost:*; worker-src 'self' blob:;"
+      content="default-src 'self'; frame-src momo-plugin:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://localhost:* http://localhost:*; worker-src 'self' blob:;"
     />
     <!-- 防白闪：parser 阻塞的经典脚本，首绘前设定主题 class（见 public/theme-boot.js） -->
     <script src="/theme-boot.js"></script>

@@ -2,7 +2,7 @@
 //
 // SettingsView 行为测试（P2 Task 4；v2.2 P1 记忆分类入列后为 9 分类；v2.4 安全沙箱入列后为 10 分类；
 // v2.7 浏览器入列后为 11 分类；「语言服务」已随 LSP 子系统下架摘除（2026-10-08）回到 11 分类）：
-// - 渲染 11 个分类菜单项（顺序：模型服务/默认模型/会话设置/记忆/外观/安全沙箱/浏览器/Git 策略/审计日志/节点互联/关于）
+// - 渲染 12 个分类菜单项（顺序：模型服务/默认模型/会话设置/记忆/外观/安全沙箱/浏览器/Git 策略/审计日志/节点互联/关于）
 // - 已删除 account 分类
 // - 顶部「← 返回」按钮点击后 setActiveView('im')
 // - 全局 Esc 键返回 im 视图（仅 settings 视图挂载时生效）
@@ -111,16 +111,17 @@ describe('SettingsView', () => {
     vi.clearAllMocks();
   });
 
-  it('渲染 11 个分类菜单项且顺序符合规范（lucide 图标无 emoji；语言服务已下架）', () => {
+  it('渲染 12 个分类菜单项且顺序符合规范（lucide 图标无 emoji；语言服务已下架）', () => {
     render(<SettingsView />);
     const nav = screen.getByRole('navigation', { name: '设置分类' });
     const navButtons = Array.from(nav.querySelectorAll('button'));
-    expect(navButtons.length).toBe(11);
+    expect(navButtons.length).toBe(12);
     const labels = navButtons.map((b) => b.textContent ?? '');
     expect(labels).toEqual([
       '模型服务',
       '默认模型',
       '会话设置',
+      '插件',
       '记忆',
       '外观',
       '安全沙箱',
@@ -131,7 +132,7 @@ describe('SettingsView', () => {
       '关于',
     ]);
     // 分类图标均为 SVG（lucide），断言 nav 内不存在 emoji 文本
-    expect(nav.querySelectorAll('svg').length).toBe(11);
+    expect(nav.querySelectorAll('svg').length).toBe(12);
   });
 
   it('点击「记忆」分类切换 activeCategory 并渲染面板（拉 memory.list）', async () => {

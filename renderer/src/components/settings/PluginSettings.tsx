@@ -26,7 +26,7 @@ export function PluginSettings() {
     ipc.resource
       .list({ type: 'plugin' })
       .then((items) => {
-        if (alive) setPlugins(items.filter((i) => i.type === 'plugin' && i.plugin?.state === 'active'));
+        if (alive) setPlugins(items.filter((i) => i.type === 'plugin' && i.plugin?.state === 'active' && i.plugin.id));
       })
       .catch((err) => {
         if (alive) setLoadError(ipcErrorMessage(err));
@@ -47,7 +47,7 @@ export function PluginSettings() {
         <p className="text-sm text-tertiary">尚未安装插件。前往资源库 → 插件页安装。</p>
       )}
       {plugins.map((p) => (
-        <PluginConfigSection key={p.id} pluginId={p.id} pluginName={p.name} />
+        <PluginConfigSection key={p.plugin!.id} pluginId={p.plugin!.id} pluginName={p.name} />
       ))}
     </section>
   );

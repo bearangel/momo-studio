@@ -154,7 +154,9 @@ export class PanelChannel {
 
   private post(msg: unknown): void {
     const win = this.getIframeWindow();
-    win?.postMessage(msg, this.origin);
+    // targetOrigin '*'：不透明 origin 无法定向——消息只发给我们持有的窗口引用
+    // （非广播；VS Code webview 同款模式）
+    win?.postMessage(msg, '*');
   }
 
   private refill(): void {
@@ -173,10 +175,21 @@ export class PanelChannel {
     return true;
   }
 
+  /** 入站双校验：source === 本 iframe（身份主锚）+ origin ∈ {'null', 本插件 scheme origin} */
+  private win_ok(ev: MessageEvent): boolean {
+    const win = this.getIframeWindow();
+    return (
+      win !== null &&
+      ev.source === (win as unknown as MessageEventSource) &&
+      (ev.origin === 'null' || ev.origin === this.origin)
+    );
+  }
+
   private onMessage = (ev: MessageEvent): void => {
     if (this.disconnected) return;
-    const win = this.getIframeWindow();
-    if (!win || ev.source !== win || ev.origin !== this.origin) {
+    // 沙箱 iframe（无 allow-same-origin）的 origin 是不透明 'null'，非 scheme origin
+    // （2026-10-16 真机冒烟实证）——source 身份是主锚，origin 只做白名单复核
+    if (!this.win_ok(ev)) {
       this.violation();
       return;
     }

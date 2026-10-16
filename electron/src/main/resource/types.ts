@@ -99,6 +99,7 @@ export interface ResourceItem {
   mcp?: { enabled: boolean };
   /** plugin 项的扩展元数据（P1：注册与展示；组件运行时激活在 P2+，spec §10） */
   plugin?: {
+    id: string;
     state: 'active' | 'missing';
     devSource: boolean;
     sourcePath: string | null;

@@ -6,6 +6,27 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 插件系统 P4：面板协议 + 设置页 config 表单
+
+平台扩展机制第四期（2026-10-16，spec `docs/specs/2026-10-15-plugin-system-design.md` §6 / 计划 `docs/plans/2026-10-16-plugin-system-p4.md`）。「看得见」：iframe 沙箱面板挂侧栏、五消息协议双向通、config 由宿主按 JSON Schema 自动渲染表单（敏感值进系统钥匙串，`${config.KEY}` 注入 MCP args/env）。真实 App 隔离冒烟全链通过（面板握手/RPC/表单落盘/MCP 注入真值/禁用即消失），当场抓修 4 个真缺陷（CSP frame-src / 沙箱 origin='null' 语义 / 资源 id≠插件 id / setConfig 回包缺 schema）。含 P3 审查 minor 清扫：workspaceOpened reason 字段、终态双发文档化、hook_calls 50k 行配额。版本 `2.1.0-alpha.19`。
+
+### 面板协议（spec §6）
+- **momo-plugin:// 自定义协议**：只放行插件安装目录内的静态文件（standard scheme——插件间 origin 隔离；穿越/非 GET/跨版本全拒绝；数据目录天然不可达）
+- **PanelHost + 面板模式**：活动栏「扩展」区图标 → 侧栏槽让渡给沙箱 iframe（`sandbox="allow-scripts"` 无 allow-same-origin）；三态（loading/加载失败红字重试/通道违规三振断开）；Esc 退出
+- **五消息通道 PanelChannel**（v1 全集不设扩展）：ready（主题 token 快照）/ app:getContext / app:subscribe（task·resource·session 域白名单）/ plugin:callService（身份由通道绑定，面板只能调本插件 service）；入站 source 身份主锚 + origin 白名单（沙箱不透明 origin='null' 真机实证）+ 256KB 上限 + 20 条/s 令牌桶三振断开；出站仅发持有的窗口引用
+- **panel.json 契约**：`{ panels: [{ id, title, icon: lucide:*, location: sidebar, entry }] }` 安装时拒绝式校验（≤4 面板）；禁用/卸载/重载经 plugin:panelsChanged 推送，面板即消失（§8.6）
+
+### config 表单与注入（spec §2.2）
+- **双轨存储**：非敏感 → `<dataDir>/config.json`（原子写）；敏感（`sensitive: true`）→ keytar `plugin.<id>.config.<KEY>`——明文永不回传 renderer（只显在场布尔）；主进程激活边界预热内存缓存供同步消费者
+- **Schema v1 子集校验**：type/properties/required/title/sensitive/enum 之外拒绝；写入 overlay 语义（空输入=不变、null=清除、required 终态校验）
+- **保存即生效**：写双轨 → MCP 重装配（`${config.KEY}` 展开 args/env，缺失键保留字面量可观察）→ 运行中 service 重启
+- **设置页「插件」分区**：schema 自动映射控件（string/number/boolean/enum → 输入框/数字/开关/下拉；敏感 → 密码态 + 已配置徽标 + 清除）；无声明插件空态卡
+
+### P3 审查 minor 清扫
+- M1：workspaceOpened payload 补 `reason: 'created' | 'switched'`（切换≠新开，watcher 型插件可辨）
+- M2：任务终态双发（taskStatusChanged + taskCompleted 同 payload）文档化于事件目录 + spec §5.1 补注
+- M3：hook_calls 50k 行配额（观察者写入计数触发，批量删最旧滞回 95%）
+
 ## [未发布] — 插件系统 P3：hooks 事件总线 + service 长驻组件
 
 平台扩展机制第三期（2026-10-16，spec `docs/specs/2026-10-15-plugin-system-design.md` §5 / 计划 `docs/plans/2026-10-15-plugin-system-p3.md`）。「管得深」：插件参与工具治理（preToolUse 拦截）与生命周期（15 事件 + 主进程长驻 service）。

@@ -32,6 +32,7 @@ export function listPluginResourceRows(workspaceId?: string): ResourceItem[] {
       installable: false,
       removable: true,
       plugin: {
+        id: rec.id,
         state: rec.state,
         devSource: rec.source === 'dev',
         sourcePath: rec.sourcePath,

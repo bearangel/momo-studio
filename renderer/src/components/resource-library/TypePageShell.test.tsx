@@ -584,7 +584,7 @@ describe('TypePageShell - 插件启停与卸载（P1）', () => {
     name: 'Codegraph 代码图谱', description: '图谱', version: '0.1.0',
     installed: true, installable: false, removable: true,
     plugin: {
-      state: 'active', devSource: false, sourcePath: null,
+      id: 'cg', state: 'active', devSource: false, sourcePath: null,
       components: ['tools', 'service', 'agents', 'skills', 'panel'], enabled: true,
     },
   };
@@ -615,7 +615,7 @@ describe('TypePageShell - 插件启停与卸载（P1）', () => {
       ...pluginItem,
       id: 'custom-plugin-dtb', slug: 'dtb', name: '内部部署工具箱',
       plugin: {
-        state: 'missing', devSource: true, sourcePath: '/Users/x/dev/deploy-toolbox',
+        id: 'dtb', state: 'missing', devSource: true, sourcePath: '/Users/x/dev/deploy-toolbox',
         components: ['tools'], enabled: false,
       },
     };
