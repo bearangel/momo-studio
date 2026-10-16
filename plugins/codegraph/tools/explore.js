@@ -7,11 +7,18 @@
 const path = require('node:path');
 const { createIndexer } = require('../lib/indexer.js');
 
-function renderExplore(e) {
+function relOf(root, absFile) {
+  // 双侧 resolve 归一（workspaceRoot 尾斜杠会让 startsWith 判定失效——审查 M2 同族）
+  const r = path.resolve(root);
+  const f = path.resolve(absFile);
+  return f.startsWith(r + path.sep) ? path.relative(r, f) : f;
+}
+
+function renderExplore(e, root) {
   const lines = [];
   lines.push(`# 符号 ${e.symbol}（${e.definition.kind}）`);
   lines.push('');
-  lines.push(`定义：${path.basename(e.definition.file)}:${e.definition.line}`);
+  lines.push(`定义：${relOf(root, e.definition.file)}:${e.definition.line}`);
   lines.push('```');
   lines.push(e.definition.snippet);
   lines.push('```');
@@ -21,7 +28,7 @@ function renderExplore(e) {
   } else {
     lines.push(`直接调用方（${e.callers.length}）：`);
     for (const c of e.callers.slice(0, 20)) {
-      lines.push(`- ${path.basename(c.file)}${c.lines.length ? ':' + c.lines.join(',') : ''}`);
+      lines.push(`- ${relOf(root, c.file)}${c.lines.length ? ':' + c.lines.join(',') : ''}`);
     }
   }
   lines.push('');
@@ -91,7 +98,7 @@ module.exports.createTools = function (pluginCtx) {
           `codegraph：符号「${symbol}」未收录（可能：未被索引/在忽略目录/非函数类符号）。可用 plugin:codegraph/status 查看索引范围。`,
         );
       }
-      return renderExplore(e);
+      return renderExplore(e, (pluginCtx.getConfig() || {}).workspaceRoot);
     },
   };
 };

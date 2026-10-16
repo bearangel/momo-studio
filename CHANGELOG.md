@@ -6,6 +6,10 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 插件系统 P5 真实 LLM 验收轮
+
+**2026-10-17 真实 LLM 独立环境验收**（bigmodel glm-5.3-flash 真实 key + 隔离 profile，`.omo/qa-reports/2026-10-16-plugin-llm-acceptance/`）：六测试点全通过——onboarding 真实供应商验证、dev 目录注册 + P4 config 表单保存即拉起 service（F1 语义）、**真实 LLM 主动调用 plugin:codegraph/explore + status**（C1 修复后 status 输出真实非零统计）、P4 面板 SVG 渲染 + watcher 外部写增量链（后写入符号出现在图上）、错误路径（未知符号→LLM 收到可行动错误并原样转述）、§8.6 禁用即消失/复启复活。验收抓修 1 缺陷：explore/graph 输出 basename 抹掉目录前缀致 LLM 读文件失败（agent 自愈绕行）——改 rel 路径输出 + 嵌套目录回归锁（oracle M5 升级实证）。
+
 ## [未发布] — 插件系统 P5：codegraph 插件本体 + §8 验收锚点闭环
 
 平台扩展机制第五期收官（2026-10-16，spec §2.5/§8 / 计划 `docs/plans/2026-10-16-plugin-system-p5.md`）。**验收锚点交付**：codegraph 插件（五组件真实实现，仓库内 `plugins/codegraph`）注册进真实 App，§8 七场景端到端：6 pass + 1 partial（执行层环境故障待定位，调用链/审计归因真机铁证）。验收当场抓修 4 缺陷（setConfig service 拉起语义 / indexer 二次方炸弹 97s→0.8s / process.send 解构病三处 / 工具错误带栈）。版本 `2.1.0-alpha.20`。

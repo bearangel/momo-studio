@@ -269,6 +269,7 @@ function createIndexer(opts) {
 
   function graph(symbol, limit = 30) {
     const stats = { files: fileEntry.size, symbols: symbols.size, edges: countEdges(), lastIndexedAt };
+    const fileNodeId = (absFile) => path.relative(root, path.resolve(absFile));
     if (!symbol || !symbols.has(symbol)) {
       const nodes = [...symbols.entries()].slice(0, limit).map(([id, d]) => ({ id, kind: d.kind }));
       const ids = new Set(nodes.map((n) => n.id));
@@ -277,7 +278,7 @@ function createIndexer(opts) {
         for (const sym of calls.keys()) {
           const def = symbols.get(sym);
           if (def && def.file === fromFile) continue;
-          const from = path.basename(fromFile);
+          const from = fileNodeId(fromFile);
           if (ids.has(sym)) edges.push({ from, to: sym });
         }
       }
@@ -289,7 +290,7 @@ function createIndexer(opts) {
     const edges = [];
     for (const [fromFile, calls] of fileCalls) {
       if (calls.has(symbol)) {
-        const from = path.basename(fromFile);
+        const from = fileNodeId(fromFile);
         nodes.push({ id: from, kind: 'file' });
         edges.push({ from, to: symbol });
       }

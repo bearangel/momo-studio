@@ -65,6 +65,15 @@ describe('codegraph 工具面', () => {
     await expect(t.execute('explore', { symbol: 'ghost' })).rejects.toThrow(/未收录/);
   });
 
+  it('explore：嵌套目录文件的路径含目录前缀（真实 LLM 轮缺陷——basename 抹掉 src/ 前缀致 agent 读文件失败）', async () => {
+    fs.writeFileSync(path.join(root, 'a.ts'), 'export function alpha() {}');
+    fs.mkdirSync(path.join(root, 'src', 'deep'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'src', 'deep', 'leaf.ts'), 'import { alpha } from "../a.ts";\nexport function leafTwice() { return alpha(); }\n');
+    const t = createExplore(mkCtx({ workspaceRoot: root, indexCommand: '' }));
+    const out = (await t.execute('explore', { symbol: 'alpha' })) as string;
+    expect(out).toContain(path.join('src', 'deep', 'leaf.ts'));
+  });
+
   it('status：摘要含 root 与非零统计（C1 回归锁——零值输出=诊断面说谎）', async () => {
     fs.writeFileSync(path.join(root, 'a.ts'), 'export function alpha() {}');
     const t = createStatus(mkCtx({ workspaceRoot: root, indexCommand: '' }));
