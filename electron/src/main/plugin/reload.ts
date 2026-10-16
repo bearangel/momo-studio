@@ -18,6 +18,7 @@ import { startPluginService, stopPluginService } from './service-manager';
 import { getPluginBus } from './bus-instance';
 import { resolvePluginRoot } from './assembly';
 import { parseManifest, validateManifest } from './manifest';
+import { validatePanelsAtRoot, notifyPanelsChanged } from './panel-sync';
 import { getDb } from '../storage/db';
 import type { PluginRecord } from './types';
 
@@ -30,6 +31,12 @@ export async function reloadPlugin(id: string): Promise<PluginRecord> {
 
   const manifest = parseManifest(fs.readFileSync(path.join(root, 'momo-plugin.json'), 'utf-8'));
   validateManifest(manifest, root);
+  // P4：面板契约重载校验——失败仅面板下线 + warn，不炸重载（D2 裁定）
+  try {
+    validatePanelsAtRoot(root, manifest, id);
+  } catch (err) {
+    logger.warn('reload：面板契约校验失败（面板下线）', { pluginId: id, error: String(err) });
+  }
   const refreshed: PluginRecord = { ...rec, version: manifest.version, manifestJson: JSON.stringify(manifest), state: 'active' };
   upsertPlugin(refreshed);
 
@@ -67,6 +74,7 @@ export async function reloadPlugin(id: string): Promise<PluginRecord> {
   }
 
   await rebuildAffectedRuntimes(id);
+  notifyPanelsChanged();
   return refreshed;
 }
 

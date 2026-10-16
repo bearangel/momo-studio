@@ -17,6 +17,7 @@ import {
   resolvePluginDataDir,
 } from '../paths';
 import { parseManifest, validateManifest } from './manifest';
+import { validatePanelsAtRoot, notifyPanelsChanged } from './panel-sync';
 import { upsertPlugin, getPlugin, removePluginRecord } from './registry';
 import { registerPluginAgents, removePluginAgents } from './agent-sync';
 import { syncPluginHooks, removePluginHooks } from './hook-sync';
@@ -115,6 +116,7 @@ export async function installPluginZip(data: Buffer, currentAppVersion: string):
       fs.writeFileSync(abs, buf);
     }
     validateManifest(manifest, staging);
+    validatePanelsAtRoot(staging, manifest, manifest.id);
 
     fs.mkdirSync(path.dirname(target), { recursive: true });
     if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
@@ -168,6 +170,7 @@ export function installPluginDevDir(dir: string, currentAppVersion: string): Plu
   const manifest = parseManifest(fs.readFileSync(manifestPath, 'utf-8'));
   assertMinAppVersion(manifest.minAppVersion, currentAppVersion);
   validateManifest(manifest, abs);
+  validatePanelsAtRoot(abs, manifest, manifest.id);
   const rec: PluginRecord = {
     id: manifest.id,
     version: manifest.version,
@@ -180,6 +183,7 @@ export function installPluginDevDir(dir: string, currentAppVersion: string): Plu
   upsertPlugin(rec);
   activateDeclarativeComponents(rec);
   emitPluginEvent('resourceInstalled', { type: 'plugin', id: rec.id });
+  notifyPanelsChanged();
   return rec;
 }
 
@@ -241,6 +245,7 @@ export function uninstallPlugin(id: string, keepData: boolean): void {
   }
   removePluginRecord(id);
   emitPluginEvent('resourceRemoved', { type: 'plugin', id });
+  notifyPanelsChanged();
   if (rec.source === 'zip') {
     fs.rmSync(path.join(resolvePluginsDir(), 'installed', id), { recursive: true, force: true });
   }
