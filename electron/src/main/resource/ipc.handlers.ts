@@ -11,6 +11,7 @@
 //   - resource:scanGitRepoSkills / resource:importGitRepoSkills  Git 仓库
 //     skill 导入两通道（P2.6 spec 2026-09-24 §4——scan 下载+解析落 tmp 返回
 //     importId+清单；import 一次性消费返回 imported/failures 逐条结果）
+import { emitPluginEvent } from '../plugin/event-sources';
 //   - resource:registryProviders / resource:registryList  网络注册表（P2 双轨 hub，
 //     spec 2026-09-22 §4.1——renderer 经此二通道消费 hub，不直连外网）
 //   - resource:installSmitheryRemote  smithery needsConfig 二段安装（P2.1 Task 3）
@@ -162,7 +163,7 @@ export function registerResourceHandlers(): void {
   // createCustomDef 等价路径 / mcp 走 registerMcpDefinition 幂等覆盖）。
   // hub：smithery 详情 deploymentUrl 直连（两态返回——needsConfig 见
   // installSmitheryEntry；renderer types.d.ts 的 SmitheryInstallResult 有镜像）。
-  ipcMain.handle('resource:install', async (_evt, id: string) => {
+  const __resourceInstall = async (_evt: unknown, id: string): Promise<unknown> => {
     const item = await resolveResourceById(id);
     if (!item) {
       // hub（smithery）未安装条目不在 library——library 只映射已装行。
@@ -212,6 +213,11 @@ export function registerResourceHandlers(): void {
       throw new Error(`marketplace catalog 中未找到 slug=${item.slug}`);
     }
     return installPackage(catalogItem);
+  };
+  ipcMain.handle('resource:install', async (evt: unknown, id: string): Promise<unknown> => {
+    const __r = await __resourceInstall(evt, id);
+    emitPluginEvent('resourceInstalled', { id });
+    return __r;
   });
 
   // resource:installSmitheryRemote — smithery needsConfig 二段安装（P2.1 Task 3）。
@@ -242,7 +248,7 @@ export function registerResourceHandlers(): void {
   //   - custom + skill → deleteCustomSkill(item.slug)（按 skills 目录名查删）
   //   - custom + agent → deleteDefinition(item.slug)（按 agent_definitions.slug 查删）
   //   - smithery       → uninstallHubMcp（mcp 行 + installed_packages 记账同删）
-  ipcMain.handle('resource:delete', async (_evt, id: string) => {
+  const __resourceDelete = async (_evt: unknown, id: string): Promise<unknown> => {
     const item = await resolveResourceById(id);
     if (!item) throw new Error(`资源 ${id} 不存在`);
     if (!item.removable) {
@@ -298,6 +304,11 @@ export function registerResourceHandlers(): void {
       default:
         throw new Error(`source=${item.source} 不支持 delete 操作`);
     }
+  };
+  ipcMain.handle('resource:delete', async (evt: unknown, id: string): Promise<unknown> => {
+    const __d = await __resourceDelete(evt, id);
+    emitPluginEvent('resourceRemoved', { id });
+    return __d;
   });
 
   // resource:registerMcp — 注册自定义 MCP 并返回其 ResourceItem。

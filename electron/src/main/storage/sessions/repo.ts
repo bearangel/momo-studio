@@ -6,6 +6,7 @@
 // （FK → workspace_agent_members）+ is_leader（快照记 leader，接待判定依据，spec §3.3）。
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../db';
+import { emitPluginEvent } from '../../plugin/event-sources';
 import { clearSessionGrants } from '../../sandbox/write-grant';
 
 export interface SessionRow {
@@ -58,6 +59,7 @@ export function insertSession(input: {
     `INSERT INTO sessions (id, workspace_id, title, title_auto, kind, settings_json, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, NULL, ?, ?)`,
   ).run(id, input.workspaceId, input.title, input.titleAuto ? 1 : 0, input.kind ?? 'chat', now, now);
+  emitPluginEvent('sessionStarted', { id, workspaceId: input.workspaceId, title: input.title });
   return getSession(id)!;
 }
 
@@ -95,6 +97,7 @@ export function deleteSession(id: string): void {
   // 会话授权随会话清理（spec 2026-10-03 §4 生命周期）——write-grant 只依赖
   // storage/db，import 方向无环
   clearSessionGrants(id);
+  emitPluginEvent('sessionEnded', { id });
 }
 
 /** 消息写入路径调用：刷新 last_message_at（排序键） */

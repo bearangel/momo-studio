@@ -15,6 +15,7 @@
 //   - updateTask 实现为「读全行 → 合并 patch → 全字段 UPDATE」——任务字段数适中（25 个），
 //     全字段写一次 SQL 比动态拼 SET 子句可读性更高、也无 SQL 注入面。
 import { getDb } from '../db';
+import { emitPluginEvent } from '../../plugin/event-sources';
 import {
   assertTransition,
   type TaskStatus,
@@ -231,6 +232,7 @@ export function insertTask(
     input.pinnedAt ?? null,
     input.archivedAt ?? null,
   );
+  emitPluginEvent('taskCreated', { id, workspaceId: input.workspaceId, title: input.title, status });
   return getTask(id)!;
 }
 
@@ -315,6 +317,15 @@ export function setTaskPinned(id: string, pinned: boolean): TaskRow {
  *
  * 非法转换抛 Error（含 from/to 信息）。返回更新后的 TaskRow。
  */
+
+/** 终态映射（completed/failed/cancelled → taskCompleted，其余不重复发） */
+function taskCompletedStatus(to: string): PluginHookEventLite {
+  return to === 'completed' || to === 'failed' || to === 'cancelled'
+    ? 'taskCompleted'
+    : 'taskStatusChanged';
+}
+type PluginHookEventLite = 'taskCompleted' | 'taskStatusChanged';
+
 export function transitionTaskStatus(
   id: string,
   to: TaskStatus,
@@ -324,6 +335,8 @@ export function transitionTaskStatus(
   if (!current) throw new Error(`task ${id} 不存在`);
   assertTransition(current.status, to);
   updateTask(id, { ...extraPatch, status: to });
+  emitPluginEvent('taskStatusChanged', { id, status: to });
+  emitPluginEvent(taskCompletedStatus(to), { id, status: to });
   return getTask(id)!;
 }
 

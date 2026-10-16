@@ -5,6 +5,7 @@
 // 本地 sessions 表内创建）。
 // v2（Task 11）：无登录概念——单用户本地应用，owner 身份是结构常量 'owner'。
 import { ipcMain, shell } from 'electron';
+import { emitPluginEvent } from '../plugin/event-sources';
 import { logger } from '../logger';
 import {
   createWorkspace,
@@ -40,7 +41,9 @@ export interface WorkspaceIpcOpts {
 export function registerWorkspaceHandlers(opts: WorkspaceIpcOpts = {}): void {
   ipcMain.handle('workspace:create', async (_evt, input: CreateWorkspaceInput) => {
     // v2（Task 11）：单用户本地应用——owner 身份为结构常量（原从 Matrix 登录会话读取）
-    return createWorkspace(input, 'owner');
+    const ws = await createWorkspace(input, 'owner');
+    emitPluginEvent('workspaceOpened', { workspaceId: ws.id });
+    return ws;
   });
 
   ipcMain.handle('workspace:list', async () => {
@@ -53,6 +56,7 @@ export function registerWorkspaceHandlers(opts: WorkspaceIpcOpts = {}): void {
 
   ipcMain.handle('workspace:delete', async (_evt, id: string) => {
     deleteWorkspace(id);
+    emitPluginEvent('workspaceClosed', { workspaceId: id });
     return;
   });
 
@@ -78,6 +82,7 @@ export function registerWorkspaceHandlers(opts: WorkspaceIpcOpts = {}): void {
     const ws = getWorkspace(id);
     if (!ws) throw new Error(`Workspace 不存在: ${id}`);
     opts.onWorkspaceSwitched?.(ws.id, ws.directoryPath);
+    emitPluginEvent('workspaceOpened', { workspaceId: ws.id });
     return { ok: true };
   });
 
