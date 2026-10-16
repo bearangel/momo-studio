@@ -126,3 +126,26 @@ describe('C3：事件源真实接线', () => {
 });
 
 import { vi } from 'vitest';
+
+
+describe('C1 修复锁：boot 预热敏感缓存', () => {
+  it('reactivatePluginsOnBoot 后 sensitiveOverlaySync 含 keytar 值（config schema 声明时）', async () => {
+    const { sensitiveOverlaySync } = await import('../../src/main/plugin/config-store');
+    const { setKeychainImpl } = await import('../../src/main/storage/keychain');
+    const vault = new Map<string, string>([['plugin.cg.config.apiToken', 'sk-boot']]);
+    setKeychainImpl({
+      setSecret: async (k, v) => void vault.set(k, v),
+      getSecret: async (k) => vault.get(k) ?? null,
+      deleteSecret: async (k) => void vault.delete(k),
+    });
+    const rec = mkInstalledRecord('cg');
+    rec.manifestJson = JSON.stringify({
+      id: 'cg', name: 'cg', version: '0.1.0', description: '',
+      components: { hooks: './hooks/hooks.json' },
+      config: { type: 'object', properties: { apiToken: { type: 'string', sensitive: true } }, required: [] },
+    });
+    upsertPlugin(rec);
+    await reactivatePluginsOnBoot();
+    expect(sensitiveOverlaySync('cg')).toEqual({ apiToken: 'sk-boot' });
+  });
+});

@@ -59,9 +59,9 @@ interface PluginConfigSectionProps {
 }
 
 function PluginConfigSection({ pluginId, pluginName }: PluginConfigSectionProps) {
-  const [view, setView] = useState<PluginConfigView | 'loading' | 'none'>('loading');
+  const [view, setView] = useState<PluginConfigView | 'loading' | 'none' | 'error'>('loading');
   const viewResolved: PluginConfigView =
-    view === 'loading' || view === 'none'
+    view === 'loading' || view === 'none' || view === 'error'
       ? { schema: { properties: {}, required: [] }, values: {}, sensitiveConfigured: {} }
       : view;
   const [form, setForm] = useState<Record<string, string | number | boolean>>({});
@@ -80,7 +80,8 @@ function PluginConfigSection({ pluginId, pluginName }: PluginConfigSectionProps)
         if (v) setForm(v.values as Record<string, string | number | boolean>);
       })
       .catch(() => {
-        if (alive) setView('none'); // 读取失败按无配置处理（分区级 loadError 已红字）
+        // 读取失败与「未声明」区分：坏 schema 等故障显式空态文案（I3）
+        if (alive) setView('error');
       });
     return () => {
       alive = false;
@@ -134,7 +135,9 @@ function PluginConfigSection({ pluginId, pluginName }: PluginConfigSectionProps)
         <span className="text-[13px] font-medium text-primary">{pluginName}</span>
         <span className="font-mono text-[11px] text-tertiary">{pluginId}</span>
       </div>
-      {entries.length === 0 ? (
+      {view === 'error' ? (
+        <div className="px-4 py-3.5 text-xs text-status-error">配置读取失败（schema 可能越界——请联系插件作者）</div>
+      ) : entries.length === 0 ? (
         <div className="flex items-center gap-2 px-4 py-3.5 text-xs text-tertiary">
           <Puzzle size={14} strokeWidth={1.75} aria-hidden />
           此插件未声明配置项

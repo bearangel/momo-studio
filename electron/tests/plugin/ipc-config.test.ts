@@ -49,6 +49,17 @@ vi.mock('../../src/main/plugin/panel-sync', () => panelFns);
 
 import { ipcMain } from 'electron';
 import { registerPluginHandlers } from '../../src/main/plugin/ipc.handlers';
+import { setKeychainImpl } from '../../src/main/storage/keychain';
+import { resetPluginConfigCacheForTest } from '../../src/main/plugin/config-store';
+
+// keychain 隔离：真机冒烟可能在本机真实钥匙串留有同名键（一次性假值）——
+// 不 mock 会串扰 sensitiveConfigured 断言（内存 vault 保真 set/get/delete 语义）
+const ipcVault = new Map<string, string>();
+setKeychainImpl({
+  setSecret: async (k, v) => void ipcVault.set(k, v),
+  getSecret: async (k) => ipcVault.get(k) ?? null,
+  deleteSecret: async (k) => void ipcVault.delete(k),
+});
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-pipc-'));
 
@@ -87,6 +98,7 @@ const CG_REC = {
 beforeEach(() => {
   fs.mkdirSync(tmpRoot, { recursive: true });
   process.env.AP_USER_DATA_DIR = tmpRoot;
+  resetPluginConfigCacheForTest();
   vi.clearAllMocks();
   appGetVersion.mockReturnValue('2.1.0');
   panelFns.listPluginPanels.mockReturnValue([]);
@@ -127,11 +139,11 @@ describe('P4 通道注册', () => {
     expect(out).toEqual({ ok: 1 });
   });
 
-  it('getConfig：无 config 声明 → null；插件不存在 → throw', () => {
+  it('getConfig：无 config 声明 → null；插件不存在 → throw', async () => {
     registryFns.getPlugin.mockReturnValueOnce({ ...CG_REC, manifestJson: JSON.stringify({ id: 'cg', name: 'x', version: '0.4.0', description: '', components: {} }) });
-    expect(handlerOf('plugin:getConfig')(null, 'cg')).toBeNull();
+    expect(await handlerOf('plugin:getConfig')(null, 'cg')).toBeNull();
     registryFns.getPlugin.mockReturnValueOnce(null);
-    expect(() => handlerOf('plugin:getConfig')(null, 'ghost')).toThrow('插件不存在');
+    await expect(handlerOf('plugin:getConfig')(null, 'ghost')).rejects.toThrow('插件不存在');
   });
 
   it('getConfig：敏感只出在场布尔（明文不外泄）', async () => {

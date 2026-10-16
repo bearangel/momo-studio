@@ -16,6 +16,7 @@ import {
   normalizeConfigSchema,
   writePluginConfig,
   getPluginConfigView,
+  warmPluginConfigCache,
   type NormalizedConfigSchema,
 } from './config-store';
 import { syncPluginMcps } from './mcp-sync';
@@ -139,11 +140,13 @@ export function registerPluginHandlers(): void {
     return normalizeConfigSchema(manifest.config);
   }
 
-  ipcMain.handle('plugin:getConfig', (_evt, pluginId: string) => {
+  ipcMain.handle('plugin:getConfig', async (_evt, pluginId: string) => {
     const rec = getPluginRecord(pluginId);
     if (!rec) throw new Error(`插件不存在: ${pluginId}`);
     const schema = normalizedSchemaOf(rec);
     if (!schema) return null;
+    // C1 修复：先预热敏感缓存（boot 预热被错过时的兜底——在场判定只看缓存）
+    await warmPluginConfigCache(pluginId, schema).catch(() => undefined);
     const view = getPluginConfigView(pluginId, schema);
     return {
       schema,

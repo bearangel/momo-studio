@@ -239,6 +239,11 @@ export function sensitiveOverlaySync(pluginId: string): Record<string, unknown> 
   return { ...(sensitiveCache.get(pluginId) ?? {}) };
 }
 
+/** 卸载清理：清除该插件敏感缓存（keepData=false 时随 keytar 一起删） */
+export function evictPluginConfigCache(pluginId: string): void {
+  sensitiveCache.delete(pluginId);
+}
+
 /** 测试隔离：清空敏感缓存 */
 export function resetPluginConfigCacheForTest(): void {
   sensitiveCache.clear();

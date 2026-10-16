@@ -163,3 +163,24 @@ describe('同步缓存 overlay（pluginCtx.getConfig 消费面）', () => {
     expect(await resolvePluginConfig('cg', SCHEMA_N)).toEqual({ indexCommand: 'x', apiToken: 'sk-2' });
   });
 });
+
+
+describe('C1 修复锁：冷缓存启动路径（不经 writePluginConfig 预热）', () => {
+  it('warmPluginConfigCache 后敏感 overlay 同步可见（boot 链语义）', async () => {
+    // 直播盘上 config.json + keytar（模拟「上次会话保存过、本会话刚启动」）
+    fs.mkdirSync(resolvePluginDataDir('cg'), { recursive: true });
+    fs.writeFileSync(dataJson('cg'), JSON.stringify({ indexCommand: 'x' }));
+    vault.set(sensitiveRef('cg', 'apiToken'), 'sk-cold');
+    await warmPluginConfigCache('cg', normalizeConfigSchema(SCHEMA));
+    const overlay = (await import('../../src/main/plugin/config-store')).sensitiveOverlaySync('cg');
+    expect(overlay).toEqual({ apiToken: 'sk-cold' });
+  });
+
+  it('evictPluginConfigCache 清除后 overlay 为空（卸载清理语义）', async () => {
+    await writePluginConfig('cg', SCHEMA_N, { indexCommand: 'x', apiToken: 'sk-1' });
+    const cs = await import('../../src/main/plugin/config-store');
+    expect(cs.sensitiveOverlaySync('cg')).toEqual({ apiToken: 'sk-1' });
+    cs.evictPluginConfigCache('cg');
+    expect(cs.sensitiveOverlaySync('cg')).toEqual({});
+  });
+});

@@ -18,6 +18,8 @@ import {
 } from '../paths';
 import { parseManifest, validateManifest } from './manifest';
 import { validatePanelsAtRoot, notifyPanelsChanged } from './panel-sync';
+import { normalizeConfigSchema, sensitiveRef, evictPluginConfigCache } from './config-store';
+import { deleteSecret } from '../storage/keychain';
 import { upsertPlugin, getPlugin, removePluginRecord } from './registry';
 import { registerPluginAgents, removePluginAgents } from './agent-sync';
 import { syncPluginHooks, removePluginHooks } from './hook-sync';
@@ -117,6 +119,7 @@ export async function installPluginZip(data: Buffer, currentAppVersion: string):
     }
     validateManifest(manifest, staging);
     validatePanelsAtRoot(staging, manifest, manifest.id);
+    if (manifest.config) normalizeConfigSchema(manifest.config);
 
     fs.mkdirSync(path.dirname(target), { recursive: true });
     if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
@@ -150,6 +153,7 @@ export async function installPluginZip(data: Buffer, currentAppVersion: string):
     upsertPlugin(rec);
     activateDeclarativeComponents(rec);
     emitPluginEvent('resourceInstalled', { type: 'plugin', id: rec.id });
+    notifyPanelsChanged(); // I1 修复：zip 是 marketplace 主通道，与 dev 链对齐
     return rec;
   } catch (err) {
     fs.rmSync(staging, { recursive: true, force: true });
@@ -171,6 +175,7 @@ export function installPluginDevDir(dir: string, currentAppVersion: string): Plu
   assertMinAppVersion(manifest.minAppVersion, currentAppVersion);
   validateManifest(manifest, abs);
   validatePanelsAtRoot(abs, manifest, manifest.id);
+  if (manifest.config) normalizeConfigSchema(manifest.config);
   const rec: PluginRecord = {
     id: manifest.id,
     version: manifest.version,
@@ -251,5 +256,20 @@ export function uninstallPlugin(id: string, keepData: boolean): void {
   }
   if (!keepData) {
     fs.rmSync(resolvePluginDataDir(id), { recursive: true, force: true });
+    // I2 修复：keytar 敏感键随数据一起删（「删除数据」语义对密钥成立）——
+    // 否则同 id 重装（marketplace 无签名，id 可冒用）经 sensitiveOverlaySync
+    // 零用户操作继承前任凭据，跨信任边界外送
+    try {
+      const manifest = JSON.parse(rec.manifestJson) as {
+        config?: { properties?: Record<string, { sensitive?: boolean }> };
+      };
+      const decls = Object.entries(manifest.config?.properties ?? {}).filter(([, d]) => d?.sensitive);
+      for (const [key] of decls) {
+        void deleteSecret(sensitiveRef(id, key)).catch(() => undefined);
+      }
+    } catch {
+      // manifest 损坏——按无敏感键处理
+    }
   }
+  evictPluginConfigCache(id); // 缓存恒清（keepData=true 时下次激活边界重预热）
 }

@@ -8,11 +8,22 @@ import { listPlugins } from './registry';
 import { syncPluginHooks } from './hook-sync';
 import { startPluginService } from './service-manager';
 import { getPluginBus } from './bus-instance';
+import { warmPluginConfigCache, normalizeConfigSchema } from './config-store';
 import { logger } from '../logger';
 
 export async function reactivatePluginsOnBoot(): Promise<void> {
   const bus = getPluginBus();
   for (const rec of listPlugins()) {
+    // C1 修复：敏感缓存预热（keytar 异步性在激活边界吸收——同步消费者
+    // pluginCtx.getConfig / service ctx / getConfig IPC 依赖此缓存）
+    try {
+      const manifest = JSON.parse(rec.manifestJson) as { config?: unknown };
+      if (manifest.config) {
+        void warmPluginConfigCache(rec.id, normalizeConfigSchema(manifest.config)).catch(() => undefined);
+      }
+    } catch {
+      // manifest 损坏或 schema 越界——激活链已各自容错，预热跳过
+    }
     try {
       syncPluginHooks(rec, bus);
     } catch (err) {
