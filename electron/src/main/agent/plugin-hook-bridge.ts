@@ -44,7 +44,10 @@ function parseDecision(raw: unknown): HookDecision | null {
 }
 
 export function requestPreToolUse(payload: PreToolUseRequest): Promise<HookDecision | null> {
-  const send = (process as { send?: (m: unknown) => void }).send;
+  // 铁律：process.send 必须以方法调用形式调用（const send = process.send 再调用
+  // 会让 this=undefined → Node 读 this.connected 抛错——真实子进程炸、mock 桩不炸，
+  // §8.4 真机三轮复现的 P3 潜伏缺陷）
+  const send = (process as { send?: (m: unknown) => void }).send?.bind(process);
   if (typeof send !== 'function') return Promise.resolve(null);
   return new Promise((resolve) => {
     const id = randomUUID();
@@ -73,7 +76,7 @@ export function requestPreToolUse(payload: PreToolUseRequest): Promise<HookDecis
 }
 
 export function notifyPostToolUse(notice: PostToolUseNotice): void {
-  const send = (process as { send?: (m: unknown) => void }).send;
+  const send = (process as { send?: (m: unknown) => void }).send?.bind(process);
   send?.({ type: 'plugin:postToolUse', ...notice });
 }
 
@@ -84,7 +87,7 @@ export function requestPluginCallService(
   method: string,
   params: unknown,
 ): Promise<unknown> {
-  const send = (process as { send?: (m: unknown) => void }).send;
+  const send = (process as { send?: (m: unknown) => void }).send?.bind(process);
   if (typeof send !== 'function') {
     return Promise.reject(new Error(`插件 ${pluginId} 的 callService 桥不可用（无 IPC 通道）`));
   }

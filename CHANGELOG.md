@@ -6,6 +6,24 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 插件系统 P5：codegraph 插件本体 + §8 验收锚点闭环
+
+平台扩展机制第五期收官（2026-10-16，spec §2.5/§8 / 计划 `docs/plans/2026-10-16-plugin-system-p5.md`）。**验收锚点交付**：codegraph 插件（五组件真实实现，仓库内 `plugins/codegraph`）注册进真实 App，§8 七场景端到端：6 pass + 1 partial（执行层环境故障待定位，调用链/审计归因真机铁证）。验收当场抓修 4 缺陷（setConfig service 拉起语义 / indexer 二次方炸弹 97s→0.8s / process.send 解构病三处 / 工具错误带栈）。版本 `2.1.0-alpha.20`。
+
+### codegraph 插件（plugins/codegraph，自食本仓 1354 文件/4084 符号/12039 边）
+- **索引引擎**（lib/indexer.js，单遍调用点提取 O(文本长度)）：符号四类提取（function/class/箭头/方法）+ 文件级调用边 + blast radius 上游传递闭包 + mtime 增量 + 上限守卫（5000 文件/1MB/忽略 node_modules·dist·.git·二进制）；「regex 近似」语义全程明示
+- **工具**：`plugin:codegraph/explore`（定义片段+直接调用方+blast）+ `plugin:codegraph/status`（索引摘要）——child 侧按需增量扫描（双实例语义）
+- **service**：workspaceRoot/config 驱动；目录树 watcher（800ms 防抖）+ reindex 队列消费（postToolUse hook 生产→dataDir 队列文件→service 消费——插件内闭环零宿主改动）；graph/stats/explore/reindex RPC；stop 关 watcher（§8.6）
+- **面板**：查询框 + SVG 邻域图（中心符号环形布局）+ 统计行 + taskCompleted 事件防抖刷新（§8.5）
+- **agent/skill**：code-navigator（systemPrompt 强制「先 explore 再读源码」工作流 + 预配两工具）+ codegraph-usage（图谱 vs grep 选择指引）
+- 测试：indexer 7 / tools 5 / service 6（含注册走查与 §8.5 全链）+ .d.ts 类型面
+
+### §8 验收修复轮
+- **F1** setConfig 无条件 stop→start service（注册期缺配置的插件补配置后复活——§8.2 真机发现）
+- **F2** indexer 单遍重写：全仓全量 97 秒（同步阻塞主进程，boot 冻结+SIGKILL 事故期确证）→ **0.8 秒**
+- **F3** plugin-hook-bridge 三处 `process.send` 解构病（真实子进程 `this.connected` 抛错；P3 潜伏、mock 不炸）→ `?.bind(process)` + this 语义回归锁
+- **F4** 工具错误 output 带栈前 3 帧（`[at]`——可观测性补课）
+
 ## [未发布] — 插件系统 P4：面板协议 + 设置页 config 表单
 
 平台扩展机制第四期（2026-10-16，spec `docs/specs/2026-10-15-plugin-system-design.md` §6 / 计划 `docs/plans/2026-10-16-plugin-system-p4.md`）。「看得见」：iframe 沙箱面板挂侧栏、五消息协议双向通、config 由宿主按 JSON Schema 自动渲染表单（敏感值进系统钥匙串，`${config.KEY}` 注入 MCP args/env）。真实 App 隔离冒烟全链通过（面板握手/RPC/表单落盘/MCP 注入真值/禁用即消失），当场抓修 4 个真缺陷（CSP frame-src / 沙箱 origin='null' 语义 / 资源 id≠插件 id / setConfig 回包缺 schema）。含 P3 审查 minor 清扫：workspaceOpened reason 字段、终态双发文档化、hook_calls 50k 行配额。版本 `2.1.0-alpha.19`。

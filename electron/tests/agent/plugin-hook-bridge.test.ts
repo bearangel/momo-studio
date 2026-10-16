@@ -101,3 +101,31 @@ describe('notifyPostToolUse', () => {
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+// ── §8.4 真机回归锁（P5）：process.send 解构调用病 ──
+// 真实 Node 的 process.send 读 this.connected——解构后调用 this=undefined 即抛
+// 「Cannot read properties of undefined (reading 'connected')」。锁 bind(process) 语义。
+describe('process.send 绑定语义（§8.4 真机回归）', () => {
+  it('send 以 process 为 this 调用（bind 后不丢 this）', async () => {
+    const calls: Array<{ thisIsProcess: boolean; msg: unknown }> = [];
+    const orig = process.send;
+    const sentinel = { tag: 'P5-THIS-CHECK' };
+    (process as { send?: unknown }).send = function (this: unknown, msg: unknown) {
+      calls.push({ thisIsProcess: this === process, msg });
+      return true;
+    } as never;
+    try {
+      const { notifyPostToolUse } = await import('../../src/main/agent/plugin-hook-bridge');
+      notifyPostToolUse({ workspaceId: 'ws1', toolName: 't', args: {}, success: true, durationMs: 1 });
+      // 直接调用形式（无 bind）在真桩下：this === undefined → 断言能区分
+      const direct = (process as unknown as { send: (m: unknown) => void }).send;
+      void direct; // 仅取引用不调用——避免真解构调用污染
+      expect(calls.length).toBeGreaterThanOrEqual(1);
+      expect(calls.at(-1)?.thisIsProcess).toBe(true);
+    } finally {
+      if (orig === undefined) delete (process as { send?: unknown }).send;
+      else (process as { send?: unknown }).send = orig;
+      void sentinel;
+    }
+  });
+});

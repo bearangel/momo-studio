@@ -905,7 +905,13 @@ export async function runChatLoop(
     try {
       summary = await requestCompaction(roomId, serializeMessages(head), coveredUntil);
     } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      return {
+        ok: false,
+        error:
+          err instanceof Error
+            ? `${err.message}\n[at] ${String(err.stack ?? '').split('\n').slice(1, 4).join(' <= ')}`
+            : String(err),
+      };
     }
 
     // 双态判定（沿 turn-mandate spec §5.1）：仅顶层 chat 路径 mandate 门控；

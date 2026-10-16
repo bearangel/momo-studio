@@ -145,7 +145,7 @@ describe('T1 注册走查：真插件过安装链全校验（manifest/config/pan
     expect(fs.existsSync(path.join(repoPlugin, 'momo-plugin.json'))).toBe(true);
     const rec = installPluginDevDir(repoPlugin, '2.1.0');
     expect(rec.id).toBe('codegraph');
-    expect(rec.version).toBe('0.1.0');
+    expect(rec.version).toBe('0.1.1'); // §8.7 重载验证版
     // 面板可列出（panel.json 校验过）
     getDb()
       .prepare(`INSERT OR IGNORE INTO workspaces (id, name, directory_path, owner_id) VALUES ('ws1', 'T', '/x', '@o')`)
