@@ -35,7 +35,7 @@ function setup(overrides: Partial<PanelHostHandlers> = {}): void {
   };
   ch = new PanelChannel({
     pluginId: PLUGIN_ID,
-    iframeWindow: () => fakeIframe as unknown as MessageEventSource,
+    iframeWindow: () => fakeIframe,
     handlers,
   });
   d = (data: unknown, opts: { origin?: string; source?: unknown } = {}) => {

@@ -73,9 +73,14 @@ interface InboundMsg {
   [key: string]: unknown;
 }
 
+/** iframe contentWindow 的结构性子集（DOM Window 结构兼容；测试桩同形） */
+export interface PanelFrameWindow {
+  postMessage(message: unknown, targetOrigin: string): void;
+}
+
 export interface PanelChannelOptions {
   pluginId: string;
-  iframeWindow: () => MessageEventSource | null;
+  iframeWindow: () => PanelFrameWindow | null;
   handlers: PanelHostHandlers;
   /** 时间源（测试注入；缺省 Date.now） */
   now?: () => number;
@@ -84,7 +89,7 @@ export interface PanelChannelOptions {
 export class PanelChannel {
   private readonly pluginId: string;
   private readonly origin: string;
-  private readonly getIframeWindow: () => MessageEventSource | null;
+  private readonly getIframeWindow: () => PanelFrameWindow | null;
   private readonly handlers: PanelHostHandlers;
   private readonly now: () => number;
 
@@ -135,9 +140,10 @@ export class PanelChannel {
     this.onMessage(ev);
   }
 
-  /** host→panel 推事件（仅已订阅者收到） */
-  pushEvent(event: string, payload: unknown): void {
-    if (this.disconnected || !this.subscribed.has(event)) return;
+  /** host→panel 推事件（仅已订阅者收到；force 用于宿主主动通知，如主题切换） */
+  pushEvent(event: string, payload: unknown, opts?: { force?: boolean }): void {
+    if (this.disconnected) return;
+    if (!opts?.force && !this.subscribed.has(event)) return;
     this.post({ type: 'event', event, payload });
   }
 

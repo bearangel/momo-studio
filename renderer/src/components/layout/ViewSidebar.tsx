@@ -16,6 +16,8 @@ import { SessionSidebarHeader } from '../im/SessionSidebarHeader';
 import { FileTree } from '../files/FileTree';
 import { TaskSidebarPanel } from '../task-board/TaskSidebarPanel';
 import { Sidebar } from './Sidebar';
+import { PanelHost } from '../plugins/PanelHost';
+import { usePluginPanelsStore, panelKeyOf } from '../../stores/plugin-panels.store';
 
 /** 有侧边栏的三个视图的文案（VIEW_META 同时承担「哪些视图有侧边栏」判定） */
 const VIEW_LABELS: Partial<Record<string, string>> = {
@@ -63,6 +65,27 @@ export function ViewSidebar() {
     },
     [workspace, openFile],
   );
+
+  // 面板模式（P4）：activeKey 非空 → 侧栏槽整体让给 PanelHost（主区不动）
+  const panels = usePluginPanelsStore((s) => s.panels);
+  const activePanelKey = usePluginPanelsStore((s) => s.activeKey);
+  const deactivatePanel = usePluginPanelsStore((s) => s.deactivate);
+  const panelWidth = usePluginPanelsStore((s) => s.width);
+  const setPanelWidth = usePluginPanelsStore((s) => s.setWidth);
+  const activePanel =
+    activePanelKey === null ? null : (panels.find((p) => panelKeyOf(p) === activePanelKey) ?? null);
+  if (activePanel) {
+    return (
+      <Sidebar
+        label={activePanel.title}
+        width={panelWidth}
+        onWidthCommit={setPanelWidth}
+        onCollapse={deactivatePanel}
+      >
+        <PanelHost panel={activePanel} onExit={deactivatePanel} />
+      </Sidebar>
+    );
+  }
 
   const label = VIEW_LABELS[activeView];
   // 无侧边栏视图（agents/marketplace/settings）或收起 → 完全消失

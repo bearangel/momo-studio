@@ -3,10 +3,15 @@
 // 活动栏：主区左侧固定图标列。5 个主项（会话/文件/看板/Agent/资源库）+ 底部设置项；
 // 激活项左侧 3px accent 指示条 + surface-active 选中底。宽度用 inline style。
 // v2.1 P1：emoji 图标全部 lucide 化，样式全 token 化。
+import { useEffect } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { MessageSquare, Folder, SquareKanban, Bot, Library, Settings } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { useUiStore, SIDEBAR_VIEWS, type SidebarViewKey, type ViewKey } from '../../stores/ui.store';
+import { usePluginPanelsStore, panelKeyOf } from '../../stores/plugin-panels.store';
+import { useWorkspaceStore } from '../../stores/workspace.store';
+import { ipc } from '../../ipc/client';
+import { panelIconOf } from '../plugins/panel-icons';
 
 interface ActivityItem {
   key: ViewKey;
@@ -28,6 +33,21 @@ export function ActivityBar() {
   const activeView = useUiStore((s) => s.activeView);
   const setActiveView = useUiStore((s) => s.setActiveView);
   const toggleSidebar = useUiStore((s) => s.toggleSidebar);
+  const panels = usePluginPanelsStore((s) => s.panels);
+  const activePanelKey = usePluginPanelsStore((s) => s.activeKey);
+  const activatePanel = usePluginPanelsStore((s) => s.activate);
+  const deactivatePanel = usePluginPanelsStore((s) => s.deactivate);
+  const refreshPanels = usePluginPanelsStore((s) => s.refresh);
+  const workspace = useWorkspaceStore((s) => s.getActive());
+
+  // 面板清单驱动：初始拉取 + plugin:panelsChanged 推送刷新（安装/卸载/重载/启停）
+  useEffect(() => {
+    if (!workspace) return;
+    void refreshPanels(workspace.id);
+    return ipc.plugin.onPanelsChanged(() => {
+      void refreshPanels(workspace.id);
+    });
+  }, [workspace?.id, refreshPanels]);
 
   // 收起状态下点击「当前侧边栏视图」图标 → 恢复该视图侧边栏（v2.2 恢复入口之三；
   // 收起状态按视图独立，v2.2 优化）；其余情况正常切换视图
@@ -57,6 +77,37 @@ export function ActivityBar() {
           onSelect={handleSelect}
         />
       ))}
+      {panels.length > 0 && <div className="my-1.5 h-px w-5 bg-subtle" role="separator" />}
+      {panels.map((p) => {
+        const key = panelKeyOf(p);
+        const PanelIcon = panelIconOf(p.icon);
+        const active = key === activePanelKey;
+        return (
+          <button
+            key={key}
+            type="button"
+            aria-label={p.title}
+            aria-pressed={active}
+            title={p.title}
+            onClick={() => (active ? deactivatePanel() : activatePanel(key))}
+            className={cn(
+              'relative flex h-[34px] w-full items-center justify-center rounded-lg transition-colors',
+              active
+                ? 'bg-surface-active text-accent-600 dark:text-accent-300'
+                : 'text-tertiary hover:bg-surface-3 hover:text-primary',
+            )}
+          >
+            {active && (
+              <span
+                data-testid="panel-indicator"
+                className="absolute bg-accent-500"
+                style={{ left: 0, top: 8, bottom: 8, width: 3, borderRadius: 2 }}
+              />
+            )}
+            <PanelIcon size={17} strokeWidth={1.75} aria-hidden />
+          </button>
+        );
+      })}
       <div className="flex-1" />
       <ActivityButton
         item={SETTINGS_ITEM}
