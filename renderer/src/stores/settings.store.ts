@@ -14,6 +14,7 @@ export type SettingsCategory =
   | 'language_services'
   | 'audit_log'
   | 'p2p'
+  | 'plugins'
   | 'about';
 
 interface SettingsState {
