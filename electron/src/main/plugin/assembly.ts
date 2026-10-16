@@ -9,6 +9,7 @@ import { listPlugins, isPluginEnabled } from './registry';
 import { resolvePluginInstalledDir, resolvePluginDataDir } from '../paths';
 import type { PluginRecord } from './types';
 import type { PluginToolRef } from '../agent/runtime-config';
+import { readPluginConfigJson, sensitiveOverlaySync } from './config-store';
 
 /** 插件根目录：zip=installed 副本 / dev=源目录；missing 态或 dev 目录消失 → null */
 export function resolvePluginRoot(rec: PluginRecord): string | null {
@@ -45,18 +46,6 @@ function enabledPlugins(workspaceId: string): ResolvedPlugin[] {
   return out;
 }
 
-function readConfig(dataDir: string): Record<string, unknown> {
-  try {
-    const raw = fs.readFileSync(path.join(dataDir, 'config.json'), 'utf-8');
-    const parsed = JSON.parse(raw) as unknown;
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
-}
-
 /** 启用插件的工具装配快照（components.tools 顶层 .js，非递归） */
 export function buildPluginToolRefs(workspaceId: string): PluginToolRef[] {
   return enabledPlugins(workspaceId).flatMap(({ rec, root, manifest }) => {
@@ -75,7 +64,7 @@ export function buildPluginToolRefs(workspaceId: string): PluginToolRef[] {
     }
     const dataDir = resolvePluginDataDir(rec.id);
     return [
-      { pluginId: rec.id, rootDir: root, modulePaths, dataDir, config: readConfig(dataDir) },
+      { pluginId: rec.id, rootDir: root, modulePaths, dataDir, config: { ...readPluginConfigJson(rec.id), ...sensitiveOverlaySync(rec.id) } },
     ];
   });
 }

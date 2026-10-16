@@ -8,23 +8,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { logger } from '../logger';
+import { readPluginConfigJson, sensitiveOverlaySync } from './config-store';
 import { resolvePluginsDir, resolvePluginDataDir } from '../paths';
 import { HookBus, type HookHandler, type PluginHookCtx, type PluginHookEvent, PLUGIN_HOOK_EVENTS } from './hook-bus';
 import type { PluginRecord } from './types';
 
 interface HooksFileShape {
   hooks?: Partial<Record<PluginHookEvent, Array<{ module?: unknown; matcher?: unknown }>>>;
-}
-
-function readConfig(dataDir: string): Record<string, unknown> {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf-8')) as unknown;
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
 }
 
 export function syncPluginHooks(
@@ -61,7 +51,7 @@ export function syncPluginHooks(
 
   const dataDir = resolvePluginDataDir(rec.id);
   const pluginCtx: PluginHookCtx = {
-    getConfig: () => readConfig(dataDir),
+    getConfig: () => ({ ...readPluginConfigJson(rec.id), ...sensitiveOverlaySync(rec.id) }),
     getDataDir: () => dataDir,
     logger: {
       warn: (msg, meta) => logger.warn(`[plugin:${rec.id}] ${msg}`, meta),

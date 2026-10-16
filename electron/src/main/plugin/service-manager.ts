@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { logger } from '../logger';
+import { readPluginConfigJson, sensitiveOverlaySync } from './config-store';
 import { resolvePluginsDir, resolvePluginDataDir } from '../paths';
 import type { PluginRecord } from './types';
 
@@ -29,17 +30,6 @@ export interface PluginServiceInstance {
 }
 
 const running = new Map<string, PluginServiceInstance>();
-
-function readConfig(dataDir: string): Record<string, unknown> {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf-8')) as unknown;
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
-}
 
 /** 启动插件 service（manifest 有 components.service 才动作）。加载或 start() 任一
  * 失败 warn 返回 false（实例不落 running——不半活，spec §5.3） */
@@ -71,7 +61,7 @@ export async function startPluginService(rec: PluginRecord): Promise<boolean> {
     }
     const dataDir = resolvePluginDataDir(rec.id);
     const ctx: PluginServiceCtx = {
-      getConfig: () => readConfig(dataDir),
+      getConfig: () => ({ ...readPluginConfigJson(rec.id), ...sensitiveOverlaySync(rec.id) }),
       getDataDir: () => dataDir,
       logger: {
         warn: (msg, meta) => logger.warn(`[plugin:${rec.id}] ${msg}`, meta),
