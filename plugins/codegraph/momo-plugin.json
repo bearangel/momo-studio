@@ -1,0 +1,26 @@
+{
+  "id": "codegraph",
+  "name": "Codegraph 代码图谱",
+  "version": "0.1.0",
+  "description": "workspace 符号/调用边索引（regex 近似），agent 一查询拿到源码+调用路径+blast radius，面板可视化",
+  "author": { "name": "Momo Studio" },
+  "minAppVersion": "2.1.0",
+  "components": {
+    "tools": "./tools",
+    "service": "./service",
+    "skills": "./skills",
+    "agents": "./agents",
+    "hooks": "./hooks/hooks.json",
+    "panel": "./panel"
+  },
+  "config": {
+    "type": "object",
+    "properties": {
+      "workspaceRoot": { "type": "string", "title": "索引根目录（绝对路径）" },
+      "indexCommand": { "type": "string", "title": "自定义索引命令（可选，留空用内置引擎）" },
+      "maxFiles": { "type": "number", "title": "最大索引文件数" }
+    },
+    "required": ["workspaceRoot"]
+  },
+  "permissions": { "fs": ["read:workspace"], "subprocess": false }
+}

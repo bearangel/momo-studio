@@ -1,0 +1,84 @@
+// electron/tests/plugin/codegraph-tools.test.ts
+//
+// P5 T3：codegraph 工具（explore/status）——返回形状 / 错误路径 / config 融合。
+// 真实 tmpdir + 真实插件模块（child 语义同构：按需增量扫描）。
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+const require_ = createRequire(import.meta.url);
+type Tools = {
+  getDefs(): { name: string; description: string; inputSchema: unknown }[];
+  getCatalog(): { name: string }[];
+  handles(name: string): boolean;
+  execute(name: string, args: unknown): Promise<unknown>;
+};
+const { createTools: createExplore } = require_('../../../plugins/codegraph/tools/explore.js') as {
+  createTools: (ctx: unknown) => Tools;
+};
+const { createTools: createStatus } = require_('../../../plugins/codegraph/tools/status.js') as {
+  createTools: (ctx: unknown) => Tools;
+};
+
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-cgtool-'));
+const root = path.join(tmp, 'ws');
+
+function mkCtx(config: Record<string, unknown> = {}): unknown {
+  return { getConfig: () => config, getDataDir: () => path.join(tmp, 'data') };
+}
+
+beforeEach(() => {
+  fs.mkdirSync(root, { recursive: true });
+});
+afterEach(() => {
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+describe('codegraph 工具面', () => {
+  it('explore.js / status.js 各出一工具（文件名=短名，交叉引用约定）+ handles', () => {
+    const te = createExplore(mkCtx({ workspaceRoot: root }));
+    expect(te.getDefs().map((d) => d.name)).toEqual(['explore']);
+    expect(te.handles('explore')).toBe(true);
+    expect(te.handles('bash')).toBe(false);
+    const ts = createStatus(mkCtx({ workspaceRoot: root }));
+    expect(ts.getDefs().map((d) => d.name)).toEqual(['status']);
+    expect(ts.handles('status')).toBe(true);
+  });
+
+  it('explore：返回定义+调用方+blast（markdown 人类可读，含近似标注）', async () => {
+    fs.writeFileSync(
+      path.join(root, 'a.ts'),
+      'export function alpha() { return 1; }',
+    );
+    fs.writeFileSync(
+      path.join(root, 'b.ts'),
+      'import { alpha } from "./a";\nexport function beta() { return alpha(); }',
+    );
+    const t = createExplore(mkCtx({ workspaceRoot: root }));
+    const out = (await t.execute('explore', { symbol: 'alpha' })) as string;
+    expect(out).toContain('alpha');
+    expect(out).toContain('b.ts');
+    expect(out).toContain('近似'); // regex 近似语义明示（计划 §6 风险裁定）
+  });
+
+  it('explore：未知符号 → 友好错误', async () => {
+    fs.writeFileSync(path.join(root, 'a.ts'), 'export function alpha() {}');
+    const t = createExplore(mkCtx({ workspaceRoot: root }));
+    await expect(t.execute('explore', { symbol: 'ghost' })).rejects.toThrow(/未收录/);
+  });
+
+  it('status：摘要含 root 与统计', async () => {
+    fs.writeFileSync(path.join(root, 'a.ts'), 'export function alpha() {}');
+    const t = createStatus(mkCtx({ workspaceRoot: root, indexCommand: '' }));
+    const out = (await t.execute('status', {})) as string;
+    expect(out).toContain(root);
+    expect(out).toContain('symbols');
+  });
+
+  it('workspaceRoot 未配置 → 明确错误（config required 语义兜底）', async () => {
+    const t = createExplore(mkCtx({}));
+    await expect(t.execute('explore', { symbol: 'x' })).rejects.toThrow(/workspaceRoot/);
+  });
+});

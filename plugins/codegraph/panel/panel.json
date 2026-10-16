@@ -1,0 +1,11 @@
+{
+  "panels": [
+    {
+      "id": "graph",
+      "title": "代码图谱",
+      "icon": "lucide:git-fork",
+      "location": "sidebar",
+      "entry": "./index.html"
+    }
+  ]
+}

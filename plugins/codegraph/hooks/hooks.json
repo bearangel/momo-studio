@@ -1,0 +1,1 @@
+{ "hooks": { "postToolUse": [{ "module": "./reindex.js" }] } }
