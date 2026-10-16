@@ -6,6 +6,7 @@
 // 观察者（wireHookBridgeAudit 一次性接线——每 handler 每插件一条，spec §5.4）。
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
+import { enforceHookCallsQuota, HOOK_CALLS_ENFORCE_INTERVAL } from '../audit/quota';
 import type { HookBus } from './hook-bus';
 import { callPluginService } from './service-manager';
 
@@ -29,6 +30,8 @@ function asArgs(raw: unknown): Record<string, unknown> {
 }
 
 /** 接线 hook_calls 审计（app 启动时调一次；观察者内自捕获异常不拖分发） */
+let hookCallInsertCount = 0;
+
 export function wireHookBridgeAudit(bus: HookBus): void {
   bus.setDispatchObserver((rec) => {
     try {
@@ -45,6 +48,10 @@ export function wireHookBridgeAudit(bus: HookBus): void {
           rec.durationMs,
           rec.success ? 1 : 0,
         );
+      // M3：写入时计数巡检（超 50k 行滚动删除至 95%，hook_calls 无 workspace 维度）
+      if (++hookCallInsertCount % HOOK_CALLS_ENFORCE_INTERVAL === 0) {
+        enforceHookCallsQuota();
+      }
     } catch (err) {
       logger.warn('hook_calls 落库失败（降级）', {
         error: err instanceof Error ? err.message : String(err),

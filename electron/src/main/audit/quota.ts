@@ -109,3 +109,31 @@ export function enforceAuditQuota(workspaceId: string, batchSize: number = DELET
   }
   return deleted;
 }
+
+// ── hook_calls 配额（P4 M3：机器级行数上限——表无 workspace 维度） ──
+
+/** hook_calls 行数上限（每次分发 × 每 handler 一行，高频事件下增长快） */
+export const HOOK_CALLS_MAX_ROWS = 50_000;
+
+/** 写入时触发巡检的间隔（照 AUDIT_ENFORCE_INTERVAL 模式） */
+export const HOOK_CALLS_ENFORCE_INTERVAL = 500;
+
+/** 超限删除至 95%（滞回，防抖动） */
+export function enforceHookCallsQuota(batchSize: number = DELETE_BATCH): number {
+  const db = getDb();
+  const count = (db.prepare(`SELECT COUNT(*) AS n FROM hook_calls`).get() as { n: number }).n;
+  if (count <= HOOK_CALLS_MAX_ROWS) return 0;
+  const target = Math.floor(HOOK_CALLS_MAX_ROWS * HYSTERESIS);
+  const del = db.prepare(
+    `DELETE FROM hook_calls WHERE id IN (SELECT id FROM hook_calls ORDER BY id ASC LIMIT ?)`,
+  );
+  let deleted = 0;
+  let remaining = count;
+  while (remaining > target) {
+    const res = del.run(batchSize);
+    if (res.changes === 0) break;
+    deleted += res.changes;
+    remaining -= res.changes;
+  }
+  return deleted;
+}

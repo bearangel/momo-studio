@@ -42,7 +42,7 @@ export function registerWorkspaceHandlers(opts: WorkspaceIpcOpts = {}): void {
   ipcMain.handle('workspace:create', async (_evt, input: CreateWorkspaceInput) => {
     // v2（Task 11）：单用户本地应用——owner 身份为结构常量（原从 Matrix 登录会话读取）
     const ws = await createWorkspace(input, 'owner');
-    emitPluginEvent('workspaceOpened', { workspaceId: ws.id });
+    emitPluginEvent('workspaceOpened', { workspaceId: ws.id, reason: 'created' });
     return ws;
   });
 
@@ -82,7 +82,9 @@ export function registerWorkspaceHandlers(opts: WorkspaceIpcOpts = {}): void {
     const ws = getWorkspace(id);
     if (!ws) throw new Error(`Workspace 不存在: ${id}`);
     opts.onWorkspaceSwitched?.(ws.id, ws.directoryPath);
-    emitPluginEvent('workspaceOpened', { workspaceId: ws.id });
+    // M1 裁定：v1 事件目录只有 opened/closed——切换复用 opened，payload.reason 区分
+    // （watcher 型插件据此避免把「切换」当「新开」重复初始化）
+    emitPluginEvent('workspaceOpened', { workspaceId: ws.id, reason: 'switched' });
     return { ok: true };
   });
 

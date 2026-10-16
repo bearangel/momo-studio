@@ -10,6 +10,9 @@
 import { logger as mainLogger } from '../logger';
 
 /** spec §5.1 事件目录（15，刻意收窄；messageAppended 高频事件排除） */
+/** 事件目录注释（M2 裁定）：任务终态（completed/failed/cancelled）时
+ * transitionTaskStatus 会**双发** taskStatusChanged + taskCompleted（同 payload，
+ * taskCompleted 是便利别名）——同时订阅两者的插件会收到重复通知，请自行去重。 */
 export const PLUGIN_HOOK_EVENTS = [
   'appReady',
   'workspaceOpened',
