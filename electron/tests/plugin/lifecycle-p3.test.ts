@@ -150,3 +150,15 @@ describe('requestPluginCallService（子进程桥）', () => {
     }
   });
 });
+
+describe('安装/卸载事件（P3 补线）', () => {
+  it('install → resourceInstalled；uninstall → resourceRemoved（经 wire 注入可观测）', async () => {
+    const events: string[] = [];
+    const { wirePluginEventSources } = await import('../../src/main/plugin/event-sources');
+    wirePluginEventSources(getPluginBus(), (e) => events.push(e));
+    installPluginDevDir(mkPlugin('cg'), '2.1.0');
+    uninstallPlugin('cg', true);
+    expect(events).toContain('resourceInstalled');
+    expect(events).toContain('resourceRemoved');
+  });
+});

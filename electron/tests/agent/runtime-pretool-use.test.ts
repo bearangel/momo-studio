@@ -61,6 +61,7 @@ function config(over: Partial<RuntimeConfig> = {}): RuntimeConfig {
     mcpNames: [],
     allowedTools: [],
     deniedTools: [],
+    pluginHooks: true,
     ...over,
   } as RuntimeConfig;
 }

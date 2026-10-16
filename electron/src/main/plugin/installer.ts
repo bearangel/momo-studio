@@ -22,6 +22,7 @@ import { registerPluginAgents, removePluginAgents } from './agent-sync';
 import { syncPluginHooks, removePluginHooks } from './hook-sync';
 import { startPluginService, stopPluginService } from './service-manager';
 import { getPluginBus } from './bus-instance';
+import { emitPluginEvent } from './event-sources';
 import { syncPluginMcps, removePluginMcps } from './mcp-sync';
 import type { PluginRecord } from './types';
 
@@ -146,6 +147,7 @@ export async function installPluginZip(data: Buffer, currentAppVersion: string):
     };
     upsertPlugin(rec);
     activateDeclarativeComponents(rec);
+    emitPluginEvent('resourceInstalled', { type: 'plugin', id: rec.id });
     return rec;
   } catch (err) {
     fs.rmSync(staging, { recursive: true, force: true });
@@ -177,6 +179,7 @@ export function installPluginDevDir(dir: string, currentAppVersion: string): Plu
   };
   upsertPlugin(rec);
   activateDeclarativeComponents(rec);
+  emitPluginEvent('resourceInstalled', { type: 'plugin', id: rec.id });
   return rec;
 }
 
@@ -237,6 +240,7 @@ export function uninstallPlugin(id: string, keepData: boolean): void {
     });
   }
   removePluginRecord(id);
+  emitPluginEvent('resourceRemoved', { type: 'plugin', id });
   if (rec.source === 'zip') {
     fs.rmSync(path.join(resolvePluginsDir(), 'installed', id), { recursive: true, force: true });
   }

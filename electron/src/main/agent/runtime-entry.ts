@@ -2275,11 +2275,15 @@ export async function doExecuteTool(
   // 插件 preToolUse waterfall（spec §5.2 顺序：插件 → 内置权限 → 执行）。
   // deny 抛错走 executeTool 审计失败路径；rewrite 就地替换 call.arguments
   // （下游工具与审计均记改写后生效值）。无 IPC 环境 fail-open 直通。
-  const hookDecision = await preToolUseHook({
-    workspaceId: config.workspaceId,
-    toolName: name,
-    args: call.arguments,
-  });
+  // 零往返短路（P3）：装配面无 hooks 订阅可能时跳过跨进程问询——
+  // 无插件 workspace 不为每次工具调用白付 IPC 往返（测试 mock send 场景实证）
+  const hookDecision = config.pluginHooks
+    ? await preToolUseHook({
+        workspaceId: config.workspaceId,
+        toolName: name,
+        args: call.arguments,
+      })
+    : null;
   if (decisionSink) decisionSink.decision = hookDecision;
   if (hookDecision?.action === 'deny') {
     throw new Error(`工具 ${name} 被插件钩子拒绝：${hookDecision.reason ?? '未给出原因'}`);

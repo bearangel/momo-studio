@@ -6,6 +6,29 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 插件系统 P3：hooks 事件总线 + service 长驻组件
+
+平台扩展机制第三期（2026-10-16，spec `docs/specs/2026-10-15-plugin-system-design.md` §5 / 计划 `docs/plans/2026-10-15-plugin-system-p3.md`）。「管得深」：插件参与工具治理（preToolUse 拦截）与生命周期（15 事件 + 主进程长驻 service）。
+
+### 新增
+- **HookBus 类型化事件总线**：15 事件 × 三分发（emit=fire-and-forget 事务安全 / parallel=并发等齐 / waterfall=preToolUse 专属洋葱式 deny·rewrite）；handler 抛错 fail-open + logger.error；matcher 通配（git_* 式）；分发观察者落 `hook_calls` 审计（每 handler 每插件一条）
+- **迁移 060**：`hook_calls` 审计表 + `tool_calls.pre_tool_use` 决策列
+- **preToolUse 跨进程拦截**：子进程桥（id 配对 + 5s 超时降级 null + 无 IPC 直通）→ 主进程 waterfall → 决策回写；顺序「插件 → 内置权限 → 执行」；rewrite 后审计记生效值；**装配面 `pluginHooks` 标志零往返短路**（无 hook workspace 不白付 IPC——全量回归实证）
+- **postToolUse/postToolUseFailure**：fire-and-forget 通知 + 审计
+- **service 长驻组件**：start/stop/handle 管理器（崩溃隔离 + 惰性实例）+ `pluginCtx.callService` 子进程桥（工具/service 两侧——service 侧刻意无 callService 防递归）；启停联动（禁用时按 enablements 反查仍启用 workspace 数）；app 退出 stopAll
+- **hooks.json 主进程加载**：`createRequire` 原生语义 + `require.resolve` 规范化缓存键失效（reload 新代码；两坑实证：vite-node 拦截 transform 态 require / macOS realpath 差异）
+- **15 事件源**：storage 层 setter 注入（sessions/tasks repo 单点，事务安全分发）；resource/workspace 于 IPC 尾部单点 emit；**插件自身安装/卸载也发 resourceInstalled/Removed**（plugin:* 通道补线——语义缝隙修正）
+- **生命周期全接**：install（hooks+service+agents+mcp）/ uninstall（全清）/ reload（重激活新代码 + runtime 重建）/ setEnabled（事件 + service 联动）
+
+### 设计取舍
+- preToolUse 钩子落 doExecuteTool + decisionSink 参数回传 executeTool 审计终值（包装层方案被否——测试群直调 doExecuteTool）
+- spawner plugin 分支前加同步前缀门卫——非插件消息零 await 让步（audit:toolCall 同步落库线契约）
+- 测试群隔离卫生：pretool/审计测试补 AP_USER_DATA_DIR（曾碰真实库一轮，NOT NULL 失败未写入、零污染实证）；service-manager 测试 afterAll 清原生 require 缓存（teardown 段 SIGSEGV 防线）
+
+### 已知遗留
+- P1/P2 的预存失败域与 minor 不变（全量对照基线一致）
+- 冒烟（隔离实例）：fixture v0.3.0（hooks+service 组件）注册/重载全通、DB 表就位；事件→hook_calls 落库链以单测+契约锁为准（运行实例代码新鲜度受 dev 重启链不确定影响，未强证）
+
 ## [未发布] — 插件系统 P2：工具扩展点 + 声明式组件激活 + reload
 
 平台扩展机制第二期（2026-10-15，spec `docs/specs/2026-10-15-plugin-system-design.md` §4 / 计划 `docs/plans/2026-10-15-plugin-system-p2.md`）。「用得上」：agent 能调用插件工具、插件 skills/agents/MCP 三面激活、改码→重载即生效。

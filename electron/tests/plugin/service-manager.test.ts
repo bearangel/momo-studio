@@ -6,8 +6,14 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { beforeEach, afterEach, describe, expect, it } from 'vitest';
-import { startPluginService, stopPluginService, callPluginService } from '../../src/main/plugin/service-manager';
+import { beforeAll, beforeEach, afterEach, afterAll, describe, expect, it } from 'vitest';
+import { createRequire } from 'node:module';
+import {
+  startPluginService,
+  stopPluginService,
+  callPluginService,
+  stopAllPluginServices,
+} from '../../src/main/plugin/service-manager';
 import { upsertPlugin } from '../../src/main/plugin/registry';
 import { closeDb, runMigrations } from '../../src/main/storage/db';
 import type { PluginRecord } from '../../src/main/plugin/types';
@@ -59,6 +65,16 @@ afterEach(() => {
   closeDb();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
   delete process.env.AP_USER_DATA_DIR;
+});
+
+afterAll(async () => {
+  // teardown 段 SIGSEGV 帝国防线：停全部实例 + 清原生 require 缓存中本测试树的
+  // 模块（worker 退出期对已 rmSync 目录内原生模块做 GC 会崩——实证）
+  await stopAllPluginServices();
+  const r = createRequire(path.join(tmpRoot, 'noop.js'));
+  for (const k of Object.keys(r.cache)) {
+    if (k.startsWith(tmpRoot)) delete r.cache[k];
+  }
 });
 
 describe('startPluginService', () => {

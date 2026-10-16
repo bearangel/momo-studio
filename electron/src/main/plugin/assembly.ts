@@ -139,3 +139,11 @@ export function filterDisabledPluginMcps(names: string[], workspaceId: string): 
   }
   return names.filter((n) => !disabled.has(n));
 }
+
+
+/** 启用插件中是否有 hooks 组件（spawn 快照——runtime 侧零往返短路依据） */
+export function hasPluginHooks(workspaceId: string): boolean {
+  return enabledPlugins(workspaceId).some(({ manifest }) =>
+    typeof manifest.components?.hooks === 'string',
+  );
+}

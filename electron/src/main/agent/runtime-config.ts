@@ -67,6 +67,8 @@ export interface AgentRuntimeOpts {
    * 可见性 = 装配面，deniedTools 支持 plugin:<id>/* 整插件禁用前缀）
    */
   pluginTools?: PluginToolRef[];
+  /** 插件系统 P3（spec §5.2）：workspace 有 hooks 订阅可能——false 时子进程跳过 preToolUse 往返 */
+  pluginHooks?: boolean;
   // === M3 工具权限白名单 ===
   /** 允许的工具名列表；空/缺省 = 不启用白名单（全部放行） */
   allowedTools?: string[];
@@ -146,6 +148,8 @@ export interface RuntimeConfig {
   mcpNames: string[];
   /** 插件系统 P2：装配快照（可选——存量配置/测试夹具无此字段；子进程按 [] 处理） */
   pluginTools?: PluginToolRef[];
+  /** 插件系统 P3：hooks 存在标志（缺省 false——子进程零往返） */
+  pluginHooks?: boolean;
   // === M3 工具权限白名单 ===
   /** 允许的工具名列表；空数组表示不启用白名单（全部放行，仅 deniedTools 生效） */
   allowedTools: string[];
@@ -407,6 +411,7 @@ export function parseConfig(raw: unknown): RuntimeConfig {
     skills,
     mcpNames,
     pluginTools,
+    pluginHooks,
     allowedTools,
     deniedTools,
     isLeader,
@@ -475,6 +480,7 @@ export function parseConfig(raw: unknown): RuntimeConfig {
     skills: resolvedSkills,
     mcpNames: resolvedMcpNames,
     pluginTools: resolvedPluginTools,
+    pluginHooks: pluginHooks === true ? true : undefined,
     allowedTools: resolvedAllowedTools,
     deniedTools: resolvedDeniedTools,
     // v25：isLeader 缺省/类型不符时按「非 leader」处理（旧配置无旧兼容负担）

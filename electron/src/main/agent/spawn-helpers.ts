@@ -26,6 +26,7 @@ import {
   buildPluginToolRefs,
   buildPluginSkillRefs,
   filterDisabledPluginMcps,
+  hasPluginHooks,
 } from '../plugin/assembly';
 import { getProvider, type ModelProvider } from './provider-crud';
 import { getSecret } from '../storage/keychain';
@@ -410,6 +411,8 @@ export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentR
     mcpNames: filterDisabledPluginMcps(filterEnabledMcps(merged.mcps), workspaceId),
     // 插件工具装配快照（spec §4.2）：workspace 级启停在此过滤——spawn 时定型
     pluginTools: buildPluginToolRefs(workspaceId),
+    // 插件 hooks 存在标志（P3 spec §5.2）：无 hook 的 workspace 子进程零往返短路
+    pluginHooks: hasPluginHooks(workspaceId),
     isLeader,
     // v1.4 嵌套：传 bot 展示信息，子 agent start chunk 据此填充 chip 头部
     botName: def.name,

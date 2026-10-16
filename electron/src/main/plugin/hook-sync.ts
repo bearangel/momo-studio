@@ -9,7 +9,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { logger } from '../logger';
 import { resolvePluginsDir, resolvePluginDataDir } from '../paths';
-import { HookBus, type PluginHookCtx, type PluginHookEvent, PLUGIN_HOOK_EVENTS } from './hook-bus';
+import { HookBus, type HookHandler, type PluginHookCtx, type PluginHookEvent, PLUGIN_HOOK_EVENTS } from './hook-bus';
 import type { PluginRecord } from './types';
 
 interface HooksFileShape {
@@ -92,7 +92,7 @@ export function syncPluginHooks(
         // 缓存键必须用 require.resolve 的规范化路径（macOS /var ↔ /private/var
         // realpath 差异——裸 modulePath 字符串删不到真实缓存键，实测）
         delete nodeRequire.cache[nodeRequire.resolve(modulePath)];
-        const mod = nodeRequire(modulePath) as { handle?: unknown };
+        const mod = nodeRequire(modulePath) as { handle?: HookHandler };
         if (typeof mod.handle !== 'function') {
           throw new Error('模块未导出 handle 函数');
         }
