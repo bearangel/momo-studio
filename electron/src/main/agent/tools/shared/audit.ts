@@ -21,6 +21,8 @@ export interface ToolCallAudit {
   durationMs: number;
   /** 插件系统 P2（spec §4.3）：溯源标记——插件工具 'plugin'，缺省 'builtin' */
   source?: 'builtin' | 'plugin';
+  /** 插件系统 P3（spec §5.4）：preToolUse 决策 JSON（null=无 hook 参与） */
+  preToolUse?: string | null;
 }
 
 /** 审计摘要最大长度（字符） */
@@ -39,5 +41,6 @@ export function logToolCall(audit: ToolCallAudit): void {
     success: audit.success,
     durationMs: audit.durationMs,
     source: audit.source ?? 'builtin',
+    preToolUse: audit.preToolUse ?? null,
   });
 }

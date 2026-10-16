@@ -21,6 +21,23 @@ import type { ThinkingRequest } from '../llm/provider-presets';
 import { parseConfig, type RuntimeConfig, type TaskConfig, type ExpandedContext, type ExpandedImageItem } from './runtime-config';
 import { formatBudgetHint, formatDispatchHint, formatTaskHint, buildMandateHint, formatClockHint, formatWorkspaceHygieneHint } from './prompt-hints';
 import { logToolCall } from './tools/shared/audit';
+
+import {
+  requestPreToolUse,
+  notifyPostToolUse,
+  type PreToolUseDecision,
+} from './plugin-hook-bridge';
+
+/** preToolUse 桥注入点（测试用；生产恒为 requestPreToolUse——fail-open 语义） */
+let preToolUseHook: typeof requestPreToolUse = requestPreToolUse;
+
+export function __setPreToolUseHookForTest(
+  fn:
+    | ((payload: { workspaceId: string; toolName: string; args: Record<string, unknown> }) => Promise<PreToolUseDecision | null>)
+    | null,
+): void {
+  preToolUseHook = fn ?? requestPreToolUse;
+}
 import { assertToolAllowed, filterVisibleToolDefs } from './tools/shared/permission';
 import {
   estimateTokens,
@@ -2194,9 +2211,11 @@ async function executeTool(
   const startTime = Date.now();
   let success = true;
   let output = '';
+  // preToolUse 决策容器：doExecuteTool 前置钩子写入，本层 finally 审计消费
+  const decisionSink: { decision: PreToolUseDecision | null } = { decision: null };
   trace(`→ 工具: ${call.name}`, { input: `${JSON.stringify(call.arguments).length}字` });
   try {
-    output = await doExecuteTool(call, ctx, config, toolBudget, dispatchInfo, toolStreamSessionId, pmStreamSessionId, executionSessionId);
+    output = await doExecuteTool(call, ctx, config, toolBudget, dispatchInfo, toolStreamSessionId, pmStreamSessionId, executionSessionId, decisionSink);
     trace(`← 工具: ${call.name}`, { ms: Date.now() - startTime, ok: '✓' });
     return output;
   } catch (err) {
@@ -2212,6 +2231,14 @@ async function executeTool(
       success,
       durationMs: Date.now() - startTime,
       source: toolSourceFor(call.name, ctx.toolModules),
+      preToolUse: decisionSink.decision ? JSON.stringify(decisionSink.decision) : null,
+    });
+    notifyPostToolUse({
+      workspaceId: config.workspaceId,
+      toolName: call.name,
+      args: call.arguments,
+      success,
+      durationMs: Date.now() - startTime,
     });
   }
 }
@@ -2240,8 +2267,27 @@ export async function doExecuteTool(
   toolStreamSessionId?: string,
   pmStreamSessionId?: string,
   executionSessionId?: string,
+  /** preToolUse 决策容器（executeTool 注入——审计终值消费；直调测试不传则跳过审计面） */
+  decisionSink?: { decision: PreToolUseDecision | null },
 ): Promise<string> {
-  const name = call.name;
+  let name = call.name;
+
+  // 插件 preToolUse waterfall（spec §5.2 顺序：插件 → 内置权限 → 执行）。
+  // deny 抛错走 executeTool 审计失败路径；rewrite 就地替换 call.arguments
+  // （下游工具与审计均记改写后生效值）。无 IPC 环境 fail-open 直通。
+  const hookDecision = await preToolUseHook({
+    workspaceId: config.workspaceId,
+    toolName: name,
+    args: call.arguments,
+  });
+  if (decisionSink) decisionSink.decision = hookDecision;
+  if (hookDecision?.action === 'deny') {
+    throw new Error(`工具 ${name} 被插件钩子拒绝：${hookDecision.reason ?? '未给出原因'}`);
+  }
+  if (hookDecision?.action === 'rewrite' && hookDecision.args) {
+    call = { ...call, arguments: hookDecision.args };
+    name = call.name;
+  }
 
   // M3 工具权限强制：deniedTools 优先于 allowedTools。抛错由 executeTool 的审计
   // 包装捕获并记为失败，再回传给 LLM 自我纠正。判定逻辑见 tools/shared/permission.ts。
