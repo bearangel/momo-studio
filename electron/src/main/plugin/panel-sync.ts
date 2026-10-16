@@ -20,6 +20,20 @@ import type { PluginRecord } from './types';
 /** renderer 收到后刷新面板列表的推送通道（preload 显式暴露） */
 export const PLUGIN_PANEL_CHANGED_CHANNEL = 'plugin:panelsChanged';
 
+/** 面板可订阅事件目录（与 renderer PANEL_SUBSCRIBABLE_EVENTS 同形——task/resource/session 域，spec §6.2） */
+export const PANEL_PUSH_EVENTS: readonly string[] = [
+  'taskCreated',
+  'taskStatusChanged',
+  'taskCompleted',
+  'resourceInstalled',
+  'resourceRemoved',
+  'sessionStarted',
+  'sessionEnded',
+];
+
+/** 面板事件推送给 renderer 的通道名（preload 显式暴露） */
+export const PLUGIN_PANEL_EVENT_CHANNEL = 'plugin:panelEvent';
+
 /** 面板声明（panel.json 单项，已归一：icon 带缺省） */
 export interface PanelDecl {
   id: string;
@@ -180,5 +194,28 @@ function defaultBroadcast(channel: string): void {
   if (typeof electron === 'string') return;
   for (const win of electron.BrowserWindow.getAllWindows()) {
     win.webContents.send(channel);
+  }
+}
+
+/**
+ * HookBus emit 域 → renderer 面板事件桥（index.ts 启动接线）。
+ * 只推白名单事件；broadcast 可注入（测试）。
+ */
+export function wirePanelEventPush(
+  bus: { setEventTap(fn: (event: string, payload: unknown) => void): void },
+  broadcast: (channel: string, payload: { event: string; payload: unknown }) => void = defaultPayloadBroadcast,
+): void {
+  bus.setEventTap((event, payload) => {
+    if (!PANEL_PUSH_EVENTS.includes(event)) return;
+    broadcast(PLUGIN_PANEL_EVENT_CHANNEL, { event, payload });
+  });
+}
+
+function defaultPayloadBroadcast(channel: string, payload: { event: string; payload: unknown }): void {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const electron = require('electron') as typeof import('electron') | string;
+  if (typeof electron === 'string') return;
+  for (const win of electron.BrowserWindow.getAllWindows()) {
+    win.webContents.send(channel, payload);
   }
 }

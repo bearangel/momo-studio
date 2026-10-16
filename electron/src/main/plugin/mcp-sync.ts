@@ -11,6 +11,7 @@ import { isValidNpmPackageName } from '../marketplace/types';
 import { removeMcpRefsFromAgents } from '../agent/crud';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
+import { readPluginConfigJson, sensitiveOverlaySync } from './config-store';
 import { resolvePluginRoot } from './assembly';
 import type { PluginRecord } from './types';
 
@@ -29,11 +30,28 @@ interface McpFileShape {
 }
 
 /** 组 McpServerConfig 的宽松输入（registerMcpDefinition 内做远程白名单等校验） */
+/** ${config.KEY} 占位符展开（spec 决策 112 行）：缺失键保留字面量 + warn（可观察不静默） */
+export function substituteConfigTemplate(
+  value: string,
+  config: Record<string, unknown>,
+  pluginId: string,
+): string {
+  return value.replace(/\$\{config\.([a-zA-Z0-9_-]+)\}/g, (raw, key: string) => {
+    const v = config[key];
+    if (v === undefined || v === null) {
+      logger.warn('mcp config 占位符无值，保留字面量', { pluginId, key });
+      return raw;
+    }
+    return String(v);
+  });
+}
+
 function toConfig(
   pluginId: string,
   root: string,
   name: string,
   entry: McpEntry,
+  config: Record<string, unknown>,
 ): {
   id: string;
   name: string;
@@ -63,14 +81,16 @@ function toConfig(
     version: '0.0.0',
     command: command ?? '',
     args: Array.isArray(entry.args)
-      ? entry.args.filter((a): a is string => typeof a === 'string')
+      ? entry.args
+          .filter((a): a is string => typeof a === 'string')
+          .map((a) => substituteConfigTemplate(a, config, pluginId))
       : [],
     env:
       typeof entry.env === 'object' && entry.env !== null
         ? (Object.fromEntries(
-            Object.entries(entry.env).filter(
-              (kv): kv is [string, string] => typeof kv[1] === 'string',
-            ),
+            Object.entries(entry.env)
+              .filter((kv): kv is [string, string] => typeof kv[1] === 'string')
+              .map(([k, v]) => [k, substituteConfigTemplate(v, config, pluginId)] as const),
           ) as Record<string, string>)
         : undefined,
     transport,
@@ -83,6 +103,10 @@ function toConfig(
 
 /** 注册插件 MCP（幂等覆盖）。返回成功注册的 server 名列表 */
 export function syncPluginMcps(rec: PluginRecord): string[] {
+  const cfgView: Record<string, unknown> = {
+    ...readPluginConfigJson(rec.id),
+    ...sensitiveOverlaySync(rec.id),
+  };
   const root = resolvePluginRoot(rec);
   if (root === null) return [];
   let manifest: { components?: { mcp?: string } };
@@ -105,13 +129,13 @@ export function syncPluginMcps(rec: PluginRecord): string[] {
   }
   const registered: string[] = [];
   for (const [name, entry] of Object.entries(parsed.servers ?? {})) {
-    const config = toConfig(rec.id, root, name, entry);
-    if (config === null) {
+    const cfg = toConfig(rec.id, root, name, entry, cfgView);
+    if (cfg === null) {
       logger.warn('插件 MCP 条目不合法（已跳过）', { pluginId: rec.id, name });
       continue;
     }
     try {
-      registerMcpDefinition(config);
+      registerMcpDefinition(cfg);
       registered.push(name);
     } catch (err) {
       logger.warn('插件 MCP 注册失败（已跳过）', {

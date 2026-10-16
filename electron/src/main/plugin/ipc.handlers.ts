@@ -10,8 +10,17 @@ import { setPluginEnabled, getPlugin as getPluginRecord } from './registry';
 import { getPluginBus } from './bus-instance';
 import { startPluginService, stopPluginService } from './service-manager';
 import { syncPluginHooks, removePluginHooks } from './hook-sync';
-import { notifyPanelsChanged } from './panel-sync';
+import { notifyPanelsChanged, listPluginPanels } from './panel-sync';
+import { callPluginService, isServiceRunning } from './service-manager';
+import {
+  normalizeConfigSchema,
+  writePluginConfig,
+  getPluginConfigView,
+  type NormalizedConfigSchema,
+} from './config-store';
+import { syncPluginMcps } from './mcp-sync';
 import { getDb } from '../storage/db';
+import { logger } from '../logger';
 import { reloadPlugin } from './reload';
 import type { PluginManifest, PluginRecord } from './types';
 
@@ -46,7 +55,8 @@ function toSummary(rec: PluginRecord): PluginSummary {
 
 /**
  * 注册 plugin:* 通道。app ready 后由 registerIpcHandlers（ipc/index.ts）统一调用。
- * 通道清单：installZip / installDevDir / setEnabled / uninstall（重载动作 P2 工具激活时引入）。
+ * 通道清单：installZip / installDevDir / setEnabled / uninstall / reload（P2）
+ *  + listPanels / callService / getConfig / setConfig（P4，spec §6）。
  */
 export function registerPluginHandlers(): void {
   ipcMain.handle('plugin:installZip', async (_evt, data: Uint8Array, _filename: string) => {
@@ -110,4 +120,58 @@ export function registerPluginHandlers(): void {
   ipcMain.handle('plugin:reload', async (_evt, id: string) => {
     return toSummary(await reloadPlugin(id));
   });
+
+  // ── P4：面板与 config 面（spec §6） ──
+
+  ipcMain.handle('plugin:listPanels', (_evt, workspaceId: string) => listPluginPanels(workspaceId));
+
+  // 面板 RPC 透传：pluginId 来自调用方（PanelHost 构造绑定），消息面不带身份
+  ipcMain.handle(
+    'plugin:callService',
+    (_evt, pluginId: string, method: string, params: unknown) =>
+      callPluginService(pluginId, method, params ?? null),
+  );
+
+  /** manifest config 归一（无 config 声明返回 null——renderer 显空态） */
+  function normalizedSchemaOf(rec: PluginRecord): NormalizedConfigSchema | null {
+    const manifest = JSON.parse(rec.manifestJson) as PluginManifest;
+    if (!manifest.config) return null;
+    return normalizeConfigSchema(manifest.config);
+  }
+
+  ipcMain.handle('plugin:getConfig', (_evt, pluginId: string) => {
+    const rec = getPluginRecord(pluginId);
+    if (!rec) throw new Error(`插件不存在: ${pluginId}`);
+    const schema = normalizedSchemaOf(rec);
+    if (!schema) return null;
+    const view = getPluginConfigView(pluginId, schema);
+    return {
+      schema,
+      values: view.values,
+      sensitiveConfigured: view.sensitiveConfigured,
+    };
+  });
+
+  /** 保存即生效（spec §3.3）：写双轨 → MCP 重装配（${config.KEY} 注入）→ 运行中 service 重启 */
+  ipcMain.handle(
+    'plugin:setConfig',
+    async (_evt, pluginId: string, values: Record<string, string | number | boolean | null>) => {
+      const rec = getPluginRecord(pluginId);
+      if (!rec) throw new Error(`插件不存在: ${pluginId}`);
+      const schema = normalizedSchemaOf(rec);
+      if (!schema) throw new Error(`此插件未声明配置项: ${pluginId}`);
+      await writePluginConfig(pluginId, schema, values);
+      try {
+        syncPluginMcps(rec);
+      } catch (err) {
+        logger.warn('setConfig 后 MCP 重装配失败', { pluginId, error: String(err) });
+      }
+      if (isServiceRunning(pluginId)) {
+        void stopPluginService(pluginId)
+          .then(() => startPluginService(rec))
+          .catch(() => undefined);
+      }
+      return getPluginConfigView(pluginId, schema);
+    },
+  );
 }

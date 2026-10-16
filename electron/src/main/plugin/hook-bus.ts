@@ -92,6 +92,7 @@ export class HookBus {
   /** workspace 级启用判定（index.ts 注入 registry 实现；缺省全放行——测试态） */
   private readonly isPluginEnabled?: (pluginId: string, workspaceId: string) => boolean;
   private observer: ((rec: HookDispatchRecord) => void) | null = null;
+  private eventTap: ((event: PluginHookEvent, payload: unknown) => void) | null = null;
 
   constructor(opts: { logger?: BusLogger; isPluginEnabled?: (pluginId: string, workspaceId: string) => boolean } = {}) {
     this.log = opts.logger ?? mainLogger;
@@ -103,6 +104,11 @@ export class HookBus {
     this.observer = fn;
   }
 
+  /** 注册 emit 事件抽头（面板推送专用——只看 emit 域事件与载荷，与审计观察者分离） */
+  setEventTap(fn: ((event: PluginHookEvent, payload: unknown) => void) | null): void {
+    this.eventTap = fn;
+  }
+
   register(sub: HookSubscription): void {
     this.unregisterOne(sub.pluginId, sub.event, sub.modulePath);
     this.subs.push(sub);
@@ -110,6 +116,7 @@ export class HookBus {
 
   /** emit 模式：同步即刻返回，handler 异步跑（错误吞日志） */
   dispatch(event: PluginHookEvent, payload: unknown): void {
+    this.eventTap?.(event, payload);
     for (const sub of this.subs) {
       if (sub.event !== event) continue;
       // 微任务化（审查 I2）：runOne 同步前缀会执行 handler 调用本身——

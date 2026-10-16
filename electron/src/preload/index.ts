@@ -38,6 +38,8 @@ import type {
   TaskRow,
   UploadedSkill,
   PluginSummary,
+  PluginPanelInfo,
+  PluginConfigView,
 } from '../../../renderer/src/ipc/types';
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -507,6 +509,27 @@ const api: ApiSurface = {
       invoke<void>('plugin:setEnabled', id, workspaceId, enabled),
     uninstall: (id: string, keepData: boolean) => invoke<void>('plugin:uninstall', id, keepData),
     reload: (id: string) => invoke<PluginSummary>('plugin:reload', id),
+    // P4：面板与 config 面（spec §6）
+    listPanels: (workspaceId: string) => invoke<PluginPanelInfo[]>('plugin:listPanels', workspaceId),
+    callService: (pluginId: string, method: string, params: unknown) =>
+      invoke<unknown>('plugin:callService', pluginId, method, params),
+    getConfig: (pluginId: string) => invoke<PluginConfigView | null>('plugin:getConfig', pluginId),
+    setConfig: (pluginId: string, values: Record<string, string | number | boolean | null>) =>
+      invoke<PluginConfigView>('plugin:setConfig', pluginId, values),
+    onPanelsChanged: (callback: () => void) => {
+      const handler = (): void => callback();
+      ipcRenderer.on('plugin:panelsChanged', handler);
+      return () => {
+        ipcRenderer.off('plugin:panelsChanged', handler);
+      };
+    },
+    onPanelEvent: (callback: (payload: { event: string; payload: unknown }) => void) => {
+      const handler = (_e: unknown, payload: { event: string; payload: unknown }): void => callback(payload);
+      ipcRenderer.on('plugin:panelEvent', handler);
+      return () => {
+        ipcRenderer.off('plugin:panelEvent', handler);
+      };
+    },
   },
   p2p: {
     // C8：P2P 节点发现 + 信任管理

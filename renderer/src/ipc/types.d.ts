@@ -1002,13 +1002,44 @@ export interface PluginSummary {
   components: string[];
 }
 
-/** 插件域 IPC 面（P1：安装 / 启停 / 卸载；P2：reload——dev 源改码后手动生效） */
+/** 可用面板清单项（plugin:listPanels 返回形状；workspace 启用过滤后） */
+export interface PluginPanelInfo {
+  pluginId: string;
+  pluginName: string;
+  panelId: string;
+  title: string;
+  icon: string;
+  entryUrl: string;
+}
+
+/** config 属性声明（主进程归一化后形状；v1 子集） */
+export interface PluginConfigPropertyDecl {
+  type: 'string' | 'number' | 'boolean';
+  title?: string;
+  sensitive?: boolean;
+  enum?: (string | number)[];
+}
+
+/** plugin:getConfig / setConfig 返回形状（敏感值只出在场布尔，明文永不外泄） */
+export interface PluginConfigView {
+  schema: { properties: Record<string, PluginConfigPropertyDecl>; required: string[] };
+  values: Record<string, unknown>;
+  sensitiveConfigured: Record<string, boolean>;
+}
+
+/** 插件域 IPC 面（P1：安装 / 启停 / 卸载；P2：reload；P4：面板与 config，spec §6） */
 export interface PluginApiSurface {
   installZip(data: Uint8Array, filename: string): Promise<PluginSummary>;
   installDevDir(dir: string): Promise<PluginSummary>;
   setEnabled(id: string, workspaceId: string, enabled: boolean): Promise<void>;
   uninstall(id: string, keepData: boolean): Promise<void>;
   reload(id: string): Promise<PluginSummary>;
+  listPanels(workspaceId: string): Promise<PluginPanelInfo[]>;
+  callService(pluginId: string, method: string, params: unknown): Promise<unknown>;
+  getConfig(pluginId: string): Promise<PluginConfigView | null>;
+  setConfig(pluginId: string, values: Record<string, string | number | boolean | null>): Promise<PluginConfigView>;
+  onPanelsChanged(callback: () => void): () => void;
+  onPanelEvent(callback: (payload: { event: string; payload: unknown }) => void): () => void;
 }
 
 /**
