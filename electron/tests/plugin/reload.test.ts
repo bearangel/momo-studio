@@ -98,7 +98,7 @@ afterEach(() => {
 });
 
 describe('reloadPlugin', () => {
-  it('dev 源：重读源目录 manifest → 版本刷新 → 无启用 workspace 时不重建 runtime', () => {
+  it('dev 源：重读源目录 manifest → 版本刷新 → 无启用 workspace 时不重建 runtime', async () => {
     seedWorkspace('ws1');
     const dir = mkDevPlugin('cg', '0.1.0');
     upsertPlugin({
@@ -118,7 +118,7 @@ describe('reloadPlugin', () => {
       path.join(dir, 'momo-plugin.json'),
       fs.readFileSync(path.join(dir, 'momo-plugin.json'), 'utf-8').replace('0.1.0', '0.2.0'),
     );
-    reloadPlugin('cg');
+    await reloadPlugin('cg');
     expect(getPlugin('cg')?.version).toBe('0.2.0');
     expect(registryFns.stopAgentRuntime).not.toHaveBeenCalled();
   });

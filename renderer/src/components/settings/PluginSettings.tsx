@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { KeyRound, Puzzle } from 'lucide-react';
 import { ipc } from '../../ipc/client';
+import { useWorkspaceStore } from '../../stores/workspace.store';
 import { ipcErrorMessage } from '../../lib/ipc-error';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
@@ -85,6 +86,8 @@ interface PluginConfigSectionProps {
 }
 
 function PluginConfigSection({ pluginId, pluginName }: PluginConfigSectionProps) {
+  // 工作空间维度 v1.1（spec §5.3）：表单随当前活动工作区读写——ws-scope 值按活动 ws 分层
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const [view, setView] = useState<PluginConfigView | 'loading' | 'none' | 'error'>('loading');
   const viewResolved: PluginConfigView =
     view === 'loading' || view === 'none' || view === 'error'
@@ -99,7 +102,7 @@ function PluginConfigSection({ pluginId, pluginName }: PluginConfigSectionProps)
   useEffect(() => {
     let alive = true;
     ipc.plugin
-      .getConfig(pluginId)
+      .getConfig(pluginId, activeWorkspaceId ?? undefined)
       .then((v) => {
         if (!alive) return;
         setView(v ?? 'none');
@@ -112,7 +115,7 @@ function PluginConfigSection({ pluginId, pluginName }: PluginConfigSectionProps)
     return () => {
       alive = false;
     };
-  }, [pluginId]);
+  }, [pluginId, activeWorkspaceId]);
 
   const entries = useMemo(() => Object.entries(viewResolved.schema.properties), [viewResolved]);
 
@@ -132,7 +135,7 @@ function PluginConfigSection({ pluginId, pluginName }: PluginConfigSectionProps)
       }
     }
     try {
-      const next = await ipc.plugin.setConfig(pluginId, payload);
+      const next = await ipc.plugin.setConfig(pluginId, payload, activeWorkspaceId ?? undefined);
       setView(next);
       setForm(next.values as Record<string, string | number | boolean>);
       setSensitiveInput({});
@@ -141,7 +144,7 @@ function PluginConfigSection({ pluginId, pluginName }: PluginConfigSectionProps)
     } catch (err) {
       setError(ipcErrorMessage(err));
     }
-  }, [entries, form, sensitiveInput, clearedKeys, pluginId]);
+  }, [entries, form, sensitiveInput, clearedKeys, pluginId, activeWorkspaceId]);
 
   if (view === 'loading') {
     return (

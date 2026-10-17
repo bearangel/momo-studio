@@ -228,6 +228,8 @@ export function registerAgentHandlers(): void {
       defaultSkills?: Array<{ kind: 'skill'; ref: string; versionRange?: string }>;
       /** v31：undefined=不改；null=清除（继承模型级）；传值=覆盖 */
       thinkingJson?: ThinkingConfig | null;
+      /** 工作空间维度 v1.1：工具禁用模式串；undefined=不改（含则整体覆盖） */
+      deniedTools?: string[];
     }) => {
       // v25 定义全局化：scope/workspaceId 不再持久化（列已 DROP），仅接收不消费
       const updated = updateAgentDefinition({
@@ -242,6 +244,7 @@ export function registerAgentHandlers(): void {
         defaultMcps: input.defaultMcps,
         defaultSkills: input.defaultSkills,
         thinkingJson: input.thinkingJson,
+        deniedTools: input.deniedTools,
       });
       const stopped = await stopRunningInstancesByDefinition(input.id);
       if (stopped.length > 0) {

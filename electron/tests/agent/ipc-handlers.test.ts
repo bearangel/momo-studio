@@ -391,3 +391,18 @@ describe('team: 通道（spec §4.2 委托）', () => {
     expect(res).toEqual({ ok: true });
   });
 });
+
+// ── 工作空间维度 v1.1 终审 C1 回归锁：updateDefinition IPC 透传 deniedTools ──
+describe('agent:updateDefinition deniedTools 透传（终审 C1）', () => {
+  it('输入含 deniedTools → 原样到达 updateAgentDefinition（编辑路径不断链）', async () => {
+    const h = ipcHandlers.get('agent:updateDefinition');
+    expect(h).toBeTypeOf('function');
+    await (h as (evt: unknown, input: unknown) => Promise<unknown>)({} as never, {
+      id: 'def-1',
+      deniedTools: ['plugin:codegraph/*'],
+    });
+    expect(crudMocks.updateAgentDefinition).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'def-1', deniedTools: ['plugin:codegraph/*'] }),
+    );
+  });
+});

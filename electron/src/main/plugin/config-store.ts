@@ -187,6 +187,11 @@ export async function writePluginConfig(
     const decl = schema.properties[key];
     if (!decl) throw new Error(`config 未知键: ${key}`);
     if (v !== null) checkValue(key, decl, v);
+    // 工作空间键必须有 workspaceId 才可写——无 wsId 照写会落全局层成为
+    // 全工作区回填默认（dape 类污染路径，终审 C2 封死）
+    if (decl.scope === 'workspace' && !workspaceId) {
+      throw new Error(`config 键 ${key} 为工作空间作用域，写入需要 workspaceId`);
+    }
   }
 
   const currentPlain = readPluginConfigJson(pluginId);

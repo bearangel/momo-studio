@@ -35,6 +35,10 @@ export interface PluginServiceInstance {
 
 const running = new Map<string, PluginServiceInstance>();
 
+/** 启动单飞表（终审 I1）：key → 进行中的 start Promise——慢 start() 期间并发
+ *  首调复用同一 Promise，杜绝「检查 has → await start → set」窗口的双实例孤儿 */
+const starting = new Map<string, Promise<boolean>>();
+
 /** manifest config 是否含 workspace-scope 属性（决定多实例形态，spec §5.1） */
 export function pluginUsesWorkspaceScope(rec: PluginRecord): boolean {
   try {
@@ -66,11 +70,24 @@ function workspaceDirOf(workspaceId: string): string | null {
 /** 启动插件 service（manifest 有 components.service 才动作）。加载或 start() 任一
  * 失败 warn 返回 false（实例不落 running——不半活，spec §5.3）。
  * 工作空间维度 v1.1：multi 插件按 workspaceId 多实例；无 wsId 不动作（lazy 兜底） */
-export async function startPluginService(rec: PluginRecord, workspaceId?: string): Promise<boolean> {
+export function startPluginService(rec: PluginRecord, workspaceId?: string): Promise<boolean> {
   const multi = pluginUsesWorkspaceScope(rec);
-  if (multi && !workspaceId) return false;
+  if (multi && !workspaceId) return Promise.resolve(false);
   const key = serviceKey(rec.id, workspaceId, multi);
-  if (running.has(key)) return true;
+  if (running.has(key)) return Promise.resolve(true);
+  const inflight = starting.get(key);
+  if (inflight) return inflight;
+  const p = doStartPluginService(rec, workspaceId, multi, key).finally(() => starting.delete(key));
+  starting.set(key, p);
+  return p;
+}
+
+async function doStartPluginService(
+  rec: PluginRecord,
+  workspaceId: string | undefined,
+  multi: boolean,
+  key: string,
+): Promise<boolean> {
   let manifest: { components?: { service?: string } };
   try {
     manifest = JSON.parse(rec.manifestJson) as { components?: { service?: string } };

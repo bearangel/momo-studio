@@ -286,3 +286,31 @@ describe('service 多实例（工作空间维度 v1.1）', () => {
     expect(marks).not.toContain('stop:ws-b');
   });
 });
+
+// ── 终审 I1 回归锁：lazy start 单飞（并发首调不产双实例孤儿）──
+const SLOW_SVC = `module.exports.createService = function (pluginCtx) {
+  const tag = pluginCtx.workspace ? pluginCtx.workspace.id : 'none';
+  return {
+    async start() {
+      globalThis.__wsm = (globalThis.__wsm || []).concat(['start:' + tag]);
+      await new Promise((r) => setTimeout(r, 120)); // 拉宽竞态窗口
+    },
+    async stop() {},
+    async handle() { return 'ok'; },
+  };
+};`;
+
+describe('lazy start 单飞（终审 I1）', () => {
+  it('慢 start 期间并发两路 callPluginService → 仅一次 start、单实例', async () => {
+    mkWs('ws-r', '/tmp/dir-r');
+    const rec = mkMultiPlugin('p-race', SLOW_SVC);
+    const [a, b] = await Promise.all([
+      callPluginService('p-race', 'ping', null, 'ws-r'),
+      callPluginService('p-race', 'ping', null, 'ws-r'),
+    ]);
+    expect(a).toBe('ok');
+    expect(b).toBe('ok');
+    const marks = (globalThis as { __wsm?: string[] }).__wsm ?? [];
+    expect(marks.filter((m) => m === 'start:ws-r')).toHaveLength(1);
+  });
+});

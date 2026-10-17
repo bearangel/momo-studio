@@ -7,11 +7,21 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { PanelHost, formatTokenValue } from './PanelHost';
 import type { PluginPanelInfo } from '../../ipc/types';
+import { useWorkspaceStore } from '../../stores/workspace.store';
+import type { Workspace } from '../../ipc/types';
+
+function usePluginPanelsPrevWs(): { workspaces: Workspace[]; activeWorkspaceId: string | null } {
+  const st = useWorkspaceStore.getState();
+  return { workspaces: st.workspaces, activeWorkspaceId: st.activeWorkspaceId };
+}
+function useWorkspaceStoreSet(patch: { workspaces: Workspace[]; activeWorkspaceId: string | null }): void {
+  useWorkspaceStore.setState(patch);
+}
 
 const onPanelEvent = vi.fn((_cb: unknown) => () => undefined);
 const callService = vi.fn();
 vi.mock('../../ipc/client', () => ({
-  ipc: { plugin: { onPanelEvent: (cb: unknown) => onPanelEvent(cb), callService: (m: string, p: unknown) => callService(m, p) } },
+  ipc: { plugin: { onPanelEvent: (cb: unknown) => onPanelEvent(cb), callService: (...args: unknown[]) => callService(...args) } },
 }));
 
 const PANEL: PluginPanelInfo = {
@@ -119,5 +129,35 @@ describe('formatTokenValue', () => {
     expect(formatTokenValue(' 94 106 210 ')).toBe('rgb(94,106,210)');
     expect(formatTokenValue('rgba(94, 106, 210, 0.12)')).toBe('rgba(94, 106, 210, 0.12)');
     expect(formatTokenValue('')).toBe('');
+  });
+});
+
+// ── 终审 C3 回归锁：面板 callService 按活动工作区路由 ──
+describe('PanelHost callService 工作区路由（终审 C3）', () => {
+  it('面板经通道调 callService → 第四参 = 活动工作区 id（multi 插件面板 RPC 不再恒失败）', async () => {
+    const prevWs = usePluginPanelsPrevWs();
+    useWorkspaceStoreSet({
+      workspaces: [{
+        id: 'ws-live', name: 'W', description: '', directoryPath: '/tmp/w', createdAt: '',
+        gitInitialized: false, ownerId: '', iconEmoji: '', defaultAgentInstanceId: null,
+      }],
+      activeWorkspaceId: 'ws-live',
+    });
+    callService.mockClear().mockResolvedValue({ ok: 1 });
+    try {
+      renderHost();
+      const frame = document.querySelector('iframe') as HTMLIFrameElement;
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          origin: 'momo-plugin://cg',
+          source: frame.contentWindow,
+          data: { type: 'plugin:callService', id: 'req-c3', method: 'graph', params: null },
+        }),
+      );
+      await waitFor(() => expect(callService).toHaveBeenCalledTimes(1));
+      expect(callService.mock.calls[0]![3]).toBe('ws-live');
+    } finally {
+      useWorkspaceStoreSet(prevWs);
+    }
   });
 });

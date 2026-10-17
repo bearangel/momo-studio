@@ -264,3 +264,14 @@ describe('config 声明式作用域（工作空间维度 v1.1）', () => {
     expect(() => readPluginConfigJson('p', '../evil')).toThrow(/workspaceId/);
   });
 });
+
+// ── 终审 C2 回归锁：工作空间键无 workspaceId 拒写（封全局层污染路径）──
+describe('config 工作空间键无 wsId 拒写（终审 C2）', () => {
+  it('ws-scope 键出现在 values 且无 workspaceId → 拒绝且零落盘', async () => {
+    const schema = normalizeConfigSchema(WS_SCHEMA);
+    await expect(
+      writePluginConfig('p-c2', schema, { workspaceRoot: '/evil-global', indexCommand: 'ls' }),
+    ).rejects.toThrow(/workspaceId/);
+    expect(fs.existsSync(dataJson('p-c2'))).toBe(false);
+  });
+});

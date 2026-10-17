@@ -94,8 +94,9 @@ export function PanelHost({ panel, onExit }: PanelHostProps) {
           };
         },
         subscribe: async (events) => ({ ok: events, rejected: [] }),
+        // 工作空间维度 v1.1：multi 插件按活动工作区路由（缺省 undefined 走单例回退）
         callService: (method, params) =>
-          ipc.plugin.callService(panel.pluginId, method, params),
+          ipc.plugin.callService(panel.pluginId, method, params, useWorkspaceStore.getState().getActive()?.id),
         onDisconnect: () => setView('disconnected'),
       },
     });

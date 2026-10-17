@@ -100,10 +100,10 @@ describe('workspaceRoot 默认跟随（工具侧）', () => {
       workspace: { id: 'ws-t', directoryPath: root },
     };
     const tools = createExplore(ctx);
-    const result = (await tools.execute('plugin:codegraph/explore', { symbol: 'followTool' }, null as never)) as string;
+    const result = (await tools.execute('plugin:codegraph/explore', { symbol: 'followTool' })) as string;
     expect(result).toContain('followTool');
     const status = createStatus(ctx);
-    const st = (await status.execute('plugin:codegraph/status', {}, null as never)) as string;
+    const st = (await status.execute('plugin:codegraph/status', {})) as string;
     expect(st).toContain(path.resolve(root));
   });
 });
