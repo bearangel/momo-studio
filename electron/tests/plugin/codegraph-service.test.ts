@@ -157,3 +157,49 @@ describe('T1 注册走查：真插件过安装链全校验（manifest/config/pan
     closeDb();
   });
 });
+
+// ── 工作空间维度 v1.1（spec §4.4）：留空默认跟随工作区目录（dape 案根治）──
+describe('workspaceRoot 默认跟随 ctx.workspace', () => {
+  it('留空 + ctx.workspace.directoryPath → 索引该目录（A2 回归锁）', async () => {
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, 'a.ts'), 'export function followMe() { return 1; }');
+    const ctx = mkCtx({}); // workspaceRoot 留空
+    (ctx as { workspace?: unknown }).workspace = { id: 'ws-follow', directoryPath: root };
+    const svc = createService(ctx);
+    await svc.start();
+    await waitFor(async () => {
+      const st = (await svc.handle('stats', null)) as { files?: number };
+      return (st.files ?? 0) > 0;
+    });
+    const g = (await svc.handle('graph', null)) as { stats?: { symbols?: number } };
+    expect(g.stats?.symbols).toBeGreaterThan(0);
+    const e = (await svc.handle('explore', { symbol: 'followMe' })) as unknown;
+    expect(JSON.stringify(e)).toContain('followMe');
+    await svc.stop();
+  });
+
+  it('留空且无 workspace 上下文 → start 明确报错（无默认可跟）', async () => {
+    const svc = createService(mkCtx({}));
+    await expect(svc.start()).rejects.toThrow(/workspaceRoot|工作区/);
+  });
+
+  it('显式 workspaceRoot 优先生效（不跟随）', async () => {
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, 'a.ts'), 'export function explicit() { return 1; }');
+    const other = path.join(tmp, 'other-ws');
+    fs.mkdirSync(other, { recursive: true });
+    fs.writeFileSync(path.join(other, 'b.ts'), 'export function otherFile() { return 2; }');
+    const ctx = mkCtx({ workspaceRoot: other });
+    (ctx as { workspace?: unknown }).workspace = { id: 'ws-x', directoryPath: root };
+    const svc = createService(ctx);
+    await svc.start();
+    await waitFor(async () => {
+      const st = (await svc.handle('stats', null)) as { files?: number };
+      return (st.files ?? 0) > 0;
+    });
+    const g2 = (await svc.handle('graph', null)) as { stats?: { symbols?: number }; nodes?: Array<{ id: string }> };
+    expect(g2.stats?.symbols).toBeGreaterThan(0);
+    expect((g2.nodes ?? []).some((n) => n.id === 'otherFile')).toBe(true);
+    await svc.stop();
+  });
+});

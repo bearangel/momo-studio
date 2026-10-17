@@ -20,7 +20,8 @@
     "properties": {
       "workspaceRoot": {
         "type": "string",
-        "title": "索引根目录（绝对路径）"
+        "title": "索引根目录（留空 = 当前工作空间目录）",
+        "scope": "workspace"
       },
       "indexCommand": {
         "type": "string",
@@ -30,10 +31,7 @@
         "type": "number",
         "title": "最大索引文件数"
       }
-    },
-    "required": [
-      "workspaceRoot"
-    ]
+    }
   },
   "permissions": {
     "fs": [

@@ -15,9 +15,11 @@ module.exports.createTools = function (pluginCtx) {
 
   function indexer() {
     const cfg = pluginCtx.getConfig() || {};
-    const root = cfg.workspaceRoot;
+    // 工作空间维度 v1.1（spec §4.4）：留空默认跟随工作区目录；显式值优先
+    const root = (typeof cfg.workspaceRoot === 'string' && cfg.workspaceRoot.trim() !== '' && cfg.workspaceRoot)
+      || (pluginCtx.workspace && pluginCtx.workspace.directoryPath);
     if (!root || typeof root !== 'string') {
-      throw new Error('codegraph：workspaceRoot 未配置（设置 → 插件 → Codegraph 填索引根目录）');
+      throw new Error('codegraph：workspaceRoot 未配置且无工作区上下文（留空即跟随工作区目录）');
     }
     if (!idx || cachedRoot !== root) {
       idx = createIndexer({ root, maxFiles: typeof cfg.maxFiles === 'number' ? cfg.maxFiles : undefined });
@@ -51,9 +53,11 @@ module.exports.createTools = function (pluginCtx) {
     async execute() {
       const cfg = pluginCtx.getConfig() || {};
       const g = indexer().graph();
+      const shownRoot = (typeof cfg.workspaceRoot === 'string' && cfg.workspaceRoot.trim() !== '' && cfg.workspaceRoot)
+        || (pluginCtx.workspace && pluginCtx.workspace.directoryPath);
       return [
         'codegraph status',
-        `- root: ${cfg.workspaceRoot}`,
+        `- root: ${shownRoot}`,
         `- files: ${g.stats.files}, symbols: ${g.stats.symbols}, edges: ${g.stats.edges}`,
         `- lastIndexedAt: ${new Date(g.stats.lastIndexedAt).toISOString()}`,
         '- engine: builtin regex indexer（近似调用图）',

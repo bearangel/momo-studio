@@ -89,3 +89,21 @@ describe('codegraph 工具面', () => {
     await expect(t.execute('explore', { symbol: 'x' })).rejects.toThrow(/workspaceRoot/);
   });
 });
+
+// ── 工作空间维度 v1.1（spec §4.4）：工具侧默认跟随 ctx.workspace ──
+describe('workspaceRoot 默认跟随（工具侧）', () => {
+  it('留空 + ctx.workspace → explore/status 用工作区目录（A2 工具链）', async () => {
+    fs.writeFileSync(path.join(root, 'a.ts'), 'export function followTool() { return 1; }');
+    const ctx = {
+      getConfig: () => ({}),
+      getDataDir: () => path.join(tmp, 'data'),
+      workspace: { id: 'ws-t', directoryPath: root },
+    };
+    const tools = createExplore(ctx);
+    const result = (await tools.execute('plugin:codegraph/explore', { symbol: 'followTool' }, null as never)) as string;
+    expect(result).toContain('followTool');
+    const status = createStatus(ctx);
+    const st = (await status.execute('plugin:codegraph/status', {}, null as never)) as string;
+    expect(st).toContain(path.resolve(root));
+  });
+});

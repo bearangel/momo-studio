@@ -34,9 +34,11 @@ module.exports.createService = function (pluginCtx) {
 
   function cfgRoot() {
     const cfg = pluginCtx.getConfig() || {};
-    const r = cfg.workspaceRoot;
+    // 工作空间维度 v1.1（spec §4.4）：留空默认跟随工作区目录；显式值优先
+    const r = (typeof cfg.workspaceRoot === 'string' && cfg.workspaceRoot.trim() !== '' && cfg.workspaceRoot)
+      || (pluginCtx.workspace && pluginCtx.workspace.directoryPath);
     if (!r || typeof r !== 'string') {
-      throw new Error('codegraph service：workspaceRoot 未配置（设置 → 插件 → Codegraph）');
+      throw new Error('codegraph service：workspaceRoot 未配置且无工作区上下文（留空即跟随工作区目录）');
     }
     return require('node:path').resolve(r); // M2：尾斜杠/相对路径归一（守卫的 startsWith 前提）
   }
