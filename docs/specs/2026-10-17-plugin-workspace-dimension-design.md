@@ -109,7 +109,9 @@ readPluginConfigJson(pluginId, workspaceId?)                 // 单文件读（�
 
 ## 6. 面板放置 placement
 
-### 6.1 manifest 变更（向后兼容）
+### 6.1 声明位（实施修订）
+
+**修订（2026-10-17 实施期）**：placement 声明位为 panel.json 每面板 `location` 字段（既有字段扩枚举 `sidebar | page`），而非下述 manifest components.panel 对象形态——字段已存在，仅扩白名单，改动面最小。以下原文保留作设计演进记录：
 
 `components.panel` 接受两种形态：
 

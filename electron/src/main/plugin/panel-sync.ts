@@ -34,16 +34,18 @@ export const PANEL_PUSH_EVENTS: readonly string[] = [
 /** 面板事件推送给 renderer 的通道名（preload 显式暴露） */
 export const PLUGIN_PANEL_EVENT_CHANNEL = 'plugin:panelEvent';
 
-/** 面板声明（panel.json 单项，已归一：icon 带缺省） */
+/** 面板声明（panel.json 单项，已归一：icon 带缺省）。
+ *  工作空间维度 v1.1：location 扩 page（主区独立视图形态，spec §6 修订） */
 export interface PanelDecl {
   id: string;
   title: string;
   icon: string;
-  location: 'sidebar';
+  location: 'sidebar' | 'page';
   entry: string;
 }
 
-/** renderer 消费形状（跨 IPC 纯数据；renderer types.d.ts 同形定义） */
+/** renderer 消费形状（跨 IPC 纯数据；renderer types.d.ts 同形定义）。
+ *  placement（v1.1）：sidebar = 侧栏槽（现状）；page = 主区独立视图 */
 export interface PluginPanelInfo {
   pluginId: string;
   pluginName: string;
@@ -51,10 +53,11 @@ export interface PluginPanelInfo {
   title: string;
   icon: string;
   entryUrl: string;
+  placement: 'sidebar' | 'page';
 }
 
-/** v1 挂载点唯一值（location 白名单） */
-const ALLOWED_LOCATIONS = ['sidebar'] as const;
+/** 挂载点白名单（v1.1 扩 page——主区独立视图） */
+const ALLOWED_LOCATIONS = ['sidebar', 'page'] as const;
 
 /** 每插件面板数上限（防 manifest 轰炸活动栏） */
 const MAX_PANELS = 4;
@@ -100,8 +103,8 @@ export function validatePanelsAtRoot(
     if (typeof p.title !== 'string' || p.title.trim().length === 0) {
       throw new Error(`面板 title 不能为空: ${pluginId}/${p.id}`);
     }
-    if (p.location !== undefined && !ALLOWED_LOCATIONS.includes(p.location as 'sidebar')) {
-      throw new Error(`面板 location v1 仅支持 sidebar: ${pluginId}/${p.id}`);
+    if (p.location !== undefined && !ALLOWED_LOCATIONS.includes(p.location as 'sidebar' | 'page')) {
+      throw new Error(`面板 location 仅支持 sidebar/page: ${pluginId}/${p.id}`);
     }
     if (p.icon !== undefined && (typeof p.icon !== 'string' || !/^lucide:[a-z0-9-]+$/.test(p.icon))) {
       throw new Error(`面板 icon 须为 lucide:<name> 形式: ${pluginId}/${p.id}`);
@@ -117,7 +120,7 @@ export function validatePanelsAtRoot(
       id: p.id,
       title: p.title,
       icon: typeof p.icon === 'string' ? p.icon : 'lucide:puzzle',
-      location: 'sidebar',
+      location: p.location === 'page' ? 'page' : 'sidebar',
       entry: p.entry,
     });
   }
@@ -173,6 +176,7 @@ export function listPluginPanels(workspaceId: string): PluginPanelInfo[] {
         title: d.title,
         icon: d.icon,
         entryUrl: `${PLUGIN_PANEL_SCHEME}://${rec.id}/${toUrlSegments(panelRel, d.entry)}`,
+        placement: d.location,
       });
     }
   }

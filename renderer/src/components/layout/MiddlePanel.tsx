@@ -24,6 +24,7 @@ import { EmptyState } from '../ui/EmptyState';
 import { SidebarRestoreButton } from './SidebarRestoreButton';
 // v2.7 Task 8：浏览器侧栏 chrome（占位区由主进程 WebContentsView 叠加渲染）
 import { BrowserSidebar } from '../workspace/BrowserSidebar';
+import { PanelPageView } from '../plugins/PanelPageView';
 
 export function MiddlePanel() {
   const activeView = useUiStore((s) => s.activeView);
@@ -127,6 +128,11 @@ export function MiddlePanel() {
   // settings 视图：Git Policy 配置 + 审计日志
   if (activeView === 'settings') {
     return <SettingsView />;
+  }
+
+  // plugin 视图（工作空间维度 v1.1）：插件 page 面板的主区独立页面
+  if (activeView === 'plugin') {
+    return <PanelPageView />;
   }
 
   // 兜底（所有 ViewKey 已在上方分支处理，理论上不可达）

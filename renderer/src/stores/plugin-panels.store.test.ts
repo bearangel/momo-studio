@@ -16,7 +16,8 @@ const P1: PluginPanelInfo = {
   panelId: 'graph',
   title: '代码图谱',
   icon: 'lucide:git-fork',
-  entryUrl: 'momo-plugin://cg/panel/index.html',
+  placement: 'sidebar',
+      entryUrl: 'momo-plugin://cg/panel/index.html',
 };
 
 beforeEach(() => {

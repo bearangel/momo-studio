@@ -89,7 +89,16 @@ export function ActivityBar() {
             aria-label={p.title}
             aria-pressed={active}
             title={p.title}
-            onClick={() => (active ? deactivatePanel() : activatePanel(key))}
+            onClick={() => {
+              // 工作空间维度 v1.1：page 面板走主区视图，sidebar 面板维持侧栏槽现状
+              if (active) {
+                deactivatePanel();
+                if (p.placement === 'page') setActiveView('im');
+                return;
+              }
+              activatePanel(key);
+              if (p.placement === 'page') setActiveView('plugin');
+            }}
             className={cn(
               'relative flex h-[34px] w-full items-center justify-center rounded-lg transition-colors',
               active

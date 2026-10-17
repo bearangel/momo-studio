@@ -1,7 +1,8 @@
 // renderer/src/stores/ui.store.ts
 import { create } from 'zustand';
 
-export type ViewKey = 'im' | 'files' | 'agents' | 'marketplace' | 'settings' | 'tasks';
+// 工作空间维度 v1.1：'plugin' = 插件主区页面态（具体面板由 plugin-panels.store.activeKey 决定）
+export type ViewKey = 'im' | 'files' | 'agents' | 'marketplace' | 'settings' | 'tasks' | 'plugin';
 
 /** 有侧边栏的视图（单一真相源：ViewSidebar / SidebarRestoreButton / ActivityBar 共用） */
 export type SidebarViewKey = 'im' | 'files' | 'tasks';

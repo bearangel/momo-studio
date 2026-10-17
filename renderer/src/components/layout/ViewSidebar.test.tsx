@@ -11,6 +11,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import { ViewSidebar } from './ViewSidebar';
+import { usePluginPanelsStore } from '../../stores/plugin-panels.store';
 import { useUiStore } from '../../stores/ui.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useEditorStore } from '../../stores/editor.store';
@@ -181,5 +182,21 @@ describe('ViewSidebar handleSelectFile（readForEditor 分流，功能优化 202
       expect(alertMock).toHaveBeenCalledWith('外部应用打开失败: Failed to open path');
     });
     alertMock.mockRestore();
+  });
+});
+
+// ── 工作空间维度 v1.1：page 面板不占侧栏槽（主区形态）──
+describe('ViewSidebar 面板槽位（placement 分流）', () => {
+  it('activeKey 指向 page 面板 → 侧栏不渲染 PanelHost（回退普通视图）', () => {
+    usePluginPanelsStore.setState({
+      panels: [{
+        pluginId: 'cg', pluginName: 'Codegraph', panelId: 'graph',
+        title: '代码图谱', icon: 'lucide:git-fork',
+        entryUrl: 'momo-plugin://cg/panel/index.html', placement: 'page',
+      }],
+      activeKey: 'cg/graph',
+    });
+    render(<ViewSidebar />);
+    expect(screen.queryByText('代码图谱')).not.toBeInTheDocument();
   });
 });

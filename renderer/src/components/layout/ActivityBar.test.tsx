@@ -122,3 +122,49 @@ describe('ActivityBar', () => {
     });
   });
 });
+
+// ── 工作空间维度 v1.1（spec §6）：page 面板点击 → 主区视图（activeView='plugin'）──
+import { usePluginPanelsStore } from '../../stores/plugin-panels.store';
+
+describe('面板放置分流（工作空间维度 v1.1）', () => {
+  beforeEach(() => {
+    useUiStore.setState({ activeView: 'im', sidebarCollapsed: { im: false, files: false, tasks: false } });
+    usePluginPanelsStore.setState({
+      panels: [
+        {
+          pluginId: 'cg', pluginName: 'Codegraph', panelId: 'graph',
+          title: '代码图谱', icon: 'lucide:git-fork',
+          entryUrl: 'momo-plugin://cg/panel/index.html', placement: 'page',
+        },
+        {
+          pluginId: 'cg', pluginName: 'Codegraph', panelId: 'mini',
+          title: '迷你面板', icon: 'lucide:puzzle',
+          entryUrl: 'momo-plugin://cg/panel/index.html', placement: 'sidebar',
+        },
+      ],
+      activeKey: null,
+    });
+  });
+
+  it('page 面板点击 → activeView=plugin + activeKey 置位', () => {
+    render(<ActivityBar />);
+    fireEvent.click(screen.getByLabelText('代码图谱'));
+    expect(useUiStore.getState().activeView).toBe('plugin');
+    expect(usePluginPanelsStore.getState().activeKey).toBe('cg/graph');
+  });
+
+  it('sidebar 面板点击 → activeView 不动，仅 activeKey 置位（现状语义）', () => {
+    render(<ActivityBar />);
+    fireEvent.click(screen.getByLabelText('迷你面板'));
+    expect(useUiStore.getState().activeView).toBe('im');
+    expect(usePluginPanelsStore.getState().activeKey).toBe('cg/mini');
+  });
+
+  it('page 面板再点 → 退出（deactivate + 回会话视图）', () => {
+    render(<ActivityBar />);
+    fireEvent.click(screen.getByLabelText('代码图谱'));
+    fireEvent.click(screen.getByLabelText('代码图谱'));
+    expect(useUiStore.getState().activeView).toBe('im');
+    expect(usePluginPanelsStore.getState().activeKey).toBeNull();
+  });
+});

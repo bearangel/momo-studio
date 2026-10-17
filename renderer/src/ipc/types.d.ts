@@ -1014,6 +1014,8 @@ export interface PluginPanelInfo {
   title: string;
   icon: string;
   entryUrl: string;
+  /** 工作空间维度 v1.1：sidebar = 侧栏槽（现状）；page = 主区独立视图 */
+  placement: 'sidebar' | 'page';
 }
 
 /** config 属性声明（主进程归一化后形状；v1 子集） */

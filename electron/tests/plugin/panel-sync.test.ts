@@ -75,7 +75,7 @@ describe('panel.json 校验（拒绝式）', () => {
     ['超过 4 项', { panels: [1, 2, 3, 4, 5].map((i) => ({ id: `p${i}`, title: 't', location: 'sidebar', entry: './index.html' })) }],
     ['id 非 slug', { panels: [{ id: 'BAD ID', title: 't', location: 'sidebar', entry: './index.html' }] }],
     ['title 空', { panels: [{ id: 'graph', title: '', location: 'sidebar', entry: './index.html' }] }],
-    ['location 非 sidebar', { panels: [{ id: 'graph', title: 't', location: 'main', entry: './index.html' }] }],
+    ['location 非法值', { panels: [{ id: 'graph', title: 't', location: 'main', entry: './index.html' }] }],
     ['icon 无 lucide 前缀', { panels: [{ id: 'graph', title: 't', icon: 'github', location: 'sidebar', entry: './index.html' }] }],
     ['entry 缺 ./ 前缀', { panels: [{ id: 'graph', title: 't', location: 'sidebar', entry: 'index.html' }] }],
     ['entry 穿越上级', { panels: [{ id: 'graph', title: 't', location: 'sidebar', entry: '../evil.html' }] }],
@@ -116,6 +116,7 @@ describe('listPluginPanels（启用过滤 + entryUrl）', () => {
       title: '代码图谱',
       icon: 'lucide:git-fork',
       entryUrl: 'momo-plugin://cg/panel/index.html',
+      placement: 'sidebar',
     });
   });
 
@@ -140,5 +141,32 @@ describe('notifyPanelsChanged 推送', () => {
     const bc = vi.fn();
     notifyPanelsChanged(bc);
     expect(bc).toHaveBeenCalledWith(PLUGIN_PANEL_CHANGED_CHANNEL);
+  });
+});
+
+
+// ── 工作空间维度 v1.1（spec §6 修订）：location 扩 page —— placement 透传 ──
+describe('panel placement（page 主区形态）', () => {
+  it('location: page 合法并透传 placement；缺省 location 仍 sidebar', () => {
+    writePanelJson('cgpage', {
+      panels: [
+        { id: 'graph', title: '代码图谱', icon: 'lucide:git-fork', location: 'page', entry: './index.html' },
+        { id: 'mini', title: '迷你', entry: './index.html' },
+      ],
+    });
+    const rec = mkRecord('cgpage', { panel: './panel' });
+    upsertPlugin(rec);
+    const decls = loadAndValidatePanels(rec);
+    expect(decls[0]?.location).toBe('page');
+    expect(decls[1]?.location).toBe('sidebar');
+    const ws = getDb().prepare(
+      "INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES ('wsp', 'p', '/tmp/p', 'u1')",
+    );
+    ws.run();
+    const infos = listPluginPanels('wsp');
+    const page = infos.find((i) => i.panelId === 'graph');
+    const side = infos.find((i) => i.panelId === 'mini');
+    expect(page?.placement).toBe('page');
+    expect(side?.placement).toBe('sidebar');
   });
 });

@@ -73,7 +73,9 @@ export function ViewSidebar() {
   const panelWidth = usePluginPanelsStore((s) => s.width);
   const setPanelWidth = usePluginPanelsStore((s) => s.setWidth);
   const activePanel =
-    activePanelKey === null ? null : (panels.find((p) => panelKeyOf(p) === activePanelKey) ?? null);
+    activePanelKey === null
+      ? null
+      : (panels.find((p) => panelKeyOf(p) === activePanelKey && p.placement === 'sidebar') ?? null);
   if (activePanel) {
     return (
       <Sidebar

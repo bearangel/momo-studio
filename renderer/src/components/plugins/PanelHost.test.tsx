@@ -20,7 +20,8 @@ const PANEL: PluginPanelInfo = {
   panelId: 'graph',
   title: '代码图谱',
   icon: 'lucide:git-fork',
-  entryUrl: 'momo-plugin://cg/panel/index.html',
+  placement: 'sidebar',
+      entryUrl: 'momo-plugin://cg/panel/index.html',
 };
 
 function renderHost(overrides: Partial<Parameters<typeof renderHostImpl>[0]> = {}) {
