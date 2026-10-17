@@ -86,6 +86,7 @@ export function requestPluginCallService(
   pluginId: string,
   method: string,
   params: unknown,
+  workspaceId?: string,
 ): Promise<unknown> {
   const send = (process as { send?: (m: unknown) => void }).send?.bind(process);
   if (typeof send !== 'function') {
@@ -110,6 +111,6 @@ export function requestPluginCallService(
       resolve(m.result ?? null);
     };
     process.on('message', handler);
-    send({ type: 'plugin:callService', id, pluginId, method, params });
+    send({ type: 'plugin:callService', id, pluginId, method, params, workspaceId });
   });
 }

@@ -23,6 +23,7 @@ import { syncPluginMcps } from './mcp-sync';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
 import { reloadPlugin } from './reload';
+import { getActiveWorkspaceId } from '../workspace/ipc.handlers';
 import type { PluginManifest, PluginRecord } from './types';
 
 /** 安装结果摘要（renderer 展示用；跨 IPC 纯数据，renderer types.d.ts 有同形定义） */
@@ -97,10 +98,11 @@ export function registerPluginHandlers(): void {
           if (stillEnabled.n === 0) removePluginHooks(id, bus);
         }
       }
-      // service 联动（spec §5.3）：启用即起；禁用时仍被其他 workspace 启用则不停
+      // service 联动（spec §5.3）：启用即起（目标=活动工作区——multi 语义，无活动 ws
+      // 则跳过由 lazy 兜底）；禁用时仍被其他 workspace 启用则不停
       if (enabled) {
         const rec = getPluginRecord(id);
-        if (rec) void startPluginService(rec).catch(() => undefined);
+        if (rec) void startPluginService(rec, getActiveWorkspaceId() ?? undefined).catch(() => undefined);
       } else {
         const stillEnabled = getDb()
           .prepare(
@@ -126,11 +128,12 @@ export function registerPluginHandlers(): void {
 
   ipcMain.handle('plugin:listPanels', (_evt, workspaceId: string) => listPluginPanels(workspaceId));
 
-  // 面板 RPC 透传：pluginId 来自调用方（PanelHost 构造绑定），消息面不带身份
+  // 面板 RPC 透传：pluginId 来自调用方（PanelHost 构造绑定），消息面不带身份。
+  // workspaceId（工作空间维度 v1.1）：multi 插件按工作区路由 + lazy 拉起（spec §5.2）
   ipcMain.handle(
     'plugin:callService',
-    (_evt, pluginId: string, method: string, params: unknown) =>
-      callPluginService(pluginId, method, params ?? null),
+    (_evt, pluginId: string, method: string, params: unknown, workspaceId?: string) =>
+      callPluginService(pluginId, method, params ?? null, workspaceId),
   );
 
   /** manifest config 归一（无 config 声明返回 null——renderer 显空态） */
@@ -140,38 +143,46 @@ export function registerPluginHandlers(): void {
     return normalizeConfigSchema(manifest.config);
   }
 
-  ipcMain.handle('plugin:getConfig', async (_evt, pluginId: string) => {
+  ipcMain.handle('plugin:getConfig', async (_evt, pluginId: string, workspaceId?: string) => {
     const rec = getPluginRecord(pluginId);
     if (!rec) throw new Error(`插件不存在: ${pluginId}`);
     const schema = normalizedSchemaOf(rec);
     if (!schema) return null;
     // C1 修复：先预热敏感缓存（boot 预热被错过时的兜底——在场判定只看缓存）
     await warmPluginConfigCache(pluginId, schema).catch(() => undefined);
-    const view = getPluginConfigView(pluginId, schema);
+    const view = getPluginConfigView(pluginId, schema, workspaceId);
     return {
       schema,
       values: view.values,
       sensitiveConfigured: view.sensitiveConfigured,
+      scopes: view.scopes,
     };
   });
 
-  /** 保存即生效（spec §3.3）：写双轨 → MCP 重装配（${config.KEY} 注入）→ 运行中 service 重启 */
+  /** 保存即生效（spec §3.3）：写双轨（workspaceId 给定时 workspace 层落该工作区文件）→
+   * MCP 重装配（${config.KEY} 注入）→ service 重启（multi 插件重启目标 = 写入的
+   * workspaceId 或活动工作区；无活动 ws 时跳过 start，lazy 兜底） */
   ipcMain.handle(
     'plugin:setConfig',
-    async (_evt, pluginId: string, values: Record<string, string | number | boolean | null>) => {
+    async (
+      _evt,
+      pluginId: string,
+      values: Record<string, string | number | boolean | null>,
+      workspaceId?: string,
+    ) => {
       const rec = getPluginRecord(pluginId);
       if (!rec) throw new Error(`插件不存在: ${pluginId}`);
       const schema = normalizedSchemaOf(rec);
       if (!schema) throw new Error(`此插件未声明配置项: ${pluginId}`);
-      await writePluginConfig(pluginId, schema, values);
+      await writePluginConfig(pluginId, schema, values, workspaceId);
       try {
         syncPluginMcps(rec);
       } catch (err) {
         logger.warn('setConfig 后 MCP 重装配失败', { pluginId, error: String(err) });
       }
-      // service 重启语义（P5 §8.2 真机发现 + 审查 I2）：无条件 stop，但 start 须
-      // gate on enablement——注册期缺配置的插件补配置后复活（F1）；全 workspace
-      // 禁用的插件保持熄灭（§8.6 禁用即消失，stop 对未运行实例幂等）
+      // service 重启语义（P5 §8.2 真机发现 + 审查 I2 + 工作空间维度 v1.1）：
+      // 无条件 stop（multi=全部实例），start 须 gate on enablement——注册期缺配置的
+      // 插件补配置后复活（F1）；全 workspace 禁用的插件保持熄灭（§8.6）
       const stillEnabled = (() => {
         try {
           const row = getDb()
@@ -186,12 +197,13 @@ export function registerPluginHandlers(): void {
           return true; // 判定失败按启用处理（保守拉起——F1 场景不受损）
         }
       })();
+      const restartTarget = workspaceId ?? getActiveWorkspaceId() ?? undefined;
       void stopPluginService(pluginId)
         .catch(() => undefined)
-        .then(() => (stillEnabled ? startPluginService(rec) : Promise.resolve(false)))
+        .then(() => (stillEnabled ? startPluginService(rec, restartTarget) : Promise.resolve(false)))
         .catch(() => undefined);
       // 回包完整 PluginConfigView（schema 必带——renderer 表单保存后原地重渲染）
-      return { schema, ...getPluginConfigView(pluginId, schema) };
+      return { schema, ...getPluginConfigView(pluginId, schema, workspaceId) };
     },
   );
 }

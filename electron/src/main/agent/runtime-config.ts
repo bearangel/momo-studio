@@ -19,8 +19,10 @@ export interface PluginToolRef {
   modulePaths: string[];
   /** 跨更新持久数据目录（pluginCtx.getDataDir()） */
   dataDir: string;
-  /** manifest.config 的当前值（<dataDir>/config.json 解析；缺省 {}） */
+  /** manifest.config 的当前值（global 层 + multi 插件的 workspace 层合并；缺省 {}） */
   config: Record<string, unknown>;
+  /** 工作空间维度 v1.1：装配定型的工作区上下文（ctx.workspace 注入源，spec §4.4） */
+  workspace?: { id: string; directoryPath: string };
 }
 import type { LLMMessage } from './llm-provider';
 import { isThinkingRequest, type ThinkingRequest } from '../llm/provider-presets';

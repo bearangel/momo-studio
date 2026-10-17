@@ -94,6 +94,7 @@ export async function handlePluginBridgeMsg(
         String(m.pluginId ?? ''),
         String(m.method ?? ''),
         (m.params ?? {}) as unknown,
+        typeof m.workspaceId === 'string' && m.workspaceId !== '' ? m.workspaceId : undefined,
       );
       respond({ id: m.id, result: result === undefined ? null : result });
     } catch (err) {

@@ -136,7 +136,7 @@ describe('P4 通道注册', () => {
   it('callService 透传三参（身份由调用方绑定）', async () => {
     svcFns.callPluginService.mockResolvedValue({ ok: 1 });
     const out = await handlerOf('plugin:callService')(null, 'cg', 'query', { q: 'x' });
-    expect(svcFns.callPluginService).toHaveBeenCalledWith('cg', 'query', { q: 'x' });
+    expect(svcFns.callPluginService).toHaveBeenCalledWith('cg', 'query', { q: 'x' }, undefined);
     expect(out).toEqual({ ok: 1 });
   });
 
@@ -171,7 +171,7 @@ describe('setConfig 保存即生效联动', () => {
     });
     expect(mcpFns.syncPluginMcps).toHaveBeenCalledWith(CG_REC);
     expect(svcFns.stopPluginService).toHaveBeenCalledWith('cg');
-    await vi.waitFor(() => expect(svcFns.startPluginService).toHaveBeenCalledWith(CG_REC));
+    await vi.waitFor(() => expect(svcFns.startPluginService).toHaveBeenCalledWith(CG_REC, undefined));
     expect((view as { sensitiveConfigured: Record<string, boolean> }).sensitiveConfigured.apiToken).toBe(true);
     expect(JSON.stringify(view)).not.toContain('sk-9');
   });
@@ -179,7 +179,7 @@ describe('setConfig 保存即生效联动', () => {
   it('service 未运行（注册期启动失败）→ 保存配置后拉起（P5 §8.2 真机语义）', async () => {
     svcFns.isServiceRunning.mockReturnValue(false);
     await handlerOf('plugin:setConfig')(null, 'cg', { indexCommand: 'x' });
-    await vi.waitFor(() => expect(svcFns.startPluginService).toHaveBeenCalledWith(CG_REC));
+    await vi.waitFor(() => expect(svcFns.startPluginService).toHaveBeenCalledWith(CG_REC, undefined));
   });
 
   it('I2 回归锁：全 workspace 禁用的插件 setConfig 不拉起 service（§8.6）', async () => {

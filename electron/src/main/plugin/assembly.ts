@@ -10,6 +10,8 @@ import { resolvePluginInstalledDir, resolvePluginDataDir } from '../paths';
 import type { PluginRecord } from './types';
 import type { PluginToolRef } from '../agent/runtime-config';
 import { readPluginConfigJson, sensitiveOverlaySync } from './config-store';
+import { pluginUsesWorkspaceScope } from './service-manager';
+import { getDb } from '../storage/db';
 
 /** 插件根目录：zip=installed 副本 / dev=源目录；missing 态或 dev 目录消失 → null */
 export function resolvePluginRoot(rec: PluginRecord): string | null {
@@ -46,8 +48,14 @@ function enabledPlugins(workspaceId: string): ResolvedPlugin[] {
   return out;
 }
 
-/** 启用插件的工具装配快照（components.tools 顶层 .js，非递归） */
+/** 启用插件的工具装配快照（components.tools 顶层 .js，非递归）。
+ *  工作空间维度 v1.1（spec §4.2/§4.4）：ref 附带工作区上下文（id + directoryPath，
+ *  workspaces 行缺失时 undefined——存量容错）；multi 插件的 config 合并 workspace 层 */
 export function buildPluginToolRefs(workspaceId: string): PluginToolRef[] {
+  const wsRow = getDb()
+    .prepare('SELECT id, directory_path FROM workspaces WHERE id = ?')
+    .get(workspaceId) as { id: string; directory_path: string } | undefined;
+  const workspace = wsRow ? { id: wsRow.id, directoryPath: wsRow.directory_path } : undefined;
   return enabledPlugins(workspaceId).flatMap(({ rec, root, manifest }) => {
     const toolsDirRel = manifest.components?.tools;
     if (typeof toolsDirRel !== 'string') return [];
@@ -63,8 +71,20 @@ export function buildPluginToolRefs(workspaceId: string): PluginToolRef[] {
       return [];
     }
     const dataDir = resolvePluginDataDir(rec.id);
+    const multi = pluginUsesWorkspaceScope(rec);
     return [
-      { pluginId: rec.id, rootDir: root, modulePaths, dataDir, config: { ...readPluginConfigJson(rec.id), ...sensitiveOverlaySync(rec.id) } },
+      {
+        pluginId: rec.id,
+        rootDir: root,
+        modulePaths,
+        dataDir,
+        config: {
+          ...readPluginConfigJson(rec.id),
+          ...(multi ? readPluginConfigJson(rec.id, workspaceId) : {}),
+          ...sensitiveOverlaySync(rec.id),
+        },
+        workspace,
+      },
     ];
   });
 }

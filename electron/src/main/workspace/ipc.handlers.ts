@@ -25,7 +25,22 @@ import { isAgentRunning } from '../agent/runtime-status';
 import { startAgentRuntime, stopAgentRuntime } from '../agent/runtime-registry';
 import { getAgentDefinition, listMembers } from '../agent/crud';
 import { buildSpawnOpts, resolveApiKey } from '../agent/spawn-helpers';
+import {
+  onWorkspaceSwitched as stopStalePluginServices,
+  stopAllWorkspaceInstances,
+} from '../plugin/service-manager';
+import { deleteWorkspacePluginConfig } from '../plugin/config-store';
 import type { CreateWorkspaceInput } from './types';
+
+/**
+ * 活动工作区单点（工作空间维度 v1.1 spec §5.2）：renderer boot 的 load()→switch
+ * 通知 + 用户切换共灌此值；插件面（setConfig 重启目标 / lazy 兜底上下文）消费。
+ * 初值 null——首个 switch 到达前的插件启动按无上下文跳过，lazy 调用兜底。
+ */
+let currentActiveWorkspaceId: string | null = null;
+export function getActiveWorkspaceId(): string | null {
+  return currentActiveWorkspaceId;
+}
 
 /** 注册可选项：workspace:* 通道的跨子系统回调（依赖注入，默认无操作） */
 export interface WorkspaceIpcOpts {
@@ -56,6 +71,14 @@ export function registerWorkspaceHandlers(opts: WorkspaceIpcOpts = {}): void {
 
   ipcMain.handle('workspace:delete', async (_evt, id: string) => {
     deleteWorkspace(id);
+    // 工作空间维度 v1.1：插件面随删清理（spec §4.2——config.<wsId>.json 物理清除 +
+    // 该 ws 全部 multi service 实例停止）；清理失败不阻塞删除主流程
+    try {
+      deleteWorkspacePluginConfig(id);
+    } catch {
+      // 孤儿文件不参与读取（按 wsId 寻址天然跳过），物理残留无害
+    }
+    void stopAllWorkspaceInstances(id).catch(() => undefined);
     emitPluginEvent('workspaceClosed', { workspaceId: id });
     return;
   });
@@ -81,6 +104,8 @@ export function registerWorkspaceHandlers(opts: WorkspaceIpcOpts = {}): void {
   ipcMain.handle('workspace:switch', (_evt, id: string) => {
     const ws = getWorkspace(id);
     if (!ws) throw new Error(`Workspace 不存在: ${id}`);
+    currentActiveWorkspaceId = ws.id;
+    void stopStalePluginServices(ws.id).catch(() => undefined); // 插件 multi 实例切换停（spec §5.2）
     opts.onWorkspaceSwitched?.(ws.id, ws.directoryPath);
     // M1 裁定：v1 事件目录只有 opened/closed——切换复用 opened，payload.reason 区分
     // （watcher 型插件据此避免把「切换」当「新开」重复初始化）

@@ -1019,6 +1019,8 @@ export interface PluginConfigPropertyDecl {
   type: 'string' | 'number' | 'boolean';
   title?: string;
   sensitive?: boolean;
+  /** 工作空间维度 v1.1：缺省 global（设置页「按工作空间」徽标依据） */
+  scope?: 'workspace' | 'global';
   enum?: (string | number)[];
 }
 
@@ -1027,6 +1029,8 @@ export interface PluginConfigView {
   schema: { properties: Record<string, PluginConfigPropertyDecl>; required: string[] };
   values: Record<string, unknown>;
   sensitiveConfigured: Record<string, boolean>;
+  /** 工作空间维度 v1.1：逐键作用域（workspace 层值已按 wsId 合并进 values） */
+  scopes: Record<string, 'workspace' | 'global'>;
 }
 
 /** 插件域 IPC 面（P1：安装 / 启停 / 卸载；P2：reload；P4：面板与 config，spec §6） */
@@ -1037,9 +1041,9 @@ export interface PluginApiSurface {
   uninstall(id: string, keepData: boolean): Promise<void>;
   reload(id: string): Promise<PluginSummary>;
   listPanels(workspaceId: string): Promise<PluginPanelInfo[]>;
-  callService(pluginId: string, method: string, params: unknown): Promise<unknown>;
-  getConfig(pluginId: string): Promise<PluginConfigView | null>;
-  setConfig(pluginId: string, values: Record<string, string | number | boolean | null>): Promise<PluginConfigView>;
+  callService(pluginId: string, method: string, params: unknown, workspaceId?: string): Promise<unknown>;
+  getConfig(pluginId: string, workspaceId?: string): Promise<PluginConfigView | null>;
+  setConfig(pluginId: string, values: Record<string, string | number | boolean | null>, workspaceId?: string): Promise<PluginConfigView>;
   onPanelsChanged(callback: () => void): () => void;
   onPanelEvent(callback: (payload: { event: string; payload: unknown }) => void): () => void;
 }

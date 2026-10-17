@@ -16,6 +16,8 @@ export interface PluginToolCtx {
   logger: { warn(msg: string, meta?: unknown): void; info(msg: string, meta?: unknown): void };
   /** P3（spec §5.3）：service RPC——走 plugin:callService 子进程桥 */
   callService(method: string, params: unknown): Promise<unknown>;
+  /** 工作空间维度 v1.1（spec §4.4）：装配定型的工作区上下文（默认跟随依据） */
+  workspace?: { id: string; directoryPath: string };
 }
 
 export interface PluginToolModule extends ToolModule {
@@ -57,7 +59,8 @@ export function loadPluginToolModules(
             warn: (msg, meta) => log(`[plugin:${ref.pluginId}] ${msg}`, meta),
             info: (msg, meta) => log(`[plugin:${ref.pluginId}] ${msg}`, meta),
           },
-          callService: (method, params) => requestPluginCallService(ref.pluginId, method, params),
+          callService: (method, params) => requestPluginCallService(ref.pluginId, method, params, ref.workspace?.id),
+          workspace: ref.workspace,
         };
         const created = mod.createTools(pluginCtx);
         if (created === null || typeof created !== 'object') {

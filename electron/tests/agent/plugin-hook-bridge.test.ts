@@ -129,3 +129,30 @@ describe('process.send 绑定语义（§8.4 真机回归）', () => {
     }
   });
 });
+
+// ── 工作空间维度 v1.1（spec §5.3）：callService 桥携带 workspaceId ──
+describe('requestPluginCallService workspaceId 透传', () => {
+  it('出站消息携带 workspaceId（this 绑定语义同 §8.4 锁）', async () => {
+    const sent: unknown[] = [];
+    const orig = process.send;
+    (process as { send?: unknown }).send = function (this: unknown, msg: unknown) {
+      if (this !== process) throw new Error('this 丢失（解构病回归）');
+      sent.push(msg);
+      // 立即回包（id 配对）
+      const m = msg as { id?: string };
+      setTimeout(() => (process as unknown as { emit(ev: string, payload: unknown): boolean }).emit('message', { id: m.id, result: 'ok' }), 0);
+      return true;
+    } as never;
+    try {
+      const { requestPluginCallService } = await import('../../src/main/agent/plugin-hook-bridge');
+      await expect(requestPluginCallService('cg', 'explore', { q: 1 }, 'ws-9')).resolves.toBe('ok');
+      const msg = sent[0] as { type?: string; pluginId?: string; workspaceId?: string };
+      expect(msg.type).toBe('plugin:callService');
+      expect(msg.pluginId).toBe('cg');
+      expect(msg.workspaceId).toBe('ws-9');
+    } finally {
+      if (orig === undefined) delete (process as { send?: unknown }).send;
+      else (process as { send?: unknown }).send = orig;
+    }
+  });
+});

@@ -511,11 +511,12 @@ const api: ApiSurface = {
     reload: (id: string) => invoke<PluginSummary>('plugin:reload', id),
     // P4：面板与 config 面（spec §6）
     listPanels: (workspaceId: string) => invoke<PluginPanelInfo[]>('plugin:listPanels', workspaceId),
-    callService: (pluginId: string, method: string, params: unknown) =>
-      invoke<unknown>('plugin:callService', pluginId, method, params),
-    getConfig: (pluginId: string) => invoke<PluginConfigView | null>('plugin:getConfig', pluginId),
-    setConfig: (pluginId: string, values: Record<string, string | number | boolean | null>) =>
-      invoke<PluginConfigView>('plugin:setConfig', pluginId, values),
+    callService: (pluginId: string, method: string, params: unknown, workspaceId?: string) =>
+      invoke<unknown>('plugin:callService', pluginId, method, params, workspaceId),
+    getConfig: (pluginId: string, workspaceId?: string) =>
+      invoke<PluginConfigView | null>('plugin:getConfig', pluginId, workspaceId),
+    setConfig: (pluginId: string, values: Record<string, string | number | boolean | null>, workspaceId?: string) =>
+      invoke<PluginConfigView>('plugin:setConfig', pluginId, values, workspaceId),
     onPanelsChanged: (callback: () => void) => {
       const handler = (): void => callback();
       ipcRenderer.on('plugin:panelsChanged', handler);

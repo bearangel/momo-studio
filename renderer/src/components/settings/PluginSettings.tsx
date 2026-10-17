@@ -62,7 +62,7 @@ function PluginConfigSection({ pluginId, pluginName }: PluginConfigSectionProps)
   const [view, setView] = useState<PluginConfigView | 'loading' | 'none' | 'error'>('loading');
   const viewResolved: PluginConfigView =
     view === 'loading' || view === 'none' || view === 'error'
-      ? { schema: { properties: {}, required: [] }, values: {}, sensitiveConfigured: {} }
+      ? { schema: { properties: {}, required: [] }, values: {}, sensitiveConfigured: {}, scopes: {} }
       : view;
   const [form, setForm] = useState<Record<string, string | number | boolean>>({});
   const [sensitiveInput, setSensitiveInput] = useState<Record<string, string>>({});

@@ -84,7 +84,7 @@ describe('handlePluginBridgeMsg 三分支', () => {
       ok,
       bus,
     );
-    expect(svc.call).toHaveBeenCalledWith('cg', 'ping', {});
+    expect(svc.call).toHaveBeenCalledWith('cg', 'ping', {}, undefined);
     expect(ok).toHaveBeenCalledWith({ id: 'r3', result: 'pong' });
 
     svc.call.mockRejectedValueOnce(new Error('svc down'));

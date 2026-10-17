@@ -175,3 +175,35 @@ describe('loadPluginToolModules', () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining('[plugin:cg] watch me'), undefined);
   });
 });
+
+// ── 工作空间维度 v1.1（spec §4.4）：工具 ctx 注入 workspace ──
+const WS_MODULE = `
+module.exports.createTools = function (pluginCtx) {
+  return {
+    getDefs() { return [{ name: 'wsinfo', description: 'ws 上下文', inputSchema: { type: 'object' } }]; },
+    getCatalog() { return []; },
+    handles(name) { return name === 'wsinfo'; },
+    async execute() { return JSON.stringify(pluginCtx.workspace ?? null); },
+  };
+};
+`;
+
+describe('PluginToolCtx.workspace 注入（工作空间维度 v1.1）', () => {
+  it('ref.workspace 透传到插件 ctx（默认跟随依据）', async () => {
+    const modulePath = writeModule('ws-echo.js', WS_MODULE);
+    const { modules, failures } = loadPluginToolModules(
+      [ref({ modulePaths: [modulePath], workspace: { id: 'ws-a', directoryPath: '/tmp/dir-a' } })],
+      vi.fn(),
+    );
+    expect(failures).toHaveLength(0);
+    const out = JSON.parse((await modules[0]!.execute('plugin:cg/wsinfo', {}, mkCtx())) as string);
+    expect(out).toEqual({ id: 'ws-a', directoryPath: '/tmp/dir-a' });
+  });
+
+  it('无 workspace 的 ref（存量/无 ws 行）→ ctx.workspace undefined 不炸', async () => {
+    const modulePath = writeModule('ws-echo2.js', WS_MODULE);
+    const { modules } = loadPluginToolModules([ref({ modulePaths: [modulePath] })], vi.fn());
+    const out = JSON.parse((await modules[0]!.execute('plugin:cg/wsinfo', {}, mkCtx())) as string);
+    expect(out).toBeNull();
+  });
+});

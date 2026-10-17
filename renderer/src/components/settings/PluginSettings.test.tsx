@@ -36,6 +36,7 @@ const PLUGINS: ResourceItem[] = [
 ] as unknown as ResourceItem[];
 
 const VIEW: PluginConfigView = {
+  scopes: {},
   schema: {
     properties: {
       indexCommand: { type: 'string', title: '索引构建命令' },
