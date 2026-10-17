@@ -84,3 +84,24 @@ describe('filterVisibleToolDefs（P2 审查 I1）', () => {
     ).toEqual(['read_file', 'bash']);
   });
 });
+
+// ── 工作空间维度 v1.1（spec 2026-10-17 §7.2）：插件工具 denied 门控（Review Focus #5） ──
+describe('deniedTools plugin 前缀门控（跨域无误伤）', () => {
+  const cfg = { allowedTools: [], deniedTools: ['plugin:codegraph/*'] };
+
+  it('plugin:codegraph/* 命中该插件全部工具，不伤 builtin 与他插件', () => {
+    expect(() => assertToolAllowed('plugin:codegraph/explore', cfg)).toThrow(/被禁止/);
+    expect(() => assertToolAllowed('plugin:codegraph/status', cfg)).toThrow(/被禁止/);
+    expect(() => assertToolAllowed('read_file', cfg)).not.toThrow();
+    expect(() => assertToolAllowed('plugin:codegraph2/x', cfg)).not.toThrow(); // 前缀碰撞免疫（'/' 分隔）
+  });
+
+  it('deny 精确名 read_file 不影响插件工具；插件精确名单独禁', () => {
+    const cfg2 = { allowedTools: [], deniedTools: ['read_file'] };
+    expect(() => assertToolAllowed('plugin:codegraph/explore', cfg2)).not.toThrow();
+    expect(() => assertToolAllowed('read_file', cfg2)).toThrow(/被禁止/);
+    const cfg3 = { allowedTools: [], deniedTools: ['plugin:codegraph/explore'] };
+    expect(() => assertToolAllowed('plugin:codegraph/explore', cfg3)).toThrow(/被禁止/);
+    expect(() => assertToolAllowed('plugin:codegraph/status', cfg3)).not.toThrow();
+  });
+});

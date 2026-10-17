@@ -85,6 +85,8 @@ export interface CreateCustomDefInput {
   defaultSkills?: SkillRef[];
   /** v31：agent 级思维模式覆盖；缺省/null=继承模型级 */
   thinkingJson?: ThinkingConfig | null;
+  /** 工作空间维度 v1.1：工具禁用模式串，缺省 = [] */
+  deniedTools?: string[];
 }
 
 /**
@@ -96,7 +98,18 @@ export interface CreateCustomDefInput {
  * 尝试从 getGlobalSettings().defaultChatModel 兜底（前提：引用的 provider 行仍存在）；
  * 兜底不可用 → 抛「未配置 modelProviderId」错误。仅影响新建路径，存量 def 不动。
  */
+/** 工作空间维度 v1.1：deniedTools 形状校验（string[]；模式串字符白名单防注入面） */
+function assertDeniedToolsShape(v: unknown): void {
+  if (!Array.isArray(v)) throw new Error('deniedTools 须为字符串数组');
+  for (const item of v) {
+    if (typeof item !== 'string' || item.length === 0 || !/^[a-zA-Z0-9_:\/*-]+$/.test(item)) {
+      throw new Error(`deniedTools 含非法模式串: ${String(item)}`);
+    }
+  }
+}
+
 export function createCustomDef(workspaceId: string | null, input: CreateCustomDefInput): AgentDefinition {
+  assertDeniedToolsShape(input.deniedTools ?? []);
   // P3 Task 2：会话模型 fallback——仅当 modelProviderId 缺省时消费全局默认；modelName 一并由 default 提供
   let effectiveProviderId = input.modelProviderId?.trim() ?? '';
   let effectiveModelName = input.modelName?.trim() ?? '';
@@ -144,6 +157,7 @@ export function createCustomDef(workspaceId: string | null, input: CreateCustomD
     modelProviderId: effectiveProviderId,
     modelName: effectiveModelName,
     thinkingJson: input.thinkingJson ?? null,
+    deniedTools: input.deniedTools ?? [],
   };
   saveAgentDefinition(def);
   logger.info('自定义 Agent 定义已创建', { slug: def.slug, workspaceId });
@@ -161,10 +175,10 @@ export function saveAgentDefinition(def: AgentDefinition): void {
   db.prepare(
     `INSERT OR REPLACE INTO agent_definitions
       (id, name, slug, version, runtime, system_prompt, default_tools, default_mcps, default_skills,
-       source, description, icon_emoji, model_provider_id, model_name, task_driven, thinking_json)
+       source, description, icon_emoji, model_provider_id, model_name, task_driven, thinking_json, denied_tools)
      VALUES
       (@id, @name, @slug, @version, @runtime, @system_prompt, @default_tools, @default_mcps, @default_skills,
-       @source, @description, @icon_emoji, @model_provider_id, @model_name, @task_driven, @thinking_json)`,
+       @source, @description, @icon_emoji, @model_provider_id, @model_name, @task_driven, @thinking_json, @denied_tools)`,
   ).run({
     id: def.id,
     name: def.name,
@@ -182,6 +196,7 @@ export function saveAgentDefinition(def: AgentDefinition): void {
     model_name: def.modelName,
     task_driven: 1, // Task 13 起 v1 长存进程双轨已删，恒为 task-driven
     thinking_json: def.thinkingJson != null ? JSON.stringify(def.thinkingJson) : null,
+    denied_tools: JSON.stringify(def.deniedTools ?? []),
   });
 }
 
@@ -470,17 +485,20 @@ export function updateAgentDefinition(input: {
   defaultSkills?: SkillRef[];
   /** v31：思维模式覆盖；undefined=不改，null=清除（继承模型级），传值=覆盖 */
   thinkingJson?: ThinkingConfig | null;
+  /** 工作空间维度 v1.1：工具禁用模式串；undefined=不改（含则整体覆盖） */
+  deniedTools?: string[];
 }): AgentDefinition {
   const existing = getAgentDefinition(input.id);
   if (!existing) throw new Error(`Agent 定义不存在: ${input.id}`);
   // 终审 I-2：坏形状源头拒绝（null=清除合法；undefined=不改不校验）
   if (input.thinkingJson != null) assertThinkingConfigShape(input.thinkingJson);
+  if (input.deniedTools !== undefined) assertDeniedToolsShape(input.deniedTools);
   const db = getDb();
   db.prepare(
     `UPDATE agent_definitions SET
        name = ?, description = ?, system_prompt = ?, icon_emoji = ?,
        model_provider_id = ?, model_name = ?,
-       default_tools = ?, default_mcps = ?, default_skills = ?, thinking_json = ?
+       default_tools = ?, default_mcps = ?, default_skills = ?, thinking_json = ?, denied_tools = ?
      WHERE id = ?`,
   ).run(
     input.name ?? existing.name,
@@ -499,6 +517,7 @@ export function updateAgentDefinition(input: {
       : existing.thinkingJson != null
         ? JSON.stringify(existing.thinkingJson)
         : null,
+    input.deniedTools !== undefined ? JSON.stringify(input.deniedTools) : JSON.stringify(existing.deniedTools ?? []),
     input.id,
   );
   return getAgentDefinition(input.id)!;

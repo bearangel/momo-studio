@@ -78,6 +78,8 @@ export interface AgentDefinition {
   // === 供应商预设（migration v31） ===
   /** agent 级思维模式覆盖；NULL/undefined=继承模型级（provider_models.thinking_json） */
   thinkingJson?: ThinkingConfig | null;
+  /** 工作空间维度 v1.1（spec §7.1，migration 061）：工具禁用模式串（plugin:<id>/* 前缀 + 精确名）；缺省 [] */
+  deniedTools?: string[];
 }
 
 /**

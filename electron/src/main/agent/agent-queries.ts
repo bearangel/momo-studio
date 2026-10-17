@@ -36,6 +36,7 @@ export interface AgentDefRow {
   model_name: string;
   task_driven: number;
   thinking_json: string | null;
+  denied_tools: string | null;
 }
 
 /** workspace_agent_members 行的弱类型映射（v25 schema：无 role/parent/enabled）。
@@ -82,6 +83,15 @@ export function rowToDef(row: AgentDefRow): AgentDefinition {
         return parseThinkingConfig(JSON.parse(row.thinking_json) as unknown);
       } catch {
         return null;
+      }
+    })(),
+    // 工作空间维度 v1.1：坏 JSON 容错读回 []（缺列=迁移前旧行，null 默认值覆盖）
+    deniedTools: (() => {
+      try {
+        const parsed = JSON.parse(row.denied_tools ?? '[]') as unknown;
+        return Array.isArray(parsed) ? (parsed.filter((x): x is string => typeof x === 'string')) : [];
+      } catch {
+        return [];
       }
     })(),
   };

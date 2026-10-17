@@ -182,3 +182,40 @@ describe('updateAgentDefinition — v1.6 default* 入参', () => {
     expect(after.systemPrompt).toBe('新 prompt');
   });
 });
+
+// ── 工作空间维度 v1.1（spec §7.1）：denied_tools 列读写 ──
+describe('agent 定义 deniedTools（迁移 061 + 行映射 + 更新）', () => {
+  it('createCustomDef 携带 deniedTools → 落库读回保真（含 plugin: 前缀模式串）', () => {
+    const def = createCustomDef(null, {
+      name: '受限 agent',
+      slug: 'gated-agent',
+      description: '',
+      systemPrompt: 'p',
+      modelProviderId: 'prov-1',
+      modelName: 'm',
+      deniedTools: ['plugin:codegraph/*', 'plugin:cg/explore'],
+    });
+    const back = getAgentDefinition(def.id);
+    expect(back?.deniedTools).toEqual(['plugin:codegraph/*', 'plugin:cg/explore']);
+  });
+
+  it('缺省 deniedTools = []（存量行为不变）；updateAgentDefinition 含则更新', () => {
+    const def = createCustomDef(null, {
+      name: '普通', slug: 'plain-agent', description: '', systemPrompt: 'p',
+      modelProviderId: 'prov-1', modelName: 'm',
+    });
+    expect(getAgentDefinition(def.id)?.deniedTools).toEqual([]);
+    updateAgentDefinition({ id: def.id, deniedTools: ['plugin:x/*'] });
+    expect(getAgentDefinition(def.id)?.deniedTools).toEqual(['plugin:x/*']);
+  });
+
+  it('坏形状拒绝：非字符串数组抛错不落库', () => {
+    expect(() =>
+      createCustomDef(null, {
+        name: '坏', slug: 'bad-agent', description: '', systemPrompt: 'p',
+        modelProviderId: 'prov-1', modelName: 'm',
+        deniedTools: [123 as unknown as string],
+      }),
+    ).toThrow(/deniedTools/);
+  });
+});

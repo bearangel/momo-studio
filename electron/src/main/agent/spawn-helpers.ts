@@ -398,6 +398,9 @@ export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentR
     subAgents,
     // v1.6 修复：allowedTools 来自三层合并后的 merged.tools（非 undefined）
     allowedTools: merged.tools,
+    // 工作空间维度 v1.1（spec §7.2）：agent 级工具门控——def 列直传，强制点
+    // doExecuteTool→assertToolAllowed 现成（plugin:* 天然覆盖）
+    deniedTools: def.deniedTools ?? [],
     // LSP 已下架（2026-10-08，GUI 验收问题多）：lspLanguages 检测快照注入摘除——
     // LspTools.create 门控随之恒 null，agent 工具面不再注册 lsp_*。子系统代码
     // 全保留（manager/detect/registry/ipc/panel/工具），恢复 = 还原本行注入 +

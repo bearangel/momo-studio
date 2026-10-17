@@ -70,6 +70,8 @@ export interface AgentDefinition {
   modelName: string;
   /** agent 级思维模式覆盖；NULL=继承模型级（v31 起） */
   thinkingJson?: ThinkingConfig | null;
+  /** 工作空间维度 v1.1：工具禁用模式串（plugin:<id>/* 前缀 + 精确名）；缺省 [] */
+  deniedTools?: string[];
 }
 
 /**
