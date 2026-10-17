@@ -16,7 +16,7 @@
 //   值缺省 = 保持现值；null = 删除；实际值 = 写入。required 校验针对合并终态。
 import fs from 'node:fs';
 import path from 'node:path';
-import { resolvePluginDataDir } from '../paths';
+import { resolvePluginDataDir, resolvePluginsDir } from '../paths';
 import { getSecret, setSecret, deleteSecret } from '../storage/keychain';
 
 /** 属性级 Schema（v1 子集，多收拒绝） */
@@ -24,6 +24,9 @@ export interface ConfigPropertyDecl {
   type: 'string' | 'number' | 'boolean';
   title?: string;
   sensitive?: boolean;
+  /** 工作空间维度 v1.1（spec 2026-10-17 §4.1）：声明式作用域，缺省 global；
+   *  sensitive 组合拒绝（敏感值跨工作区共享，v1 非目标） */
+  scope?: 'workspace' | 'global';
   enum?: (string | number)[];
 }
 
@@ -67,18 +70,25 @@ export function normalizeConfigSchema(raw: unknown): NormalizedConfigSchema {
     if (!isConfigKey(key)) throw new Error(`config 属性键非法（字母数字白名单外）: ${key}`);
     const d = decl as Record<string, unknown>;
     if (typeof d !== 'object' || d === null) throw new Error(`config 属性声明须为对象: ${key}`);
-    const allowed = new Set(['type', 'title', 'sensitive', 'enum']);
+    const allowed = new Set(['type', 'title', 'sensitive', 'scope', 'enum']);
     for (const field of Object.keys(d)) {
       if (!allowed.has(field)) throw new Error(`config 属性含 v1 不支持字段: ${key}.${field}`);
     }
     if (d.type !== 'string' && d.type !== 'number' && d.type !== 'boolean') {
       throw new Error(`config 属性 type 须为 string/number/boolean: ${key}`);
     }
+    if (d.scope !== undefined && d.scope !== 'workspace' && d.scope !== 'global') {
+      throw new Error(`config.scope 须为 workspace/global: ${key}`);
+    }
+    if (d.scope === 'workspace' && d.sensitive === true) {
+      throw new Error(`config 组合不支持：sensitive 属性 ${key} 不能声明 scope: workspace`);
+    }
     const out: ConfigPropertyDecl = { type: d.type };
     if (d.title !== undefined && typeof d.title !== 'string') throw new Error(`config.title 须为字符串: ${key}`);
     if (d.title !== undefined) out.title = d.title;
     if (d.sensitive !== undefined && typeof d.sensitive !== 'boolean') throw new Error(`config.sensitive 须为布尔: ${key}`);
     if (d.sensitive !== undefined) out.sensitive = d.sensitive;
+    if (d.scope !== undefined) out.scope = d.scope;
     if (d.enum !== undefined) {
       if (!Array.isArray(d.enum) || d.enum.length === 0 || !d.enum.every((v) => typeof v === 'string' || typeof v === 'number')) {
         throw new Error(`config.enum 须为非空 string/number 数组: ${key}`);
@@ -100,12 +110,26 @@ export function normalizeConfigSchema(raw: unknown): NormalizedConfigSchema {
   return { properties, required };
 }
 
-/** 非敏感层同步读（收敛 P3 三份 readConfig 实现的唯一语义：坏文件/缺文件/非对象 → {}） */
-export function readPluginConfigJson(pluginId: string): Record<string, unknown> {
+/** workspace 层文件名段：workspaceId 白名单校验（UUID/字母数字连字符——防路径穿越） */
+function assertWorkspaceId(workspaceId: string): void {
+  if (!/^[a-zA-Z0-9-]+$/.test(workspaceId)) throw new Error(`workspaceId 非法: ${workspaceId}`);
+}
+
+function workspaceConfigPath(dataDir: string, workspaceId: string): string {
+  assertWorkspaceId(workspaceId);
+  return path.join(dataDir, `config.${workspaceId}.json`);
+}
+
+/**
+ * 非敏感层同步读（收敛 P3 三份 readConfig 实现的唯一语义：坏文件/缺文件/非对象 → {}）。
+ * 工作空间维度 v1.1：workspaceId 给定时读 workspace 层文件（config.<wsId>.json），
+ * 缺省读 global 层（config.json）——旧调用点零改动。
+ */
+export function readPluginConfigJson(pluginId: string, workspaceId?: string): Record<string, unknown> {
+  const base = resolvePluginDataDir(pluginId);
+  const file = workspaceId ? workspaceConfigPath(base, workspaceId) : path.join(base, 'config.json');
   try {
-    const parsed = JSON.parse(
-      fs.readFileSync(path.join(resolvePluginDataDir(pluginId), 'config.json'), 'utf-8'),
-    ) as unknown;
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf-8')) as unknown;
     return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>)
       : {};
@@ -148,14 +172,16 @@ function checkValue(key: string, decl: ConfigPropertyDecl, v: unknown): void {
 }
 
 /**
- * 写入（overlay 语义 + 终态 required 校验）：
- *   非敏感层合并进 config.json（tmp + rename 原子写）；
- *   敏感层写 keytar（null = deleteSecret）并更新缓存。
+ * 写入（overlay 语义 + 终态 required 校验，按作用域分层）：
+ *   workspace-scope 键 → config.<wsId>.json（workspaceId 给定时）；global/敏感 → 原轨道；
+ *   required 校验针对本次涉及作用域的合并终态（无 wsId 写入不触碰/不校验 workspace 层）；
+ *   两层各自 tmp + rename 原子写。
  */
 export async function writePluginConfig(
   pluginId: string,
   schema: NormalizedConfigSchema,
   values: WriteValues,
+  workspaceId?: string,
 ): Promise<void> {
   for (const [key, v] of Object.entries(values)) {
     const decl = schema.properties[key];
@@ -163,14 +189,19 @@ export async function writePluginConfig(
     if (v !== null) checkValue(key, decl, v);
   }
 
-  // 终态 required 校验（合并现有值后）
   const currentPlain = readPluginConfigJson(pluginId);
-  const currentSensitive = sensitiveCache.get(pluginId) ?? {};
+  const currentWs = workspaceId ? readPluginConfigJson(pluginId, workspaceId) : {};
   const finalPlain = { ...currentPlain };
-  const finalSensitiveKeys = new Set(Object.keys(currentSensitive));
+  const finalWs = { ...currentWs };
+  const finalSensitiveKeys = new Set(Object.keys(sensitiveCache.get(pluginId) ?? {}));
   for (const [key, v] of Object.entries(values)) {
     const decl = schema.properties[key];
     if (decl === undefined) throw new Error(`config 未知键: ${key}`);
+    if (decl.scope === 'workspace' && workspaceId) {
+      if (v === null) delete finalWs[key];
+      else finalWs[key] = v;
+      continue;
+    }
     if (decl.sensitive) {
       if (v === null) finalSensitiveKeys.delete(key);
       else finalSensitiveKeys.add(key);
@@ -180,20 +211,26 @@ export async function writePluginConfig(
       finalPlain[key] = v;
     }
   }
-  const missing = schema.required.filter((k) => !(k in finalPlain) && !finalSensitiveKeys.has(k));
+  const missing = schema.required.filter((k) => {
+    const decl = schema.properties[k];
+    if (decl === undefined) return false;
+    if (decl.scope === 'workspace') {
+      if (!workspaceId) return false; // 本次不触碰 workspace 层——不纳入校验
+      return !(k in finalWs);
+    }
+    return !(k in finalPlain) && !finalSensitiveKeys.has(k);
+  });
   if (missing.length > 0) {
     throw new Error(`config 必填项未配置: ${missing.join(', ')}`);
   }
 
-  // 非敏感层原子写
   const dataDir = resolvePluginDataDir(pluginId);
   fs.mkdirSync(dataDir, { recursive: true });
-  const target = path.join(dataDir, 'config.json');
-  const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
-  fs.writeFileSync(tmp, JSON.stringify(finalPlain, null, 2), 'utf-8');
-  fs.renameSync(tmp, target);
+  writeAtomicJson(path.join(dataDir, 'config.json'), finalPlain);
+  if (workspaceId) {
+    writeAtomicJson(workspaceConfigPath(dataDir, workspaceId), finalWs);
+  }
 
-  // 敏感层 keytar + 缓存
   for (const [key, v] of Object.entries(values)) {
     const decl = schema.properties[key];
     if (decl === undefined || !decl.sensitive) continue;
@@ -207,31 +244,48 @@ export async function writePluginConfig(
   await warmPluginConfigCache(pluginId, schema);
 }
 
-/** 表单渲染视图：非敏感明文 + 敏感在场布尔（明文永不外泄） */
+/** tmp + rename 原子写（分轨存储抽公共） */
+function writeAtomicJson(target: string, data: Record<string, unknown>): void {
+  const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
+  fs.renameSync(tmp, target);
+}
+
+/** 表单渲染视图：global+workspace 层合并明文 + 敏感在场布尔 + 逐键作用域（renderer 徽标用） */
 export function getPluginConfigView(
   pluginId: string,
   schema: NormalizedConfigSchema,
-): { values: Record<string, unknown>; sensitiveConfigured: Record<string, boolean> } {
-  const values = readPluginConfigJson(pluginId);
+  workspaceId?: string,
+): {
+  values: Record<string, unknown>;
+  sensitiveConfigured: Record<string, boolean>;
+  scopes: Record<string, 'workspace' | 'global'>;
+} {
+  const values = {
+    ...readPluginConfigJson(pluginId),
+    ...(workspaceId ? readPluginConfigJson(pluginId, workspaceId) : {}),
+  };
   const sensitiveConfigured: Record<string, boolean> = {};
+  const scopes: Record<string, 'workspace' | 'global'> = {};
   for (const [key, decl] of Object.entries(schema.properties)) {
-    if (decl.sensitive) sensitiveConfigured[key] = (key in (sensitiveCache.get(pluginId) ?? {})) || vaultHas(pluginId, key);
+    if (decl.sensitive) sensitiveConfigured[key] = key in (sensitiveCache.get(pluginId) ?? {});
+    scopes[key] = decl.scope ?? 'global';
   }
-  return { values, sensitiveConfigured };
+  return { values, sensitiveConfigured, scopes };
 }
 
-/** 缓存是否已有该键（避免同步路径读 keytar） */
-function vaultHas(_pluginId: string, _key: string): boolean {
-  return false; // 同步面只看缓存；在场判定准确性由激活边界 warm 保证
-}
-
-/** 全量合并（含敏感）——异步面专用（${config.KEY} 注入 / service 启动快照） */
+/** 全量合并（global 层 + workspace 层 + 敏感缓存）——异步面专用（${config.KEY} 注入 / service 启动快照） */
 export async function resolvePluginConfig(
   pluginId: string,
   schema: NormalizedConfigSchema,
+  workspaceId?: string,
 ): Promise<Record<string, unknown>> {
   await warmPluginConfigCache(pluginId, schema);
-  return { ...readPluginConfigJson(pluginId), ...(sensitiveCache.get(pluginId) ?? {}) };
+  return {
+    ...readPluginConfigJson(pluginId),
+    ...(workspaceId ? readPluginConfigJson(pluginId, workspaceId) : {}),
+    ...(sensitiveCache.get(pluginId) ?? {}),
+  };
 }
 
 /** 同步敏感 overlay（pluginCtx.getConfig / service ctx 组装用） */
@@ -242,6 +296,28 @@ export function sensitiveOverlaySync(pluginId: string): Record<string, unknown> 
 /** 卸载清理：清除该插件敏感缓存（keepData=false 时随 keytar 一起删） */
 export function evictPluginConfigCache(pluginId: string): void {
   sensitiveCache.delete(pluginId);
+}
+
+/** 工作区删除清理：扫数据根删各插件的 config.<wsId>.json（孤儿不参与读取，此处物理清理；
+ *  数据目录扫描而非注册表遍历——避免 config-store 引入 DB 依赖） */
+export function deleteWorkspacePluginConfig(workspaceId: string): void {
+  const dataRoot = path.join(resolvePluginsDir(), 'data');
+  assertWorkspaceId(workspaceId);
+  let entries: string[] = [];
+  try {
+    entries = fs.readdirSync(dataRoot, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name);
+  } catch {
+    return; // 数据根不存在 = 无可清理
+  }
+  for (const pluginId of entries) {
+    try {
+      fs.rmSync(workspaceConfigPath(path.join(dataRoot, pluginId), workspaceId), { force: true });
+    } catch {
+      // 单插件清理失败不阻塞其余
+    }
+  }
 }
 
 /** 测试隔离：清空敏感缓存 */

@@ -15,6 +15,7 @@ import {
   resolvePluginConfig,
   warmPluginConfigCache,
   sensitiveRef,
+  deleteWorkspacePluginConfig,
 } from '../../src/main/plugin/config-store';
 import { setKeychainImpl } from '../../src/main/storage/keychain';
 import { resolvePluginDataDir } from '../../src/main/paths';
@@ -182,5 +183,84 @@ describe('C1 修复锁：冷缓存启动路径（不经 writePluginConfig 预热
     expect(cs.sensitiveOverlaySync('cg')).toEqual({ apiToken: 'sk-1' });
     cs.evictPluginConfigCache('cg');
     expect(cs.sensitiveOverlaySync('cg')).toEqual({});
+  });
+});
+
+// ── 工作空间维度 v1.1（spec 2026-10-17 §4）：声明式作用域 + 双轨存储 ──
+
+const WS_SCHEMA = {
+  type: 'object',
+  properties: {
+    workspaceRoot: { type: 'string', title: '索引根目录', scope: 'workspace' },
+    indexCommand: { type: 'string', title: '索引命令' },
+  },
+  required: ['workspaceRoot'],
+};
+
+function wsJson(id: string, workspaceId: string): string {
+  return path.join(resolvePluginDataDir(id), `config.${workspaceId}.json`);
+}
+
+describe('config 声明式作用域（工作空间维度 v1.1）', () => {
+  it('scope 校验：合法值归一、缺省 global、非法值拒绝', () => {
+    const schema = normalizeConfigSchema(WS_SCHEMA);
+    expect(schema.properties.workspaceRoot?.scope).toBe('workspace');
+    expect(schema.properties.indexCommand?.scope).toBeUndefined();
+    expect(() =>
+      normalizeConfigSchema({ type: 'object', properties: { a: { type: 'string', scope: 'ws' } } }),
+    ).toThrow(/scope/);
+  });
+
+  it('sensitive + workspace 组合拒绝（v1 非目标）', () => {
+    expect(() =>
+      normalizeConfigSchema({
+        type: 'object',
+        properties: { a: { type: 'string', sensitive: true, scope: 'workspace' } },
+      }),
+    ).toThrow(/workspace/);
+  });
+
+  it('workspace-scope 键落 config.<wsId>.json，global 键仍落 config.json（分轨）', async () => {
+    const schema = normalizeConfigSchema(WS_SCHEMA);
+    await writePluginConfig('p-ws', schema, { workspaceRoot: '/ws-a-root', indexCommand: 'ls' }, 'ws-a');
+    expect(fs.existsSync(wsJson('p-ws', 'ws-a'))).toBe(true);
+    expect(fs.existsSync(dataJson('p-ws'))).toBe(true);
+    const view = getPluginConfigView('p-ws', schema, 'ws-a');
+    expect(view.values).toEqual({ workspaceRoot: '/ws-a-root', indexCommand: 'ls' });
+    expect(view.scopes).toEqual({ workspaceRoot: 'workspace', indexCommand: 'global' });
+  });
+
+  it('无 workspaceId 写入：workspace-scope 键不写不校验，global 键照常', async () => {
+    const schema = normalizeConfigSchema(WS_SCHEMA);
+    // required 含 workspaceRoot（workspace 层）——无 wsId 时不纳入校验，仅写 global 层
+    await writePluginConfig('p-ws2', schema, { indexCommand: 'ls' });
+    expect(readPluginConfigJson('p-ws2')).toEqual({ indexCommand: 'ls' });
+    expect(readPluginConfigJson('p-ws2', 'ws-a')).toEqual({});
+  });
+
+  it('required 校验按作用域分层：带 wsId 写入但 workspace 层缺必填 → 拒绝', async () => {
+    const schema = normalizeConfigSchema(WS_SCHEMA);
+    await expect(
+      writePluginConfig('p-ws3', schema, { indexCommand: 'x' }, 'ws-a'),
+    ).rejects.toThrow(/必填/);
+  });
+
+  it('resolvePluginConfig 合并三层：global + workspace + 敏感缓存', async () => {
+    const schema = normalizeConfigSchema(WS_SCHEMA);
+    await writePluginConfig('p-ws4', schema, { workspaceRoot: '/a', indexCommand: 'g' }, 'ws-a');
+    const merged = await resolvePluginConfig('p-ws4', schema, 'ws-a');
+    expect(merged).toEqual({ workspaceRoot: '/a', indexCommand: 'g' });
+  });
+
+  it('deleteWorkspacePluginConfig 扫数据根清各插件该工作区文件（不动 global 层）', async () => {
+    const schema = normalizeConfigSchema(WS_SCHEMA);
+    await writePluginConfig('p-ws5', schema, { workspaceRoot: '/a', indexCommand: 'g' }, 'ws-a');
+    deleteWorkspacePluginConfig('ws-a');
+    expect(fs.existsSync(wsJson('p-ws5', 'ws-a'))).toBe(false);
+    expect(fs.existsSync(dataJson('p-ws5'))).toBe(true); // global 层保留
+  });
+
+  it('workspaceId 含路径字符拒绝（防穿越）', () => {
+    expect(() => readPluginConfigJson('p', '../evil')).toThrow(/workspaceId/);
   });
 });
