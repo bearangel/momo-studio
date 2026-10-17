@@ -39,6 +39,7 @@ import type {
   UploadedSkill,
   PluginSummary,
   PluginPanelInfo,
+  PluginToolInfo,
   PluginConfigView,
 } from '../../../renderer/src/ipc/types';
 
@@ -511,6 +512,8 @@ const api: ApiSurface = {
     reload: (id: string) => invoke<PluginSummary>('plugin:reload', id),
     // P4：面板与 config 面（spec §6）
     listPanels: (workspaceId: string) => invoke<PluginPanelInfo[]>('plugin:listPanels', workspaceId),
+    listAssembledTools: (workspaceId: string) =>
+      invoke<PluginToolInfo[]>('plugin:listAssembledTools', workspaceId),
     callService: (pluginId: string, method: string, params: unknown, workspaceId?: string) =>
       invoke<unknown>('plugin:callService', pluginId, method, params, workspaceId),
     getConfig: (pluginId: string, workspaceId?: string) =>

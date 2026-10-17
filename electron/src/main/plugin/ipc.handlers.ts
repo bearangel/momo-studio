@@ -24,6 +24,7 @@ import { getDb } from '../storage/db';
 import { logger } from '../logger';
 import { reloadPlugin } from './reload';
 import { getActiveWorkspaceId } from '../workspace/ipc.handlers';
+import { listAssembledToolDefs } from './tool-catalog';
 import type { PluginManifest, PluginRecord } from './types';
 
 /** 安装结果摘要（renderer 展示用；跨 IPC 纯数据，renderer types.d.ts 有同形定义） */
@@ -127,6 +128,11 @@ export function registerPluginHandlers(): void {
   // ── P4：面板与 config 面（spec §6） ──
 
   ipcMain.handle('plugin:listPanels', (_evt, workspaceId: string) => listPluginPanels(workspaceId));
+
+  // 工作空间维度 v1.1（spec §7.3）：agent 配置 UI 的插件工具清单（装配面派生）
+  ipcMain.handle('plugin:listAssembledTools', (_evt, workspaceId: string) =>
+    listAssembledToolDefs(workspaceId),
+  );
 
   // 面板 RPC 透传：pluginId 来自调用方（PanelHost 构造绑定），消息面不带身份。
   // workspaceId（工作空间维度 v1.1）：multi 插件按工作区路由 + lazy 拉起（spec §5.2）

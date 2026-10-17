@@ -36,8 +36,34 @@ export function PluginSettings() {
     };
   }, []);
 
+  const [hintDismissed, setHintDismissed] = useState(() => {
+    try {
+      return localStorage.getItem('momo.pluginWsConfigHint.v1') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const dismissHint = (): void => {
+    try {
+      localStorage.setItem('momo.pluginWsConfigHint.v1', '1');
+    } catch {
+      // localStorage 不可用不阻塞——仅本会话消失
+    }
+    setHintDismissed(true);
+  };
+
   return (
     <section aria-label="插件配置">
+      {!hintDismissed && (
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-subtle bg-surface-2 px-3 py-2.5">
+          <span className="flex-1 text-xs text-secondary">
+            按工作空间的配置项独立保存于每个工作空间，留空时部分插件将使用工作空间目录默认值
+          </span>
+          <Button variant="ghost" type="button" onClick={dismissHint}>
+            知道了
+          </Button>
+        </div>
+      )}
       <h2 className="text-base text-primary">插件</h2>
       <p className="mb-4 mt-1 text-xs leading-relaxed text-tertiary">
         各插件的配置项由其声明自动生成；保存后立即生效（MCP 重装配 / service 重启），无需重启应用。
@@ -206,6 +232,9 @@ function ConfigField(props: ConfigFieldProps) {
       <label htmlFor={`cfg-${fieldKey}`} className="text-[13px] text-secondary">
         {label}
         {required && <span className="ml-0.5 text-status-error">*</span>}
+        {decl.scope === 'workspace' && (
+          <span className="ml-1.5 rounded bg-surface-3 px-1.5 py-px text-[10px] text-tertiary">按工作空间</span>
+        )}
       </label>
       {decl.sensitive ? (
         <div className="flex items-center gap-2">

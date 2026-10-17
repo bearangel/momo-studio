@@ -1028,6 +1028,16 @@ export interface PluginConfigPropertyDecl {
   enum?: (string | number)[];
 }
 
+/** plugin:listAssembledTools 返回项（工作空间维度 v1.1 spec §7.3——agent 配置 UI 数据源） */
+export interface PluginToolInfo {
+  pluginId: string;
+  pluginName: string;
+  toolName: string;
+  /** 全限定名 = plugin:<id>/<短名>（deniedTools 精确名形态） */
+  fullName: string;
+  description: string;
+}
+
 /** plugin:getConfig / setConfig 返回形状（敏感值只出在场布尔，明文永不外泄） */
 export interface PluginConfigView {
   schema: { properties: Record<string, PluginConfigPropertyDecl>; required: string[] };
@@ -1045,6 +1055,7 @@ export interface PluginApiSurface {
   uninstall(id: string, keepData: boolean): Promise<void>;
   reload(id: string): Promise<PluginSummary>;
   listPanels(workspaceId: string): Promise<PluginPanelInfo[]>;
+  listAssembledTools(workspaceId: string): Promise<PluginToolInfo[]>;
   callService(pluginId: string, method: string, params: unknown, workspaceId?: string): Promise<unknown>;
   getConfig(pluginId: string, workspaceId?: string): Promise<PluginConfigView | null>;
   setConfig(pluginId: string, values: Record<string, string | number | boolean | null>, workspaceId?: string): Promise<PluginConfigView>;
@@ -1976,6 +1987,8 @@ export interface ApiSurface {
       defaultSkills?: Array<{ kind: 'skill'; ref: string; versionRange?: string }>;
       /** v31：agent 级思维模式覆盖；缺省 = null（继承模型级） */
       thinkingJson?: ThinkingConfig | null;
+      /** 工作空间维度 v1.1：工具禁用模式串；缺省 = [] */
+      deniedTools?: string[];
     }): Promise<AgentDefinition>;
     /** v1.3：可选 workspaceId 过滤 */
     list(workspaceId?: string): Promise<AgentDefinition[]>;
@@ -2008,6 +2021,8 @@ export interface ApiSurface {
       defaultSkills?: Array<{ kind: 'skill'; ref: string; versionRange?: string }>;
       /** v31：agent 级思维模式覆盖；undefined=不改；null=清除（回退模型级） */
       thinkingJson?: ThinkingConfig | null;
+      /** 工作空间维度 v1.1：工具禁用模式串；undefined=不改（含则整体覆盖） */
+      deniedTools?: string[];
     }): Promise<{ definition: AgentDefinition; stoppedInstanceIds: string[] }>;
     /** 预设 agent 按需启用（spec 2026-09-22）：def 入库 + 模型 + 可选加入/设默认 */
     enablePreset(input: EnablePresetInput): Promise<EnablePresetResult>;

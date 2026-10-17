@@ -24,6 +24,7 @@ import { CapabilityTabs, type Capabilities } from './CapabilityTabs';
 import { ProviderModelPicker } from './ProviderModelPicker';
 import { ThinkingOverrideControl } from './ThinkingOverrideControl';
 import { useToolCatalog } from '../../lib/useToolCatalog';
+import { usePluginTools } from '../../lib/usePluginTools';
 import { defToCapabilities } from '../../lib/capability-helpers';
 import type { AgentDefinition, ReasoningCapability, ThinkingConfig } from '../../ipc/types';
 
@@ -52,6 +53,8 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
   // create 模式默认勾选目录 defaultOn 集（Tier 1）；edit/configure 模式从
   // def.defaultTools/Mcps/Skills 加载（下方既有 useEffect，不依赖目录）。
   const { data: catalog } = useToolCatalog();
+  const { data: pluginTools } = usePluginTools(mode === 'create' ? activeWorkspaceId : activeWorkspaceId);
+  const [deniedTools, setDeniedTools] = useState<string[]>([]);
   const [capabilities, setCapabilities] = useState<Capabilities>({
     tools: [],
     mcps: [],
@@ -78,6 +81,7 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
       setProviderId(def.modelProviderId ?? '');
       setModelName(def.modelName);
       setThinkingJson(def.thinkingJson ?? null);
+      setDeniedTools(def.deniedTools ?? []);
       setCapabilities(defToCapabilities(def));
     }
   }, [def, mode]);
@@ -119,6 +123,7 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
           modelProviderId: providerId,
           modelName: modelName.trim(),
           thinkingJson,
+          deniedTools,
           defaultTools,
           defaultMcps,
           defaultSkills,
@@ -132,6 +137,7 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
           modelProviderId: providerId,
           modelName: modelName.trim(),
           thinkingJson,
+          deniedTools,
           defaultTools,
           defaultMcps,
           defaultSkills,
@@ -225,6 +231,14 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
             value={capabilities}
             onChange={(next) => setCapabilities(next)}
           />
+          {(pluginTools?.length ?? 0) > 0 && (
+            <PluginToolsSection
+              tools={pluginTools ?? []}
+              deniedTools={deniedTools}
+              onChange={setDeniedTools}
+              disabled={readOnly}
+            />
+          )}
         </div>
 
         {error && <div className="text-status-error text-sm">{error}</div>}
@@ -236,5 +250,100 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
         </div>
       </form>
     </Dialog>
+  );
+}
+
+
+/** 插件工具门控换算纯函数（工作空间维度 v1.1 spec §7.3；导出供测试）：
+ *  changed 形态两种——整组模式 `plugin:<id>/*` 或精确名 `plugin:<id>/<name>`。
+ *  组模式存在时开单个工具 = 摘组模式 + 展开其余精确名（保持其余仍禁）。 */
+export function computeDeniedTools(
+  current: string[],
+  pluginId: string,
+  toolFullNames: string[],
+  changed: string,
+  on: boolean,
+): string[] {
+  const group = `plugin:${pluginId}/*`;
+  if (!on) {
+    if (changed === group) return [...new Set([...current, group])];
+    const hadGroup = current.includes(group);
+    const base = current.filter((p) => p !== group);
+    const rest = hadGroup ? toolFullNames.filter((n) => n !== changed) : [];
+    return [...new Set([...base, changed, ...rest])];
+  }
+  if (changed === group) {
+    return current.filter((p) => p !== group && !p.startsWith(`plugin:${pluginId}/`));
+  }
+  // 组模式下开单个：摘组模式，其余仍禁的展开为精确名（语义连续不跳变）
+  const hadGroup = current.includes(group);
+  const base = current.filter((p) => p !== group && p !== changed);
+  const rest = hadGroup ? toolFullNames.filter((n) => n !== changed) : [];
+  return [...base, ...rest];
+}
+
+interface PluginToolsSectionProps {
+  tools: Array<{ pluginId: string; pluginName: string; fullName: string; description: string }>;
+  deniedTools: string[];
+  onChange: (next: string[]) => void;
+  disabled: boolean;
+}
+
+/** 插件工具分组（DefinitionEditor）：组头整插件开关 + 组内单工具开关，默认全开 */
+function PluginToolsSection({ tools, deniedTools, onChange, disabled }: PluginToolsSectionProps) {
+  const byPlugin = new Map<string, typeof tools>();
+  for (const t of tools) {
+    const list = byPlugin.get(t.pluginId) ?? [];
+    list.push(t);
+    byPlugin.set(t.pluginId, list);
+  }
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="text-xs text-secondary">插件工具</div>
+      {[...byPlugin.entries()].map(([pluginId, list]) => {
+        const group = `plugin:${pluginId}/*`;
+        const groupDenied = deniedTools.includes(group);
+        const allDenied = list.every((t) => groupDenied || deniedTools.includes(t.fullName));
+        const someDenied = groupDenied || list.some((t) => deniedTools.includes(t.fullName));
+        return (
+          <div key={pluginId} className="rounded-md border border-subtle bg-surface-2 px-2.5 py-2">
+            <label className="flex items-center gap-2 text-xs text-primary">
+              <input
+                type="checkbox"
+                aria-label={`禁用插件 ${list[0]!.pluginName} 全部工具`}
+                checked={allDenied}
+                disabled={disabled}
+                onChange={(e) =>
+                  onChange(computeDeniedTools(deniedTools, pluginId, list.map((t) => t.fullName), group, !e.target.checked))
+                }
+              />
+              <span className="font-medium">{list[0]!.pluginName}</span>
+              <span className="font-mono text-[10px] text-tertiary">{pluginId}</span>
+              {someDenied && !allDenied && <span className="text-[10px] text-tertiary">部分禁用</span>}
+            </label>
+            <div className="mt-1 flex flex-col gap-0.5 pl-5">
+              {list.map((t) => {
+                const denied = groupDenied || deniedTools.includes(t.fullName);
+                return (
+                  <label key={t.fullName} className="flex items-center gap-2 text-xs text-secondary">
+                    <input
+                      type="checkbox"
+                      aria-label={`禁用 ${t.fullName}`}
+                      checked={denied}
+                      disabled={disabled}
+                      onChange={(e) =>
+                        onChange(computeDeniedTools(deniedTools, pluginId, list.map((x) => x.fullName), t.fullName, !e.target.checked))
+                      }
+                    />
+                    <span className="font-mono">{t.fullName}</span>
+                    <span className="text-tertiary">{t.description}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }

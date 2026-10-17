@@ -22,6 +22,7 @@ const updateDefinition = vi.fn();
 const resourceList = vi.fn();
 const listModels = vi.fn();
 const getCatalog = vi.fn();
+const listAssembledTools = vi.fn();
 
 /** mock 工具目录：2 个 defaultOn + 1 个 defaultOn=false（与 CapabilityTabs 测试同规格） */
 const MOCK_CATALOG: ToolCatalogEntry[] = [
@@ -41,6 +42,7 @@ const mockApi = {
   resource: { list: resourceList },
   provider: { listModels },
   tools: { getCatalog },
+  plugin: { listAssembledTools },
 };
 
 beforeEach(() => {
@@ -50,6 +52,7 @@ beforeEach(() => {
   updateDefinition.mockResolvedValue({ definition: {}, stoppedInstanceIds: [] });
   resourceList.mockResolvedValue([]);
   getCatalog.mockReset().mockResolvedValue(MOCK_CATALOG);
+  listAssembledTools.mockReset().mockResolvedValue([]);
   listModels.mockReset().mockResolvedValue([
     { providerId: 'prov-1', modelId: 'gpt-4o', enabled: true, addedAt: 0 },
   ]);
@@ -331,5 +334,69 @@ describe('DefinitionEditor — brief 数据丢失回归锁：def.thinkingJson �
     });
     const arg = updateDefinition.mock.calls[0][0];
     expect(arg.thinkingJson).toEqual(persistedThinking);
+  });
+});
+
+// ── 工作空间维度 v1.1（spec §7.3）：插件工具门控分组 ──
+import { computeDeniedTools } from './DefinitionEditor';
+
+
+describe('插件工具门控分组（工作空间维度 v1.1）', () => {
+  beforeEach(() => {
+    listAssembledTools.mockReset().mockResolvedValue([
+      { pluginId: 'cg', pluginName: 'Codegraph', toolName: 'explore', fullName: 'plugin:cg/explore', description: '查询图谱' },
+      { pluginId: 'cg', pluginName: 'Codegraph', toolName: 'status', fullName: 'plugin:cg/status', description: '索引状态' },
+    ]);
+  });
+
+  it('渲染插件分组：组头与单工具名可见；全开默认无 denied', async () => {
+    render(<DefinitionEditor mode="create" onClose={() => {}} />);
+    expect(await screen.findByText('插件工具')).toBeInTheDocument();
+    expect(screen.getByText('plugin:cg/explore')).toBeInTheDocument();
+    expect(screen.getByText('plugin:cg/status')).toBeInTheDocument();
+  });
+
+  it('组头关闭 → 提交携带 plugin:cg/*', async () => {
+    render(<DefinitionEditor mode="create" onClose={() => {}} />);
+    await screen.findByText('插件工具');
+    fireEvent.click(screen.getByLabelText('禁用插件 Codegraph 全部工具'));
+    fireEvent.change(screen.getByPlaceholderText('如：代码审查员'), { target: { value: '测试 agent' } });
+    fireEvent.change(screen.getByPlaceholderText('如：code-reviewer'), { target: { value: 'test-agent' } });
+    fireEvent.change(screen.getByPlaceholderText('你是一名资深审查员...'), { target: { value: '系统提示词' } });
+    fireEvent.change(screen.getByLabelText('模型供应商*'), { target: { value: 'prov-1' } });
+    await screen.findByRole('option', { name: 'gpt-4o' });
+    fireEvent.change(screen.getByLabelText('模型名'), { target: { value: 'gpt-4o' } });
+    fireEvent.click(screen.getByText('创建'));
+    await waitFor(() => expect(createCustom).toHaveBeenCalled());
+    expect(createCustom.mock.calls[0][0].deniedTools).toEqual(['plugin:cg/*']);
+  });
+
+  it('单工具关闭 → 提交携带精确名', async () => {
+    render(<DefinitionEditor mode="create" onClose={() => {}} />);
+    await screen.findByText('插件工具');
+    fireEvent.click(screen.getByLabelText('禁用 plugin:cg/explore'));
+    fireEvent.change(screen.getByPlaceholderText('如：代码审查员'), { target: { value: '测试 agent' } });
+    fireEvent.change(screen.getByPlaceholderText('如：code-reviewer'), { target: { value: 'test-agent' } });
+    fireEvent.change(screen.getByPlaceholderText('你是一名资深审查员...'), { target: { value: '系统提示词' } });
+    fireEvent.change(screen.getByLabelText('模型供应商*'), { target: { value: 'prov-1' } });
+    await screen.findByRole('option', { name: 'gpt-4o' });
+    fireEvent.change(screen.getByLabelText('模型名'), { target: { value: 'gpt-4o' } });
+    fireEvent.click(screen.getByText('创建'));
+    await waitFor(() => expect(createCustom).toHaveBeenCalled());
+    expect(createCustom.mock.calls[0][0].deniedTools).toEqual(['plugin:cg/explore']);
+  });
+
+  it('computeDeniedTools 纯函数：组模式展开/收起语义', () => {
+    const names = ['plugin:cg/explore', 'plugin:cg/status'];
+    // 关单个工具（组开态）
+    expect(computeDeniedTools([], 'cg', names, 'plugin:cg/explore', false)).toEqual(['plugin:cg/explore']);
+    // 组模式下开单个 → 摘组模式并展开其余精确名
+    expect(computeDeniedTools(['plugin:cg/*'], 'cg', names, 'plugin:cg/explore', true)).toEqual([
+      'plugin:cg/status',
+    ]);
+    // 关整组
+    expect(computeDeniedTools([], 'cg', names, 'plugin:cg/*', false)).toEqual(['plugin:cg/*']);
+    // 开整组 → 清该插件全部相关模式
+    expect(computeDeniedTools(['plugin:cg/*', 'plugin:cg/explore'], 'cg', names, 'plugin:cg/*', true)).toEqual([]);
   });
 });

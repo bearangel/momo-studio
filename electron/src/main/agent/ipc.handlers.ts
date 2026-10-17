@@ -195,6 +195,8 @@ export function registerAgentHandlers(): void {
       defaultSkills?: Array<{ kind: 'skill'; ref: string; versionRange?: string }>;
       /** v31：agent 级思维模式覆盖；缺省/null=继承模型级 */
       thinkingJson?: ThinkingConfig | null;
+      /** 工作空间维度 v1.1：工具禁用模式串；缺省 = [] */
+      deniedTools?: string[];
     }) => {
       const workspaceId = input.scope === 'workspace'
         ? input.workspaceId ?? null

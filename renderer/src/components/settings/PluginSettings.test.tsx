@@ -36,9 +36,10 @@ const PLUGINS: ResourceItem[] = [
 ] as unknown as ResourceItem[];
 
 const VIEW: PluginConfigView = {
-  scopes: {},
+  scopes: { workspaceRoot: 'workspace', indexCommand: 'global' },
   schema: {
     properties: {
+      workspaceRoot: { type: 'string', title: '索引根目录', scope: 'workspace' },
       indexCommand: { type: 'string', title: '索引构建命令' },
       apiToken: { type: 'string', title: 'API Token', sensitive: true },
       watchDebounce: { type: 'number', title: '监听防抖（ms）' },
@@ -136,5 +137,21 @@ describe('PluginSettings', () => {
     resourceList.mockResolvedValue([]);
     render(<PluginSettings />);
     await waitFor(() => expect(screen.getByText(/前往资源库/)).toBeTruthy());
+  });
+});
+
+// ── 工作空间维度 v1.1：作用域徽标 + 一次性迁移提示 ──
+describe('workspace 作用域徽标与迁移提示（工作空间维度 v1.1）', () => {
+  it('scope=workspace 的字段标题旁显示「按工作空间」徽标；global 字段无徽标', async () => {
+    render(<PluginSettings />);
+    expect(await screen.findByText('索引根目录')).toBeInTheDocument();
+    expect(screen.getByText('按工作空间')).toBeInTheDocument();
+  });
+
+  it('一次性提示：localStorage 已置位则不再渲染', () => {
+    localStorage.setItem('momo.pluginWsConfigHint.v1', '1');
+    render(<PluginSettings />);
+    expect(screen.queryByText(/按工作空间的配置项独立保存/)).not.toBeInTheDocument();
+    localStorage.removeItem('momo.pluginWsConfigHint.v1');
   });
 });
