@@ -141,6 +141,74 @@ describe('模板态插件 MCP 集成（假引擎）', () => {
     expect(textB).toContain('ws-b');
   }, 30000);
 
+  it('③ I2 回归锁：卸载级联（removePluginMcps）回收池实例——旧引擎进程不再复用', async () => {
+    const rec = seedDevPlugin();
+    await writePluginConfig(PID, SCHEMA, { workspaceRoot: path.join(tmpRoot, 'ws-a') }, 'ws-a');
+    syncPluginMcps(rec);
+    const cfg = getMcpConfig('codegraph');
+    if (cfg === null) throw new Error('未注册');
+    const before = await getOrStartMcp('ws-a', cfg);
+    expect(before.isConnected).toBe(true);
+
+    const { removePluginMcps } = await import('../../src/main/plugin/mcp-sync');
+    removePluginMcps(PID);
+
+    // 池实例已回收：重拉同键必然重建（旧实例不复用）
+    const after = await getOrStartMcp('ws-a', cfg);
+    expect(after).not.toBe(before);
+  }, 30000);
+
+  it('④ C1 回归锁：boot.js 进程链——宿主断连后孙进程（引擎）随之退出', async () => {
+    const rec = seedDevPlugin();
+    // 预建索引目录——绕开并行 init 路径（本用例锁进程链，init 语义由 harness 覆盖）
+    fs.mkdirSync(path.join(tmpRoot, 'ws-a', '.momo-codegraph'), { recursive: true });
+    // boot 形态：command node + boot.js --engine <假引擎> --root <ws>
+    // 假引擎 serve 前写 pid 文件；断连后断言该 pid 消亡
+    const pidFile = path.join(tmpRoot, 'grandchild.pid');
+    const FAKE_BOOT_ENGINE = FAKE_ENGINE.replace(
+      "rl.on('line',",
+      `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\nrl.on('line',`,
+    );
+    const root = path.join(tmpRoot, 'dev-plugin');
+    fs.writeFileSync(path.join(root, 'engine', 'bin', 'codegraph'), FAKE_BOOT_ENGINE, {
+      encoding: 'utf-8',
+      mode: 0o755,
+    });
+    await writePluginConfig(PID, SCHEMA, { workspaceRoot: path.join(tmpRoot, 'ws-a') }, 'ws-a');
+    // 直接注册 boot 形态定义（绕过 mcp.json——本用例测进程链而非注册）
+    const cfg: import('../../src/main/mcp/types').McpServerConfig = {
+      id: 'plugin-cg-codegraph',
+      name: 'codegraph',
+      version: '0.0.0',
+      command: 'node',
+      args: [
+        path.join(path.dirname(__dirname), '..', '..', 'plugins', 'codegraph', 'bin', 'boot.js'),
+        '--engine', path.join(root, 'engine', 'bin', 'codegraph'),
+        '--root', path.join(tmpRoot, 'ws-a'),
+      ],
+      transport: 'stdio',
+      source: 'plugin',
+      pluginId: PID,
+    };
+    const client = await getOrStartMcp('ws-a', cfg);
+    await client.callTool('codegraph_explore', {});
+    // 引擎孙进程已记录 pid
+    await new Promise((r) => setTimeout(r, 300));
+    const pid = Number(fs.readFileSync(pidFile, 'utf-8').trim());
+    expect(pid).toBeGreaterThan(0);
+    expect(process.kill(pid, 0)).toBe(true); // 存活
+    // 宿主断连（kill 直接子进程 node boot.js）
+    await client.disconnect();
+    // 轮询孙进程消亡（信号转发 + stdin EOF 联动后应 ≤3s）
+    const deadline = Date.now() + 8000;
+    let gone = false;
+    while (Date.now() < deadline) {
+      try { process.kill(pid, 0); await new Promise((r) => setTimeout(r, 300)); }
+      catch { gone = true; break; }
+    }
+    expect(gone).toBe(true);
+  }, 30000);
+
   it('② setConfig 联动失效：改 workspaceRoot 后旧实例回收、新参数生效（stale root 杜绝）', async () => {
     const rec = seedDevPlugin();
     await writePluginConfig(PID, SCHEMA, { workspaceRoot: path.join(tmpRoot, 'ws-a') }, 'ws-a');

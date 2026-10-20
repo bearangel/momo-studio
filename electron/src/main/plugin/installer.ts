@@ -68,9 +68,22 @@ export function isSafeEntryRelPath(rel: string): boolean {
  * manifest 校验（对 staging 根）→ 原子移入 installed/<id>/<version>/ → 注册表落行。
  * 失败清 staging 不留残留。
  */
-/** vendor 引擎包解压（引擎整合 T4，spec §4.2）：sha256 校验 → 条目守卫 →
- *  tar 解压到 engine/（bundle 布局 bin/+lib/）→ 平台探针。任一失败抛错，
- *  由 installPluginZip 的 staging 回滚统一清理（拒装不落残留）。 */
+/** tar 成员名守卫（终审 I1）：zip 侧 isSafeEntryRelPath 防线的 tar 内延伸——
+ *  `..` 段与绝对路径成员拒装（GNU tar 默认剥前导 / 但放行 ../）。
+ *  抛错即拒装（staging 回滚链覆盖）。 */
+export function assertSafeTarMembers(entries: string[]): void {
+  for (const raw of entries) {
+    if (raw.startsWith('/') || raw.split('/').includes('..')) {
+      throw new Error(`vendor 包含不安全成员路径（穿越/绝对路径）: ${raw}`);
+    }
+  }
+}
+
+/** probe 候选（终审 I3）：win32 平台补 .exe 后缀（与 engineBinPath 同规则） */
+export function probeCandidates(probe: string, platform: string): string[] {
+  return platform === 'win32' ? [`${probe}.exe`, probe] : [probe];
+}
+
 function extractVendorArchives(manifest: PluginManifest, staging: string): void {
   const vendor = manifest.vendor;
   if (!vendor || vendor.archives.length === 0) return;
@@ -88,7 +101,9 @@ function extractVendorArchives(manifest: PluginManifest, staging: string): void 
     const maxEntries = arc.maxEntries ?? 20000;
     const list = execFileSync('tar', ['-tzf', abs], { encoding: 'utf-8' })
       .split('\n')
-      .filter((l) => l.trim() !== '' && !l.trim().endsWith('/'));
+      .filter((l) => l.trim() !== '' && !l.trim().endsWith('/'))
+      .map((l) => l.trim());
+    assertSafeTarMembers(list);
     if (list.length > maxEntries) {
       throw new Error(`vendor 包条目数超限（${list.length} > ${maxEntries}）: ${arc.file}`);
     }
@@ -96,8 +111,11 @@ function extractVendorArchives(manifest: PluginManifest, staging: string): void 
     execFileSync('tar', ['-xzf', abs, '-C', engineDir]);
   }
   if (vendor.probe) {
-    const probeAbs = path.resolve(staging, vendor.probe);
-    if (!probeAbs.startsWith(staging + path.sep) || !fs.existsSync(probeAbs)) {
+    const hit = probeCandidates(vendor.probe, process.platform).some((c) => {
+      const probeAbs = path.resolve(staging, c);
+      return probeAbs.startsWith(staging + path.sep) && fs.existsSync(probeAbs);
+    });
+    if (!hit) {
       throw new Error(
         `vendor 平台探针未命中（${vendor.probe} 不存在——引擎包与本平台不符或损坏，请确认平台变体）`,
       );

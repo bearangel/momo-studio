@@ -6,7 +6,7 @@
 // （removeMcpRefsFromAgents 同构语义）。
 import fs from 'node:fs';
 import path from 'node:path';
-import { registerMcpDefinition } from '../mcp/host-manager';
+import { registerMcpDefinition, invalidateMcpByName } from '../mcp/host-manager';
 import { isValidNpmPackageName } from '../marketplace/types';
 import { removeMcpRefsFromAgents } from '../agent/crud';
 import { getDb } from '../storage/db';
@@ -151,6 +151,12 @@ function pruneStaleMcpDefs(pluginId: string, liveNames: string[]): void {
 
 /** 卸载级联：删本插件（plugin_id 归属）的 MCP 定义 + 清 agent 引用 */
 export function removePluginMcps(pluginId: string): void {
+  // 终审 I2：卸载级联先收池实例（isConnected 旧引擎进程不复用——engineBin/定义删除
+  // 亦是模板展开参数源，与 setConfig 同为参数变化诱因）
+  const live = getDb()
+    .prepare(`SELECT name FROM mcp_definitions WHERE plugin_id = ?`)
+    .all(pluginId) as Array<{ name: string }>;
+  for (const { name } of live) invalidateMcpByName(name);
   const db = getDb();
   const rows = db
     .prepare(`SELECT name FROM mcp_definitions WHERE plugin_id = ?`)

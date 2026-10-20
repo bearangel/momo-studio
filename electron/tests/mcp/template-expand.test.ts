@@ -159,6 +159,25 @@ describe('expandMcpTemplate', () => {
     expect(e.env).toEqual({ T: 'token=sk-live', M: 'plain' });
   });
 
+  it('⑧ ${engineNode}：展开为引擎自带 Node 二进制（缺失可读报错）', async () => {
+    const root = seedPlugin();
+    seedDb(root);
+    // engine/node 由 seedPlugin 不建——补建
+    fs.writeFileSync(path.join(root, 'engine', 'node'), 'bin', { mode: 0o755 });
+    const e = await expandMcpTemplate(
+      mkConfig({ command: '${engineNode}', args: ['${pluginRoot}/bin/boot.js'] }),
+      'ws-1',
+    );
+    expect(e.command).toBe(path.join(root, 'engine', 'node'));
+    // 缺失态：新插件根无 engine/node
+    const root2 = seedPlugin();
+    seedDb(root2);
+    fs.rmSync(path.join(root2, 'engine', 'node'), { force: true });
+    await expect(
+      expandMcpTemplate(mkConfig({ command: '${engineNode}' }), 'ws-1'),
+    ).rejects.toThrow(/engine.*node|Node/);
+  });
+
   it('⑦ 无对应 config 键的占位符（manifest 未声明）→ 拒启（可观察）', async () => {
     const root = seedPlugin();
     seedDb(root);

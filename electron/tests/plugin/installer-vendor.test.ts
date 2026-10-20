@@ -109,6 +109,25 @@ describe('installPluginZip vendor 引擎包', () => {
     ).rejects.toThrow(/探针|probe|平台/i);
   });
 
+  it('⑥ I1 回归锁：tar 成员名守卫——../ 与绝对路径成员拒装（穿越防线延伸到 tar 内）', async () => {
+    const { assertSafeTarMembers } = await import('../../src/main/plugin/installer');
+    // 合法 bundle 布局成员
+    expect(() => assertSafeTarMembers(['bin/codegraph', 'lib/dist/x.js', 'lib/'])).not.toThrow();
+    // 穿越成员（GNU tar 默认剥前导 / 但放行 ../——Linux 主力环境成立）
+    expect(() => assertSafeTarMembers(['../evil.txt'])).toThrow(/穿越|安全/);
+    expect(() => assertSafeTarMembers(['bin/../../evil'])).toThrow(/穿越|安全/);
+    expect(() => assertSafeTarMembers(['/abs/evil'])).toThrow(/穿越|安全/);
+  });
+
+  it('⑦ I3 回归锁：probe 路径 win32 感知——补 .exe 候选', async () => {
+    const { probeCandidates } = await import('../../src/main/plugin/installer');
+    expect(probeCandidates('engine/bin/codegraph', 'darwin')).toEqual(['engine/bin/codegraph']);
+    expect(probeCandidates('engine/bin/codegraph', 'win32')).toEqual([
+      'engine/bin/codegraph.exe',
+      'engine/bin/codegraph',
+    ]);
+  });
+
   it('⑤ 无 vendor 声明 → 行为与现状一致（正常安装，无 engine 目录）', async () => {
     const zip = new AdmZip();
     zip.addFile(

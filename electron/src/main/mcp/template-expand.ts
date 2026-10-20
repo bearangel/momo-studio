@@ -97,6 +97,13 @@ export async function expandMcpTemplate(
         }
         return runtime.root;
       }
+      if (name === 'engineNode') {
+        const nodeBin = path.join(runtime.root, 'engine', 'node');
+        if (!fs.existsSync(nodeBin)) {
+          throw new Error(`插件引擎 Node 运行时缺失（${nodeBin}）——请在资源库重装该插件恢复引擎`);
+        }
+        return nodeBin;
+      }
       if (name === 'engineBin') {
         const bin = engineBinPath(runtime.root);
         if (!fs.existsSync(bin)) {

@@ -1,7 +1,7 @@
 {
   "servers": {
     "codegraph": {
-      "command": "node",
+      "command": "${engineNode}",
       "args": [
         "${pluginRoot}/bin/boot.js",
         "--engine", "${engineBin}",
