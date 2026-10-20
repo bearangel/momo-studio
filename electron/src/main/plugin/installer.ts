@@ -8,6 +8,8 @@
 //   - 原子落位 installed/<id>/<version>/（staging rename，单版本驻留）
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import AdmZip from 'adm-zip';
 import { isIgnoredEntry } from '../skill/zip-uploader';
 import { logger } from '../logger';
@@ -17,6 +19,7 @@ import {
   resolvePluginDataDir,
 } from '../paths';
 import { parseManifest, validateManifest } from './manifest';
+import type { PluginManifest } from './types';
 import { validatePanelsAtRoot, notifyPanelsChanged } from './panel-sync';
 import { normalizeConfigSchema, sensitiveRef, evictPluginConfigCache } from './config-store';
 import { deleteSecret } from '../storage/keychain';
@@ -65,6 +68,43 @@ export function isSafeEntryRelPath(rel: string): boolean {
  * manifest 校验（对 staging 根）→ 原子移入 installed/<id>/<version>/ → 注册表落行。
  * 失败清 staging 不留残留。
  */
+/** vendor 引擎包解压（引擎整合 T4，spec §4.2）：sha256 校验 → 条目守卫 →
+ *  tar 解压到 engine/（bundle 布局 bin/+lib/）→ 平台探针。任一失败抛错，
+ *  由 installPluginZip 的 staging 回滚统一清理（拒装不落残留）。 */
+function extractVendorArchives(manifest: PluginManifest, staging: string): void {
+  const vendor = manifest.vendor;
+  if (!vendor || vendor.archives.length === 0) return;
+  const engineDir = path.join(staging, 'engine');
+  for (const arc of vendor.archives) {
+    const abs = path.resolve(staging, arc.file);
+    if (!abs.startsWith(staging + path.sep)) {
+      throw new Error(`vendor 包路径越界: ${arc.file}`);
+    }
+    const buf = fs.readFileSync(abs);
+    const actual = crypto.createHash('sha256').update(buf).digest('hex');
+    if (actual !== arc.sha256.toLowerCase()) {
+      throw new Error(`vendor 包校验失败（sha256 不符）: ${arc.file}`);
+    }
+    const maxEntries = arc.maxEntries ?? 20000;
+    const list = execFileSync('tar', ['-tzf', abs], { encoding: 'utf-8' })
+      .split('\n')
+      .filter((l) => l.trim() !== '' && !l.trim().endsWith('/'));
+    if (list.length > maxEntries) {
+      throw new Error(`vendor 包条目数超限（${list.length} > ${maxEntries}）: ${arc.file}`);
+    }
+    fs.mkdirSync(engineDir, { recursive: true });
+    execFileSync('tar', ['-xzf', abs, '-C', engineDir]);
+  }
+  if (vendor.probe) {
+    const probeAbs = path.resolve(staging, vendor.probe);
+    if (!probeAbs.startsWith(staging + path.sep) || !fs.existsSync(probeAbs)) {
+      throw new Error(
+        `vendor 平台探针未命中（${vendor.probe} 不存在——引擎包与本平台不符或损坏，请确认平台变体）`,
+      );
+    }
+  }
+}
+
 export async function installPluginZip(data: Buffer, currentAppVersion: string): Promise<PluginRecord> {
   const zip = new AdmZip(data);
   const entries = zip.getEntries().filter((e) => !e.isDirectory && !isIgnoredEntry(e.entryName));
@@ -120,6 +160,7 @@ export async function installPluginZip(data: Buffer, currentAppVersion: string):
     validateManifest(manifest, staging);
     validatePanelsAtRoot(staging, manifest, manifest.id);
     if (manifest.config) normalizeConfigSchema(manifest.config);
+    extractVendorArchives(manifest, staging);
 
     fs.mkdirSync(path.dirname(target), { recursive: true });
     if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });

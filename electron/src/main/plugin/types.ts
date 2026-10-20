@@ -21,6 +21,21 @@ export interface PluginPermissionDecls {
   subprocess?: boolean;
 }
 
+/** vendor 引擎包声明（引擎整合 T4，spec §4.2）：tarball 随 zip 分发，
+ *  安装链校验 sha256 → 条目守卫 → 解压到 engine/ → 平台探针 */
+export interface PluginVendorArchiveDecl {
+  file: string;
+  sha256: string;
+  maxEntries?: number;
+  maxUnpackedMB?: number;
+}
+
+export interface PluginVendorDecl {
+  archives: PluginVendorArchiveDecl[];
+  /** 解压后必须存在的相对路径（平台装错探测，如 engine/bin/codegraph） */
+  probe?: string;
+}
+
 /** config 字段：JSON-Schema-lite 透传（type/properties/required），宿主按其渲染设置表单 */
 export interface PluginConfigSchema {
   [key: string]: unknown;
@@ -31,6 +46,7 @@ export interface PluginManifest {
   id: string;
   name: string;
   version: string;
+  vendor?: PluginVendorDecl;
   description: string;
   author?: { name: string };
   minAppVersion?: string;

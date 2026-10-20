@@ -85,6 +85,27 @@ export function validateManifest(manifest: PluginManifest, pluginRoot: string): 
   if (manifest.minAppVersion !== undefined && typeof manifest.minAppVersion !== 'string') {
     issues.push({ field: 'minAppVersion', message: '必须是字符串' });
   }
+  if (manifest.vendor !== undefined) {
+    const v = manifest.vendor;
+    if (typeof v !== 'object' || v === null || !Array.isArray(v.archives)) {
+      issues.push({ field: 'vendor', message: '必须是对象且 archives 为数组' });
+    } else {
+      for (const a of v.archives) {
+        if (
+          typeof a !== 'object' ||
+          a === null ||
+          typeof a.file !== 'string' ||
+          typeof a.sha256 !== 'string' ||
+          !/^[0-9a-f]{64}$/i.test(a.sha256)
+        ) {
+          issues.push({ field: 'vendor.archives', message: '条目须含 file 与 64 位 hex sha256' });
+        }
+      }
+      if (v.probe !== undefined && typeof v.probe !== 'string') {
+        issues.push({ field: 'vendor.probe', message: '必须是字符串' });
+      }
+    }
+  }
 
   if (typeof manifest.id === 'string' && !isValidSlug(manifest.id)) {
     issues.push({ field: 'id', message: `非法插件 id（白名单外字符）: ${manifest.id}` });
