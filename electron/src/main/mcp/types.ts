@@ -89,6 +89,8 @@ export interface RegisteredMcp {
   /** 配置表单元数据（DB 行 config_schema='{}' → undefined；编辑功能表单回填源） */
   configSchema?: McpConfigSchema;
   source: 'marketplace' | 'custom' | 'smithery' | 'plugin';
+  /** source='plugin' 行的归属插件 id（getOrStartMcp 模板展开触发条件之一） */
+  pluginId?: string;
   installedAt: string;
   /** 组⑤ 启停开关（DB 行 enabled 列；DEFAULT 1 → 恒有值） */
   enabled: boolean;

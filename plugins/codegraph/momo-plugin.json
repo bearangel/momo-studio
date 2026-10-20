@@ -3,8 +3,14 @@
   "name": "Codegraph 代码图谱",
   "version": "2.0.0",
   "description": "内置 codegraph 引擎的代码图谱（30+ 语言符号/调用方/影响面查询，auto-sync 增量索引）",
-  "codegraph": { "engineVersion": "1.6.2" },
-  "components": { "mcp": "./mcp", "panel": "./panel", "service": "./service" },
+  "codegraph": {
+    "engineVersion": "1.6.2"
+  },
+  "components": {
+    "mcp": "./mcp/mcp.json",
+    "panel": "./panel",
+    "service": "./service"
+  },
   "vendor": {
     "archives": [
       {

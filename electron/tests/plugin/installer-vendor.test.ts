@@ -62,7 +62,7 @@ function makeVendorZip(opts: VendorOpts = {}): Buffer {
     name: 'Codegraph',
     version: '2.0.0',
     description: '图谱',
-    components: { mcp: './mcp' },
+    components: { mcp: './mcp/mcp.json' },
     vendor: {
       archives: [
         {
@@ -119,7 +119,7 @@ describe('installPluginZip vendor 引擎包', () => {
           name: 'Plain',
           version: '1.0.0',
           description: 'd',
-          components: { mcp: './mcp' },
+          components: { mcp: './mcp/mcp.json' },
         }),
       ),
     );

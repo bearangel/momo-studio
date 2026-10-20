@@ -39,6 +39,7 @@ interface McpDefinitionRow {
   cwd: string | null;
   config_schema: string;
   source: string;
+  plugin_id?: string | null;
   installed_at: string;
   enabled: number;
 }
@@ -110,6 +111,7 @@ function rowToRegistered(row: McpDefinitionRow): RegisteredMcp {
     cwd: row.cwd ?? undefined,
     configSchema: parseConfigSchema(row.config_schema, row.name),
     source: row.source as RegisteredMcp['source'],
+    pluginId: row.plugin_id ?? undefined,
     installedAt: row.installed_at,
     enabled: row.enabled !== 0,
   };
@@ -321,7 +323,7 @@ export function getMcpConfig(mcpName: string): McpServerConfig | null {
   const db = getDb();
   const row = db
     .prepare(
-      'SELECT id, name, version, transport, command, args, env, url, headers_json, cwd, config_schema, source, installed_at, enabled FROM mcp_definitions WHERE name = ?',
+      'SELECT id, name, version, transport, command, args, env, url, headers_json, cwd, config_schema, source, plugin_id, installed_at, enabled FROM mcp_definitions WHERE name = ?',
     )
     .get(mcpName) as McpDefinitionRow | undefined;
   if (!row) return null;

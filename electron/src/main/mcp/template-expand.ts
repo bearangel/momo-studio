@@ -91,6 +91,12 @@ export async function expandMcpTemplate(
 
   const expandOne = (raw: string): string => {
     return raw.replace(PLACEHOLDER_RE, (whole, name: string) => {
+      if (name === 'pluginRoot') {
+        if (!runtime.root) {
+          throw new Error(`插件根目录不可用（${config.pluginId ?? '?'}）——dev sourcePath 失效或安装目录缺失`);
+        }
+        return runtime.root;
+      }
       if (name === 'engineBin') {
         const bin = engineBinPath(runtime.root);
         if (!fs.existsSync(bin)) {
