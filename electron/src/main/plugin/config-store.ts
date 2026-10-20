@@ -138,6 +138,43 @@ export function readPluginConfigJson(pluginId: string, workspaceId?: string): Re
   }
 }
 
+/** scope 分层合并（2026-10-20 引擎整合 spec §9.1）：workspace 键只取 per-ws 层、
+ *  global 键只取全局层——全局层的 workspace 键属历史污染产物，不再 fallback
+ *  （曾致 dape 工作区残留泄漏给全部未配置工作空间）。 */
+function mergeScoped(
+  pluginId: string,
+  schema: NormalizedConfigSchema,
+  workspaceId?: string,
+): Record<string, unknown> {
+  const globalLayer = readPluginConfigJson(pluginId);
+  const wsLayer = workspaceId ? readPluginConfigJson(pluginId, workspaceId) : {};
+  const out: Record<string, unknown> = {};
+  for (const [key, decl] of Object.entries(schema.properties)) {
+    if ((decl.scope ?? 'global') === 'workspace') {
+      if (key in wsLayer) out[key] = wsLayer[key];
+    } else if (key in globalLayer) {
+      out[key] = globalLayer[key];
+    }
+  }
+  return out;
+}
+
+/** 全局层残留检测（boot 告警用）：workspace 作用域键出现在全局层 → spill。
+ *  纯函数（由 boot 组装插件条目），不触碰 DB。 */
+export function findGlobalLayerWorkspaceSpills(
+  entries: Array<{ pluginId: string; schema: NormalizedConfigSchema }>,
+): Array<{ pluginId: string; keys: string[] }> {
+  const spills: Array<{ pluginId: string; keys: string[] }> = [];
+  for (const { pluginId, schema } of entries) {
+    const globalLayer = readPluginConfigJson(pluginId);
+    const keys = Object.keys(schema.properties).filter(
+      (k) => (schema.properties[k]!.scope ?? 'global') === 'workspace' && k in globalLayer,
+    );
+    if (keys.length > 0) spills.push({ pluginId, keys });
+  }
+  return spills;
+}
+
 /** 敏感值主进程内存缓存（激活边界预热 / 写入时更新） */
 const sensitiveCache = new Map<string, Record<string, string>>();
 
@@ -266,10 +303,7 @@ export function getPluginConfigView(
   sensitiveConfigured: Record<string, boolean>;
   scopes: Record<string, 'workspace' | 'global'>;
 } {
-  const values = {
-    ...readPluginConfigJson(pluginId),
-    ...(workspaceId ? readPluginConfigJson(pluginId, workspaceId) : {}),
-  };
+  const values = mergeScoped(pluginId, schema, workspaceId);
   const sensitiveConfigured: Record<string, boolean> = {};
   const scopes: Record<string, 'workspace' | 'global'> = {};
   for (const [key, decl] of Object.entries(schema.properties)) {
@@ -287,8 +321,7 @@ export async function resolvePluginConfig(
 ): Promise<Record<string, unknown>> {
   await warmPluginConfigCache(pluginId, schema);
   return {
-    ...readPluginConfigJson(pluginId),
-    ...(workspaceId ? readPluginConfigJson(pluginId, workspaceId) : {}),
+    ...mergeScoped(pluginId, schema, workspaceId),
     ...(sensitiveCache.get(pluginId) ?? {}),
   };
 }
