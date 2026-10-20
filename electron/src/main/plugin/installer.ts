@@ -29,7 +29,7 @@ import { syncPluginHooks, removePluginHooks } from './hook-sync';
 import { startPluginService, stopPluginService } from './service-manager';
 import { getPluginBus } from './bus-instance';
 import { emitPluginEvent } from './event-sources';
-import { syncPluginMcps, removePluginMcps } from './mcp-sync';
+import { syncPluginMcps, removePluginMcps, assignPluginMcpsToAllWorkspaces } from './mcp-sync';
 import type { PluginRecord } from './types';
 
 /** zip bomb 守卫：累计解压上限 200MB */
@@ -272,7 +272,8 @@ function activateDeclarativeComponents(rec: PluginRecord): void {
     });
   }
   try {
-    syncPluginMcps(rec);
+    // D2 裁定：插件 MCP 装即注入所有工作空间（仅 install 链；reload 不注入）
+    assignPluginMcpsToAllWorkspaces(syncPluginMcps(rec));
   } catch (err) {
     logger.warn('插件 MCP 激活失败（可重载重试）', {
       pluginId: rec.id,

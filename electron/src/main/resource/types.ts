@@ -22,7 +22,9 @@ export type ResourceSource =
   | 'builtin'
   | 'marketplace'
   | 'custom'
-  | 'smithery';
+  | 'smithery'
+  // D2：插件自带资源（MCP server 等）——随插件生命周期，不可手动删
+  | 'plugin';
 
 /** 资源列表过滤条件——所有字段可选，undefined 表示不过滤该维度 */
 export interface ResourceFilter {
@@ -111,6 +113,7 @@ const SOURCE_LABELS: Record<ResourceSource, string> = {
   custom: '自定义',
   marketplace: '网络资源',
   smithery: 'Smithery',
+  plugin: '插件',
 };
 
 /**

@@ -840,7 +840,7 @@ export type ResourceType = 'agent' | 'mcp' | 'skill' | 'plugin';
  * modelscope 已于 P2.1 移除；p2p 共享已于 2026-10-20 随 P2P 子系统移除。
  * 与 electron 端 resource/types.ts 的 ResourceSource 对齐。
  */
-export type ResourceSource = 'builtin' | 'marketplace' | 'custom' | 'smithery';
+export type ResourceSource = 'builtin' | 'marketplace' | 'custom' | 'smithery' | 'plugin';
 
 /**
  * v1.7 资源列表过滤条件，所有字段可选，undefined 表示不过滤该维度。

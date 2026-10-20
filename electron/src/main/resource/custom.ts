@@ -39,6 +39,22 @@ export function listCustomResources(): ResourceItem[] {
   const result: ResourceItem[] = [];
 
   // 1. MCP：自定义注册的 MCP server（source='custom'，非 marketplace 安装）
+  // D2 点亮：插件自带 MCP（source='plugin'）列入统一资源面——资源库/成员编辑
+  // MCP tab/工作空间配置三入口同源可见；随插件卸载级联（不可手动删）。
+  for (const mcp of listRegistered().filter((m) => m.source === 'plugin')) {
+    result.push({
+      id: buildResourceId('plugin', 'mcp', mcp.name),
+      type: 'mcp',
+      source: 'plugin',
+      slug: mcp.name,
+      name: mcp.name,
+      description: `来自插件${mcp.pluginId ? ` ${mcp.pluginId}` : ''}（随插件卸载）`,
+      version: mcp.version,
+      installed: true,
+      installable: false,
+      removable: false,
+    });
+  }
   for (const mcp of listRegistered().filter((m) => m.source === 'custom')) {
     result.push({
       id: buildResourceId('custom', 'mcp', mcp.name),

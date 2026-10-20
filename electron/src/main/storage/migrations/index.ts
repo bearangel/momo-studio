@@ -39,6 +39,7 @@ import { migration061 } from './061_agent_denied_tools';
 import { migration062 } from './062_assignment_plugin_tool_delta';
 import { migration063 } from './063_remove_p2p_lsp_residue';
 import { migration064 } from './064_codegraph_plugin_tool_to_mcp';
+import { migration065 } from './065_plugin_mcp_backfill_allocations';
 
 export interface Migration {
   version: number;
@@ -1122,6 +1123,11 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 行（整组+单工具）保守升级为 mcp server 级禁用（INSERT OR IGNORE 防主键冲突）
     version: migration064.version,
     sql: migration064.up,
+  },
+  {
+    // D2 裁定存量回填：既有 plugin MCP × 既有工作空间 allocation 对齐（幂等）
+    version: migration065.version,
+    sql: migration065.up,
   },
 ];
 
