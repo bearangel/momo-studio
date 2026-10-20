@@ -30,6 +30,18 @@ export interface MarketplaceItem {
   checksum: string;
   sizeBytes: number;
   installCount: number;
+  /** 平台变体（引擎整合 T5，spec §4.1）：同条目挂多平台包，安装侧
+   *  pickVariant 按 platform-arch 精确匹配；无本平台变体时不回退主条目
+   *  （宁可明示无包，避免装错平台引擎包）。 */
+  variants?: MarketplaceVariant[];
+}
+
+/** catalog 条目的平台变体（platform 形如 darwin-arm64 / win32-x64） */
+export interface MarketplaceVariant {
+  platform: string;
+  downloadUrl: string;
+  checksum: string;
+  sizeBytes: number;
 }
 
 /** catalog.json 顶层结构 */
