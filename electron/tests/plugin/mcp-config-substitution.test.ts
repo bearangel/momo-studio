@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { substituteConfigTemplate, syncPluginMcps } from '../../src/main/plugin/mcp-sync';
+import { syncPluginMcps } from '../../src/main/plugin/mcp-sync';
 import { normalizeConfigSchema, writePluginConfig, resetPluginConfigCacheForTest } from '../../src/main/plugin/config-store';
 import { setKeychainImpl } from '../../src/main/storage/keychain';
 import { getDb, closeDb, runMigrations } from '../../src/main/storage/db';
@@ -44,22 +44,7 @@ afterEach(() => {
   delete process.env.AP_USER_DATA_DIR;
 });
 
-describe('substituteConfigTemplate', () => {
-  it('替换单处与多处占位符', () => {
-    const cfg = { indexCommand: 'codegraph index', n: 3 };
-    expect(substituteConfigTemplate('${config.indexCommand}', cfg, 'cg')).toBe('codegraph index');
-    expect(substituteConfigTemplate('run ${config.indexCommand} -j ${config.n}', cfg, 'cg')).toBe(
-      'run codegraph index -j 3',
-    );
-  });
-
-  it('缺失键保留字面量；非占位符文本不动', () => {
-    expect(substituteConfigTemplate('${config.ghost}', {}, 'cg')).toBe('${config.ghost}');
-    expect(substituteConfigTemplate('plain ${HOME} text', {}, 'cg')).toBe('plain ${HOME} text');
-  });
-});
-
-describe('syncPluginMcps 集成（args/env 展开 + 敏感经缓存）', () => {
+describe('syncPluginMcps 集成（模板态入库）', () => {
   function installCg(mcpJson: unknown): PluginRecord {
     const root = resolvePluginInstalledDir('cg', '0.4.0');
     fs.mkdirSync(root, { recursive: true });
@@ -99,7 +84,9 @@ describe('syncPluginMcps 集成（args/env 展开 + 敏感经缓存）', () => {
     return row ? { args: JSON.parse(row.args), env: JSON.parse(row.env) } : undefined;
   }
 
-  it('args/env 中的 ${config.KEY} 全部替换（含 keytar 敏感值）', async () => {
+  // T2 模板态（2026-10-20 引擎整合）：注册期不展开——spawn 期由 host-manager
+  // 按工作空间展开（per-ws 值不同）；敏感值同理延迟到 spawn 时刻读取。
+  it('args/env 保留 ${config.KEY} 模板原文入库（spawn 期展开）', async () => {
     const rec = installCg({
       servers: {
         cg: {
@@ -116,8 +103,32 @@ describe('syncPluginMcps 集成（args/env 展开 + 敏感经缓存）', () => {
     const registered = syncPluginMcps(rec);
     expect(registered).toEqual(['cg']);
     const row = defOf('plugin-cg-cg');
-    expect(row?.args).toEqual(['-y', 'cg-server', 'index --inc']);
-    expect(row?.env).toEqual({ CG_TOKEN: 'sk-live', CG_MODE: 'local' });
+    expect(row?.args).toEqual(['-y', 'cg-server', '${config.indexCommand}']);
+    expect(row?.env).toEqual({ CG_TOKEN: '${config.apiToken}', CG_MODE: 'local' });
+  });
+
+  it('T2 占位符 command（${engineBin}）放行入库——spawn 期才解析', () => {
+    const rec = installCg({
+      servers: {
+        cg: { command: '${engineBin}', args: ['serve', '--mcp'] },
+      },
+    });
+    const registered = syncPluginMcps(rec);
+    expect(registered).toEqual(['cg']);
+    const row = getDb()
+      .prepare(`SELECT command FROM mcp_definitions WHERE id = ?`)
+      .get('plugin-cg-cg') as { command: string };
+    expect(row.command).toBe('${engineBin}');
+  });
+
+  it('T2 普通坏名 command（非占位符、非 npm 名）仍拒收', () => {
+    const rec = installCg({
+      servers: {
+        bad: { command: '../escape/&& rm -rf', args: [] },
+      },
+    });
+    const registered = syncPluginMcps(rec);
+    expect(registered).toEqual([]);
   });
 
   it('未配置的占位符保留字面量（可观察）', () => {

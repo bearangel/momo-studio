@@ -11,7 +11,6 @@ import { isValidNpmPackageName } from '../marketplace/types';
 import { removeMcpRefsFromAgents } from '../agent/crud';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
-import { readPluginConfigJson, sensitiveOverlaySync } from './config-store';
 import { resolvePluginRoot } from './assembly';
 import type { PluginRecord } from './types';
 
@@ -29,29 +28,15 @@ interface McpFileShape {
   servers?: Record<string, McpEntry>;
 }
 
-/** 组 McpServerConfig 的宽松输入（registerMcpDefinition 内做远程白名单等校验） */
-/** ${config.KEY} 占位符展开（spec 决策 112 行）：缺失键保留字面量 + warn（可观察不静默） */
-export function substituteConfigTemplate(
-  value: string,
-  config: Record<string, unknown>,
-  pluginId: string,
-): string {
-  return value.replace(/\$\{config\.([a-zA-Z0-9_-]+)\}/g, (raw, key: string) => {
-    const v = config[key];
-    if (v === undefined || v === null) {
-      logger.warn('mcp config 占位符无值，保留字面量', { pluginId, key });
-      return raw;
-    }
-    return String(v);
-  });
-}
+/** 整串占位符形态（${engineBin} 等）——注册期放行，spawn 期由 template-expand 解析 */
+const PLACEHOLDER_COMMAND_RE = /^\$\{[a-zA-Z][a-zA-Z0-9._]*\}$/;
 
+/** 组 McpServerConfig 的宽松输入（registerMcpDefinition 内做远程白名单等校验） */
 function toConfig(
   pluginId: string,
   root: string,
   name: string,
   entry: McpEntry,
-  config: Record<string, unknown>,
 ): {
   id: string;
   name: string;
@@ -70,8 +55,15 @@ function toConfig(
   const transport =
     entry.transport === 'streamable_http' ? 'streamable_http' : ('stdio' as const);
   if (transport === 'stdio') {
-    // npx command 注入防线（P1 marketplace 同款）：非法 npm 名整条拒绝
-    if (!command || !isValidNpmPackageName(command.replace(/^npx\s+/, ''))) return null;
+    // npx command 注入防线（P1 marketplace 同款）：非法 npm 名整条拒绝。
+    // 占位符形态（T2 模板态）放行——spawn 期展开后再由展开层校验产物。
+    const isPlaceholder = typeof command === 'string' && PLACEHOLDER_COMMAND_RE.test(command);
+    if (
+      !command ||
+      (!isPlaceholder && !isValidNpmPackageName(command.replace(/^npx\s+/, '')))
+    ) {
+      return null;
+    }
   } else if (typeof entry.url !== 'string') {
     return null;
   }
@@ -80,17 +72,16 @@ function toConfig(
     name,
     version: '0.0.0',
     command: command ?? '',
+    // T2 模板态：占位符原文入库（含 ${config.*}/${engineBin}），spawn 期按工作空间展开
     args: Array.isArray(entry.args)
-      ? entry.args
-          .filter((a): a is string => typeof a === 'string')
-          .map((a) => substituteConfigTemplate(a, config, pluginId))
+      ? entry.args.filter((a): a is string => typeof a === 'string')
       : [],
     env:
       typeof entry.env === 'object' && entry.env !== null
         ? (Object.fromEntries(
-            Object.entries(entry.env)
-              .filter((kv): kv is [string, string] => typeof kv[1] === 'string')
-              .map(([k, v]) => [k, substituteConfigTemplate(v, config, pluginId)] as const),
+            Object.entries(entry.env).filter(
+              (kv): kv is [string, string] => typeof kv[1] === 'string',
+            ),
           ) as Record<string, string>)
         : undefined,
     transport,
@@ -103,10 +94,6 @@ function toConfig(
 
 /** 注册插件 MCP（幂等覆盖）。返回成功注册的 server 名列表 */
 export function syncPluginMcps(rec: PluginRecord): string[] {
-  const cfgView: Record<string, unknown> = {
-    ...readPluginConfigJson(rec.id),
-    ...sensitiveOverlaySync(rec.id),
-  };
   const root = resolvePluginRoot(rec);
   if (root === null) return [];
   let manifest: { components?: { mcp?: string } };
@@ -129,7 +116,7 @@ export function syncPluginMcps(rec: PluginRecord): string[] {
   }
   const registered: string[] = [];
   for (const [name, entry] of Object.entries(parsed.servers ?? {})) {
-    const cfg = toConfig(rec.id, root, name, entry, cfgView);
+    const cfg = toConfig(rec.id, root, name, entry);
     if (cfg === null) {
       logger.warn('插件 MCP 条目不合法（已跳过）', { pluginId: rec.id, name });
       continue;
