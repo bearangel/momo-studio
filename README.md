@@ -48,7 +48,7 @@
 ```bash
 git clone <repo>
 cd momo-studio
-nvm use 20          # Node 20 LTS 必需（Node 26 会破坏 better-sqlite3 原生编译）
+nvm use 24          # Node 24 LTS（.nvmrc 已钉 24；App 运行时为 Electron 44 内嵌 Node 24.22，开发/测试同为 24 线）
 npx pnpm@9.0.0 install
 npx pnpm@9.0.0 dev
 ```

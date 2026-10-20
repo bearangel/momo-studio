@@ -33,7 +33,7 @@ v2.0.0 设计取舍一句话：「单进程 Electron + 内置 SessionService + �
 
 ```bash
 # 安装（容器内 pnpm 未全局安装）
-nvm use 20
+nvm use 24
 npx pnpm@9.0.0 install
 
 # 测试（两个 workspace 同时跑）
@@ -72,7 +72,7 @@ npx pnpm@9.0.0 build
 
 ## 必须遵守的约束
 
-- **Node 20 LTS**：Node 26 会破坏 better-sqlite3 的 native binding（`ERR_DLOPEN_FAILED`）。容器默认 Node 26，必须先 `nvm use 20`。
+- **Node 24 LTS**（2026-10-20 起，spec `docs/specs/2026-10-20-node24-electron44-upgrade-design.md`）：工具链与 App 运行时同为 Node 24 线（Electron 44 内嵌 24.22）。Node 20 已 EOL（2026-03）；容器默认 Node 26 不可用于测试（ABI 147 与 bsq v12 单测 prebuild 137 不匹配），必须 `nvm use 24`（根 `.nvmrc` 已钉 24）。
 - **TypeScript strict**：禁止 `any`、`@ts-ignore`、`as any`。ESLint `no-explicit-any: error` 已启用。
 - **Conventional Commits**：`feat:`、`fix:`、`chore:`、`docs:`、`test:`、`refactor:`。
 - **版本号纪律（2026-09-13 起）**：产品版本号与 CHANGELOG.md 研发账本（v2.x 条目）**解耦**。特性 / 修复 commit **一律不动版本号**；合入大特性只把三处 `package.json` 的 alpha 号 +1（当前 `2.1.0-alpha.N`）；发正式版（用户明说「发版」）才定终号——默认打包累积特性定 `2.1.0`，破坏面达 MAJOR 四条则 `3.0.0`。策略全文：`docs/dev/release.md`「研发期版本号策略」。
@@ -108,9 +108,9 @@ docs/       — 设计文档(specs) + 实施计划(plans) + 开发指南(dev)
 
 | 陷阱 | 症状 | 解决 |
 |---|---|---|
-| Node 版本不对 | `better-sqlite3 ERR_DLOPEN_FAILED` 或 `NODE_MODULE_VERSION mismatch` | `nvm use 20 && npx pnpm@9.0.0 rebuild better-sqlite3`。⚠️ P1 实测：workspace 根的 `pnpm rebuild better-sqlite3` 可能静默 no-op（exit 0 但二进制未变）；此时改在包目录跑 `cd node_modules/better-sqlite3 && npx prebuild-install`。验证 ABI 勿用裸 `require('better-sqlite3')`（不触发 dlopen，首构造才加载，假阴性）——用 `new Database(':memory:')` 或直接跑测试 |
-| Electron native binding 不匹配 | 启动 Electron 时 `NODE_MODULE_VERSION 115 vs 123` | `cd electron && npx electron-rebuild -f -w better-sqlite3`。冒烟后如需回 Node ABI 跑测试，同上行注意事项 |
-| ABI 反复横跳后 vitest 全仓 SIGKILL | electron-rebuild ↔ prebuild-install 来回替换 `better_sqlite3.node` 后，macOS AMFI 签名态损坏——vitest worker（含 forks）加载即被击杀，但裸 `node -e "new Database(...)"` 正常 | `codesign --force --sign - node_modules/.pnpm/better-sqlite3@11.10.0/node_modules/better-sqlite3/build/Release/better_sqlite3.node`（ad-hoc 重签即愈）。判别特征：SIGKILL 而非 SIGSEGV、瞬死无测试输出、`codesign -v` 可能仍报通过 |
+| Node 版本不对 | `better-sqlite3 ERR_DLOPEN_FAILED` 或 `NODE_MODULE_VERSION mismatch` | `nvm use 24 && npx pnpm@9.0.0 rebuild better-sqlite3`。⚠️ P1 实测：workspace 根的 `pnpm rebuild better-sqlite3` 可能静默 no-op（exit 0 但二进制未变）；此时改在包目录跑 `cd node_modules/better-sqlite3 && npx prebuild-install`。验证 ABI 勿用裸 `require('better-sqlite3')`（不触发 dlopen，首构造才加载，假阴性）——用 `new Database(':memory:')` 或直接跑测试 |
+| Electron native binding 不匹配 | 启动 Electron 时 `NODE_MODULE_VERSION 137 vs 149` | `cd electron && npx electron-rebuild -f -w better-sqlite3 -w keytar`。冒烟后如需回 Node ABI 跑测试，同上行注意事项 |
+| ABI 反复横跳后 vitest 全仓 SIGKILL | electron-rebuild ↔ prebuild-install 来回替换 `better_sqlite3.node` 后，macOS AMFI 签名态损坏——vitest worker（含 forks）加载即被击杀，但裸 `node -e "new Database(...)"` 正常 | `codesign --force --sign - node_modules/.pnpm/better-sqlite3@12.11.1/node_modules/better-sqlite3/build/Release/better_sqlite3.node`（ad-hoc 重签即愈；路径按实际 .pnpm 版本目录调整）。判别特征：SIGKILL 而非 SIGSEGV、瞬死无测试输出、`codesign -v` 可能仍报通过 |
 | 容器内启动 Electron | `chrome-sandbox SUID` 错误 | 加 `--no-sandbox` 参数 |
 | vitest 崩溃运行孤儿化 worker | 主机变慢；`ps` 里一堆 `node (vitest N)` 进程 PPID=1 挂后台，持续占内存/CPU | vitest 进程被信号杀死（SIGSEGV/SIGKILL，见上两行）时 tinypool worker 子进程被 launchd 收养成孤儿。**每次 vitest 非正常退出（exit 139/137、Segmentation fault）后必须检查并清理**：`ps -axo pid,ppid,command | grep vitest | grep -v grep`，对 PPID=1 者逐个 `kill <pid>`。预防：DB 重度目录（tests/plugin、tests/storage 等）跑测试**显式加 `--pool=forks`**（threads 池 worker 线程析构期 GC weak callback 崩溃；且 vitest 1.6.1 的 poolMatchGlobs 对 run 模式整体失效——config 里 22 条 glob 目录跑从未生效，勿信） |
 | `git add docs/foo.md` 无输出 | `.gitignore` 历史遗留条目 | 先 `git add docs/` 或 `git add -f docs/foo.md`（v2.0.0 后该裸 `docs` 条目已删，正常 `git add` 即可） |
@@ -128,7 +128,7 @@ docs/       — 设计文档(specs) + 实施计划(plans) + 开发指南(dev)
 本项目运行在 OrbStack DevContainer（Linux arm64）中。代码同步映射到 macOS 主机 `/Users/stbearangel/dev/AiProject/moo-studio`。
 
 - 容器内无 GUI 显示——测试 Electron GUI 需 `xvfb-run -a --server-args="-screen 0 1280x800x24"`
-- 容器内可用 `nvm use 20`（已安装）；默认 shell 是 Node 26
+- 容器内可用 `nvm use 24`（若未安装先 `nvm install 24`）；默认 shell 是 Node 26
 - macOS 主机上可直接 `cd /Users/stbearangel/dev/AiProject/moo-studio && pnpm dev` 运行 GUI
 
 ## 关键文档

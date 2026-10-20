@@ -6,6 +6,10 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — Node 24 LTS + Electron 44 升级
+
+工具链与运行时一步到位切换 Node 24 生态（spec `docs/specs/2026-10-20-node24-electron44-upgrade-design.md`）：**Electron 30.5.1 → 44.9**（内嵌 Node 20.18 → **24.22**，Chromium 124 → 152，ABI 123 → 149——两者原先均已 EOL）；**better-sqlite3 11.10.0 → 12.11.1**（11.x 停更无 Node 24 支持；钉 12 不上 13——v13.0.x 零 prebuild）；@types/node ^24；根 `engines >=24` + 新增 `.nvmrc`；CI 三平台 node 24；AGENTS.md/README 纪律同步。破坏面全量比对后唯一必修：`console-message` 事件迁移 Event 对象签名（level 数字 → 字符串）。行为变化登记：原生 dialog 无 defaultPath 时初始目录改 Downloads（不再记忆上次目录）；`window.open` 弹窗恒可缩放；macOS 最低系统要求升至 13。Electron 42 起 npm 包二进制改为首跑按需下载（postinstall 不再下载）。解锁 codegraph 引擎 Library API in-process 路线（Node ≥22.5 的 `node:sqlite`，整合另立项）。版本 `2.1.0-alpha.21`。
+
 ## [未发布] — 插件平台「工作空间维度」补全
 
 真实使用四问题（配置不隔离/面板形态/工具门控/索引挂错）的平台级根治（spec `docs/specs/2026-10-17-plugin-workspace-dimension-design.md`）：① config 声明式作用域（manifest 属性级 `scope: workspace|global`，分轨存储 `config.<wsId>.json`）+ service 工作区多实例（lazy 启动带 enablement 门 / 切换停非当前 / 禁用前缀齐停）；② 面板 page 主区形态（panel.json location 扩枚举，codegraph 迁 page 获全宽画布）；③ agent 级插件工具门控（`agent_definitions.denied_tools` 迁移 061 + 配置 UI 分组开关，运行时 assertToolAllowed 现成）；④ codegraph workspaceRoot 留空默认跟随工作区目录——dape 索引挂错案根治（A2 回归锁）。
