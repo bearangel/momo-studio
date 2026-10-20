@@ -59,8 +59,13 @@ const HIDDEN_BOUNDS: SidebarRect = { x: 0, y: 0, width: 0, height: 0 };
 /** 每 tab console 环形缓冲上限（spec §3.1）。slice 移除截断，简单可靠 */
 const CONSOLE_RING_SIZE = 50;
 
-/** console-message level 数字 → 文本前缀（Electron 0-3: verbose/info/warning/error） */
-const CONSOLE_LEVELS = ['verbose', 'info', 'warning', 'error'] as const;
+/** Electron 33+ console-message 事件形态（详情挂 Event 对象，level 为字符串枚举） */
+interface ConsoleMessageEvent {
+  level: 'debug' | 'info' | 'warning' | 'error';
+  message: string;
+  lineNumber: number;
+  sourceId: string;
+}
 
 /**
  * before-input-event 修饰键集合：单独按下不计接管信号（spec §13 误触发防线）。
@@ -980,13 +985,14 @@ export class BrowserManager {
     });
 
     // console 环形缓冲（每 tab 50 条，serial 键控——tab 关闭即随记录释放，不漂移）
+    // Electron 33+：详情在 Event 对象上（ConsoleMessageEvent），level 已是字符串
     wc.on('console-message', (...args: unknown[]) => {
-      const level = typeof args[1] === 'number' ? args[1] : 0;
-      const message = typeof args[2] === 'string' ? args[2] : '';
+      const ev = args[0] as ConsoleMessageEvent | undefined;
+      const level = typeof ev?.level === 'string' && ev.level !== '' ? ev.level : 'log';
+      const message = typeof ev?.message === 'string' ? ev.message : '';
       const buf = ws.consoleBuffer.get(record.serial);
       if (!buf) return;
-      const tag = CONSOLE_LEVELS[level] ?? 'log';
-      buf.push(`[${tag}] ${message}`);
+      buf.push(`[${level}] ${message}`);
       if (buf.length > CONSOLE_RING_SIZE) buf.splice(0, buf.length - CONSOLE_RING_SIZE);
     });
 

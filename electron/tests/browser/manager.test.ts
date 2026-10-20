@@ -2,8 +2,9 @@
 //
 // BrowserManager 编排语义测试——mock 收窄在 Electron 视图边界（ViewFactory / webContents
 // 对象），policy 用真实实现（mock 仅替换 Electron 面，momo-test-rules）。mock 视图的事件
-// 注册/触发参数序与真实 Electron 一致（console-message: (event, level, message, line,
-// sourceId）；render-process-gone: (event, details)；before-input-event: (event, input)）。
+// 注册/触发参数序与真实 Electron 一致（console-message（Electron 33+）：单一 Event 对象
+// { level: 'debug'|'info'|'warning'|'error', message, lineNumber, sourceId, frame }；
+// render-process-gone: (event, details)；before-input-event: (event, input)）。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -723,17 +724,18 @@ describe('console buffer 环形 50', () => {
     await manager.tabsAction('ws1', 'open');
     const v0 = factory.views[0]!;
     const v1 = factory.views[1]!;
+    const levels = ['debug', 'info', 'warning', 'error'] as const;
     for (let i = 1; i <= 60; i++) {
-      v0.emit('console-message', undefined, i % 4, `msg-${i}`, i, 'src.js');
+      v0.emit('console-message', { level: levels[i % 4]!, message: `msg-${i}`, lineNumber: i, sourceId: 'src.js' });
     }
-    v1.emit('console-message', undefined, 0, 'other-tab-line', 1, '');
+    v1.emit('console-message', { level: 'info', message: 'other-tab-line', lineNumber: 1, sourceId: '' });
     await manager.tabsAction('ws1', 'switch', 0);
     const msgs = await manager.consoleMessages('ws1');
     expect(msgs).toHaveLength(50);
     expect(msgs[0]).toContain('msg-11');
     expect(msgs[49]).toContain('msg-60');
     expect(msgs.join('\n')).not.toContain('msg-10');
-    expect(msgs[0]).toMatch(/^\[/); // 级别前缀 [info/warning/error/verbose]
+    expect(msgs[0]).toMatch(/^\[/); // 级别前缀 [debug/info/warning/error]
     await manager.tabsAction('ws1', 'switch', 1);
     const m1 = await manager.consoleMessages('ws1');
     expect(m1).toHaveLength(1);
@@ -747,13 +749,28 @@ describe('console buffer 环形 50', () => {
     await manager.tabsAction('ws1', 'open');
     const v0 = factory.views[0]!;
     const v1 = factory.views[1]!;
-    v0.emit('console-message', undefined, 0, 'tab0-only', 1, '');
-    v1.emit('console-message', undefined, 0, 'tab1-only', 1, '');
+    v0.emit('console-message', { level: 'info', message: 'tab0-only', lineNumber: 1, sourceId: '' });
+    v1.emit('console-message', { level: 'info', message: 'tab1-only', lineNumber: 1, sourceId: '' });
     // 关闭 tab0，tab1 仍有独立缓冲（serial 键控，无数组索引漂移）
     await manager.tabsAction('ws1', 'close', 0);
     const m = await manager.consoleMessages('ws1');
     expect(m).toEqual([expect.stringContaining('tab1-only')]);
     expect(m.join('\n')).not.toContain('tab0-only');
+  });
+
+  it('错误路径：level 缺失/非字符串 → 兜底 [log]；message 非字符串 → 空串（Electron 33+ 事件形态防御）', async () => {
+    const { manager, factory } = mkManager();
+    manager.onWorkspaceActivated('ws1', '/ws/ws1');
+    await manager.navigate('ws1', 'http://localhost:5173/');
+    const v0 = factory.views[0]!;
+    v0.emit('console-message', { message: 'no-level', lineNumber: 1, sourceId: '' });
+    v0.emit('console-message', { level: 3, message: 'numeric-level-legacy-shape', lineNumber: 1, sourceId: '' });
+    v0.emit('console-message', { level: 'warning', message: undefined, lineNumber: 1, sourceId: '' });
+    const msgs = await manager.consoleMessages('ws1');
+    expect(msgs).toHaveLength(3);
+    expect(msgs[0]).toBe('[log] no-level');
+    expect(msgs[1]).toBe('[log] numeric-level-legacy-shape');
+    expect(msgs[2]).toBe('[warning] ');
   });
 });
 
