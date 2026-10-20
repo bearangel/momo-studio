@@ -1117,6 +1117,12 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     version: migration063.version,
     sql: migration063.up,
   },
+  {
+    // codegraph 引擎整合（2026-10-20 spec §5.2）：plugin_tool plugin:codegraph/* 门控
+    // 行（整组+单工具）保守升级为 mcp server 级禁用（INSERT OR IGNORE 防主键冲突）
+    version: migration064.version,
+    sql: migration064.up,
+  },
 ];
 
 export function loadMigrations(): Migration[] {

@@ -57,6 +57,12 @@ function seedRows(): void {
 }
 
 describe('migration 064：codegraph plugin_tool → mcp 门控', () => {
+  it('⓪ 注册验证：loadMigrations 含 version 64（终审后补——数组注册曾静默失败）', async () => {
+    const { loadMigrations } = await import('../../src/main/storage/migrations');
+    expect(loadMigrations().some((m) => m.version === 64)).toBe(true);
+  });
+
+
   it('up：remove 整组行 → mcp|remove|codegraph；其他插件行不动；冲突行不炸', async () => {
     seedRows();
     const m = (await import('../../src/main/storage/migrations/064_codegraph_plugin_tool_to_mcp')).migration064;
