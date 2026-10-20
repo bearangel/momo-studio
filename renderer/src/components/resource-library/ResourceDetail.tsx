@@ -361,14 +361,6 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
               </>
             )}
 
-            {/* p2p：来源节点（目录元数据不含完整定义，导入经 request/provide 拉取——T5） */}
-            {item.source === 'p2p' && item.p2p && (
-              <div>
-                <div className="text-xs text-tertiary mb-1">来源节点</div>
-                <div className="text-secondary">{item.p2p.peerName}</div>
-              </div>
-            )}
-
             {/* custom 共用：上传时间 */}
             {item.custom?.installedAt && (
               <div>
@@ -385,10 +377,10 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
       </div>
 
       <div className="px-4 py-3 border-t border-subtle flex gap-2">
-        {/* 安装按钮：仅 installable 且未安装时显示（p2p 源文案为「导入」） */}
+        {/* 安装按钮：仅 installable 且未安装时显示 */}
         {item.installable && !item.installed && onInstall && (
           <Button size="sm" onClick={() => onInstall(item.id)}>
-            {item.source === 'p2p' ? '导入' : '安装'}
+            安装
           </Button>
         )}
         {/* 编辑按钮：仅 custom agent（installed）显示——挂载 DefinitionEditor 编辑定义 */}

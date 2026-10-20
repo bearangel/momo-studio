@@ -172,12 +172,7 @@ function MessageBubbleBody({ message, isSelf, senderName }: Props) {
 
   // v2.11 Task 11：owner 消息的输入上下文 chips。agent 消息不渲染（上下文只随
   // 用户输入产生）；解析失败 / 项全非法 / 均空数组 → 无 chip 行。
-  // I3：P2P 远端镜像的 owner 消息经 sync 改写 sender 为 remote:<nodeId>[:<原sender>]，
-  // 门控放宽为前缀匹配——远端用户的 context 同样渲染 chip。
-  const ctx =
-    message.sender === 'owner' || message.sender.startsWith('remote:')
-      ? parseMessageContext(message.contextJson)
-      : null;
+  const ctx = message.sender === 'owner' ? parseMessageContext(message.contextJson) : null;
   const ctxSkills = ctx?.skills.filter(isRenderableSkill) ?? [];
   const ctxFiles = ctx?.files.filter(isRenderableFile) ?? [];
   // images 已由 parseMessageContext 做过整体形状校验（元素均含 path/w/h），此处只滤 path

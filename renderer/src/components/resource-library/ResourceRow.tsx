@@ -101,7 +101,7 @@ export function ResourceRow({
             className="text-xs px-2 py-0.5 rounded bg-surface-active text-accent-600 dark:text-accent-300 hover:opacity-80"
             onClick={(e) => { e.stopPropagation(); onInstall(item.id); }}
           >
-            {item.source === 'p2p' ? '导入' : '安装'}
+            安装
           </button>
         )}
         {/* 编辑：custom agent 专属（定义编辑入口） */}

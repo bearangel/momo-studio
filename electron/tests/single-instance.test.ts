@@ -10,7 +10,7 @@
 // 锁定契约（摘掉任一分支必红）：
 //   1. 无锁（requestSingleInstanceLock → false）：app.quit() 被调 + boot 链零进入
 //      （whenReady 即便已 resolve，runMigrations / registerIpcHandlers /
-//       initTaskRuntime / createMainWindow / initP2p 等一律零调用）
+//       initTaskRuntime / createMainWindow 等一律零调用）
 //   2. 有锁：app.on('second-instance', cb) 注册；quit 零调用
 //   3. second-instance 回调 → 取第一个可见窗口：最小化 → show + focus（恢复）；
 //      未最小化 → 仅 focus（不重复 show）；无可见窗口 → 安静返回不抛错
@@ -60,8 +60,6 @@ const b = vi.hoisted(() => ({
   writeLegacyUpgradeNotice: vi.fn(),
   setSessionMainWindow: vi.fn(),
   broadcastRuntimeChanged: vi.fn(),
-  initP2p: vi.fn(async (): Promise<void> => undefined),
-  stopP2p: vi.fn(async (): Promise<void> => undefined),
   initTaskRuntime: vi.fn(),
   stopTaskRuntime: vi.fn(),
   destroyAllTaskDrivenRuntimes: vi.fn(),
@@ -92,7 +90,6 @@ vi.mock('../src/main/im/session-service', () => ({
   setSessionMainWindow: b.setSessionMainWindow,
   broadcastRuntimeChanged: b.broadcastRuntimeChanged,
 }));
-vi.mock('../src/main/p2p', () => ({ initP2p: b.initP2p, stopP2p: b.stopP2p }));
 vi.mock('../src/main/task/runtime-init', () => ({
   initTaskRuntime: b.initTaskRuntime,
   stopTaskRuntime: b.stopTaskRuntime,
@@ -186,7 +183,6 @@ describe('单实例锁：无锁分支', () => {
     expect(b.initTaskRuntime).not.toHaveBeenCalled();
     expect(b.createMainWindow).not.toHaveBeenCalled();
     expect(b.initTaskDrivenRuntime).not.toHaveBeenCalled();
-    expect(b.initP2p).not.toHaveBeenCalled();
     expect(b.assembleBrowserSubsystem).not.toHaveBeenCalled();
   });
 

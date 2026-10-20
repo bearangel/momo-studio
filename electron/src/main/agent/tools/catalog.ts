@@ -3,7 +3,7 @@
 //   - 手写清单曾两次漂移（renderer 24 / electron 33 / 运行时 ≈60），
 //     模块注册即目录，结构性根除漂移。
 //   - 三个导出符号与历史形状兼容（string[] / Array<{label,emoji,tools}>），
-//     crud.ts、p2p clamp、marketplace installer 等既有消费者零改动。
+//     crud.ts、marketplace installer 等既有消费者零改动。
 // 工具名来源：各模块 getDefs() 的 name 字段（经 getCatalog 自描述聚合）。
 import { unconditionalModules } from './index';
 import type { ToolCatalogEntry } from './catalog-entry';
@@ -18,7 +18,7 @@ export const ALL_BUILTIN_TOOLS: string[] = buildToolCatalog().map((e) => e.name)
 
 /**
  * 安全最小集 = Tier 1 公共默认集（spec §3.2，17 个：只读 13 + 文件写 4）。
- * 新建 custom agent 默认勾选；p2p 导入钳制同源派生（天然不含 rm/bash/git 写）。
+ * 新建 custom agent 默认勾选。
  */
 export const SAFE_MINIMUM_TOOLS: string[] = buildToolCatalog()
   .filter((e) => e.defaultOn)

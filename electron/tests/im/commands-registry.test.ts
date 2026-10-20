@@ -6,7 +6,7 @@
 //
 // mock 对齐说明（momo-test-rules：mock 收窄到 IPC/DB 边界）：
 //   - session-service 加载所需的 sessions/repo / messages/repo / runtime-registry /
-//     compaction / p2p / session-ops / task / session-naming / logger 全部按
+//     compaction / session-ops / task / session-naming / logger 全部按
 //     session-command.test.ts 既有模式 mock 为 no-op——handler 的未知命令判定在
 //     早期 return，不真正触达这些模块。
 //   - commands.ts 是纯常量 + 纯函数，零依赖、无副作用，直接 import。
@@ -56,7 +56,6 @@ vi.mock('../../src/main/compaction/service', () => ({
   upsertSessionCompaction: vi.fn(),
   getSessionCompaction: vi.fn(() => null),
 }));
-vi.mock('../../src/main/p2p', () => ({ broadcastLocalMessage: vi.fn() }));
 vi.mock('../../src/main/task/conflict-detector', () => ({ detectConflict: vi.fn() }));
 vi.mock('../../src/main/task/activation', () => ({ activateMentionedTasks: vi.fn() }));
 vi.mock('../../src/main/storage/tasks/repo', () => ({

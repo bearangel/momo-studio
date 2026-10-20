@@ -13,7 +13,7 @@
 //   修复前此处抛 "table agent_definitions has no column named workspace_id"）。
 //
 // Mock 收窄（momo-test-rules #5）：仅进程/重边界（electron ipcMain / keychain /
-// runtime spawn 链 / p2p 广播）；DB、crud、assignment-capabilities、capability-merger
+// runtime spawn 链）；DB、crud、assignment-capabilities、capability-merger
 // 全真实。成员 instanceId 用真实 addMember 产出的 randomUUID（唯一性保真）。
 import { describe, it, expect, vi, beforeEach, beforeAll, afterEach } from 'vitest';
 import path from 'node:path';
@@ -56,11 +56,6 @@ vi.mock('../../src/main/agent/spawn-helpers', () => ({
 // builtin：YAML 资源加载边界（注册时引用，不触发）
 vi.mock('../../src/main/agent/builtin', () => ({
   getBuiltinSuggestionsMap: vi.fn(() => new Map()),
-}));
-
-// p2p 广播：网络边界（create/delete def 时 fire-and-forget）
-vi.mock('../../src/main/p2p/resource-share', () => ({
-  broadcastLocalResourceCatalog: vi.fn(async () => undefined),
 }));
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';

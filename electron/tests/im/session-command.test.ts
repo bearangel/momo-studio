@@ -13,7 +13,6 @@
 //   - compaction/service 模块 mock（generateCompaction / upsertSessionCompaction）——
 //     LLM 与 DB 落库边界；serializeMessages 与 messageToContext 用真实实现（纯函数，
 //     T2/P3-M7 各有独立单测）——序列化产物形状在本测试内被真实消费与断言
-//   - broadcastLocalMessage 来自 '../p2p'（index 本体导出）
 //   - sessions/repo mock 须含 touchSessionLastMessage；getSession 对 'busy' 也返回会话行
 //   - 冲突检测 / #T 激活 / 命名 / tasks repo / logger 按模块路径 mock 为 no-op
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -64,7 +63,6 @@ vi.mock('../../src/main/compaction/service', () => ({
   upsertSessionCompaction: vi.fn(),
   getSessionCompaction: vi.fn(() => null),
 }));
-vi.mock('../../src/main/p2p', () => ({ broadcastLocalMessage: vi.fn() }));
 // 其余 session-service 依赖（冲突检测 / #T 激活 / 命名 / tasks repo / logger）按模块路径 mock 为 no-op
 vi.mock('../../src/main/task/conflict-detector', () => ({ detectConflict: vi.fn() }));
 vi.mock('../../src/main/task/activation', () => ({ activateMentionedTasks: vi.fn() }));
@@ -83,7 +81,6 @@ import {
   upsertSessionCompaction,
 } from '../../src/main/compaction/service';
 import { insertMessage, listRecentMessagesBySession } from '../../src/main/storage/messages/repo';
-import { broadcastLocalMessage } from '../../src/main/p2p';
 
 describe('handleSessionCommand(compact)', () => {
   beforeEach(() => {
@@ -111,14 +108,6 @@ describe('handleSessionCommand(compact)', () => {
       eventType: 'io.momo-studio.compact',
       workspaceId: 'w1',
     }));
-    // LAN 广播只传统计行（同 eventType——对端 renderer 同款 CompactNotice 渲染为
-    // 无摘要通知行）；摘要全文不进只读镜像
-    expect(broadcastLocalMessage).toHaveBeenCalledWith({
-      roomId: 's1',
-      sender: 'owner',
-      body: '已压缩 3 条历史消息（摘要自下轮生效）',
-      eventType: 'io.momo-studio.compact',
-    });
     // IPC 返回 message = 统计行（renderer 成功路径不展示它，但保持人类可读）
     expect(r).toEqual({ ok: true, message: '已压缩 3 条历史消息（摘要自下轮生效）' });
   });

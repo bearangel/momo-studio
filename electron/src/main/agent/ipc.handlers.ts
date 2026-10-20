@@ -53,7 +53,6 @@ import { buildSpawnOpts, resolveApiKey } from './spawn-helpers';
 import { getBuiltinSuggestionsMap } from './builtin';
 import { enablePresetWithJoin, type EnablePresetWithJoinInput } from './preset';
 import { broadcastSessionListChanged } from '../im/session-service';
-import { broadcastLocalResourceCatalog } from '../p2p/resource-share';
 import {
   getAssignmentDeltas,
   setAssignmentDeltas,
@@ -203,7 +202,6 @@ export function registerAgentHandlers(): void {
         : null;
       const def = createCustomDef(workspaceId, input);
       // P4 Task 4：自定义 agent 创建成功 → 广播资源目录（fire-and-forget）
-      void broadcastLocalResourceCatalog();
       return def;
     },
   );
@@ -251,7 +249,6 @@ export function registerAgentHandlers(): void {
         logger.info('Agent 定义更新，已停止运行中实例', { id: input.id, stopped: stopped.length });
       }
       // P4 Task 4：定义更新成功 → 广播资源目录（全量重扫；非 custom def 更新无害）
-      void broadcastLocalResourceCatalog();
       return { definition: updated, stoppedInstanceIds: stopped };
     },
   );
@@ -262,7 +259,6 @@ export function registerAgentHandlers(): void {
     async (_evt, defId: string) => {
       const result = await crudDeleteDefinition(defId);
       // P4 Task 4：自定义 agent 删除成功 → 广播资源目录（fire-and-forget）
-      void broadcastLocalResourceCatalog();
       // 级联可能清空会话成员（FK CASCADE）→ 通知 renderer 刷新会话列表
       broadcastSessionListChanged();
       return result;
@@ -277,7 +273,6 @@ export function registerAgentHandlers(): void {
   // 停用预设 agent（回到未启用态；级联内核与 deleteDefinition 共用）
   ipcMain.handle('agent:disablePreset', async (_evt, defId: string) => {
     const result = await crudDisablePreset(defId);
-    void broadcastLocalResourceCatalog();
     broadcastSessionListChanged();
     return result;
   });

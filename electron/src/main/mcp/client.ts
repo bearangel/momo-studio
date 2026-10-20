@@ -16,7 +16,7 @@ import type { McpServerConfig, McpToolInfo, McpToolResult } from './types';
 
 /**
  * MCP 子进程环境变量白名单——与 agent 工具的 buildSandboxEnv（shell-tools.ts）
- * 同一防线：MCP server 可能来自 marketplace/p2p 第三方，不能继承主进程全部
+ * 同一防线：MCP server 可能来自 marketplace 第三方，不能继承主进程全部
  * 环境变量（LLM API key 等敏感值）。白名单成员 = 进程运行必需项（npx 类
  * server 依赖 PATH/HOME）+ 本地化；config.env 显式配置在白名单之上再覆盖。
  */

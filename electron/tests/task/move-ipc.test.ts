@@ -41,10 +41,8 @@ import type { TaskRow, TaskStatus } from '../../src/main/storage/tasks/repo';
 import { createGroup } from '../../src/main/storage/task-groups/repo';
 import { registerTaskHandlers } from '../../src/main/task/ipc.handlers';
 import { logger } from '../../src/main/logger';
-import * as taskBroadcastMod from '../../src/main/p2p/task-broadcast';
 
 // 写通道成功后 fire-and-forget 广播——spy 模块导出(tsc→CJS 属性访问,spy 生效)
-const broadcastSpy = vi.spyOn(taskBroadcastMod, 'broadcastLocalTaskSnapshot');
 
 const WS = 'wsi';
 const tmpRoot = path.join(
@@ -77,7 +75,6 @@ afterEach(() => {
   closeDb();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
   delete process.env.AP_USER_DATA_DIR;
-  broadcastSpy.mockClear();
 });
 
 describe('task:move IPC', () => {
@@ -94,7 +91,6 @@ describe('task:move IPC', () => {
     const t = seed('draft', { assigneeAgentId: 'i' });
     const handler = handlers.get('task:move')!;
     await handler(null, t.id, { column: 'assigned', groupId: null });
-    expect(broadcastSpy).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -109,7 +105,6 @@ describe('task:setPinned IPC（迁移 050 顶置开关）', () => {
 
     const unpinned = (await handler!(null, t.id, false)) as TaskRow;
     expect(unpinned.pinnedAt).toBeNull();
-    expect(broadcastSpy).toHaveBeenCalledTimes(2);
   });
 
   it('重复 pin 刷新时间戳（重新压顶语义）+ 不存在的任务拒绝', async () => {
@@ -130,7 +125,6 @@ describe('task:archive IPC', () => {
     const handler = handlers.get('task:archive')!;
     const row = (await handler(null, done.id)) as TaskRow;
     expect(row.archivedAt).not.toBeNull();
-    expect(broadcastSpy).toHaveBeenCalledTimes(1);
   });
 
   it('非终态任务归档拒绝(Review Focus 边界)', async () => {
@@ -152,7 +146,6 @@ describe('task:unarchive IPC', () => {
     const handler = handlers.get('task:unarchive')!;
     const row = (await handler(null, t.id)) as TaskRow;
     expect(row.archivedAt).toBeNull();
-    expect(broadcastSpy).toHaveBeenCalledTimes(1);
   });
 
   it('不存在的任务拒绝(updateTask 单点校验,错误路径)', async () => {

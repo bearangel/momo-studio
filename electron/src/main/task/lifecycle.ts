@@ -14,7 +14,6 @@
 //     （Task 7 铺路：拆为可独立调用的单任务 abort——只中止运行时流，不携带
 //     transition；cancelTask = 先 transition 再调它）
 import { getTask, transitionTaskStatus, type TaskRow } from '../storage/tasks/repo';
-import { broadcastLocalTaskSnapshot } from '../p2p/task-broadcast';
 import { notifyExecutor, buildKickoffBody } from './executor';
 import { startTask, type StartTaskOpts, type StartTaskResult } from './starter';
 import { captureTaskScanBaseline } from '../journal/baseline';
@@ -83,7 +82,6 @@ export async function startTaskAndKickoff(
       throw err;
     }
   }
-  void broadcastLocalTaskSnapshot();
   notifyExecutor();
   return result;
 }
@@ -109,7 +107,6 @@ export async function resumePausedTask(id: string): Promise<TaskRow> {
       systemKickoff: true,
     });
   }
-  void broadcastLocalTaskSnapshot();
   notifyExecutor();
   return row;
 }
@@ -121,6 +118,5 @@ export async function resumePausedTask(id: string): Promise<TaskRow> {
 export async function cancelTask(id: string): Promise<void> {
   transitionTaskStatus(id, 'cancelled');
   abortTaskExecution(id);
-  void broadcastLocalTaskSnapshot();
   notifyExecutor();
 }

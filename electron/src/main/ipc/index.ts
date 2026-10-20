@@ -27,7 +27,6 @@ import { registerResourceHandlers } from '../resource/ipc.handlers';
 import { registerPluginHandlers } from '../plugin/ipc.handlers';
 import { registerTaskHandlers } from '../task/ipc.handlers';
 import { registerTaskGroupHandlers } from '../task/groups.ipc.handlers';
-import { registerP2pHandlers } from '../p2p';
 import { registerDialogHandlers } from './dialog.handlers';
 import { registerWindowIpc } from '../window-ipc';
 // 新装引导（spec 2026-10-10）：status / 方案生成 / 方案应用 / 完成标记
@@ -80,7 +79,6 @@ export function registerIpcHandlers(opts: WorkspaceIpcOpts = {}): void {
   registerTaskHandlers();
   // 看板重构 Task 7：taskGroup 命名空间（组 CRUD + 归档级联 + abort 补偿）
   registerTaskGroupHandlers();
-  registerP2pHandlers();
   registerDialogHandlers();
   // 新装引导（spec 2026-10-10）
   registerOnboardingHandlers();

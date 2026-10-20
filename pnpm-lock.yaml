@@ -41,9 +41,6 @@ importers:
       better-sqlite3:
         specifier: ^12.11.1
         version: 12.11.1
-      bonjour-service:
-        specifier: ^1.4.4
-        version: 1.4.4
       cheerio:
         specifier: '1'
         version: 1.2.0
@@ -86,15 +83,9 @@ importers:
       turndown:
         specifier: '7'
         version: 7.2.4
-      tweetnacl:
-        specifier: ^1.0.3
-        version: 1.0.3
       undici:
         specifier: ^6.28.0
         version: 6.28.0
-      ws:
-        specifier: ^8.18.0
-        version: 8.21.1
     devDependencies:
       '@electron/rebuild':
         specifier: ^4.2.0
@@ -117,9 +108,6 @@ importers:
       '@types/turndown':
         specifier: ^5.0.6
         version: 5.0.6
-      '@types/ws':
-        specifier: ^8.5.13
-        version: 8.18.1
       '@vitest/coverage-v8':
         specifier: ^3.2.7
         version: 3.2.7(vitest@3.2.7(@types/debug@4.1.13)(@types/node@24.19.2)(jsdom@24.1.3))
@@ -144,9 +132,6 @@ importers:
       typescript-eslint:
         specifier: ^8.0.0
         version: 8.65.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
-      typescript-language-server:
-        specifier: '4'
-        version: 4.4.1
       vitest:
         specifier: ^3.2.7
         version: 3.2.7(@types/debug@4.1.13)(@types/node@24.19.2)(jsdom@24.1.3)
@@ -850,9 +835,6 @@ packages:
   '@kwsites/promise-deferred@1.1.1':
     resolution: {integrity: sha512-GaHYm+c0O9MjZRu0ongGBRbinu8gVAMd2UZjji6jVmqKtZluZnptXGWhz1E8j8D2HJ3f/yMxKAUC0b+57wncIw==}
 
-  '@leichtgewicht/ip-codec@2.0.5':
-    resolution: {integrity: sha512-Vo+PSpZG2/fmgmiNzYK9qWRh8h/CHrwD0mo1h1DzL4yzHNSfWYujGTYsWGreD000gcgmZ7K4Ys6Tx9TxtsKdDw==}
-
   '@malept/cross-spawn-promise@2.0.0':
     resolution: {integrity: sha512-1DpKU0Z5ThltBwjNySMC14g0CkbyhCaz9FkhxqNsZI6uAPJXFS8cMXlBKo26FJ8ZuW6S9GCMcR9IO5k2X5/9Fg==}
     engines: {node: '>= 12.13.0'}
@@ -1325,9 +1307,6 @@ packages:
   '@types/unist@3.0.3':
     resolution: {integrity: sha512-ko/gIFJRv177XgZsZcBwnqJN5x/Gien8qNOn0D5bQU/zAzVf9Zt3BlcUiLqhV9y4ARk0GbT3tnUiPNgnTXzc/Q==}
 
-  '@types/ws@8.18.1':
-    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
-
   '@typescript-eslint/eslint-plugin@8.65.0':
     resolution: {integrity: sha512-IEgob78X12rHpUmtcwFsXhZdVGJtwTVP8FiCLZkR6GlYVrl2PcuB+KhCE5BlVC/eQpQnu8WXRtkHZuPar+gCRA==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
@@ -1611,9 +1590,6 @@ packages:
 
   bluebird@3.7.2:
     resolution: {integrity: sha512-XpNj6GDQzdfW+r2Wnn7xiSAd7TM3jzkxGXBGTtWKuSXv1xUV+azxAm8jdWZN06QTQk+2N2XB9jRDkvbmQmcRtg==}
-
-  bonjour-service@1.4.4:
-    resolution: {integrity: sha512-jCZcVv7eoc4QesRscwEZtSROBen+6LpKAmBIsQYQrsAeVHLyMXWX/t6eIV5KiRZYNUBl8eVqImEEMQ8L5+c/Kw==}
 
   boolbase@1.0.0:
     resolution: {integrity: sha512-JZOSA7Mo9sNGB8+UjSgzdLtokWAky1zbztM3WRLCbZ70/3cTANmQmOdR7y2g+J0e2WXywy1yS468tY+IruqEww==}
@@ -1948,10 +1924,6 @@ packages:
 
   dmg-builder@26.15.3:
     resolution: {integrity: sha512-O3zJUFUYHJKgzPqioHxfxzBzlSC1eXCSr79gMSBKBP5AgjjpmrydMsMLotEg9fAJF36vdUncb+4ndRNxoPdlSQ==}
-
-  dns-packet@5.6.1:
-    resolution: {integrity: sha512-l4gcSouhcgIKRvyy99RNVOgxXiicE+2jZoNmaNmZ6JXiGajBOJAesk1OBlJuM5k2c+eudGdLxDqXuPCKIj6kpw==}
-    engines: {node: '>=6'}
 
   docx@9.7.1:
     resolution: {integrity: sha512-ilXFf9Moz47ABjFpDiA5s1w9lpb4EFSp7+5iiJSbfyYDM+bpZdAgLlSr7fW4aXhVe/E+F6QCv0EvRVFEd5CsWg==}
@@ -3010,10 +2982,6 @@ packages:
   ms@2.1.3:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
 
-  multicast-dns@7.2.5:
-    resolution: {integrity: sha512-2eznPJP8z2BFLX50tf0LuODrpINqP1RVIm/CObbTcBRITQgmC/TjcREF1NeTBzIcR5XO/ukWo+YHOjBbFwIupg==}
-    hasBin: true
-
   mz@2.7.0:
     resolution: {integrity: sha512-z81GNO7nnYMEhrGh9LeymoE4+Yr0Wn5McHIZMK5cfQCl+NDX08sCZgUc9/6MHni9IWuFLm1Z3HTCXu2z9fN62Q==}
 
@@ -3726,9 +3694,6 @@ packages:
   thenify@3.3.1:
     resolution: {integrity: sha512-RVZSIV5IG10Hk3enotrhvz0T9em6cyHBLkH/YAZuKqd8hRkKhSfCGIcP2KUY0EPxndzANBmNllzWPwak+bheSw==}
 
-  thunky@1.1.0:
-    resolution: {integrity: sha512-eHY7nBftgThBqOyHGVN+l8gF0BucP09fMo0oO/Lb0w1OF80dJv+lDVpXG60WMQvkcxAkNybKsrEIE3ZtKGmPrA==}
-
   tiny-async-pool@1.3.0:
     resolution: {integrity: sha512-01EAw5EDrcVrdgyCLgoSPvqznC0sVxDSVeiOz09FUpjh71G79VCqneOr+xvt7T1r76CF6ZZfPjHorN2+d+3mqA==}
 
@@ -3816,9 +3781,6 @@ packages:
     resolution: {integrity: sha512-I8yFsfRzmzK0WV1pNNOA4A7y4RDfFxPRxb3t+e3ui14qSGOxGtiSP6GjeX+Y6CHb7HYaFj7ECUD7VE5kQMZWGQ==}
     engines: {node: '>=18', npm: '>=9'}
 
-  tweetnacl@1.0.3:
-    resolution: {integrity: sha512-6rt+RN7aOi1nGMyC4Xa5DdYiukl2UWCbcJft7YhxReBGQD7OAM8Pbxw6YMo4r2diNEA8FEmu32YOn9rhaiE5yw==}
-
   type-check@0.4.0:
     resolution: {integrity: sha512-XleUoc9uwGXqjWwXaUTZAmzMcFZ5858QA2vvx1Ur5xIcixXIP+8LnFDgRplU30us6teqdlskFfu+ae4K79Ooew==}
     engines: {node: '>= 0.8.0'}
@@ -3833,11 +3795,6 @@ packages:
     peerDependencies:
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
       typescript: '>=4.8.4 <6.1.0'
-
-  typescript-language-server@4.4.1:
-    resolution: {integrity: sha512-vEvDw+cjY75afMN2rhx0z8sQtFDAUHoBniksBmB6NUZlDt0rEIwQq01VMiqyXFm9uZwcED2475cmDeXxoDHleg==}
-    engines: {node: '>=18'}
-    hasBin: true
 
   typescript@5.9.3:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
@@ -3999,20 +3956,6 @@ packages:
         optional: true
       jsdom:
         optional: true
-
-  vscode-jsonrpc@5.0.1:
-    resolution: {integrity: sha512-JvONPptw3GAQGXlVV2utDcHx0BiY34FupW/kI6mZ5x06ER5DdPG/tXWMVHjTNULF5uKPOUUD0SaXg5QaubJL0A==}
-    engines: {node: '>=8.0.0 || >=10.0.0'}
-
-  vscode-jsonrpc@9.0.1:
-    resolution: {integrity: sha512-rfuA6T75H6m5EkbhtEPzre9pT0HPcDI2MMy4+nPFIBks5J8JBAUHD4tRYSgaBOijIEC7SRkC1kKyXTLqbmh9jw==}
-    engines: {node: '>=14.0.0'}
-
-  vscode-languageserver-protocol@3.18.2:
-    resolution: {integrity: sha512-XRyDbT0Pp3sSNti3JmxVEUMySWCSi1hhM+/KUlCy1hV1zmrqpM1OwO12EAki8blhmLuIMpaJrYbo0OzGVfK2Qg==}
-
-  vscode-languageserver-types@3.18.0:
-    resolution: {integrity: sha512-8TsGPNMIMiiBdkORgRSvLjuiEIiAFtO+KssmYWxQ+uSVvlf7RjK8YKCOjPzZ+YA04jXEV7+7LvkSmHkhpNS99g==}
 
   w3c-xmlserializer@5.0.0:
     resolution: {integrity: sha512-o8qghlI8NZHU1lLPrpi2+Uq7abh4GGPpYANlalzWxyWteJOCsr/P+oPBA49TOLu5FTZO4d3F9MnWJfiMo4BkmA==}
@@ -4706,8 +4649,6 @@ snapshots:
 
   '@kwsites/promise-deferred@1.1.1': {}
 
-  '@leichtgewicht/ip-codec@2.0.5': {}
-
   '@malept/cross-spawn-promise@2.0.0':
     dependencies:
       cross-spawn: 7.0.6
@@ -5122,10 +5063,6 @@ snapshots:
   '@types/unist@2.0.11': {}
 
   '@types/unist@3.0.3': {}
-
-  '@types/ws@8.18.1':
-    dependencies:
-      '@types/node': 24.19.2
 
   '@typescript-eslint/eslint-plugin@8.65.0(@typescript-eslint/parser@8.65.0(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3))(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)':
     dependencies:
@@ -5562,11 +5499,6 @@ snapshots:
 
   bluebird@3.7.2: {}
 
-  bonjour-service@1.4.4:
-    dependencies:
-      fast-deep-equal: 3.1.3
-      multicast-dns: 7.2.5
-
   boolbase@1.0.0: {}
 
   boolean@3.2.0:
@@ -5920,10 +5852,6 @@ snapshots:
     transitivePeerDependencies:
       - electron-builder-squirrel-windows
       - supports-color
-
-  dns-packet@5.6.1:
-    dependencies:
-      '@leichtgewicht/ip-codec': 2.0.5
 
   docx@9.7.1:
     dependencies:
@@ -7373,11 +7301,6 @@ snapshots:
 
   ms@2.1.3: {}
 
-  multicast-dns@7.2.5:
-    dependencies:
-      dns-packet: 5.6.1
-      thunky: 1.1.0
-
   mz@2.7.0:
     dependencies:
       any-promise: 1.3.0
@@ -8190,8 +8113,6 @@ snapshots:
     dependencies:
       any-promise: 1.3.0
 
-  thunky@1.1.0: {}
-
   tiny-async-pool@1.3.0:
     dependencies:
       semver: 5.7.2
@@ -8268,8 +8189,6 @@ snapshots:
     dependencies:
       '@mixmark-io/domino': 2.2.0
 
-  tweetnacl@1.0.3: {}
-
   type-check@0.4.0:
     dependencies:
       prelude-ls: 1.2.1
@@ -8298,11 +8217,6 @@ snapshots:
       typescript: 5.9.3
     transitivePeerDependencies:
       - supports-color
-
-  typescript-language-server@4.4.1:
-    dependencies:
-      vscode-jsonrpc: 5.0.1
-      vscode-languageserver-protocol: 3.18.2
 
   typescript@5.9.3: {}
 
@@ -8487,17 +8401,6 @@ snapshots:
       - sugarss
       - supports-color
       - terser
-
-  vscode-jsonrpc@5.0.1: {}
-
-  vscode-jsonrpc@9.0.1: {}
-
-  vscode-languageserver-protocol@3.18.2:
-    dependencies:
-      vscode-jsonrpc: 9.0.1
-      vscode-languageserver-types: 3.18.0
-
-  vscode-languageserver-types@3.18.0: {}
 
   w3c-xmlserializer@5.0.0:
     dependencies:

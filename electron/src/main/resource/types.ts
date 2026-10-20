@@ -1,6 +1,6 @@
 // electron/src/main/resource/types.ts
 //
-// v1.7 资源库统一类型定义。所有来源（builtin/custom/marketplace/p2p/smithery）的资源
+// v1.7 资源库统一类型定义。所有来源（builtin/custom/marketplace/smithery）的资源
 // 都映射成 ResourceItem，前端只感知这一种数据结构，不感知 source 差异。
 //
 // 这是 v1.7 整个 UI + IPC 重构的核心类型——后续 14 个 task（registry / IPC /
@@ -14,17 +14,14 @@ export type ResourceType = 'agent' | 'mcp' | 'skill' | 'plugin';
  *   - builtin      系统预置（随应用分发，不可删除）
  *   - marketplace  网络资源（远程 catalog 下载安装）
  *   - custom       自定义（用户本地注册 / 上传）
- *   - p2p          P2P 共享（其他 peer 推送过来的资源，v2 引入）
  *   - smithery     Smithery registry 安装（P2 双轨·国际，spec 2026-09-22）
  *
- * modelscope（魔搭社区）已于 P2.1 移除——registry 100% hosted 后骨架轨无意义；
- * P3 若公开 API 落地再评估。
+ * modelscope（魔搭社区）已于 P2.1 移除；p2p 共享已于 2026-10-20 随 P2P 子系统移除。
  */
 export type ResourceSource =
   | 'builtin'
   | 'marketplace'
   | 'custom'
-  | 'p2p'
   | 'smithery';
 
 /** 资源列表过滤条件——所有字段可选，undefined 表示不过滤该维度 */
@@ -39,7 +36,7 @@ export interface ResourceFilter {
  * 统一资源项。v1.7 UI/IPC 的核心数据结构。
  *
  * 顶层字段对所有 source 通用；source 特有信息放在对应的可选 namespace 字段
- * （builtin / marketplace / custom / p2p）中，由消费方按 source 按需读取。
+ * （builtin / marketplace / custom）中，由消费方按 source 按需读取。
  * 这种"扁平通用字段 + 可选 namespace"的形状让前端列表渲染只需顶层字段，
  * 详情面板再按 source 切换到对应 namespace。
  */
@@ -57,7 +54,7 @@ export interface ResourceItem {
   iconEmoji?: string;
   /** 是否已安装到本地（builtin 永远 true） */
   installed: boolean;
-  /** 是否可安装（builtin = false；p2p 未确认时 = false） */
+  /** 是否可安装（builtin = false） */
   installable: boolean;
   /** 是否可删除（仅 builtin = false） */
   removable: boolean;
@@ -90,8 +87,6 @@ export interface ResourceItem {
     /** MCP 条目的传输形态（只读；ResourceDetail「配置」按钮显示条件消费，spec §6.1） */
     transport?: 'stdio' | 'streamable_http';
   };
-  /** p2p 项的扩展元数据（来源 peer 标识） */
-  p2p?: { peerId: string; peerName: string };
   /**
    * mcp_definitions DB 行派生项（custom / smithery 源）的启停态（组⑤）。
    * builtin catalog 项无 DB 行不带该段；禁用 = 定义保留、运行时切断。
@@ -115,7 +110,6 @@ const SOURCE_LABELS: Record<ResourceSource, string> = {
   builtin: '系统预置',
   custom: '自定义',
   marketplace: '网络资源',
-  p2p: 'P2P 共享',
   smithery: 'Smithery',
 };
 
@@ -145,7 +139,7 @@ export function buildResourceId(source: ResourceSource, type: ResourceType, slug
  */
 export function parseResourceId(id: string): { source: ResourceSource; type: ResourceType; slug: string } | null {
   // slug 部分允许任意非空字符（包括 UUID 中的连字符），用贪婪匹配
-  const m = id.match(/^(builtin|marketplace|custom|p2p|smithery)-(agent|mcp|skill|plugin)-(.+)$/);
+  const m = id.match(/^(builtin|marketplace|custom|smithery)-(agent|mcp|skill|plugin)-(.+)$/);
   if (!m || !m[3]) return null;
   return {
     source: m[1] as ResourceSource,

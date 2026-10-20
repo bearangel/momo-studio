@@ -6,7 +6,6 @@ import type { TaskStatus } from '../ipc/types';
 import {
   dispatchStatusStyle,
   PENDING_WRAP_UP_STYLE,
-  remoteStatusStyle,
   taskStatusStyle,
   type TaskStatusKey,
 } from './task-status';
@@ -76,12 +75,3 @@ describe('dispatchStatusStyle', () => {
   });
 });
 
-describe('remoteStatusStyle（远端未知状态防御）', () => {
-  it('已知状态走 taskStatusStyle；未知枚举回退 neutral + 原样文案', () => {
-    expect(remoteStatusStyle('failed').className).toContain('bg-status-error-tint');
-    expect(remoteStatusStyle('failed').label).toBe('失败');
-    const unknown = remoteStatusStyle('archived');
-    expect(unknown.label).toBe('archived');
-    expect(unknown.className).toContain('bg-surface-3');
-  });
-});

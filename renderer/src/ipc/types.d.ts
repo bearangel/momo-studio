@@ -191,20 +191,6 @@ export type TaskSnapshotItem = Pick<
 >;
 
 /**
- * 远端节点任务镜像（P4 Task 3）——p2p:getRemoteTasks 返回结构。
- * 只读：远端任务仅作看板展示，不进本地 tasks 表。
- */
-export interface RemoteNodeTasks {
-  nodeId: string;
-  nodeName: string;
-  tasks: TaskSnapshotItem[];
-  /** 快照拍摄时间（毫秒） */
-  takenAt: number;
-  /** 超 3 分钟未更新——对端可能离线（仍展示，带「已离线?」标记） */
-  stale: boolean;
-}
-
-/**
  * 任务相关 IPC 接口（B 子系统）。
  *
  *   - create：新建任务（status 默认 'draft'）。creatorUserId 由 main process 从当前
@@ -850,12 +836,11 @@ export type ResourceType = 'agent' | 'mcp' | 'skill' | 'plugin';
  *   - builtin      系统预置（随应用分发，不可删除）
  *   - marketplace  网络资源（远程 catalog 下载安装）
  *   - custom       自定义（用户本地注册 / 上传）
- *   - p2p          P2P 共享（v2 引入）
  *   - smithery     Smithery registry 安装（P2 双轨·国际，spec 2026-09-22）
- * modelscope 已于 P2.1 移除（registry 100% hosted 后放弃；P3 若公开 API 落地再评估）。
+ * modelscope 已于 P2.1 移除；p2p 共享已于 2026-10-20 随 P2P 子系统移除。
  * 与 electron 端 resource/types.ts 的 ResourceSource 对齐。
  */
-export type ResourceSource = 'builtin' | 'marketplace' | 'custom' | 'p2p' | 'smithery';
+export type ResourceSource = 'builtin' | 'marketplace' | 'custom' | 'smithery';
 
 /**
  * v1.7 资源列表过滤条件，所有字段可选，undefined 表示不过滤该维度。
@@ -921,7 +906,7 @@ export interface ResourceItem {
   iconEmoji?: string;
   /** 是否已安装到本地（builtin 永远 true） */
   installed: boolean;
-  /** 是否可安装（builtin = false；p2p 未确认时 = false） */
+  /** 是否可安装（builtin = false） */
   installable: boolean;
   /** 是否可删除（仅 builtin = false） */
   removable: boolean;
@@ -953,8 +938,6 @@ export interface ResourceItem {
     /** MCP 条目的传输形态（只读；「配置」按钮显示条件：transport === 'streamable_http'，spec §6.1） */
     transport?: 'stdio' | 'streamable_http';
   };
-  /** p2p 项的扩展元数据 */
-  p2p?: { peerId: string; peerName: string };
   /**
    * mcp_definitions DB 行派生项（custom / smithery 源）的启停态（组⑤）。
    * builtin catalog 项无 DB 行不带该段；禁用 = 定义保留、运行时切断。
@@ -2300,39 +2283,6 @@ export interface ApiSurface {
   task: TaskApiSurface;
   /** 看板重构 Task 7：任务组通道面（taskGroup:*，groups.ipc.handlers.ts） */
   taskGroup: TaskGroupApiSurface;
-  /**
-   * P2P 子系统 IPC（C 子系统 C8）——节点发现 + 信任管理。
-   *
-   *   - getIdentity：当前节点身份（未 initP2p 时返回 null）。fingerprint = 签名公钥
-   *     指纹（sha512 前 16 字节 hex，32 字符）——本机指纹，信任前供对端带外核对
-   *   - getDiscoveredNodes：mDNS 发现的节点列表（trusted 字段标当前是否已信任；
-   *     fingerprint = 该节点签名公钥指纹，与本机指纹比对防局域网冒充）
-   *   - addTrustedNode / removeTrustedNode：信任管理（信任后才能 E2E 通信）
-   *   - listTrustedNodes：信任节点完整列表（settings 详情用）
-   */
-  p2p: {
-    getIdentity(): Promise<
-      { nodeId: string; displayName: string; fingerprint: string } | null
-    >;
-    getDiscoveredNodes(): Promise<
-      Array<{
-        nodeId: string;
-        displayName: string;
-        transport: 'lan' | 'hub';
-        trusted: boolean;
-        lastSeen: number;
-        /** 节点签名公钥指纹——添加信任前与对端 UI 展示的本机指纹核对（防冒充） */
-        fingerprint: string;
-      }>
-    >;
-    addTrustedNode(nodeId: string): Promise<void>;
-    removeTrustedNode(nodeId: string): Promise<void>;
-    listTrustedNodes(): Promise<
-      Array<{ nodeId: string; displayName: string; trustedAt: number }>
-    >;
-    /** P4 Task 3：远端节点任务只读镜像（内存缓存；轮询点顺带清理超时条目） */
-    getRemoteTasks(): Promise<RemoteNodeTasks[]>;
-  };
   /**
    * 插件系统 P1（spec 2026-10-15）：安装 / 启停 / 卸载四通道。
    * 契约与 electron 端 plugin/ipc.handlers.ts 对齐。

@@ -20,7 +20,6 @@ import { wireHookBridgeAudit } from './plugin/hook-bridge-main';
 import { stopAllPluginServices } from './plugin/service-manager';
 import { runLegacyUpgradeIfNeeded, writeLegacyUpgradeNotice } from './upgrade/legacy-upgrade';
 import { setSessionMainWindow, broadcastRuntimeChanged } from './im/session-service';
-import { initP2p, stopP2p } from './p2p';
 import { initTaskRuntime, stopTaskRuntime } from './task/runtime-init';
 import { logger } from './logger';
 import { destroyAllTaskDrivenRuntimes } from './agent/runtime-registry';
@@ -228,13 +227,6 @@ if (!app.requestSingleInstanceLock()) {
           error: err instanceof Error ? err.message : String(err),
         });
       }
-
-      // P2P 子系统（节点发现/信任管理不依赖 Matrix）
-      void initP2p().catch((err) => {
-        logger.warn('P2P 子系统初始化失败（不影响主流程）', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
     } catch (err) {
       logger.error('Fatal startup error', {
         error: err instanceof Error ? err.message : String(err),
@@ -256,6 +248,5 @@ if (!app.requestSingleInstanceLock()) {
     destroyAllTaskDrivenRuntimes();
     destroyRouterService();
     stopTaskRuntime();
-    void stopP2p();
   });
 }

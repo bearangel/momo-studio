@@ -81,7 +81,6 @@ describe('TypePageShell（已安装单态，P2.3 Task 1）', () => {
     expect(within(select).getByRole('option', { name: /全部来源/ })).toBeTruthy();
     expect(within(select).getByRole('option', { name: /预置/ })).toBeTruthy();
     expect(within(select).getByRole('option', { name: /自定义/ })).toBeTruthy();
-    expect(within(select).getByRole('option', { name: /P2P/ })).toBeTruthy();
     expect(within(select).queryByRole('option', { name: /网络/ })).toBeNull();
     expect(screen.getByRole('button', { name: '添加服务器' })).toBeTruthy();
     // P2.3 Task 3：外部市场快捷打开入口挂载（原 Segmented 位）
@@ -124,7 +123,6 @@ describe('TypePageShell（已安装单态，P2.3 Task 1）', () => {
     expect(within(select).getByRole('option', { name: '全部来源 3' })).toBeTruthy();
     expect(within(select).getByRole('option', { name: '预置 2' })).toBeTruthy();
     expect(within(select).getByRole('option', { name: '自定义 1' })).toBeTruthy();
-    expect(within(select).getByRole('option', { name: 'P2P 0' })).toBeTruthy();
   });
 
   it('来源下拉切换 = 前端过滤（不触发 load；列表按来源收窄）', () => {
@@ -292,7 +290,7 @@ describe('TypePageShell - 筛选状态诚实性（走查 N1/N2/N4 + A2）', () =
     );
     const select = screen.getByLabelText('来源筛选');
     expect(within(select).queryByRole('option', { name: /网络/ })).toBeNull();
-    expect(within(select).getAllByRole('option')).toHaveLength(4);
+    expect(within(select).getAllByRole('option')).toHaveLength(3);
   });
 
   it('搜索无匹配 → 「没有匹配的资源」+ 清除筛选按钮（不得误报空库）', () => {
@@ -306,7 +304,7 @@ describe('TypePageShell - 筛选状态诚实性（走查 N1/N2/N4 + A2）', () =
   });
 
   it('清除筛选 → query 清空 + sourceFilter 回 all', () => {
-    useResourceStore.setState({ items: [itemA], query: 'zzz', sourceFilter: 'p2p' });
+    useResourceStore.setState({ items: [itemA], query: 'zzz', sourceFilter: 'smithery' });
     render(
       <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
     );
@@ -317,7 +315,7 @@ describe('TypePageShell - 筛选状态诚实性（走查 N1/N2/N4 + A2）', () =
 
   it('来源筛选无匹配（无该来源项）→ 同样显示无匹配空态而非「还没有…」', () => {
     // 来源筛选是前端过滤（组③：下拉计数需全量）——有 items 但无该来源项即触发
-    useResourceStore.setState({ items: [itemA], sourceFilter: 'p2p' });
+    useResourceStore.setState({ items: [itemA], sourceFilter: 'smithery' });
     render(
       <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
     );

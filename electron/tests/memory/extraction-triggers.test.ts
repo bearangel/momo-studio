@@ -11,7 +11,7 @@
 //
 // 保真度约定（momo-test-rules）：
 //   - 只 mock 边界：extraction.scheduleExtraction（被测接线的对端 spy）、
-//     electron.ipcMain（注册表捕获）、p2p.broadcastLocalMessage（网络栈）
+//     electron.ipcMain（注册表捕获）（网络栈边界随 P2P 移除退役）
 //   - 其余全真实：AgentRunner / WarmPool / 真实 SQLite（任务行终态转换、
 //     owner 消息计数、sendUserMessage 落库全链）；TRIGGER_TURN_INTERVAL 用真实常量
 //   - mock child 按真实语义构造（connected=true / exitCode=null；on 记录 handler
@@ -24,10 +24,9 @@ import type { ChildProcess } from 'node:child_process';
 
 // ─── 边界 mock（vi.mock 工厂提升到 import 之前，可变桩经 vi.hoisted 声明）──────
 
-const { scheduleExtractionSpy, ipcHandlers, mockBroadcast } = vi.hoisted(() => ({
+const { scheduleExtractionSpy, ipcHandlers } = vi.hoisted(() => ({
   scheduleExtractionSpy: vi.fn(),
   ipcHandlers: new Map<string, (...args: unknown[]) => unknown>(),
-  mockBroadcast: vi.fn(),
 }));
 
 // extraction 模块：仅覆写 scheduleExtraction（被测接线对端的 spy）；
@@ -43,11 +42,6 @@ vi.mock('electron', () => ({
       ipcHandlers.set(channel, fn);
     },
   },
-}));
-
-// p2p 网络栈打桩（session-service 真实链路依赖；与 session-service.test.ts 同法）
-vi.mock('../../src/main/p2p', () => ({
-  broadcastLocalMessage: mockBroadcast,
 }));
 
 vi.mock('../../src/main/logger', () => ({

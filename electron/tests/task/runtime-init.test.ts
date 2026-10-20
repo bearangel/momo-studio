@@ -10,7 +10,7 @@
 //
 // mock 收窄（momo-test-rules）：只 mock 进程/网络边界——electron（import 图
 // 经 executor → starter → agent 域触达 stream-relay 的运行时 electron import）
-// 与 p2p 门面（session-service → ../p2p 的网络栈）。
+//。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -19,9 +19,6 @@ import os from 'node:os';
 vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] },
   ipcMain: { handle: vi.fn(), on: vi.fn() },
-}));
-vi.mock('../../src/main/p2p', () => ({
-  broadcastLocalMessage: vi.fn(),
 }));
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';

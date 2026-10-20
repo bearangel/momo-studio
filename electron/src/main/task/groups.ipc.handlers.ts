@@ -30,7 +30,6 @@ import {
   updateGroup,
 } from '../storage/task-groups/repo';
 import { abortTaskExecution } from './lifecycle';
-import { broadcastLocalTaskSnapshot } from '../p2p/task-broadcast';
 import { logger } from '../logger';
 
 export function registerTaskGroupHandlers(): void {
@@ -68,7 +67,6 @@ export function registerTaskGroupHandlers(): void {
         logger.warn(`taskGroup:archive 补执行中断失败 task=${tid}`, err);
       }
     }
-    void broadcastLocalTaskSnapshot();
     return res;
   });
 
@@ -79,7 +77,6 @@ export function registerTaskGroupHandlers(): void {
     async (_evt, id: string, moveToGroupId: string | null) => {
       const res = deleteGroup(id, moveToGroupId);
       // 转移改变任务行归属 → 广播 P2P 快照（与既有写通道惯例对齐）
-      void broadcastLocalTaskSnapshot();
       return res;
     },
   );

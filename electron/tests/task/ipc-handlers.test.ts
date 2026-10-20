@@ -32,14 +32,12 @@ import type { TaskRow } from '../../src/main/storage/tasks/repo';
 import { createGroup, archiveGroup } from '../../src/main/storage/task-groups/repo';
 import { registerTaskHandlers } from '../../src/main/task/ipc.handlers';
 import * as executorMod from '../../src/main/task/executor';
-import * as taskBroadcastMod from '../../src/main/p2p/task-broadcast';
 import * as runtimeRegistryMod from '../../src/main/agent/runtime-registry';
 import * as sessionServiceMod from '../../src/main/im/session-service';
 
 // K3：task:update 成功后需触发调度重评估 + P2P 快照广播——spy 模块导出
 // （tsc→CJS 编译为属性访问，spy 生效），不断言内部实现
 const notifyExecutorSpy = vi.spyOn(executorMod, 'notifyExecutor');
-const broadcastSpy = vi.spyOn(taskBroadcastMod, 'broadcastLocalTaskSnapshot');
 // K7-4/K7-5：暂停/取消联动中断 + resume kickoff 重注入——同样 spy 模块边界
 const abortSpy = vi.spyOn(runtimeRegistryMod, 'abortTasksBySessionEverywhere');
 const sendUserMessageSpy = vi.spyOn(sessionServiceMod, 'sendUserMessage');
@@ -69,7 +67,6 @@ afterEach(() => {
   fs.rmSync(tmpRoot, { recursive: true, force: true });
   delete process.env.AP_USER_DATA_DIR;
   notifyExecutorSpy.mockClear();
-  broadcastSpy.mockClear();
   abortSpy.mockClear();
   sendUserMessageSpy.mockClear();
   sessionListChangedSpy.mockClear();
@@ -116,14 +113,12 @@ describe('task:update（minor-11）', () => {
     await handler(null, t.id, { assigneeAgentId: 'inst-new' });
 
     expect(notifyExecutorSpy).toHaveBeenCalledTimes(1);
-    expect(broadcastSpy).toHaveBeenCalledTimes(1);
   });
 
   it('K3: task:update 前置校验失败（任务不存在）→ 不触发通知', async () => {
     const handler = handlers.get('task:update')!;
     await expect(handler(null, 'T-9999', { title: 'nope' })).rejects.toThrow();
     expect(notifyExecutorSpy).not.toHaveBeenCalled();
-    expect(broadcastSpy).not.toHaveBeenCalled();
   });
 });
 

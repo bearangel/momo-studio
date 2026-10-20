@@ -12,7 +12,7 @@
 //   - setSourceFilter / setQuery：纯前端筛选状态（无 IPC）；变化时清掉
 //     installNotice（防止下一次切换仍显示陈旧的成功提示）
 //   - deleteResource / installResource：调对应 IPC 后立即 load 刷新
-//   - installResource：包 try/catch——p2p 导入失败（离线/未找到/超时）必须落到 error 字段，
+//   - installResource：包 try/catch——安装失败必须落到 error 字段，
 //     避免 unhandled rejection；成功后 set installNotice 给 View 渲染一次性成功横幅；
 //     返回 true/false 表示成功/失败（false 时错误已在 error 字段）。
 //     P2.1 Task 3：smithery needsConfig:true 时原样透传 SmitheryInstallResult
@@ -200,7 +200,7 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       set({ error: `导入失败：${message}`, loading: false, installNotice: null });
-      // 不 rethrow——p2p 导入失败（离线/未找到/超时）必须落到 error 字段给 View 渲染，
+      // 不 rethrow——安装失败必须落到 error 字段给 View 渲染，
       // 避免 unhandled rejection；调用方 await installResource() 拿到 false 语义
       return false;
     }

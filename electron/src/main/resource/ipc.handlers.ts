@@ -29,7 +29,7 @@ import { emitPluginEvent } from '../plugin/event-sources';
 //
 // 设计原则：
 //   - list / getDetail 直接转发给 library（纯查询，无副作用）
-//   - install 支持 marketplace / p2p / hub（smithery）三源（builtin 不可装、
+//   - install 支持 marketplace / hub（smithery）双源（builtin 不可装、
 //     custom 已在本地）；hub 未装条目经 id 反解直装，不经 library（两态返回：
 //     needsConfig=true 时带 schema 给 renderer 弹窗，不注册）
 //   - delete 按 source + type 路由：marketplace→uninstallPackage / custom 三分支 /
@@ -41,7 +41,7 @@ import { emitPluginEvent } from '../plugin/event-sources';
 //     （modelscope hub 轨已于 P2.1 移除，P3 若公开 API 落地再评估）
 //
 // P4 Task 4 追加：三个 custom 写通道成功后 fire-and-forget 广播资源目录
-// （broadcastLocalResourceCatalog——P2P 未启用时静默 no-op，本地写路径不受影响）。
+//
 
 import { randomUUID } from 'node:crypto';
 import { ipcMain, shell } from 'electron';
@@ -88,8 +88,6 @@ import { importGitRepoSkills, scanGitRepoSkills } from '../skill/git-import';
 import { deleteDefinition, removeMcpRefsFromAgents } from '../agent/crud';
 import { broadcastSessionListChanged } from '../im/session-service';
 import { listBuiltinPresetAgents, previewBuiltinPresetAgent } from '../agent/builtin';
-import { broadcastLocalResourceCatalog } from '../p2p/resource-share';
-import { requestResourceImport } from '../p2p/resource-transfer';
 
 /** resource:registerMcp 入参——注册自定义 MCP 的最小配置（id / version 由主进程补全） */
 export interface RegisterMcpInput {
@@ -156,11 +154,9 @@ export function registerResourceHandlers(): void {
     return resolveResourceById(id);
   });
 
-  // resource:install — marketplace 安装 + p2p 导入（P4 Task 5）+ hub 安装（P2.1 Task 3）
+  // resource:install — marketplace 安装（P4 Task 5）+ hub 安装（P2.1 Task 3）
   // marketplace：installPackage 底层需要完整的 MarketplaceItem（含 downloadUrl/checksum 等），
   // ResourceItem 不携带这些字段，故先 fetchCatalog 按 slug 找到原 catalog item 再传入。
-  // p2p：目录条目 → request/provide 按需拉取完整定义 → 落地 custom（agent 走
-  // createCustomDef 等价路径 / mcp 走 registerMcpDefinition 幂等覆盖）。
   // hub：smithery 详情 deploymentUrl 直连（两态返回——needsConfig 见
   // installSmitheryEntry；renderer types.d.ts 的 SmitheryInstallResult 有镜像）。
   const __resourceInstall = async (_evt: unknown, id: string): Promise<unknown> => {
@@ -172,34 +168,9 @@ export function registerResourceHandlers(): void {
       if (hubParsed?.type === 'mcp' && hubParsed.source === 'smithery') {
         return installSmitheryEntry(hubParsed.slug);
       }
-      // p2p 项由内存目录缓存解析——来源节点离线 / 目录超 5min prune 后条目消失，
-      // 给针对性文案（区别于 marketplace 的 id 不存在）
-      if (id.startsWith('p2p-')) {
-        throw new Error('找不到该 P2P 资源：来源节点可能已离线，或共享目录已过期');
-      }
       throw new Error(`资源 ${id} 不存在`);
     }
     if (!item.installable) throw new Error(`「${item.name}」不可安装`);
-
-    if (item.source === 'p2p') {
-      // library p2p 映射：item.slug 是对端原始 slug（不掺节点前缀），
-      // p2p.peerId 是完整 nodeId——直接作为请求三元组，无需反解 id 前缀
-      if (item.type !== 'agent' && item.type !== 'mcp') {
-        throw new Error(`P2P 共享暂只支持 agent / mcp 类型（收到 ${item.type}）`);
-      }
-      const peerNodeId = item.p2p?.peerId;
-      if (!peerNodeId) throw new Error(`P2P 资源 ${id} 缺少来源节点信息`);
-      const result = await requestResourceImport(peerNodeId, item.type, item.slug);
-      if (result === 'ok') {
-        // 导入即 custom 写通道（与 registerMcp/uploadSkill 同语义）→ 广播目录
-        void broadcastLocalResourceCatalog();
-        return;
-      }
-      if (result === 'not-found') {
-        throw new Error(`对端节点未找到资源「${item.name}」（可能已被删除或取消共享）`);
-      }
-      throw new Error(`导入「${item.name}」超时：对端节点无响应（可能已离线）`);
-    }
 
     if (item.source !== 'marketplace') {
       throw new Error(`source=${item.source} 不支持 install 操作`);
@@ -298,7 +269,6 @@ export function registerResourceHandlers(): void {
         else throw new Error(`未知 custom type: ${item.type}`);
         // 统一等待删除成功再广播（失败上抛时不广播旧目录）
         await deleted;
-        void broadcastLocalResourceCatalog();
         return deleted;
       }
       default:
@@ -338,7 +308,6 @@ export function registerResourceHandlers(): void {
       throw new Error(`注册后未在自定义资源中找到 MCP ${config.name}`);
     }
     // custom 资源变更 → 广播资源目录（fire-and-forget）
-    void broadcastLocalResourceCatalog();
     return item;
   });
 
@@ -351,7 +320,6 @@ export function registerResourceHandlers(): void {
       const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
       const uploaded = uploadSkillZip(buffer, filename);
       // skill 虽不入 P2P 目录（2.1 排除），仍统一触发广播保持 custom 写通道行为一致
-      void broadcastLocalResourceCatalog();
       return uploaded;
     },
   );
@@ -361,7 +329,6 @@ export function registerResourceHandlers(): void {
   // slug 冲突覆盖（与 zip 重复上传同语义——UI 提交前自行比对提示）。
   ipcMain.handle('resource:createSkill', async (_evt, input: SkillCreateInput) => {
     const uploaded = createSkillFromForm(input);
-    void broadcastLocalResourceCatalog();
     return uploaded;
   });
 
@@ -377,7 +344,6 @@ export function registerResourceHandlers(): void {
   // 不广播旧目录（与 registerMcp/uploadSkill 同语义）。
   ipcMain.handle('resource:importGitRepoSkills', async (_evt, importId: string) => {
     const result = await importGitRepoSkills(importId);
-    void broadcastLocalResourceCatalog();
     return result;
   });
 
@@ -406,7 +372,6 @@ export function registerResourceHandlers(): void {
     ) => {
       const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
       const item = importMcpBundle(buffer, filename, userConfig);
-      void broadcastLocalResourceCatalog();
       return item;
     },
   );

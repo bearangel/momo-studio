@@ -19,7 +19,6 @@ import { ConversationSettings } from './ConversationSettings';
 import { MemorySettings } from './MemorySettings';
 import { DefaultModelSettings } from './DefaultModelSettings';
 import { About } from './About';
-import { NodeDiscoveryPanel } from '../p2p/NodeDiscoveryPanel';
 import { PluginSettings } from './PluginSettings';
 import { AppearanceSettings } from './AppearanceSettings';
 import { SandboxSettingsPanel } from './SandboxSettingsPanel';
@@ -78,7 +77,6 @@ export function SettingsView() {
           {active === 'git_policy' && <GitPolicySettings workspaceId={workspace.id} />}
           {active === 'audit_log' && <AuditLog workspaceId={workspace.id} />}
           {active === 'plugins' && <PluginSettings />}
-          {active === 'p2p' && <NodeDiscoveryPanel />}
           {active === 'about' && <About />}
         </div>
       </div>

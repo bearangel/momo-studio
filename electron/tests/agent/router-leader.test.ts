@@ -10,7 +10,7 @@
 //   ※ sender 契约：生产 sendUserMessage 落库行被 session-naming 直接消费（'owner' 字面量锁死）
 //
 // 保真度约定（momo-test-rules）：
-//   - Mock 收窄：仅 vi.mock p2p 广播（网络边界）与 createLLMProvider（LLM 边界）；
+//   - Mock 收窄：仅 vi.mock createLLMProvider（LLM 边界）；
 //     路由判定、DB 读写、命名守卫 SQL、事件落库全部走真实实现
 //   - RouterService 用真实实例 + duck-typed fake runner（executeTask spy）；
 //     自动拉起链用「注册 runner 进 Map」的 ensureRunner spy 仿真 start 效果
@@ -23,16 +23,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-const { mockBroadcast, createLLMProviderMock, chatMock, ensureMemberRuntimeMock } = vi.hoisted(() => ({
-  mockBroadcast: vi.fn(),
+const { createLLMProviderMock, chatMock, ensureMemberRuntimeMock } = vi.hoisted(() => ({
   createLLMProviderMock: vi.fn(),
   chatMock: vi.fn(),
   ensureMemberRuntimeMock: vi.fn(),
 }));
 
-vi.mock('../../src/main/p2p', () => ({
-  broadcastLocalMessage: mockBroadcast,
-}));
 
 vi.mock('../../src/main/agent/llm-provider', () => ({
   createLLMProvider: createLLMProviderMock,
@@ -151,7 +147,6 @@ beforeEach(() => {
     async deleteSecret() {},
   });
 
-  mockBroadcast.mockReset().mockResolvedValue(undefined);
   chatMock.mockReset().mockResolvedValue({ content: '登录页面开发', toolCalls: [], finishReason: 'stop' });
   createLLMProviderMock.mockReset().mockImplementation(() => ({ chat: chatMock }));
 });

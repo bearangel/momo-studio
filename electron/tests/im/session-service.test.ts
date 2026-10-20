@@ -11,7 +11,6 @@
 // 隔离策略：
 //   - DB：AP_USER_DATA_DIR 临时目录 + runMigrations + closeDb（v25 schema：
 //     workspace_agent_members / workspaces.default_agent_instance_id）
-//   - p2p 模块整体 vi.mock（broadcastLocalMessage 替换为 spy，不加载真实网络栈）
 //   - 命名接线走真实 session-naming（applyFirstMessageTitle 纯 DB 路径，无 LLM）
 //   - router 经 setSessionRouter 注入满足 SessionRouter 结构的 spy 对象
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -19,14 +18,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import type { BrowserWindow } from 'electron';
-
-const { mockBroadcast } = vi.hoisted(() => ({
-  mockBroadcast: vi.fn(),
-}));
-
-vi.mock('../../src/main/p2p', () => ({
-  broadcastLocalMessage: mockBroadcast,
-}));
 
 // logger mock：断言「router 缺席导致派发跳过」的 warn 留痕（防静默死路回归）
 vi.mock('../../src/main/logger', () => ({
@@ -93,7 +84,6 @@ beforeEach(() => {
   fs.mkdirSync(tmpRoot, { recursive: true });
   process.env.AP_USER_DATA_DIR = tmpRoot;
   runMigrations();
-  mockBroadcast.mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -242,13 +232,6 @@ describe('sendUserMessage 全链', () => {
       expect.objectContaining({ id: rows[0]?.id, sessionId: s.id, sender: 'owner', body: '你好' }),
     );
 
-    expect(mockBroadcast).toHaveBeenCalledTimes(1);
-    expect(mockBroadcast).toHaveBeenCalledWith({
-      roomId: s.id,
-      sender: 'owner',
-      body: '你好',
-      eventType: 'm.room.message',
-    });
 
     expect(routeUserChat).toHaveBeenCalledTimes(1);
     expect(routeUserChat).toHaveBeenCalledWith({
@@ -474,9 +457,7 @@ describe('sendUserMessage 全链', () => {
     expect(getTask('T-005')!.status).toBe('pending');
     expect(getTask('T-005')!.targetSessionId).toBeNull();
 
-    // 路由保留：kickoff 仍需 leader 接待派发（P2P 广播 mockBroadcast 同样保留）
     expect(routeUserChat).toHaveBeenCalledTimes(1);
-    expect(mockBroadcast).toHaveBeenCalledTimes(1);
   });
 
   // kickoff 行 task_id 落库（2026-09-30 定位修复）：sourceTaskId 是 executor

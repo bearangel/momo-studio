@@ -33,7 +33,6 @@ const SOURCE_OPTIONS: ReadonlyArray<{ key: SourceOptionKey; label: string }> = [
   { key: 'all', label: '全部来源' },
   { key: 'builtin', label: '预置' },
   { key: 'custom', label: '自定义' },
-  { key: 'p2p', label: 'P2P' },
 ];
 
 /** 来源计数形状（与 SOURCE_OPTIONS 的 key 一一对应；其余来源只计入 all） */
@@ -41,7 +40,6 @@ interface SourceCounts {
   all: number;
   builtin: number;
   custom: number;
-  p2p: number;
 }
 
 type SourceOptionKey = keyof SourceCounts;
@@ -112,7 +110,7 @@ interface TypePageShellProps {
   type: ResourceType;
   /** 类型专属「＋」下拉项（由 ResourceLibraryView 组装——弹窗开关都在那边） */
   addItems: AddMenuItem[];
-  /** 本地安装回调（installed 列表 installable 项——p2p 导入；实现直连 store.installResource） */
+  /** 本地安装回调（installed 列表 installable 项；实现直连 store.installResource） */
   onInstall: (id: string) => void;
   /** custom agent 编辑入口（DefinitionEditor 挂载在 View 层） */
   onEditAgent: (id: string) => void;
@@ -282,11 +280,10 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
   };
 
   // 来源计数（下拉选项标签；marketplace/smithery 只计入 all）
-  const counts: SourceCounts = { all: items.length, builtin: 0, custom: 0, p2p: 0 };
+  const counts: SourceCounts = { all: items.length, builtin: 0, custom: 0 };
   for (const i of items) {
     if (i.source === 'builtin') counts.builtin += 1;
     else if (i.source === 'custom') counts.custom += 1;
-    else if (i.source === 'p2p') counts.p2p += 1;
   }
 
   // 详情数据：从「过滤后」列表解析——选中项被搜索/筛选排除时详情面板自动收起

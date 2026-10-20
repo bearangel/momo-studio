@@ -25,7 +25,6 @@ const {
   runtimeStatusMocks,
   spawnMocks,
   builtinMocks,
-  resourceShareMocks,
   capsMocks,
 } = vi.hoisted(() => {
   const ipcHandlers = new Map<string, (...args: unknown[]) => unknown>();
@@ -97,9 +96,6 @@ const {
     builtinMocks: {
       getBuiltinSuggestionsMap: vi.fn(() => ({})),
     },
-    resourceShareMocks: {
-      broadcastLocalResourceCatalog: vi.fn(async () => undefined),
-    },
     capsMocks: {
       getAssignmentDeltas: vi.fn(() => ({
         addedTools: [], removedTools: [], addedMcps: [],
@@ -130,7 +126,6 @@ vi.mock('../../src/main/agent/runtime-registry', () => runtimeRegistryMocks);
 vi.mock('../../src/main/agent/runtime-status', () => runtimeStatusMocks);
 vi.mock('../../src/main/agent/spawn-helpers', () => spawnMocks);
 vi.mock('../../src/main/agent/builtin', () => builtinMocks);
-vi.mock('../../src/main/p2p/resource-share', () => resourceShareMocks);
 vi.mock('../../src/main/agent/assignment-capabilities', () => capsMocks);
 vi.mock('../../src/main/agent/manifest-parser', () => ({
   parseAgentManifest: vi.fn(),
@@ -162,7 +157,6 @@ beforeEach(() => {
   Object.values(runtimeStatusMocks).forEach((m) => m.mockClear());
   Object.values(spawnMocks).forEach((m) => m.mockClear());
   Object.values(builtinMocks).forEach((m) => m.mockClear());
-  Object.values(resourceShareMocks).forEach((m) => m.mockClear());
   Object.values(capsMocks).forEach((m) => m.mockClear());
   registerAgentHandlers();
 });

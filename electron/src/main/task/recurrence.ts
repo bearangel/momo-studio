@@ -7,7 +7,6 @@
 // 本期不做 cron 解析（spec D5）；非法规则一律 nextRun → null（不抛错，
 // spawn 侧静默跳过——规则坏了不能拖垮任务终态处理链）。
 import { getTask, insertTask } from '../storage/tasks/repo';
-import { broadcastLocalTaskSnapshot } from '../p2p/task-broadcast';
 import { logger } from '../logger';
 
 const MINUTE = 60_000;
@@ -82,5 +81,4 @@ export function spawnNextInstanceIfRecurring(taskId: string): void {
     // deadline 不复制（spec §7.2：绝对截止时间对下次运行无意义）
   });
   logger.info('循环任务已续期', { parent: task.id, next: next.id, scheduledAt: at });
-  void broadcastLocalTaskSnapshot();
 }

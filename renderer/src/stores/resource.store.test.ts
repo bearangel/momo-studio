@@ -193,14 +193,14 @@ describe('resource.store 资源库重设计（activeType 单态）', () => {
 
   it('setSourceFilter 纯前端状态：不触发 load（组③——来源下拉计数需全量 items）', () => {
     resourceList.mockClear();
-    useResourceStore.getState().setSourceFilter('p2p');
-    expect(useResourceStore.getState().sourceFilter).toBe('p2p');
+    useResourceStore.getState().setSourceFilter('smithery');
+    expect(useResourceStore.getState().sourceFilter).toBe('smithery');
     expect(resourceList).not.toHaveBeenCalled();
   });
 
   it('load 只按 type 过滤——即使 sourceFilter 非 all 也不下发 source（组③ 前端化）', async () => {
     resourceList.mockClear();
-    useResourceStore.setState({ typeFilter: 'skill', sourceFilter: 'p2p' });
+    useResourceStore.setState({ typeFilter: 'skill', sourceFilter: 'smithery' });
     await useResourceStore.getState().load();
     expect(resourceList).toHaveBeenLastCalledWith({ type: 'skill' });
   });

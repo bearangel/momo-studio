@@ -28,7 +28,6 @@ import type {
   RegisterMcpInput,
   RegistryListEntry,
   RegistryProviderMeta,
-  RemoteNodeTasks,
   ResourceFilter,
   ResourceItem,
   ResourceType,
@@ -527,16 +526,6 @@ const api: ApiSurface = {
         ipcRenderer.off('plugin:panelEvent', handler);
       };
     },
-  },
-  p2p: {
-    // C8：P2P 节点发现 + 信任管理
-    getIdentity: () => invoke('p2p:getIdentity'),
-    getDiscoveredNodes: () => invoke('p2p:getDiscoveredNodes'),
-    addTrustedNode: (nodeId: string) => invoke('p2p:addTrustedNode', nodeId),
-    removeTrustedNode: (nodeId: string) => invoke('p2p:removeTrustedNode', nodeId),
-    listTrustedNodes: () => invoke('p2p:listTrustedNodes'),
-    // P4 Task 3：远端节点任务只读镜像（看板远端分区 5s 轮询数据源）
-    getRemoteTasks: () => invoke<RemoteNodeTasks[]>('p2p:getRemoteTasks'),
   },
   window: {
     // P2 Task 1：自绘 titlebar 窗口控制（send 单向 + is-maximized 查询 + maximized 推送）

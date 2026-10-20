@@ -7,7 +7,6 @@
 // 分层职责（momo-test-rules 第 5 条——mock 收窄到模块边界）：
 //   - skill/git-import 模块桩化：真实下载/解析/落盘链路由 tests/skill/git-import.test.ts
 //     覆盖，本文件只锁「renderer → preload → handler → 服务函数」的对接面
-//   - p2p/resource-share 广播 spy：fire-and-forget 广播是 import 通道契约的一部分
 //     （与 registerMcp/uploadSkillZip 同语义），不 mock 无法断言
 //   - AP_USER_DATA_DIR 指向 tmp：logger（electron-log）落盘隔离；两 handler 不触 DB
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -28,11 +27,6 @@ vi.mock('../../src/main/skill/git-import', () => gitImportMocks);
 
 // 广播 spy：import 成功后的唯一外副作用（P2P 未启用时真实实现为静默 no-op，
 // 此处桩化才能锁「调用事实」）
-const { broadcastCatalog } = vi.hoisted(() => ({ broadcastCatalog: vi.fn() }));
-vi.mock('../../src/main/p2p/resource-share', () => ({
-  broadcastLocalResourceCatalog: broadcastCatalog,
-}));
-
 import { ipcMain } from 'electron';
 import { registerResourceHandlers } from '../../src/main/resource/ipc.handlers';
 
@@ -79,7 +73,6 @@ describe('resource:scanGitRepoSkills — 通道契约', () => {
     expect(gitImportMocks.scanGitRepoSkills).toHaveBeenCalledTimes(1);
     expect(gitImportMocks.scanGitRepoSkills).toHaveBeenCalledWith('https://github.com/obra/superpowers');
     expect(result).toEqual(stub);
-    expect(broadcastCatalog).not.toHaveBeenCalled();
   });
 
   it('服务层中文报错（暂不支持 host）→ handler reject 原样上抛', async () => {
@@ -109,7 +102,6 @@ describe('resource:importGitRepoSkills — 通道契约', () => {
     expect(gitImportMocks.importGitRepoSkills).toHaveBeenCalledWith('0192f0a0-1234-4000-8000-00000000abcd');
     expect(result).toEqual(stub);
     // 有失败条目也属「成功返回」（逐条结果不中断）→ 仍广播
-    expect(broadcastCatalog).toHaveBeenCalledTimes(1);
   });
 
   it('导入抛错（会话失效）→ handler reject 中文透传且不广播', async () => {
@@ -117,6 +109,5 @@ describe('resource:importGitRepoSkills — 通道契约', () => {
     await expect(
       getHandler('resource:importGitRepoSkills')({}, 'stale-import-id'),
     ).rejects.toThrow(/失效/);
-    expect(broadcastCatalog).not.toHaveBeenCalled();
   });
 });

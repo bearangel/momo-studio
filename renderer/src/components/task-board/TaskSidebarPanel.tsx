@@ -14,77 +14,8 @@ import { useEffect, useState } from 'react';
 import { Archive } from 'lucide-react';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { ipc } from '../../ipc/client';
-import type { RemoteNodeTasks } from '../../ipc/types';
 import { ArchivePanel } from './ArchivePanel';
 import { GroupManageList } from './GroupManageList';
-import { remoteStatusStyle } from '../../lib/task-status';
-
-/** 远端镜像轮询间隔（毫秒）——同 NodeDiscoveryPanel 的发现节点轮询节奏 */
-const REMOTE_REFRESH_INTERVAL_MS = 5000;
-
-/** 相对时间展示：「xx 秒/分钟/小时前」 */
-function formatRelativeTime(takenAt: number): string {
-  const diffSec = Math.max(0, Math.floor((Date.now() - takenAt) / 1000));
-  if (diffSec < 60) return `${diffSec} 秒前`;
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin} 分钟前`;
-  return `${Math.floor(diffMin / 60)} 小时前`;
-}
-
-/** 底部远端节点只读分区——空数据不渲染；任务行纯展示（非按钮、无操作） */
-function RemoteTaskSection() {
-  const [remoteTasks, setRemoteTasks] = useState<RemoteNodeTasks[]>([]);
-
-  useEffect(() => {
-    const refresh = async (): Promise<void> => {
-      try {
-        setRemoteTasks(await ipc.p2p.getRemoteTasks());
-      } catch {
-        // P2P 未启用 / 通道未注册 → 静默保持空（分区不渲染，不刷错误）
-      }
-    };
-    void refresh();
-    const interval = setInterval(() => {
-      void refresh();
-    }, REMOTE_REFRESH_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, []);
-
-  if (remoteTasks.length === 0) return null;
-
-  return (
-    <div className="shrink-0 border-t border-subtle px-3 py-2">
-      <div className="text-xs font-medium text-tertiary mb-1">远端节点</div>
-      <div className="flex flex-col gap-2 max-h-64 overflow-y-auto">
-        {remoteTasks.map((node) => (
-          <div key={node.nodeId} className="border border-subtle rounded p-2">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-medium text-primary truncate">
-                {node.nodeName}
-              </span>
-              <span className="text-xs text-tertiary shrink-0">
-                <span>{formatRelativeTime(node.takenAt)}</span>
-                {node.stale && <span className="text-status-warning ml-1">已离线?</span>}
-              </span>
-            </div>
-            {node.tasks.map((t) => (
-              <div key={t.id} className="flex items-center justify-between gap-2 mt-1">
-                <span className="text-xs text-secondary truncate">
-                  #{t.id} · {t.title}
-                </span>
-                {/* 跨版本对端可能送来未知状态枚举——remoteStatusStyle 回退原样展示 */}
-                {(() => {
-                  const s = remoteStatusStyle(t.status);
-                  return <span className={s.className}>{s.label}</span>;
-                })()}
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 export function TaskSidebarPanel() {
   const workspace = useWorkspaceStore((s) => s.getActive());
@@ -126,7 +57,6 @@ export function TaskSidebarPanel() {
           归档 <span className="text-tertiary">{archivedCount}</span>
         </button>
       </div>
-      <RemoteTaskSection />
       {workspace && (
         <ArchivePanel
           open={archiveOpen}

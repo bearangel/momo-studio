@@ -32,7 +32,6 @@ import {
 import { listAgentDefinitions } from '../agent/crud';
 import type { McpConfigSchema, McpEntryUpdateInput, RegisteredMcp } from '../mcp/types';
 import { composeRemoteConfig, fetchSmitheryDetail } from './hub-install';
-import { broadcastLocalResourceCatalog } from '../p2p/resource-share';
 
 /** P2.5：全字段编辑入参（定义在 mcp/types.ts；renderer types.d.ts 同形镜像） */
 export type { McpEntryUpdateInput };
@@ -258,7 +257,6 @@ export function getMcpEditView(name: string): McpEditView {
 export async function updateMcpEntry(name: string, input: McpEntryUpdateInput): Promise<void> {
   updateMcpEntryDefinition(name, input);
   await evictMcpByName(name);
-  void broadcastLocalResourceCatalog();
 }
 
 /**

@@ -20,7 +20,7 @@
 //   - task:list 直接转发 listTasks 的 opts 结构（workspaceId / status / assigneeAgentId 等）。
 //   - P4 Task 2：四个写通道（create/transition/cancel/start）成功后 fire-and-forget
 //     广播任务快照（P2P 未启用时内部静默 no-op）。import 叶子模块 task-broadcast
-//     而非 p2p 门面——避免把 electron/传输层依赖拖进 scheduler 等纯逻辑模块的测试图。
+//     ——避免把 electron/传输层依赖拖进 scheduler 等纯逻辑模块的测试图。
 //   - Task 5：同一批写通道成功后 notifyExecutor()——队列状态变化立即触发放行评估
 //     （executor 内部 100ms 去抖合并；通知丢了有 30s 兜底扫描自愈）。
 //   - 看板重构 Task 4：start / resume-paused / cancel 三动作的语义单点抽取到
@@ -40,7 +40,6 @@ import {
 } from '../storage/tasks/repo';
 import { isTerminal } from '../storage/tasks/state-machine';
 import { getGroup } from '../storage/task-groups/repo';
-import { broadcastLocalTaskSnapshot } from '../p2p/task-broadcast';
 import { notifyExecutor } from './executor';
 import { hasDelegationTarget, type StartTaskOpts } from './starter';
 import { resolveCreateStatus } from './create-status';
@@ -130,7 +129,6 @@ export function registerTaskHandlers(): void {
       deadlineAt: input.deadlineAt,
       groupId: input.groupId,
     });
-    void broadcastLocalTaskSnapshot();
     notifyExecutor();
     return created;
   });
@@ -182,7 +180,6 @@ export function registerTaskHandlers(): void {
       // K3（P0 修复）：与 create/transition/cancel/start 四写通道对齐——
       // 编辑可能改 assignee/目标（排队任务的执行对象变化），
       // 成功后必须触发调度重评估 + P2P 快照广播
-      void broadcastLocalTaskSnapshot();
       notifyExecutor();
     },
   );
@@ -199,7 +196,6 @@ export function registerTaskHandlers(): void {
       if (to === 'paused' || to === 'cancelled') {
         abortTaskExecution(id);
       }
-      void broadcastLocalTaskSnapshot();
       notifyExecutor();
       return row;
     },
@@ -215,7 +211,6 @@ export function registerTaskHandlers(): void {
   // 成功后广播快照，远端看板镜像即时同步
   ipcMain.handle('task:move', async (_evt, id: string, target: MoveTarget): Promise<TaskRow> => {
     const row = await executeMove(id, target);
-    void broadcastLocalTaskSnapshot();
     return row;
   });
 
@@ -226,7 +221,6 @@ export function registerTaskHandlers(): void {
     'task:setPinned',
     async (_evt, id: string, pinned: boolean): Promise<TaskRow> => {
       const row = setTaskPinned(id, pinned);
-      void broadcastLocalTaskSnapshot();
       return row;
     },
   );
@@ -239,13 +233,11 @@ export function registerTaskHandlers(): void {
     if (!t) throw new Error(`task ${id} 不存在`);
     if (!isTerminal(t.status)) throw new Error('仅终态任务可归档(completed/failed/cancelled)');
     updateTask(id, { archivedAt: Date.now() });
-    void broadcastLocalTaskSnapshot();
     return getTask(id)!;
   });
 
   ipcMain.handle('task:unarchive', async (_evt, id: string): Promise<TaskRow> => {
     updateTask(id, { archivedAt: null });
-    void broadcastLocalTaskSnapshot();
     return getTask(id)!;
   });
 
@@ -271,7 +263,6 @@ export function registerTaskHandlers(): void {
 
       // v2.6.0：其余可恢复状态交由 resume.ts resumeTask 统一处理
       const result = await resumeTask(id);
-      void broadcastLocalTaskSnapshot();
       const after = getTask(id);
       return { ...(after ?? before), streamSessionId: result.streamSessionId };
     },

@@ -21,7 +21,6 @@ import {
   type MessageRow,
 } from '../storage/messages/repo';
 import { getSession, touchSessionLastMessage } from '../storage/sessions/repo';
-import { broadcastLocalMessage } from '../p2p';
 // /compact 运行中拒绝判定（spec §5.4）：只读 runner 注册表。与文件头 SessionRouter
 // 「避免直接依赖 agent 模块」不冲突——runtime-registry 对本模块的反向引用仅经
 // router-bootstrap 动态 import，无静态回边。
@@ -187,17 +186,6 @@ export async function sendUserMessage(input: {
         (input.context.files[0] ? input.context.files[0].path.split('/').pop()! : '');
   applyFirstMessageTitle(input.sessionId, titleSource);
 
-  // P2P 广播（fire-and-forget；sync 未初始化时静默返回）。
-  // 注意：p2p SyncMessage 字段名仍为 roomId（p2p 模块属阶段三重构范围，本 task 不动），
-  // 此处按值映射 sessionId → roomId；p2p 模块重构时统一改名。
-  void broadcastLocalMessage({
-    roomId: input.sessionId,
-    sender: 'owner',
-    body: input.body,
-    eventType: 'm.room.message',
-    ...(input.context ? { contextJson: JSON.stringify(input.context) } : {}),
-  });
-
   // 冲突检测（沿用 im:send 的保护语义：失败不阻塞消息发送）。
   // systemKickoff：executor 注入的系统消息不做冲突检测——kickoff 正文自带
   // #T 任务 id，检测必然命中「会话内 in_progress + mention 其他任务」误报
@@ -336,13 +324,5 @@ export async function handleSessionCommand(input: {
   });
   touchSessionLastMessage(input.sessionId);
   pushMessageRow(ack);
-  // LAN 只读镜像只广播统计行（eventType 原样——对端 renderer 同款 CompactNotice
-  // 渲染为无摘要通知行）；摘要全文是本机折叠卡载荷，不进镜像
-  void broadcastLocalMessage({
-    roomId: input.sessionId,
-    sender: 'owner',
-    body: statsLine,
-    eventType: COMPACT_ACK_EVENT_TYPE,
-  });
   return { ok: true, message: statsLine };
 }

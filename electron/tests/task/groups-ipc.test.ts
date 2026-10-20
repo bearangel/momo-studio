@@ -35,13 +35,11 @@ import type { GroupRow } from '../../src/main/storage/task-groups/repo';
 import { insertTask, transitionTaskStatus, listTasks } from '../../src/main/storage/tasks/repo';
 import type { TaskRow, TaskStatus } from '../../src/main/storage/tasks/repo';
 import { registerTaskGroupHandlers } from '../../src/main/task/groups.ipc.handlers';
-import * as taskBroadcastMod from '../../src/main/p2p/task-broadcast';
 import * as lifecycleMod from '../../src/main/task/lifecycle';
 import * as loggerMod from '../../src/main/logger';
 
 // archive 成功后的 fire-and-forget 广播 + 级联 abort——spy 模块导出
 // (tsc→CJS 属性访问,spy 生效,照 move-ipc.test.ts 先例)
-const broadcastSpy = vi.spyOn(taskBroadcastMod, 'broadcastLocalTaskSnapshot');
 const abortSpy = vi.spyOn(lifecycleMod, 'abortTaskExecution');
 const loggerWarnSpy = vi.spyOn(loggerMod.logger, 'warn');
 
@@ -76,7 +74,6 @@ afterEach(() => {
   closeDb();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
   delete process.env.AP_USER_DATA_DIR;
-  broadcastSpy.mockClear();
   abortSpy.mockClear();
   loggerWarnSpy.mockClear();
 });
@@ -149,7 +146,6 @@ describe('taskGroup:archive IPC', () => {
     expect(abortSpy).toHaveBeenCalledTimes(1);
     expect(abortSpy).toHaveBeenCalledWith(run.id);
     // 归档改变 task:list 默认可见性 → 触发 P2P 快照广播(与既有写通道惯例对齐)
-    expect(broadcastSpy).toHaveBeenCalledTimes(1);
   });
 
   it('abort 失败吞错只 warn——不阻断归档结果', async () => {
@@ -228,7 +224,6 @@ describe('taskGroup:delete IPC', () => {
     expect(listTasks({ workspaceId: WS }).map((t) => t.id)).toContain(t1.id);
     expect((await handlers.get('taskGroup:list')!(null, WS)) as GroupRow[]).toHaveLength(1);
     // 转移改变任务行 → 触发 P2P 快照广播(与既有写通道惯例对齐)
-    expect(broadcastSpy).toHaveBeenCalled();
   });
 
   it('moveToGroupId=null 转移到未分组', async () => {

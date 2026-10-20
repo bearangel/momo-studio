@@ -2,7 +2,7 @@
 // 设置左侧分类导航：宽度 190px（inline style 规避 Tailwind 任意值 class 失效问题）。
 // v2.1：图标 lucide 化（emoji 禁用），新增「外观」分类。v2.2：新增「记忆」分类。v2.4：新增「安全沙箱」分类。v2.7：新增「浏览器」分类（spec §6.2 与安全沙箱并列）。
 import type { LucideIcon } from 'lucide-react';
-import { Building2, Target, MessageSquare, Puzzle, Brain, SunMoon, ShieldCheck, AppWindow, GitBranch, ScrollText, Globe, Info } from 'lucide-react';
+import { Building2, Target, MessageSquare, Puzzle, Brain, SunMoon, ShieldCheck, AppWindow, GitBranch, ScrollText, Info } from 'lucide-react';
 import { useSettingsStore, type SettingsCategory } from '../../stores/settings.store';
 import { cn } from '../../lib/cn';
 
@@ -19,7 +19,6 @@ const CATEGORIES: { key: SettingsCategory; label: string; icon: LucideIcon }[] =
   { key: 'browser', label: '浏览器', icon: AppWindow },
   { key: 'git_policy', label: 'Git 策略', icon: GitBranch },
   { key: 'audit_log', label: '审计日志', icon: ScrollText },
-  { key: 'p2p', label: '节点互联', icon: Globe },
   { key: 'about', label: '关于', icon: Info },
 ];
 

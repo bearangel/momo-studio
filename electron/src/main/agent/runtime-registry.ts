@@ -28,7 +28,6 @@ import { logger } from '../logger';
 import { getDb } from '../storage/db';
 import { transitionTaskStatus } from '../storage/tasks/repo';
 import { notifyExecutor } from '../task/executor';
-import { broadcastLocalTaskSnapshot } from '../p2p/task-broadcast';
 import type { AgentRuntimeOpts } from './runtime-config';
 // Task 6：chunk 中继（handleStreamChunk）由 stream-relay 承载
 import { handleStreamChunk, setAbortResolver } from './stream-relay';
@@ -283,7 +282,6 @@ function pauseRunningTasksForAgent(instanceId: string): void {
     }
   }
   if (rows.length > 0) {
-    void broadcastLocalTaskSnapshot();
     notifyExecutor();
   }
 }

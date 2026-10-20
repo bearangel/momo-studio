@@ -53,7 +53,6 @@ describe('resource/types', () => {
     expect(sourceLabel('builtin')).toBe('系统预置');
     expect(sourceLabel('custom')).toBe('自定义');
     expect(sourceLabel('marketplace')).toBe('网络资源');
-    expect(sourceLabel('p2p')).toBe('P2P 共享');
   });
 });
 

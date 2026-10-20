@@ -10,7 +10,7 @@
 // 通道契约（名称/入参/错误码）与 Task 6 锁定版保持不变。
 //
 // 推送通道（Task 12 起 im:message 反向桥已移除，全部发送方统一新通道）：
-//   - session:message             ← 用户/agent 消息行推送（session-service / p2p handleRemoteMessage）
+//   - session:message             ← 用户/agent 消息行推送（session-service）
 //   - session:message_event_batch ← 流式 events 批量推送（stream-relay onFlush）
 
 import { ipcMain } from 'electron';
