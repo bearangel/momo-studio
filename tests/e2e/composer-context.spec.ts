@@ -86,13 +86,14 @@ test('输入框支持文件引用与技能 chip：@ 文件 → / 技能 → 发�
     const win = await app.firstWindow();
     await win.waitForLoadState('domcontentloaded');
 
-    // ---- 1. 首启空态 → 创建 workspace（内嵌表单，同 browser.spec 先例） ----
+    // ---- 1. 首启空态：跳过引导向导 → 创建 workspace（内嵌表单，同 browser.spec 先例） ----
+    await win.getByRole('button', { name: '跳过引导' }).click({ timeout: 15000 });
     await win.getByLabel('名称').fill('E2E 上下文');
     await win.getByPlaceholder('选择或输入目录路径').fill(tmpWsDir);
     await win.getByRole('button', { name: '创建', exact: true }).click();
 
-    // 主布局就绪标志：活动栏 Agent 入口可见
-    await expect(win.getByLabel('Agent', { exact: true })).toBeVisible({ timeout: 20000 });
+    // 主布局就绪标志：活动栏智能体入口可见（2026-10-12 命名统一：Agent→智能体）
+    await expect(win.getByLabel('智能体', { exact: true })).toBeVisible({ timeout: 20000 });
 
     // ---- 2. fixture 种子：agent 定义 + ws 成员 + 默认 agent ----
     // 经 preload API（与 UI 同一 IPC 通道，browser.spec 先例 win.evaluate + w.api.*）。
@@ -174,11 +175,11 @@ test('输入框支持文件引用与技能 chip：@ 文件 → / 技能 → 发�
     await input.fill('/');
     await expect(win.getByRole('button', { name: /^\/compact/ })).toBeVisible();
     await expect(win.getByText('技能', { exact: true })).toBeVisible();
-    await win.getByRole('button', { name: '代码审查工作流', exact: true }).click();
+    await win.getByRole('button', { name: '代码审查', exact: true }).click();
     // 技能选择不插正文：/ 触发字符被剥掉、skill pill 替代——编辑器现在
     // 含技能 pill（label = 技能名；spec §3：技能不进 body），编辑器
     // textContent 应包含技能名；空字符串断言（toHaveValue('')）已不适用
-    await expect(input).toContainText('代码审查工作流');
+    await expect(input).toContainText('代码审查');
     await expect(input.locator('span[data-kind="skill"]')).toHaveCount(1);
 
     // ---- 6. @ 文件引用：@ 前缀（v2.11.1 统一菜单）→ 选 package.json → 文件 pill 内联 ----
@@ -210,7 +211,7 @@ test('输入框支持文件引用与技能 chip：@ 文件 → / 技能 → 发�
 
     const chips = win.getByTestId('message-context-chips');
     await expect(chips).toBeVisible();
-    await expect(chips.getByText('代码审查工作流')).toBeVisible();
+    await expect(chips.getByText('代码审查')).toBeVisible();
     // 文件 chip 是可点按钮（点击打开编辑器），aria-label 即完整相对路径
     await expect(chips.getByRole('button', { name: 'package.json' })).toBeVisible();
   } finally {

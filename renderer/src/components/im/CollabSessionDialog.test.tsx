@@ -248,9 +248,9 @@ describe('CollabSessionDialog — 失败路径', () => {
 
 describe('CollabSessionDialog - 已启用未加入本空间的 agent（2026-10-10 走查反馈）', () => {
   it('def 已启用但未加入本空间：分区显示「+ 加入」入口，点击调 addMember(workspaceId, defId)', () => {
-    // 生产 addMember 为 async（agent.store）——mock 仿真真实返回 Promise（P3 存量清偿，
-    // 否则组件 .then() 链在 undefined 上产生 unhandled error 令 suite exit=1）
-    const addMember = vi.fn(async () => undefined);
+    // 生产 addMember 为 async 且返回新成员行（agent.store）——mock 仿真真实签名
+    // （P3 存量清偿：否则组件 .then() 链在 undefined 上产生 unhandled error 令 suite exit=1）
+    const addMember = vi.fn(async () => MEMBER_2);
     useAgentStore.setState({
       definitions: [DEF_1, DEF_2],
       members: [MEMBER_1], // DEF_2 已启用但未加入

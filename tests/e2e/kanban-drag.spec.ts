@@ -54,7 +54,8 @@ test('看板拖拽冒烟：新建任务落待办列 → 拖到已关闭列 → �
     const win = await app.firstWindow();
     await win.waitForLoadState('domcontentloaded');
 
-    // 1. 首启空态：内嵌创建工作空间表单（smoke.spec 同款定位）
+    // 1. 首启空态：引导 pending → 跳过向导落回内嵌创建表单（smoke.spec 同款两步）
+    await win.getByRole('button', { name: '跳过引导' }).click({ timeout: 15000 });
     await win.getByLabel('名称').fill('拖拽冒烟', { timeout: 15000 });
     await win.getByPlaceholder('选择或输入目录路径').fill(path.join(tmpUserData, 'ws'));
     await win.getByRole('button', { name: '创建', exact: true }).click();

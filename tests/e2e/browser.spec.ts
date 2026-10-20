@@ -183,13 +183,55 @@ test('v2.7 浏览器全链路：导航→user 态点击→popup 收编→下载�
     const win = await app.firstWindow();
     await win.waitForLoadState('domcontentloaded');
 
-    // ---- 1. 首启空态 → 创建 workspace → 激活（im 视图带浏览器侧栏） ----
+    // ---- 1. 首启空态：跳过引导向导 → 创建 workspace → 激活（im 视图带浏览器侧栏） ----
+    await win.getByRole('button', { name: '跳过引导' }).click({ timeout: 15000 });
     await win.getByLabel('名称').fill('E2E 浏览器');
     await win.getByPlaceholder('选择或输入目录路径').fill(tmpWsDir);
     await win.getByRole('button', { name: '创建', exact: true }).click();
 
     const sidebar = win.getByTestId('browser-sidebar');
     await expect(sidebar).toBeVisible({ timeout: 20000 });
+    // 先等主区就绪（IM 空态）
+    await expect(win.getByText('未选择会话')).toBeVisible({ timeout: 15000 });
+
+    // ---- 1b. 会话建立（v2.x 链路，composer-context.spec 同款 fixture 种子 + 快速会话）：
+    // 浏览器侧栏可见性按会话存储（isVisible(sessionId)，sessionId=null 恒 false）——
+    // 无活跃会话时展开钮是 no-op，必须先建立会话侧栏才可展开 ----
+    await win.evaluate(async () => {
+      const w = window as unknown as {
+        api: {
+          workspace: { list(): Promise<Array<{ id: string }>> };
+          agent: {
+            createCustom(input: {
+              name: string; slug: string; description: string; systemPrompt: string;
+              scope: 'global'; modelProviderId: string; modelName: string;
+            }): Promise<{ id: string }>;
+            assign(workspaceId: string, defId: string, agentUserId: string): Promise<{ instanceId: string }>;
+            stop(instanceId: string): Promise<{ ok: boolean }>;
+          };
+        };
+      };
+      const ws = (await w.api.workspace.list())[0];
+      if (!ws) throw new Error('workspace 列表为空');
+      const def = await w.api.agent.createCustom({
+        name: 'E2E 浏览助手', slug: 'e2e-browser-helper', description: 'browser e2e fixture',
+        systemPrompt: '你是 e2e 测试助手', scope: 'global',
+        modelProviderId: 'e2e-fixture-provider', modelName: 'e2e-fixture-model',
+      });
+      const member = await w.api.agent.assign(ws.id, def.id, '@e2e-browser-helper');
+      await w.api.agent.stop(member.instanceId);
+    });
+    await win.getByLabel('快速会话').click();
+    const picker = win.getByRole('dialog');
+    const radio = picker.getByRole('radio');
+    await expect(radio).toHaveCount(1, { timeout: 10000 });
+    await radio.first().click();
+    await picker.getByRole('button', { name: '设为默认并继续' }).click();
+    await expect(win.getByRole('textbox', { name: '消息输入框' })).toBeEnabled({ timeout: 15000 });
+
+    // 新会话缺省收起（spec §9.1）——点竖条展开钮，空态占位区才渲染
+    await win.getByRole('button', { name: '展开浏览器侧栏' }).click({ timeout: 15000 });
+    await expect(win.getByLabel('地址栏')).toBeVisible({ timeout: 15000 });
     // 侧栏空态：无 tab 时占位区显示引导文案
     await expect(win.getByText('浏览器待命')).toBeVisible();
 

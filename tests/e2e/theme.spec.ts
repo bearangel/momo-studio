@@ -72,9 +72,11 @@ async function launchApp(userDataDir: string) {
   return app;
 }
 
-/** 等到首启空态（创建工作空间表单「名称」输入必现）——React 已挂载、CSS 已应用 */
+/** 等到首启空态（创建工作空间表单「名称」输入必现）——React 已挂载、CSS 已应用。
+ *  首启引导 pending → 向导先接管（跳过后落回空态表单，smoke.spec 同款两步） */
 async function waitForAppReady(win: Page): Promise<void> {
   await win.waitForLoadState('domcontentloaded');
+  await win.getByRole('button', { name: '跳过引导' }).click({ timeout: 15000 });
   await expect(win.getByLabel('名称')).toBeVisible({ timeout: 15000 });
 }
 
