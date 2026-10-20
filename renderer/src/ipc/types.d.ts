@@ -568,6 +568,9 @@ export interface AssignmentDeltas {
   removedMcps: string[];
   addedSkills: string[];
   removedSkills: string[];
+  /** 成员级插件工具覆盖：added=覆盖定义级禁用（重新启用）、removed=追加禁用 */
+  addedPluginTools: string[];
+  removedPluginTools: string[];
 }
 
 /** 一条可识别的 commit message 模式，与 electron 端 CommitPattern 对齐 */

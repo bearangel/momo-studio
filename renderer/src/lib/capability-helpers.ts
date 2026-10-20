@@ -33,6 +33,8 @@ export const EMPTY_DELTAS: AssignmentDeltas = {
   removedMcps: [],
   addedSkills: [],
   removedSkills: [],
+  addedPluginTools: [],
+  removedPluginTools: [],
 };
 
 /** 把 def 的 Ref 形态能力（含 kind 字段）扁平化为 CapabilityTabs 期望的 string[] */
@@ -90,6 +92,9 @@ export function computeDeltas(value: Capabilities, defaults: Capabilities): Assi
     removedMcps: diff(defaults.mcps, value.mcps),
     addedSkills: diff(value.skills, defaults.skills),
     removedSkills: diff(defaults.skills, value.skills),
+    // plugin 覆盖不走 Capabilities diff 模型（成员级独立状态，MemberEditDialog 持有）
+    addedPluginTools: [],
+    removedPluginTools: [],
   };
 }
 
@@ -103,7 +108,9 @@ export function deltasEqual(a: AssignmentDeltas, b: AssignmentDeltas): boolean {
     sameSet(a.addedMcps, b.addedMcps) &&
     sameSet(a.removedMcps, b.removedMcps) &&
     sameSet(a.addedSkills, b.addedSkills) &&
-    sameSet(a.removedSkills, b.removedSkills)
+    sameSet(a.removedSkills, b.removedSkills) &&
+    sameSet(a.addedPluginTools ?? [], b.addedPluginTools ?? []) &&
+    sameSet(a.removedPluginTools ?? [], b.removedPluginTools ?? [])
   );
 }
 
@@ -117,4 +124,44 @@ export function isEmptyDeltas(deltas: AssignmentDeltas): boolean {
     deltas.addedSkills.length === 0 &&
     deltas.removedSkills.length === 0
   );
+}
+
+
+/** 成员级插件工具覆盖换算（功能全面性规则 2026-10-17）：
+ *  effectiveDenied = (defDenied ∪ removed) − added（merger 同款保守语义——
+ *  冲突时禁用胜出由 merger 保证，此处 UI 换算不产生冲突行）。
+ *  changed 关（禁用）：在 defDenied → removed 加；在 added → added 删；否则 removed 加。
+ *  changed 开（启用）：在 removed → removed 删；在 defDenied → added 加；否则 removed 删。 */
+export function computePluginToolDeltas(
+  defDenied: string[],
+  deltas: Pick<AssignmentDeltas, 'addedPluginTools' | 'removedPluginTools'>,
+  changed: string,
+  on: boolean,
+): { addedPluginTools: string[]; removedPluginTools: string[] } {
+  const added = new Set(deltas.addedPluginTools ?? []);
+  const removed = new Set(deltas.removedPluginTools ?? []);
+  const defHas = defDenied.includes(changed);
+  if (!on) {
+    if (added.has(changed)) added.delete(changed);
+    removed.add(changed);
+  } else {
+    if (removed.has(changed)) {
+      removed.delete(changed);
+      if (defHas) added.add(changed); // 成员级禁用回退：定义也禁 → 需正向覆盖
+    } else if (defHas) {
+      added.add(changed); // 定义级禁用的重新启用（无 removed 行）→ 正向覆盖行
+    }
+    // 其余（非 delta 非禁）开 = no-op
+  }
+  return { addedPluginTools: [...added], removedPluginTools: [...removed] };
+}
+
+/** 成员级插件工具生效态（渲染初值）：(defDenied ∪ removed) − added */
+export function effectivePluginDenied(
+  defDenied: string[],
+  deltas: Pick<AssignmentDeltas, 'addedPluginTools' | 'removedPluginTools'>,
+): string[] {
+  const base = new Set([...defDenied, ...(deltas.removedPluginTools ?? [])]);
+  for (const a of deltas.addedPluginTools ?? []) base.delete(a);
+  return [...base];
 }

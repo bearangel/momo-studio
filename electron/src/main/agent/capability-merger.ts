@@ -26,11 +26,14 @@ import { getAssignmentDeltas, type AssignmentDeltas } from './assignment-capabil
 export type { WorkspaceAllocation } from '../workspace/allocation';
 export type { AssignmentDeltas } from './assignment-capabilities';
 
-/** 合并后的最终可用能力清单（ref 字符串列表，已去重） */
+/** 合并后的最终可用能力清单（ref 字符串列表，已去重）。
+ *  deniedTools（功能全面性规则 2026-10-17）：插件工具禁用模式串终态 =
+ *  (def.deniedTools ∪ removedPluginTools) − addedPluginTools */
 export interface MergedCapabilities {
   tools: string[];
   mcps: string[];
   skills: string[];
+  deniedTools: string[];
 }
 
 /**
@@ -69,6 +72,8 @@ export function mergeCapabilities(
   let tools = [...new Set([...defTools, ...allocation.tools])];
   let mcps = [...new Set([...defMcps, ...allocation.mcps])];
   let skills = [...new Set([...defSkills, ...allocation.skills])];
+  // 插件工具禁用面：定义级为基线（成员级 delta 见 Step 2）
+  let deniedTools = [...new Set([...(def.deniedTools ?? [])])];
 
   // Step 2：叠加 Layer 3 deltas（仅当调用方传入时）
   // 注意：空 deltas（全空数组）进入此分支也是 no-op，等价于不传。
@@ -76,9 +81,14 @@ export function mergeCapabilities(
     tools = subtract(union(tools, deltas.addedTools), deltas.removedTools);
     mcps = subtract(union(mcps, deltas.addedMcps), deltas.removedMcps);
     skills = subtract(union(skills, deltas.addedSkills), deltas.removedSkills);
+    // 与 tools 同向的保守语义：同模式同时 added + removed 时禁用胜出——
+    // 冲突模式从「重新启用」集剔除（保留在禁用集），非冲突 added 才生效
+    const removedPlugin = deltas.removedPluginTools ?? [];
+    const addedPlugin = (deltas.addedPluginTools ?? []).filter((a) => !removedPlugin.includes(a));
+    deniedTools = subtract(union(deniedTools, removedPlugin), addedPlugin);
   }
 
-  return { tools, mcps, skills };
+  return { tools, mcps, skills, deniedTools };
 }
 
 /**

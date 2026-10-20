@@ -78,6 +78,8 @@ const mockApi = {
       removedMcps: [],
       addedSkills: [],
       removedSkills: [],
+    addedPluginTools: [],
+    removedPluginTools: [],
     }),
     setMemberDeltas: vi.fn().mockResolvedValue(undefined),
     getBuiltinSuggestions: vi.fn().mockResolvedValue({
@@ -234,6 +236,8 @@ describe('agent.store — v25 members（spec §5）', () => {
       removedMcps: [],
       addedSkills: [],
       removedSkills: [],
+    addedPluginTools: [],
+    removedPluginTools: [],
     };
     await useAgentStore.getState().setMemberDeltas('inst-1', deltas);
     expect(mockApi.agent.setMemberDeltas).toHaveBeenCalledWith('inst-1', deltas);

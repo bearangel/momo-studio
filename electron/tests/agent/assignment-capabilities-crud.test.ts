@@ -62,6 +62,8 @@ describe('assignment-capabilities CRUD', () => {
       removedMcps: [],
       addedSkills: [],
       removedSkills: [],
+      addedPluginTools: [],
+      removedPluginTools: [],
     });
   });
 
@@ -73,6 +75,8 @@ describe('assignment-capabilities CRUD', () => {
       removedMcps: [],
       addedSkills: ['code-review'],
       removedSkills: [],
+      addedPluginTools: [],
+      removedPluginTools: [],
     });
     const d = getAssignmentDeltas('inst1');
     expect(d.addedTools).toEqual(['bash', 'webfetch']);
@@ -89,6 +93,8 @@ describe('assignment-capabilities CRUD', () => {
       removedMcps: [],
       addedSkills: [],
       removedSkills: [],
+      addedPluginTools: [],
+      removedPluginTools: [],
     });
     setAssignmentDeltas('inst1', {
       addedTools: [],
@@ -97,6 +103,8 @@ describe('assignment-capabilities CRUD', () => {
       removedMcps: [],
       addedSkills: [],
       removedSkills: [],
+      addedPluginTools: [],
+      removedPluginTools: [],
     });
     const d = getAssignmentDeltas('inst1');
     expect(d.addedTools).toEqual([]); // bash 被清空
@@ -111,6 +119,8 @@ describe('assignment-capabilities CRUD', () => {
       removedMcps: [],
       addedSkills: [],
       removedSkills: [],
+      addedPluginTools: [],
+      removedPluginTools: [],
     };
     setAssignmentDeltas('inst1', deltas);
     setAssignmentDeltas('inst1', deltas);
@@ -127,10 +137,43 @@ describe('assignment-capabilities CRUD', () => {
       removedMcps: [],
       addedSkills: [],
       removedSkills: [],
+      addedPluginTools: [],
+      removedPluginTools: [],
     });
     // ON DELETE CASCADE（依赖 getDb() 的 foreign_keys = ON）自动清理 delta 行
     getDb().prepare('DELETE FROM workspace_agent_members WHERE instance_id = ?').run('inst1');
     const d = getAssignmentDeltas('inst1');
     expect(d.addedTools).toEqual([]);
+  });
+});
+
+// ── 功能全面性规则案例：plugin_tool delta 行读写（成员级插件工具覆盖存储）──
+describe('plugin_tool deltas（成员级插件工具覆盖）', () => {
+  it('addedPluginTools/removedPluginTools 全量替换往返保真（plugin: 前缀模式串）', () => {
+    setAssignmentDeltas('inst1', {
+      addedTools: [], removedTools: [], addedMcps: [], removedMcps: [], addedSkills: [], removedSkills: [],
+      addedPluginTools: ['plugin:cg/*'], removedPluginTools: ['plugin:other/x'],
+    });
+    const d = getAssignmentDeltas('inst1');
+    expect(d.addedPluginTools).toEqual(['plugin:cg/*']);
+    expect(d.removedPluginTools).toEqual(['plugin:other/x']);
+  });
+
+  it('旧调用（无 plugin 字段）容错——undefined 按空数组，不炸不丢既有字段', () => {
+    setAssignmentDeltas('inst1', {
+      addedTools: ['read_file'], removedTools: [], addedMcps: [], removedMcps: [], addedSkills: [], removedSkills: [],
+    } as unknown as import('../../src/main/agent/assignment-capabilities').AssignmentDeltas);
+    const d = getAssignmentDeltas('inst1');
+    expect(d.addedTools).toEqual(['read_file']);
+    expect(d.addedPluginTools).toEqual([]);
+    expect(d.removedPluginTools).toEqual([]);
+  });
+
+  it('存量 plugin_tool 行读取路由正确（capability_type=plugin_tool × mode）', () => {
+    getDb().prepare(
+      `INSERT INTO agent_assignment_capabilities (assignment_id, capability_type, mode, ref) VALUES (?, ?, ?, ?)`,
+    ).run('inst1', 'plugin_tool', 'remove', 'plugin:cg/explore');
+    const d = getAssignmentDeltas('inst1');
+    expect(d.removedPluginTools).toEqual(['plugin:cg/explore']);
   });
 });

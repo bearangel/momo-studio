@@ -9,7 +9,10 @@
 
 import { getDb } from '../storage/db';
 
-/** 某 assignment 的能力 delta（按 add/remove 双向） */
+/** 某 assignment 的能力 delta（按 add/remove 双向）。
+ *  plugin 字段（功能全面性规则 2026-10-17）：成员级插件工具覆盖——
+ *  added = 覆盖定义级禁用（重新启用）、removed = 追加禁用；行模型
+ *  capability_type='plugin_tool'，与既有 add/remove 语义同构 */
 export interface AssignmentDeltas {
   addedTools: string[];
   removedTools: string[];
@@ -17,6 +20,8 @@ export interface AssignmentDeltas {
   removedMcps: string[];
   addedSkills: string[];
   removedSkills: string[];
+  addedPluginTools: string[];
+  removedPluginTools: string[];
 }
 
 interface DeltaRow {
@@ -41,6 +46,8 @@ export function getAssignmentDeltas(assignmentId: string): AssignmentDeltas {
     removedMcps: [],
     addedSkills: [],
     removedSkills: [],
+    addedPluginTools: [],
+    removedPluginTools: [],
   };
 
   // 按 capability_type × mode 路由到对应字段；未知类型静默跳过（前向兼容）
@@ -48,6 +55,7 @@ export function getAssignmentDeltas(assignmentId: string): AssignmentDeltas {
     tool: { add: result.addedTools, remove: result.removedTools },
     mcp: { add: result.addedMcps, remove: result.removedMcps },
     skill: { add: result.addedSkills, remove: result.removedSkills },
+    plugin_tool: { add: result.addedPluginTools, remove: result.removedPluginTools },
   };
 
   for (const row of rows) {
@@ -79,6 +87,8 @@ export function setAssignmentDeltas(assignmentId: string, deltas: AssignmentDelt
     ...deltas.removedMcps.map((r): [string, string, string, string] => [assignmentId, 'mcp', 'remove', r]),
     ...deltas.addedSkills.map((r): [string, string, string, string] => [assignmentId, 'skill', 'add', r]),
     ...deltas.removedSkills.map((r): [string, string, string, string] => [assignmentId, 'skill', 'remove', r]),
+    ...(deltas.addedPluginTools ?? []).map((r): [string, string, string, string] => [assignmentId, 'plugin_tool', 'add', r]),
+    ...(deltas.removedPluginTools ?? []).map((r): [string, string, string, string] => [assignmentId, 'plugin_tool', 'remove', r]),
   ];
 
   // 事务保证 DELETE + INSERT 原子：中途异常则回滚，避免丢数据

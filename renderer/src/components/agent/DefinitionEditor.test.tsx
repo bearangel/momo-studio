@@ -338,7 +338,7 @@ describe('DefinitionEditor — brief 数据丢失回归锁：def.thinkingJson �
 });
 
 // ── 工作空间维度 v1.1（spec §7.3）：插件工具门控分组 ──
-import { computeDeniedTools } from './DefinitionEditor';
+import { computeDeniedTools } from './PluginToolsSection';
 
 
 describe('插件工具门控分组（工作空间维度 v1.1）', () => {

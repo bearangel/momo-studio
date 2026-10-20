@@ -52,6 +52,8 @@ const emptyDeltas: AssignmentDeltas = {
   removedMcps: [],
   addedSkills: [],
   removedSkills: [],
+  addedPluginTools: [],
+  removedPluginTools: [],
 };
 
 describe('mergeCapabilities Layer 3', () => {
@@ -140,5 +142,49 @@ describe('capability-merger helpers', () => {
     const merged = subtract(union(['base'], ['conflict']), ['conflict']);
     expect(merged).not.toContain('conflict');
     expect(merged).toEqual(['base']);
+  });
+});
+
+// ── 功能全面性规则案例：插件工具成员级覆盖（deniedTools 第 4 输出）──
+// 铁律 5 验收锚点：builtin（只读定义）经成员 deltas 管理插件工具的存量场景。
+const EMPTY_ALLOC: WorkspaceAllocation = { workspaceId: 'ws-x', tools: [], mcps: [], skills: [] };
+const EMPTY: AssignmentDeltas = {
+  addedTools: [], removedTools: [], addedMcps: [], removedMcps: [], addedSkills: [], removedSkills: [],
+  addedPluginTools: [], removedPluginTools: [],
+};
+
+describe('mergeCapabilities deniedTools（成员级插件工具覆盖）', () => {
+  it('基线：无 deltas → 输出 = def.deniedTools（builtin 默认无 = []）', () => {
+    const out = mergeCapabilities(mockDef, EMPTY_ALLOC);
+    expect(out.deniedTools).toEqual([]);
+    const defDeny = { ...mockDef, deniedTools: ['plugin:codegraph/*'] };
+    expect(mergeCapabilities(defDeny, EMPTY_ALLOC).deniedTools).toEqual(['plugin:codegraph/*']);
+  });
+
+  it('成员 remove 追加禁用；add 覆盖 def 级禁用（重新启用）', () => {
+    const out = mergeCapabilities(mockDef, EMPTY_ALLOC, {
+      ...EMPTY, removedPluginTools: ['plugin:cg/explore'],
+    });
+    expect(out.deniedTools).toEqual(['plugin:cg/explore']);
+    const defDeny = { ...mockDef, deniedTools: ['plugin:cg/*', 'plugin:other/x'] };
+    const re = mergeCapabilities(defDeny, EMPTY_ALLOC, {
+      ...EMPTY, addedPluginTools: ['plugin:cg/*'],
+    });
+    expect(re.deniedTools).toEqual(['plugin:other/x']); // cg 整插件被成员重新启用
+  });
+
+  it('冲突：同模式 add + removed → removed（禁用）胜出——与 tools 保守语义对齐', () => {
+    const out = mergeCapabilities(mockDef, EMPTY_ALLOC, {
+      ...EMPTY, addedPluginTools: ['plugin:cg/*'], removedPluginTools: ['plugin:cg/*'],
+    });
+    expect(out.deniedTools).toEqual(['plugin:cg/*']);
+  });
+
+  it('旧 deltas（无 plugin 字段）容错——undefined 按 empty 处理（前向兼容）', () => {
+    const legacy = {
+      addedTools: [], removedTools: [], addedMcps: [], removedMcps: [], addedSkills: [], removedSkills: [],
+    } as unknown as AssignmentDeltas;
+    expect(mergeCapabilities({ ...mockDef, deniedTools: ['plugin:a/*'] }, EMPTY_ALLOC, legacy).deniedTools)
+      .toEqual(['plugin:a/*']);
   });
 });

@@ -36,6 +36,7 @@ import { migration058 } from './058_tool_call_source';
 import { migration059 } from './059_mcp_plugin_id';
 import { migration060 } from './060_plugin_hooks_audit';
 import { migration061 } from './061_agent_denied_tools';
+import { migration062 } from './062_assignment_plugin_tool_delta';
 
 export interface Migration {
   version: number;
@@ -1101,6 +1102,12 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 工作空间维度 v1.1（spec §7.1）：agent 级工具门控（plugin:<id>/* 前缀 + 精确名模式串）
     version: migration061.version,
     sql: migration061.up,
+  },
+  {
+    // 功能全面性规则（2026-10-17）：deltas 行模型扩 plugin_tool（成员级插件工具覆盖，
+    // builtin 只读对象的管理通道）——CHECK 约束放宽需表重建，数据零丢失
+    version: migration062.version,
+    sql: migration062.up,
   },
 ];
 

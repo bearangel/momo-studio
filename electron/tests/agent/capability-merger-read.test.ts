@@ -90,6 +90,8 @@ describe('capability-merger read facade', () => {
       removedMcps: [],
       addedSkills: ['code-review'],
       removedSkills: [],
+      addedPluginTools: [],
+      removedPluginTools: [],
     });
 
     const viaFacade = readAssignmentDeltas('inst-1');

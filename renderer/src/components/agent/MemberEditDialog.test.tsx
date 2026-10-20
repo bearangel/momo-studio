@@ -43,6 +43,7 @@ const setMemberDeltasMock = vi.fn();
 const stopMemberMock = vi.fn();
 const startMemberMock = vi.fn();
 const loadDefinitionsMock = vi.fn();
+const listAssembledTools = vi.fn();
 
 const mockApi = {
   allocation: { get: allocationGet },
@@ -51,6 +52,7 @@ const mockApi = {
   provider: { listModels: providerListModels },
   agent: { updateDefinition },
   tools: { getCatalog },
+  plugin: { listAssembledTools },
 };
 
 const EMPTY_DELTAS: AssignmentDeltas = {
@@ -60,6 +62,8 @@ const EMPTY_DELTAS: AssignmentDeltas = {
   removedMcps: [],
   addedSkills: [],
   removedSkills: [],
+    addedPluginTools: [],
+    removedPluginTools: [],
 };
 
 beforeEach(() => {
@@ -70,6 +74,7 @@ beforeEach(() => {
   updateDefinition.mockReset();
   getCatalog.mockReset();
   getMemberDeltasMock.mockReset();
+  listAssembledTools.mockReset().mockResolvedValue([]);
   setMemberDeltasMock.mockReset();
   stopMemberMock.mockReset();
   startMemberMock.mockReset();
@@ -511,5 +516,55 @@ describe('MemberEditDialog — 模型区（全局定义）', () => {
     expect(updateDefinition).not.toHaveBeenCalled();
     expect(setMemberDeltasMock).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+
+// ── 功能全面性规则案例：插件工具成员级覆盖（builtin 只读对象的管理通道）──
+describe('MemberEditDialog — 插件工具覆盖（铁律 4/5：builtin 存量场景）', () => {
+  const TOOLS = [
+    { pluginId: 'cg', pluginName: 'Codegraph 代码图谱', toolName: 'explore', fullName: 'plugin:cg/explore', description: '查图谱' },
+    { pluginId: 'cg', pluginName: 'Codegraph 代码图谱', toolName: 'status', fullName: 'plugin:cg/status', description: '索引状态' },
+  ];
+
+  it('builtin agent（只读定义）渲染插件分组；组头关闭 → setMemberDeltas 携带 removedPluginTools', async () => {
+    listAssembledTools.mockResolvedValue(TOOLS);
+    const def = buildDef({ id: 'builtin-coder', name: 'Smith', source: 'builtin' as AgentDefinition['source'] });
+    render(<MemberEditDialog member={buildMember()} def={def} onClose={() => {}} />);
+    expect(await screen.findByText('插件工具')).toBeInTheDocument();
+    expect(screen.getByText('plugin:cg/explore')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('禁用插件 Codegraph 代码图谱 全部工具'));
+    fireEvent.click(screen.getByText('保存'));
+    await waitFor(() => expect(setMemberDeltasMock).toHaveBeenCalled());
+    const arg = setMemberDeltasMock.mock.calls[0][1] as AssignmentDeltas;
+    expect(arg.removedPluginTools).toEqual(['plugin:cg/*']);
+    expect(arg.addedPluginTools).toEqual([]);
+  });
+
+  it('定义级禁用 + 成员重新启用 → addedPluginTools 正向覆盖行', async () => {
+    listAssembledTools.mockResolvedValue(TOOLS);
+    getMemberDeltasMock.mockResolvedValue({ ...EMPTY_DELTAS });
+    const def = buildDef({ deniedTools: ['plugin:cg/*'] });
+    render(<MemberEditDialog member={buildMember()} def={def} onClose={() => {}} />);
+    await screen.findByText('插件工具');
+    // 初值：整组禁用态（定义级）
+    expect(screen.getByLabelText('禁用插件 Codegraph 代码图谱 全部工具')).toBeChecked();
+    fireEvent.click(screen.getByLabelText('禁用插件 Codegraph 代码图谱 全部工具'));
+    fireEvent.click(screen.getByText('保存'));
+    await waitFor(() => expect(setMemberDeltasMock).toHaveBeenCalled());
+    const arg = setMemberDeltasMock.mock.calls[0][1] as AssignmentDeltas;
+    expect(arg.addedPluginTools).toEqual(['plugin:cg/*']);
+  });
+
+  it('打开时回放成员级 delta 初值（removed 生效态正确）', async () => {
+    listAssembledTools.mockResolvedValue(TOOLS);
+    getMemberDeltasMock.mockResolvedValue({
+      ...EMPTY_DELTAS,
+      removedPluginTools: ['plugin:cg/explore'],
+    });
+    render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />);
+    await screen.findByText('插件工具');
+    expect(screen.getByLabelText('禁用 plugin:cg/explore')).toBeChecked();
+    expect(screen.getByLabelText('禁用 plugin:cg/status')).not.toBeChecked();
   });
 });

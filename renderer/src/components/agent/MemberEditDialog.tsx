@@ -29,6 +29,9 @@ import { useAgentStore } from '../../stores/agent.store';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { CapabilityTabs } from './CapabilityTabs';
+import { PluginToolsSection } from './PluginToolsSection';
+import { usePluginTools } from '../../lib/usePluginTools';
+import { computePluginToolDeltas, effectivePluginDenied } from '../../lib/capability-helpers';
 import { ProviderModelPicker } from './ProviderModelPicker';
 import { ThinkingOverrideControl } from './ThinkingOverrideControl';
 import {
@@ -85,6 +88,17 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
   // 弹窗打开时加载的 deltas 快照（保存时判断是否产生新变化）
   const [initialDeltas, setInitialDeltas] = useState<AssignmentDeltas>(EMPTY_DELTAS);
 
+  // ---- 插件工具覆盖区（功能全面性规则：builtin 只读对象的管理通道）----
+  const { data: pluginTools } = usePluginTools(member.workspaceId);
+  const [pluginDeltas, setPluginDeltas] = useState<Pick<AssignmentDeltas, 'addedPluginTools' | 'removedPluginTools'>>({
+    addedPluginTools: [],
+    removedPluginTools: [],
+  });
+  const effectiveDenied = effectivePluginDenied(def.deniedTools ?? [], pluginDeltas);
+  const handlePluginToggle = (changed: string, on: boolean): void => {
+    setPluginDeltas((prev) => computePluginToolDeltas(def.deniedTools ?? [], prev, changed, on));
+  };
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -107,6 +121,10 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
         setDefaultCaps(merged);
         setInitialDeltas(deltas);
         setValue(applyDeltas(merged, deltas));
+        setPluginDeltas({
+          addedPluginTools: deltas.addedPluginTools ?? [],
+          removedPluginTools: deltas.removedPluginTools ?? [],
+        });
       } catch (err) {
         if (!cancelled) setError((err as Error).message);
       } finally {
@@ -136,7 +154,12 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
         // 全局定义已变——刷新共享 definitions store，成员行/重开弹窗才能看到新模型（终审 Critical）
         await loadDefinitions(member.workspaceId);
       }
-      const newDeltas = computeDeltas(value, defaultCaps);
+      const base = computeDeltas(value, defaultCaps);
+      const newDeltas: AssignmentDeltas = {
+        ...base,
+        addedPluginTools: pluginDeltas.addedPluginTools,
+        removedPluginTools: pluginDeltas.removedPluginTools,
+      };
       await setMemberDeltasAction(member.instanceId, newDeltas);
       const deltasChanged = !deltasEqual(newDeltas, initialDeltas);
       setInitialDeltas(newDeltas);
@@ -224,6 +247,28 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
                 onChange={(next) => setValue(next)}
               />
             </section>
+
+            {(pluginTools?.length ?? 0) > 0 && (
+              <section className="flex flex-col gap-2 border-t border-subtle pt-3">
+                <PluginToolsSection
+                  tools={pluginTools ?? []}
+                  deniedTools={effectiveDenied}
+                  onChange={(nextDenied) => {
+                    // 反解：由目标 denied 终态对每个工具/组求 changed+on（终态驱动，
+                    // 与 checkbox 语义一致——增量换算在 computePluginToolDeltas 内完成）
+                    const current = new Set(effectiveDenied);
+                    const target = new Set(nextDenied);
+                    for (const pat of [...target].filter((x) => !current.has(x))) {
+                      handlePluginToggle(pat, false);
+                    }
+                    for (const pat of [...current].filter((x) => !target.has(x))) {
+                      handlePluginToggle(pat, true);
+                    }
+                  }}
+                  disabled={false}
+                />
+              </section>
+            )}
 
             {error && <div className="text-status-error text-sm">{error}</div>}
             <div className="flex gap-2 justify-end">
