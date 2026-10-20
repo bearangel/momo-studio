@@ -1,19 +1,19 @@
 {
   "id": "codegraph",
   "name": "Codegraph 代码图谱",
-  "version": "0.1.1",
-  "description": "workspace 符号/调用边索引（regex 近似），agent 一查询拿到源码+调用路径+blast radius，面板可视化",
-  "author": {
-    "name": "Momo Studio"
-  },
-  "minAppVersion": "2.1.0",
-  "components": {
-    "tools": "./tools",
-    "service": "./service",
-    "skills": "./skills",
-    "agents": "./agents",
-    "hooks": "./hooks/hooks.json",
-    "panel": "./panel"
+  "version": "2.0.0",
+  "description": "内置 codegraph 引擎的代码图谱（30+ 语言符号/调用方/影响面查询，auto-sync 增量索引）",
+  "codegraph": { "engineVersion": "1.6.2" },
+  "components": { "mcp": "./mcp", "panel": "./panel", "service": "./service" },
+  "vendor": {
+    "archives": [
+      {
+        "file": "vendor/codegraph-TARGET.tar.gz",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "maxEntries": 20000
+      }
+    ],
+    "probe": "engine/bin/codegraph"
   },
   "config": {
     "type": "object",
@@ -22,21 +22,7 @@
         "type": "string",
         "title": "索引根目录（留空 = 当前工作空间目录）",
         "scope": "workspace"
-      },
-      "indexCommand": {
-        "type": "string",
-        "title": "自定义索引命令（可选，留空用内置引擎）"
-      },
-      "maxFiles": {
-        "type": "number",
-        "title": "最大索引文件数"
       }
     }
-  },
-  "permissions": {
-    "fs": [
-      "read:workspace"
-    ],
-    "subprocess": false
   }
 }

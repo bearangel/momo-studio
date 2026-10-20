@@ -1,194 +1,69 @@
 // plugins/codegraph/service/index.js
 //
-// codegraph service（P5，spec §2.5/§5.3/§8.2/§8.5）——主进程长驻：
-//   - start：读 config.workspaceRoot → 首次全量索引（后台）+ 双 watcher
-//     （① workspaceRoot 目录树变更 → 防抖重扫；② dataDir/reindex-queue.json
-//     消费——postToolUse hook 的生产队列，计划 D4）
-//   - handle RPC（面板 callService / 手动）：
-//       graph({symbol}) → 邻域图；stats() → 摘要；explore({symbol}) → 同工具形状；
-//       reindex({paths}) → 指定文件增量
-//   - stop：关 watcher（§8.6 禁用 → watcher 清理干净）
+// v2.0.0 薄化（引擎整合）：索引/查询能力整体移交 MCP server（mcp.json 声明，
+// 引擎 bundle 自带 Node 24 运行时）。本 service 仅剩面板状态卡数据源——
+// fs 统计 .momo-codegraph 目录（无引擎依赖、无宿主反向依赖）。
 'use strict';
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { createIndexer } = require('../lib/indexer.js');
 
-const QUEUE_FILE = 'reindex-queue.json';
-const WATCH_DEBOUNCE_MS = 800;
+const MAX_WALK = 5000; // 目录遍历上限（防慢盘大仓卡面板请求）
 
 module.exports.createService = function (pluginCtx) {
-  let idx = null;
-  let root = null;
-  let watchers = [];
-  let debounceTimer = null;
-  let queueTimer = null;
-  let ready = false;
-
   function dataDir() {
     return pluginCtx.getDataDir();
-  }
-  function queuePath() {
-    return path.join(dataDir(), QUEUE_FILE);
   }
 
   function cfgRoot() {
     const cfg = pluginCtx.getConfig() || {};
-    // 工作空间维度 v1.1（spec §4.4）：留空默认跟随工作区目录；显式值优先
-    const r = (typeof cfg.workspaceRoot === 'string' && cfg.workspaceRoot.trim() !== '' && cfg.workspaceRoot)
-      || (pluginCtx.workspace && pluginCtx.workspace.directoryPath);
-    if (!r || typeof r !== 'string') {
-      throw new Error('codegraph service：workspaceRoot 未配置且无工作区上下文（留空即跟随工作区目录）');
-    }
-    return require('node:path').resolve(r); // M2：尾斜杠/相对路径归一（守卫的 startsWith 前提）
+    const r =
+      (typeof cfg.workspaceRoot === 'string' && cfg.workspaceRoot.trim() !== '' && cfg.workspaceRoot) ||
+      (pluginCtx.workspace && pluginCtx.workspace.directoryPath);
+    if (!r || typeof r !== 'string') return null;
+    return path.resolve(r);
   }
 
-  function ensureIndexer() {
-    const r = cfgRoot();
-    if (!idx || root !== r) {
-      idx = createIndexer({ root: r });
-      root = r;
-    }
-    return idx;
-  }
-
-  function consumeQueue() {
-    let paths = [];
-    try {
-      const raw = JSON.parse(fs.readFileSync(queuePath(), 'utf-8'));
-      if (Array.isArray(raw.paths)) paths = raw.paths.filter((p) => typeof p === 'string');
-    } catch {
-      return; // 无队列 / 损坏——忽略
-    }
-    try {
-      fs.rmSync(queuePath(), { force: true });
-    } catch {
-      // 消费失败下次再试（幂等——重扫无副作用）
-    }
-    if (paths.length === 0) return;
-    const i = ensureIndexer();
-    for (const p of paths.slice(0, 200)) {
-      const abs = path.isAbsolute(p) ? p : path.resolve(root, p);
-      // 越界守卫：只重扫 workspaceRoot 内的路径
-      if (abs === root || abs.startsWith(root + path.sep)) i.scanFile(abs);
-    }
-    if (ready) pluginCtx.logger.info('codegraph：队列增量重扫完成', { count: paths.length });
-    // I3：read→rm 竞态兜底——处理期间若又有 hook 原子写（被 rm 连带删掉），重读非空则再消费
-    try {
-      const again = JSON.parse(fs.readFileSync(queuePath(), 'utf-8'));
-      if (Array.isArray(again.paths) && again.paths.length > 0) {
-        setTimeout(consumeQueue, 60);
+  function dirStats(dir) {
+    if (!fs.existsSync(dir)) return { exists: false, bytes: 0, files: 0 };
+    let bytes = 0;
+    let files = 0;
+    const queue = [dir];
+    while (queue.length > 0 && files < MAX_WALK) {
+      const cur = queue.shift();
+      for ( const ent of fs.readdirSync(cur, { withFileTypes: true })) {
+        const abs = path.join(cur, ent.name);
+        if (ent.isDirectory()) queue.push(abs);
+        else {
+          try { bytes += fs.statSync(abs).size; files += 1; } catch { /* 并发删除忽略 */ }
+        }
       }
-    } catch {
-      // 无新队列
     }
-  }
-
-  function watchQueue() {
-    try {
-      fs.mkdirSync(dataDir(), { recursive: true });
-    } catch {
-      return;
-    }
-    let lastQueueAt = 0;
-    try {
-      const w = fs.watch(dataDir(), (event, filename) => {
-        if (event !== 'change' && event !== 'rename') return;
-        if (filename !== QUEUE_FILE) return;
-        const now = Date.now();
-        if (now - lastQueueAt < 50) return; // 写入抖动合并
-        lastQueueAt = now;
-        if (queueTimer) clearTimeout(queueTimer);
-        queueTimer = setTimeout(consumeQueue, 60);
-      });
-      w.on('error', () => undefined);
-      watchers.push(w);
-    } catch {
-      // dataDir 不可 watch——轮询兜底（低频）
-      queueTimer = setInterval(consumeQueue, 2000);
-    }
-  }
-
-  function watchRoot() {
-    if (!root) return;
-    try {
-      const w = fs.watch(root, { recursive: true }, () => {
-        if (debounceTimer) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-          try {
-            ensureIndexer().scanFull();
-          } catch {
-            // 扫描失败保持旧索引
-          }
-        }, WATCH_DEBOUNCE_MS);
-      });
-      w.on('error', () => undefined);
-      watchers.push(w);
-    } catch {
-      pluginCtx.logger.warn('codegraph：workspaceRoot 目录 watch 失败（仅剩队列驱动增量）', { root });
-    }
+    return { exists: true, bytes, files };
   }
 
   return {
     async start() {
-      const i = ensureIndexer(); // 校验 config（缺 root 即 throw → 启动失败可见）
-      // 首次全量后台化——不阻塞 service start（计划 §6 风险裁定）
-      setImmediate(() => {
-        try {
-          i.scanFull();
-          ready = true;
-          pluginCtx.logger.info('codegraph：首次全量索引完成', { root });
-        } catch (err) {
-          pluginCtx.logger.warn('codegraph：首次索引失败', { error: String(err) });
-        }
-      });
-      watchRoot();
-      watchQueue();
-      // 启动时消费遗留队列（上次会话的未处理增量）
-      setImmediate(consumeQueue);
+      fs.mkdirSync(dataDir(), { recursive: true });
     },
-    async stop() {
-      for (const w of watchers) {
-        try {
-          w.close();
-        } catch {
-          // 已关
-        }
-      }
-      watchers = [];
-      if (debounceTimer) clearTimeout(debounceTimer);
-      if (queueTimer) {
-        clearTimeout(queueTimer);
-        clearInterval(queueTimer);
-      }
-      ready = false;
-    },
+    async stop() {},
     async handle(method, params) {
-      const i = ensureIndexer();
-      switch (method) {
-        case 'graph':
-          return i.graph(params && params.symbol, (params && params.limit) || 30);
-        case 'stats': {
-          const g = i.graph();
-          return g.stats;
-        }
-        case 'explore': {
-          const symbol = params && params.symbol;
-          const e = i.explore(String(symbol || ''));
-          if (!e) throw new Error(`符号未收录: ${symbol}`);
-          return e;
-        }
-        case 'reindex': {
-          const paths = (params && params.paths) || [];
-          for (const p of paths.slice(0, 200)) {
-            const abs = path.isAbsolute(p) ? p : path.resolve(root, p);
-            if (abs === root || abs.startsWith(root + path.sep)) i.scanFile(abs);
-          }
-          return { rescanned: paths.length };
-        }
-        default:
-          throw new Error(`codegraph service：未知方法 ${method}`);
+      if (method !== 'stats') {
+        throw new Error(`codegraph service v2 仅支持 stats（索引/查询走 MCP server）: ${method}`);
       }
+      void params;
+      const root = cfgRoot();
+      const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'momo-plugin.json'), 'utf-8'));
+      const engineVersion = (manifest.codegraph && manifest.codegraph.engineVersion) || null;
+      if (!root) {
+        return { workspaceRoot: null, engineVersion, index: { exists: false, bytes: 0, files: 0 }, hint: 'workspaceRoot 未配置且无工作区上下文' };
+      }
+      return {
+        workspaceRoot: root,
+        engineVersion,
+        index: dirStats(path.join(root, '.momo-codegraph')),
+        mcpServer: 'codegraph',
+      };
     },
   };
 };

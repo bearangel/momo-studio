@@ -5,33 +5,34 @@
 <title>代码图谱</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font: 12px/1.6 -apple-system, 'PingFang SC', sans-serif; padding: 10px; height: 100vh; display: flex; flex-direction: column; gap: 8px; }
-  .search { display: flex; gap: 6px; }
-  .search input { flex: 1; border: 1px solid #9996; border-radius: 6px; padding: 4px 8px; font: inherit; background: transparent; }
-  .search button { border: 1px solid #9996; border-radius: 6px; padding: 4px 10px; background: transparent; cursor: pointer; font: inherit; }
-  .stats { color: #888; font-size: 11px; }
-  .canvas { flex: 1; border: 1px dashed #9995; border-radius: 8px; position: relative; overflow: hidden; min-height: 0; }
-  .node { position: absolute; padding: 3px 8px; border: 1px solid #9996; border-radius: 6px; background: rgba(127,127,127,0.08); font-family: ui-monospace, Menlo, monospace; font-size: 11px; white-space: nowrap; }
-  .node.center { border-color: var(--accent); color: var(--accent); background: rgba(94,106,210,0.12); font-weight: 600; }
+  body { font: 12px/1.6 -apple-system, 'PingFang SC', sans-serif; padding: 12px; height: 100vh; display: flex; flex-direction: column; gap: 8px; }
+  .card { border: 1px solid #9996; border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .row { display: flex; justify-content: space-between; gap: 8px; }
+  .k { color: #888; }
+  .v { font-family: ui-monospace, Menlo, monospace; word-break: break-all; text-align: right; }
+  .hint { color: #888; font-size: 11px; line-height: 1.7; }
   .status { font-size: 11px; color: #888; min-height: 16px; }
   .status.err { color: #d33; }
+  .ok { color: #3a3; }
 </style>
 </head>
 <body>
-<div class="search">
-  <input id="q" placeholder="符号名（如 transitionTaskStatus）…" />
-  <button id="go">查询</button>
+<div class="card" id="stats">
+  <div class="row"><span class="k">索引根目录</span><span class="v" id="root">…</span></div>
+  <div class="row"><span class="k">引擎版本</span><span class="v" id="ver">…</span></div>
+  <div class="row"><span class="k">索引数据</span><span class="v" id="idx">…</span></div>
 </div>
-<div class="stats" id="stats">连接中…</div>
-<div class="canvas" id="canvas"></div>
+<div class="hint">
+  v2.0 起索引与查询由内置 codegraph 引擎（MCP server）提供，随会话按需启动、自动增量同步。
+  在智能体会话中直接提问（如「X 方法被谁调用」），agent 会使用 <b>codegraph_explore</b> 查询；
+  索引数据位于项目根 <b>.momo-codegraph/</b> 目录。
+</div>
 <div class="status" id="status"></div>
 <script>
-  // P5 codegraph 面板（spec §2.5/§8.2/§8.5）：查询邻域图 + 事件驱动刷新。
+  // v2.0 状态卡（引擎整合）：数据源 = service stats（fs 统计），图查询能力移交会话内 MCP 工具。
   // 沙箱 iframe origin='null'——双向 postMessage '*'，宿主以 source 校验身份。
   var seq = 0;
   var pending = {};
-  var accent = 'rgb(94,106,210)';
-  var refreshTimer = null;
   function send(type, extra) {
     var id = ++seq;
     parent.postMessage(Object.assign({ type: type, id: id }, extra || {}), '*');
@@ -49,84 +50,30 @@
     else pending[m.id].resolve(m.result);
     delete pending[m.id];
   });
-  function applyTheme(theme) {
-    if (theme && theme.tokens) {
-      var a = theme.tokens['--accent-500'];
-      if (a) accent = a;
-      var bg = theme.tokens['--surface-1'];
-      if (bg) document.body.style.background = bg;
-    }
+  function fmtBytes(b) {
+    if (b > 1048576) return (b / 1048576).toFixed(1) + ' MB';
+    if (b > 1024) return (b / 1024).toFixed(1) + ' KB';
+    return b + ' B';
   }
-  function fmtStats(s) {
-    return '文件 ' + s.files + ' · 符号 ' + s.symbols + ' · 调用边 ' + s.edges +
-      ' · 索引于 ' + new Date(s.lastIndexedAt).toLocaleTimeString();
-  }
-  function render(g, centerId) {
-    var c = document.getElementById('canvas');
-    c.innerHTML = '';
-    var nodes = g.nodes || [];
-    var edges = g.edges || [];
-    if (nodes.length === 0) { document.getElementById('status').textContent = '无数据（service 未启动或索引为空）'; return; }
-    // 布局：中心符号居中，其余环形
-    var W = c.clientWidth || 260, H = c.clientHeight || 300;
-    var pos = {};
-    var center = nodes.find(function (n) { return n.id === centerId; }) || nodes[0];
-    nodes.forEach(function (n, i) {
-      if (n === center) { pos[n.id] = { x: W / 2 - 40, y: H / 2 - 12 }; return; }
-      var others = nodes.filter(function (x) { return x !== center; });
-      var k = others.indexOf(n);
-      var ang = (2 * Math.PI * k) / Math.max(1, others.length) - Math.PI / 2;
-      var r = Math.min(W, H) / 2 - 50;
-      pos[n.id] = { x: W / 2 + r * Math.cos(ang), y: H / 2 + r * Math.sin(ang) };
-    });
-    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('width', '100%'); svg.setAttribute('height', '100%');
-    svg.style.position = 'absolute'; svg.style.inset = '0';
-    edges.forEach(function (e) {
-      if (!pos[e.from] || !pos[e.to]) return;
-      var l = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      l.setAttribute('x1', pos[e.from].x + 30); l.setAttribute('y1', pos[e.from].y + 10);
-      l.setAttribute('x2', pos[e.to].x + 30); l.setAttribute('y2', pos[e.to].y + 10);
-      l.setAttribute('stroke', 'rgba(128,128,128,0.5)');
-      l.setAttribute('stroke-width', '1.5');
-      svg.appendChild(l);
-    });
-    c.appendChild(svg);
-    nodes.forEach(function (n) {
-      var d = document.createElement('div');
-      d.className = 'node' + (n === center ? ' center' : '');
-      d.textContent = n.id;
-      d.style.left = pos[n.id].x + 'px';
-      d.style.top = pos[n.id].y + 'px';
-      if (n === center) d.style.borderColor = accent, d.style.color = accent;
-      c.appendChild(d);
-    });
-    document.getElementById('status').textContent = '近似调用图（regex）· 节点 ' + nodes.length;
-  }
-  function refresh(symbol) {
-    send('plugin:callService', { method: 'graph', params: symbol ? { symbol: symbol } : {} })
-      .then(function (r) {
-        document.getElementById('stats').textContent = fmtStats(r.stats || {});
-        render(r, symbol);
+  function refresh() {
+    send('plugin:callService', { method: 'stats', params: {} })
+      .then(function (s) {
+        document.getElementById('root').textContent = s.workspaceRoot || '（跟随工作空间）';
+        document.getElementById('ver').textContent = s.engineVersion || '-';
+        var i = s.index || {};
+        document.getElementById('idx').textContent = i.exists
+          ? fmtBytes(i.bytes) + ' · ' + i.files + ' 文件'
+          : '未建（首次查询时自动索引）';
+        document.getElementById('idx').className = 'v' + (i.exists ? ' ok' : '');
+        document.getElementById('status').textContent = s.hint ? s.hint : '';
       })
       .catch(function (e) {
         document.getElementById('status').className = 'status err';
-        document.getElementById('status').textContent = '图查询失败：' + e.message;
+        document.getElementById('status').textContent = '状态读取失败：' + e.message;
       });
   }
-  send('ready').then(function (r) { applyTheme(r.result); document.getElementById('stats').textContent = '已连接'; refresh(); });
-  send('app:subscribe', { events: ['taskCompleted', 'taskStatusChanged'] }).catch(function () {});
-  window.addEventListener('message', function (ev) {
-    var m = ev.data;
-    if (m && m.type === 'event') {
-      // 任务事件 → 防抖刷新（§8.5：agent 改代码 → watcher 增量 → 面板刷新）
-      if (refreshTimer) clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(function () { refresh(document.getElementById('q').value.trim() || undefined); }, 1200);
-    }
-    if (m && m.type === 'event' && m.event === 'theme' && m.payload) applyTheme(m.payload);
-  });
-  document.getElementById('go').addEventListener('click', function () { refresh(document.getElementById('q').value.trim() || undefined); });
-  document.getElementById('q').addEventListener('keydown', function (e) { if (e.key === 'Enter') refresh(e.target.value.trim() || undefined); });
+  send('ready').then(function () { refresh(); });
+  setInterval(refresh, 15000);
 </script>
 </body>
 </html>

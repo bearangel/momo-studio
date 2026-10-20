@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "codegraph": {
+      "command": "${engineBin}",
+      "args": ["serve", "--mcp", "--path", "${config.workspaceRoot}"],
+      "env": {
+        "CODEGRAPH_NO_DOWNLOAD": "1",
+        "CODEGRAPH_DIR": ".momo-codegraph"
+      }
+    }
+  }
+}
