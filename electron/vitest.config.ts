@@ -21,6 +21,9 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
+    // forks 冷 worker 的 transform + 63 条迁移成本、真实子进程用例（git/spawn/沙箱）
+    // 在全量负载下常超 vitest 默认 5s（2026-10-20 终验实证，隔离恒绿）——统一 15s
+    testTimeout: 15_000,
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
@@ -32,6 +35,7 @@ export default defineConfig({
           include: ['tests/agent/**/*.test.ts'],
           environment: 'node',
           pool: 'threads',
+          testTimeout: 15_000,
           // 哨兵置位（生产=spawner env，见 internal-event.ts hasChildIpcChannel）：
           // threads 下与哨兵前置语义完全等价——无 stub 时 process.send=undefined 照旧静默，
           // 有 stub 时（属性替换）照旧送达。迟到异步事件在 stub 还原后因通道缺失自然哑火
@@ -45,6 +49,7 @@ export default defineConfig({
           exclude: ['tests/agent/**'],
           environment: 'node',
           pool: 'forks',
+          testTimeout: 15_000,
           // 同上：foks worker 内 stub 依赖哨兵送达；无 stub 的发送因通道归 vitest 而被
           // 哨兵拦截（迟到事件防污染——integration 两文件另有 beforeEach/afterEach 作用域哨兵）
           env: { MOMO_RUNTIME_CHILD: '1' },

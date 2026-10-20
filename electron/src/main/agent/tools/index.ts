@@ -54,7 +54,7 @@ export function unconditionalModules(): ToolModule[] {
   ];
 }
 
-export function buildToolRegistry(ctx: ToolContext): ToolModule[] {
+export function buildToolRegistry(_ctx: ToolContext): ToolModule[] {
   return unconditionalModules();
 }
 

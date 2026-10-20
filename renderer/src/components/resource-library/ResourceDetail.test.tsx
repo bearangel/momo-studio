@@ -11,9 +11,9 @@
 // 真实 jsdom window 上装 window.api 属性——ipc.client 是真实 Proxy，组件经
 // ipc.agent.list 反查 custom agent def 走真通道（momo-test-rules：mock 收窄到 IPC 边界）。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { ResourceDetail } from './ResourceDetail';
-import type { AgentDefinition, BuiltinPresetPreview, ResourceItem } from '../../ipc/types';
+import type { AgentDefinition, ResourceItem } from '../../ipc/types';
 
 /** 测试用基线 item，默认为 builtin agent */
 const baseItem = (overrides: Partial<ResourceItem> = {}): ResourceItem => ({
@@ -26,26 +26,6 @@ const baseItem = (overrides: Partial<ResourceItem> = {}): ResourceItem => ({
   installed: true,
   installable: false,
   removable: false,
-  ...overrides,
-});
-
-/** 测试用基线 AgentDefinition，默认为 custom 源 */
-const baseDef = (overrides: Partial<AgentDefinition> = {}): AgentDefinition => ({
-  id: 'def-uuid-1',
-  name: 'Researcher',
-  slug: 'researcher',
-  version: '1.0.0',
-  runtime: 'local',
-  systemPrompt: '你是一个严谨的研究员，逐条给出出处。',
-  defaultTools: [{ kind: 'builtin', ref: 'read_file' }],
-  source: 'custom',
-  description: '',
-  iconEmoji: '',
-  workspaceId: null,
-  modelProviderId: 'openai',
-  modelName: 'gpt-4o',
-  defaultMcps: [],
-  defaultSkills: [],
   ...overrides,
 });
 
