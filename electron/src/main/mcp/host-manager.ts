@@ -450,7 +450,7 @@ export function listRegistered(): RegisteredMcp[] {
   const db = getDb();
   const rows = db
     .prepare(
-      'SELECT id, name, version, transport, command, args, env, url, headers_json, cwd, config_schema, source, installed_at, enabled FROM mcp_definitions ORDER BY installed_at DESC',
+      'SELECT id, name, version, transport, command, args, env, url, headers_json, cwd, config_schema, source, plugin_id, installed_at, enabled FROM mcp_definitions ORDER BY installed_at DESC',
     )
     .all() as McpDefinitionRow[];
   return rows.map(rowToRegistered);
