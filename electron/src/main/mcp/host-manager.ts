@@ -14,6 +14,7 @@
 import { McpClient } from './client';
 import { HttpMcpClient } from './http-client';
 import { getDb } from '../storage/db';
+import { expandMcpTemplate, mcpConfigHasPlaceholder } from './template-expand';
 import { logger } from '../logger';
 import type {
   McpServerConfig,
@@ -160,10 +161,18 @@ export async function getOrStartMcp(
   }
   // in-flight Promise：并发调用共享，只 spawn 一次
   const promise = (async (): Promise<PooledMcpClient> => {
+    // 引擎整合 T3（spec §4.3）：插件 MCP 模板 spawn 期按工作空间展开——
+    // per-ws config 各自生效；展开后参数与池内旧实例不同（如用户改了
+    // workspaceRoot）→ 先回收旧进程再起新，杜绝 stale root
+    let effective = config;
+    if (config.source === 'plugin' && config.pluginId && mcpConfigHasPlaceholder(config)) {
+      const expanded = await expandMcpTemplate(config, workspaceId);
+      effective = { ...config, ...expanded };
+    }
     const client =
-      (config.transport ?? 'stdio') === 'streamable_http'
-        ? new HttpMcpClient(config)
-        : new McpClient(config);
+      (effective.transport ?? 'stdio') === 'streamable_http'
+        ? new HttpMcpClient(effective)
+        : new McpClient(effective);
     await client.connect();
     logger.info('MCP server 已启动', { workspaceId, name: config.name });
     return client;
@@ -221,6 +230,21 @@ export async function callMcpTool(
 }
 
 /** 停止并移除某 workspace 内的指定 MCP server 实例。未启动则静默跳过。 */
+/** 按 server 名回收全部工作空间的池实例（引擎整合 T3：插件 config 变更后，
+ *  模板展开参数随配置变化——setConfig 联动调用，杜绝复用 stale 参数旧进程。
+ *  名下无实例时 no-op。 */
+export function invalidateMcpByName(mcpName: string): void {
+  for (const key of [...pool.keys()]) {
+    if (!key.endsWith(`:${mcpName}`)) continue;
+    const entry = pool.get(key);
+    pool.delete(key);
+    if (!entry) continue;
+    void entry
+      .then((client) => client.disconnect())
+      .catch(() => undefined); // 启动失败/已退出的 promise await 会抛错，忽略
+  }
+}
+
 export async function stopMcp(workspaceId: string, mcpName: string): Promise<void> {
   const key = poolKey(workspaceId, mcpName);
   const promise = pool.get(key);

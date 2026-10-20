@@ -1,3 +1,4 @@
+import { invalidateMcpByName } from '../mcp/host-manager';
 // electron/src/main/plugin/ipc.handlers.ts
 //
 // plugin:* IPC 通道（spec §2/§7）。错误约定：直接 throw 中文 Error，renderer
@@ -182,7 +183,11 @@ export function registerPluginHandlers(): void {
       if (!schema) throw new Error(`此插件未声明配置项: ${pluginId}`);
       await writePluginConfig(pluginId, schema, values, workspaceId);
       try {
-        syncPluginMcps(rec);
+        // 模板态插件 MCP：配置变更 → 展开参数变 → 失效该插件全部 server 池实例
+        // （下次调用按新参数重拉，杜绝 stale root/旧 token 复用）
+        for (const name of syncPluginMcps(rec)) {
+          invalidateMcpByName(name);
+        }
       } catch (err) {
         logger.warn('setConfig 后 MCP 重装配失败', { pluginId, error: String(err) });
       }
