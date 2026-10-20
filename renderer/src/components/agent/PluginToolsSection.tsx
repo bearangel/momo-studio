@@ -41,7 +41,8 @@ export interface PluginToolsSectionProps {
   disabled: boolean;
 }
 
-/** 插件工具分组：组头整插件开关 + 组内单工具开关，默认全开 */
+/** 插件工具分组：组头整插件开关 + 组内单工具开关，默认全开。
+ *  勾选 = 启用（2026-10-20 语义反转：原「勾选=禁用」反直觉，用户实测误勾致整组禁用） */
 export function PluginToolsSection({ tools, deniedTools, onChange, disabled }: PluginToolsSectionProps) {
   const byPlugin = new Map<string, typeof tools>();
   for (const t of tools) {
@@ -62,11 +63,11 @@ export function PluginToolsSection({ tools, deniedTools, onChange, disabled }: P
             <label className="flex items-center gap-2 text-xs text-primary">
               <input
                 type="checkbox"
-                aria-label={`禁用插件 ${list[0]!.pluginName} 全部工具`}
-                checked={allDenied}
+                aria-label={`启用插件 ${list[0]!.pluginName} 全部工具`}
+                checked={!allDenied}
                 disabled={disabled}
                 onChange={(e) =>
-                  onChange(computeDeniedTools(deniedTools, pluginId, list.map((t) => t.fullName), group, !e.target.checked))
+                  onChange(computeDeniedTools(deniedTools, pluginId, list.map((t) => t.fullName), group, e.target.checked))
                 }
               />
               <span className="font-medium">{list[0]!.pluginName}</span>
@@ -80,11 +81,11 @@ export function PluginToolsSection({ tools, deniedTools, onChange, disabled }: P
                   <label key={t.fullName} className="flex items-center gap-2 text-xs text-secondary">
                     <input
                       type="checkbox"
-                      aria-label={`禁用 ${t.fullName}`}
-                      checked={denied}
+                      aria-label={`启用 ${t.fullName}`}
+                      checked={!denied}
                       disabled={disabled}
                       onChange={(e) =>
-                        onChange(computeDeniedTools(deniedTools, pluginId, list.map((x) => x.fullName), t.fullName, !e.target.checked))
+                        onChange(computeDeniedTools(deniedTools, pluginId, list.map((x) => x.fullName), t.fullName, e.target.checked))
                       }
                     />
                     <span className="font-mono">{t.fullName}</span>

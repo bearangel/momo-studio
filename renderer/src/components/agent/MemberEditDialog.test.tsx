@@ -533,7 +533,7 @@ describe('MemberEditDialog — 插件工具覆盖（铁律 4/5：builtin 存量�
     render(<MemberEditDialog member={buildMember()} def={def} onClose={() => {}} />);
     expect(await screen.findByText('插件工具')).toBeInTheDocument();
     expect(screen.getByText('plugin:cg/explore')).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText('禁用插件 Codegraph 代码图谱 全部工具'));
+    fireEvent.click(screen.getByLabelText('启用插件 Codegraph 代码图谱 全部工具'));
     fireEvent.click(screen.getByText('保存'));
     await waitFor(() => expect(setMemberDeltasMock).toHaveBeenCalled());
     const arg = setMemberDeltasMock.mock.calls[0][1] as AssignmentDeltas;
@@ -548,8 +548,8 @@ describe('MemberEditDialog — 插件工具覆盖（铁律 4/5：builtin 存量�
     render(<MemberEditDialog member={buildMember()} def={def} onClose={() => {}} />);
     await screen.findByText('插件工具');
     // 初值：整组禁用态（定义级）
-    expect(screen.getByLabelText('禁用插件 Codegraph 代码图谱 全部工具')).toBeChecked();
-    fireEvent.click(screen.getByLabelText('禁用插件 Codegraph 代码图谱 全部工具'));
+    expect(screen.getByLabelText('启用插件 Codegraph 代码图谱 全部工具')).not.toBeChecked();
+    fireEvent.click(screen.getByLabelText('启用插件 Codegraph 代码图谱 全部工具'));
     fireEvent.click(screen.getByText('保存'));
     await waitFor(() => expect(setMemberDeltasMock).toHaveBeenCalled());
     const arg = setMemberDeltasMock.mock.calls[0][1] as AssignmentDeltas;
@@ -564,7 +564,7 @@ describe('MemberEditDialog — 插件工具覆盖（铁律 4/5：builtin 存量�
     });
     render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />);
     await screen.findByText('插件工具');
-    expect(screen.getByLabelText('禁用 plugin:cg/explore')).toBeChecked();
-    expect(screen.getByLabelText('禁用 plugin:cg/status')).not.toBeChecked();
+    expect(screen.getByLabelText('启用 plugin:cg/explore')).not.toBeChecked();
+    expect(screen.getByLabelText('启用 plugin:cg/status')).toBeChecked();
   });
 });

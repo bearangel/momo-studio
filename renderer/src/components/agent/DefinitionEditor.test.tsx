@@ -356,10 +356,10 @@ describe('插件工具门控分组（工作空间维度 v1.1）', () => {
     expect(screen.getByText('plugin:cg/status')).toBeInTheDocument();
   });
 
-  it('组头关闭 → 提交携带 plugin:cg/*', async () => {
+  it('取消勾选组头（禁用整组）→ 提交携带 plugin:cg/*', async () => {
     render(<DefinitionEditor mode="create" onClose={() => {}} />);
     await screen.findByText('插件工具');
-    fireEvent.click(screen.getByLabelText('禁用插件 Codegraph 全部工具'));
+    fireEvent.click(screen.getByLabelText('启用插件 Codegraph 全部工具'));
     fireEvent.change(screen.getByPlaceholderText('如：代码审查员'), { target: { value: '测试 agent' } });
     fireEvent.change(screen.getByPlaceholderText('如：code-reviewer'), { target: { value: 'test-agent' } });
     fireEvent.change(screen.getByPlaceholderText('你是一名资深审查员...'), { target: { value: '系统提示词' } });
@@ -371,10 +371,10 @@ describe('插件工具门控分组（工作空间维度 v1.1）', () => {
     expect(createCustom.mock.calls[0][0].deniedTools).toEqual(['plugin:cg/*']);
   });
 
-  it('单工具关闭 → 提交携带精确名', async () => {
+  it('取消勾选单工具（禁用）→ 提交携带精确名', async () => {
     render(<DefinitionEditor mode="create" onClose={() => {}} />);
     await screen.findByText('插件工具');
-    fireEvent.click(screen.getByLabelText('禁用 plugin:cg/explore'));
+    fireEvent.click(screen.getByLabelText('启用 plugin:cg/explore'));
     fireEvent.change(screen.getByPlaceholderText('如：代码审查员'), { target: { value: '测试 agent' } });
     fireEvent.change(screen.getByPlaceholderText('如：code-reviewer'), { target: { value: 'test-agent' } });
     fireEvent.change(screen.getByPlaceholderText('你是一名资深审查员...'), { target: { value: '系统提示词' } });

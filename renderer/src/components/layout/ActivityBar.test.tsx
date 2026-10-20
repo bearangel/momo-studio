@@ -167,4 +167,31 @@ describe('面板放置分流（工作空间维度 v1.1）', () => {
     expect(useUiStore.getState().activeView).toBe('im');
     expect(usePluginPanelsStore.getState().activeKey).toBeNull();
   });
+
+  // ── 2026-10-20 用户实测 bug 回归锁：切走视图后高亮残留 + 再入需两次点击 ──
+  it('page 面板激活时切其他视图 → 面板模式退出（activeKey 清空、按钮熄灭）', () => {
+    render(<ActivityBar />);
+    fireEvent.click(screen.getByLabelText('代码图谱'));
+    fireEvent.click(screen.getByLabelText('会话'));
+    expect(useUiStore.getState().activeView).toBe('im');
+    expect(usePluginPanelsStore.getState().activeKey).toBeNull();
+    expect(screen.getByLabelText('代码图谱')).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('切走后再点面板按钮 → 一次直达面板（回归锁：两次点击症状）', () => {
+    render(<ActivityBar />);
+    fireEvent.click(screen.getByLabelText('代码图谱'));
+    fireEvent.click(screen.getByLabelText('会话'));
+    fireEvent.click(screen.getByLabelText('代码图谱'));
+    expect(useUiStore.getState().activeView).toBe('plugin');
+    expect(usePluginPanelsStore.getState().activeKey).toBe('cg/graph');
+  });
+
+  it('sidebar 面板激活时切其他视图 → 让出侧栏槽（activeKey 清空）', () => {
+    render(<ActivityBar />);
+    fireEvent.click(screen.getByLabelText('迷你面板'));
+    fireEvent.click(screen.getByLabelText('文件'));
+    expect(useUiStore.getState().activeView).toBe('files');
+    expect(usePluginPanelsStore.getState().activeKey).toBeNull();
+  });
 });

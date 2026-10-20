@@ -52,6 +52,9 @@ export function ActivityBar() {
   // 收起状态下点击「当前侧边栏视图」图标 → 恢复该视图侧边栏（v2.2 恢复入口之三；
   // 收起状态按视图独立，v2.2 优化）；其余情况正常切换视图
   const handleSelect = (view: ViewKey): void => {
+    // 切走插件视图 → 面板模式整体退出（2026-10-20 修复：activeKey 残留致按钮
+    // 高亮不灭 + 再入需两次点击；sidebar 面板跨视图霸占侧栏槽同修）
+    if (view !== 'plugin') deactivatePanel();
     if (
       view === activeView &&
       (SIDEBAR_VIEWS as readonly string[]).includes(view) &&
