@@ -8,12 +8,14 @@ import type { ResourceSource } from '../../ipc/types';
 import type { BadgeTone } from '../ui/Badge';
 import { Badge } from '../ui/Badge';
 
-/** source × { 中文标签, Badge tone }。custom 与来源筛选 chip 同名（走查 A1 术语统一） */
+/** source × { 中文标签, Badge tone }。custom 与来源筛选 chip 同名（走查 A1 术语统一）
+ *  plugin（D2）：插件自带资源，与 builtin 同组 accent。 */
 const SOURCE_BADGE: Record<ResourceSource, { label: string; tone: BadgeTone }> = {
   builtin:     { label: '系统预置', tone: 'accent' },
   custom:      { label: '自定义', tone: 'neutral' },
   marketplace: { label: '网络资源', tone: 'violet' },
   smithery:    { label: 'Smithery', tone: 'violet' },
+  plugin:      { label: '插件', tone: 'accent' },
 };
 
 export function SourceBadge({ source }: { source: ResourceSource }) {

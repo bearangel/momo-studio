@@ -93,7 +93,7 @@ describe('插件 MCP 默认注入（D2：所有工作空间）', () => {
   it('③ 卸载级联：uninstallPlugin 清各 ws allocation 行', () => {
     seedTwoWorkspaces();
     installPluginDevDir(mkDevPlugin(), '2.1.0');
-    uninstallPlugin('cgp');
+    uninstallPlugin('cgp', false);
     expect(allocations()).toEqual([]);
   });
 
@@ -111,10 +111,14 @@ describe('插件 MCP 默认注入（D2：所有工作空间）', () => {
     installPluginDevDir(mkDevPlugin(), '2.1.0');
     const db = getDb();
     db.prepare(`DELETE FROM workspace_allocations WHERE capability_ref='cg-server'`).run();
-    const rec = db
+    const row = db
       .prepare(`SELECT id, version, manifest_json, state, source, source_path, installed_at FROM plugins WHERE id='cgp'`)
-      .get() as Parameters<typeof syncPluginMcps>[0];
-    syncPluginMcps(rec);
+      .get() as unknown;
+    const rec = row as { id: string; version: string; manifestJson: string; state: string; source: string; sourcePath: string; installedAt: string };
+    syncPluginMcps({
+      id: rec.id, version: rec.version, manifestJson: rec.manifestJson, state: rec.state as 'active',
+      source: rec.source as 'dev', sourcePath: rec.sourcePath, installedAt: rec.installedAt,
+    });
     expect(allocations()).toEqual([]);
   });
 });

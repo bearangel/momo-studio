@@ -142,7 +142,7 @@ export function buildResourceId(source: ResourceSource, type: ResourceType, slug
  */
 export function parseResourceId(id: string): { source: ResourceSource; type: ResourceType; slug: string } | null {
   // slug 部分允许任意非空字符（包括 UUID 中的连字符），用贪婪匹配
-  const m = id.match(/^(builtin|marketplace|custom|smithery)-(agent|mcp|skill|plugin)-(.+)$/);
+  const m = id.match(/^(builtin|marketplace|custom|smithery|plugin)-(agent|mcp|skill|plugin)-(.+)$/);
   if (!m || !m[3]) return null;
   return {
     source: m[1] as ResourceSource,
