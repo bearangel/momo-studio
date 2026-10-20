@@ -128,7 +128,7 @@ describe('ProviderSettings 两列布局', () => {
     expect(update).toHaveBeenCalledWith(expect.objectContaining({
       id: 'p1', name: 'P1', baseUrl: 'https://a.example.com/v1', platform: 'anthropic',
     }));
-    expect(update.mock.calls[0][0]).not.toHaveProperty('apiKey');
+    expect(update.mock.calls[0]![0]).not.toHaveProperty('apiKey');
   });
 
   it('填写 APIKey 后保存 → update 携带 apiKey', async () => {

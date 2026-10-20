@@ -110,9 +110,6 @@ import { initBrowserTools } from './tools/browser-tools';
 // shell-tools 经此桥往返 effective / wait 两 op
 import { handleNetTrustOpResult } from './tools/net-trust-bridge';
 import { handleProcessOpResult } from './tools/process-bridge';
-// LSP 工具 IPC 桥（多语言 LSP 子系统 Task 5）：真实 LspManager 只活在主进程，
-// 子进程 lsp-tools 经此桥往返（与 browser-ipc-bridge 同型第三例）
-import { handleLspOpResult } from './tools/lsp-ipc-bridge';
 // 写授权硬门控拒绝广播（spec 2026-10-03 hard-gate §4.4）：主进程经
 // runtime-registry.broadcastWriteGrantDenied → child.send(write-grant-denied) →
 // runtime-entry 此分支路由至 write-grant-wait 的通知器。
@@ -384,9 +381,6 @@ async function main(): Promise<void> {
       handleTaskReplyIpc(msg);
     } else if (m.type === 'browser-op:result') {
       handleBrowserOpResult(msg);
-    } else if (m.type === 'lsp:op-result') {
-      // lsp 桥应答（requestId 关联，不经流过滤——同 browser-op:result 形态）
-      handleLspOpResult(msg);
     } else if (m.type === 'net-trust-op:result') {
       handleNetTrustOpResult(msg);
     } else if (m.type === 'write-grant-denied') {
@@ -494,8 +488,6 @@ ${skillIndex}`
       creatorUserId: getWorkspace(config.workspaceId)?.ownerId ?? 'unknown',
       // v2.3 Read-before-Edit：进程级单例注入（终审 C1——缺此字段守门静默失效）
       readTracker,
-      // 多语言 LSP（Task 5）：检测快照透传，LspTools.create 以非空为注册门控
-      lspLanguages: config.lspLanguages,
     }),
     config.pluginTools ?? [],
     (msg, meta) => process.stderr.write(`${msg} ${JSON.stringify(meta ?? {})}\n`),

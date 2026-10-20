@@ -150,7 +150,7 @@ describe('AssignTargetDialog 指派并放入队列', () => {
     fireEvent.change(screen.getByLabelText(/计划时间/), { target: { value: futureLocal } });
     fireEvent.click(screen.getByRole('button', { name: '放入队列' }));
     await waitFor(() => expect(mockApi.task.move).toHaveBeenCalled());
-    const patch = mockApi.task.update.mock.calls[0][1] as { scheduledAt: number | null };
+    const patch = mockApi.task.update.mock.calls[0]![1] as { scheduledAt: number | null };
     expect(patch.scheduledAt).not.toBeNull();
     expect(patch.scheduledAt).toBeGreaterThan(Date.now());
   });

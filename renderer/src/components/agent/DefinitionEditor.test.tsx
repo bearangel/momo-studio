@@ -166,7 +166,7 @@ describe('DefinitionEditor — create 模式能力配置区', () => {
     await waitFor(() => {
       expect(createCustom).toHaveBeenCalledTimes(1);
     });
-    const arg = createCustom.mock.calls[0][0];
+    const arg = createCustom.mock.calls[0]![0];
     expect(arg.defaultTools).toEqual(
       MOCK_DEFAULT_ON.map((ref) => ({ kind: 'builtin', ref })),
     );
@@ -194,7 +194,7 @@ describe('DefinitionEditor — create 模式能力配置区', () => {
     await waitFor(() => {
       expect(createCustom).toHaveBeenCalledTimes(1);
     });
-    const arg = createCustom.mock.calls[0][0];
+    const arg = createCustom.mock.calls[0]![0];
     expect(arg.defaultTools).toEqual(
       expect.arrayContaining([
         ...MOCK_DEFAULT_ON.map((ref) => ({ kind: 'builtin', ref })),
@@ -230,7 +230,7 @@ describe('DefinitionEditor — edit 模式加载现有 def 能力', () => {
     await waitFor(() => {
       expect(updateDefinition).toHaveBeenCalledTimes(1);
     });
-    const arg = updateDefinition.mock.calls[0][0];
+    const arg = updateDefinition.mock.calls[0]![0];
     expect(arg.defaultTools).toEqual(
       expect.arrayContaining([
         { kind: 'builtin', ref: 'read_file' },
@@ -332,7 +332,7 @@ describe('DefinitionEditor — brief 数据丢失回归锁：def.thinkingJson �
     await waitFor(() => {
       expect(updateDefinition).toHaveBeenCalledTimes(1);
     });
-    const arg = updateDefinition.mock.calls[0][0];
+    const arg = updateDefinition.mock.calls[0]![0];
     expect(arg.thinkingJson).toEqual(persistedThinking);
   });
 });
@@ -368,7 +368,7 @@ describe('插件工具门控分组（工作空间维度 v1.1）', () => {
     fireEvent.change(screen.getByLabelText('模型名'), { target: { value: 'gpt-4o' } });
     fireEvent.click(screen.getByText('创建'));
     await waitFor(() => expect(createCustom).toHaveBeenCalled());
-    expect(createCustom.mock.calls[0][0].deniedTools).toEqual(['plugin:cg/*']);
+    expect(createCustom.mock.calls[0]![0].deniedTools).toEqual(['plugin:cg/*']);
   });
 
   it('取消勾选单工具（禁用）→ 提交携带精确名', async () => {
@@ -383,7 +383,7 @@ describe('插件工具门控分组（工作空间维度 v1.1）', () => {
     fireEvent.change(screen.getByLabelText('模型名'), { target: { value: 'gpt-4o' } });
     fireEvent.click(screen.getByText('创建'));
     await waitFor(() => expect(createCustom).toHaveBeenCalled());
-    expect(createCustom.mock.calls[0][0].deniedTools).toEqual(['plugin:cg/explore']);
+    expect(createCustom.mock.calls[0]![0].deniedTools).toEqual(['plugin:cg/explore']);
   });
 
   it('computeDeniedTools 纯函数：组模式展开/收起语义', () => {

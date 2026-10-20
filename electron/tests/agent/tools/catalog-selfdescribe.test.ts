@@ -3,11 +3,9 @@
 //   1. 每个模块 getCatalog() 与 getDefs() 名字一一对应
 //   2. 每个条目 category 非空、defaultOn 为 boolean、displayName（中文显示名）非空
 //   3. 缺 meta 的工具在 buildCatalog 处 fail-fast（防将来新模块漏写）
-//   4. LSP 条目带 conditional 标注
-//   5. Tier 1（defaultOn=true）全集 = 17 个，与 spec §3.2 逐名核对
+//   4. Tier 1（defaultOn=true）全集 = 17 个，与 spec §3.2 逐名核对
 import { describe, it, expect } from 'vitest';
 import { unconditionalModules } from '../../../src/main/agent/tools/index';
-import { LSP_CATALOG_ENTRIES } from '../../../src/main/agent/tools/lsp-tools';
 import { buildCatalog, type ToolCatalogEntry } from '../../../src/main/agent/tools/catalog-entry';
 import type { LLMToolDef } from '../../../src/main/agent/llm-provider';
 
@@ -38,18 +36,9 @@ describe('ToolModule.getCatalog 自描述', () => {
   it('Tier 1 全集 = 17 个且逐名核对', () => {
     const all: ToolCatalogEntry[] = [
       ...unconditionalModules().flatMap((m) => m.getCatalog()),
-      ...LSP_CATALOG_ENTRIES,
     ];
     const tier1 = all.filter((e) => e.defaultOn).map((e) => e.name).sort();
     expect(tier1).toEqual([...TIER1].sort());
-  });
-
-  it('LSP 条目带 conditional 标注且 defaultOn=false', () => {
-    expect(LSP_CATALOG_ENTRIES).toHaveLength(2);
-    for (const e of LSP_CATALOG_ENTRIES) {
-      expect(e.conditional).toContain('自动检测');
-      expect(e.defaultOn).toBe(false);
-    }
   });
 
   it('buildCatalog 缺 meta 条目抛错（fail-fast）', () => {

@@ -536,7 +536,7 @@ describe('MemberEditDialog — 插件工具覆盖（铁律 4/5：builtin 存量�
     fireEvent.click(screen.getByLabelText('启用插件 Codegraph 代码图谱 全部工具'));
     fireEvent.click(screen.getByText('保存'));
     await waitFor(() => expect(setMemberDeltasMock).toHaveBeenCalled());
-    const arg = setMemberDeltasMock.mock.calls[0][1] as AssignmentDeltas;
+    const arg = setMemberDeltasMock.mock.calls[0]![1] as AssignmentDeltas;
     expect(arg.removedPluginTools).toEqual(['plugin:cg/*']);
     expect(arg.addedPluginTools).toEqual([]);
   });
@@ -552,7 +552,7 @@ describe('MemberEditDialog — 插件工具覆盖（铁律 4/5：builtin 存量�
     fireEvent.click(screen.getByLabelText('启用插件 Codegraph 代码图谱 全部工具'));
     fireEvent.click(screen.getByText('保存'));
     await waitFor(() => expect(setMemberDeltasMock).toHaveBeenCalled());
-    const arg = setMemberDeltasMock.mock.calls[0][1] as AssignmentDeltas;
+    const arg = setMemberDeltasMock.mock.calls[0]![1] as AssignmentDeltas;
     expect(arg.addedPluginTools).toEqual(['plugin:cg/*']);
   });
 

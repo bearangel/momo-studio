@@ -235,7 +235,7 @@ describe('MessageBubble system 行分支（spec §5.3 系统事件卡接线）',
 });
 
 describe('MessageBubble 链接拦截（S2 导航劫持防护）', () => {
-  let openSpy: MockInstance<Parameters<typeof window.open>, ReturnType<typeof window.open>>;
+  let openSpy: MockInstance<typeof window.open>;
   beforeEach(() => {
     openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
   });

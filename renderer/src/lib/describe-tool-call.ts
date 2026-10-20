@@ -34,7 +34,7 @@ function truncate(s: string, max = 60): string {
 }
 
 const FILE_TOOLS = new Set([
-  'read_file', 'write_file', 'edit_file', 'mkdir', 'rm', 'mv', 'exists', 'lsp_diagnostics',
+  'read_file', 'write_file', 'edit_file', 'mkdir', 'rm', 'mv', 'exists',
   'list_files',
 ]);
 

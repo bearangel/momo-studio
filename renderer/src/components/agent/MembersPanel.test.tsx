@@ -108,8 +108,8 @@ const stopMemberMock = vi.fn();
 const removeMemberMock = vi.fn();
 const setDefaultAgentMock = vi.fn();
 
-let confirmSpy: MockInstance<Parameters<typeof window.confirm>, ReturnType<typeof window.confirm>>;
-let alertSpy: MockInstance<Parameters<typeof window.alert>, ReturnType<typeof window.alert>>;
+let confirmSpy: MockInstance<typeof window.confirm>;
+let alertSpy: MockInstance<typeof window.alert>;
 
 beforeEach(() => {
   editDialogMock.mockReset();

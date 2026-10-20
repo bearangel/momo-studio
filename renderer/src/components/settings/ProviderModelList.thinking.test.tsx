@@ -95,7 +95,7 @@ describe('默认清除（fix 哨兵冲突）', () => {
       effectiveWindow: 1000000, vision: true,
     },
   ];
-  let setModelThinking: ReturnType<typeof vi.fn<[], Promise<undefined>>>;
+  let setModelThinking: ReturnType<typeof vi.fn<() => Promise<undefined>>>;
   beforeEach(() => {
     setModelThinking = vi.fn(async () => undefined);
     // 与本文件其余测试一致：替换 window.api 属性而非整个 window（保留 jsdom document）

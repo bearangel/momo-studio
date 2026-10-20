@@ -4,8 +4,7 @@
 //   ShellTools（bash，workspace 内自由 shell）+ GitTools（git 9 工具）+
 //   WebTools（webfetch URL 抓取）+ TodoTools（v1.5 todowrite 任务列表）+
 //   TaskTools（v2 B10 任务工具：read_task / read_task_history / read_task_progress /
-//     create_task / complete_task / fail_task / list_tasks）+ LspTools
-//   （lsp_diagnostics + lsp_find_references，条件注册——仅 TS/JS workspace）
+//     create_task / complete_task / fail_task / list_tasks）
 //   + MemoryTools（v2.2 记忆三工具：memory_save / memory_search / memory_forget）
 //   + BrowserTools（v2.7 McpBrowser 12 工具：browser_navigate / browser_snapshot /
 //     browser_screenshot / browser_click / browser_type / browser_press_key /
@@ -31,7 +30,6 @@ import { GitTools } from './git-tools';
 import { WebTools } from './web-tools';
 import { TodoTools } from './todo-tools';
 import { TaskTools } from './task-tools';
-import { LspTools } from './lsp-tools';
 import { MemoryTools } from './memory-tools';
 import { BrowserTools } from './browser-tools';
 import { OfficeTools } from './office-tools';
@@ -57,10 +55,7 @@ export function unconditionalModules(): ToolModule[] {
 }
 
 export function buildToolRegistry(ctx: ToolContext): ToolModule[] {
-  const modules = unconditionalModules();
-  const lsp = LspTools.create(ctx);
-  if (lsp) modules.push(lsp);
-  return modules;
+  return unconditionalModules();
 }
 
 export function getAllToolDefs(modules: ToolModule[]): LLMToolDef[] {

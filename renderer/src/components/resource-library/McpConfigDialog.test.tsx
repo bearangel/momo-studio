@@ -162,7 +162,7 @@ describe('McpConfigDialog — schema 模式提交', () => {
     await screen.findByLabelText('API Key');
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    const input = onSubmit.mock.calls[0][0];
+    const input = onSubmit.mock.calls[0]![0];
     expect(input.url).toBe('https://mcp.context7.com/mcp');
     expect(input.config).toEqual({ apiKey: 'sk-old-key', region: 'us' });
     expect(input.schema).toEqual(SCHEMA_VIEW.schema);
@@ -240,7 +240,7 @@ describe('McpConfigDialog — 裸模式', () => {
     fireEvent.change(newVal, { target: { value: 'should-drop' } });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    const input = onSubmit.mock.calls[0][0];
+    const input = onSubmit.mock.calls[0]![0];
     expect(input.url).toBe('https://mcp.example.com/sse');
     expect(input.config).toEqual({});
     expect(input.headers).toEqual({ Authorization: 'Bearer tok-1', 'X-Custom': 'cv' });

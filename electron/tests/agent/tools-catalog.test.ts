@@ -18,15 +18,10 @@ describe('tools/catalog 派生常量', () => {
     for (const name of unconditionalModules().flatMap((m) => m.getDefs().map((d) => d.name))) {
       expect(ALL_BUILTIN_TOOLS).toContain(name);
     }
-    expect(ALL_BUILTIN_TOOLS).not.toContain('lsp_find_references');
-    expect(ALL_BUILTIN_TOOLS).not.toContain('lsp_diagnostics');
-    // lsp_* 已随子系统下架摘除目录（2026-10-08）——不该出现在全量清单
     for (const name of ['bash', 'apply_patch', 'office_read',
       'read_task', 'memory_search', 'browser_navigate', 'list_sessions', 'process_list', 'git_repos']) {
       expect(ALL_BUILTIN_TOOLS).toContain(name);
     }
-    expect(ALL_BUILTIN_TOOLS).not.toContain('lsp_find_references');
-    expect(ALL_BUILTIN_TOOLS).not.toContain('lsp_diagnostics');
     expect(new Set(ALL_BUILTIN_TOOLS).size).toBe(ALL_BUILTIN_TOOLS.length);
   });
 
@@ -46,10 +41,9 @@ describe('tools/catalog 派生常量', () => {
     expect(all.sort()).toEqual([...ALL_BUILTIN_TOOLS].sort());
   });
 
-  it('buildToolCatalog 完备：条目数 = 模块 defs（LSP 已下架摘除），每条目有 meta', () => {
+  it('buildToolCatalog 完备：条目数 = 模块 defs，每条目有 meta', () => {
     const entries = buildToolCatalog();
     const registryNames = unconditionalModules().flatMap((m) => m.getDefs().map((d) => d.name));
-    expect(entries.some((e) => e.name.startsWith('lsp_'))).toBe(false);
     expect(entries.map((e) => e.name).sort()).toEqual([...registryNames].sort());
     for (const e of entries) {
       expect(e.category.length).toBeGreaterThan(0);

@@ -87,7 +87,7 @@ describe('PluginSettings', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: '保存' })).toBeTruthy());
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => expect(setConfig).toHaveBeenCalled());
-    const payload = setConfig.mock.calls[0][1] as Record<string, unknown>;
+    const payload = setConfig.mock.calls[0]![1] as Record<string, unknown>;
     expect(payload.indexCommand).toBe('codegraph index');
     expect(payload.watchDebounce).toBe(300);
     expect(payload.enableWatch).toBe(true);
@@ -101,7 +101,7 @@ describe('PluginSettings', () => {
     fireEvent.click(screen.getByRole('button', { name: '清除' }));
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => expect(setConfig).toHaveBeenCalled());
-    expect((setConfig.mock.calls[0][1] as Record<string, unknown>).apiToken).toBeNull();
+    expect((setConfig.mock.calls[0]![1] as Record<string, unknown>).apiToken).toBeNull();
     cleanup();
     setConfig.mockClear();
 
@@ -112,7 +112,7 @@ describe('PluginSettings', () => {
     fireEvent.click(screen.getByRole('button', { name: '撤销清除' }));
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => expect(setConfig).toHaveBeenCalledTimes(1));
-    expect((setConfig.mock.calls[0][1] as Record<string, unknown>).apiToken).toBeUndefined();
+    expect((setConfig.mock.calls[0]![1] as Record<string, unknown>).apiToken).toBeUndefined();
   });
 
   it('保存失败 → 行内红字；成功 → 成功提示', async () => {

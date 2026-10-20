@@ -74,8 +74,6 @@ beforeEach(() => {
   // skillRegistry 在本测试的工具路径中不被调用，给最小桩满足类型约束
   const skillRegistry = { list: () => [] } as never;
   const sendStreamChunk = () => {};
-  // buildToolRegistry 按 ctx.lspLanguages 检测快照门控 LspTools（本 ctx 未注入
-  // → 不注册，符合预期）；其余字段给最小桩。
   const sharedToolCtxFields = {
     wsFs,
     workspaceId: 'ws',

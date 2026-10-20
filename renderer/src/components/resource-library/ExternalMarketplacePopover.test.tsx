@@ -15,7 +15,7 @@ import { ExternalMarketplacePopover } from './ExternalMarketplacePopover';
 import type { ResourceType } from '../../ipc/types';
 
 // window.api 属性安装（只装组件触达的 misc 命名空间）
-const openExternalMock = vi.fn<[], Promise<void>>();
+const openExternalMock = vi.fn<() => Promise<void>>();
 
 const mockApi = {
   misc: {

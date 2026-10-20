@@ -434,26 +434,6 @@ export interface ToolCatalogEntry {
   conditional?: string;
 }
 
-/**
- * LSP 语言状态（lsp:status / lsp:redetect 返回项；electron 侧
- * main/lsp/detect.ts 的 LanguageStatus 镜像契约）。
- * 三态判定：toolchain && binary = ready；toolchain && !binary = missing-binary；!toolchain = inactive。
- */
-export interface LanguageStatus {
-  languageId: string;
-  label: string;
-  tier: 'verified' | 'experimental';
-  /** workspace 内检测到该语言的工程标志（markers 根 + 一层子目录） */
-  toolchain: boolean;
-  /** PATH 内探测到语言 server 二进制 */
-  binary: boolean;
-  /** server 运行态（主进程 LspManager 键控单例） */
-  running: 'running' | 'idle' | 'stopped';
-  /** missing-binary 时的安装引导命令 */
-  installHint: string;
-  /** 支持面板一键安装（spec.install 存在——仅 npm 分发语言；electron 侧 detect.ts 镜像） */
-  installable: boolean;
-}
 
 /**
  * A 子系统：IM 消息（SQLite messages 表 row）。
@@ -2171,17 +2151,6 @@ export interface ApiSurface {
     get(workspaceId: string): Promise<GitPolicy>;
     /** 覆盖写入某 workspace 的 Git Policy */
     set(workspaceId: string, policy: GitPolicy): Promise<void>;
-  };
-  /** 多语言 LSP 子系统：workspace 语言检测面板通道（lsp:status / lsp:redetect / lsp:install） */
-  lsp: {
-    /** 检测快照（主进程 per-workspace 缓存），每语言一项三态 */
-    status(workspaceId: string): Promise<LanguageStatus[]>;
-    /** 强制重算（markers + 二进制 PATH 重探测）并刷新缓存 */
-    redetect(workspaceId: string): Promise<LanguageStatus[]>;
-    /** 一键安装（npm 分发语言）到 app 共享目录 <userData>/lsp-bin，成功后重探测并返回新列表 */
-    install(workspaceId: string, languageId: string): Promise<LanguageStatus[]>;
-    /** 手动启动某语言 server（spawn + initialize 握手；面板「启动」按钮），返回实时覆写后的列表 */
-    start(workspaceId: string, languageId: string): Promise<LanguageStatus[]>;
   };
   audit: {
     /** 分页查询某 workspace 的工具调用审计记录（最新优先） */

@@ -87,7 +87,7 @@ const TEAM: Team = {
 const loadTeamsMock = vi.fn();
 const deleteTeamMock = vi.fn();
 
-let confirmSpy: MockInstance<Parameters<typeof window.confirm>, ReturnType<typeof window.confirm>>;
+let confirmSpy: MockInstance<typeof window.confirm>;
 
 beforeEach(() => {
   loadTeamsMock.mockReset().mockResolvedValue(undefined);

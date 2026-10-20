@@ -172,11 +172,6 @@ describe('SettingsView', () => {
     expect(mockApi.browser.getSettings).toHaveBeenCalledWith('ws-test');
   });
 
-  it('「语言服务」分类已下架（2026-10-08）——导航与面板均不渲染', () => {
-    render(<SettingsView />);
-    expect(screen.queryByRole('button', { name: '语言服务' })).not.toBeInTheDocument();
-  });
-
   it('account 分类不存在', () => {
     render(<SettingsView />);
     expect(screen.queryByText('账户')).not.toBeInTheDocument();

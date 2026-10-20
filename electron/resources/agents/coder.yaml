@@ -1,7 +1,5 @@
 # Smith（锻造师）— 实现工程师（v2.0.0 重做，2026-10-09）。
 # 命名走「属性→职能」映射（对齐 oh-my-openagent Hephaestus 锻造之神位）；slug 保持不变。
-# lsp_* 两项为 LSP 子系统下架（9cc3407a）后的刻意休眠引用，preset-consistency 测试 E 豁免；
-# prompt 正文不得提及 lsp 工具（休眠态调用会 unknown-tool），恢复时一并解除。
 # 预置库按需启用（builtin 注册链自 v1.1 起休眠）；YAML 与 catalog 双轨先例。
 apiVersion: v1
 kind: AgentDefinition
@@ -82,10 +80,6 @@ spec:
       ref: webfetch
     - kind: builtin
       ref: todowrite
-    - kind: builtin
-      ref: lsp_diagnostics
-    - kind: builtin
-      ref: lsp_find_references
     - kind: builtin
       ref: list_sessions
     - kind: builtin

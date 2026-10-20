@@ -82,17 +82,13 @@ describe('预设内容库一致性（spec 2026-10-08）', () => {
   });
 
   it('E. agent YAML 的 defaultTools 引用的工具全部真实存在（防契约漂移）', () => {
-    // LSP 休眠豁免：LSP 子系统 2026-10-08 下架（commit 9cc3407a，ALL_BUILTIN_TOOLS
-    // 已摘除 lsp_*），现有 agent YAML 的 lsp 引用是下架提交刻意保留的休眠态；
-    // LSP 恢复时移除本豁免。
-    const dormantRefs = new Set(['lsp_diagnostics', 'lsp_find_references']);
     for (const f of listAgentYamls()) {
       const { def } = parseAgentManifestWithSuggestion(
         fs.readFileSync(path.join(AGENTS_DIR, f), 'utf-8'),
       );
       for (const t of def.defaultTools) {
         expect(
-          ALL_BUILTIN_TOOLS.includes(t.ref) || dormantRefs.has(t.ref),
+          ALL_BUILTIN_TOOLS.includes(t.ref),
           `${f} 引用了不存在的工具: ${t.ref}`,
         ).toBe(true);
       }

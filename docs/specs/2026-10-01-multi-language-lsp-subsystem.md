@@ -1,8 +1,7 @@
 # 多语言 LSP 子系统重构 设计文档
 
-> **⚠️ 已下架（2026-10-08，GUI 验收）**：LSP 服务在真机验收中问题密度超预期（rust-analyzer rustup shim 空壳秒退、错误保真缺失、检测误报等——当日三连修见 commit 05e041b4 后仍决定整体下架，稳定后再复启）。
-> **下架面（代码全保留，休眠）**：① `spawn-helpers.ts` lspLanguages 注入摘除（LspTools 门控恒 null → agent 工具面无 lsp_*）；② `tools/catalog.ts` 目录项摘除（设置工具清单无 lsp 行）；③ 设置页「语言服务」导航 + 面板摘除（SettingsNav/SettingsView）。主进程 manager/detect/registry/ipc、lsp-tools、LanguageServicesPanel 及其测试全部保留。
-> **恢复路径**：还原上述三处 + 移除本横幅（本分支 git 历史可追溯）。
+> **🪦 已移除（2026-10-20）**：LSP 子系统整体删除（spec `docs/specs/2026-10-20-remove-p2p-lsp-design.md`）——`src/main/lsp/`、lsp 工具链、面板 IPC、preload/types、`tests/lsp/`、devDep 均已不存在。若未来需要语言能力，以插件形式重建。本文档转为历史档案。
+> 前一状态：2026-10-08 曾下架休眠（代码全保留），2026-10-20 由休眠转为彻底移除。
 
 - 日期：2026-10-01
 - 状态：设计已确认（十节经用户逐节确认），待 spec 审阅；**2026-10-08 起已下架（见顶部横幅）**

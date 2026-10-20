@@ -161,7 +161,7 @@ describe('CapabilityTabs — edit 模式', () => {
       skills: [],
     });
     // 原有工具数量 + 1
-    const call = onChange.mock.calls[0][0];
+    const call = onChange.mock.calls[0]![0];
     expect(call.tools).toHaveLength(MOCK_SAFE_MINIMUM.length + 1);
   });
 
@@ -170,7 +170,7 @@ describe('CapabilityTabs — edit 模式', () => {
     render(<CapabilityTabs {...defaultProps({ onChange })} />);
     fireEvent.click(await screen.findByLabelText('读取文件（read_file）'));
     expect(onChange).toHaveBeenCalledTimes(1);
-    const call = onChange.mock.calls[0][0];
+    const call = onChange.mock.calls[0]![0];
     expect(call.tools).not.toContain('read_file');
     expect(call.tools).toHaveLength(MOCK_SAFE_MINIMUM.length - 1);
   });

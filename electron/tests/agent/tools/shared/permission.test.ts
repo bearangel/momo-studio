@@ -1,7 +1,7 @@
 // electron/tests/agent/tools/shared/permission.test.ts
 //
 // 验证工具权限白名单 + 通配符匹配：
-//   - 后缀通配符（lsp_* / git_* / mcp:github:*）匹配多个工具
+//   - 后缀通配符（office_* / git_* / mcp:github:*）匹配多个工具
 //   - 通配符不会错误匹配前缀不同的工具
 //   - denied 优先于 allowed（含通配符场景）
 //   - 精确匹配仍然有效（向后兼容）
@@ -12,13 +12,13 @@ import { assertToolAllowed, filterVisibleToolDefs } from '../../../../src/main/a
 describe('assertToolAllowed - 通配符', () => {
   const config = (allowed: string[], denied: string[]) => ({ allowedTools: allowed, deniedTools: denied });
 
-  it('通配符后缀匹配：lsp_* 匹配 lsp_diagnostics', () => {
-    expect(() => assertToolAllowed('lsp_diagnostics', config(['lsp_*'], []))).not.toThrow();
-    expect(() => assertToolAllowed('lsp_find_references', config(['lsp_*'], []))).not.toThrow();
+  it('通配符后缀匹配：office_* 匹配 office_read', () => {
+    expect(() => assertToolAllowed('office_read', config(['office_*'], []))).not.toThrow();
+    expect(() => assertToolAllowed('office_write_excel', config(['office_*'], []))).not.toThrow();
   });
 
   it('通配符不匹配前缀不同的工具', () => {
-    expect(() => assertToolAllowed('bash', config(['lsp_*'], []))).toThrow(/不在允许列表/);
+    expect(() => assertToolAllowed('bash', config(['office_*'], []))).toThrow(/不在允许列表/);
   });
 
   it('denied 通配符优先于 allowed', () => {

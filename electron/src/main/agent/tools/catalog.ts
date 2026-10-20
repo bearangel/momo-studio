@@ -8,9 +8,7 @@
 import { unconditionalModules } from './index';
 import type { ToolCatalogEntry } from './catalog-entry';
 
-/** 全部内置工具目录（≈58 个，随模块注册自动扩展）。LSP 条目已随子系统下架
- *  摘除（2026-10-08）——LSP_CATALOG_ENTRIES 仍从 lsp-tools.ts 导出（自描述
- *  契约测试在册），恢复时拼回此处。 */
+/** 全部内置工具目录（随模块注册自动扩展）。 */
 export function buildToolCatalog(): ToolCatalogEntry[] {
   return unconditionalModules().flatMap((m) => m.getCatalog());
 }

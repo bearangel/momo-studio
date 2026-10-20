@@ -49,7 +49,6 @@ import {
 import type { AgentDefinition } from './types';
 import type { SubAgentRef, RuntimeSkillRef } from './builtin-tools';
 import type { AgentRuntimeOpts } from './runtime-config';
-// 多语言 LSP 检测（spec §7）：主进程单点检测，快照随 AGENT_CONFIG 注入子进程
 
 /** buildDispatchSnapshot 的产出：dispatch 注入条件 + subAgents 快照（spec §4.7） */
 export interface DispatchSnapshot {
@@ -401,10 +400,6 @@ export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentR
     // agent 级工具门控：三层合并终态（def 级基线 ∪ 成员 removed − 成员 added，
     // capability-merger 第 4 输出——builtin 只读对象经成员 deltas 管理的唯一通道）
     deniedTools: merged.deniedTools,
-    // LSP 已下架（2026-10-08，GUI 验收问题多）：lspLanguages 检测快照注入摘除——
-    // LspTools.create 门控随之恒 null，agent 工具面不再注册 lsp_*。子系统代码
-    // 全保留（manager/detect/registry/ipc/panel/工具），恢复 = 还原本行注入 +
-    // catalog.ts 目录项 + 设置页导航三处（见 spec 头部下架横幅）。
     skills: [
       ...resolveSkillSlugs(merged.skills),
       // 插件 skills（spec §4 声明式激活）：零复制 refs 直指插件目录

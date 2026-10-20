@@ -45,7 +45,7 @@ const mockApi = {
   },
 };
 
-let alertSpy: MockInstance<Parameters<typeof window.alert>, ReturnType<typeof window.alert>>;
+let alertSpy: MockInstance<typeof window.alert>;
 
 describe('WorkspaceTabs', () => {
   beforeEach(() => {
