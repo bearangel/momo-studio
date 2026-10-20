@@ -38,6 +38,7 @@ import { migration060 } from './060_plugin_hooks_audit';
 import { migration061 } from './061_agent_denied_tools';
 import { migration062 } from './062_assignment_plugin_tool_delta';
 import { migration063 } from './063_remove_p2p_lsp_residue';
+import { migration064 } from './064_codegraph_plugin_tool_to_mcp';
 
 export interface Migration {
   version: number;
