@@ -6,6 +6,10 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 移除 P2P 联网与 LSP 子系统
+
+产品方向整改（spec `docs/specs/2026-10-20-remove-p2p-lsp-design.md`）：**P2P 联网子系统整体删除**（Ed25519 身份 / mDNS 发现 / TCP 直连 / hub 死码 / 资源分享与导入 / 任务只读镜像 / `source='p2p'`，-8783 行）——后续联网统一走 momo-hub（未来单独立项）；**LSP 子系统整体删除**（语言检测 / LspManager / 面板 IPC / 休眠工具链 / devDep，-3416 行）——未来以插件形式回归。migration **063** 彻底清（用户裁定 A）：`tasks.source_node_id` 列 DROP、`messages` 的 lan/hub 镜像行删除、`agent_definitions.default_tools` 的 lsp 休眠引用剔除；`ResourceSource` 联合收窄（builtin/marketplace/custom/smithery）、`MessageSource` 收窄（local/matrix）。**行为影响**：设置页「节点互联」分类消失（12→11）、任务看板远端节点分区消失、资源库 P2P 来源筛选消失。userData 残留文件（`p2p-identity.json` / `p2p-trusted-nodes.json` / `lsp-bin/`）无代码读取，保留不清理。依赖卸载四项（bonjour-service / tweetnacl / ws / @types/ws）+ typescript-language-server（devDep）。版本 `2.1.0-alpha.22`。
+
 ## [未发布] — Node 24 LTS + Electron 44 升级
 
 工具链与运行时一步到位切换 Node 24 生态（spec `docs/specs/2026-10-20-node24-electron44-upgrade-design.md`）：**Electron 30.5.1 → 44.9**（内嵌 Node 20.18 → **24.22**，Chromium 124 → 152，ABI 123 → 149——两者原先均已 EOL）；**better-sqlite3 11.10.0 → 12.11.1**（11.x 停更无 Node 24 支持；钉 12 不上 13——v13.0.x 零 prebuild）；@types/node ^24；根 `engines >=24` + 新增 `.nvmrc`；CI 三平台 node 24；AGENTS.md/README 纪律同步。破坏面全量比对后唯一必修：`console-message` 事件迁移 Event 对象签名（level 数字 → 字符串）。行为变化登记：原生 dialog 无 defaultPath 时初始目录改 Downloads（不再记忆上次目录）；`window.open` 弹窗恒可缩放；macOS 最低系统要求升至 13。Electron 42 起 npm 包二进制改为首跑按需下载（postinstall 不再下载）。解锁 codegraph 引擎 Library API in-process 路线（Node ≥22.5 的 `node:sqlite`，整合另立项）。版本 `2.1.0-alpha.21`。

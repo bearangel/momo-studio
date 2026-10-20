@@ -50,7 +50,6 @@ export interface TaskRow {
   actualTokens: number | null;
   toolCallsUsed: number;
   errorMessage: string | null;
-  sourceNodeId: string | null;
   createdAt: number;
   updatedAt: number;
   startedAt: number | null;
@@ -88,7 +87,6 @@ type SqlRow = {
   actual_tokens: number | null;
   tool_calls_used: number;
   error_message: string | null;
-  source_node_id: string | null;
   created_at: number;
   updated_at: number;
   started_at: number | null;
@@ -123,7 +121,6 @@ function rowToCamel(r: SqlRow): TaskRow {
     actualTokens: r.actual_tokens,
     toolCallsUsed: r.tool_calls_used,
     errorMessage: r.error_message,
-    sourceNodeId: r.source_node_id,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     startedAt: r.started_at,
@@ -195,7 +192,7 @@ export function insertTask(
       execution_session_id, assignee_agent_id,
       target_team_id, target_session_id, recurrence_parent_id,
       priority, scheduled_at, recurrence_rule, deadline_at,
-      queue_position, runtime_instance_id, estimated_tokens, actual_tokens, tool_calls_used, error_message, source_node_id,
+      queue_position, runtime_instance_id, estimated_tokens, actual_tokens, tool_calls_used, error_message,
       created_at, updated_at, started_at, completed_at,
       group_id, pinned_at, archived_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -223,7 +220,6 @@ export function insertTask(
     input.actualTokens,
     0,
     input.errorMessage,
-    input.sourceNodeId,
     now,
     now,
     input.startedAt,
@@ -258,7 +254,7 @@ export function updateTask(id: string, patch: Partial<Omit<TaskRow, 'id' | 'crea
       execution_session_id=?, assignee_agent_id=?,
       target_team_id=?, target_session_id=?, recurrence_parent_id=?,
       priority=?, scheduled_at=?, recurrence_rule=?, deadline_at=?,
-      queue_position=?, runtime_instance_id=?, estimated_tokens=?, actual_tokens=?, tool_calls_used=?, error_message=?, source_node_id=?,
+      queue_position=?, runtime_instance_id=?, estimated_tokens=?, actual_tokens=?, tool_calls_used=?, error_message=?,
       group_id=?, pinned_at=?, archived_at=?,
       updated_at=?, started_at=?, completed_at=?
     WHERE id=?`,
@@ -285,7 +281,6 @@ export function updateTask(id: string, patch: Partial<Omit<TaskRow, 'id' | 'crea
     next.actualTokens,
     next.toolCallsUsed,
     next.errorMessage,
-    next.sourceNodeId,
     next.groupId,
     next.pinnedAt,
     next.archivedAt,
@@ -445,7 +440,6 @@ export function listTasks(opts: {
  *       created_at ASC（先到先得兜底）。
  * 返回一条（limit 1）。无候选返回 null。
  *
- * C 阶段 P2P 任务可能由 source_node_id != null 标识，但本函数只过滤本地 agent 的任务。
  */
 export function findNextAssignedTask(assigneeAgentId: string, now: number): TaskRow | null {
   const db = getDb();

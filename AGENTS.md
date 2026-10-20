@@ -15,7 +15,6 @@ v2.0.0 已发布（commit ac51236 起合并）。五期重构收官：
 - P1 传输层内迁：移除 Matrix/Tuwunel 全家，`sessions` / `session_members` 表取代 Matrix room
 - P2 UI 骨架与设置：自绘 TitleBar + 活动栏 + 统一侧边栏 + 设置独立界面
 - P3 半成品处置 + IPC 收敛：provider platform 运行时接线、#T 任务 id 端到端、资源注册统一 `resource:*`
-- P4 局域网 P2P：任务只读镜像 + agent/MCP 资源分享 + 一键导入
 - P5 升级体验：旧库只读导出 Markdown/JSON，备份重命名 `.legacy-v1.bak`，首启一次性提示
 
 ## 架构关键点
@@ -26,8 +25,8 @@ v2.0.0 设计取舍一句话：「单进程 Electron + 内置 SessionService + �
 - **task-driven runtime**：AgentRunner + WarmPool（K=2 预热）+ MessageEventBuffer（50ms/30 条批落盘）；废弃 v1 双轨 runtime-manager
 - **v25 agent 域（去编排）**：`workspace_agent_members` 成员制（无 role/parent，同 ws 同 def 唯一）取代 `agent_assignments`；agent 定义全局化（`workspace_id` 列已 DROP）；多 agent 协作走「团队」（`teams`/`team_members`，leader+成员），dispatch 注入按会话快照判定（成员>1 且 is_leader，`buildDispatchSnapshot` 在 spawn 时定型）；会话双类型（快速/协作），`workspaces.default_agent_instance_id` 支撑快速会话；依据 `docs/specs/2026-08-31-agent-team-session-redesign.md`
 - **dispatch + stream 事件链**：RouterService 切输入源（Matrix event → SessionService 进程内事件）；dispatch / task_reply 走内部事件桥，子 agent 结果可靠回传
-- **LAN p2p**：Ed25519 身份 + mDNS 发现 + TCP 直连；payload 多类型分发（message / task-snapshot / resource-catalog / resource-request / resource-provide）；远端任务**只读镜像**（spec D7 铁律：入站快照只进内存缓存，绝不写 `tasks` 表）
-- **marketplace + skill**：资源库三类 source（builtin / marketplace / custom）+ v2 加 `source='p2p'`；内置 agent YAML 落 `electron/resources/agents/*.yaml`（coder / pm-agent / requirement-analyst）；marketplace 目录 `resources/marketplace/catalog.json`
+- **P2P/LSP 已移除（2026-10-20）**：P2P 联网子系统（Ed25519/mDNS/TCP/资源分享/任务镜像）与 LSP 子系统整体删除（spec `docs/specs/2026-10-20-remove-p2p-lsp-design.md`）；后续联网走 momo-hub（未立项）、LSP 需求以插件形式回归
+- **marketplace + skill**：资源库 source（builtin / marketplace / custom / smithery）；内置 agent YAML 落 `electron/resources/agents/*.yaml`（coder / pm-agent / requirement-analyst）；marketplace 目录 `resources/marketplace/catalog.json`
 
 ## 关键命令
 
@@ -136,7 +135,7 @@ docs/       — 设计文档(specs) + 实施计划(plans) + 开发指南(dev)
 - `docs/specs/2026-08-31-agent-team-session-redesign.md` — v25 agent/会话域现行设计（去编排 + 团队 + 双会话），agent 域实现以此为准
 - `docs/specs/2026-08-23-v2.0.0-platform-refactor-design.md` — v2.0.0 现行架构设计（18 节），所有 2.x 实现的依据
 - `docs/specs/2026-07-28-agent-platform-design.md` — v1.x 早期设计（14 节），**已 superseded**；v2.0.0 起仅作历史参考
-- `docs/plans/2026-08-23-v2.0.0-p*.md` — 五期实施计划（p1 会话内核 / p2 UI / p3 收尾 / p4 局域网 / p5 升级）
+- `docs/plans/2026-08-23-v2.0.0-p*.md` — 五期实施计划（p1 会话内核 / p2 UI / p3 收尾 / p4 局域网〔已随 P2P 移除退役〕/ p5 升级）
 - `docs/2026-08-14-system-feature-inventory.md` — 系统功能全景清单（v2.0 spec 的上游输入底座）
 - `.superpowers/sdd/progress.md` — v2.0.0 主线 ledger，gitignored
 - `docs/dev/design-system.md` — v2.1 UI 设计系统规范（token / 组件 / 图标 / do-don't），renderer UI 开发唯一入口

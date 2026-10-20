@@ -37,6 +37,7 @@ import { migration059 } from './059_mcp_plugin_id';
 import { migration060 } from './060_plugin_hooks_audit';
 import { migration061 } from './061_agent_denied_tools';
 import { migration062 } from './062_assignment_plugin_tool_delta';
+import { migration063 } from './063_remove_p2p_lsp_residue';
 
 export interface Migration {
   version: number;
@@ -1108,6 +1109,12 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // builtin 只读对象的管理通道）——CHECK 约束放宽需表重建，数据零丢失
     version: migration062.version,
     sql: migration062.up,
+  },
+  {
+    // P2P/LSP 子系统移除（2026-10-20）：tasks.source_node_id DROP + messages 镜像行
+    // 清理 + agent_definitions.default_tools lsp 休眠引用清理（spec remove-p2p-lsp）
+    version: migration063.version,
+    sql: migration063.up,
   },
 ];
 

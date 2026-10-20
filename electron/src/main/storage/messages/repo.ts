@@ -6,7 +6,7 @@
 //   - 字段名 camelCase（SQLite 是 snake_case），用 rowToCamel 做映射
 //   - id 默认 randomUUID()；调用方可显式传入（A7 多段消息需要可预测 id）
 //   - status 默认 'done'（user 消息、最终态消息）；agent 流式消息插入时显式传 'streaming'
-//   - source 默认 'local'；跨节点同步（C 阶段）传 'lan' / 'hub'
+//   - source 默认 'local'（'lan'/'hub' P2P 镜像值已随子系统移除，2026-10-20）
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../db';
 
@@ -21,7 +21,7 @@ export interface MessageRow {
   segmentOf: string | null;
   segmentIndex: number | null;
   status: 'streaming' | 'done' | 'failed' | 'aborted';
-  source: 'local' | 'lan' | 'hub' | 'matrix';
+  source: 'local' | 'matrix';
   workspaceId: string | null;
   taskId: string | null;
   /**

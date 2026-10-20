@@ -9,7 +9,7 @@
 - **本地优先**：单进程 Electron，零外部服务依赖——不需要服务器、不需要账号，数据全在本机（SQLite + 工作区目录）
 - **隐私边界清晰**：API key 入 keychain；agent 的每一次文件写入、每一条 bash 命令都有账本与审计，可逐条撤销
 - **多 agent 真协作**：团队（leader + 成员）、dispatch 派发、断点续接、异步句柄与收割——不只是多个聊天窗
-- **能力可扩展**：MCP server、Skill 渐进披露、资源库多来源（预置 / 上传 / 网络 / P2P 共享），15 家模型供应商预设开箱即用
+- **能力可扩展**：MCP server、Skill 渐进披露、资源库多来源（预置 / 上传 / 网络），15 家模型供应商预设开箱即用
 
 ## 核心特性
 
@@ -38,8 +38,7 @@
 
 **连接性**
 - MCP stdio transport，共享进程池，热重载
-- 资源库：agent / MCP / skill 三类 × 多来源（预置 / 上传 / 网络 / P2P）
-- 局域网 P2P：Ed25519 身份 + mDNS 发现 + TCP 直连；任务只读镜像 + 资源分享一键导入
+- 资源库：agent / MCP / skill 三类 × 多来源（预置 / 上传 / 网络）
 
 ## 安装
 
@@ -96,7 +95,7 @@ docs/       specs（设计）/ plans（实施计划）/ dev（开发指南）
 
 研发中（`2.1.0-alpha`）——自 v2.0.0 起累积：Windows 全平台化 / 多仓 git / 编排元语 / 浏览器工具 / 断点续跑 / 变更账本与撤销 / OS 沙箱 / 记忆系统 / 供应商预设。逐特性详情与验收待办见 `CHANGELOG.md`。
 
-近期方向：Windows 真机验收收口 · LSP 集成 · 分支工作流（agent 工作独立 branch，PR 式合并）· agent 并发多任务 · e2e 套件重写。
+近期方向：Windows 真机验收收口 · 分支工作流（agent 工作独立 branch，PR 式合并）· agent 并发多任务 · e2e 套件重写。（LSP/P2P 已移除——未来以插件 / momo-hub 形式回归）
 
 远期：私有 marketplace · headless agent runner · 移动端只读 · NAT 打洞。
 
