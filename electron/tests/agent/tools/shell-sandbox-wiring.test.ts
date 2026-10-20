@@ -120,6 +120,7 @@ describe('bash 工具沙箱接线（真实路由）', () => {
 
   it('strict + 不可用 → 抛错含安装指引（不 spawn）', async () => {
     __setSandboxSettingsForTest(settings('strict', 'deny'));
-    await expect(executeBashViaRealRoute('echo hello')).rejects.toThrow('bubblewrap');
+    // 平台稳定的公共前缀（Linux 文案含 bubblewrap、macOS 含 Seatbelt——各自随平台变）
+    await expect(executeBashViaRealRoute('echo hello')).rejects.toThrow('OS 沙箱不可用');
   });
 });

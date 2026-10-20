@@ -13,7 +13,6 @@ vi.mock('./MainShell', () => ({
 }));
 
 import { App } from '../App';
-import { ipc } from '../ipc/client';
 
 function mkWs(id: string): Workspace {
   return {

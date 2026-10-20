@@ -8,8 +8,12 @@ beforeEach(() => __setSandboxStateForTest(null));
 const okRunner = (stdout = ''): CmdRunner => async () => ({ code: 0, stdout, stderr: '' });
 const failRunner: CmdRunner = async () => ({ code: null, stdout: '', stderr: 'spawn ENOENT' });
 
+// linux 分支按真实平台执行——非 linux 宿主（macOS 真机/容器外）跳过
+// （probe 在 darwin 走 Seatbelt 路径，bwrap 断言无意义）
+const itLinux = process.platform === 'linux' ? it : it.skip;
+
 describe('reprobeSandbox（linux 分支——按真实平台执行）', () => {
-  it('bwrap --version 成功 → available + 版本解析', async () => {
+  itLinux('bwrap --version 成功 → available + 版本解析', async () => {
     const st = await reprobeSandbox(async (cmd, args) => {
       if (cmd === 'bwrap' && args[0] === '--version') return { code: 0, stdout: 'bubblewrap 0.10.0\n', stderr: '' };
       return { code: null, stdout: '', stderr: 'unexpected' };
@@ -20,7 +24,7 @@ describe('reprobeSandbox（linux 分支——按真实平台执行）', () => {
     expect(getSandboxState()).toEqual(st); // 单例缓存
   });
 
-  it('bwrap 缺失（ENOENT）→ unavailable + 原因', async () => {
+  itLinux('bwrap 缺失（ENOENT）→ unavailable + 原因', async () => {
     const st = await reprobeSandbox(failRunner);
     expect(st.available).toBe(false);
     expect(st.unavailableReason).toContain('bwrap');

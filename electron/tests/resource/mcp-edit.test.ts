@@ -161,7 +161,7 @@ describe('MCP 全字段编辑（getMcpEditView / updateMcpEntry 真实 DB 契约
     expect(row.cwd).toBeNull();
   });
 
-  it('updateMcpEntry：远程 url 非 https → reject（校验先于任何 DB 写）', async () => {
+  it('updateMcpEntry：远程 url 非 http(s) → reject（校验先于任何 DB 写；http 现行策略放行）', async () => {
     await seedEntry({
       name: 'fs-inet',
       command: 'node',
@@ -171,10 +171,10 @@ describe('MCP 全字段编辑（getMcpEditView / updateMcpEntry 真实 DB 契约
     await expect(
       getChannelHandler('resource:updateMcpEntry')({}, 'fs-inet', {
         transport: 'streamable_http',
-        url: 'http://mcp.example.com/mcp',
+        url: 'ftp://mcp.example.com/mcp',
         command: '',
       }),
-    ).rejects.toThrow('https');
+    ).rejects.toThrow('http');
     // 防线先于写入——整行与调用前完全一致（无半行污染）
     expect(getRawRow('fs-inet')).toEqual(rowBefore);
   });

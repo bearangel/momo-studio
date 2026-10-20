@@ -244,6 +244,7 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     AGENT_CONFIG: JSON.stringify(runtimeConfig),
+    MOMO_RUNTIME_CHILD: '1',
   };
 
   // fork runtime-entry.js

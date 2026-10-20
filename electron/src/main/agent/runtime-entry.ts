@@ -409,7 +409,10 @@ async function main(): Promise<void> {
   // parser emit 而永久丢弃，回合静默死亡（零 chunk / 零消息行 / 零错误）。
   // 必须置于 process.on('message', taskMessageListener) 之后：ready 即承诺
   // 「task-config 监听器已就位」。
-  process.send?.({ type: 'runtime-ready' });
+  // 哨兵门（internal-event.ts hasChildIpcChannel）：宿主/测试进程不发 ready
+  if (process.env.MOMO_RUNTIME_CHILD === '1') {
+    process.send?.({ type: 'runtime-ready' });
+  }
 }
 
 
@@ -1897,6 +1900,10 @@ function sendTaskEndAndExit(msg: Record<string, unknown>, exitCode: number): voi
   // 解构后裸调用（const send = process.send; send(...)）在严格模式下 this=undefined，
   // 抛 "Cannot read properties of undefined (reading 'connected')" 令错误路径整体崩溃
   // （2.0.0 主机验收 P0：LLM 请求失败 → 错误处理崩溃 → agent 永不回复）。
+  // 哨兵门：宿主/测试进程不发也不退出（MOMO_RUNTIME_CHILD 见 spawnForAgent）
+  if (process.env.MOMO_RUNTIME_CHILD !== '1') {
+    return;
+  }
   if (!process.send) {
     process.exit(exitCode);
     return;

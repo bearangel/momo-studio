@@ -18,6 +18,10 @@ import {
   CATALOG_CACHE_TTL_MS,
   CATALOG_FAILURE_BACKOFF_MS,
 } from '../../src/main/marketplace/client';
+
+// 本地内置 catalog 条目数动态派生（防目录增删后计数锁漂移——2026-10-20 全量首跑实证）
+const LOCAL_CATALOG_PATH = path.resolve(__dirname, '../../..', 'resources/marketplace/catalog.json');
+const LOCAL_ITEM_COUNT = (JSON.parse(fs.readFileSync(LOCAL_CATALOG_PATH, 'utf-8')) as { items: unknown[] }).items.length;
 import type { Catalog } from '../../src/main/marketplace/types';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-mp-client-test-${Date.now()}`);
@@ -92,7 +96,7 @@ describe('marketplace/client fetchCatalog', () => {
     fetchSpy.mockRejectedValue(new Error('network down'));
 
     const catalog = await fetchCatalog('https://example.test/catalog.json');
-    expect(catalog.items.length).toBe(26);
+    expect(catalog.items.length).toBe(LOCAL_ITEM_COUNT);
     expect(catalog.version).toBe('1.0');
   });
 });
@@ -422,7 +426,7 @@ describe('marketplace/client fetchCatalog 安全校验（S1）', () => {
     } as Response);
     const result = await fetchCatalog('https://example.test/catalog.json');
     expect(result.version).toBe('1.0');
-    expect(result.items).toHaveLength(26);
+    expect(result.items).toHaveLength(LOCAL_ITEM_COUNT);
   }
 
   it('item.slug 含 shell 元字符 → 远程 catalog 整体拒绝，回退本地', async () => {

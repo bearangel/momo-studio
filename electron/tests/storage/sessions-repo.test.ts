@@ -222,10 +222,10 @@ describe('sessions repo', () => {
     expect(JSON.parse(row.settings_json)).toEqual({ maxToolCalls: 5, conflictStrategy: 'queue' });
   });
 
-  it('resolveMaxToolCalls：session 覆盖 > global 覆盖 > 硬编码默认 10', () => {
+  it('resolveMaxToolCalls：session 覆盖 > global 覆盖 > 硬编码默认 50', () => {
     const s = insertSession({ workspaceId: 'ws1', title: 'a' });
-    // 无任何配置 → 硬编码默认 10
-    expect(resolveMaxToolCalls(s.id)).toBe(10);
+    // 无任何配置 → 硬编码默认 50（DEFAULT_MAX_TOOL_CALLS，已自 10 上调）
+    expect(resolveMaxToolCalls(s.id)).toBe(50);
     // global 覆盖默认
     updateGlobalSettings({ maxToolCalls: 7 });
     expect(getGlobalSettings().maxToolCalls).toBe(7);

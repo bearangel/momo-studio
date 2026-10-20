@@ -24,7 +24,7 @@ import type { ReactNode } from 'react';
 import { BoardCanvas, resolveDrop, buildDropIndex, buildDropTarget, type DropCtx } from './BoardCanvas';
 import { useBoardDrop, dropConfirmContent } from './useBoardDrop';
 import { Toast } from '../ui/Toast';
-import { splitLanes, type BoardLane } from '../../lib/board';
+import { splitLanes } from '../../lib/board';
 import type { GroupRow, TaskRow } from '../../ipc/types';
 import { useTaskStore } from '../../stores/task.store';
 
@@ -93,10 +93,6 @@ function backlogFixture(): TaskRow[] {
     mkTask({ id: 'T3', title: '丙', status: 'draft', groupId: 'G-2', pinnedAt: 1024 }),
     mkTask({ id: 'T4', title: '丁', status: 'pending', groupId: 'G-2', pinnedAt: 2048 }),
   ];
-}
-
-function idsOf(lane: BoardLane): Set<string> {
-  return new Set(lane.tasks.map((t) => t.id));
 }
 
 const GROUPS = [mkGroup({ id: 'G-1', name: '组一', position: 1 }), mkGroup({ id: 'G-2', name: '组二', position: 2 })];

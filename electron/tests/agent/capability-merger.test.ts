@@ -98,6 +98,6 @@ describe('agent/capability-merger', () => {
 
   it('全空时返回空数组', () => {
     const merged = mergeCapabilities(makeDef(), makeAllocation());
-    expect(merged).toEqual({ tools: [], mcps: [], skills: [] });
+    expect(merged).toEqual({ tools: [], mcps: [], skills: [], deniedTools: [] });
   });
 });

@@ -33,6 +33,8 @@ const AUDIT_SUMMARY_MAX = 500;
  * process.send 在非子进程环境下为 undefined，可选链调用确保 no-op。
  */
 export function logToolCall(audit: ToolCallAudit): void {
+  // 哨兵门（internal-event.ts hasChildIpcChannel 同源）：宿主/测试进程不发
+  if (process.env.MOMO_RUNTIME_CHILD !== '1') return;
   process.send?.({
     type: 'audit:toolCall',
     toolName: audit.toolName,

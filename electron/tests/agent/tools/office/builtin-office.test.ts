@@ -24,7 +24,8 @@ describe('office-assistant.yaml', () => {
     expect(meta.slug).toBe('office-assistant');
     expect(typeof meta.name).toBe('string');
     const spec = m.spec as Record<string, unknown>;
-    expect(spec.type).toBe('standalone');
+    // v2.0.0 更名重做（2026-10-09）去掉 spec.type 字段——runtime/declarative 才是现行契约
+    expect(spec.runtime).toBe('declarative');
   });
 
   it('defaultTools 引用的工具全部真实存在（防契约漂移）', () => {
@@ -98,12 +99,13 @@ describe('marketplace catalog', () => {
       .systemPrompt as string;
     expect(yamlPrompt).toContain('add_chart');
 
-    // catalog readme 含 add_chart 指引（readme 即 systemPrompt 载体）
+    // catalog readme（v2.0.0 更名重做 2026-10-09 起为概要载体，不再承载逐 op 教学）：
+    // 概要契约 = 纪律要点一句话 + 「实战纪律全保留」承诺（详载在 YAML/DEF 两腿）
     const catalog = JSON.parse(fs.readFileSync(CATALOG_PATH, 'utf-8')) as {
       items: Array<{ slug: string; readme: string }>;
     };
     const item = catalog.items.find((i) => i.slug === 'office-assistant');
-    expect(item!.readme).toContain('add_chart');
+    expect(item!.readme).toContain('实战纪律全保留');
 
     // WRITE_EXCEL_DEF description 含 add_chart（LLM 看到的工具描述）
     const writeDef = new OfficeTools().getDefs().find((d) => d.name === 'office_write_excel');
@@ -158,13 +160,12 @@ describe('marketplace catalog', () => {
     expect(yamlPrompt).toContain('第一');
     expect(yamlPrompt).toContain('office_read_cells');
 
-    // catalog readme 同步锁
+    // catalog readme 概要纪律锁（v2.0.0 概要化：VLOOKUP 纪律保留，逐 op 措辞见 YAML）
     const catalog = JSON.parse(fs.readFileSync(CATALOG_PATH, 'utf-8')) as {
       items: Array<{ slug: string; readme: string }>;
     };
     const item = catalog.items.find((i) => i.slug === 'office-assistant');
-    expect(item!.readme).toContain('第一');
-    expect(item!.readme).toContain('office_read_cells');
+    expect(item!.readme).toContain('VLOOKUP');
   });
 
   it('§14.8-6 三联动契约锁：set_format 提示词/搬运教学 三处一致 + 表头覆盖警示 + fill 表 repeat', () => {
@@ -187,7 +188,6 @@ describe('marketplace catalog', () => {
     };
     const item = catalog.items.find((i) => i.slug === 'office-assistant');
     expect(item!.readme).toContain('set_format');
-    expect(item!.readme).toContain('百分比');
 
     expect(writeDef!.description).toContain('set_format');
     // op enum 已扩（T2 已加，本用例兜底）
@@ -196,14 +196,13 @@ describe('marketplace catalog', () => {
     // 表头覆盖警示（spec §14.8-6 三句之一；YAML/catalog 不必逐句重复，DEF 是 LLM 看到的关键）
     expect(writeDef!.description).toContain('覆盖表头');
 
-    // 跨文件搬数据教学：read_cells 精读 + set_cells 分批 ≤50 行 + 公式列筛选预警（YAML/catalog/DEF 三处一致）
-    for (const source of [yamlPrompt, item!.readme, writeDef!.description]) {
-      // 三个教学要点都要落到三处（语义等价允许表述差异，但关键词必须出现）
+    // 跨文件搬数据教学：read_cells 精读 + set_cells 分批 ≤50 行 + 公式列筛选预警（YAML/DEF 一致；
+    // readme v2.0.0 概要化后不承载逐 op 教学，不在此腿）
+    for (const source of [yamlPrompt, writeDef!.description]) {
       expect(source).toContain('office_read_cells');
     }
-    // 分批 ≤50 行：YAML 系统提示里必含（教学最常落地处）；catalog readme 语义同步
+    // 分批 ≤50 行：YAML 系统提示里必含（教学最常落地处）
     expect(yamlPrompt).toContain('50 行');
-    expect(item!.readme).toContain('50 行');
     // 公式列筛选/预警：IF/COUNTIF/SUMIF 三选其一即可（spec 给「IF/COUNTIF」）
     expect(yamlPrompt).toMatch(/IF|COUNTIF|SUMIF/);
     expect(item!.readme).toMatch(/IF|COUNTIF|SUMIF/);
@@ -223,7 +222,7 @@ describe('marketplace catalog', () => {
       items: Array<{ slug: string; readme: string }>;
     };
     const item = catalog.items.find((i) => i.slug === 'office-assistant');
-    expect(item!.readme).toContain('office_fill_ppt_template');
+    expect(item!.readme).toContain('PPT');
 
     const pptCreate = new OfficeTools().getDefs().find((d) => d.name === 'office_create_ppt');
     expect(pptCreate!.description).toContain('office_fill_ppt_template');
@@ -240,11 +239,9 @@ describe('marketplace catalog', () => {
     expect(pptSlides).toHaveProperty('images');
     expect(pptSlides).toHaveProperty('chart');
 
-    // 模板工作流关键词（spec §14.9-3 模板填充工具 + YAML 教学指引）
+    // 模板工作流关键词（spec §14.9-3 模板填充工具 + YAML 教学指引；readme 概要化后由 PPT 域枚举腿覆盖）
     expect(yamlPrompt).toContain('模板');
     expect(yamlPrompt).toContain('填充');
-    expect(item!.readme).toContain('模板');
-    expect(item!.readme).toContain('填充');
 
     // OFFICE_FILL_PPT_DEF 模板不动 / 产出新文件 / 版式主题品牌全保留（T2 已写，本用例兜底防回归）
     const fillDef = new OfficeTools().getDefs().find((d) => d.name === 'office_fill_ppt_template');

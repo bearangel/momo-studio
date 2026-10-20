@@ -88,7 +88,7 @@ function sendBrowserOp<K extends BrowserOp>(
   timeoutMs: number,
 ): Promise<BrowserOpPayloads[K]> {
   return new Promise<BrowserOpPayloads[K]>((resolve, reject) => {
-    if (typeof process.send !== 'function') {
+    if (process.env.MOMO_RUNTIME_CHILD !== '1' || typeof process.send !== 'function') {
       reject(new Error(NO_SEND_MESSAGE));
       return;
     }

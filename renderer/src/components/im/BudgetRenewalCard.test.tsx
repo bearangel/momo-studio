@@ -10,8 +10,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { BudgetRenewalCard, BUDGET_RENEWAL_MESSAGE } from './BudgetRenewalCard';
-import { useSessionStore } from '../../stores/session.store';
-import { ipc } from '../../ipc/client';
 
 const sendMock = vi.hoisted(() => vi.fn());
 const updateSessionMock = vi.hoisted(() => vi.fn());

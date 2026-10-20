@@ -39,7 +39,7 @@ export function App() {
   // 新装引导（spec 2026-10-10 §3.1）：pending → 向导；completed/skipped → 原空态。
   // 拉取失败按 pending（引导是容错增强，不阻塞启动）；obCheck 在向导收尾后自增重拉
   // ——跳过路径 workspaces 仍为空，须靠 status=skipped 防向导重现。
-  const [obStatus, setObStatus] = useState<'pending' | 'completed' | 'skipped'>('pending');
+  const [, setObStatus] = useState<'pending' | 'completed' | 'skipped'>('pending');
   const [obCheck, setObCheck] = useState(0);
   // C1 闩锁（终审）：向导一经挂载，进行期 store.create 使 workspaces 变非空也
   // 不得卸载——判定收敛为 wizardOpen 单点，仅在本 effect（boot / 收尾重拉）与

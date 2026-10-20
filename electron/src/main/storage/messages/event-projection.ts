@@ -125,8 +125,16 @@ export function truncateToolResultsForWire(events: MessageEventRow[]): MessageEv
   let out: MessageEventRow[] | null = null; // null = 未发生任何截断（零拷贝快路径）
   for (let i = 0; i < events.length; i++) {
     const ev = events[i]!;
-    if (ev.eventType !== 'tool_call_result' || typeof ev.payload.result !== 'string') continue;
-    if (ev.payload.result.length <= TOOL_RESULT_WIRE_BUDGET) continue;
+    const oversized =
+      ev.eventType === 'tool_call_result' &&
+      typeof ev.payload.result === 'string' &&
+      ev.payload.result.length > TOOL_RESULT_WIRE_BUDGET;
+    // 截断一旦开始（out !== null），未截断事件也必须原样入列——否则被静默丢弃
+    // （2026-10-20 全量首跑实证：截断点之后的短结果/无 result 事件整条蒸发）
+    if (!oversized) {
+      if (out !== null) out.push(ev);
+      continue;
+    }
     if (out === null) out = events.slice(0, i);
     out.push({
       ...ev,

@@ -50,13 +50,16 @@ export async function runWithWriteGrant<T>(
       if (rawPath === null) throw err; // 非越界错误不进门控
     }
     const dirs = normalizeGrantDirs([rawPath], os.homedir());
-    process.send?.({
-      type: 'write-blocked-report',
-      streamSessionId: ctx.streamSessionId,
-      workspaceId: ctx.workspaceId,
-      dirs,
-      command: `${toolName} ${pathArg}`.slice(0, 200),
-    });
+    // 哨兵门（internal-event.ts hasChildIpcChannel 同源）：宿主/测试进程不发
+    if (process.env.MOMO_RUNTIME_CHILD === '1') {
+      process.send?.({
+        type: 'write-blocked-report',
+        streamSessionId: ctx.streamSessionId,
+        workspaceId: ctx.workspaceId,
+        dirs,
+        command: `${toolName} ${pathArg}`.slice(0, 200),
+      });
+    }
     const wait = await doWait({
       dirs,
       signal: ctx.abortSignal,

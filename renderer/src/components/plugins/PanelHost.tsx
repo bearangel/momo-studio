@@ -7,7 +7,7 @@
 //   - 三态：loading → live；加载失败 → 红字占位 + 重试；通道断开 → 重新连接
 //   - 主题快照：ready 回包携 token 换算值；documentElement class 变化 → force 推 theme
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, PlugZap, RefreshCw } from 'lucide-react';
+import { AlertTriangle, PlugZap } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { PanelChannel, type PanelThemeSnapshot } from '../../lib/plugin/panel-channel';
 import { useWorkspaceStore } from '../../stores/workspace.store';

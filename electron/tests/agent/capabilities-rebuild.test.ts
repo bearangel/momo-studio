@@ -89,6 +89,8 @@ const EMPTY_DELTAS = {
   removedMcps: [],
   addedSkills: [],
   removedSkills: [],
+  addedPluginTools: [],
+  removedPluginTools: [],
 };
 
 function makeDef(): AgentDefinition {
@@ -161,6 +163,8 @@ describe('setMemberDeltas 全链路（handler → 落表 → merger 读回 → �
       removedMcps: [],
       addedSkills: ['code-review'],
       removedSkills: [],
+      addedPluginTools: [],
+      removedPluginTools: [],
     };
     const handler = ipcHandlers.get('agent:setMemberDeltas') as (
       ...args: unknown[]

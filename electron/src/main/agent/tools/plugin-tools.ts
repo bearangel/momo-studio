@@ -46,6 +46,7 @@ export function loadPluginToolModules(
     for (const modulePath of ref.modulePaths) {
       try {
         // 无需 require 缓存失效：WarmPool 一 task 一进程（release=kill）
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
         const mod = require(modulePath) as {
           createTools?: (ctx: PluginToolCtx) => unknown;
         };

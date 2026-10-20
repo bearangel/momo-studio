@@ -58,6 +58,12 @@ const { p2pShareMocks } = vi.hoisted(() => ({
 }));
 vi.mock('../../src/main/p2p/resource-share', () => p2pShareMocks);
 
+// mock 插件资源行（plugins 表/开发目录扫描——不 mock 会读到仓库 plugins/codegraph
+// 的 agent+skill 两行，测试随仓库插件状态漂移；本文件只测四源纯合并逻辑）
+vi.mock('../../src/main/plugin/resources', () => ({
+  listPluginResourceRows: vi.fn(() => []),
+}));
+
 // mock skill zip-uploader（v2.11：library 直接消费其 listInstalled 的 builtin 分支——
 // 本地预置 skill 并入 builtin 源；fixture 含与 marketplace 同 slug 的条目锁去重语义）
 const { skillZipMocks } = vi.hoisted(() => ({

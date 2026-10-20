@@ -183,14 +183,16 @@ export class ShellTools implements ToolModule {
     // queryNet 每轮现解析 override（等待回调里可能翻转替身——模拟授权落地）
     let last = await this.bashOnce(command, timeoutMs, ctx);
     for (let round = 0; last.blocked && round < WRITE_WAIT_MAX_ROUNDS; round += 1) {
-      // fire-and-forget 上报（proc-group:register 同形态；非 fork 环境 no-op）
-      process.send?.({
-        type: 'write-blocked-report',
-        streamSessionId: ctx.streamSessionId,
-        workspaceId: ctx.workspaceId,
-        dirs: last.dirs,
-        command,
-      });
+      // fire-and-forget 上报（proc-group:register 同形态；哨兵门外 no-op——见 internal-event.ts）
+      if (process.env.MOMO_RUNTIME_CHILD === '1') {
+        process.send?.({
+          type: 'write-blocked-report',
+          streamSessionId: ctx.streamSessionId,
+          workspaceId: ctx.workspaceId,
+          dirs: last.dirs,
+          command,
+        });
+      }
       const queryNet = netQueryOverride ?? requestEffectiveNetwork;
       const doWait = writeWaitOverride ?? waitForWriteGrant;
       const wait = await doWait({

@@ -292,6 +292,8 @@ describe('task_reply 回传全链路（PM dispatch → SUB 执行 → 回执 →
     });
 
     // process.send：内部事件经真实 bridge 路由；callback 形式兼容 sendTaskEndAndExit
+    // 哨兵置位（sendInternalEvent 仅在 MOMO_RUNTIME_CHILD=1 时发送——见 internal-event.ts）
+    process.env.MOMO_RUNTIME_CHILD = '1';
     process.send = ((
       msg: unknown,
       callback?: (err: Error | null) => void,
@@ -316,6 +318,7 @@ describe('task_reply 回传全链路（PM dispatch → SUB 执行 → 回执 →
 
   afterEach(() => {
     process.send = originalSend;
+    delete process.env.MOMO_RUNTIME_CHILD;
     __resetMemoryProviderForTest();
     exitSpy.mockRestore();
     setBridgeRouter(null);

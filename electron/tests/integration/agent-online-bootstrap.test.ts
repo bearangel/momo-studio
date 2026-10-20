@@ -20,6 +20,10 @@ import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import type { AgentRunner } from '../../src/main/agent/agent-runner';
 
+// forks 冷 worker 的模块 transform + 62 条迁移成本可超 vitest 默认 5s testTimeout
+// （全量负载下尤甚），本文件统一放宽
+vi.setConfig({ testTimeout: 15_000 });
+
 // ─── Mock 重依赖 ───────────────────────────────────────────────────────────
 // 拦截 keychain / 网络 / fork 子进程调用，使测试可纯逻辑验证过滤行为。
 

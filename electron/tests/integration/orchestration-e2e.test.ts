@@ -263,6 +263,9 @@ beforeEach(() => {
   );
 
   // ── process.send：内部事件记录 + 转交真实桥（同 task-reply-return-chain 模式） ──
+  // 哨兵置位：sendInternalEvent 仅在 MOMO_RUNTIME_CHILD=1 时发送（生产=spawner env；
+  // 本测试经 stub 通道消费，迟到异步事件在哨兵恢复后自然哑火，不再污染池通道）
+  process.env.MOMO_RUNTIME_CHILD = '1';
   process.send = ((msg: unknown): boolean => {
     const m = msg as InternalEventMsg;
     if (m?.type === INTERNAL_EVENT_MSG) {
@@ -276,6 +279,7 @@ beforeEach(() => {
 
 afterEach(() => {
   process.send = originalSend;
+  delete process.env.MOMO_RUNTIME_CHILD;
   setBridgeRouter(null);
   // 兜底清理 pending dispatch（测试失败中途退出时防渐进超时计时器悬挂）：
   // 对本测试发出的全部 dispatch task_id 幂等注入 failed reply（已 settle 的

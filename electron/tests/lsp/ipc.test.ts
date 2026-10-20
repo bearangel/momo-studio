@@ -84,8 +84,8 @@ describe('routeLspOp', () => {
     expect(vi.mocked(manager.ensureLspManager).mock.calls[0]![0]).toBe('ws-x');
     expect(vi.mocked(manager.ensureLspManager).mock.calls[0]![1]).toBe('/tmp/ws-x');
     expect(vi.mocked(manager.ensureLspManager).mock.calls[0]![2].languageId).toBe('typescript');
-    // 传给 manager 的 absPath 已按 workspace 目录 resolve
-    const mgr = vi.mocked(manager.ensureLspManager).mock.results[0]!.value as unknown as {
+    // 传给 manager 的 absPath 已按 workspace 目录 resolve（vitest 3：mock.results[].value 是 Promise 本体，须 await）
+    const mgr = (await vi.mocked(manager.ensureLspManager).mock.results[0]!.value) as unknown as {
       getDiagnostics: ReturnType<typeof vi.fn>;
     };
     expect(mgr.getDiagnostics).toHaveBeenCalledWith('/tmp/ws-x/src/a.ts', 'const x: number = "s";');
@@ -108,7 +108,7 @@ describe('routeLspOp', () => {
     expect(reply.ok).toBe(true);
     // 0-based (3,7) → 展示 1-based 4:8；URI → 相对 workspace 路径
     expect(String(reply.result)).toContain('src/a.ts:4:8');
-    const mgr = vi.mocked(manager.ensureLspManager).mock.results[0]!.value as unknown as {
+    const mgr = (await vi.mocked(manager.ensureLspManager).mock.results[0]!.value) as unknown as {
       findReferences: ReturnType<typeof vi.fn>;
     };
     expect(mgr.findReferences).toHaveBeenCalledWith('/tmp/ws-x/src/a.ts', 3, 8);

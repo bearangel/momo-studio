@@ -8,7 +8,7 @@
 //     x-from=header 与缺省（实证样本均无 x-from 元数据，spec D5 缺省进 header）
 //     进 headers；streamable_http 注册（command 空串占位）+ installed_packages 记账
 //     （item_id = `smithery:${slug}`）
-//   - S1 错误路径（momo-test-rules 铁律 3）：deploymentUrl 非 https → 拒绝且双表不落库
+//   - S1 错误路径（momo-test-rules 铁律 3）：deploymentUrl 非 http(s) → 拒绝且双表不落库
 //   - 重复安装幂等 / hub 卸载（mcp 行 + 记账同删）/ listHubInstalledResources 映射
 //     （remote 行描述 = 远程 MCP（域名））/ library 接入（needHub 合并契约）
 //
@@ -219,10 +219,10 @@ describe('installSmitheryRemote x-from 分流', () => {
     expect(cfg!.headers).toEqual({});
   });
 
-  it('deploymentUrl 非 https → 拒绝且双表均不落库', async () => {
+  it('deploymentUrl 非 http(s) → 拒绝且双表均不落库（http 供自建放行——isAllowedRemoteUrl 现行策略）', async () => {
     await expect(
-      installSmitheryRemote('insecure', 'http://insecure.run.tools', {}),
-    ).rejects.toThrow(/https/);
+      installSmitheryRemote('insecure', 'ftp://insecure.run.tools', {}),
+    ).rejects.toThrow(/http/);
 
     expect(getMcpConfig('insecure')).toBeNull();
     const count = getDb()

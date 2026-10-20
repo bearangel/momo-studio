@@ -25,7 +25,18 @@ export interface InternalEventMsg {
   content: Record<string, unknown>;
 }
 
+/**
+ * child→main IPC 通道发送权判定：仅 runtime-spawner fork 的真实子进程持有
+ * （spawnForAgent 注入 MOMO_RUNTIME_CHILD=1 哨兵）。宿主进程的 process.send
+ * 属他者协议（如 vitest forks worker 的 tinypool IPC），一律禁发——
+ * 2026-10-20 forks 池污染实证（"Unexpected call to process.send()"）。
+ */
+export function hasChildIpcChannel(): boolean {
+  return process.env.MOMO_RUNTIME_CHILD === '1' && typeof process.send === 'function';
+}
+
 export function sendInternalEvent(evt: Omit<InternalEventMsg, 'type'>): void {
+  if (!hasChildIpcChannel()) return;
   process.send?.({ type: INTERNAL_EVENT_MSG, ...evt });
 }
 

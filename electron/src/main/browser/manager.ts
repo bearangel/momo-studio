@@ -988,7 +988,7 @@ export class BrowserManager {
     // Electron 33+：详情在 Event 对象上（ConsoleMessageEvent），level 已是字符串
     wc.on('console-message', (...args: unknown[]) => {
       const ev = args[0] as ConsoleMessageEvent | undefined;
-      const level = typeof ev?.level === 'string' && ev.level !== '' ? ev.level : 'log';
+      const level = typeof ev?.level === 'string' ? ev.level : 'log';
       const message = typeof ev?.message === 'string' ? ev.message : '';
       const buf = ws.consoleBuffer.get(record.serial);
       if (!buf) return;

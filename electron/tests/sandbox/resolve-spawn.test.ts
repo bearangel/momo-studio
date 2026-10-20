@@ -9,7 +9,7 @@
 // SandboxSettings 形如 { mode, networkPolicy }。本测试仅关注网络态与追加写授权
 // 目录（extraDirs）两条接线。
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { resolveShellSpawn, sandboxInstallHint } from '../../src/main/sandbox';
 import { __setSandboxStateForTest } from '../../src/main/sandbox/probe';
 import { __setSandboxSettingsForTest } from '../../src/main/sandbox/settings';
@@ -28,10 +28,22 @@ const winState = { platform: 'win32' as NodeJS.Platform, sandboxTool: null, tool
 
 beforeEach(() => { __setSandboxSettingsForTest(null); __setSandboxStateForTest(null); });
 
+// process.platform mock（resolveShellSpawn 直读真实平台）：linux 分支用例在任意宿主可跑
+// ——此前依赖「linux 容器天然命中」（darwin 真机上 wrapped 断言必红，2026-10-20 实证）
+const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+function setPlatform(v: NodeJS.Platform): void {
+  Object.defineProperty(process, 'platform', { value: v });
+}
+function restorePlatform(): void {
+  Object.defineProperty(process, 'platform', realPlatform);
+}
+
 // 注：win32 分支测试需 mock process.platform——用 Object.defineProperty；
 // linux 容器天然走 linux 分支。darwin 分支无法在本平台触发 → 用 mock platform 测。
 
 describe('resolveShellSpawn 网络双态推导（修订 B）', () => {
+  beforeEach(() => { setPlatform('linux'); });
+  afterEach(restorePlatform);
   it('policy=allow → net-on（bwrap args 无 --unshare-net）', () => {
     __setSandboxStateForTest(linuxAvail);
     __setSandboxSettingsForTest(settings('strict', 'allow'));
@@ -72,6 +84,8 @@ describe('resolveShellSpawn 网络双态推导（修订 B）', () => {
 });
 
 describe('resolveShellSpawn 平台分支（既有基线）', () => {
+  beforeEach(() => { setPlatform('linux'); });
+  afterEach(restorePlatform);
   it('linux + bwrap 可用 → wrapped：bwrap 前缀 + bash -c 收尾 + 缓存 env 注入', () => {
     __setSandboxStateForTest(linuxAvail);
     __setSandboxSettingsForTest(settings('strict', 'deny'));

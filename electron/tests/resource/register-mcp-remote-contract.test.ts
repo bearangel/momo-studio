@@ -78,15 +78,15 @@ describe('resource:registerMcp 二态透传全链（真实 DB 契约）', () => 
     expect(cfg!.url).toBeUndefined();
   });
 
-  it('remote 输入 url 非 https → 抛错且不落库（安全边界经 IPC 面同样生效）', async () => {
+  it('remote 输入 url 非 http(s) → 抛错且不落库（http 现行策略放行；IPC 面安全边界）', async () => {
     await expect(
       getRegisterMcpHandler()({}, {
         name: 'bad-remote',
         command: '',
         transport: 'streamable_http',
-        url: 'http://x.test/sse',
+        url: 'ftp://x.test/sse',
       }),
-    ).rejects.toThrow(/https/);
+    ).rejects.toThrow(/http/);
     expect(getMcpConfig('bad-remote')).toBeNull();
   });
 });

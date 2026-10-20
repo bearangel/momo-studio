@@ -34,8 +34,8 @@ describe('WarmPool', () => {
     // 验证返回的是同一子进程
     expect(rt.child.pid).toBe(12345);
     expect(spawn).toHaveBeenCalledWith('agent-1');
-    // acquire 后从池中取走，池应为空
-    expect(pool.size('agent-1')).toBe(0);
+    // acquire 后异步 replenish 把池补回 poolSize（C4 回填语义——池不再停留在空态）
+    await vi.waitFor(() => expect(pool.size('agent-1')).toBe(2));
   });
 
   it('初始化时预 spawn poolSize 个 warm runtime', async () => {
