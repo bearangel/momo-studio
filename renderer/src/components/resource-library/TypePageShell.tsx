@@ -393,6 +393,7 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
               onEdit={onEditAgent}
               onConfigure={onOpenPreset}
               onDisable={onDisableAgent}
+              onTogglePlugin={onTogglePlugin}
             />
               ))}
             </div>
