@@ -236,6 +236,8 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
             {/* 组⑤：禁用态徽章（mcp DB 行派生项 / plugin workspace 级启停） */}
             {item.mcp && !item.mcp.enabled && <Badge tone="warning">已禁用</Badge>}
             {item.plugin && !item.plugin.enabled && <Badge tone="warning">已禁用</Badge>}
+            {/* plugin 源 mcp/skill/agent 行：来源插件停用（矩阵 C7 管理面徽标） */}
+            {item.pluginDisabled && <Badge tone="warning">插件已停用</Badge>}
             {/* dev 源插件目录缺失降级态（读路径自愈：目录恢复即消） */}
             {item.plugin?.state === 'missing' && <Badge tone="warning">目录缺失</Badge>}
           </div>

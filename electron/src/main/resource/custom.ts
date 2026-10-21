@@ -10,6 +10,7 @@
 
 import { listRegistered } from '../mcp/host-manager';
 import { listAllPluginSkills } from '../plugin/assembly';
+import { isPluginEnabled } from '../plugin/registry';
 import { listInstalled as listInstalledSkills } from '../skill/zip-uploader';
 import { listAgentDefinitions } from '../agent/crud';
 import { buildResourceId, type ResourceItem } from './types';
@@ -36,7 +37,7 @@ function hashPrompt(prompt: string): string {
  *
  * @returns ResourceItem[]，每项 source='custom'
  */
-export function listCustomResources(): ResourceItem[] {
+export function listCustomResources(workspaceId?: string): ResourceItem[] {
   const result: ResourceItem[] = [];
 
   // 1. MCP：自定义注册的 MCP server（source='custom'，非 marketplace 安装）
@@ -54,6 +55,7 @@ export function listCustomResources(): ResourceItem[] {
       installed: true,
       installable: false,
       removable: false,
+      pluginDisabled: workspaceId && mcp.pluginId ? !isPluginEnabled(mcp.pluginId, workspaceId) : undefined,
     });
   }
   for (const mcp of listRegistered().filter((m) => m.source === 'custom')) {
@@ -92,6 +94,7 @@ export function listCustomResources(): ResourceItem[] {
       installed: true,
       installable: false,
       removable: false,
+      pluginDisabled: workspaceId && skill.pluginId ? !isPluginEnabled(skill.pluginId, workspaceId) : undefined,
       custom: {
         installedAt: new Date().toISOString(),
       },
@@ -130,6 +133,10 @@ export function listCustomResources(): ResourceItem[] {
       installed: true,
       installable: false,
       removable: false,
+      // plugin agent id 形如 plugin:<pluginId>:<slug>——前缀解 pluginId 判启停
+      pluginDisabled: workspaceId && def.id.startsWith('plugin:')
+        ? !isPluginEnabled(def.id.split(':')[1] ?? '', workspaceId)
+        : undefined,
       custom: {
         installedAt: def.createdAt ?? new Date().toISOString(),
         agentSystemPromptHash: hashPrompt(def.systemPrompt),

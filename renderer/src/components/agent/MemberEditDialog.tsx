@@ -251,6 +251,7 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
             <section className="flex flex-col gap-2 border-t border-subtle pt-3">
               <CapabilityTabs
                 mode="override"
+                workspaceId={member.workspaceId}
                 defaultValue={defaultCaps}
                 value={value}
                 onChange={(next) => setValue(next)}

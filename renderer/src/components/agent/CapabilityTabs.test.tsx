@@ -509,3 +509,39 @@ describe('CapabilityTabs — Skill Tab 动态列表', () => {
     });
   });
 });
+
+describe('CapabilityTabs — 插件停用行过滤（spec 2026-10-21 矩阵 C6/C8）', () => {
+  it('pluginDisabled 行不出现在候选（MCP/Skill）；resource.list 传 workspaceId', async () => {
+    mockResourceList.mockImplementation((filter: { type: string }) => {
+      if (filter.type === 'mcp') {
+        return Promise.resolve([
+          { id: 'custom-mcp-a', type: 'mcp', source: 'custom', slug: 'a', name: '甲', description: '', installed: true, installable: false, removable: true },
+          { id: 'plugin-mcp-cg', type: 'mcp', source: 'plugin', slug: 'cgx', name: 'cgx', description: '', installed: true, installable: false, removable: false, pluginDisabled: true },
+        ]);
+      }
+      if (filter.type === 'skill') {
+        return Promise.resolve([
+          { id: 'plugin-skill-cg', type: 'skill', source: 'plugin', slug: 'cg-usage', name: 'cg-usage', description: '', installed: true, installable: false, removable: false, pluginDisabled: true },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+    const onChange = vi.fn();
+    const Comp = await importFreshComponent();
+    render(
+      <Comp mode="edit" workspaceId="ws1"
+        value={{ tools: [], mcps: [], skills: [] }} onChange={onChange} />,
+    );
+    // 切 MCP Tab 断言
+    fireEvent.click(await screen.findByRole('button', { name: 'MCP' }));
+    await waitFor(() => expect(screen.queryByText('cgx')).toBeNull());
+    expect(screen.getByText('甲')).toBeTruthy();
+    // 切 Skill Tab 断言
+    fireEvent.click(screen.getByRole('button', { name: 'Skill' }));
+    await waitFor(() => expect(screen.queryByText('cg-usage')).toBeNull());
+    // resource.list 收到 workspaceId
+    expect(mockResourceList).toHaveBeenCalledWith(expect.objectContaining({ type: 'mcp', workspaceId: 'ws1' }));
+    expect(mockResourceList).toHaveBeenCalledWith(expect.objectContaining({ type: 'skill', workspaceId: 'ws1' }));
+    void onChange;
+  });
+});

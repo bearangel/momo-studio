@@ -89,15 +89,19 @@ export function AgentCreateWizard({ onClose, onSuccess, initialDef, source = 'li
   useEffect(() => {
     if (step !== 2) return;
     let cancelled = false;
-    Promise.all([ipc.resource.list({ type: 'mcp' }), ipc.resource.list({ type: 'skill' })])
+    // plugin 源行按 ws 启停标注后过滤（矩阵 C8：候选=可用池）
+    Promise.all([
+      ipc.resource.list({ type: 'mcp', workspaceId: workspace?.id }),
+      ipc.resource.list({ type: 'skill', workspaceId: workspace?.id }),
+    ])
       .then(([m, s]) => {
         if (cancelled) return;
-        setMcps(m.filter((i) => i.installed));
-        setSkills(s.filter((i) => i.installed));
+        setMcps(m.filter((i) => i.installed && !i.pluginDisabled));
+        setSkills(s.filter((i) => i.installed && !i.pluginDisabled));
       })
       .catch(() => { /* 多选区为空 */ });
     return () => { cancelled = true; };
-  }, [step]);
+  }, [step, workspace?.id]);
 
   const validateStep = (): string | null => {
     if (step === 0 && !name.trim()) return '名称不能为空';

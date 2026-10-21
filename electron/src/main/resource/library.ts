@@ -50,7 +50,7 @@ export async function listResources(filter?: ResourceFilter): Promise<ResourceIt
   if (needCustom) {
     tasks.push(
       Promise.resolve().then(() => {
-        customItems = listCustomResources();
+        customItems = listCustomResources(filter?.workspaceId);
       }),
     );
   }

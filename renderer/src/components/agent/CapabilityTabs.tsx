@@ -28,6 +28,8 @@ import type { ResourceItem } from '../../ipc/types';
 type Tab = 'tools' | 'mcp' | 'skill';
 
 export interface CapabilityTabsProps {
+  /** 工作空间上下文（成员编辑/向导传；定义级不传→plugin 源行不判停用） */
+  workspaceId?: string;
   mode: 'edit' | 'override' | 'readonly';
   /**
    * def + workspace 默认集合（override 模式下用于 UI 提示用户默认是什么；
@@ -47,7 +49,7 @@ const TAB_LABELS: Record<Tab, string> = {
   skill: 'Skill',
 };
 
-export function CapabilityTabs({ mode, defaultValue, value, onChange }: CapabilityTabsProps) {
+export function CapabilityTabs({ mode, defaultValue, value, onChange, workspaceId }: CapabilityTabsProps) {
   const [tab, setTab] = useState<Tab>('tools');
   const { data: catalog, error: catalogError } = useToolCatalog();
   // v1.7：mcps / skills 拉取自统一 ipc.resource.list；filter installed 只展示已安装项。
@@ -56,13 +58,14 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange }: Capabili
 
   // 拉取动态列表：已注册 MCP + 已安装 Skill（仅展示用，不影响 value）
   useEffect(() => {
+    // plugin 源行按 ws 启停标注后过滤（矩阵 C6/C8：候选=可用池，停用插件能力不列）
     void ipc.resource
-      .list({ type: 'mcp' })
-      .then((items) => setMcps(items.filter((i) => i.installed)));
+      .list({ type: 'mcp', workspaceId })
+      .then((items) => setMcps(items.filter((i) => i.installed && !i.pluginDisabled)));
     void ipc.resource
-      .list({ type: 'skill' })
-      .then((items) => setSkills(items.filter((i) => i.installed)));
-  }, []);
+      .list({ type: 'skill', workspaceId })
+      .then((items) => setSkills(items.filter((i) => i.installed && !i.pluginDisabled)));
+  }, [workspaceId]);
 
   const readonly = mode === 'readonly';
 

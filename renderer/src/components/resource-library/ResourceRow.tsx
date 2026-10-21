@@ -97,6 +97,10 @@ export function ResourceRow({
       <span className="text-xs text-tertiary truncate flex-1 min-w-0">{item.description}</span>
 
       <span className="flex gap-1 items-center shrink-0">
+        {/* plugin 源行（mcp/skill/agent）：来源插件在当前 ws 停用——管理面保留行+徽标（矩阵 C7） */}
+        {item.pluginDisabled && (
+          <span className="text-xs px-2 py-0.5 rounded-full bg-surface-3 text-tertiary">插件已停用</span>
+        )}
         {/* 插件启停面（spec 2026-10-21 §9①）：恒显徽标（当前 ws 视角）+ 行内开关 */}
         {item.type === 'plugin' && item.plugin && (
           <>

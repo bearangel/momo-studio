@@ -273,15 +273,19 @@ export function MentionInput() {
   // typeFilter 是资源库页面的 tab 全局态，此处需要固定 { type: 'skill' } 视图）
   useEffect(() => {
     void ipc.session.listCommands().then(setCommands).catch(() => {});
+    // 技能组按活动 ws 拉取并滤停用插件行（矩阵 C4：/ 引用入口=全熄语义——
+    // 停用插件的 skill 不进菜单；无 ws 语境退化为不标注不过滤）
     void ipc.resource
-      .list({ type: 'skill' })
+      .list({ type: 'skill', workspaceId: workspace?.id })
       .then((items) =>
         setSkillItems(
-          items.filter((i) => i.installed).map((i) => ({ slug: i.slug, name: i.name })),
+          items
+            .filter((i) => i.installed && !i.pluginDisabled)
+            .map((i) => ({ slug: i.slug, name: i.name })),
         ),
       )
       .catch(() => {});
-  }, []);
+  }, [workspace?.id]);
 
   // 在线成员判定与 MembersPanel 同源：lastRunning = 用户最近运行意图
   const filteredMembers =

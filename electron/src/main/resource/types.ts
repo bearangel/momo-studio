@@ -80,6 +80,10 @@ export interface ResourceItem {
     tags: string[];
     category: string;
   };
+  /** plugin 源行：其插件在目标 workspace 停用（展示层徽标 / 选择器过滤，
+   *  spec 2026-10-21 消费面矩阵 C1-C3——生效层过滤在 spawn，本字段只管可见性） */
+  pluginDisabled?: boolean;
+
   /** custom 项的扩展元数据（安装时间 / mcp 配置 / skill frontmatter / prompt hash） */
   custom?: {
     installedAt: string;

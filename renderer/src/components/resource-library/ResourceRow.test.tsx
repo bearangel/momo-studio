@@ -87,3 +87,19 @@ describe('ResourceRow 插件面（spec 2026-10-21 §9①：恒显徽标 + 行内
     expect(sw.disabled).toBe(true);
   });
 });
+
+describe('ResourceRow 插件停用源徽标（矩阵 C7：管理面保留行+徽标）', () => {
+  it('pluginDisabled 的 mcp 行显示「插件已停用」徽标', () => {
+    render(
+      <ResourceRow
+        item={mkItem({
+          id: 'plugin-mcp-cgx', type: 'mcp', source: 'plugin', slug: 'cgx',
+          name: 'cgx', pluginDisabled: true,
+        })}
+        selected={false}
+        onSelect={noop}
+      />,
+    );
+    expect(screen.getByText('插件已停用')).toBeTruthy();
+  });
+});

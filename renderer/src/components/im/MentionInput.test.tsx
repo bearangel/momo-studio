@@ -1727,3 +1727,22 @@ describe('MentionInput 命令执行中（pending 反馈 + 禁发）', () => {
     await waitFor(() => expect(sessionState.sendMessage).toHaveBeenCalled());
   });
 });
+
+describe('MentionInput / 菜单技能组 — 停用插件行过滤（矩阵 C4）', () => {
+  it('pluginDisabled skill 不进 / 菜单；list 调用带 workspaceId', async () => {
+    mockApi.resource.list.mockClear();
+    mockApi.resource.list.mockResolvedValue([
+      makeSkillResource({ slug: 'code-review-workflow', name: '代码审查工作流' }),
+      makeSkillResource({ slug: 'cg-usage', name: 'cg-usage', source: 'plugin', pluginDisabled: true } as Partial<ResourceItem> & { slug: string }),
+    ]);
+    render(<MentionInput />);
+    typeInEditor(editor(), '/');
+    // 可用技能在（异步拉取——waitFor）；停用插件的 skill 不进菜单
+    await waitFor(() => expect(screen.getByText('代码审查工作流')).toBeTruthy());
+    expect(screen.queryByText('cg-usage')).toBeNull();
+    // ws 上下文透传（ws-1 = mock store 默认）
+    expect(mockApi.resource.list).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'skill', workspaceId: 'ws-1' }),
+    );
+  });
+});
