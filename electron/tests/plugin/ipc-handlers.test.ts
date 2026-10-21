@@ -29,6 +29,12 @@ vi.mock('../../src/main/plugin/registry', () => ({
 
 const reloadFns = vi.hoisted(() => ({ reloadPlugin: vi.fn(), rebuildWorkspaceRuntimes: vi.fn(async () => undefined) }));
 vi.mock('../../src/main/plugin/reload', () => reloadFns);
+// 真库隔离（momo-test-rules：forks 池文件串行共享 getDb 单例——本文件无 env 隔离，
+// setEnabled 的 invalidateMcpByName 真实现会打开 ~/.momo-studio 真库并污染缓存单例，
+// 导致后续 env 隔离文件写入真库。mock 收窄到 IPC 边界）
+vi.mock('../../src/main/mcp/host-manager', () => ({
+  invalidateMcpByName: vi.fn(),
+}));
 
 import { ipcMain } from 'electron';
 import { registerPluginHandlers } from '../../src/main/plugin/ipc.handlers';
