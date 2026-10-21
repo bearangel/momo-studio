@@ -9,7 +9,8 @@
   "components": {
     "mcp": "./mcp/mcp.json",
     "panel": "./panel",
-    "service": "./service"
+    "service": "./service",
+    "skills": "./skills"
   },
   "vendor": {
     "archives": [

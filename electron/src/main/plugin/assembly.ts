@@ -89,6 +89,26 @@ export function buildPluginToolRefs(workspaceId: string): PluginToolRef[] {
   });
 }
 
+/** 全部 active 插件贡献的 skills（资源面列举用——无工作空间维度，全量） */
+export function listAllPluginSkills(): Array<{ slug: string; cachePath: string; pluginId: string }> {
+  return listPlugins()
+    .filter((rec) => rec.state === 'active')
+    .flatMap((rec) => {
+      const root = resolvePluginRoot(rec);
+      const rel = rec.manifestJson ? (JSON.parse(rec.manifestJson) as { components?: { skills?: string } }).components?.skills : undefined;
+      if (!root || typeof rel !== 'string') return [];
+      const dir = path.resolve(root, rel);
+      try {
+        return fs
+          .readdirSync(dir, { withFileTypes: true })
+          .filter((e) => e.isDirectory() && fs.existsSync(path.join(dir, e.name, 'SKILL.md')))
+          .map((e) => ({ slug: e.name, cachePath: path.join(dir, e.name), pluginId: rec.id }));
+      } catch {
+        return [];
+      }
+    });
+}
+
 /** 启用插件的 skill refs（零复制：cachePath 直指插件目录，SkillRegistry 接受任意绝对路径） */
 export function buildPluginSkillRefs(
   workspaceId: string,

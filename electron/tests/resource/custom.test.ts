@@ -74,6 +74,11 @@ vi.mock('../../src/main/skill/zip-uploader', () => ({
   ]),
 }));
 
+vi.mock('../../src/main/plugin/assembly', () => ({
+  // plugin 源行有专属测试（plugin-skill-resource / plugin-mcp-autoassign）——此处隔离为空，锁定 custom 源语义
+  listAllPluginSkills: vi.fn(() => []),
+}));
+
 vi.mock('../../src/main/agent/crud', () => ({
   listAgentDefinitions: vi.fn(() => [
     {

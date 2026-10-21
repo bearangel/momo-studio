@@ -9,6 +9,7 @@
 // 所有 custom 项统一 installed=true / installable=false / removable=true。
 
 import { listRegistered } from '../mcp/host-manager';
+import { listAllPluginSkills } from '../plugin/assembly';
 import { listInstalled as listInstalledSkills } from '../skill/zip-uploader';
 import { listAgentDefinitions } from '../agent/crud';
 import { buildResourceId, type ResourceItem } from './types';
@@ -75,6 +76,25 @@ export function listCustomResources(): ResourceItem[] {
       },
       // 组⑤：启停态透出（详情 toggle / 行「已禁用」标记消费）
       mcp: { enabled: mcp.enabled },
+    });
+  }
+
+  // 2a. 插件自带 skills（source='plugin'，随插件生命周期，不可手动删）——
+  //     资源库 Skill 分类 / 成员编辑 skill tab 同源可见（D2 的 skill 面补齐）
+  for (const skill of listAllPluginSkills()) {
+    result.push({
+      id: buildResourceId('plugin', 'skill', skill.slug),
+      type: 'skill',
+      source: 'plugin',
+      slug: skill.slug,
+      name: skill.slug,
+      description: `来自插件 ${skill.pluginId}（随插件卸载）`,
+      installed: true,
+      installable: false,
+      removable: false,
+      custom: {
+        installedAt: new Date().toISOString(),
+      },
     });
   }
 
