@@ -46,6 +46,8 @@ import {
   listTeams,
 } from './team';
 import { getWorkspace } from '../workspace/crud';
+import { getGlobalSettings } from '../settings/crud';
+import { getProvider } from './provider-crud';
 import { deleteSecret } from '../storage/keychain';
 import { isAgentRunning } from './runtime-status';
 import { startAgentRuntime, stopAgentRuntime } from './runtime-registry';
@@ -98,8 +100,20 @@ export function registerAgentHandlers(): void {
 
       const def = getAgentDefinition(agentDefinitionId);
       if (!def) throw new Error(`未找到 agent 定义: ${agentDefinitionId}`);
+      // 插件 agent（yaml 预配模型非宿主 provider，注册落 null）：消费全局默认模型兜底并回写
+      // 定义——「设置 → 默认模型」已配即可直接添加（装即用；与 createCustomDef P3 语义对齐）
       if (!def.modelProviderId) {
-        throw new Error(`agent 定义「${def.name}」未配置 modelProviderId，请先到 Agent 库配置`);
+        const ref = getGlobalSettings().defaultChatModel;
+        if (ref && getProvider(ref.providerId)) {
+          updateAgentDefinition({ id: def.id, modelProviderId: ref.providerId, modelName: ref.modelId });
+          logger.info('addMember 消费 defaultChatModel 兜底（插件/预配 agent）', {
+            defId: def.id, providerId: ref.providerId, modelId: ref.modelId,
+          });
+        } else {
+          throw new Error(
+            `agent 定义「${def.name}」未配置模型——请在「设置 → 默认模型」设置后重试，或先编辑该 agent 选择供应商`,
+          );
+        }
       }
 
       const workspace = getWorkspace(workspaceId);
@@ -111,7 +125,10 @@ export function registerAgentHandlers(): void {
         workspaceId, agentDefinitionId, generateAgentUserId(def.slug), apiKeyOverride,
       );
 
-      const apiKey = await resolveApiKey(member.instanceId, def.modelProviderId);
+      const apiKey = await resolveApiKey(
+        member.instanceId,
+        def.modelProviderId ?? getGlobalSettings().defaultChatModel?.providerId ?? '',
+      );
       await startAgentRuntime(
         await buildSpawnOpts({
           instanceId: member.instanceId,

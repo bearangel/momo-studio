@@ -116,6 +116,27 @@ export function listCustomResources(): ResourceItem[] {
     });
   }
 
+  // 3a. 插件自带 agent 定义（source='plugin'，随插件生命周期，不可手动删）
+  for (const def of listAgentDefinitions().filter((d) => d.source === 'plugin')) {
+    result.push({
+      id: buildResourceId('plugin', 'agent', def.id),
+      type: 'agent',
+      source: 'plugin',
+      slug: def.id,
+      name: def.name,
+      description: `${def.description}（来自插件，随插件卸载）`,
+      iconEmoji: def.iconEmoji,
+      version: def.version,
+      installed: true,
+      installable: false,
+      removable: false,
+      custom: {
+        installedAt: def.createdAt ?? new Date().toISOString(),
+        agentSystemPromptHash: hashPrompt(def.systemPrompt),
+      },
+    });
+  }
+
   // 3. Agent：用户自定义创建的 agent 定义（source='custom'）
   // def.id 是 UUID（v1.3 重构后），作为 slug 部分——def.slug 可能重名，UUID 保证唯一
   for (const def of listAgentDefinitions().filter((d) => d.source === 'custom')) {
