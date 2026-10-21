@@ -203,3 +203,30 @@ describe('I2：LIKE _ 通配与 I3：reload 收敛（审查修复）', () => {
     expect(defs[0]!.id).toBe('plugin:cg:nav');
   });
 });
+
+// v2.0 引擎整合回归锁：插件 agent 注册链（manifest agents 声明 → 定义落库 source='plugin'）
+describe('registerPluginAgents（codegraph v2.0 agents 声明）', () => {
+  it('manifest 声明 agents → yaml 注册为 plugin 源定义', () => {
+    const manifest = {
+      id: 'cg',
+      name: 'cg',
+      version: '2.0.0',
+      components: { agents: './agents' },
+    };
+    const rec = {
+      id: 'cg',
+      version: '2.0.0',
+      manifestJson: JSON.stringify(manifest),
+      state: 'active',
+      source: 'dev',
+      sourcePath: path.resolve(__dirname, '../../../plugins/codegraph'),
+      installedAt: 'x',
+    } as Parameters<typeof registerPluginAgents>[0];
+    const n = registerPluginAgents(rec);
+    expect(n).toBeGreaterThanOrEqual(1);
+    const def = getDb()
+      .prepare(`SELECT source, slug FROM agent_definitions WHERE id = 'plugin:cg:code-navigator'`)
+      .get() as { source: string; slug: string } | undefined;
+    expect(def).toMatchObject({ source: 'plugin', slug: 'code-navigator' });
+  });
+});

@@ -10,7 +10,8 @@
     "mcp": "./mcp/mcp.json",
     "panel": "./panel",
     "service": "./service",
-    "skills": "./skills"
+    "skills": "./skills",
+    "agents": "./agents"
   },
   "vendor": {
     "archives": [

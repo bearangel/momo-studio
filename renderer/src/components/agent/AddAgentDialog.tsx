@@ -92,7 +92,7 @@ export function AddAgentDialog({ onClose }: Props) {
                   <div className="text-xs text-tertiary truncate">{d.description}</div>
                 </div>
                 <span className="text-xs text-tertiary shrink-0">
-                  {d.source === 'builtin' ? '系统预置' : '自定义'}
+                  {d.source === 'builtin' ? '系统预置' : d.source === 'plugin' ? '插件' : '自定义'}
                 </span>
                 <Button
                   size="sm"
