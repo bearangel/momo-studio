@@ -37,7 +37,7 @@ export function listPluginResourceRows(workspaceId?: string): ResourceItem[] {
         devSource: rec.source === 'dev',
         sourcePath: rec.sourcePath,
         components: Object.keys(manifest.components ?? {}),
-        enabled: workspaceId ? isPluginEnabled(rec.id, workspaceId) : true,
+        enabled: workspaceId ? isPluginEnabled(rec.id, workspaceId) : true, // 无 ws 上下文按启用展示（管理面恒传 wsId）
       },
     };
   });

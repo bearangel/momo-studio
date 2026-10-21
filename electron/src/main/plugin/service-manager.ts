@@ -205,11 +205,7 @@ export async function stopAllWorkspaceInstances(workspaceId: string): Promise<vo
 function anyWorkspaceEnabled(pluginId: string): boolean {
   try {
     const row = getDb()
-      .prepare(
-        `SELECT COUNT(*) AS n FROM workspaces w
-         LEFT JOIN plugin_enablements e ON e.workspace_id = w.id AND e.plugin_id = ?
-         WHERE e.enabled IS NULL OR e.enabled = 1`,
-      )
+      .prepare(`SELECT COUNT(*) AS n FROM plugin_enablements WHERE plugin_id = ? AND enabled = 1`)
       .get(pluginId) as { n: number };
     return row.n > 0;
   } catch {

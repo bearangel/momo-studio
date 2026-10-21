@@ -55,6 +55,10 @@ describe('插件 skills 可见性', () => {
   it('① manifest skills 声明 → 装配 refs 产出（slug+cachePath 指插件目录）', () => {
     seedWs();
     installPluginDevDir(mkDevPlugin(), '2.1.0');
+    // scoped activation：装后补启用行（Task 3 起安装链自带）
+    getDb()
+      .prepare(`INSERT OR IGNORE INTO plugin_enablements (workspace_id, plugin_id, enabled) VALUES ('w', 'cgs', 1)`)
+      .run();
     const refs = buildPluginSkillRefs('w');
     expect(refs).toEqual([
       { slug: 'codegraph-usage', cachePath: path.join(tmpRoot, 'skill-plugin', 'skills', 'codegraph-usage') },

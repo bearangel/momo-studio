@@ -35,7 +35,7 @@ const spawnFns = vi.hoisted(() => ({
 vi.mock('../../src/main/agent/spawn-helpers', () => spawnFns);
 
 import { reloadPlugin } from '../../src/main/plugin/reload';
-import { upsertPlugin, getPlugin } from '../../src/main/plugin/registry';
+import { upsertPlugin, getPlugin, setPluginEnabled } from '../../src/main/plugin/registry';
 import type { PluginRecord } from '../../src/main/plugin/types';
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-preload-'));
@@ -110,10 +110,9 @@ describe('reloadPlugin', () => {
       sourcePath: dir,
       installedAt: 'x',
     });
-    // 禁用状态 → 无受影响 workspace
-    getDb()
-      .prepare(`INSERT INTO plugin_enablements (workspace_id, plugin_id, enabled) VALUES ('ws1', 'cg', 0)`)
-      .run();
+    setPluginEnabled('cg', 'ws1', true);
+    // 禁用状态 → 无受影响 workspace（覆盖前注入的启用行）
+    setPluginEnabled('cg', 'ws1', false);
     fs.writeFileSync(
       path.join(dir, 'momo-plugin.json'),
       fs.readFileSync(path.join(dir, 'momo-plugin.json'), 'utf-8').replace('0.1.0', '0.2.0'),
@@ -135,6 +134,7 @@ describe('reloadPlugin', () => {
       sourcePath: dir,
       installedAt: 'x',
     });
+    setPluginEnabled('cg', 'ws1', true);
     agentCrudFns.listMembers.mockReturnValue([
       { instanceId: 'inst-1', agentDefinitionId: 'def-1', agentUserId: '@a:1', lastRunning: true },
     ]);

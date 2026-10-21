@@ -30,6 +30,7 @@ function mkPlugin(id: string, toolsSrc: Record<string, string>): void {
     sourcePath: null,
     installedAt: 'x',
   });
+  setPluginEnabled(id, 'ws1', true);
 }
 
 const GOOD_TOOLS = `

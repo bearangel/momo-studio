@@ -32,6 +32,7 @@ afterEach(() => {
 
 describe('listPluginResourceRows', () => {
   it('映射 ResourceItem：type=plugin / source=custom / id 三段式 / components 列表', () => {
+    seedWorkspace('ws1');
     upsertPlugin({
       id: 'cg',
       version: '0.1.0',
@@ -47,6 +48,7 @@ describe('listPluginResourceRows', () => {
       sourcePath: null,
       installedAt: '2026-10-15T00:00:00Z',
     });
+    setPluginEnabled('cg', 'ws1', true);
     const rows = listPluginResourceRows('ws1');
     expect(rows).toHaveLength(1);
     expect(rows[0]!).toMatchObject({
@@ -67,7 +69,7 @@ describe('listPluginResourceRows', () => {
     });
   });
 
-  it('workspaceId 传入时 enabled 反映启停；缺省 enabled=true', () => {
+  it('workspaceId 传入时 enabled 反映启停；无行 ws=停用、缺省调用=true（scoped 语义）', () => {
     seedWorkspace('ws1');
     upsertPlugin({
       id: 'cg',
@@ -80,7 +82,7 @@ describe('listPluginResourceRows', () => {
     });
     setPluginEnabled('cg', 'ws1', false);
     expect(listPluginResourceRows('ws1')[0]!.plugin?.enabled).toBe(false);
-    expect(listPluginResourceRows('ws2')[0]!.plugin?.enabled).toBe(true);
+    expect(listPluginResourceRows('ws2')[0]!.plugin?.enabled).toBe(false);
     expect(listPluginResourceRows()[0]!.plugin?.enabled).toBe(true);
   });
 

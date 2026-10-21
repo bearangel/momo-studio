@@ -149,6 +149,13 @@ describe.skipIf(!ENGINE_READY)('真引擎双 ws 双语言 harness（L2 锚点）
          VALUES ('ws-a', 'A', ?, '@o'), ('ws-b', 'B', ?, '@o')`,
       )
       .run(wsDir('ws-a'), wsDir('ws-b'));
+    // scoped activation：行缺失=停用——补两 ws 启用（ws 行须先建，FK 约束）
+    getDb()
+      .prepare(
+        `INSERT OR IGNORE INTO plugin_enablements (workspace_id, plugin_id, enabled)
+         VALUES ('ws-a', 'cg', 1), ('ws-b', 'cg', 1)`,
+      )
+      .run();
 
     const a = await getOrStartMcp('ws-a', mcpConfigFor('ws-a', wsDir('ws-a')));
     const b = await getOrStartMcp('ws-b', mcpConfigFor('ws-b', wsDir('ws-b')));

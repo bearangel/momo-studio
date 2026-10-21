@@ -78,14 +78,14 @@ export function removePluginRecord(id: string): void {
 }
 
 /**
- * workspace 级启停解析（spec §7.1）：行缺失 = 启用（默认开启语义，
- * 仅禁用/重启用落行）。plugin_enablements FK 到 plugins——调用前须已 upsert。
+ * workspace 级启停解析（spec 2026-10-21 §2）：行缺失 = 停用（scoped 语义；
+ * 存量库由迁移 066 回填 enabled=1 保现状，新装/新 ws 走安装链单行写入）。
  */
 export function isPluginEnabled(pluginId: string, workspaceId: string): boolean {
   const row = getDb()
     .prepare(`SELECT enabled FROM plugin_enablements WHERE workspace_id = ? AND plugin_id = ?`)
     .get(workspaceId, pluginId) as { enabled: number } | undefined;
-  return row?.enabled !== 0;
+  return row?.enabled === 1;
 }
 
 export function setPluginEnabled(pluginId: string, workspaceId: string, enabled: boolean): void {

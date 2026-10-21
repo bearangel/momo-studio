@@ -63,6 +63,7 @@ describe('panel.json 校验（拒绝式）', () => {
     });
     const rec = mkRecord('cg', { panel: './panel' });
     upsertPlugin(rec);
+    setPluginEnabled('cg', 'ws1', true);
     expect(loadAndValidatePanels(rec)).toEqual([
       { id: 'graph', title: '代码图谱', icon: 'lucide:puzzle', location: 'sidebar', entry: './index.html' },
     ]);
@@ -107,6 +108,7 @@ describe('listPluginPanels（启用过滤 + entryUrl）', () => {
       panels: [{ id: 'graph', title: '代码图谱', icon: 'lucide:git-fork', location: 'sidebar', entry: './index.html' }],
     });
     upsertPlugin(mkRecord('cg', { panel: './panel' }));
+    setPluginEnabled('cg', 'ws1', true);
     const panels = listPluginPanels('ws1');
     expect(panels).toHaveLength(1);
     expect(panels[0]).toEqual({
@@ -125,6 +127,7 @@ describe('listPluginPanels（启用过滤 + entryUrl）', () => {
       panels: [{ id: 'graph', title: 't', location: 'sidebar', entry: './index.html' }],
     });
     upsertPlugin(mkRecord('cg', { panel: './panel' }));
+    setPluginEnabled('cg', 'ws1', true);
     setPluginEnabled('cg', 'ws1', false);
     expect(listPluginPanels('ws1')).toEqual([]);
   });
@@ -132,6 +135,7 @@ describe('listPluginPanels（启用过滤 + entryUrl）', () => {
   it('运行时解析失败 → 跳过该插件不炸列表（install 时已校验，此处容错）', () => {
     writePanelJson('bad', { panels: [] }); // 装后被人改坏
     upsertPlugin(mkRecord('bad', { panel: './panel' }));
+    setPluginEnabled('bad', 'ws1', true);
     expect(listPluginPanels('ws1')).toEqual([]);
   });
 });
@@ -156,6 +160,7 @@ describe('panel placement（page 主区形态）', () => {
     });
     const rec = mkRecord('cgpage', { panel: './panel' });
     upsertPlugin(rec);
+    setPluginEnabled('cgpage', 'ws1', true);
     const decls = loadAndValidatePanels(rec);
     expect(decls[0]?.location).toBe('page');
     expect(decls[1]?.location).toBe('sidebar');
@@ -163,6 +168,7 @@ describe('panel placement（page 主区形态）', () => {
       "INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES ('wsp', 'p', '/tmp/p', 'u1')",
     );
     ws.run();
+    setPluginEnabled('cgpage', 'wsp', true);
     const infos = listPluginPanels('wsp');
     const page = infos.find((i) => i.panelId === 'graph');
     const side = infos.find((i) => i.panelId === 'mini');

@@ -91,11 +91,7 @@ export function registerPluginHandlers(): void {
           }
         } else {
           const stillEnabled = getDb()
-            .prepare(
-              `SELECT COUNT(*) AS n FROM workspaces w
-               LEFT JOIN plugin_enablements e ON e.workspace_id = w.id AND e.plugin_id = ?
-               WHERE e.enabled IS NULL OR e.enabled = 1`,
-            )
+            .prepare(`SELECT COUNT(*) AS n FROM plugin_enablements WHERE plugin_id = ? AND enabled = 1`)
             .get(id) as { n: number };
           if (stillEnabled.n === 0) removePluginHooks(id, bus);
         }
@@ -107,11 +103,7 @@ export function registerPluginHandlers(): void {
         if (rec) void startPluginService(rec, getActiveWorkspaceId() ?? undefined).catch(() => undefined);
       } else {
         const stillEnabled = getDb()
-          .prepare(
-            `SELECT COUNT(*) AS n FROM workspaces w
-             LEFT JOIN plugin_enablements e ON e.workspace_id = w.id AND e.plugin_id = ?
-             WHERE e.enabled IS NULL OR e.enabled = 1`,
-          )
+          .prepare(`SELECT COUNT(*) AS n FROM plugin_enablements WHERE plugin_id = ? AND enabled = 1`)
           .get(id) as { n: number };
         if (stillEnabled.n === 0) void stopPluginService(id).catch(() => undefined);
       }
@@ -197,11 +189,7 @@ export function registerPluginHandlers(): void {
       const stillEnabled = (() => {
         try {
           const row = getDb()
-            .prepare(
-              `SELECT COUNT(*) AS n FROM workspaces w
-               LEFT JOIN plugin_enablements e ON e.workspace_id = w.id AND e.plugin_id = ?
-               WHERE e.enabled IS NULL OR e.enabled = 1`,
-            )
+            .prepare(`SELECT COUNT(*) AS n FROM plugin_enablements WHERE plugin_id = ? AND enabled = 1`)
             .get(pluginId) as { n: number };
           return row.n > 0;
         } catch {

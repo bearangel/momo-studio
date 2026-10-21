@@ -952,7 +952,7 @@ export interface ResourceItem {
     sourcePath: string | null;
     /** manifest.components 声明的组件键列表（UI 详情展示） */
     components: string[];
-    /** 当前 workspace 启停态（行缺失 = 启用） */
+    /** 当前 workspace 启停态（行缺失 = 停用，spec 2026-10-21 §2） */
     enabled: boolean;
   };
 }

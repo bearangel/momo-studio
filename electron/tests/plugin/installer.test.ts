@@ -319,6 +319,10 @@ describe('审查修复 I1/I2/I3', () => {
     getDb()
       .prepare(`INSERT OR IGNORE INTO workspaces (id, name, directory_path, owner_id) VALUES ('ws1', 'T', '/x', '@o')`)
       .run();
+    // scoped activation：翻转后行缺失=停用——面板列举前补启用行
+    getDb()
+      .prepare(`INSERT OR IGNORE INTO plugin_enablements (workspace_id, plugin_id, enabled) VALUES ('ws1', 'pp', 1)`)
+      .run();
     const panels = listPluginPanels('ws1');
     expect(panels.some((p) => p.pluginId === 'pp')).toBe(true);
     void seen; void orig;

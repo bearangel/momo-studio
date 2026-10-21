@@ -127,6 +127,14 @@ vi.mock('../../src/main/agent/runtime-status', () => runtimeStatusMocks);
 vi.mock('../../src/main/agent/spawn-helpers', () => spawnMocks);
 vi.mock('../../src/main/agent/builtin', () => builtinMocks);
 vi.mock('../../src/main/agent/assignment-capabilities', () => capsMocks);
+// addMember defaultChatModel 兜底段的真实模块隔离（防真库副作用）：
+// 默认「无默认模型」——兜底不可用走拒绝路径；需要兜底成功的用例单独覆写
+vi.mock('../../src/main/settings/crud', () => ({
+  getGlobalSettings: vi.fn(() => ({ defaultChatModel: null })),
+}));
+vi.mock('../../src/main/agent/provider-crud', () => ({
+  getProvider: vi.fn(() => null),
+}));
 vi.mock('../../src/main/agent/manifest-parser', () => ({
   parseAgentManifest: vi.fn(),
 }));
@@ -231,14 +239,14 @@ describe('agent:addMember handler', () => {
     expect((res as { instanceId: string }).instanceId).toMatch(/^inst-\d+$/);
   });
 
-  it('def 未配置 modelProviderId → 拒绝且零写入', async () => {
+  it('def 未配置模型且默认模型不可用 → 拒绝且零写入', async () => {
     crudMocks.getAgentDefinition.mockReturnValueOnce({ ...DEF, modelProviderId: null });
     await expect(
       ipcHandlers.get('agent:addMember')!({} as never, {
         workspaceId: 'ws-1',
         agentDefinitionId: 'def-1',
       }),
-    ).rejects.toThrow('modelProviderId');
+    ).rejects.toThrow('未配置模型');
     expect(crudMocks.addMember).not.toHaveBeenCalled();
   });
 

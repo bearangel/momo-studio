@@ -40,6 +40,14 @@ function mkPlugin(id: string, serviceSrc: string, withService = true): PluginRec
     installedAt: 'x',
   };
   upsertPlugin(rec);
+  getDb()
+    .prepare(`INSERT OR IGNORE INTO workspaces (id, name, directory_path, owner_id) VALUES ('ws1', 'T', '/x', '@o')`)
+    .run();
+  getDb()
+    .prepare(`INSERT OR IGNORE INTO workspaces (id, name, directory_path, owner_id) VALUES ('ws2', 'T', '/x', '@o')`)
+    .run();
+  setPluginEnabled(rec.id, 'ws1', true);
+  setPluginEnabled(rec.id, 'ws2', true);
   return rec;
 }
 
@@ -132,6 +140,10 @@ describe('stopPluginService + cache 失效', () => {
   it('stop 后 call 对启用插件 lazy 复活；禁用后 call 不复活（§8.6）', async () => {
     getDb().prepare('INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES (?, ?, ?, ?)').run('ws-live', 'l', '/tmp/l', 'u1');
     const rec = mkPlugin('p-revive', ECHO_SVC);
+    // 本用例锁「唯一工作区禁用 → 无人启用」——抵消 mkPlugin helper 的 ws1/ws2 启用注入
+    setPluginEnabled('p-revive', 'ws1', false);
+    setPluginEnabled('p-revive', 'ws2', false);
+    setPluginEnabled('p-revive', 'ws-live', true);
     await startPluginService(rec);
     await stopPluginService('p-revive');
     await expect(callPluginService('p-revive', 'ping', {})).resolves.toBe('echo:ping:{}'); // lazy 复活（新语义）
@@ -193,6 +205,14 @@ function mkMultiPlugin(id: string, serviceSrc: string): PluginRecord {
     },
   });
   upsertPlugin(rec);
+  getDb()
+    .prepare(`INSERT OR IGNORE INTO workspaces (id, name, directory_path, owner_id) VALUES ('ws1', 'T', '/x', '@o')`)
+    .run();
+  getDb()
+    .prepare(`INSERT OR IGNORE INTO workspaces (id, name, directory_path, owner_id) VALUES ('ws2', 'T', '/x', '@o')`)
+    .run();
+  setPluginEnabled(rec.id, 'ws1', true);
+  setPluginEnabled(rec.id, 'ws2', true);
   return rec;
 }
 
@@ -251,6 +271,7 @@ describe('service 多实例（工作空间维度 v1.1）', () => {
   it('lazy start：未启动的 multi 插件按 wsId 拉起；start 失败不落注册表可重试（Review Focus #4）', async () => {
     mkWs('ws-a', '/tmp/dir-a');
     const rec = mkMultiPlugin('p-lazy', WS_SVC);
+    setPluginEnabled('p-lazy', 'ws-a', true);
     await expect(callPluginService('p-lazy', 'wsinfo', null, 'ws-a')).resolves.toBe('ws-a|/tmp/dir-a');
     // 坏 service（createService 抛错）
     const bad = mkMultiPlugin('p-bad', 'module.exports.createService = function () { throw new Error("bad"); };');
@@ -304,6 +325,7 @@ describe('lazy start 单飞（终审 I1）', () => {
   it('慢 start 期间并发两路 callPluginService → 仅一次 start、单实例', async () => {
     mkWs('ws-r', '/tmp/dir-r');
     const rec = mkMultiPlugin('p-race', SLOW_SVC);
+    setPluginEnabled('p-race', 'ws-r', true);
     const [a, b] = await Promise.all([
       callPluginService('p-race', 'ping', null, 'ws-r'),
       callPluginService('p-race', 'ping', null, 'ws-r'),

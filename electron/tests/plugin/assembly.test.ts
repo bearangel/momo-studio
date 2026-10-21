@@ -93,6 +93,8 @@ describe('buildPluginToolRefs', () => {
   it('启用插件 → refs 含 rootDir/modulePaths/dataDir/config', () => {
     const root = mkPluginTree('cg');
     upsertPlugin(mkRec('cg', root));
+    setPluginEnabled('cg', 'ws1', true);
+    setPluginEnabled('cg', 'ws2', true);
     const refs = buildPluginToolRefs('ws1');
     expect(refs).toHaveLength(1);
     expect(refs[0]!.pluginId).toBe('cg');
@@ -105,6 +107,8 @@ describe('buildPluginToolRefs', () => {
   it('workspace 级隔离：ws1 禁用 ws2 启用（Review Focus #3）', () => {
     const root = mkPluginTree('cg');
     upsertPlugin(mkRec('cg', root));
+    setPluginEnabled('cg', 'ws1', true);
+    setPluginEnabled('cg', 'ws2', true);
     setPluginEnabled('cg', 'ws1', false);
     expect(buildPluginToolRefs('ws1')).toHaveLength(0);
     expect(buildPluginToolRefs('ws2')).toHaveLength(1);
@@ -121,6 +125,8 @@ describe('buildPluginToolRefs', () => {
   it('config.json 存在 → 读入；坏 JSON → 降级 {}', () => {
     const root = mkPluginTree('cg');
     upsertPlugin(mkRec('cg', root));
+    setPluginEnabled('cg', 'ws1', true);
+    setPluginEnabled('cg', 'ws2', true);
     const dataDir = path.join(pluginsDir, 'data', 'cg');
     fs.mkdirSync(dataDir, { recursive: true });
     fs.writeFileSync(path.join(dataDir, 'config.json'), '{"a":1}');
@@ -134,6 +140,8 @@ describe('buildPluginToolRefs', () => {
     fs.rmSync(path.join(root, 'tools'), { recursive: true });
     fs.mkdirSync(path.join(root, 'tools'));
     upsertPlugin(mkRec('cg', root));
+    setPluginEnabled('cg', 'ws1', true);
+    setPluginEnabled('cg', 'ws2', true);
     const refs = buildPluginToolRefs('ws1');
     expect(refs).toHaveLength(1);
     expect(refs[0]!.modulePaths).toEqual([]);
@@ -144,6 +152,8 @@ describe('buildPluginSkillRefs', () => {
   it('启用插件的 skills 子目录（含 SKILL.md）产出 slug+cachePath', () => {
     const root = mkPluginTree('cg');
     upsertPlugin(mkRec('cg', root));
+    setPluginEnabled('cg', 'ws1', true);
+    setPluginEnabled('cg', 'ws2', true);
     const refs = buildPluginSkillRefs('ws1');
     expect(refs).toEqual([
       { slug: 'usage', cachePath: path.join(root, 'skills', 'usage') },
@@ -154,6 +164,8 @@ describe('buildPluginSkillRefs', () => {
   it('禁用 workspace → 空', () => {
     const root = mkPluginTree('cg');
     upsertPlugin(mkRec('cg', root));
+    setPluginEnabled('cg', 'ws1', true);
+    setPluginEnabled('cg', 'ws2', true);
     setPluginEnabled('cg', 'ws1', false);
     expect(buildPluginSkillRefs('ws1')).toHaveLength(0);
   });
@@ -167,6 +179,8 @@ describe('buildPluginMcpNames / filterDisabledPluginMcps', () => {
       JSON.stringify({ servers: { 'cg-fetch': { command: 'npx', args: ['-y', 'cg-fetch'] } } }),
     );
     upsertPlugin(mkRec('cg', root));
+    setPluginEnabled('cg', 'ws1', true);
+    setPluginEnabled('cg', 'ws2', true);
     expect(buildPluginMcpNames('ws1')).toEqual(['cg-fetch']);
     setPluginEnabled('cg', 'ws1', false);
     expect(buildPluginMcpNames('ws1')).toEqual([]);

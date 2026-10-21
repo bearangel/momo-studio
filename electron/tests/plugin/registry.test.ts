@@ -1,6 +1,6 @@
 // electron/tests/plugin/registry.test.ts
 //
-// 注册表 CRUD + 启停语义锁（spec §7.1：行缺失 = 启用）+ dev 源 missing 检测。
+// 注册表 CRUD + 启停语义锁（spec 2026-10-21 §2：行缺失 = 停用）+ dev 源 missing 检测。
 // 真实 DB 全链（tmpdir + AP_USER_DATA_DIR + runMigrations）——FK 强制开启，
 // plugin_enablements 写入前须先种 workspace 行。
 import fs from 'node:fs';
@@ -65,17 +65,17 @@ describe('registry CRUD', () => {
   });
 });
 
-describe('启停语义（spec §7.1：行缺失 = 启用）', () => {
-  it('无行 → enabled true；置 0 → false；重启用 → true；其他 workspace 不受影响', () => {
+describe('启停语义（spec 2026-10-21 §2：行缺失 = 停用）', () => {
+  it('无行 → false；显式 enabled=1 → true；置 0 → false；其他 workspace 不受影响', () => {
     seedWorkspace('ws1');
     seedWorkspace('ws2');
     upsertPlugin(mkRec());
-    expect(isPluginEnabled('cg', 'ws1')).toBe(true);
-    setPluginEnabled('cg', 'ws1', false);
     expect(isPluginEnabled('cg', 'ws1')).toBe(false);
-    expect(isPluginEnabled('cg', 'ws2')).toBe(true);
     setPluginEnabled('cg', 'ws1', true);
     expect(isPluginEnabled('cg', 'ws1')).toBe(true);
+    expect(isPluginEnabled('cg', 'ws2')).toBe(false);
+    setPluginEnabled('cg', 'ws1', false);
+    expect(isPluginEnabled('cg', 'ws1')).toBe(false);
   });
 
   it('插件删除后 enablement 行级联清除（ON DELETE CASCADE）', () => {
