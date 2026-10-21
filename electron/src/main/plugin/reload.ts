@@ -78,38 +78,47 @@ export async function reloadPlugin(id: string): Promise<PluginRecord> {
   return refreshed;
 }
 
-/** 启用了该插件的 workspace：其 lastRunning 成员的 runtime stop→start（新 opts） */
-async function rebuildAffectedRuntimes(pluginId: string): Promise<void> {
-  const db = getDb();
-  const workspaces = db
-    .prepare(`SELECT id, directory_path FROM workspaces`)
-    .all() as Array<{ id: string; directory_path: string }>;
-  for (const ws of workspaces) {
-    if (!isPluginEnabled(pluginId, ws.id)) continue;
-    for (const member of listMembers(ws.id)) {
-      if (!member.lastRunning) continue;
-      const def = getAgentDefinition(member.agentDefinitionId);
-      if (!def || !def.modelProviderId) continue;
-      try {
-        const llmApiKey = await resolveApiKey(member.instanceId, def.modelProviderId);
-        await stopAgentRuntime(member.instanceId);
-        await startAgentRuntime(
-          await buildSpawnOpts({
-            instanceId: member.instanceId,
-            agentUserId: member.agentUserId,
-            workspaceId: ws.id,
-            workspaceDir: ws.directory_path,
-            def,
-            llmApiKey,
-          }),
-        );
-      } catch (err) {
-        logger.warn('reload：runtime 重建失败（下一 spawn 用新装配兜底）', {
-          pluginId,
+/** 单 workspace 重建：其 lastRunning 成员的 runtime stop→start（新 opts）。
+ *  reload（全启用 ws）与 setEnabled（目标 ws，spec 2026-10-21 §7）共用 */
+export async function rebuildWorkspaceRuntimes(pluginId: string, workspaceId: string): Promise<void> {
+  const ws = getDb()
+    .prepare(`SELECT id, directory_path FROM workspaces WHERE id = ?`)
+    .get(workspaceId) as { id: string; directory_path: string } | undefined;
+  if (!ws) return;
+  for (const member of listMembers(ws.id)) {
+    if (!member.lastRunning) continue;
+    const def = getAgentDefinition(member.agentDefinitionId);
+    if (!def || !def.modelProviderId) continue;
+    try {
+      const llmApiKey = await resolveApiKey(member.instanceId, def.modelProviderId);
+      await stopAgentRuntime(member.instanceId);
+      await startAgentRuntime(
+        await buildSpawnOpts({
           instanceId: member.instanceId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
+          agentUserId: member.agentUserId,
+          workspaceId: ws.id,
+          workspaceDir: ws.directory_path,
+          def,
+          llmApiKey,
+        }),
+      );
+    } catch (err) {
+      logger.warn('runtime 重建失败（下一 spawn 用新装配兜底）', {
+        pluginId,
+        instanceId: member.instanceId,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
+  }
+}
+
+/** 启用了该插件的 workspace：逐 ws 重建（reload 语义不变） */
+async function rebuildAffectedRuntimes(pluginId: string): Promise<void> {
+  const workspaces = getDb()
+    .prepare(`SELECT id FROM workspaces`)
+    .all() as Array<{ id: string }>;
+  for (const { id } of workspaces) {
+    if (!isPluginEnabled(pluginId, id)) continue;
+    await rebuildWorkspaceRuntimes(pluginId, id);
   }
 }

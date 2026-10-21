@@ -27,7 +27,7 @@ vi.mock('../../src/main/plugin/registry', () => ({
   isPluginEnabled: vi.fn().mockReturnValue(true),
 }));
 
-const reloadFns = vi.hoisted(() => ({ reloadPlugin: vi.fn() }));
+const reloadFns = vi.hoisted(() => ({ reloadPlugin: vi.fn(), rebuildWorkspaceRuntimes: vi.fn(async () => undefined) }));
 vi.mock('../../src/main/plugin/reload', () => reloadFns);
 
 import { ipcMain } from 'electron';

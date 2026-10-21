@@ -23,7 +23,7 @@ import {
 import { syncPluginMcps } from './mcp-sync';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
-import { reloadPlugin } from './reload';
+import { reloadPlugin, rebuildWorkspaceRuntimes } from './reload';
 import { getActiveWorkspaceId } from '../workspace/ipc.handlers';
 import { listAssembledToolDefs } from './tool-catalog';
 import type { PluginManifest, PluginRecord } from './types';
@@ -111,6 +111,21 @@ export function registerPluginHandlers(): void {
           .get(id) as { n: number };
         if (stillEnabled.n === 0) void stopPluginService(id).catch(() => undefined);
       }
+      // 启停即时生效（spec 2026-10-21 §7）：双向重建该 ws 在线成员（停用=能力立即
+      // 摘除；启用=授权面立即生效）。停用方向先失效该插件 MCP 池实例——防残留与
+      // 按需复活（§3.3 冻结语义收窄至配置变更：setConfig 不重建，现状保留）
+      if (!enabled) {
+        const serverNames = getDb()
+          .prepare(`SELECT name FROM mcp_definitions WHERE plugin_id = ?`)
+          .all(id) as Array<{ name: string }>;
+        for (const { name } of serverNames) invalidateMcpByName(name);
+      }
+      void rebuildWorkspaceRuntimes(id, workspaceId).catch((err) =>
+        logger.warn('启停运行时重建失败（下一 spawn 新装配兜底）', {
+          pluginId: id,
+          error: String(err),
+        }),
+      );
     },
   );
 
