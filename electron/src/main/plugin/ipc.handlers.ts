@@ -26,6 +26,7 @@ import { logger } from '../logger';
 import { reloadPlugin, rebuildWorkspaceRuntimes } from './reload';
 import { getActiveWorkspaceId } from '../workspace/ipc.handlers';
 import { listAssembledToolDefs } from './tool-catalog';
+import { getPluginDetail } from './inventory';
 import type { PluginManifest, PluginRecord } from './types';
 
 /** 安装结果摘要（renderer 展示用；跨 IPC 纯数据，renderer types.d.ts 有同形定义） */
@@ -136,6 +137,11 @@ export function registerPluginHandlers(): void {
   ipcMain.handle('plugin:reload', async (_evt, id: string) => {
     return toSummary(await reloadPlugin(id));
   });
+
+  // 组件明细清单（spec 2026-10-21 §9②）：只读七面
+  ipcMain.handle('plugin:getDetail', (_evt, pluginId: string, workspaceId?: string) =>
+    getPluginDetail(pluginId, workspaceId),
+  );
 
   // ── P4：面板与 config 面（spec §6） ──
 

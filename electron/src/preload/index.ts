@@ -37,6 +37,7 @@ import type {
   TaskRow,
   UploadedSkill,
   PluginSummary,
+  PluginDetail,
   PluginPanelInfo,
   PluginToolInfo,
   PluginConfigView,
@@ -503,6 +504,8 @@ const api: ApiSurface = {
       invoke<void>('plugin:setEnabled', id, workspaceId, enabled),
     uninstall: (id: string, keepData: boolean) => invoke<void>('plugin:uninstall', id, keepData),
     reload: (id: string) => invoke<PluginSummary>('plugin:reload', id),
+    getDetail: (pluginId: string, workspaceId?: string) =>
+      invoke<PluginDetail>('plugin:getDetail', pluginId, workspaceId),
     // P4：面板与 config 面（spec §6）
     listPanels: (workspaceId: string) => invoke<PluginPanelInfo[]>('plugin:listPanels', workspaceId),
     listAssembledTools: (workspaceId: string) =>

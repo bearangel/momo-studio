@@ -972,6 +972,18 @@ export interface PluginSummary {
   components: string[];
 }
 
+/** plugin:getDetail 返回形状（spec 2026-10-21 §9② 组件清单，只读七面） */
+export interface PluginDetail {
+  pluginId: string;
+  mcps: Array<{ name: string }>;
+  tools: Array<{ fullName: string; description: string; pluginName: string }>;
+  skills: Array<{ slug: string }>;
+  agents: Array<{ id: string; name: string }>;
+  panels: Array<{ panelId: string; title: string }>;
+  service: boolean;
+  config: boolean;
+}
+
 /** 可用面板清单项（plugin:listPanels 返回形状；workspace 启用过滤后） */
 export interface PluginPanelInfo {
   pluginId: string;
@@ -1020,6 +1032,7 @@ export interface PluginApiSurface {
   setEnabled(id: string, workspaceId: string, enabled: boolean): Promise<void>;
   uninstall(id: string, keepData: boolean): Promise<void>;
   reload(id: string): Promise<PluginSummary>;
+  getDetail(pluginId: string, workspaceId?: string): Promise<PluginDetail>;
   listPanels(workspaceId: string): Promise<PluginPanelInfo[]>;
   listAssembledTools(workspaceId: string): Promise<PluginToolInfo[]>;
   callService(pluginId: string, method: string, params: unknown, workspaceId?: string): Promise<unknown>;
