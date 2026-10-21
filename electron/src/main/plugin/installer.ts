@@ -30,6 +30,8 @@ import { startPluginService, stopPluginService } from './service-manager';
 import { getPluginBus } from './bus-instance';
 import { emitPluginEvent } from './event-sources';
 import { syncPluginMcps, removePluginMcps } from './mcp-sync';
+import { listAllPluginSkills } from './assembly';
+import { removePluginCapabilityGrants } from '../agent/grant-cleanup';
 import type { PluginRecord } from './types';
 
 /** zip bomb 守卫：累计解压上限 200MB */
@@ -317,6 +319,15 @@ export function uninstallPlugin(id: string, keepData: boolean): void {
     removePluginAgents(id);
   } catch (err) {
     logger.warn('插件卸载：agents 级联清理失败（残留行需手动清理）', {
+      pluginId: id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }  try {
+    // 授权行级联（spec 2026-10-21 §8）：先于目录删除扫 slug——防同 id 重装冒用继承
+    const slugs = listAllPluginSkills().filter((s) => s.pluginId === id).map((s) => s.slug);
+    removePluginCapabilityGrants(id, slugs);
+  } catch (err) {
+    logger.warn('插件卸载：授权行级联清理失败', {
       pluginId: id,
       error: err instanceof Error ? err.message : String(err),
     });
