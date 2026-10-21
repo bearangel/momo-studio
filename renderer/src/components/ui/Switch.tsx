@@ -18,7 +18,7 @@ export function Switch({ checked, onChange, disabled, className, ...rest }: Swit
       disabled={disabled}
       className={cn(
         'relative w-[34px] h-[19px] rounded-full transition-colors shrink-0',
-        checked ? 'bg-accent-500' : 'bg-border-strong',
+        checked ? 'bg-accent-500' : 'bg-strong',
         disabled && 'opacity-40 cursor-not-allowed',
         className,
       )}
@@ -31,7 +31,7 @@ export function Switch({ checked, onChange, disabled, className, ...rest }: Swit
       <span
         aria-hidden
         className={cn(
-          'absolute top-[2px] w-[15px] h-[15px] rounded-full bg-white transition-all',
+          'absolute top-[2px] w-[15px] h-[15px] rounded-full bg-inverse transition-all',
           checked ? 'right-[2px]' : 'left-[2px]',
         )}
       />
