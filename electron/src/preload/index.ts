@@ -495,9 +495,10 @@ const api: ApiSurface = {
   },
   // 插件系统 P1（spec 2026-10-15）：安装 / 启停 / 卸载；P2 加 reload
   plugin: {
-    installZip: (data: Uint8Array, filename: string) =>
-      invoke<PluginSummary>('plugin:installZip', data, filename),
-    installDevDir: (dir: string) => invoke<PluginSummary>('plugin:installDevDir', dir),
+    installZip: (data: Uint8Array, filename: string, workspaceId?: string) =>
+      invoke<PluginSummary>('plugin:installZip', data, filename, workspaceId),
+    installDevDir: (dir: string, workspaceId?: string) =>
+      invoke<PluginSummary>('plugin:installDevDir', dir, workspaceId),
     setEnabled: (id: string, workspaceId: string, enabled: boolean) =>
       invoke<void>('plugin:setEnabled', id, workspaceId, enabled),
     uninstall: (id: string, keepData: boolean) => invoke<void>('plugin:uninstall', id, keepData),

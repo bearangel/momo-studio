@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import AdmZip from 'adm-zip';
 import { beforeEach, afterEach, describe, expect, it } from 'vitest';
-import { closeDb, runMigrations } from '../../src/main/storage/db';
+import { closeDb, runMigrations, getDb } from '../../src/main/storage/db';
 import { installPluginZip } from '../../src/main/plugin/installer';
 import { resolvePluginInstalledDir } from '../../src/main/paths';
 
@@ -22,6 +22,9 @@ beforeEach(() => {
   fs.mkdirSync(tarWork, { recursive: true });
   process.env.AP_USER_DATA_DIR = tmpRoot;
   runMigrations();
+  getDb()
+    .prepare(`INSERT OR IGNORE INTO workspaces (id, name, directory_path, owner_id) VALUES ('ws-t', 'T', '/tmp/x', '@o')`)
+    .run();
 });
 afterEach(() => {
   closeDb();
@@ -83,7 +86,7 @@ function makeVendorZip(opts: VendorOpts = {}): Buffer {
 
 describe('installPluginZip vendor 引擎包', () => {
   it('① 合法 tarball → 解压落位 engine/ + 探针命中 + 安装成功', async () => {
-    const rec = await installPluginZip(makeVendorZip(), '2.1.0');
+    const rec = await installPluginZip(makeVendorZip(), '2.1.0', 'ws-t');
     expect(rec.id).toBe('cg');
     const dir = resolvePluginInstalledDir('cg', '2.0.0');
     expect(fs.existsSync(path.join(dir, 'engine', 'bin', 'codegraph'))).toBe(true);
@@ -92,20 +95,20 @@ describe('installPluginZip vendor 引擎包', () => {
 
   it('② sha256 不符 → 拒装且不落 engine/', async () => {
     await expect(
-      installPluginZip(makeVendorZip({ sha256: '0'.repeat(64) }), '2.1.0'),
+      installPluginZip(makeVendorZip({ sha256: '0'.repeat(64) }), '2.1.0', 'ws-t'),
     ).rejects.toThrow(/校验失败|sha256/i);
     expect(fs.existsSync(path.join(resolvePluginInstalledDir('cg', '2.0.0'), 'engine'))).toBe(false);
   });
 
   it('③ tarball 条目数超 maxEntries → 拒装', async () => {
-    await expect(installPluginZip(makeVendorZip({ maxEntries: 1 }), '2.1.0')).rejects.toThrow(
+    await expect(installPluginZip(makeVendorZip({ maxEntries: 1 }), '2.1.0', 'ws-t')).rejects.toThrow(
       /条目|entries/i,
     );
   });
 
   it('④ 平台装错模拟（tarball 无 bin/，探针落空）→ 拒装', async () => {
     await expect(
-      installPluginZip(makeVendorZip({ omitProbeFiles: true }), '2.1.0'),
+      installPluginZip(makeVendorZip({ omitProbeFiles: true }), '2.1.0', 'ws-t'),
     ).rejects.toThrow(/探针|probe|平台/i);
   });
 
@@ -143,7 +146,7 @@ describe('installPluginZip vendor 引擎包', () => {
       ),
     );
     zip.addFile('mcp/mcp.json', Buffer.from(JSON.stringify({ servers: {} })));
-    const rec = await installPluginZip(zip.toBuffer(), '2.1.0');
+    const rec = await installPluginZip(zip.toBuffer(), '2.1.0', 'ws-t');
     expect(rec.id).toBe('plain');
     expect(fs.existsSync(path.join(resolvePluginInstalledDir('plain', '1.0.0'), 'engine'))).toBe(false);
   });

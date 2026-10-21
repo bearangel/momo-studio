@@ -5,6 +5,7 @@
 // 校验失败错误逐条内联展示不关弹窗。
 import { useRef, useState, type ChangeEvent } from 'react';
 import { ipc } from '../../ipc/client';
+import { useWorkspaceStore } from '../../stores/workspace.store';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import type { PluginSummary } from '../../ipc/types';
@@ -28,6 +29,7 @@ function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
 const noop = (): void => undefined;
 
 export function InstallPluginZipDialog({ onClose, onSuccess }: Props) {
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
@@ -46,7 +48,11 @@ export function InstallPluginZipDialog({ onClose, onSuccess }: Props) {
     setError(null);
     try {
       const buffer = await readFileAsArrayBuffer(file);
-      const summary = await ipc.plugin.installZip(new Uint8Array(buffer), file.name);
+      const summary = await ipc.plugin.installZip(
+        new Uint8Array(buffer),
+        file.name,
+        activeWorkspaceId ?? undefined,
+      );
       onSuccess(summary);
       onClose();
     } catch (err) {

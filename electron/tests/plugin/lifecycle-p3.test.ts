@@ -10,7 +10,7 @@ import { installPluginDevDir, uninstallPlugin } from '../../src/main/plugin/inst
 import { reloadPlugin } from '../../src/main/plugin/reload';
 import { getPluginBus, resetPluginBusForTest } from '../../src/main/plugin/bus-instance';
 import { isServiceRunning, stopAllPluginServices } from '../../src/main/plugin/service-manager';
-import { closeDb, runMigrations } from '../../src/main/storage/db';
+import { closeDb, runMigrations , getDb } from '../../src/main/storage/db';
 import { requestPluginCallService } from '../../src/main/agent/plugin-hook-bridge';
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-plife-'));
@@ -53,6 +53,9 @@ beforeEach(() => {
   fs.mkdirSync(tmpRoot, { recursive: true });
   process.env.AP_USER_DATA_DIR = tmpRoot;
   runMigrations();
+  getDb()
+    .prepare(`INSERT OR IGNORE INTO workspaces (id, name, directory_path, owner_id) VALUES ('ws-t', 'T', '/tmp/x', '@o')`)
+    .run();
   resetPluginBusForTest();
 });
 afterEach(() => {
@@ -63,7 +66,7 @@ afterEach(() => {
 
 describe('install → 激活 hooks + service', () => {
   it('dev 注册后：HookBus 有订阅 + service 运行', async () => {
-    installPluginDevDir(mkPlugin('cg'), '2.1.0');
+    installPluginDevDir(mkPlugin('cg'), '2.1.0', 'ws-t');
     await new Promise((r) => setTimeout(r, 30)); // service start 异步（void 发射）
     expect(getPluginBus().listSubscriptions('cg')).toHaveLength(1);
     expect(isServiceRunning('cg')).toBe(true);
@@ -75,7 +78,7 @@ describe('install → 激活 hooks + service', () => {
 
 describe('uninstall → 全清', () => {
   it('hooks 注销 + service 停止', async () => {
-    installPluginDevDir(mkPlugin('cg'), '2.1.0');
+    installPluginDevDir(mkPlugin('cg'), '2.1.0', 'ws-t');
     await new Promise((r) => setTimeout(r, 30));
     uninstallPlugin('cg', true);
     await new Promise((r) => setTimeout(r, 30));
@@ -87,7 +90,7 @@ describe('uninstall → 全清', () => {
 describe('reload → 重激活（新代码）', () => {
   it('service 换实现后 reload → callService 走新代码', async () => {
     const dir = mkPlugin('cg');
-    installPluginDevDir(dir, '2.1.0');
+    installPluginDevDir(dir, '2.1.0', 'ws-t');
     const { callPluginService } = await import('../../src/main/plugin/service-manager');
     await expect(callPluginService('cg', 'ping', {})).resolves.toBe('svc:ping');
     fs.writeFileSync(
@@ -109,8 +112,8 @@ describe('reload → 重激活（新代码）', () => {
 
 describe('stopAllPluginServices', () => {
   it('停全部（app 退出钩语义）', async () => {
-    installPluginDevDir(mkPlugin('a'), '2.1.0');
-    installPluginDevDir(mkPlugin('b'), '2.1.0');
+    installPluginDevDir(mkPlugin('a'), '2.1.0', 'ws-t');
+    installPluginDevDir(mkPlugin('b'), '2.1.0', 'ws-t');
     await new Promise((r) => setTimeout(r, 30));
     await stopAllPluginServices();
     expect(isServiceRunning('a')).toBe(false);
@@ -156,7 +159,7 @@ describe('安装/卸载事件（P3 补线）', () => {
     const events: string[] = [];
     const { wirePluginEventSources } = await import('../../src/main/plugin/event-sources');
     wirePluginEventSources(getPluginBus(), (e) => events.push(e));
-    installPluginDevDir(mkPlugin('cg'), '2.1.0');
+    installPluginDevDir(mkPlugin('cg'), '2.1.0', 'ws-t');
     uninstallPlugin('cg', true);
     expect(events).toContain('resourceInstalled');
     expect(events).toContain('resourceRemoved');

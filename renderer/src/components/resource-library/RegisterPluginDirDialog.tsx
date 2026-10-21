@@ -3,6 +3,7 @@
 // = 刷新版本。成功即自动关闭（反馈走 View 层 installNotice 横幅）；失败错误内联不关弹窗。
 import { useState } from 'react';
 import { ipc } from '../../ipc/client';
+import { useWorkspaceStore } from '../../stores/workspace.store';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { Input } from '../ui/Input';
@@ -14,6 +15,7 @@ interface Props {
 }
 
 export function RegisterPluginDirDialog({ onClose, onSuccess }: Props) {
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const [dir, setDir] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [registering, setRegistering] = useState(false);
@@ -25,7 +27,7 @@ export function RegisterPluginDirDialog({ onClose, onSuccess }: Props) {
     setRegistering(true);
     setError(null);
     try {
-      const summary = await ipc.plugin.installDevDir(trimmed);
+      const summary = await ipc.plugin.installDevDir(trimmed, activeWorkspaceId ?? undefined);
       onSuccess(summary);
       onClose();
     } catch (err) {

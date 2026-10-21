@@ -37,6 +37,9 @@ function mkDevPlugin(): string {
 function seedWs(): void {
   runMigrations();
   getDb()
+    .prepare(`INSERT OR IGNORE INTO workspaces (id, name, directory_path, owner_id) VALUES ('ws-t', 'T', '/tmp/x', '@o')`)
+    .run();
+  getDb()
     .prepare(`INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES ('w', 'W', '/tmp/x', '@o')`)
     .run();
 }
@@ -54,7 +57,7 @@ afterEach(() => {
 describe('插件 skills 可见性', () => {
   it('① manifest skills 声明 → 装配 refs 产出（slug+cachePath 指插件目录）', () => {
     seedWs();
-    installPluginDevDir(mkDevPlugin(), '2.1.0');
+    installPluginDevDir(mkDevPlugin(), '2.1.0', 'w');
     // scoped activation：装后补启用行（Task 3 起安装链自带）
     getDb()
       .prepare(`INSERT OR IGNORE INTO plugin_enablements (workspace_id, plugin_id, enabled) VALUES ('w', 'cgs', 1)`)
@@ -67,7 +70,7 @@ describe('插件 skills 可见性', () => {
 
   it('② 资源面：plugin 源 skill 列出（不可手动删）', () => {
     seedWs();
-    installPluginDevDir(mkDevPlugin(), '2.1.0');
+    installPluginDevDir(mkDevPlugin(), '2.1.0', 'w');
     const items = listCustomResources().filter((i) => i.type === 'skill' && i.slug === 'codegraph-usage');
     expect(items).toHaveLength(1);
     expect(items[0]!.source).toBe('plugin');
@@ -82,7 +85,7 @@ describe('插件 skills 可见性', () => {
       path.join(devDir, 'momo-plugin.json'),
       JSON.stringify({ id: 'ns', name: 'N', version: '1.0.0', description: 'd', components: {} }),
     );
-    installPluginDevDir(devDir, '2.1.0');
+    installPluginDevDir(devDir, '2.1.0', 'ws-t');
     expect(buildPluginSkillRefs('w')).toEqual([]);
   });
 });

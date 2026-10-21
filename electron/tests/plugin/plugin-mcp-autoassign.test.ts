@@ -1,11 +1,13 @@
 // electron/tests/plugin/plugin-mcp-autoassign.test.ts
 //
-// 插件 MCP 默认注入（D2 裁定 2026-10-20：装即所有工作空间可用）RED：
-//   ① 安装注入：插件装好 → 全部现存 ws 获得 (ws, 'mcp', <server>) allocation
-//   ② 新 ws 回填：新建工作空间 → 自动继承全部 plugin source MCP
-//   ③ 卸载级联：卸载插件 → 各 ws 对应 allocation 行清除
+// 安装即作用域（spec 2026-10-21 §5，取代 D2「装即所有工作空间」语义）：
+//   ① 安装零 allocation：mcp_definitions 注册（能力池）但 workspace_allocations 零写入；
+//      enablements 仅 (originWs, plugin, 1) 一行
+//   ② 新 ws 不回填：新建工作空间 → 无任何 plugin MCP 注入（backfill 已退役）
+//   ③ 卸载级联：卸载插件 → mcp 定义 + 各 ws 对应 allocation 行清除
 //   ④ 资源列点亮：resource.list({type:'mcp'}) 含 source='plugin' 行（不可手动删）
 //   ⑤ 手动移除持久性：删行后 syncPluginMcps（reload 路径）不回填
+//   ⑥ 无 origin ws → 拒装（报错且不落盘）
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -50,14 +52,6 @@ function seedTwoWorkspaces(): void {
   }
 }
 
-function allocations(): Array<{ workspace_id: string; capability_ref: string }> {
-  return getDb()
-    .prepare(
-      `SELECT workspace_id, capability_ref FROM workspace_allocations WHERE capability_type='mcp' ORDER BY workspace_id`,
-    )
-    .all() as Array<{ workspace_id: string; capability_ref: string }>;
-}
-
 beforeEach(() => {
   fs.mkdirSync(tmpRoot, { recursive: true });
   process.env.AP_USER_DATA_DIR = tmpRoot;
@@ -69,56 +63,86 @@ afterEach(() => {
   delete process.env.AP_USER_DATA_DIR;
 });
 
-describe('插件 MCP 默认注入（D2：所有工作空间）', () => {
-  it('① 安装注入：dev 注册 → 全部现存 ws 获得 allocation', () => {
+describe('安装即作用域（spec 2026-10-21 §5）', () => {
+  it('① 安装于 ws-1 → MCP 定义注册但 allocation 零写入；enablements 仅 origin 一行', () => {
     seedTwoWorkspaces();
-    installPluginDevDir(mkDevPlugin(), '2.1.0');
-    expect(allocations()).toEqual([
-      { workspace_id: 'ws-1', capability_ref: 'cg-server' },
-      { workspace_id: 'ws-2', capability_ref: 'cg-server' },
-    ]);
-  });
-
-  it('② 新 ws 回填：createWorkspace 自动继承 plugin MCP', async () => {
-    seedTwoWorkspaces();
-    installPluginDevDir(mkDevPlugin(), '2.1.0');
-    const ws = await createWorkspace(
-      { name: 'W3', directoryPath: path.join(tmpRoot, 'w3') },
-      '@o',
-    );
-    const refs = allocations().filter((a) => a.workspace_id === ws.id);
-    expect(refs).toEqual([{ workspace_id: ws.id, capability_ref: 'cg-server' }]);
-  });
-
-  it('③ 卸载级联：uninstallPlugin 清各 ws allocation 行', () => {
-    seedTwoWorkspaces();
-    installPluginDevDir(mkDevPlugin(), '2.1.0');
-    uninstallPlugin('cgp', false);
-    expect(allocations()).toEqual([]);
-  });
-
-  it('④ 资源列点亮：resource.list mcp 含 plugin 源（不可手动删）', () => {
-    seedTwoWorkspaces();
-    installPluginDevDir(mkDevPlugin(), '2.1.0');
-    const items = listCustomResources().filter((i) => i.slug === 'cg-server');
-    expect(items).toHaveLength(1);
-    expect(items[0]!.source).toBe('plugin');
-    expect(items[0]!.removable).toBe(false);
-  });
-
-  it('⑤ 手动移除持久性：删行后 syncPluginMcps（reload 路径）不回填', () => {
-    seedTwoWorkspaces();
-    installPluginDevDir(mkDevPlugin(), '2.1.0');
+    installPluginDevDir(mkDevPlugin(), '2.1.0', 'ws-1');
     const db = getDb();
-    db.prepare(`DELETE FROM workspace_allocations WHERE capability_ref='cg-server'`).run();
-    const row = db
-      .prepare(`SELECT id, version, manifest_json, state, source, source_path, installed_at FROM plugins WHERE id='cgp'`)
-      .get() as unknown;
-    const rec = row as { id: string; version: string; manifestJson: string; state: string; source: string; sourcePath: string; installedAt: string };
-    syncPluginMcps({
-      id: rec.id, version: rec.version, manifestJson: rec.manifestJson, state: rec.state as 'active',
-      source: rec.source as 'dev', sourcePath: rec.sourcePath, installedAt: rec.installedAt,
-    });
-    expect(allocations()).toEqual([]);
+    const defs = db
+      .prepare(`SELECT name FROM mcp_definitions WHERE source='plugin' AND plugin_id='cgp'`)
+      .all() as Array<{ name: string }>;
+    expect(defs.map((d) => d.name)).toEqual(['cg-server']); // 能力池注册 ✓
+    const allocs = db
+      .prepare(`SELECT COUNT(*) AS c FROM workspace_allocations WHERE capability_type='mcp' AND capability_ref='cg-server'`)
+      .get() as { c: number };
+    expect(allocs.c).toBe(0); // 零注入
+    const en = db
+      .prepare(`SELECT workspace_id, enabled FROM plugin_enablements WHERE plugin_id='cgp'`)
+      .all() as Array<{ workspace_id: string; enabled: number }>;
+    expect(en).toEqual([{ workspace_id: 'ws-1', enabled: 1 }]); // 仅 origin ws
+  });
+
+  it('② 新 ws 不回填：createWorkspace 后无 plugin MCP 注入', () => {
+    seedTwoWorkspaces();
+    installPluginDevDir(mkDevPlugin(), '2.1.0', 'ws-1');
+    createWorkspace({ id: 'ws-3', name: 'W3', directoryPath: path.join(tmpRoot, 'w3') });
+    const db = getDb();
+    const rows = db
+      .prepare(`SELECT COUNT(*) AS c FROM workspace_allocations WHERE workspace_id='ws-3' AND capability_type='mcp'`)
+      .get() as { c: number };
+    expect(rows.c).toBe(0);
+    const en = db
+      .prepare(`SELECT COUNT(*) AS c FROM plugin_enablements WHERE workspace_id='ws-3' AND plugin_id='cgp'`)
+      .get() as { c: number };
+    expect(en.c).toBe(0); // 新 ws 默认停用
+  });
+
+  it('③ 卸载级联：mcp 定义 + 各 ws allocation 行清除', () => {
+    seedTwoWorkspaces();
+    installPluginDevDir(mkDevPlugin(), '2.1.0', 'ws-1');
+    // 模拟用户显式授权（allocation 行）后卸载
+    getDb()
+      .prepare(`INSERT INTO workspace_allocations (workspace_id, capability_type, capability_ref) VALUES ('ws-1', 'mcp', 'cg-server')`)
+      .run();
+    uninstallPlugin('cgp', true);
+    const db = getDb();
+    expect(
+      db.prepare(`SELECT COUNT(*) AS c FROM mcp_definitions WHERE plugin_id='cgp'`).get(),
+    ).toMatchObject({ c: 0 });
+    expect(
+      db.prepare(`SELECT COUNT(*) AS c FROM workspace_allocations WHERE capability_ref='cg-server'`).get(),
+    ).toMatchObject({ c: 0 });
+  });
+
+  it('④ 资源列点亮：resource.list({type:\'mcp\'}) 含 source=plugin 行', () => {
+    seedTwoWorkspaces();
+    installPluginDevDir(mkDevPlugin(), '2.1.0', 'ws-1');
+    const rows = listCustomResources().filter((r) => r.type === 'mcp' && r.source === 'plugin');
+    expect(rows.some((r) => r.slug === 'cg-server' && r.removable === false)).toBe(true);
+  });
+
+  it('⑤ 手动移除持久性：删 allocation 行后 syncPluginMcps（reload 路径）不回填', () => {
+    seedTwoWorkspaces();
+    const rec = installPluginDevDir(mkDevPlugin(), '2.1.0', 'ws-1');
+    getDb()
+      .prepare(`INSERT INTO workspace_allocations (workspace_id, capability_type, capability_ref) VALUES ('ws-1', 'mcp', 'cg-server')`)
+      .run();
+    getDb()
+      .prepare(`DELETE FROM workspace_allocations WHERE capability_ref='cg-server'`)
+      .run();
+    syncPluginMcps(rec);
+    expect(
+      getDb()
+        .prepare(`SELECT COUNT(*) AS c FROM workspace_allocations WHERE capability_ref='cg-server'`)
+        .get(),
+    ).toMatchObject({ c: 0 });
+  });
+
+  it('⑥ 无 origin ws → 拒装且不落盘', () => {
+    seedTwoWorkspaces();
+    expect(() => installPluginDevDir(mkDevPlugin('noWs'), '2.1.0', '')).toThrow('无法确定安装作用域');
+    expect(
+      getDb().prepare(`SELECT COUNT(*) AS c FROM plugins WHERE id='noWs'`).get(),
+    ).toMatchObject({ c: 0 });
   });
 });

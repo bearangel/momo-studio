@@ -63,13 +63,17 @@ function toSummary(rec: PluginRecord): PluginSummary {
  *  + listPanels / callService / getConfig / setConfig（P4，spec §6）。
  */
 export function registerPluginHandlers(): void {
-  ipcMain.handle('plugin:installZip', async (_evt, data: Uint8Array, _filename: string) => {
-    const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
-    return toSummary(await installPluginZip(buf, app.getVersion()));
-  });
+  ipcMain.handle(
+    'plugin:installZip',
+    async (_evt, data: Uint8Array, _filename: string, workspaceId?: string) => {
+      const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      // 安装作用域（spec 2026-10-21 §5）：renderer 显式传 ws；缺省取活动工作区
+      return toSummary(await installPluginZip(buf, app.getVersion(), workspaceId ?? getActiveWorkspaceId() ?? ''));
+    },
+  );
 
-  ipcMain.handle('plugin:installDevDir', (_evt, dir: string) => {
-    return toSummary(installPluginDevDir(dir, app.getVersion()));
+  ipcMain.handle('plugin:installDevDir', (_evt, dir: string, workspaceId?: string) => {
+    return toSummary(installPluginDevDir(dir, app.getVersion(), workspaceId ?? getActiveWorkspaceId() ?? ''));
   });
 
   ipcMain.handle(

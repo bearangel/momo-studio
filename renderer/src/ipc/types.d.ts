@@ -1015,8 +1015,8 @@ export interface PluginConfigView {
 
 /** 插件域 IPC 面（P1：安装 / 启停 / 卸载；P2：reload；P4：面板与 config，spec §6） */
 export interface PluginApiSurface {
-  installZip(data: Uint8Array, filename: string): Promise<PluginSummary>;
-  installDevDir(dir: string): Promise<PluginSummary>;
+  installZip(data: Uint8Array, filename: string, workspaceId?: string): Promise<PluginSummary>;
+  installDevDir(dir: string, workspaceId?: string): Promise<PluginSummary>;
   setEnabled(id: string, workspaceId: string, enabled: boolean): Promise<void>;
   uninstall(id: string, keepData: boolean): Promise<void>;
   reload(id: string): Promise<PluginSummary>;

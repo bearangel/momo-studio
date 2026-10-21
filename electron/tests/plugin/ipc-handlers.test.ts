@@ -106,8 +106,8 @@ describe('registerPluginHandlers', () => {
       sourcePath: '/x',
       installedAt: 'x',
     });
-    const summary = (await handlerOf('plugin:installDevDir')({}, '/dev/cg')) as { source: string };
-    expect(installFns.installPluginDevDir).toHaveBeenCalledWith('/dev/cg', '2.1.0');
+    const summary = (await handlerOf('plugin:installDevDir')({}, '/dev/cg', 'ws-act')) as { source: string };
+    expect(installFns.installPluginDevDir).toHaveBeenCalledWith('/dev/cg', '2.1.0', 'ws-act');
     expect(summary.source).toBe('dev');
   });
 

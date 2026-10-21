@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { beforeEach, afterEach, describe, expect, it } from 'vitest';
-import { closeDb, runMigrations } from '../../src/main/storage/db';
+import { closeDb, runMigrations , getDb } from '../../src/main/storage/db';
 import { installPluginDevDir } from '../../src/main/plugin/installer';
 import { getPlugin } from '../../src/main/plugin/registry';
 import { resolvePluginsDir } from '../../src/main/paths';
@@ -31,6 +31,9 @@ beforeEach(() => {
   fs.mkdirSync(tmpRoot, { recursive: true });
   process.env.AP_USER_DATA_DIR = tmpRoot;
   runMigrations();
+  getDb()
+    .prepare(`INSERT OR IGNORE INTO workspaces (id, name, directory_path, owner_id) VALUES ('ws-t', 'T', '/tmp/x', '@o')`)
+    .run();
 });
 afterEach(() => {
   closeDb();
@@ -42,7 +45,7 @@ describe('installPluginDevDir', () => {
   it('注册 dev 源：不拷贝、直读源目录、重复注册刷新版本', () => {
     const devDir = path.join(tmpRoot, 'codegraph-plugin');
     mkDevPlugin(devDir);
-    const rec = installPluginDevDir(devDir, '2.1.0');
+    const rec = installPluginDevDir(devDir, '2.1.0', 'ws-t');
     expect(rec.source).toBe('dev');
     expect(rec.sourcePath).toBe(path.resolve(devDir));
     expect(getPlugin('cg')?.version).toBe('0.1.0');
@@ -57,18 +60,18 @@ describe('installPluginDevDir', () => {
         components: { tools: './tools' },
       }),
     );
-    installPluginDevDir(devDir, '2.1.0');
+    installPluginDevDir(devDir, '2.1.0', 'ws-t');
     expect(getPlugin('cg')?.version).toBe('0.2.0');
   });
 
   it('目录不存在抛中文错', () => {
-    expect(() => installPluginDevDir(path.join(tmpRoot, 'nope'), '2.1.0')).toThrow(/不存在/);
+    expect(() => installPluginDevDir(path.join(tmpRoot, 'nope'), '2.1.0', 'ws-t')).toThrow(/不存在/);
   });
 
   it('目录内缺 manifest 抛中文错', () => {
     const empty = path.join(tmpRoot, 'empty-plugin');
     fs.mkdirSync(empty, { recursive: true });
-    expect(() => installPluginDevDir(empty, '2.1.0')).toThrow(/momo-plugin\.json/);
+    expect(() => installPluginDevDir(empty, '2.1.0', 'ws-t')).toThrow(/momo-plugin\.json/);
   });
 
   it('manifest 校验失败抛含字段路径的错误', () => {
@@ -84,7 +87,7 @@ describe('installPluginDevDir', () => {
         components: { tools: './tools' },
       }),
     );
-    expect(() => installPluginDevDir(devDir, '2.1.0')).toThrow(/id/);
+    expect(() => installPluginDevDir(devDir, '2.1.0', 'ws-t')).toThrow(/id/);
   });
 
   it('minAppVersion 高于当前版本拒装', () => {
@@ -101,6 +104,6 @@ describe('installPluginDevDir', () => {
         minAppVersion: '3.0.0',
       }),
     );
-    expect(() => installPluginDevDir(devDir, '2.1.0')).toThrow(/需要应用版本/);
+    expect(() => installPluginDevDir(devDir, '2.1.0', 'ws-t')).toThrow(/需要应用版本/);
   });
 });

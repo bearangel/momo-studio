@@ -14,7 +14,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
-import { backfillPluginMcpsForWorkspace } from '../plugin/mcp-sync';
 import { clearSessionGrants, clearWorkspaceGrants } from '../sandbox/write-grant';
 import type { Workspace, CreateWorkspaceInput } from './types';
 import { initGitRepo } from './git';
@@ -90,15 +89,6 @@ export async function createWorkspace(
     `INSERT INTO workspace_members (workspace_id, matrix_user_id, role) VALUES (?, ?, 'owner')`,
   ).run(id, ownerUserId);
 
-  // D2 裁定：新工作空间继承全部插件 MCP（装即全空间可用）
-  try {
-    backfillPluginMcpsForWorkspace(id);
-  } catch (err) {
-    logger.warn('新工作空间插件 MCP 回填失败（不阻断创建）', {
-      id,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
 
   const row = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id) as WorkspaceRow;
   logger.info('Workspace 已创建', { id, name: input.name, dir });

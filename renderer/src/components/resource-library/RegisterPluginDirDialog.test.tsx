@@ -45,7 +45,7 @@ describe('RegisterPluginDirDialog', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: '注册' }));
     await waitFor(() =>
-      expect(installDevDir).toHaveBeenCalledWith('/Users/x/dev/plugins/codegraph-plugin'),
+      expect(installDevDir).toHaveBeenCalledWith('/Users/x/dev/plugins/codegraph-plugin', undefined),
     );
     await waitFor(() => expect(onSuccess).toHaveBeenCalledWith(SUMMARY));
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));

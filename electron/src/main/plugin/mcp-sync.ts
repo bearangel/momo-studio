@@ -136,34 +136,7 @@ export function syncPluginMcps(rec: PluginRecord): string[] {
   return registered;
 }
 
-/** 插件 MCP 默认注入所有工作空间（D2 裁定 2026-10-20：装即全空间可用）。
- *  幂等（INSERT OR IGNORE）；仅 install 链调用——reload/同步路径不注入
- *  （用户手动移除的行在正常运行期保持移除态，重装才重新默认）。 */
-export function assignPluginMcpsToAllWorkspaces(serverNames: string[]): void {
-  if (serverNames.length === 0) return;
-  const db = getDb();
-  const wsIds = db.prepare(`SELECT id FROM workspaces`).all() as Array<{ id: string }>;
-  const ins = db.prepare(
-    `INSERT OR IGNORE INTO workspace_allocations (workspace_id, capability_type, capability_ref, added_at)
-     VALUES (?, 'mcp', ?, datetime('now'))`,
-  );
-  for (const { id } of wsIds) {
-    for (const name of serverNames) ins.run(id, name);
-  }
-}
 
-/** 新工作空间回填：全部 plugin source MCP server 注入该 ws（createWorkspace 调用） */
-export function backfillPluginMcpsForWorkspace(workspaceId: string): void {
-  const db = getDb();
-  const names = db
-    .prepare(`SELECT name FROM mcp_definitions WHERE source='plugin'`)
-    .all() as Array<{ name: string }>;
-  const ins = db.prepare(
-    `INSERT OR IGNORE INTO workspace_allocations (workspace_id, capability_type, capability_ref, added_at)
-     VALUES (?, 'mcp', ?, datetime('now'))`,
-  );
-  for (const { name } of names) ins.run(workspaceId, name);
-}
 
 /** 收敛：清理本插件下已不在 mcp.json 中的幽灵定义（含 agent 引用）——审查 I3 */
 function pruneStaleMcpDefs(pluginId: string, liveNames: string[]): void {

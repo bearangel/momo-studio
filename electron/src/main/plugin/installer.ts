@@ -23,13 +23,13 @@ import type { PluginManifest } from './types';
 import { validatePanelsAtRoot, notifyPanelsChanged } from './panel-sync';
 import { normalizeConfigSchema, sensitiveRef, evictPluginConfigCache } from './config-store';
 import { deleteSecret } from '../storage/keychain';
-import { upsertPlugin, getPlugin, removePluginRecord } from './registry';
+import { upsertPlugin, getPlugin, removePluginRecord, setPluginEnabled } from './registry';
 import { registerPluginAgents, removePluginAgents } from './agent-sync';
 import { syncPluginHooks, removePluginHooks } from './hook-sync';
 import { startPluginService, stopPluginService } from './service-manager';
 import { getPluginBus } from './bus-instance';
 import { emitPluginEvent } from './event-sources';
-import { syncPluginMcps, removePluginMcps, assignPluginMcpsToAllWorkspaces } from './mcp-sync';
+import { syncPluginMcps, removePluginMcps } from './mcp-sync';
 import type { PluginRecord } from './types';
 
 /** zip bomb 守卫：累计解压上限 200MB */
@@ -123,7 +123,12 @@ function extractVendorArchives(manifest: PluginManifest, staging: string): void 
   }
 }
 
-export async function installPluginZip(data: Buffer, currentAppVersion: string): Promise<PluginRecord> {
+export async function installPluginZip(
+  data: Buffer,
+  currentAppVersion: string,
+  originWorkspaceId: string,
+): Promise<PluginRecord> {
+  assertOriginWorkspace(originWorkspaceId);
   const zip = new AdmZip(data);
   const entries = zip.getEntries().filter((e) => !e.isDirectory && !isIgnoredEntry(e.entryName));
   if (entries.length > MAX_ENTRIES) throw new Error(`zip 条目数超限（>${MAX_ENTRIES}）`);
@@ -210,7 +215,7 @@ export async function installPluginZip(data: Buffer, currentAppVersion: string):
       installedAt: new Date().toISOString(),
     };
     upsertPlugin(rec);
-    activateDeclarativeComponents(rec);
+    activateDeclarativeComponents(rec, originWorkspaceId);
     emitPluginEvent('resourceInstalled', { type: 'plugin', id: rec.id });
     notifyPanelsChanged(); // I1 修复：zip 是 marketplace 主通道，与 dev 链对齐
     return rec;
@@ -221,7 +226,12 @@ export async function installPluginZip(data: Buffer, currentAppVersion: string):
 }
 
 /** dev 目录注册：不拷贝，直读源目录（改码→重载即生效的开发流，spec §7.2） */
-export function installPluginDevDir(dir: string, currentAppVersion: string): PluginRecord {
+export function installPluginDevDir(
+  dir: string,
+  currentAppVersion: string,
+  originWorkspaceId: string,
+): PluginRecord {
+  assertOriginWorkspace(originWorkspaceId);
   const abs = path.resolve(dir);
   if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
     throw new Error(`dev 插件目录不存在: ${abs}`);
@@ -245,15 +255,23 @@ export function installPluginDevDir(dir: string, currentAppVersion: string): Plu
     installedAt: new Date().toISOString(),
   };
   upsertPlugin(rec);
-  activateDeclarativeComponents(rec);
+  activateDeclarativeComponents(rec, originWorkspaceId);
   emitPluginEvent('resourceInstalled', { type: 'plugin', id: rec.id });
   notifyPanelsChanged();
   return rec;
 }
 
+/** 安装作用域守卫（spec 2026-10-21 §5）：无 origin ws 即拒——scoped 语义下
+ *  enablement 单行必须落在确定的工作空间，静默全局启用不可接受 */
+function assertOriginWorkspace(originWorkspaceId: string): void {
+  if (!originWorkspaceId) {
+    throw new Error('无活动工作空间，无法确定安装作用域');
+  }
+}
+
 /** 声明式组件激活（hooks 订阅 / service 启动 / agents 落库 / mcp 注册；
  * skills 零复制无激活步）。整层异常降级为 warn——安装不因单个组件面失败 */
-function activateDeclarativeComponents(rec: PluginRecord): void {
+function activateDeclarativeComponents(rec: PluginRecord, originWorkspaceId: string): void {
   try {
     syncPluginHooks(rec, getPluginBus());
   } catch (err) {
@@ -272,14 +290,17 @@ function activateDeclarativeComponents(rec: PluginRecord): void {
     });
   }
   try {
-    // D2 裁定：插件 MCP 装即注入所有工作空间（仅 install 链；reload 不注入）
-    assignPluginMcpsToAllWorkspaces(syncPluginMcps(rec));
+    // scoped activation（spec §5）：MCP 定义照常注册（能力池），allocation 零写入——
+    // agent 获得途径 = def 声明 / 工作空间显式授权 / 成员勾选
+    syncPluginMcps(rec);
   } catch (err) {
     logger.warn('插件 MCP 激活失败（可重载重试）', {
       pluginId: rec.id,
       error: err instanceof Error ? err.message : String(err),
     });
   }
+  // 安装 ws 单行启用（其他 ws 行缺失=停用；重装同 id 覆盖为新 origin）
+  setPluginEnabled(rec.id, originWorkspaceId, true);
 }
 
 /**

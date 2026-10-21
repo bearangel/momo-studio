@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
 import { beforeEach, afterEach, describe, expect, it } from 'vitest';
-import { closeDb, runMigrations } from '../../src/main/storage/db';
+import { closeDb, runMigrations, getDb } from '../../src/main/storage/db';
 import {
   installPluginZip,
   uninstallPlugin,
@@ -40,6 +40,9 @@ beforeEach(() => {
   fs.mkdirSync(tmpRoot, { recursive: true });
   process.env.AP_USER_DATA_DIR = tmpRoot;
   runMigrations();
+  getDb()
+    .prepare(`INSERT OR IGNORE INTO workspaces (id, name, directory_path, owner_id) VALUES ('ws-t', 'T', '/tmp/x', '@o')`)
+    .run();
 });
 afterEach(() => {
   closeDb();
@@ -49,7 +52,7 @@ afterEach(() => {
 
 describe('installPluginZip', () => {
   it('合法 zip 落位 installed/<id>/<version> 并注册', async () => {
-    const rec = await installPluginZip(makePluginZip(VALID_FILES), '2.1.0');
+    const rec = await installPluginZip(makePluginZip(VALID_FILES), '2.1.0', 'ws-t');
     expect(rec.id).toBe('cg');
     const dir = resolvePluginInstalledDir('cg', '0.1.0');
     expect(fs.existsSync(path.join(dir, 'momo-plugin.json'))).toBe(true);
@@ -70,7 +73,7 @@ describe('installPluginZip', () => {
     zip.addFile('a.bin', big);
     zip.addFile('b.bin', big);
     zip.addFile('c.bin', big);
-    await expect(installPluginZip(zip.toBuffer(), '2.1.0')).rejects.toThrow(/解压总量超限/);
+    await expect(installPluginZip(zip.toBuffer(), '2.1.0', 'ws-t')).rejects.toThrow(/解压总量超限/);
   });
 
   it('说谎的 zip 头（声明小于实际）：拒装 + 零残留 + 不落库（审查 I2）', async () => {
@@ -89,7 +92,7 @@ describe('installPluginZip', () => {
     for (const e of zip.getEntries()) {
       if (e.entryName.endsWith('.bin')) e.header.size = 90 * 1024 * 1024;
     }
-    await expect(installPluginZip(zip.toBuffer(), '2.1.0')).rejects.toThrow();
+    await expect(installPluginZip(zip.toBuffer(), '2.1.0', 'ws-t')).rejects.toThrow();
     expect(getPlugin('liar')).toBeNull();
     const staging = fs
       .readdirSync(path.join(tmpRoot, 'plugins'))
@@ -110,7 +113,7 @@ describe('installPluginZip', () => {
       ),
     );
     zip.addFile('../escape.txt', Buffer.from('x'));
-    await installPluginZip(zip.toBuffer(), '2.1.0');
+    await installPluginZip(zip.toBuffer(), '2.1.0', 'ws-t');
     expect(fs.existsSync(path.join(tmpRoot, 'escape.txt'))).toBe(false);
     const dir = resolvePluginInstalledDir('evil', '0.1.0');
     expect(fs.readdirSync(dir)).toContain('momo-plugin.json');
@@ -128,7 +131,7 @@ describe('installPluginZip', () => {
         components: {},
       }),
     };
-    await expect(installPluginZip(makePluginZip(bad), '2.1.0')).rejects.toThrow(/id/);
+    await expect(installPluginZip(makePluginZip(bad), '2.1.0', 'ws-t')).rejects.toThrow(/id/);
     const staging = fs
       .readdirSync(path.join(tmpRoot, 'plugins'))
       .filter((f) => f.startsWith('.staging'));
@@ -147,13 +150,13 @@ describe('installPluginZip', () => {
         minAppVersion: '2.2.0',
       }),
     };
-    await expect(installPluginZip(makePluginZip(newer), '2.1.0')).rejects.toThrow(
+    await expect(installPluginZip(makePluginZip(newer), '2.1.0', 'ws-t')).rejects.toThrow(
       /需要应用版本.*2\.2\.0/,
     );
   });
 
   it('同 id 新版本重装 = 替换（单版本驻留，旧目录消失）', async () => {
-    await installPluginZip(makePluginZip(VALID_FILES), '2.1.0');
+    await installPluginZip(makePluginZip(VALID_FILES), '2.1.0', 'ws-t');
     const v2 = {
       ...VALID_FILES,
       'momo-plugin.json': JSON.stringify({
@@ -164,7 +167,7 @@ describe('installPluginZip', () => {
         components: { tools: './tools' },
       }),
     };
-    await installPluginZip(makePluginZip(v2), '2.1.0');
+    await installPluginZip(makePluginZip(v2), '2.1.0', 'ws-t');
     expect(fs.existsSync(resolvePluginInstalledDir('cg', '0.1.0'))).toBe(false);
     expect(fs.existsSync(resolvePluginInstalledDir('cg', '0.2.0'))).toBe(true);
     expect(getPlugin('cg')?.version).toBe('0.2.0');
@@ -186,7 +189,7 @@ describe('installPluginZip', () => {
       ),
     );
     zip.addFile('codegraph/tools/cg.js', Buffer.from('module.exports.createTools = () => ({});'));
-    const rec = await installPluginZip(zip.toBuffer(), '2.1.0');
+    const rec = await installPluginZip(zip.toBuffer(), '2.1.0', 'ws-t');
     expect(rec.id).toBe('cg');
     const dir = resolvePluginInstalledDir('cg', '0.1.0');
     expect(fs.existsSync(path.join(dir, 'tools', 'cg.js'))).toBe(true);
@@ -195,7 +198,7 @@ describe('installPluginZip', () => {
 
 describe('uninstallPlugin', () => {
   it('zip 源卸载删行删目录；keepData=false 删 data', async () => {
-    await installPluginZip(makePluginZip(VALID_FILES), '2.1.0');
+    await installPluginZip(makePluginZip(VALID_FILES), '2.1.0', 'ws-t');
     const dataDir = resolvePluginDataDir('cg');
     fs.mkdirSync(dataDir, { recursive: true });
     fs.writeFileSync(path.join(dataDir, 'state.json'), '{}');
@@ -206,7 +209,7 @@ describe('uninstallPlugin', () => {
   });
 
   it('keepData=true 保留 data 目录', async () => {
-    await installPluginZip(makePluginZip(VALID_FILES), '2.1.0');
+    await installPluginZip(makePluginZip(VALID_FILES), '2.1.0', 'ws-t');
     const dataDir = resolvePluginDataDir('cg');
     fs.mkdirSync(dataDir, { recursive: true });
     uninstallPlugin('cg', true);
@@ -253,7 +256,7 @@ describe('审查修复 I1/I2/I3', () => {
       components: { tools: './tools' },
       config: { type: 'object', properties: { n: { type: 'integer' } } },
     });
-    await expect(installPluginZip(makePluginZip(bad), '2.1.0')).rejects.toThrow();
+    await expect(installPluginZip(makePluginZip(bad), '2.1.0', 'ws-t')).rejects.toThrow();
   });
 
   it('I3：合法 config schema → 安装通过', async () => {
@@ -263,7 +266,7 @@ describe('审查修复 I1/I2/I3', () => {
       components: { tools: './tools' },
       config: { type: 'object', properties: { t: { type: 'string', sensitive: true } }, required: [] },
     });
-    const rec = await installPluginZip(makePluginZip(ok), '2.1.0');
+    const rec = await installPluginZip(makePluginZip(ok), '2.1.0', 'ws-t');
     expect(rec.id).toBe('cg');
   });
 
@@ -282,7 +285,7 @@ describe('审查修复 I1/I2/I3', () => {
       components: { tools: './tools' },
       config: { type: 'object', properties: { t: { type: 'string', sensitive: true } }, required: [] },
     });
-    const rec = await installPluginZip(makePluginZip(withCfg), '2.1.0');
+    const rec = await installPluginZip(makePluginZip(withCfg), '2.1.0', 'ws-t');
     // 预置缓存有值（模拟运行期）
     await (await import('../../src/main/plugin/config-store')).warmPluginConfigCache('cg', {
       properties: { t: { type: 'string', sensitive: true } }, required: [],
@@ -313,7 +316,7 @@ describe('审查修复 I1/I2/I3', () => {
       }),
       'panel/index.html': '<html></html>',
     };
-    await installPluginZip(makePluginZip(panelFiles), '2.1.0');
+    await installPluginZip(makePluginZip(panelFiles), '2.1.0', 'ws-t');
     const { listPluginPanels } = await import('../../src/main/plugin/panel-sync');
     const { getDb } = await import('../../src/main/storage/db');
     getDb()
