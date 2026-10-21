@@ -1,9 +1,9 @@
 // renderer/src/components/agent/PluginToolsSection.tsx
 //
-// 插件工具门控分组（功能全面性规则 2026-10-17 抽公共）：DefinitionEditor
-// （定义级 deniedTools）与 MemberEditDialog（成员级 deltas）共用。
-// 「denied 模式串」换算纯函数 computeDeniedTools 供定义级；成员级的
-// add/remove 模型换算见 computePluginToolDeltas（capability-helpers）。
+// 插件工具分组（受控组件，spec 2026-10-21 §9③）：checkedFullNames + onToggle——
+// 勾态完全由调用方给定（Member=授权集公式 / Definition=全量−denied），
+// changed 可为精确名或 `plugin:<id>/*` 组模式串，换算归调用方。
+// 定义级 deniedTools 维护的组展开算法（computeDeniedTools）仍从本文件导出。
 import type { PluginToolInfo } from '../../ipc/types';
 
 /** 定义级换算（deniedTools 整体清单维护）：
@@ -34,17 +34,26 @@ export function computeDeniedTools(
   return [...base, ...rest];
 }
 
+/** denied 模式串命中（精确名或组前缀）——DefinitionEditor 由 deniedTools 换算 checked 用 */
+export function deniedMatch(fullName: string, patterns: string[]): boolean {
+  for (const p of patterns) {
+    if (p === fullName) return true;
+    if (p.endsWith('/*') && fullName.startsWith(p.slice(0, -1))) return true;
+  }
+  return false;
+}
+
 export interface PluginToolsSectionProps {
-  tools: Array<{ pluginId: string; pluginName: string; fullName: string; description: string }>;
-  deniedTools: string[];
-  onChange: (next: string[]) => void;
+  tools: PluginToolInfo[];
+  /** 当前生效（勾选）的工具全名集——受控 */
+  checkedFullNames: string[];
+  /** 勾选变化：changed 为精确名或 `plugin:<id>/*` 组模式串 */
+  onToggle: (changed: string, next: boolean) => void;
   disabled: boolean;
 }
 
-/** 插件工具分组：组头整插件开关 + 组内单工具开关，默认全开。
- *  勾选 = 启用（2026-10-20 语义反转：原「勾选=禁用」反直觉，用户实测误勾致整组禁用） */
-export function PluginToolsSection({ tools, deniedTools, onChange, disabled }: PluginToolsSectionProps) {
-  const byPlugin = new Map<string, typeof tools>();
+export function PluginToolsSection({ tools, checkedFullNames, onToggle, disabled }: PluginToolsSectionProps) {
+  const byPlugin = new Map<string, PluginToolInfo[]>();
   for (const t of tools) {
     const list = byPlugin.get(t.pluginId) ?? [];
     list.push(t);
@@ -54,45 +63,40 @@ export function PluginToolsSection({ tools, deniedTools, onChange, disabled }: P
     <div className="flex flex-col gap-1.5">
       <div className="text-xs text-secondary">插件工具</div>
       {[...byPlugin.entries()].map(([pluginId, list]) => {
-        const group = `plugin:${pluginId}/*`;
-        const groupDenied = deniedTools.includes(group);
-        const allDenied = list.every((t) => groupDenied || deniedTools.includes(t.fullName));
-        const someDenied = groupDenied || list.some((t) => deniedTools.includes(t.fullName));
+        const fullNames = list.map((t) => t.fullName);
+        const checkedCount = fullNames.filter((n) => checkedFullNames.includes(n)).length;
+        const all = checkedCount === fullNames.length;
+        const some = checkedCount > 0 && !all;
         return (
           <div key={pluginId} className="rounded-md border border-subtle bg-surface-2 px-2.5 py-2">
             <label className="flex items-center gap-2 text-xs text-primary">
               <input
                 type="checkbox"
                 aria-label={`启用插件 ${list[0]!.pluginName} 全部工具`}
-                checked={!allDenied}
+                checked={all}
+                ref={(el) => { if (el) el.indeterminate = some; }}
                 disabled={disabled}
-                onChange={(e) =>
-                  onChange(computeDeniedTools(deniedTools, pluginId, list.map((t) => t.fullName), group, e.target.checked))
-                }
+                onChange={(e) => onToggle(`plugin:${pluginId}/*`, e.target.checked)}
               />
               <span className="font-medium">{list[0]!.pluginName}</span>
               <span className="font-mono text-[10px] text-tertiary">{pluginId}</span>
-              {someDenied && !allDenied && <span className="text-[10px] text-tertiary">部分禁用</span>}
+              {some && <span className="text-[10px] text-tertiary">部分启用</span>}
+              {!some && !all && <span className="text-[10px] text-tertiary">全不启用</span>}
             </label>
             <div className="mt-1 flex flex-col gap-0.5 pl-5">
-              {list.map((t) => {
-                const denied = groupDenied || deniedTools.includes(t.fullName);
-                return (
-                  <label key={t.fullName} className="flex items-center gap-2 text-xs text-secondary">
-                    <input
-                      type="checkbox"
-                      aria-label={`启用 ${t.fullName}`}
-                      checked={!denied}
-                      disabled={disabled}
-                      onChange={(e) =>
-                        onChange(computeDeniedTools(deniedTools, pluginId, list.map((x) => x.fullName), t.fullName, e.target.checked))
-                      }
-                    />
-                    <span className="font-mono">{t.fullName}</span>
-                    <span className="text-tertiary">{t.description}</span>
-                  </label>
-                );
-              })}
+              {list.map((t) => (
+                <label key={t.fullName} className="flex items-center gap-2 text-xs text-secondary">
+                  <input
+                    type="checkbox"
+                    aria-label={`启用 ${t.fullName}`}
+                    checked={checkedFullNames.includes(t.fullName)}
+                    disabled={disabled}
+                    onChange={(e) => onToggle(t.fullName, e.target.checked)}
+                  />
+                  <span className="font-mono">{t.fullName}</span>
+                  <span className="text-tertiary">{t.description}</span>
+                </label>
+              ))}
             </div>
           </div>
         );

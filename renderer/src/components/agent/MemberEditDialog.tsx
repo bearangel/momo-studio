@@ -31,7 +31,7 @@ import { Dialog } from '../ui/Dialog';
 import { CapabilityTabs } from './CapabilityTabs';
 import { PluginToolsSection } from './PluginToolsSection';
 import { usePluginTools } from '../../lib/usePluginTools';
-import { computePluginToolDeltas, effectivePluginDenied } from '../../lib/capability-helpers';
+import { computePluginToolGrants, effectivePluginGranted } from '../../lib/capability-helpers';
 import { ProviderModelPicker } from './ProviderModelPicker';
 import { ThinkingOverrideControl } from './ThinkingOverrideControl';
 import {
@@ -94,9 +94,16 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
     addedPluginTools: [],
     removedPluginTools: [],
   });
-  const effectiveDenied = effectivePluginDenied(def.deniedTools ?? [], pluginDeltas);
+  // 授权模型（spec 2026-10-21 §6）：勾=授权行；生效=(ws授权∪added)−(removed∪def禁)
+  const wsGranted = defCaps.tools.filter((t) => t.startsWith('plugin:'));
+  const pluginChecked = effectivePluginGranted(
+    def.deniedTools ?? [],
+    pluginDeltas,
+    wsGranted,
+    (pluginTools ?? []).map((t) => t.fullName),
+  );
   const handlePluginToggle = (changed: string, on: boolean): void => {
-    setPluginDeltas((prev) => computePluginToolDeltas(def.deniedTools ?? [], prev, changed, on));
+    setPluginDeltas((prev) => computePluginToolGrants(def.deniedTools ?? [], prev, changed, on));
   };
 
   const [loading, setLoading] = useState(true);
@@ -252,19 +259,8 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
               <section className="flex flex-col gap-2 border-t border-subtle pt-3">
                 <PluginToolsSection
                   tools={pluginTools ?? []}
-                  deniedTools={effectiveDenied}
-                  onChange={(nextDenied) => {
-                    // 反解：由目标 denied 终态对每个工具/组求 changed+on（终态驱动，
-                    // 与 checkbox 语义一致——增量换算在 computePluginToolDeltas 内完成）
-                    const current = new Set(effectiveDenied);
-                    const target = new Set(nextDenied);
-                    for (const pat of [...target].filter((x) => !current.has(x))) {
-                      handlePluginToggle(pat, false);
-                    }
-                    for (const pat of [...current].filter((x) => !target.has(x))) {
-                      handlePluginToggle(pat, true);
-                    }
-                  }}
+                  checkedFullNames={pluginChecked}
+                  onToggle={handlePluginToggle}
                   disabled={false}
                 />
               </section>

@@ -127,41 +127,47 @@ export function isEmptyDeltas(deltas: AssignmentDeltas): boolean {
 }
 
 
-/** 成员级插件工具覆盖换算（功能全面性规则 2026-10-17）：
- *  effectiveDenied = (defDenied ∪ removed) − added（merger 同款保守语义——
- *  冲突时禁用胜出由 merger 保证，此处 UI 换算不产生冲突行）。
- *  changed 关（禁用）：在 defDenied → removed 加；在 added → added 删；否则 removed 加。
- *  changed 开（启用）：在 removed → removed 删；在 defDenied → added 加；否则 removed 删。 */
-export function computePluginToolDeltas(
-  defDenied: string[],
+/** 成员级插件工具授权换算（spec 2026-10-21 §6——翻转旧 denied 模型）：
+ *  生效 = (ws 授权 ∪ added) − (removed ∪ def 禁)。勾 = 写 added 授权行（并清该名
+ *  removed）；取消 = 写 removed 行（并清 added——ws 级授权的成员级取消）。
+ *  changed 可为精确名或 `plugin:<id>/*` 组模式串（electron toolRefMatches 命中）。 */
+export function computePluginToolGrants(
+  _defDenied: string[],
   deltas: Pick<AssignmentDeltas, 'addedPluginTools' | 'removedPluginTools'>,
   changed: string,
   on: boolean,
 ): { addedPluginTools: string[]; removedPluginTools: string[] } {
   const added = new Set(deltas.addedPluginTools ?? []);
   const removed = new Set(deltas.removedPluginTools ?? []);
-  const defHas = defDenied.includes(changed);
-  if (!on) {
-    if (added.has(changed)) added.delete(changed);
-    removed.add(changed);
+  if (on) {
+    removed.delete(changed);
+    added.add(changed);
   } else {
-    if (removed.has(changed)) {
-      removed.delete(changed);
-      if (defHas) added.add(changed); // 成员级禁用回退：定义也禁 → 需正向覆盖
-    } else if (defHas) {
-      added.add(changed); // 定义级禁用的重新启用（无 removed 行）→ 正向覆盖行
-    }
-    // 其余（非 delta 非禁）开 = no-op
+    added.delete(changed);
+    removed.add(changed);
   }
   return { addedPluginTools: [...added], removedPluginTools: [...removed] };
 }
 
-/** 成员级插件工具生效态（渲染初值）：(defDenied ∪ removed) − added */
-export function effectivePluginDenied(
+/** 模式串命中：精确名或 `plugin:<id>/*` 组前缀（与 electron toolRefMatches 同款） */
+function matchesToolPattern(fullName: string, patterns: string[]): boolean {
+  for (const p of patterns) {
+    if (p === fullName) return true;
+    if (p.endsWith('/*') && fullName.startsWith(p.slice(0, -1))) return true;
+  }
+  return false;
+}
+
+/** 成员级插件工具生效授权集（渲染初值，spec §6 公式）：
+ *  工具全名域 = (wsGranted ∪ added) 授予 − (removed ∪ def 禁)，模式串展开语义
+ *  与 electron spawn 侧 toolRefMatches 完全对齐 */
+export function effectivePluginGranted(
   defDenied: string[],
   deltas: Pick<AssignmentDeltas, 'addedPluginTools' | 'removedPluginTools'>,
+  wsGranted: string[],
+  toolFullNames: string[],
 ): string[] {
-  const base = new Set([...defDenied, ...(deltas.removedPluginTools ?? [])]);
-  for (const a of deltas.addedPluginTools ?? []) base.delete(a);
-  return [...base];
+  const grant = [...wsGranted, ...(deltas.addedPluginTools ?? [])];
+  const deny = [...defDenied, ...(deltas.removedPluginTools ?? [])];
+  return toolFullNames.filter((n) => matchesToolPattern(n, grant) && !matchesToolPattern(n, deny));
 }

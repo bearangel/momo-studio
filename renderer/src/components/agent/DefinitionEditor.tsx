@@ -25,7 +25,7 @@ import { ProviderModelPicker } from './ProviderModelPicker';
 import { ThinkingOverrideControl } from './ThinkingOverrideControl';
 import { useToolCatalog } from '../../lib/useToolCatalog';
 import { usePluginTools } from '../../lib/usePluginTools';
-import { PluginToolsSection } from './PluginToolsSection';
+import { PluginToolsSection, computeDeniedTools, deniedMatch } from './PluginToolsSection';
 import { defToCapabilities } from '../../lib/capability-helpers';
 import type { AgentDefinition, ReasoningCapability, ThinkingConfig } from '../../ipc/types';
 
@@ -235,8 +235,23 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
           {(pluginTools?.length ?? 0) > 0 && (
             <PluginToolsSection
               tools={pluginTools ?? []}
-              deniedTools={deniedTools}
-              onChange={setDeniedTools}
+              checkedFullNames={(pluginTools ?? [])
+                .map((t) => t.fullName)
+                .filter((n) => !deniedMatch(n, deniedTools))}
+              onToggle={(changed, next) => {
+                // 定义级语义保留（spec §6 黑名单优先）：changed 为组模式或精确名，
+                // 组模式需按插件展开——从串反解 pluginId
+                const pid = changed.slice('plugin:'.length).split('/')[0] ?? '';
+                setDeniedTools((prev) =>
+                  computeDeniedTools(
+                    prev,
+                    pid,
+                    (pluginTools ?? []).filter((t) => t.pluginId === pid).map((t) => t.fullName),
+                    changed,
+                    next,
+                  ),
+                );
+              }}
               disabled={readOnly}
             />
           )}

@@ -527,44 +527,47 @@ describe('MemberEditDialog — 插件工具覆盖（铁律 4/5：builtin 存量�
     { pluginId: 'cg', pluginName: 'Codegraph 代码图谱', toolName: 'status', fullName: 'plugin:cg/status', description: '索引状态' },
   ];
 
-  it('builtin agent（只读定义）渲染插件分组；组头关闭 → setMemberDeltas 携带 removedPluginTools', async () => {
+  it('builtin agent（只读定义）渲染插件分组；新语义默认全不勾，组头勾选 → addedPluginTools 授权行', async () => {
     listAssembledTools.mockResolvedValue(TOOLS);
     const def = buildDef({ id: 'builtin-coder', name: 'Smith', source: 'builtin' as AgentDefinition['source'] });
     render(<MemberEditDialog member={buildMember()} def={def} onClose={() => {}} />);
     expect(await screen.findByText('插件工具')).toBeInTheDocument();
     expect(screen.getByText('plugin:cg/explore')).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText('启用插件 Codegraph 代码图谱 全部工具'));
-    fireEvent.click(screen.getByText('保存'));
-    await waitFor(() => expect(setMemberDeltasMock).toHaveBeenCalled());
-    const arg = setMemberDeltasMock.mock.calls[0]![1] as AssignmentDeltas;
-    expect(arg.removedPluginTools).toEqual(['plugin:cg/*']);
-    expect(arg.addedPluginTools).toEqual([]);
-  });
-
-  it('定义级禁用 + 成员重新启用 → addedPluginTools 正向覆盖行', async () => {
-    listAssembledTools.mockResolvedValue(TOOLS);
-    getMemberDeltasMock.mockResolvedValue({ ...EMPTY_DELTAS });
-    const def = buildDef({ deniedTools: ['plugin:cg/*'] });
-    render(<MemberEditDialog member={buildMember()} def={def} onClose={() => {}} />);
-    await screen.findByText('插件工具');
-    // 初值：整组禁用态（定义级）
+    // 默认关（spec 2026-10-21 §6：插件工具默认不给任何 agent）
     expect(screen.getByLabelText('启用插件 Codegraph 代码图谱 全部工具')).not.toBeChecked();
+    expect(screen.getByText('全不启用')).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText('启用插件 Codegraph 代码图谱 全部工具'));
     fireEvent.click(screen.getByText('保存'));
     await waitFor(() => expect(setMemberDeltasMock).toHaveBeenCalled());
     const arg = setMemberDeltasMock.mock.calls[0]![1] as AssignmentDeltas;
     expect(arg.addedPluginTools).toEqual(['plugin:cg/*']);
+    expect(arg.removedPluginTools).toEqual([]);
   });
 
-  it('打开时回放成员级 delta 初值（removed 生效态正确）', async () => {
+  it('定义级禁用（黑名单最高优先）：勾选写 added 行但生效被 def 禁压制（checked 回弹）', async () => {
+    listAssembledTools.mockResolvedValue(TOOLS);
+    getMemberDeltasMock.mockResolvedValue({ ...EMPTY_DELTAS });
+    const def = buildDef({ deniedTools: ['plugin:cg/*'] });
+    render(<MemberEditDialog member={buildMember()} def={def} onClose={() => {}} />);
+    await screen.findByText('插件工具');
+    expect(screen.getByLabelText('启用插件 Codegraph 代码图谱 全部工具')).not.toBeChecked();
+    fireEvent.click(screen.getByLabelText('启用插件 Codegraph 代码图谱 全部工具'));
+    fireEvent.click(screen.getByText('保存'));
+    await waitFor(() => expect(setMemberDeltasMock).toHaveBeenCalled());
+    const arg = setMemberDeltasMock.mock.calls[0]![1] as AssignmentDeltas;
+    // 行照写（引擎侧公式 deny 优先压制——勾选意图留档）
+    expect(arg.addedPluginTools).toEqual(['plugin:cg/*']);
+  });
+
+  it('打开时回放成员级授权初值（added 行点亮对应工具；未授权不亮）', async () => {
     listAssembledTools.mockResolvedValue(TOOLS);
     getMemberDeltasMock.mockResolvedValue({
       ...EMPTY_DELTAS,
-      removedPluginTools: ['plugin:cg/explore'],
+      addedPluginTools: ['plugin:cg/status'],
     });
     render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />);
     await screen.findByText('插件工具');
-    expect(screen.getByLabelText('启用 plugin:cg/explore')).not.toBeChecked();
     expect(screen.getByLabelText('启用 plugin:cg/status')).toBeChecked();
+    expect(screen.getByLabelText('启用 plugin:cg/explore')).not.toBeChecked();
   });
 });
