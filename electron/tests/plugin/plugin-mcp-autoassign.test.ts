@@ -85,7 +85,8 @@ describe('安装即作用域（spec 2026-10-21 §5）', () => {
   it('② 新 ws 不回填：createWorkspace 后无 plugin MCP 注入', () => {
     seedTwoWorkspaces();
     installPluginDevDir(mkDevPlugin(), '2.1.0', 'ws-1');
-    createWorkspace({ id: 'ws-3', name: 'W3', directoryPath: path.join(tmpRoot, 'w3') });
+    fs.mkdirSync(path.join(tmpRoot, 'w3'), { recursive: true });
+    createWorkspace({ id: 'ws-3', name: 'W3', directoryPath: path.join(tmpRoot, 'w3') }, '@o');
     const db = getDb();
     const rows = db
       .prepare(`SELECT COUNT(*) AS c FROM workspace_allocations WHERE workspace_id='ws-3' AND capability_type='mcp'`)
