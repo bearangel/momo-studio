@@ -371,8 +371,16 @@ export function registerAgentHandlers(): void {
       if (!def) {
         throw new Error(`未找到 agent 定义: ${member.agentDefinitionId}`);
       }
+      // 与 agent:addMember 同款兜底（插件/预配 agent 的 modelProviderId 空态消费默认模型）
       if (!def.modelProviderId) {
-        throw new Error(`agent 定义「${def.name}」未配置 modelProviderId，请到 Agent 库配置`);
+        const ref = getGlobalSettings().defaultChatModel;
+        if (ref && getProvider(ref.providerId)) {
+          updateAgentDefinition({ id: def.id, modelProviderId: ref.providerId, modelName: ref.modelId });
+        } else {
+          throw new Error(
+            `agent 定义「${def.name}」未配置模型——请在「设置 → 默认模型」设置后重试，或先编辑该 agent 选择供应商`,
+          );
+        }
       }
 
       const workspace = getWorkspace(workspaceId);
