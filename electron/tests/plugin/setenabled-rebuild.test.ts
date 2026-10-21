@@ -128,18 +128,19 @@ describe('plugin:setEnabled 即时生效（spec §7）', () => {
     expect(hostFns.invalidateMcpByName).not.toHaveBeenCalled();
   });
 
-  it('重建的新装配 mcpNames 不含停用插件的 server 名', async () => {
-    // buildSpawnOpts mock 按当前启用态给 mcpNames——真实过滤在 spawn-helpers（另有域测）
-    spawnFns.buildSpawnOpts.mockImplementation(() => ({
-      instanceId: 'x',
-      mcpNames: [], // 停用后 filterDisabledPluginMcps 产物
-    }));
+  it('停用清池次序锁（终审 I-2 修复锁，spec §7.2）：stop 全部成员 → invalidate → start', async () => {
     const h = ipcHandlers.get('plugin:setEnabled')!;
     await h({}, 'cg', 'ws1', false);
     await new Promise((r) => setTimeout(r, 20));
-    const opts = spawnFns.buildSpawnOpts.mock.results[0]!.value as { mcpNames: string[] };
-    expect(opts.mcpNames).not.toContain('cgx');
-    // 清 mock 实现避免污染后续用例
-    spawnFns.buildSpawnOpts.mockImplementation(() => ({ instanceId: 'x', mcpNames: [] }));
+    const stopOrder = registryFns.stopAgentRuntime.mock.invocationCallOrder[0]!;
+    const invOrder = hostFns.invalidateMcpByName.mock.invocationCallOrder[0]!;
+    const startOrder = registryFns.startAgentRuntime.mock.invocationCallOrder[0]!;
+    // 旧 runtime 停机后无人能以其快照发起调用，此时失效池才不会按需复活（防残留进程）
+    expect(stopOrder).toBeLessThan(invOrder);
+    expect(invOrder).toBeLessThan(startOrder);
+    // 启用方向不失效
+    await h({}, 'cg', 'ws1', true);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(hostFns.invalidateMcpByName).toHaveBeenCalledTimes(1);
   });
 });

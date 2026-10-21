@@ -559,6 +559,20 @@ describe('MemberEditDialog — 插件工具覆盖（铁律 4/5：builtin 存量�
     expect(arg.addedPluginTools).toEqual(['plugin:cg/*']);
   });
 
+  it('ws 级授权（allocation.tools 含 plugin: 模式）作为勾选基线点亮（终审 I-1 修复锁）', async () => {
+    listAssembledTools.mockResolvedValue(TOOLS);
+    getMemberDeltasMock.mockResolvedValue({ ...EMPTY_DELTAS });
+    allocationGet.mockResolvedValue({
+      workspaceId: buildMember().workspaceId, tools: ['plugin:cg/*'], mcps: [], skills: [],
+    } satisfies WorkspaceAllocation);
+    render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />);
+    await screen.findByText('插件工具');
+    await waitFor(() => {
+      expect(screen.getByLabelText('启用 plugin:cg/explore')).toBeChecked();
+      expect(screen.getByLabelText('启用 plugin:cg/status')).toBeChecked();
+    });
+  });
+
   it('打开时回放成员级授权初值（added 行点亮对应工具；未授权不亮）', async () => {
     listAssembledTools.mockResolvedValue(TOOLS);
     getMemberDeltasMock.mockResolvedValue({

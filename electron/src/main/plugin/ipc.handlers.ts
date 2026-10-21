@@ -113,15 +113,17 @@ export function registerPluginHandlers(): void {
         if (stillEnabled.n === 0) void stopPluginService(id).catch(() => undefined);
       }
       // 启停即时生效（spec 2026-10-21 §7）：双向重建该 ws 在线成员（停用=能力立即
-      // 摘除；启用=授权面立即生效）。停用方向先失效该插件 MCP 池实例——防残留与
-      // 按需复活（§3.3 冻结语义收窄至配置变更：setConfig 不重建，现状保留）
-      if (!enabled) {
-        const serverNames = getDb()
-          .prepare(`SELECT name FROM mcp_definitions WHERE plugin_id = ?`)
-          .all(id) as Array<{ name: string }>;
-        for (const { name } of serverNames) invalidateMcpByName(name);
-      }
-      void rebuildWorkspaceRuntimes(id, workspaceId).catch((err) =>
+      // 摘除；启用=授权面立即生效）。停用方向在重建的两阶段间隙（全部 stop 之后、
+      // start 之前）失效该插件 MCP 池——旧 runtime 已停机，失效不会被按需复活
+      // （§3.3 冻结语义收窄至配置变更；终审 I-2 修复）
+      const invalidateNames = enabled
+        ? undefined
+        : (
+            getDb()
+              .prepare(`SELECT name FROM mcp_definitions WHERE plugin_id = ?`)
+              .all(id) as Array<{ name: string }>
+          ).map((r) => r.name);
+      void rebuildWorkspaceRuntimes(id, workspaceId, { invalidateMcpNames: invalidateNames }).catch((err) =>
         logger.warn('启停运行时重建失败（下一 spawn 新装配兜底）', {
           pluginId: id,
           error: String(err),

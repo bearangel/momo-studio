@@ -20,6 +20,7 @@ import { resolvePluginRoot } from './assembly';
 import { parseManifest, validateManifest } from './manifest';
 import { validatePanelsAtRoot, notifyPanelsChanged } from './panel-sync';
 import { getDb } from '../storage/db';
+import { invalidateMcpByName } from '../mcp/host-manager';
 import type { PluginRecord } from './types';
 
 /** 重载插件：manifest 刷新 + 组件重激活 + 受影响 workspace 的 runtime 重建 */
@@ -78,34 +79,55 @@ export async function reloadPlugin(id: string): Promise<PluginRecord> {
   return refreshed;
 }
 
-/** 单 workspace 重建：其 lastRunning 成员的 runtime stop→start（新 opts）。
- *  reload（全启用 ws）与 setEnabled（目标 ws，spec 2026-10-21 §7）共用 */
-export async function rebuildWorkspaceRuntimes(pluginId: string, workspaceId: string): Promise<void> {
+/** 单 workspace 重建：lastRunning 成员全部 stop →（可选）MCP 池失效 → 全部 start（新 opts）。
+ *  reload（全启用 ws）与 setEnabled（目标 ws，spec 2026-10-21 §7）共用。
+ *  两阶段语义（终审 I-2 修复，spec §7.2）：停用清池必须落在全部 stop 之后、首个 start
+ *  之前——旧 runtime 停机后无人能以其快照发起调用，此时失效池才不会按需复活 */
+export async function rebuildWorkspaceRuntimes(
+  pluginId: string,
+  workspaceId: string,
+  opts: { invalidateMcpNames?: string[] } = {},
+): Promise<void> {
   const ws = getDb()
     .prepare(`SELECT id, directory_path FROM workspaces WHERE id = ?`)
     .get(workspaceId) as { id: string; directory_path: string } | undefined;
   if (!ws) return;
-  for (const member of listMembers(ws.id)) {
-    if (!member.lastRunning) continue;
+  const members = listMembers(ws.id).filter((m) => m.lastRunning);
+  const startArgs: Array<{ instanceId: string; agentUserId: string; def: NonNullable<ReturnType<typeof getAgentDefinition>>; apiKey: string }> = [];
+  for (const member of members) {
     const def = getAgentDefinition(member.agentDefinitionId);
     if (!def || !def.modelProviderId) continue;
     try {
-      const llmApiKey = await resolveApiKey(member.instanceId, def.modelProviderId);
+      const apiKey = await resolveApiKey(member.instanceId, def.modelProviderId);
       await stopAgentRuntime(member.instanceId);
+      startArgs.push({ instanceId: member.instanceId, agentUserId: member.agentUserId, def, apiKey });
+    } catch (err) {
+      logger.warn('runtime 重建失败（下一 spawn 用新装配兜底）', {
+        pluginId,
+        instanceId: member.instanceId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  if (opts.invalidateMcpNames) {
+    for (const name of opts.invalidateMcpNames) invalidateMcpByName(name);
+  }
+  for (const a of startArgs) {
+    try {
       await startAgentRuntime(
         await buildSpawnOpts({
-          instanceId: member.instanceId,
-          agentUserId: member.agentUserId,
+          instanceId: a.instanceId,
+          agentUserId: a.agentUserId,
           workspaceId: ws.id,
           workspaceDir: ws.directory_path,
-          def,
-          llmApiKey,
+          def: a.def,
+          llmApiKey: a.apiKey,
         }),
       );
     } catch (err) {
       logger.warn('runtime 重建失败（下一 spawn 用新装配兜底）', {
         pluginId,
-        instanceId: member.instanceId,
+        instanceId: a.instanceId,
         error: err instanceof Error ? err.message : String(err),
       });
     }

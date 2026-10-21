@@ -94,8 +94,10 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
     addedPluginTools: [],
     removedPluginTools: [],
   });
-  // 授权模型（spec 2026-10-21 §6）：勾=授权行；生效=(ws授权∪added)−(removed∪def禁)
-  const wsGranted = defCaps.tools.filter((t) => t.startsWith('plugin:'));
+  // 授权模型（spec 2026-10-21 §6）：勾=授权行；生效=(ws授权∪added)−(removed∪def禁)。
+  // ws 授权基线取 defaultCaps（Layer1∪Layer2——def.defaultTools 仅 builtin ref，
+  // defCaps 恒不含 plugin: 模式；终审 I-1 修复）
+  const wsGranted = defaultCaps.tools.filter((t) => t.startsWith('plugin:'));
   const pluginChecked = effectivePluginGranted(
     def.deniedTools ?? [],
     pluginDeltas,
