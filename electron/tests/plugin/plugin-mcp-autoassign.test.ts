@@ -82,19 +82,18 @@ describe('安装即作用域（spec 2026-10-21 §5）', () => {
     expect(en).toEqual([{ workspace_id: 'ws-1', enabled: 1 }]); // 仅 origin ws
   });
 
-  it('② 新 ws 不回填：createWorkspace 后无 plugin MCP 注入', () => {
+  it('② 新 ws 不回填：createWorkspace 后无 plugin MCP 注入', async () => {
     seedTwoWorkspaces();
     installPluginDevDir(mkDevPlugin(), '2.1.0', 'ws-1');
-    fs.mkdirSync(path.join(tmpRoot, 'w3'), { recursive: true });
-    createWorkspace({ id: 'ws-3', name: 'W3', directoryPath: path.join(tmpRoot, 'w3') }, '@o');
+    const ws3 = await createWorkspace({ name: 'W3', directoryPath: path.join(tmpRoot, 'w3') }, '@o');
     const db = getDb();
     const rows = db
-      .prepare(`SELECT COUNT(*) AS c FROM workspace_allocations WHERE workspace_id='ws-3' AND capability_type='mcp'`)
-      .get() as { c: number };
+      .prepare(`SELECT COUNT(*) AS c FROM workspace_allocations WHERE workspace_id=? AND capability_type='mcp'`)
+      .get(ws3.id) as { c: number };
     expect(rows.c).toBe(0);
     const en = db
-      .prepare(`SELECT COUNT(*) AS c FROM plugin_enablements WHERE workspace_id='ws-3' AND plugin_id='cgp'`)
-      .get() as { c: number };
+      .prepare(`SELECT COUNT(*) AS c FROM plugin_enablements WHERE workspace_id=? AND plugin_id='cgp'`)
+      .get(ws3.id) as { c: number };
     expect(en.c).toBe(0); // 新 ws 默认停用
   });
 

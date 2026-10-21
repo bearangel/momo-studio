@@ -75,7 +75,7 @@ function seedAll(): void {
     sourcePath: path.join(tmpRoot, 'cg'),
     installedAt: 'x',
   };
-  fs.mkdirSync(rec.sourcePath, { recursive: true });
+  fs.mkdirSync(rec.sourcePath ?? tmpRoot, { recursive: true });
   upsertPlugin(rec);
   setPluginEnabled('cg', 'ws1', true);
   // MCP 定义（plugin source）+ lastRunning 成员 + def
