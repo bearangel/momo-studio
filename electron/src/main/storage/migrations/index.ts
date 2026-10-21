@@ -40,6 +40,7 @@ import { migration062 } from './062_assignment_plugin_tool_delta';
 import { migration063 } from './063_remove_p2p_lsp_residue';
 import { migration064 } from './064_codegraph_plugin_tool_to_mcp';
 import { migration065 } from './065_plugin_mcp_backfill_allocations';
+import { migration066 } from './066_plugin_scoped_activation';
 
 export interface Migration {
   version: number;
@@ -1128,6 +1129,11 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // D2 裁定存量回填：既有 plugin MCP × 既有工作空间 allocation 对齐（幂等）
     version: migration065.version,
     sql: migration065.up,
+  },
+  {
+    // 插件作用域激活存量回填（spec 2026-10-21 §4）：全部 ws × plugin = enabled=1
+    version: migration066.version,
+    sql: migration066.up,
   },
 ];
 

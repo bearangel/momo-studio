@@ -43,9 +43,7 @@ agent 拥有能力（三层合并）            = 授权：定义声明 ∪ 工�
 
 1. **enablements 全量回填**（存量 A）：全部 workspaces × 全部 plugins →
    `INSERT OR IGNORE INTO plugin_enablements (workspace_id, plugin_id, enabled) VALUES (…, …, 1)`
-2. **存量 skill 授权物化**：对每个 (ws × 启用插件 × 插件 skill slug) →
-   `INSERT OR IGNORE INTO workspace_allocations (workspace_id, 'skill', slug, datetime('now'))`
-   ——存量 agent 经 Layer 2 显式授权继续可见（codegraph-usage 在 4 个 ws 均保活）
+2. **存量 skill 授权物化（启动期回填）**：迁移是内联纯 SQL，无法扫盘取插件 skill slug——由 app 启动后 `backfillLegacyPluginSkillGrants()`（`installed_at < 2026-10-21` 截止日判定，INSERT OR IGNORE 幂等）承担，见 `plugin/legacy-grants.ts`。存量 agent 经 Layer 2 显式授权继续可见（codegraph-usage 在 4 个 ws 均保活）
 3. **tools 存量**：无物化对象（当前无 tools 组件插件）。已知边界见 §12
 4. **down**：保守清除——删 066 插入的 enablements 回填行无法与用户手写行区分，down 仅删「全 ws × 全 plugin 且无 origin 标记」的行集合并记录不可完全逆（参照 064 风格）
 
