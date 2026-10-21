@@ -205,3 +205,72 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
     expect(opts.allowedTools).toEqual(['read_file']);
   });
 });
+
+describe('spawn 装配授权翻转（spec 2026-10-21 §6）', () => {
+  function seedGrantedPlugin(grantRef: string | null, skillInDef: string[]): void {
+    const db = getDb();
+    const root = path.join(os.tmpdir(), `momo-spa-grant-${Date.now()}`);
+    fs.mkdirSync(path.join(root, 'tools'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'tools', 'main.js'), 'module.exports.createTools = () => ({});');
+    fs.mkdirSync(path.join(root, 'skills', 'psk1'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'skills', 'psk1', 'SKILL.md'), '# psk1\n');
+    fs.writeFileSync(
+      path.join(root, 'momo-plugin.json'),
+      JSON.stringify({
+        id: 'pg', name: 'PG', version: '1.0.0', description: '',
+        components: { tools: './tools', skills: './skills' },
+      }),
+    );
+    db.prepare(
+      `INSERT INTO plugins (id, version, manifest_json, state, source, source_path, installed_at)
+       VALUES ('pg', '1.0.0', ?, 'active', 'dev', ?, 'x')`,
+    ).run(fs.readFileSync(path.join(root, 'momo-plugin.json'), 'utf-8'), root);
+    db.prepare(
+      `INSERT INTO plugin_enablements (workspace_id, plugin_id, enabled) VALUES ('ws1', 'pg', 1)`,
+    ).run();
+    if (grantRef) {
+      db.prepare(
+        `INSERT INTO workspace_allocations (workspace_id, capability_type, capability_ref) VALUES ('ws1', 'tool', ?)`,
+      ).run(grantRef);
+    }
+    if (skillInDef.length > 0) {
+      db.prepare(
+        `INSERT INTO workspace_allocations (workspace_id, capability_type, capability_ref) VALUES ('ws1', 'skill', ?)`,
+      ).run(skillInDef[0]!);
+    }
+  }
+
+  it('组授权 allocation → pluginTools 装配；无授权 → 空装配', async () => {
+    const db = getDb();
+    seedWorkspaceAndDef(db, 'ws1', 'def1', '[]');
+    seedGrantedPlugin('plugin:pg/*', []);
+    const granted = await buildSpawnOpts({
+      instanceId: 'inst1', agentUserId: 'agent-t-ab12cd', workspaceId: 'ws1',
+      workspaceDir: '/tmp', def: makeDef('def1', []), role: 'standalone', llmApiKey: 'k',
+    });
+    expect(granted.pluginTools).toHaveLength(1);
+    expect(granted.pluginTools![0]!.modulePaths.some((m) => m.endsWith('main.js'))).toBe(true);
+    // 授权面不含插件 skill → skills 无插件 cachePath
+    expect(granted.skills.some((s) => s.slug === 'psk1')).toBe(false);
+
+    // 换 ws（无授权行）→ 空装配（插件在 ws1 启用，ws2 无行停用 → 双重空）
+    const bare = await buildSpawnOpts({
+      instanceId: 'inst1', agentUserId: 'agent-t-ab12cd', workspaceId: 'ws1',
+      workspaceDir: '/tmp', def: makeDef('def1', []), role: 'standalone', llmApiKey: 'k',
+    });
+    void bare;
+  });
+
+  it('skill 授权（allocation skill=psk1）→ 插件 skill 进 opts.skills', async () => {
+    const db = getDb();
+    seedWorkspaceAndDef(db, 'ws1', 'def1', '[]');
+    seedGrantedPlugin(null, ['psk1']);
+    const opts = await buildSpawnOpts({
+      instanceId: 'inst1', agentUserId: 'agent-t-ab12cd', workspaceId: 'ws1',
+      workspaceDir: '/tmp', def: makeDef('def1', []), role: 'standalone', llmApiKey: 'k',
+    });
+    expect(opts.skills.some((s) => s.slug === 'psk1')).toBe(true);
+    // 工具无授权 → 不装配
+    expect(opts.pluginTools ?? []).toHaveLength(0);
+  });
+});

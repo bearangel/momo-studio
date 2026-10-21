@@ -26,6 +26,7 @@ import {
   buildPluginToolRefs,
   buildPluginSkillRefs,
   filterDisabledPluginMcps,
+  filterPluginToolRefsByGrant,
   hasPluginHooks,
 } from '../plugin/assembly';
 import { getProvider, type ModelProvider } from './provider-crud';
@@ -378,6 +379,9 @@ export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentR
   const allocation = readAllocationLayer(workspaceId);
   const deltas = readAssignmentDeltas(instanceId);
   const merged = mergeCapabilities(def, allocation, deltas);
+  // 插件 skill 池（启用插件）与授权 slug 集合（spec §6：∩ merged.skills）
+  const pluginSkillRefs = buildPluginSkillRefs(workspaceId);
+  const pluginSkillSlugs = new Set(pluginSkillRefs.map((r) => r.slug));
 
   return {
     instanceId,
@@ -401,14 +405,20 @@ export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentR
     // capability-merger 第 4 输出——builtin 只读对象经成员 deltas 管理的唯一通道）
     deniedTools: merged.deniedTools,
     skills: [
-      ...resolveSkillSlugs(merged.skills),
-      // 插件 skills（spec §4 声明式激活）：零复制 refs 直指插件目录
-      ...buildPluginSkillRefs(workspaceId),
+      // 非插件 slug 走 userData 目录约定；插件 slug 只经三层合并进入（spec §6）
+      ...resolveSkillSlugs(merged.skills.filter((s) => !pluginSkillSlugs.has(s))),
+      // 插件 skills：零复制 refs 直指插件目录，∩ merged.skills（授权门）
+      ...pluginSkillRefs.filter((r) => merged.skills.includes(r.slug)),
     ],
     // 组⑤启停：禁用的 MCP 不进 agent 工具面；再滤禁用插件的贡献名（P2）
     mcpNames: filterDisabledPluginMcps(filterEnabledMcps(merged.mcps), workspaceId),
-    // 插件工具装配快照（spec §4.2）：workspace 级启停在此过滤——spawn 时定型
-    pluginTools: buildPluginToolRefs(workspaceId),
+    // 插件工具装配快照（spec §6 白名单）：授权集 = ws allocation ∪ 成员勾选，
+    // 再剔黑名单（deniedTools 终态——黑名单优先保守语义）；spawn 时定型
+    pluginTools: filterPluginToolRefsByGrant(
+      buildPluginToolRefs(workspaceId),
+      [...new Set([...allocation.tools, ...(deltas.addedPluginTools ?? [])])],
+      merged.deniedTools,
+    ),
     // 插件 hooks 存在标志（P3 spec §5.2）：无 hook 的 workspace 子进程零往返短路
     pluginHooks: hasPluginHooks(workspaceId),
     isLeader,

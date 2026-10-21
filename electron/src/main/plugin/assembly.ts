@@ -170,6 +170,35 @@ export function filterDisabledPluginMcps(names: string[], workspaceId: string): 
 }
 
 
+/** 工具全名匹配：精确名或 plugin:<id>/* 组模式（与 deniedTools 同款语义） */
+export function toolRefMatches(fullName: string, patterns: string[]): boolean {
+  for (const p of patterns) {
+    if (p === fullName) return true;
+    if (p.endsWith('/*') && fullName.startsWith(p.slice(0, -1))) return true;
+  }
+  return false;
+}
+
+/** 白名单过滤（spec 2026-10-21 §6）：授权集（组/精确）内且不被黑名单剔除的模块
+ *  才进装配快照——「可见性 = 装配面」的授权化落地；modulePaths 全滤空的 ref 丢弃 */
+export function filterPluginToolRefsByGrant(
+  refs: PluginToolRef[],
+  grants: string[],
+  denied: string[],
+): PluginToolRef[] {
+  const out: PluginToolRef[] = [];
+  for (const ref of refs) {
+    const modulePaths = ref.modulePaths.filter((mp) => {
+      const short = path.basename(mp, '.js');
+      const fullName = `plugin:${ref.pluginId}/${short}`;
+      return toolRefMatches(fullName, grants) && !toolRefMatches(fullName, denied);
+    });
+    if (modulePaths.length === 0) continue;
+    out.push({ ...ref, modulePaths });
+  }
+  return out;
+}
+
 /** 启用插件中是否有 hooks 组件（spawn 快照——runtime 侧零往返短路依据） */
 export function hasPluginHooks(workspaceId: string): boolean {
   return enabledPlugins(workspaceId).some(({ manifest }) =>
