@@ -388,7 +388,10 @@ export function registerAgentHandlers(): void {
         throw new Error(`未找到 workspace: ${workspaceId}`);
       }
 
-      const llmApiKey = await resolveApiKey(member.instanceId, def.modelProviderId);
+      const llmApiKey = await resolveApiKey(
+        member.instanceId,
+        def.modelProviderId ?? getGlobalSettings().defaultChatModel?.providerId ?? '',
+      );
 
       await startAgentRuntime(
         await buildSpawnOpts({
