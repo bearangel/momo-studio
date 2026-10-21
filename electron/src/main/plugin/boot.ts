@@ -5,6 +5,7 @@
 // 重建。listPlugins() 的 ORDER BY id 迭代顺带固化 waterfall 注册序的
 // 跨重启确定性（审查 C1）。
 import { listPlugins } from './registry';
+import { backfillLegacyPluginSkillGrants } from './legacy-grants';
 import { syncPluginHooks } from './hook-sync';
 import { startPluginService } from './service-manager';
 import { getPluginBus } from './bus-instance';
@@ -45,5 +46,13 @@ export async function reactivatePluginsOnBoot(): Promise<void> {
   }
   for (const spill of findGlobalLayerWorkspaceSpills(spillEntries)) {
     logger.warn('插件全局层残留 workspace 作用域键（读取已过滤，建议重配到工作空间层）', spill);
+  }
+  // 存量 skill 授权回填（spec 2026-10-21 §4：installed_at 截止日判定，幂等）
+  try {
+    backfillLegacyPluginSkillGrants();
+  } catch (err) {
+    logger.warn('存量插件 skill 授权回填失败（不影响启动）', {
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
