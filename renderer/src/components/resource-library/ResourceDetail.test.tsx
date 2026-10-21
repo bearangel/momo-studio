@@ -34,6 +34,8 @@ const agentListMock = vi.fn();
 // 2026-10-08 能力预览：默认给最小可用形状（builtin agent 面板挂载即拉，老用例无感）
 const previewBuiltinPresetMock = vi.fn();
 
+const pluginGetDetailMock = vi.fn();
+
 const mockApi = {
   agent: {
     list: agentListMock,
@@ -41,9 +43,13 @@ const mockApi = {
   resource: {
     previewBuiltinPreset: previewBuiltinPresetMock,
   },
+  plugin: {
+    getDetail: pluginGetDetailMock,
+  },
 };
 
 beforeEach(() => {
+  pluginGetDetailMock.mockReset();
   agentListMock.mockReset();
   // 默认空库：custom agent 反查不到 def → 不渲染定义预览（错误路径基线）
   agentListMock.mockResolvedValue([] as AgentDefinition[]);
@@ -244,4 +250,40 @@ describe('ResourceDetail - 按 source 分支显示', () => {
     expect(screen.queryByText(/系统预置 · agent/)).toBeNull();
   });
 
+});
+
+
+describe('ResourceDetail - 插件组件清单（spec 2026-10-21 §9②：getDetail 五组分组）', () => {
+  function pluginItem(): ResourceItem {
+    return baseItem({
+      id: 'custom-plugin-cg', type: 'plugin', slug: 'cg',
+      plugin: { id: 'cg', state: 'active', devSource: true, sourcePath: '/x', components: ['mcp', 'skills'], enabled: true },
+    });
+  }
+
+  it('渲染五组：MCP Server / 工具 / Skill / Agent / 其他组件（空组显示「无」）', async () => {
+    pluginGetDetailMock.mockResolvedValue({
+      pluginId: 'cg',
+      mcps: [{ name: 'codegraph' }],
+      tools: [{ fullName: 'plugin:codegraph/查询符号', description: '查', pluginName: 'cg' }],
+      skills: [{ slug: 'codegraph-usage' }],
+      agents: [{ id: 'plugin:codegraph:code-navigator', name: '代码导航员' }],
+      panels: [{ panelId: 'main', title: '图谱' }],
+      service: true,
+      config: true,
+    });
+    render(<ResourceDetail item={pluginItem()} onClose={vi.fn()} />);
+    expect(await screen.findByText('codegraph', { selector: '[data-testid="plugin-cap-mcp"] *' })).toBeTruthy();
+    expect(screen.getByTestId('plugin-cap-tool').textContent).toContain('plugin:codegraph/查询符号');
+    expect(screen.getByTestId('plugin-cap-skill').textContent).toContain('codegraph-usage');
+    expect(screen.getByTestId('plugin-cap-agent').textContent).toContain('代码导航员');
+    expect(screen.getByTestId('plugin-cap-other').textContent).toContain('面板');
+    expect(screen.getByTestId('plugin-cap-other').textContent).toContain('service');
+  });
+
+  it('getDetail 失败 → 内联错误不崩面板（键名 chips 降级不保留——错误文案）', async () => {
+    pluginGetDetailMock.mockRejectedValue(new Error('boom'));
+    render(<ResourceDetail item={pluginItem()} onClose={vi.fn()} />);
+    expect(await screen.findByText(/组件清单加载失败/)).toBeTruthy();
+  });
 });

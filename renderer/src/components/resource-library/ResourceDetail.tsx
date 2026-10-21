@@ -27,6 +27,8 @@ import type { LucideIcon } from 'lucide-react';
 import { Bot, Blocks, Check, Copy, Package, Pencil, Power, Puzzle, RotateCw, Settings2, Trash2, X } from 'lucide-react';
 import type { BuiltinPresetPreview, ResourceItem } from '../../ipc/types';
 import { ipc } from '../../ipc/client';
+import type { PluginDetail } from '../../ipc/types';
+import { useWorkspaceStore } from '../../stores/workspace.store';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import type { BadgeTone } from '../ui/Badge';
@@ -93,7 +95,34 @@ function TypeIcon({ type }: { type: ResourceItem['type'] }) {
   return <Icon size={16} strokeWidth={1.75} aria-hidden />;
 }
 
+/** 能力 chip 组：空集显示「无」 */
+function CapChips({ names }: { names: string[] }): React.JSX.Element {
+  if (names.length === 0) return <span className="text-xs text-tertiary">无</span>;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {names.map((n) => (
+        <code key={n} className="rounded-md border border-subtle bg-surface-2 px-2 py-0.5 text-xs text-secondary">
+          {n}
+        </code>
+      ))}
+    </div>
+  );
+}
+
 export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onEnable, onConfigure, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onTogglePlugin, onReloadPlugin, onForkPreset, onDisable }: Props) {
+  // 插件组件清单（spec 2026-10-21 §9②）：面板打开即拉；item 切换重拉
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
+  const [pluginDetail, setPluginDetail] = useState<PluginDetail | Error | null>(null);
+  useEffect(() => {
+    if (item.type !== 'plugin' || !item.plugin) return;
+    let cancelled = false;
+    setPluginDetail(null);
+    ipc.plugin
+      .getDetail(item.plugin.id, activeWorkspaceId ?? undefined)
+      .then((d) => { if (!cancelled) setPluginDetail(d); })
+      .catch((err: Error) => { if (!cancelled) setPluginDetail(err); });
+    return () => { cancelled = true; };
+  }, [item, activeWorkspaceId]);
   const mcpEnv = item.custom?.mcpConfig?.env;
   const envEntries = mcpEnv ? Object.entries(mcpEnv) : [];
 
@@ -257,26 +286,52 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
               </div>
             )}
 
-            {/* 插件：组件清单 + dev 源目录（spec 2026-10-15 §8.1——P1 仅注册与展示） */}
+            {/* 插件：组件清单（spec 2026-10-21 §9② getDetail 五组）+ dev 源目录 */}
             {item.type === 'plugin' && item.plugin && (
               <>
                 <div>
-                  <div className="text-xs text-tertiary mb-1">
-                    组件（{item.plugin.components.length}）——运行时激活将在后续版本逐步开放
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    {item.plugin.components.map((c) => (
-                      <code
-                        key={c}
-                        className="rounded-md border border-subtle bg-surface-2 px-2 py-0.5 text-xs text-secondary"
-                      >
-                        {c}
-                      </code>
-                    ))}
-                    {item.plugin.components.length === 0 && (
-                      <span className="text-xs text-tertiary">（无声明组件）</span>
-                    )}
-                  </div>
+                  <div className="text-xs text-tertiary mb-1">提供的能力</div>
+                  {pluginDetail === null ? (
+                    <div className="text-xs text-tertiary">加载中…</div>
+                  ) : pluginDetail instanceof Error ? (
+                    <div className="text-xs text-status-error">组件清单加载失败：{pluginDetail.message}</div>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      <div data-testid="plugin-cap-mcp">
+                        <div className="text-xs font-semibold text-secondary mb-1">MCP Server</div>
+                        <CapChips names={pluginDetail.mcps.map((m) => m.name)} />
+                      </div>
+                      <div data-testid="plugin-cap-tool">
+                        <div className="text-xs font-semibold text-secondary mb-1">工具</div>
+                        <CapChips names={pluginDetail.tools.map((t) => t.fullName)} />
+                      </div>
+                      <div data-testid="plugin-cap-skill">
+                        <div className="text-xs font-semibold text-secondary mb-1">Skill</div>
+                        <CapChips names={pluginDetail.skills.map((sk) => sk.slug)} />
+                      </div>
+                      <div data-testid="plugin-cap-agent">
+                        <div className="text-xs font-semibold text-secondary mb-1">Agent</div>
+                        <CapChips names={pluginDetail.agents.map((a) => a.name)} />
+                      </div>
+                      <div data-testid="plugin-cap-other">
+                        <div className="text-xs font-semibold text-secondary mb-1">其他组件</div>
+                        <div className="flex flex-wrap gap-1">
+                          {pluginDetail.panels.length > 0 && (
+                            <code className="rounded-md border border-subtle bg-surface-2 px-2 py-0.5 text-xs text-secondary">面板 ×{pluginDetail.panels.length}</code>
+                          )}
+                          {pluginDetail.service && (
+                            <code className="rounded-md border border-subtle bg-surface-2 px-2 py-0.5 text-xs text-secondary">service ✓</code>
+                          )}
+                          {pluginDetail.config && (
+                            <code className="rounded-md border border-subtle bg-surface-2 px-2 py-0.5 text-xs text-secondary">配置项 ✓</code>
+                          )}
+                          {!pluginDetail.service && !pluginDetail.config && pluginDetail.panels.length === 0 && (
+                            <span className="text-xs text-tertiary">无</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 {item.plugin.sourcePath && (
                   <div>

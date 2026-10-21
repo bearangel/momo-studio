@@ -46,3 +46,44 @@ describe('ResourceRow', () => {
   });
 
 });
+
+describe('ResourceRow 插件面（spec 2026-10-21 §9①：恒显徽标 + 行内启停开关）', () => {
+  function mkPlugin(over: Partial<NonNullable<ResourceItem['plugin']>>): ResourceItem {
+    return mkItem({
+      id: 'custom-plugin-cg', type: 'plugin', slug: 'cg',
+      plugin: { id: 'cg', state: 'active', devSource: true, sourcePath: '/x', components: ['mcp'], enabled: false, ...over },
+    });
+  }
+
+  it('启用态：徽标「已启用」+ switch aria-checked=true；点 switch 回调 next=false 且不冒泡', () => {
+    const onTogglePlugin = vi.fn();
+    const onSelect = vi.fn();
+    render(
+      <ResourceRow item={mkPlugin({ enabled: true })} selected={false}
+        onSelect={onSelect} onTogglePlugin={onTogglePlugin} />,
+    );
+    expect(screen.getByText('已启用')).toBeTruthy();
+    const sw = screen.getByRole('switch');
+    expect(sw.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(sw);
+    expect(onTogglePlugin).toHaveBeenCalledWith(expect.objectContaining({ slug: 'cg' }), false);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('停用态：徽标「已停用」+ aria-checked=false；missing：徽标「目录缺失」+ 开关禁用', () => {
+    const onTogglePlugin = vi.fn();
+    const { rerender } = render(
+      <ResourceRow item={mkPlugin({ enabled: false })} selected={false}
+        onSelect={noop} onTogglePlugin={onTogglePlugin} />,
+    );
+    expect(screen.getByText('已停用')).toBeTruthy();
+    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false');
+    rerender(
+      <ResourceRow item={mkPlugin({ enabled: false, state: 'missing' })} selected={false}
+        onSelect={noop} onTogglePlugin={onTogglePlugin} />,
+    );
+    expect(screen.getByText('目录缺失')).toBeTruthy();
+    const sw = screen.getByRole('switch') as HTMLButtonElement;
+    expect(sw.disabled).toBe(true);
+  });
+});

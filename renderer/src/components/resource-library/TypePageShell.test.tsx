@@ -26,12 +26,17 @@ const deleteMock = vi.fn();
 // D9：agent 页挂载时经 store.loadCatalogStatus 拉目录健康状态
 const getCatalogStatusMock = vi.fn();
 
+const pluginGetDetailMock = vi.fn();
+
 const mockApi = {
   resource: {
     list: listMock,
     danglingMcpRefs: danglingMcpRefsMock,
     delete: deleteMock,
     getCatalogStatus: getCatalogStatusMock,
+  },
+  plugin: {
+    getDetail: pluginGetDetailMock,
   },
 };
 
@@ -46,6 +51,10 @@ const builtinItem: ResourceItem = {
 };
 
 beforeEach(() => {
+  pluginGetDetailMock.mockReset();
+  pluginGetDetailMock.mockResolvedValue({
+    pluginId: '', mcps: [], tools: [], skills: [], agents: [], panels: [], service: false, config: false,
+  });
   listMock.mockReset();
   listMock.mockResolvedValue([] as ResourceItem[]);
   danglingMcpRefsMock.mockReset();
@@ -593,14 +602,26 @@ describe('TypePageShell - 插件启停与卸载（P1）', () => {
     expect(screen.getByText('还没有安装插件')).toBeTruthy();
   });
 
-  it('选中插件行 → 详情面板出现组件 chips 与启停按钮，点击启停透传回调', async () => {
+  it('选中插件行 → 详情面板出现分组能力清单与启停按钮，点击启停透传回调', async () => {
+    pluginGetDetailMock.mockResolvedValue({
+      pluginId: 'cg',
+      mcps: [{ name: 'codegraph' }],
+      tools: [{ fullName: 'plugin:cg/explore', description: '查', pluginName: 'cg' }],
+      skills: [{ slug: 'cg-usage' }],
+      agents: [{ id: 'plugin:cg:nav', name: '导航员' }],
+      panels: [{ panelId: 'main', title: 't' }],
+      service: true, config: true,
+    });
     useResourceStore.setState({ typeFilter: 'plugin', activeType: 'plugin', items: [pluginItem] });
     const onTogglePlugin = vi.fn();
     render(<TypePageShell type="plugin" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} onTogglePlugin={onTogglePlugin} />);
     fireEvent.click(screen.getByText('Codegraph 代码图谱'));
-    expect(await screen.findByText('tools')).toBeTruthy();
-    expect(screen.getByText('service')).toBeTruthy();
-    expect(screen.getByText(/组件（5）/)).toBeTruthy();
+    expect(await screen.findByText('提供的能力')).toBeTruthy();
+    expect(screen.getByText('codegraph')).toBeTruthy();
+    expect(screen.getByText('plugin:cg/explore')).toBeTruthy();
+    expect(screen.getByText('cg-usage')).toBeTruthy();
+    expect(screen.getByText('导航员')).toBeTruthy();
+    expect(screen.getByText(/面板 ×1/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /禁用/ }));
     expect(onTogglePlugin).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'custom-plugin-cg' }),
@@ -621,14 +642,17 @@ describe('TypePageShell - 插件启停与卸载（P1）', () => {
     render(<TypePageShell type="plugin" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />);
     fireEvent.click(screen.getByText('内部部署工具箱'));
     expect(await screen.findByText('/Users/x/dev/deploy-toolbox')).toBeTruthy();
-    expect(screen.getByText('目录缺失')).toBeTruthy();
+    expect(screen.getAllByText('目录缺失').length).toBeGreaterThanOrEqual(2); // 行徽标 + 详情徽章双面
   });
 
   it('插件卸载走 keepData 双按钮弹窗：完全卸载传 (id, false)，保留数据传 (id, true)', async () => {
     const uninstallMock = vi.fn().mockResolvedValue(undefined);
     (window as unknown as { api: Record<string, unknown> }).api = {
       ...((window as unknown as { api: Record<string, unknown> }).api ?? {}),
-      plugin: { uninstall: uninstallMock, setEnabled: vi.fn(), installZip: vi.fn(), installDevDir: vi.fn() },
+      plugin: {
+        uninstall: uninstallMock, setEnabled: vi.fn(), installZip: vi.fn(), installDevDir: vi.fn(),
+        getDetail: pluginGetDetailMock,
+      },
     };
     useResourceStore.setState({ typeFilter: 'plugin', activeType: 'plugin', items: [pluginItem] });
     render(<TypePageShell type="plugin" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />);

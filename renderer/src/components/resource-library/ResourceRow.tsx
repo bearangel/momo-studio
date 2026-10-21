@@ -10,6 +10,7 @@ import { Bot, Blocks, Check, Package, Puzzle, Trash2 } from 'lucide-react';
 import type { ResourceItem, ResourceType } from '../../ipc/types';
 import { cn } from '../../lib/cn';
 import { SourceBadge } from './SourceBadge';
+import { Switch } from '../ui/Switch';
 
 interface ResourceRowProps {
   item: ResourceItem;
@@ -27,6 +28,8 @@ interface ResourceRowProps {
   onConfigure?: (id: string) => void;
   /** builtin agent 停用入口（2026-10-10：列表行与详情面板对称；影响面确认挂 View 层） */
   onDisable?: (id: string) => void;
+  /** 插件工作空间级启停（spec 2026-10-21 §9①：行内开关；View 层接 store.setPluginEnabled） */
+  onTogglePlugin?: (item: ResourceItem, next: boolean) => void;
 }
 
 /** 资源类型兜底图标（item.iconEmoji 优先——用户数据照渲染）。TypeSidebar/TypePageShell 复用。 */
@@ -47,7 +50,7 @@ function moveFocus(current: HTMLElement, pick: (rows: HTMLElement[], idx: number
 }
 
 export function ResourceRow({
-  item, selected, onSelect, onInstall, onDelete, onEnable, onEdit, onConfigure, onDisable,
+  item, selected, onSelect, onInstall, onDelete, onEnable, onEdit, onConfigure, onDisable, onTogglePlugin,
 }: ResourceRowProps) {
   const TypeIcon = TYPE_ICON[item.type];
 
@@ -94,6 +97,26 @@ export function ResourceRow({
       <span className="text-xs text-tertiary truncate flex-1 min-w-0">{item.description}</span>
 
       <span className="flex gap-1 items-center shrink-0">
+        {/* 插件启停面（spec 2026-10-21 §9①）：恒显徽标（当前 ws 视角）+ 行内开关 */}
+        {item.type === 'plugin' && item.plugin && (
+          <>
+            {item.plugin.state === 'missing' ? (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-status-error-tint text-status-error">目录缺失</span>
+            ) : item.plugin.enabled ? (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-status-success-tint text-status-success">已启用</span>
+            ) : (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-surface-3 text-tertiary">已停用</span>
+            )}
+            {onTogglePlugin && (
+              <Switch
+                checked={item.plugin.enabled}
+                disabled={item.plugin.state === 'missing'}
+                aria-label={`${item.plugin.enabled ? '停用' : '启用'}插件 ${item.name}`}
+                onChange={(next) => onTogglePlugin(item, next)}
+              />
+            )}
+          </>
+        )}
         {/* 安装/导入：仅 installable 且未安装；p2p 文案为「导入」（与详情面板口径一致，走查 A3） */}
         {item.installable && !item.installed && onInstall && (
           <button
