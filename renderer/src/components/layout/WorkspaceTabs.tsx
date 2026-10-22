@@ -14,6 +14,7 @@ import { X, Plus, Folder, Pencil, FolderOpen, Trash2 } from 'lucide-react';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { ipc } from '../../ipc/client';
 import { CreateWorkspaceDialog } from '../workspace/CreateWorkspaceDialog';
+import { ClosedTabsDropdown } from './ClosedTabsDropdown';
 import { cn } from '../../lib/cn';
 import { noDragStyle } from '../../lib/platform';
 import { PromptDialog } from '../common/PromptDialog';
@@ -198,6 +199,9 @@ export function WorkspaceTabs() {
       >
         <Plus size={14} strokeWidth={1.75} aria-hidden />
       </button>
+
+      {/* 已关闭工作空间的重开入口（closedIds 非空才出现，空态零视觉噪音） */}
+      <ClosedTabsDropdown />
 
       {showCreate && <CreateWorkspaceDialog onClose={() => setShowCreate(false)} />}
 
