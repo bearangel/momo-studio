@@ -176,3 +176,13 @@ v2.10 Windows 全平台化（spec：`docs/specs/2026-09-12-windows-platform-desi
 - UI 变更静态预览门禁 → `.opencode/skills/momo-ui-preview-rules/SKILL.md`
 - App 级验收测试 → `.opencode/skills/momo-acceptance/SKILL.md`
 - 核心红线（常驻）→ `AGENTS.md` 研发红线章节
+
+---
+
+## UI 验收定值规则（2026-10-22）
+
+ClosedTabsDropdown 落码丢失已批准预览的 `min-width: 216px`（症状：短名工作空间使下拉面板 shrink-to-fit 压窄，「已关闭的工作空间」标题折 3 行；agent 验收 11/11 pass 未拦住，用户 dev 环境实测才发现）。三道关全部漏放，根因与规则：
+
+- **「对照预览」是印象式而非属性级**——截图整体形态「看起来像」就判过，无机制核对预览定值在代码里的对应物。规则：预览 HTML 每个布局定值（min/max-width、固定尺寸、字号、图标、间距、token）都是合同条款；P1 事后验收先列定值清单逐项核（grep 代码 + `getComputedStyle` 抽查）再做形态比对（momo-ui-preview-rules「预览定值对照纪律」）
+- **验收数据矩阵缺「极短内容」边界**——M2 探查只列「超长与特殊字符」，验收全用 4-6 字长名；shrink-to-fit 缺陷只在极短内容（1-2 字符）下暴露。规则：展示型组件（列表/菜单/面板/标签）验收必须含极短用例（momo-acceptance M2 边界矩阵）
+- **a11y 快照测不出 CSS 折行**——文本树里标题折不折行都是同一节点，快照「正常」不构成无折行证据。规则：宽度/折行/溢出类结论须 computed style 断言或双场景（极短 vs 超长）宽度对比支撑（momo-acceptance M2 视觉属性判定）

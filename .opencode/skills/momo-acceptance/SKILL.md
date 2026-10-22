@@ -74,7 +74,8 @@ tmux send-keys -t momo-acceptance "cd <repo> && PATH=\"$V20:\$PATH\" AP_USER_DAT
 
 ### M2 设计符合性（三层）
 - **spec 对照**：实际行为逐条对照相关 spec 章节
-- **缺陷探查**：空态渲染 / 超长与特殊字符 / 重复提交 / 关窗重开状态保真
+- **缺陷探查**：空态渲染 / **内容长度边界：极短（1-2 字符）+ 常规 + 超长与特殊字符**——展示型组件（列表 / 菜单 / 面板 / 标签）必须含极短用例，shrink-to-fit 类布局缺陷只在极短内容下暴露（2026-10-22 实证）/ 重复提交 / 关窗重开状态保真
+- **视觉属性判定**：宽度 / 折行 / 溢出类结论须 computed style 断言（CDP eval `getComputedStyle`）或双场景（极短 vs 超长）宽度对比支撑——a11y 快照是文本树，不反映 CSS 渲染折行，单独快照不得作为「无折行」证据
 - **UI 偏离**：对照 `docs/dev/design-system.md`——语义 token（computed style 抽查）、16px / stroke 1.75 图标、状态色走 `lib/task-status.ts`、**明暗双主题各截一组**
 
 ### M3 UX 走查
@@ -121,4 +122,5 @@ tmux send-keys -t momo-acceptance "cd <repo> && PATH=\"$V20:\$PATH\" AP_USER_DAT
 - ❌ 证据引用指向不存在的文件；截图失败静默跳过
 - ❌ UX 判断无观察依据（「感觉不错」不算）
 - ❌ 错误路径没有专项用例就宣布功能 pass
+- ❌ 宽度/折行类视觉结论只凭 a11y 快照或单张截图「看起来正常」
 - ❌ 越界自动修缺陷——验收只报告，修复另起任务走 `momo-debug-rules`
