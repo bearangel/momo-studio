@@ -14,6 +14,9 @@ import { getRouterService } from '../agent/router-bootstrap';
 // P2-D Task D1：listInFlight 数据面（registry 在途链 → 视图 + 子 agent 名解析）
 import { listInFlightViews } from '../agent/inflight-view';
 import { registerSessionIpcHandlers } from '../im/session.ipc.handlers';
+// 会话分组/置顶六通道（spec 2026-10-22 §7）：sessionGroup CRUD +
+// session:setPinned / session:moveToGroup（后者与分组校验同址）
+import { registerSessionGroupIpcHandlers } from '../im/session-group.ipc.handlers';
 import { registerMcpHandlers } from '../mcp/ipc.handlers';
 import { registerAllocationHandlers } from '../workspace/ipc.handlers';
 import { registerGitPolicyHandlers } from '../workspace/git-policy';
@@ -63,6 +66,8 @@ export function registerIpcHandlers(opts: WorkspaceIpcOpts = {}): void {
     listInFlight: listInFlightViews,
   });
   registerSessionIpcHandlers();
+  // 会话分组/置顶六通道（spec 2026-10-22 §7）
+  registerSessionGroupIpcHandlers();
   registerMcpHandlers();
   registerAllocationHandlers();
   registerGitPolicyHandlers();

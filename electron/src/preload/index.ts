@@ -32,6 +32,7 @@ import type {
   ResourceItem,
   ResourceType,
   ScannedSkill,
+  SessionGroupRow,
   SkillCreateInput,
   SmitheryInstallResult,
   TaskRow,
@@ -303,6 +304,12 @@ const api: ApiSurface = {
       invoke<{ filename: string; content: string }>('session:exportMessages', sessionId, limit),
     // 三级中断·会话级急停（spec 2026-10-13 §7.5）：全部流 + 全链 + 待投递回执清空
     stopAll: (sessionId: string) => invoke('session:stopAll', { sessionId }),
+    // 置顶切换（spec 2026-10-22 §7）：true=写时间戳 / false=取消。handler 同址在
+    // im/session-group.ipc.handlers.ts（与分组校验耦合，通道名属 session 命名空间）
+    setPinned: (sessionId: string, pinned: boolean) => invoke('session:setPinned', sessionId, pinned),
+    // 归组/移出分组：groupId=null 移出；主进程校验组属该会话所在工作空间
+    moveToGroup: (sessionId: string, groupId: string | null) =>
+      invoke('session:moveToGroup', sessionId, groupId),
     onMessage: (callback) => {
       const handler = (_evt: IpcRendererEvent, msg: ImMessage): void => callback(msg);
       ipcRenderer.on('session:message', handler);
@@ -486,6 +493,15 @@ const api: ApiSurface = {
     unarchive: (id) => invoke<GroupRow>('taskGroup:unarchive', id),
     delete: (id, moveToGroupId) =>
       invoke<{ movedCount: number }>('taskGroup:delete', id, moveToGroupId),
+  },
+  // 会话分组命名空间（spec 2026-10-22 §7）：分组 CRUD，按 workspace 隔离。
+  // 置顶/归组两个会话行写面在 api.session（setPinned / moveToGroup）。
+  sessionGroup: {
+    list: (workspaceId: string) => invoke<SessionGroupRow[]>('sessionGroup:list', workspaceId),
+    create: (workspaceId: string, name: string) =>
+      invoke<SessionGroupRow>('sessionGroup:create', workspaceId, name),
+    rename: (groupId: string, name: string) => invoke<void>('sessionGroup:rename', groupId, name),
+    delete: (groupId: string) => invoke<void>('sessionGroup:delete', groupId),
   },
   dialog: {
     pickDirectory: (opts) => invoke('dialog:pickDirectory', opts),

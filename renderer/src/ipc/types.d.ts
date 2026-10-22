@@ -1350,6 +1350,20 @@ export interface SessionSummary {
 }
 
 /**
+ * 会话分组行（renderer 镜像，spec 2026-10-22 §7）。
+ * 与 electron 端 storage/sessions/repo.ts 的 SessionGroupRow 对齐
+ * （跨进程独立定义，仅结构对齐）；会话列表按 position ASC, created_at ASC 渲染分组区。
+ */
+export interface SessionGroupRow {
+  id: string;
+  workspaceId: string;
+  name: string;
+  /** 同 workspace 内单调递增（建组 = 当前 max + 1024） */
+  position: number;
+  createdAt: number;
+}
+
+/**
  * v25 spec §4.4：协作会话目标——单个 agent 或团队（快照展开）。
  */
 export type CollabTarget = { type: 'agent'; instanceId: string } | { type: 'team'; teamId: string };
@@ -1473,12 +1487,39 @@ export interface SessionApiSurface {
    * 全部流 aborted + 全部在途链 cancelled + 待投递回执队列清空。
    */
   stopAll(sessionId: string): Promise<{ stoppedStreams: number; cancelledChains: number }>;
+  /**
+   * 置顶切换（spec 2026-10-22 §7，通道 session:setPinned）：true=写置顶时间戳
+   * （重置顶可上浮置顶区）/ false=取消置顶。与分组互不影响——删组不解除置顶。
+   */
+  setPinned(sessionId: string, pinned: boolean): Promise<void>;
+  /**
+   * 归组 / 移出分组（spec 2026-10-22 §7，通道 session:moveToGroup）：
+   * groupId=null 为合法的移出路径；非 null 时主进程校验该组属会话所在工作空间，
+   * 否则 reject（message 含「分组不存在或不属于当前会话所在工作空间」）。
+   */
+  moveToGroup(sessionId: string, groupId: string | null): Promise<void>;
   /** 订阅消息行实时推送（session:message） */
   onMessage(callback: (msg: ImMessage) => void): () => void;
   /** 订阅流式 events 批量推送（session:message_event_batch，MessageEventBuffer flush 时触发） */
   onMessageEventBatch(callback: (batch: MessageEventBatch) => void): () => void;
   /** K10：订阅会话列表变化推送（session:listChanged——主进程主动新建执行会话时触发） */
   onListChanged(callback: () => void): () => void;
+}
+
+/**
+ * 会话分组通道面（spec 2026-10-22 §7；IPC 命名空间 sessionGroup:*，
+ * electron/src/main/im/session-group.ipc.handlers.ts）。分组按 workspace 隔离，
+ * 置顶/归组两个会话行写面在 api.session（setPinned / moveToGroup）。
+ */
+export interface SessionGroupApiSurface {
+  /** 按 workspace 列组；顺序 position ASC, created_at ASC（分组区渲染序） */
+  list(workspaceId: string): Promise<SessionGroupRow[]>;
+  /** 建组（尾插 position = max + 1024）；空名/纯空白 reject「分组名不能为空」 */
+  create(workspaceId: string, name: string): Promise<SessionGroupRow>;
+  /** 改名；空名 reject 同 create（共用名守卫） */
+  rename(groupId: string, name: string): Promise<void>;
+  /** 删组：组内会话回落未分组（置顶位独立保留），不删会话 */
+  delete(groupId: string): Promise<void>;
 }
 
 /**
@@ -2133,6 +2174,8 @@ export interface ApiSurface {
    * v2.0 P1 Task 8：会话内核命名空间（session.ipc.handlers.ts）。
    */
   session: SessionApiSurface;
+  /** 会话分组命名空间（spec 2026-10-22 §7）：分组 CRUD，按 workspace 隔离 */
+  sessionGroup: SessionGroupApiSurface;
   /** 三级中断·链级 + 在途查询（dispatch:cancelChain / dispatch:listInFlight） */
   dispatch: DispatchApiSurface;
   mcp: {
