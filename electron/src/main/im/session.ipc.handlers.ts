@@ -135,6 +135,12 @@ function toSummary(row: SessionRow): SessionSummary {
     titleAuto: row.titleAuto,
     kind: row.kind,
     lastMessageAt: row.lastMessageAt,
+    // 建会时刻未置顶、未分组，groupName 恒 null；session_type 由建会路径定型
+    // （quick / collab，spec 2026-10-22 §3.1）
+    pinnedAt: row.pinnedAt,
+    groupId: row.groupId,
+    groupName: null,
+    sessionType: row.sessionType,
     members: getSessionMembersInfo(row.id),
   };
 }

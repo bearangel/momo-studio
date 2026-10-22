@@ -179,6 +179,10 @@ function makeSessionSummary(id: string): SessionSummary {
     titleAuto: false,
     kind: 'chat',
     lastMessageAt: null,
+    pinnedAt: null,
+    groupId: null,
+    groupName: null,
+    sessionType: null,
     members: [],
   };
 }

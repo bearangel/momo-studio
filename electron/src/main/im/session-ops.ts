@@ -24,9 +24,10 @@ import {
   renameSession as repoRenameSession,
   deleteSession,
   addSessionMember,
-  listSessionsByWorkspace,
   listAllSessions,
+  listSessionsWithGroup,
   type SessionRow,
+  type SessionWithGroupRow,
 } from '../storage/sessions/repo';
 import { getWorkspace } from '../workspace/crud';
 import { listTeams } from '../agent/team';
@@ -78,6 +79,14 @@ export interface SessionSummary {
   titleAuto: boolean;
   kind: SessionRow['kind'];
   lastMessageAt: number | null;
+  /** 置顶时间戳（spec 2026-10-22 §4.1）；null=未置顶 */
+  pinnedAt: number | null;
+  /** 所属分组 id（spec 2026-10-22 §4）；null=未分组 */
+  groupId: string | null;
+  /** 分组名（LEFT JOIN session_groups 带出）；null=未分组 */
+  groupName: string | null;
+  /** 会话类型（spec 2026-10-22 §3.1）；null=泛化创建路径 */
+  sessionType: 'quick' | 'collab' | null;
   members: SessionMemberInfo[];
 }
 
@@ -98,6 +107,8 @@ function insertSessionWithMembers(args: {
   titleAuto: boolean;
   kind: SessionRow['kind'];
   members: MemberWrite[];
+  /** 会话类型定型（spec 2026-10-22 §3.1）；缺省 → NULL（泛化创建路径） */
+  sessionType?: 'quick' | 'collab';
 }): SessionRow {
   const db = getDb();
   const tx = db.transaction((a: {
@@ -106,12 +117,14 @@ function insertSessionWithMembers(args: {
     titleAuto: boolean;
     kind: SessionRow['kind'];
     members: MemberWrite[];
+    sessionType?: 'quick' | 'collab';
   }): SessionRow => {
     const row = insertSession({
       workspaceId: a.workspaceId,
       title: a.title,
       kind: a.kind,
       titleAuto: a.titleAuto,
+      sessionType: a.sessionType,
     });
     for (const m of a.members) {
       addSessionMember(row.id, m.instanceId, m.isLeader);
@@ -158,6 +171,7 @@ export function createQuickSession(workspaceId: string): SessionRow {
     titleAuto: true,
     kind: 'chat',
     members: [{ instanceId: ws.defaultAgentInstanceId, isLeader: true }],
+    sessionType: 'quick',
   });
 }
 
@@ -200,6 +214,7 @@ export function createCollabSession(
     titleAuto: userTitle === null,
     kind: 'chat',
     members,
+    sessionType: 'collab',
   });
 }
 
@@ -221,9 +236,15 @@ export function deleteSessionOp(id: string): void {
  * 列出某 workspace 下的全部会话（含成员信息）。
  * workspaceId 缺省 → 返回全部 workspace 的会话（仅迁移/调试用，
  * IM 入口应总是带 workspaceId 过滤）。
+ *
+ * 数据源走 listSessionsWithGroup（spec 2026-10-22 §4.1 排序契约单源），
+ * 顺带把 pinned/group/sessionType 带进 summary；listAllSessions 路径不 JOIN
+ * 分组名，归一为 null 以免消费方（Task 4 IPC / Task 5、7 渲染层）区分两条数据源。
  */
 export function getSessionsForWorkspace(workspaceId?: string): SessionSummary[] {
-  const sessions = workspaceId ? listSessionsByWorkspace(workspaceId) : listAllSessions();
+  const sessions: SessionWithGroupRow[] = workspaceId
+    ? listSessionsWithGroup(workspaceId)
+    : listAllSessions().map((s) => ({ ...s, groupName: null }));
   return sessions.map((s) => ({
     id: s.id,
     workspaceId: s.workspaceId,
@@ -231,6 +252,10 @@ export function getSessionsForWorkspace(workspaceId?: string): SessionSummary[] 
     titleAuto: s.titleAuto,
     kind: s.kind,
     lastMessageAt: s.lastMessageAt,
+    pinnedAt: s.pinnedAt,
+    groupId: s.groupId,
+    groupName: s.groupName ?? null,
+    sessionType: s.sessionType,
     members: getSessionMembersInfo(s.id),
   }));
 }

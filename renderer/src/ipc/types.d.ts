@@ -1298,6 +1298,12 @@ export interface SessionRow {
   updatedAt: number;
   /** 最后消息时间戳（会话列表排序键）；null=尚无消息 */
   lastMessageAt: number | null;
+  /** 置顶时间戳（spec 2026-10-22 §4.1）；null=未置顶 */
+  pinnedAt: number | null;
+  /** 所属分组（spec 2026-10-22 §4）；null=未分组 */
+  groupId: string | null;
+  /** 会话类型（spec 2026-10-22 §3.1）；null=泛化创建路径 */
+  sessionType: 'quick' | 'collab' | null;
 }
 
 /**
@@ -1332,6 +1338,14 @@ export interface SessionSummary {
   titleAuto: boolean;
   kind: SessionKind;
   lastMessageAt: number | null;
+  /** 置顶时间戳（spec 2026-10-22 §4.1）；null=未置顶 */
+  pinnedAt: number | null;
+  /** 所属分组 id（spec 2026-10-22 §4）；null=未分组 */
+  groupId: string | null;
+  /** 分组名（spec 2026-10-22 §4）；null=未分组 */
+  groupName: string | null;
+  /** 会话类型（spec 2026-10-22 §3.1）；null=泛化创建路径 */
+  sessionType: 'quick' | 'collab' | null;
   members: SessionMemberInfo[];
 }
 

@@ -241,6 +241,7 @@ describe('session:createQuick handler', () => {
 
     expect(sessionOpsMocks.createQuickSession).toHaveBeenCalledWith('ws-1');
     // 返回 SessionSummary（id/titleAuto/members 齐全——renderer 直接消费）
+    // 四个 spec 2026-10-22 新字段全量锁：建会返回即未置顶/未分组，groupName 恒 null
     expect(res).toEqual({
       id: 'sess-quick',
       workspaceId: 'ws-1',
@@ -248,6 +249,10 @@ describe('session:createQuick handler', () => {
       titleAuto: true,
       kind: 'chat',
       lastMessageAt: null,
+      pinnedAt: null,
+      groupId: null,
+      groupName: null,
+      sessionType: null,
       members: [
         { instanceId: 'inst-default', agentName: '默认Agent', iconEmoji: '🤖', isLeader: true, lastRunning: true, vision: false },
       ],

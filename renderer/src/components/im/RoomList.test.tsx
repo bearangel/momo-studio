@@ -52,6 +52,10 @@ function makeSession(overrides: Partial<SessionSummary> & { id: string }): Sessi
     titleAuto: false,
     kind: 'chat',
     lastMessageAt: null,
+    pinnedAt: null,
+    groupId: null,
+    groupName: null,
+    sessionType: null,
     members: [],
     ...overrides,
   };

@@ -146,6 +146,10 @@ function mkSession(id: string): SessionSummary {
     titleAuto: true,
     kind: 'chat',
     lastMessageAt: null,
+    pinnedAt: null,
+    groupId: null,
+    groupName: null,
+    sessionType: null,
     members: [],
   };
 }

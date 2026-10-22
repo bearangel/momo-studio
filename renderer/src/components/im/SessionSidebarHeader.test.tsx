@@ -96,6 +96,10 @@ const MOCK_QUICK_SESSION: SessionSummary = {
   titleAuto: true,
   kind: 'chat',
   lastMessageAt: null,
+  pinnedAt: null,
+  groupId: null,
+  groupName: null,
+  sessionType: 'quick',
   members: [QUICK_SESSION_MEMBER],
 };
 

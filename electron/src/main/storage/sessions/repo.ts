@@ -86,10 +86,45 @@ export function listSessionsByWorkspace(workspaceId: string): SessionRow[] {
   return rows.map(rowToCamel);
 }
 
-/** 不限 workspace 的全量会话列表（仅迁移/调试用）；排序契约与本文件唯一同源 */
+/**
+ * 排序契约单点（spec 2026-10-22 §4.1）：置顶区 > 分组 > 未分组 > 活跃时间。
+ * 供 listSessionsWithGroup（列表数据源）与 listAllSessions（不限 ws）同源引用，
+ * 避免两处 ORDER BY 漂移。依赖左侧 JOIN 别名：s=sessions / g=session_groups。
+ */
+const SESSION_ORDER_BY = `ORDER BY
+  (s.pinned_at IS NULL) ASC,
+  s.pinned_at DESC,
+  (g.position IS NULL) ASC,
+  g.position ASC,
+  g.created_at ASC,
+  COALESCE(s.last_message_at, s.created_at) DESC,
+  s.created_at DESC`;
+
+/** 会话行 + 分组名（LEFT JOIN 产物；group_name 未分组时为 NULL） */
+export interface SessionWithGroupRow extends SessionRow {
+  groupName: string | null;
+}
+
+/** 会话列表（排序契约单源，Task 4 IPC `session:list` 数据源） */
+export function listSessionsWithGroup(workspaceId: string): SessionWithGroupRow[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT s.*, g.name AS group_name FROM sessions s
+       LEFT JOIN session_groups g ON g.id = s.group_id
+       WHERE s.workspace_id = ? ${SESSION_ORDER_BY}`,
+    )
+    .all(workspaceId) as Array<SqlRow & { group_name: string | null }>;
+  return rows.map((r) => ({ ...rowToCamel(r), groupName: r.group_name }));
+}
+
+/** 不限 workspace 的全量会话列表（仅迁移/调试用）；排序契约与 listSessionsWithGroup 同源 */
 export function listAllSessions(): SessionRow[] {
   const rows = getDb()
-    .prepare('SELECT * FROM sessions ORDER BY COALESCE(last_message_at, created_at) DESC, created_at DESC')
+    .prepare(
+      `SELECT s.* FROM sessions s
+       LEFT JOIN session_groups g ON g.id = s.group_id
+       ${SESSION_ORDER_BY}`,
+    )
     .all() as SqlRow[];
   return rows.map(rowToCamel);
 }
