@@ -1,9 +1,14 @@
 // renderer/src/components/im/CollabSessionDialog.test.tsx
 //
 // v25 Task 13：创建协作会话弹窗测试（spec §6.5）。
-// 名称输入（可空=动态命名提示文案）+「单个 agent / 团队」页签 + 目标单选列表
-// （成员行显示在线态 / 团队行显示 Crown leader + 成员数）；提交走 session.store createCollabSession。
+// 名称输入（可空=动态命名提示文案）+「选择成员 / 选择团队」页签。
 // v2.1 P2 Task 15：👑 → lucide-react Crown；断言改 getByTitle('leader：…') + 内含 svg。
+//
+// 2026-10-22 Task 11（spec §5.3，预览 B rev2 批准交互）：
+//   - agent 页签 radio 单选 → checkbox 多选卡；提交 payload 恒 members 形态
+//     （单选亦然）；页签改名「单个 agent」→「选择成员」、「团队」→「选择团队」
+//   - 主 agent 指定 = 已选卡底部 radio 行（>1 已选时）+ leader 名旁 Crown 徽标；
+//     不变量：首个选中默认 leader、取消 leader 回落剩余首个、切页签清空
 //
 // Mock 策略（momo-test-rules）：
 //   - store 为真实 zustand 实例，setState 注入状态与 action 桩；
@@ -151,9 +156,13 @@ describe('CollabSessionDialog — 渲染与数据加载', () => {
     expect(screen.queryByText('@reviewer:local')).not.toBeInTheDocument();
   });
 
-  it('默认「单个 agent」页签，成员行显示名称与在线/离线态', async () => {
+  it('默认「选择成员」页签（Task 11 改名），成员行显示名称与在线/离线态', async () => {
     render(<CollabSessionDialog onClose={() => {}} />);
-    expect(screen.getByRole('button', { name: '单个 agent' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '选择成员' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '选择团队' })).toBeInTheDocument();
+    // 旧页签名退役（改名回归锁）
+    expect(screen.queryByRole('button', { name: '单个 agent' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '团队' })).not.toBeInTheDocument();
     expect(screen.getByText('编码助手')).toBeInTheDocument();
     expect(screen.getByText('在线')).toBeInTheDocument();
     expect(screen.getByText('离线')).toBeInTheDocument();
@@ -169,24 +178,130 @@ describe('CollabSessionDialog — 渲染与数据加载', () => {
 });
 
 describe('CollabSessionDialog — 校验', () => {
-  it('未选目标提交 → 提示选择会话目标', async () => {
+  it('未选目标提交 → 提示选择会话成员', async () => {
     render(<CollabSessionDialog onClose={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: '创建' }));
-    expect(await screen.findByText('请选择会话目标')).toBeInTheDocument();
+    expect(await screen.findByText('请选择会话成员')).toBeInTheDocument();
     expect(createCollabSession).not.toHaveBeenCalled();
   });
 });
 
-describe('CollabSessionDialog — 单个 agent 提交', () => {
-  it('名称留空 → title=undefined（动态命名），目标为所选成员', async () => {
+describe('CollabSessionDialog — 成员多选与主 agent（Task 11，预览 B rev2 批准交互）', () => {
+  it('1. 勾选两个成员 → 引导文案 + 已选卡各出 radio 行 + 首个选中者默认 leader（名旁 Crown 徽标）', async () => {
+    render(<CollabSessionDialog onClose={() => {}} />);
+    // 成员行为 checkbox 卡（aria-label = 成员名）
+    fireEvent.click(screen.getByLabelText('编码助手'));
+    fireEvent.click(screen.getByLabelText('评审员'));
+
+    // 引导文案（已选 >1 时出现于卡片列表上方）
+    expect(
+      screen.getByText('已选 2 个成员——指定一名主 agent 负责接待与任务分派'),
+    ).toBeInTheDocument();
+
+    const radioA = screen.getByTestId('leader-radio-inst-1') as HTMLInputElement;
+    const radioB = screen.getByTestId('leader-radio-inst-2') as HTMLInputElement;
+    expect(radioA.name).toBe('collab-leader');
+    expect(radioB.name).toBe('collab-leader');
+    // 不变量：首个选中默认 leader
+    expect(radioA.checked).toBe(true);
+    expect(radioB.checked).toBe(false);
+
+    // Crown 徽标：leader（inst-1）名旁出现、非 leader 无
+    expect(screen.getByTestId('leader-badge-inst-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('leader-badge-inst-2')).not.toBeInTheDocument();
+  });
+
+  it('2. 点第二个成员 radio → 互斥切换 + Crown 徽标随迁', async () => {
+    render(<CollabSessionDialog onClose={() => {}} />);
+    fireEvent.click(screen.getByLabelText('编码助手'));
+    fireEvent.click(screen.getByLabelText('评审员'));
+
+    fireEvent.click(screen.getByTestId('leader-radio-inst-2'));
+
+    expect((screen.getByTestId('leader-radio-inst-2') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByTestId('leader-radio-inst-1') as HTMLInputElement).checked).toBe(false);
+    expect(screen.queryByTestId('leader-badge-inst-1')).not.toBeInTheDocument();
+    expect(screen.getByTestId('leader-badge-inst-2')).toBeInTheDocument();
+    // 徽标 title 职责说明（rev2：徽标非交互）
+    expect(screen.getByTestId('leader-badge-inst-2')).toHaveAttribute(
+      'title',
+      '主 agent：负责接待用户输入与任务分派',
+    );
+  });
+
+  it('3. 仅勾 1 个成员 → 无 radio 行、无 Crown 徽标、无引导文案', async () => {
+    render(<CollabSessionDialog onClose={() => {}} />);
+    fireEvent.click(screen.getByLabelText('编码助手'));
+
+    expect(screen.queryByTestId('leader-radio-inst-1')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('leader-badge-inst-1')).not.toBeInTheDocument();
+    expect(screen.queryByText(/指定一名主 agent 负责接待与任务分派/)).not.toBeInTheDocument();
+  });
+
+  it('4. 取消选中当前 leader → leader 回落到剩余首个（不变量，payload 证明非陈旧）', async () => {
+    render(<CollabSessionDialog onClose={() => {}} />);
+    fireEvent.click(screen.getByLabelText('编码助手'));
+    fireEvent.click(screen.getByLabelText('评审员'));
+    // leader 切到评审员后取消勾选——剩余仅编码助手，回落后 leader 必须是它
+    fireEvent.click(screen.getByTestId('leader-radio-inst-2'));
+    fireEvent.click(screen.getByLabelText('评审员'));
+
+    // 剩余 1 个 → chrome 规则：无 radio / 无徽标 / 无引导
+    expect(screen.queryByTestId('leader-radio-inst-1')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('leader-badge-inst-1')).not.toBeInTheDocument();
+    expect(screen.queryByText(/指定一名主 agent/)).not.toBeInTheDocument();
+
+    // 提交证明回落：leaderInstanceId=inst-1（陈旧 inst-2 会被主进程「主 agent 必须是所选成员之一」拒绝）
+    fireEvent.click(screen.getByRole('button', { name: '创建' }));
+    await waitFor(() =>
+      expect(createCollabSession).toHaveBeenCalledWith('ws-1', undefined, {
+        type: 'members',
+        instanceIds: ['inst-1'],
+        leaderInstanceId: 'inst-1',
+      }),
+    );
+  });
+
+  it('5. 提交 → createCollabSession 恒以 members 形态调用（instanceIds + leaderInstanceId）', async () => {
+    const onClose = vi.fn();
+    render(<CollabSessionDialog onClose={onClose} />);
+    fireEvent.click(screen.getByLabelText('编码助手'));
+    fireEvent.click(screen.getByLabelText('评审员'));
+
+    fireEvent.click(screen.getByRole('button', { name: '创建' }));
+
+    await waitFor(() =>
+      expect(createCollabSession).toHaveBeenCalledWith('ws-1', undefined, {
+        type: 'members',
+        instanceIds: ['inst-1', 'inst-2'],
+        leaderInstanceId: 'inst-1',
+      }),
+    );
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it('切页签清空勾选与 leader（回切后勾选态不残留）', async () => {
+    render(<CollabSessionDialog onClose={() => {}} />);
+    fireEvent.click(screen.getByLabelText('编码助手'));
+    fireEvent.click(screen.getByRole('button', { name: '选择团队' }));
+    fireEvent.click(screen.getByRole('button', { name: '选择成员' }));
+
+    expect((screen.getByLabelText('编码助手') as HTMLInputElement).checked).toBe(false);
+    expect(screen.queryByTestId('leader-badge-inst-1')).not.toBeInTheDocument();
+  });
+});
+
+describe('CollabSessionDialog — 单成员提交（members 形态收敛）', () => {
+  it('名称留空 → title=undefined（动态命名），payload 为 members 形态（单选亦然）', async () => {
     const onClose = vi.fn();
     render(<CollabSessionDialog onClose={onClose} />);
     fireEvent.click(screen.getByLabelText('编码助手'));
     fireEvent.click(screen.getByRole('button', { name: '创建' }));
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
     expect(createCollabSession).toHaveBeenCalledWith('ws-1', undefined, {
-      type: 'agent',
-      instanceId: 'inst-1',
+      type: 'members',
+      instanceIds: ['inst-1'],
+      leaderInstanceId: 'inst-1',
     });
   });
 
@@ -198,17 +313,18 @@ describe('CollabSessionDialog — 单个 agent 提交', () => {
     fireEvent.click(screen.getByRole('button', { name: '创建' }));
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
     expect(createCollabSession).toHaveBeenCalledWith('ws-1', '评审会', {
-      type: 'agent',
-      instanceId: 'inst-2',
+      type: 'members',
+      instanceIds: ['inst-2'],
+      leaderInstanceId: 'inst-2',
     });
   });
 });
 
-describe('CollabSessionDialog — 团队页签', () => {
+describe('CollabSessionDialog — 团队页签（行为不变回归锁）', () => {
   it('团队行显示 Crown leader 标记与成员数；选择团队提交 → team 目标', async () => {
     const onClose = vi.fn();
     render(<CollabSessionDialog onClose={onClose} />);
-    fireEvent.click(screen.getByRole('button', { name: '团队' }));
+    fireEvent.click(screen.getByRole('button', { name: '选择团队' }));
     // v2.1 P2 Task 15：👑 emoji → lucide-react Crown；断言改 getByTitle + 内含 svg
     const leader = screen.getByTitle('leader：编码助手');
     expect(leader).toBeInTheDocument();
@@ -223,10 +339,18 @@ describe('CollabSessionDialog — 团队页签', () => {
     });
   });
 
-  it('团队页签下不显示成员单选列表', () => {
+  it('团队页签下不显示成员多选列表', () => {
     render(<CollabSessionDialog onClose={() => {}} />);
-    fireEvent.click(screen.getByRole('button', { name: '团队' }));
+    fireEvent.click(screen.getByRole('button', { name: '选择团队' }));
     expect(screen.queryByLabelText('编码助手')).not.toBeInTheDocument();
+  });
+
+  it('团队页签未选提交 → 提示选择会话目标（空选错误路径）', async () => {
+    render(<CollabSessionDialog onClose={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: '选择团队' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建' }));
+    expect(await screen.findByText('请选择会话目标')).toBeInTheDocument();
+    expect(createCollabSession).not.toHaveBeenCalled();
   });
 });
 
@@ -257,7 +381,7 @@ describe('CollabSessionDialog - 已启用未加入本空间的 agent（2026-10-1
       addMember,
     });
     render(<CollabSessionDialog onClose={() => {}} />);
-    // 未加入分区出现 DEF_2，且不是可选项（radio 不出现在该行）
+    // 未加入分区出现 DEF_2，且不是可选项（checkbox 不出现在该行）
     const joinBtn = screen.getByRole('button', { name: '加入 评审员' });
     expect(screen.getByText('已启用、未加入本工作空间（加入后可选）')).toBeInTheDocument();
     fireEvent.click(joinBtn);
@@ -295,7 +419,8 @@ describe('CollabSessionDialog - 加入 pending 态（2026-10-10）', () => {
     await waitFor(() => {
       useAgentStore.setState((s) => ({ members: [...s.members, MEMBER_2] }));
     });
-    await waitFor(() => expect(screen.getByRole('radio', { name: '评审员' })).toBeInTheDocument());
+    // Task 11：成员行为 checkbox（多选卡）
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: '评审员' })).toBeInTheDocument());
     expect(screen.queryByText('加入中…')).toBeNull();
   });
 });
