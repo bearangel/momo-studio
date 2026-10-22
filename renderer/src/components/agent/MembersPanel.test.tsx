@@ -1,8 +1,9 @@
 // renderer/src/components/agent/MembersPanel.test.tsx
 //
 // v25 Task 12：AgentsView Tab 1「智能体成员」面板测试（spec §6.1）。
-// 成员行 = icon emoji + 名称 + 模型 + ⭐默认会话标记 + 在线状态 + 行内操作
-// （启动/停止、设为默认会话、编辑、移出工作空间）。
+// 2026-10-22 卡片化流式布局：成员卡片 = icon emoji + 名称 + 模型 + ⭐默认会话标记
+// + 状态徽标 + 说明（def.description 直出，空 →「暂无说明」占位）
+// + 卡内 hover 操作（启动/停止、设为默认会话、编辑、移出工作空间）。
 // 移出被 leader 守卫拦截时 alert blockedTeams 团队名（spec §7）。
 //
 // Mock 策略（momo-test-rules）：
@@ -59,7 +60,7 @@ const DEF_1: AgentDefinition = {
   systemPrompt: '',
   defaultTools: [{ kind: 'builtin', ref: 'read_file' }],
   source: 'custom',
-  description: '',
+  description: '根据需求实现代码并遵循项目规范',
   iconEmoji: '🤖',
   defaultMcps: [],
   defaultSkills: [],
@@ -74,6 +75,7 @@ const DEF_2: AgentDefinition = {
   name: '评审员',
   slug: 'reviewer',
   iconEmoji: '🔍',
+  description: '',
   modelProviderId: 'p2',
   modelName: 'claude-sonnet',
 };
@@ -164,20 +166,20 @@ async function renderLoaded(): Promise<void> {
   });
 }
 
-/** 定位某成员所在的行容器（名称 span 的父级），用于行内按钮作用域查询 */
-function rowOf(name: string): HTMLElement {
-  const row = screen.getByText(name).parentElement;
-  if (!row) throw new Error(`未找到成员行：${name}`);
-  return row;
+/** 定位某成员所在的卡片容器（data-member-card），用于卡内按钮作用域查询 */
+function cardOf(name: string): HTMLElement {
+  const card = screen.getByText(name).closest<HTMLElement>('[data-member-card]');
+  if (!card) throw new Error(`未找到成员卡片：${name}`);
+  return card;
 }
 
-describe('MembersPanel — 成员行渲染', () => {
+describe('MembersPanel — 成员卡片渲染', () => {
   it('挂载时按当前 workspace 加载成员列表', async () => {
     await renderLoaded();
     expect(loadMembersMock).toHaveBeenCalledWith('ws-1');
   });
 
-  it('成员行渲染 icon emoji、名称、模型与在线状态', async () => {
+  it('成员卡片渲染 icon emoji、名称、模型与状态徽标', async () => {
     await renderLoaded();
     // icon emoji + 名称
     expect(screen.getByText('编码助手')).toBeInTheDocument();
@@ -185,9 +187,38 @@ describe('MembersPanel — 成员行渲染', () => {
     // 模型（次级文本）
     expect(screen.getByText('gpt-4o')).toBeInTheDocument();
     expect(screen.getByText('claude-sonnet')).toBeInTheDocument();
-    // 在线状态：inst-1 运行中（Play）/ inst-2 已停止（Pause）——v2.1 P3 图标 lucide 化
+    // 状态：inst-1 运行中（Play）/ inst-2 已停止（Pause）——v2.1 P3 图标 lucide 化
     expect(screen.getByText('运行中')).toBeInTheDocument();
     expect(screen.getByText('已停止')).toBeInTheDocument();
+  });
+
+  it('卡片直出智能体说明（def.description），无需切资源库查看', async () => {
+    await renderLoaded();
+    // DEF_1 有说明 → 卡片正文直出
+    expect(screen.getByText('根据需求实现代码并遵循项目规范')).toBeInTheDocument();
+    // 整卡 title 悬停可见全文（截断不丢信息）
+    expect(cardOf('编码助手')).toHaveAttribute('title', '根据需求实现代码并遵循项目规范');
+  });
+
+  it('空说明显示「暂无说明」占位且不带 title', async () => {
+    await renderLoaded();
+    // 仅 DEF_2（description 为空串）一张卡片出现占位
+    expect(screen.getAllByText('暂无说明')).toHaveLength(1);
+    expect(cardOf('评审员')).not.toHaveAttribute('title');
+  });
+
+  it('定义缺失的成员卡片显示「未知」与「暂无说明」，不崩', async () => {
+    useAgentStore.setState({
+      members: [
+        { ...MEMBER_NORMAL, instanceId: 'inst-3', agentDefinitionId: 'def-missing' },
+      ],
+    });
+    render(<MembersPanel />);
+    await waitFor(() => {
+      expect(loadMembersMock).toHaveBeenCalledWith('ws-1');
+    });
+    expect(screen.getByText('未知')).toBeInTheDocument();
+    expect(screen.getByText('暂无说明')).toBeInTheDocument();
   });
 
   it('仅默认会话智能体显示 Star 标记；非默认成员提供「设为默认」按钮', async () => {
@@ -249,7 +280,7 @@ describe('MembersPanel — 行内操作触发 store action', () => {
 
   it('点「编辑」→ 渲染 MemberEditDialog（member + def 数据源为该行成员）', async () => {
     await renderLoaded();
-    fireEvent.click(within(rowOf('编码助手')).getByText('编辑'));
+    fireEvent.click(within(cardOf('编码助手')).getByText('编辑'));
     await waitFor(() => {
       expect(screen.getByTestId('member-edit-dialog')).toBeInTheDocument();
     });
@@ -267,7 +298,7 @@ describe('MembersPanel — 行内操作触发 store action', () => {
 
   it('关闭编辑弹窗 → loadMembers 刷新（setMemberDeltas 不内部刷新）', async () => {
     await renderLoaded();
-    fireEvent.click(within(rowOf('编码助手')).getByText('编辑'));
+    fireEvent.click(within(cardOf('编码助手')).getByText('编辑'));
     await waitFor(() => {
       expect(screen.getByTestId('member-edit-dialog')).toBeInTheDocument();
     });
@@ -283,7 +314,7 @@ describe('MembersPanel — 行内操作触发 store action', () => {
 describe('MembersPanel — 移出工作空间（leader 守卫路径）', () => {
   it('确认后调用 removeMember(instanceId)', async () => {
     await renderLoaded();
-    fireEvent.click(within(rowOf('评审员')).getByText('移出'));
+    fireEvent.click(within(cardOf('评审员')).getByText('移出'));
     await waitFor(() => {
       expect(removeMemberMock).toHaveBeenCalledWith('inst-2');
     });
@@ -293,14 +324,14 @@ describe('MembersPanel — 移出工作空间（leader 守卫路径）', () => {
   it('confirm 取消 → 不调用 removeMember', async () => {
     confirmSpy.mockReturnValue(false);
     await renderLoaded();
-    fireEvent.click(within(rowOf('评审员')).getByText('移出'));
+    fireEvent.click(within(cardOf('评审员')).getByText('移出'));
     expect(removeMemberMock).not.toHaveBeenCalled();
   });
 
   it('被 leader 守卫拦截（ok:false）→ alert blockedTeams 团队名', async () => {
     removeMemberMock.mockResolvedValue({ ok: false, blockedTeams: ['攻坚组', '值班组'] });
     await renderLoaded();
-    fireEvent.click(within(rowOf('评审员')).getByText('移出'));
+    fireEvent.click(within(cardOf('评审员')).getByText('移出'));
     await waitFor(() => {
       expect(alertSpy).toHaveBeenCalled();
     });
