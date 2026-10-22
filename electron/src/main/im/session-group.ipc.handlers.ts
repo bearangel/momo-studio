@@ -32,7 +32,7 @@ function assertNonEmptyName(name: string): string {
   return trimmed;
 }
 
-/** 注册会话分组 / 置顶六通道。app ready 后由 ipc/index.ts 的 registerIpcHandlers 统一调用。 */
+/** 注册会话分组 / 置顶七通道（含 setColor）。app ready 后由 ipc/index.ts 的 registerIpcHandlers 统一调用。 */
 export function registerSessionGroupIpcHandlers(): void {
   // 分组列表：position ASC, created_at ASC（会话列表分组区渲染顺序的单一真相源）
   ipcMain.handle('sessionGroup:list', async (_evt, workspaceId: string) => {

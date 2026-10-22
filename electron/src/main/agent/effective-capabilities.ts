@@ -31,6 +31,7 @@ export function getEffectiveCapabilities(
     if (!member) continue;
     const def = getAgentDefinition(member.agentDefinitionId);
     // 成员行指向的定义缺失（脏数据/定义删除竞态）：同样省略，不抛错炸整批
+    // JOIN 后正常不可达——撕裂读/脏数据防御（终审裁定保留）
     if (!def) continue;
     out[id] = mergeCapabilities(
       def,

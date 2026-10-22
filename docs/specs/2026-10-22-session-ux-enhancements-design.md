@@ -33,7 +33,7 @@
 - 自动分组（按时间/类型/agent 聚类）。
 - 会话跨分组多属（一会话至多属于一个分组）。
 
-## 3. 数据模型与迁移（067）
+## 3. 数据模型与迁移（067 + 068）
 
 ```sql
 -- migration 067（独立模块 067_session_groups_pin_type.ts，与 032-066 同机制）
@@ -54,6 +54,13 @@ UPDATE sessions SET session_type =
 WHERE kind = 'chat';
 ```
 
+```sql
+-- migration 068（独立模块 068_session_group_color.ts，与 032-067 同机制）——组色子系统
+ALTER TABLE session_groups ADD COLUMN color TEXT NULL;
+-- 存量组按 (position, created_at, id) 序 6 色轮转回填（预览 A rev2 批准色值）：
+-- #5E6AD2 #23835C #B7791F #D33F49 #6E56CF #3E8F8C
+```
+
 ### 3.1 `session_type` 写入定型矩阵
 
 | 创建路径 | session_type | 说明 |
@@ -67,6 +74,7 @@ WHERE kind = 'chat';
 ### 3.2 契约扩展（两端同步）
 
 - `SessionRow`（electron repo + renderer `types.d.ts` 镜像）：加 `pinnedAt: number | null`、`groupId: string | null`、`sessionType: 'quick' | 'collab' | null`。
+- `SessionGroupRow`：增 `color: string`——创建即定值 `palette[(组数)%6]`，永不为 NULL（068 列定义 NULL 仅为存量回填过渡态）。
 - `SessionSummary`：在 SessionRow 扩展之上加 `groupName: string | null`（JOIN 带出，免二次查询）。
 - 修改 IPC 接口后 electron / renderer 两个 workspace 都要 typecheck（preload 三层 `../../../` 引用 `types.d.ts`）。
 
@@ -90,7 +98,7 @@ ORDER BY
 ```
 
 - repo 提供该 JOIN 查询供 SessionSummary 组装消费；`listAllSessions` 同步换同源 ORDER BY（排序契约唯一性）。
-- 置顶区语义（微信式全局顶置）：置顶项脱离原分组位置固定列表最上，**置顶区内顺序由置顶时间决定**（新消息不改变置顶区内部顺序；重置顶可上浮）；置顶项上显示所属分组小标识（groupName 非空时以 title 提示，避免视觉噪音）。
+- 置顶区语义（微信式全局顶置）：置顶项脱离原分组位置固定列表最上，**置顶区内顺序由置顶时间决定**（新消息不改变置顶区内部顺序；重置顶可上浮）；置顶项上显示所属分组小标识（groupName 非空时以 title 提示，避免视觉噪音）；置顶行同时以组名文字后缀显示归属（预览 A 批准形态，title 提示之外）。
 - `pinned_at` 与 `group_id` 相互独立：置顶不清分组，取消置顶回落原分组位置。
 - repo 层新函数：`setSessionPinned(id, pinned: boolean)`（置顶 = `Date.now()`，取消 = NULL）、`setSessionGroup(id, groupId: string | null)`；两者与 `renameSession` 同习惯更新 `updated_at`。
 - `session_groups` CRUD：`insertSessionGroup`（position = max+1024）、`renameSessionGroup`、`deleteSessionGroup`（**事务**：`UPDATE sessions SET group_id = NULL WHERE group_id = ?` → 删组行）、`listSessionGroups(workspaceId)`（`ORDER BY position ASC, created_at ASC`）。
@@ -121,6 +129,14 @@ ORDER BY
 ### 4.5 搜索态
 
 过滤非空时分组结构拍平，纯匹配列表（保持现行为）：不渲染组头与置顶区结构，但匹配的置顶/分组会话照常显示（含类型图标与 Pin 标记），顺序仍按主进程全局序。
+
+### 4.6 组色交互（预览 A rev2 三轮批准定值，2026-10-22）
+
+- 组头整行按组色 tint：浅色主题 `rgba(组色, .13)`、暗色主题 `rgba(组色, .20)`；hover 不加深 tint，只浮现操作钮（重命名 / 删除 / Palette）。
+- 暗主题提亮档（同一色相 6 值替换，避免暗底上原色发闷）：#8A93E0 #4BB782 #F2C94C #EB5757 #9E8CF5 #56B3B0。
+- 置顶行与搜索拍平行以 6px 组色圆点平行标记归属（与组头 tint 同色源）。
+- 组头 Palette 钮 → 色板面板：6 个 swatch + 斜杠「恢复默认」项 + ＋自定义 hex 输入；面板零文字（纯色块与图标）。
+- 恢复默认 = `palette[(组序)%6]`（与 068 存量回填规则同源）；自定义 hex 发送前 trim。
 
 ## 5. 协作会话创建（多选 + 主 agent）
 
@@ -192,6 +208,7 @@ export type CollabTarget =
 | `sessionGroup:create` | `(workspaceId, name)` | `SessionGroupRow` | position=max+1024；空名报错 |
 | `sessionGroup:rename` | `(groupId, name)` | `void` | |
 | `sessionGroup:delete` | `(groupId)` | `void` | 事务：组内会话回落未分组 |
+| `sessionGroup:setColor` | `(groupId, color: string)` | `void` | 校验 #RRGGBB，非法「颜色值格式不正确」 |
 | `agent:getEffectiveCapabilities` | `(instanceIds: string[])` | `Record<string, MergedCapabilities>` | §6.1 |
 | `session:createCollab` 入参扩展 | `CollabTarget` 增 members 态 | `SessionSummary` | §5.1 |
 

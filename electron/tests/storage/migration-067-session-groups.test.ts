@@ -76,7 +76,7 @@ describe('migration 067：会话分组/置顶/类型', () => {
     db.close();
   });
 
-  it('session_groups 表 5 列 + workspace 索引；重复应用幂等', () => {
+  it('session_groups 表 5 列 + workspace 索引；重复应用必炸（重放保护由迁移版本标记保证）', () => {
     const db = new Database(':memory:');
     db.pragma('foreign_keys = ON');
     applyUpTo(db, 66);

@@ -149,7 +149,7 @@ describe('sessions repo', () => {
     expect(listSessionsByWorkspace('ws1').map((s) => s.id)).toEqual([sOld.id, sNew.id]);
   });
 
-  it('listAllSessions 跨 workspace 全量列表，排序契约与 listSessionsByWorkspace 同源', () => {
+  it('listAllSessions 跨 workspace 全量列表——SESSION_ORDER_BY 同源（pinned/groups/活跃时间），与本用例无组无置顶数据退化序一致', () => {
     const sEmpty = insertSession({ workspaceId: 'ws1', title: 'ws1 空会话' });
     getDb()
       .prepare(

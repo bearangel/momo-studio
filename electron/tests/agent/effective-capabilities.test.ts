@@ -202,7 +202,7 @@ describe('getEffectiveCapabilities 省略语义（Task 13 renderer 降级消费�
     expect(Object.keys(caps)).toEqual([]);
   });
 
-  it('成员定义已删除（FK 层成员行仍在但 def 读回 null）→ 条目省略', () => {
+  it('成员行指向的定义缺失（INNER JOIN 脏数据防御分支）→ 条目省略', () => {
     // 制造「成员行指向的 def 读不到」：先去掉外键约束再删 def 行，模拟脏数据
     getDb().prepare('PRAGMA foreign_keys = OFF').run();
     getDb().prepare('DELETE FROM agent_definitions WHERE id = ?').run(DEF_C);
