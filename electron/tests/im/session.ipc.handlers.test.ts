@@ -130,6 +130,9 @@ const sessionRow: SessionRow = {
   createdAt: 1,
   updatedAt: 1,
   lastMessageAt: 123,
+  pinnedAt: null,
+  groupId: null,
+  sessionType: null,
 };
 
 /** 复用的 MessageRow fixture（agent 消息，sender 为 bot userId） */

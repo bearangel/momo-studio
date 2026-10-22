@@ -20,6 +20,12 @@ export interface SessionRow {
   createdAt: number;
   updatedAt: number;
   lastMessageAt: number | null;
+  /** 置顶时间戳（spec 2026-10-22 §4.1）；NULL=未置顶 */
+  pinnedAt: number | null;
+  /** 所属分组（spec 2026-10-22 §4）；NULL=未分组 */
+  groupId: string | null;
+  /** 会话类型（spec §3.1）；NULL=泛化创建路径（图标按 kind 判定） */
+  sessionType: 'quick' | 'collab' | null;
 }
 
 export interface SessionSettings {
@@ -31,6 +37,7 @@ export interface SessionSettings {
 type SqlRow = {
   id: string; workspace_id: string; title: string; title_auto: number; kind: string;
   settings_json: string | null; created_at: number; updated_at: number; last_message_at: number | null;
+  pinned_at: number | null; group_id: string | null; session_type: string | null;
 };
 
 function rowToCamel(r: SqlRow): SessionRow {
@@ -39,6 +46,8 @@ function rowToCamel(r: SqlRow): SessionRow {
     titleAuto: r.title_auto === 1,
     kind: r.kind as SessionRow['kind'], settingsJson: r.settings_json,
     createdAt: r.created_at, updatedAt: r.updated_at, lastMessageAt: r.last_message_at,
+    pinnedAt: r.pinned_at, groupId: r.group_id,
+    sessionType: r.session_type === 'quick' || r.session_type === 'collab' ? r.session_type : null,
   };
 }
 
@@ -51,14 +60,16 @@ export function insertSession(input: {
   title: string;
   kind?: SessionRow['kind'];
   titleAuto?: boolean;
+  sessionType?: 'quick' | 'collab';
 }): SessionRow {
   const db = getDb();
   const id = randomUUID();
   const now = Date.now();
   db.prepare(
-    `INSERT INTO sessions (id, workspace_id, title, title_auto, kind, settings_json, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, NULL, ?, ?)`,
-  ).run(id, input.workspaceId, input.title, input.titleAuto ? 1 : 0, input.kind ?? 'chat', now, now);
+    `INSERT INTO sessions (id, workspace_id, title, title_auto, kind, settings_json, created_at, updated_at, session_type)
+     VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+  ).run(id, input.workspaceId, input.title, input.titleAuto ? 1 : 0, input.kind ?? 'chat', now, now,
+        input.sessionType ?? null);
   emitPluginEvent('sessionStarted', { id, workspaceId: input.workspaceId, title: input.title });
   return getSession(id)!;
 }
@@ -140,4 +151,67 @@ export function listSessionMembers(sessionId: string): Array<{ instanceId: strin
     'SELECT instance_id, is_leader, added_at FROM session_members WHERE session_id = ? ORDER BY added_at ASC',
   ).all(sessionId) as Array<{ instance_id: string; is_leader: number; added_at: number }>;
   return rows.map((r) => ({ instanceId: r.instance_id, isLeader: r.is_leader === 1, addedAt: r.added_at }));
+}
+
+// ─── 分组与置顶（spec 2026-10-22 §4.1）──────────────────────────────────────
+
+export interface SessionGroupRow {
+  id: string;
+  workspaceId: string;
+  name: string;
+  position: number;
+  createdAt: number;
+}
+
+type GroupSqlRow = { id: string; workspace_id: string; name: string; position: number; created_at: number };
+
+function groupRowToCamel(r: GroupSqlRow): SessionGroupRow {
+  return { id: r.id, workspaceId: r.workspace_id, name: r.name, position: r.position, createdAt: r.created_at };
+}
+
+export function listSessionGroups(workspaceId: string): SessionGroupRow[] {
+  const rows = getDb().prepare(
+    'SELECT * FROM session_groups WHERE workspace_id = ? ORDER BY position ASC, created_at ASC',
+  ).all(workspaceId) as GroupSqlRow[];
+  return rows.map(groupRowToCamel);
+}
+
+export function insertSessionGroup(workspaceId: string, name: string): SessionGroupRow {
+  const db = getDb();
+  const id = randomUUID();
+  // position 步进契约镜像 task_groups：(max + 1024)，同 workspace 内单调递增
+  const max = db.prepare('SELECT COALESCE(MAX(position), 0) AS p FROM session_groups WHERE workspace_id = ?')
+    .get(workspaceId) as { p: number };
+  db.prepare(
+    'INSERT INTO session_groups (id, workspace_id, name, position, created_at) VALUES (?, ?, ?, ?, ?)',
+  ).run(id, workspaceId, name, max.p + 1024, Date.now());
+  return groupRowToCamel(
+    db.prepare('SELECT * FROM session_groups WHERE id = ?').get(id) as GroupSqlRow,
+  );
+}
+
+export function renameSessionGroup(id: string, name: string): void {
+  getDb().prepare('UPDATE session_groups SET name = ? WHERE id = ?').run(name, id);
+}
+
+/** 删组（事务）：组内会话回落未分组 → 删组行。置顶位 pinned_at 独立保留（spec §4.1）。 */
+export function deleteSessionGroup(id: string): void {
+  const db = getDb();
+  const tx = db.transaction(() => {
+    // 先清引用再删组行：sessions.group_id FK 为 NO ACTION，顺序颠倒会因外键约束失败
+    db.prepare('UPDATE sessions SET group_id = NULL, updated_at = ? WHERE group_id = ?').run(Date.now(), id);
+    db.prepare('DELETE FROM session_groups WHERE id = ?').run(id);
+  });
+  tx();
+}
+
+/** 置顶切换：置顶=Date.now()（重置顶可上浮置顶区），取消=NULL。 */
+export function setSessionPinned(id: string, pinned: boolean): void {
+  getDb().prepare('UPDATE sessions SET pinned_at = ?, updated_at = ? WHERE id = ?')
+    .run(pinned ? Date.now() : null, Date.now(), id);
+}
+
+export function setSessionGroup(sessionId: string, groupId: string | null): void {
+  getDb().prepare('UPDATE sessions SET group_id = ?, updated_at = ? WHERE id = ?')
+    .run(groupId, Date.now(), sessionId);
 }
