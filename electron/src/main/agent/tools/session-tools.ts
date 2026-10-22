@@ -78,13 +78,21 @@ async function executeListSessions(args: Record<string, unknown>, ctx: ToolConte
   const { byInstanceId } = buildNameMaps(ctx);
   const lines: string[] = [];
   for (const s of matched.slice(0, limit)) {
-    const members = listSessionMembers(s.id)
+    // 成员原始行只查一次：名单富化与类型兜底（memberRows.length）共用，勿二次查询
+    const memberRows = listSessionMembers(s.id);
+    const members = memberRows
       .map((m) => byInstanceId.get(m.instanceId) ?? m.instanceId)
       .join('/');
     const preview = getFirstUserMessage(s.id)?.body ?? '';
     const previewText = preview === '' ? '（无用户消息）' : truncateString(preview, PREVIEW_CHARS);
+    // 会话类型标签（spec 2026-10-22 §8 消费面）：chat 行带子类型供 LLM 消歧；
+    // sessionType=null（泛化创建路径）按成员数兜底，与 renderer deriveSessionType 同构
+    const typeTag =
+      s.kind === 'chat'
+        ? `chat/${s.sessionType ?? (memberRows.length > 1 ? 'collab' : 'quick')}`
+        : s.kind;
     lines.push(
-      `- id=${s.id} 《${s.title}》 [${s.kind}] 活跃=${formatTs(s.lastMessageAt ?? s.createdAt)} 消息数=${countMessagesBySession(s.id)}`,
+      `- id=${s.id} 《${s.title}》 [${typeTag}] 活跃=${formatTs(s.lastMessageAt ?? s.createdAt)} 消息数=${countMessagesBySession(s.id)}`,
       `  成员: ${members === '' ? '（无成员）' : members}  预览: ${previewText}`,
     );
   }

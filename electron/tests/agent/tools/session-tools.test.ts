@@ -116,6 +116,37 @@ describe('list_sessions', () => {
     expect(out).toContain(ref.id); // id 必须出现（read_session 直达键）
   });
 
+  it('list_sessions 输出行带会话类型：chat/quick、chat/collab、task_execution（spec 2026-10-22 §8 消费面）', async () => {
+    const wsA = seedWorkspace();
+    const cur = insertSession({ workspaceId: wsA, title: '当前会话' });
+    const quick = insertSession({ workspaceId: wsA, title: '快速会话', sessionType: 'quick' });
+    const collab = insertSession({ workspaceId: wsA, title: '协作会话', sessionType: 'collab' });
+    const task = insertSession({ workspaceId: wsA, title: '任务会话', kind: 'task_execution' });
+
+    const out = await new SessionTools().execute('list_sessions', {}, mkCtx(wsA, cur.id));
+
+    // 标签与会话行绑定断言（非全文 contain）：防不同行标签互换仍绿
+    expect(out).toContain(`id=${quick.id} 《快速会话》 [chat/quick]`);
+    expect(out).toContain(`id=${collab.id} 《协作会话》 [chat/collab]`);
+    expect(out).toContain(`id=${task.id} 《任务会话》 [task_execution]`);
+  });
+
+  it('sessionType=null（泛化创建路径）按成员数兜底：>1 成员 → chat/collab，0/1 成员 → chat/quick', async () => {
+    const wsA = seedWorkspace();
+    const cur = insertSession({ workspaceId: wsA, title: '当前会话' });
+    const multi = insertSession({ workspaceId: wsA, title: '旧库多成员会话' }); // sessionType 未写
+    const solo = insertSession({ workspaceId: wsA, title: '旧库单成员会话' });
+    seedMemberInstance(wsA, 'inst-coder', 'def-coder', 'coder-1');
+    seedMemberInstance(wsA, 'inst-second', 'def-second', 'second-1');
+    addSessionMember(multi.id, 'inst-coder', true);
+    addSessionMember(multi.id, 'inst-second', false);
+
+    const out = await new SessionTools().execute('list_sessions', {}, mkCtx(wsA, cur.id));
+
+    expect(out).toContain(`id=${multi.id} 《旧库多成员会话》 [chat/collab]`);
+    expect(out).toContain(`id=${solo.id} 《旧库单成员会话》 [chat/quick]`);
+  });
+
   it('keyword 标题子串过滤（大小写不敏感）', async () => {
     const wsA = seedWorkspace();
     insertSession({ workspaceId: wsA, title: 'Refactor Plan' });
