@@ -147,9 +147,9 @@ export type CollabTarget =
 
 ### 5.3 对话框交互（CollabSessionDialog）
 
-- agent 页签：radio → **checkbox 多选**；行升级为卡片行（见 §6.2）。
+- agent 页签：radio → **checkbox 多选**；页签改名「单个 agent」→「选择成员」、「团队」→「选择团队」（多选化后旧名不符业务，预览 B rev2 批准）；行升级为卡片行（见 §6.2）。
 - 选中 1 个：等价现状（自动 leader，无额外 UI）。
-- 选中 >1：每个已选行右侧出现 `Crown` 钮（12px，点击指定主 agent，唯一高亮 accent 色，title=「主 agent：接待用户输入与任务分派」）；默认主 agent = 第一个选中者，可改。
+- 选中 >1（预览 B rev2 批准交互）：**Crown 为 12px 状态徽标**（紧随当前 leader 名称，accent 色，title=「主 agent：负责接待用户输入与任务分派」，非交互）——指定动作改为**每张已选卡底部「主 agent」radio 行**（radio + 文字标签，互斥单选，可发现性优先）；卡片列表上方引导文案「已选 N 个成员——指定一名主 agent 负责接待与任务分派」（tertiary 12px）；默认主 agent = 第一个选中者，可改。
 - 取消选中当前主 agent 时，主 agent 自动回落到剩余选中项的第一个（保持不变量：选中 >1 时必有唯一主 agent）。
 - 提交：统一发 `{ type: 'members', instanceIds, leaderInstanceId }`（单选也走此形态）；`'agent'` / `'team'` 形态在 IPC 契约中保留兼容。
 - 团队页签原样保留（含 Crown leader 展示与成员数）。

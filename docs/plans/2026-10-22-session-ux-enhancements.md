@@ -916,6 +916,52 @@ git commit -m "feat: receiveMessage 桶内上浮——置顶原地更新、非�
 
 ---
 
+### Task 6b: 迁移 068——session_groups.color + setColor IPC（组色数据面；预览 A rev2 批准定值）
+
+**Files:**
+- Create: `electron/src/main/storage/migrations/068_session_group_color.ts`
+- Modify: `electron/src/main/storage/migrations/index.ts`（注册 068）、`electron/src/main/storage/sessions/repo.ts`、`electron/src/main/im/session-group.ipc.handlers.ts`、`electron/src/preload/index.ts`、`renderer/src/ipc/types.d.ts`
+- Test: `electron/tests/storage/migration-068-session-group-color.test.ts`；扩展 `sessions-group-repo.test.ts`、`session-group-ipc.test.ts`
+
+**Interfaces:**
+- Consumes: Task 2/4 的 `SessionGroupRow` / `insertSessionGroup` / `session-group.ipc.handlers.ts`。
+- Produces（Task 7 消费）:
+  - `SessionGroupRow` 增 `color: string`（创建时定值；存量回填；永不为 NULL——迁移回填后全表有值）
+  - `GROUP_COLOR_PALETTE = ['#5E6AD2', '#23835C', '#B7791F', '#D33F49', '#6E56CF', '#3E8F8C']`（repo.ts 导出；来源 = 预览 A rev2 定值清单 light 档；注释注明与 renderer `lib/group-colors.ts` 对齐）
+  - `insertSessionGroup(workspaceId, name)`：color 默认 = `GROUP_COLOR_PALETTE[(该 ws 既有组数) % 6]`（创建即定值，不存 NULL）
+  - `setSessionGroupColor(id, color: string)`：repo 直写
+  - IPC `sessionGroup:setColor(groupId, color: string)`：校验 `/^#[0-9A-Fa-f]{6}$/`，非法抛「颜色值格式不正确」；renderer 侧 `ipc.sessionGroup.setColor`
+  - `listSessionGroups` 返回带 color
+
+- [ ] **Step 1: 失败测试**（三处）：
+  - `migration-068-session-group-color.test.ts`（范式同 067）：applyUpTo(db, 67) → 造 3 组（position 1024/2048/3072）→ 应用 068 → 断言 color 依次为 palette[0]/[1]/[2]，列存在且新表组（后续 INSERT 不带 color）为 NULL。
+  - `sessions-group-repo.test.ts` 扩展：建 7 组颜色轮转 palette[(n-1)%6] 循环；`setSessionGroupColor` 落库任意 hex（`#AB12CD`）。
+  - `session-group-ipc.test.ts` 扩展：`sessionGroup:setColor` 合法 hex 落库；`'red'` / `'#GGGGGG'` → 「颜色值格式不正确」。
+- [ ] **Step 2: RED** — `cd electron && npx pnpm@9.0.0 vitest run --pool=forks tests/storage/migration-068-session-group-color.test.ts`（FAIL：068 未注册）
+- [ ] **Step 3: 实现**
+
+```ts
+// 068_session_group_color.ts（头注释中文，注明来源预览 A rev2）
+export const version = 68;
+export const up = `
+ALTER TABLE session_groups ADD COLUMN color TEXT NULL;
+UPDATE session_groups SET color = CASE
+  ((SELECT COUNT(*) FROM session_groups g2
+    WHERE (g2.position, g2.created_at, g2.id) <= (session_groups.position, session_groups.created_at, session_groups.id)) - 1) % 6
+  WHEN 0 THEN '#5E6AD2' WHEN 1 THEN '#23835C' WHEN 2 THEN '#B7791F'
+  WHEN 3 THEN '#D33F49' WHEN 4 THEN '#6E56CF' ELSE '#3E8F8C' END;
+`;
+```
+
+repo.ts：`GROUP_COLOR_PALETTE` 导出（中文注释：预览 A rev2 定值、与 renderer group-colors.ts 对齐）；`insertSessionGroup` 建组前 `COUNT(*)` 取 `palette[n % 6]` 写入；新增 `setSessionGroupColor`（更新 updated_at 同习惯不需要——组色非会话字段，组表无 updated_at，直写即可）；`groupRowToCamel` 带出 color（`r.color ?? ''`——迁移后非空，防御旧库）。
+handlers：`register('sessionGroup:setColor', (_e, groupId: string, color: string) => { if (!/^#[0-9A-Fa-f]{6}$/.test(color)) throw new Error('颜色值格式不正确'); setSessionGroupColor(groupId, color); })`。
+preload `api.sessionGroup.setColor`；types.d.ts `SessionGroupRow.color: string` 镜像 + setColor 签名（中文注释）。
+
+- [ ] **Step 4: GREEN + 回归** — migration/repo/ipc 三测试文件 + `tests/storage/` + 根 typecheck（零新增）
+- [ ] **Step 5: Commit** — `git add` 实际触及文件；`feat: 迁移 068——session_groups 组色列（轮转回填）+ sessionGroup:setColor IPC（预览 A rev2 组色定值）`
+
+---
+
 ### Task 7: RoomList——类型图标 / 置顶 / 分组 / 移动弹窗
 
 **Files:**
@@ -928,7 +974,15 @@ git commit -m "feat: receiveMessage 桶内上浮——置顶原地更新、非�
 - Consumes: Task 3 `SessionSummary` 新字段；Task 4 `ipc.session.setPinned/moveToGroup`、`ipc.sessionGroup.*`；Task 6 定值合同。
 - Produces: `deriveSessionType(s: SessionSummary): 'quick' | 'collab'`（纯函数，测试锚点）。
 
-**定值合同**（以 Task 6 批准稿为准回填；未回填前禁用 emoji、禁标准色阶、图标 12-14px/1.75）
+**定值合同**（Task 6 三轮批准稿回填，源文件 `.omo/previews/session-list-groups.html`——gitignored，若缺失以本节文字为准）：
+- 行高 28px（紧凑密度）；类型图标 14px / 工具条与操作条钮 12px / Pin 10px / 组色圆点 6px，全部 stroke 1.75 `text-tertiary`（圆点例外：组色实心）。
+- 置顶行：右侧 Pin 恒距 8px（行 padding-right 26px = 8+10+8），标题 flex-1 truncate 让位；title=「已置顶（属于 <组名>）」；置顶行标题右侧组色圆点 6px（组身份随行走）。
+- 组头：整行组色 tint 底色（hover 不加深，仅浮现操作钮）+ ChevronDown/Right + 组名 + `(N)` 计数；操作条 = Palette（首位）· Pencil · Trash2 裸钮（无独立底色，直接落在 tint 上）。
+- Palette 面板（原地展开）：6 色板 swatch + 斜杠圆「恢复默认」（ban 图形，无文字，title=「恢复默认色」）+ 尾部「＋」swatch（title=「自定义颜色」，静态预览语义为打开 hex 输入）——**面板内零文字**。恢复默认 = renderer 计算 `GROUP_COLOR_PALETTE[(组在列表中的序) % 6]` 传 setColor。
+- 组色 tint：`rgba(hex, .13)`（浅主题）/ `rgba(hex, .20)`（暗主题）；暗主题圆点/面板 swatch 用提亮档色板（`#8A93E0 #4BB782 #F2C94C #EB5757 #9E8CF5 #56B3B0`）；自定义 hex 两主题同值直用。
+- 新建文件 `renderer/src/lib/group-colors.ts`：`GROUP_COLOR_PALETTE_DARK` 提亮档表 + `groupTintColor(hex, theme)` / `groupDotColor(hex, theme)`（light hex → dark 档查表，未命中（自定义色）原值返回）；注释与 electron `repo.ts GROUP_COLOR_PALETTE` 对齐（镜像纪律）。
+- 会话行 hover 工具条四钮 Pin·FolderInput·Pencil·Trash2 裸钮无独立底色。
+- 搜索拍平态：无组头无置顶区结构，平铺行保留类型图标 + Pin + 组色圆点 + 组名后缀；搜索行出现清除 X。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -1369,12 +1423,13 @@ git commit -m "feat: CollabTarget 增 members 第三态——建会临时组队 
 - [ ] **Step 1: 写失败测试**（mock `../ipc/client` + agent.store/session.store/workspace.store/ui.store——范式照抄 `AddAgentDialog.test.tsx` 的 store mock 方式）
 
 ```tsx
-// 核心用例（4 个）：
-// 1. 勾选两个成员 → 每个已选行出现 Crown 钮；默认第一个选中者高亮
-// 2. 点击第二个成员 Crown → 高亮唯一切换
-// 3. 取消选中当前 leader（第二个）→ leader 回落到剩余首个（Review Focus：不变量）
-// 4. 提交 → createCollabSession 以 { type:'members', instanceIds:[a,b], leaderInstanceId:b } 调用
-// 断言锚点：data-testid="leader-crown-<instanceId>"（高亮态 aria-pressed=true）
+// 核心用例（5 个）（预览 B rev2 批准交互：Crown=徽标 + radio 指定）：
+// 1. 勾选两个成员 → 每张已选卡出现「主 agent」radio 行 + 引导文案「已选 2 个成员——指定一名主 agent 负责接待与任务分派」；默认第一个选中者 radio 选中、其名称旁有 Crown 徽标
+// 2. 点第二个成员 radio → radio 互斥切换、Crown 徽标随迁
+// 3. 勾选仅 1 个成员 → 无 radio 行、无 Crown 徽标、无引导文案
+// 4. 取消选中当前 leader → leader 回落到剩余首个（Review Focus：不变量）
+// 5. 提交 → createCollabSession 以 { type:'members', instanceIds, leaderInstanceId } 调用
+// 断言锚点：radio data-testid="leader-radio-<instanceId>"；徽标 data-testid="leader-badge-<instanceId>"
 ```
 
 （具体渲染断言按组件实际 DOM 写；测试数据两成员：`{ instanceId: 'ia', agentName: 'A', iconEmoji: '', lastRunning: true, agentDefinitionId: 'da', workspaceId: WS, agentUserId: 'aua', hasApiKeyOverride: false, createdAt: 1 }` 同构 B。）
@@ -1408,16 +1463,26 @@ const toggle = (id: string): void => {
 if (selectedIds.length === 0 || leaderId === null) { setError('请选择会话成员'); return; }
 const target: CollabTarget = { type: 'members', instanceIds: selectedIds, leaderInstanceId: leaderId };
 
-// 成员行：radio → checkbox；选中 >1 时行尾 Crown 按钮：
+// 页签改名：「单个 agent」→「选择成员」、「团队」→「选择团队」（预览 B rev2 批准）
+// 多选引导文案（已选 >1 时渲染于卡片列表上方）：
+//   <p className="text-xs text-tertiary">已选 {selectedIds.length} 个成员——指定一名主 agent 负责接待与任务分派</p>
+
+// 成员行（预览 B rev2：Crown 为徽标非按钮；指定动作 = 已选卡底部 radio 行）：
 <input type="checkbox" checked={selectedIds.includes(m.instanceId)} onChange={() => toggle(m.instanceId)} />
 …
-{selectedIds.length > 1 && selectedIds.includes(m.instanceId) && (
-  <button type="button" data-testid={`leader-crown-${m.instanceId}`} aria-pressed={leaderId === m.instanceId}
-    title="主 agent：接待用户输入与任务分派"
-    onClick={(e) => { e.preventDefault(); setLeaderId(m.instanceId); }}
-    className={cn('shrink-0', leaderId === m.instanceId ? 'text-accent-500' : 'text-tertiary hover:text-primary')}>
+{leaderId === m.instanceId && (
+  <span data-testid={`leader-badge-${m.instanceId}`} title="主 agent：负责接待用户输入与任务分派"
+    className="shrink-0 text-accent-500">
     <Crown size={12} strokeWidth={1.75} aria-hidden />
-  </button>
+  </span>
+)}
+…
+{selectedIds.length > 1 && selectedIds.includes(m.instanceId) && (
+  <label className="mt-1 flex items-center gap-1.5 text-xs text-secondary">
+    <input type="radio" name="collab-leader" data-testid={`leader-radio-${m.instanceId}`}
+      checked={leaderId === m.instanceId} onChange={() => setLeaderId(m.instanceId)} />
+    主 agent
+  </label>
 )}
 // switchTab 切页签时 setSelectedIds([]) + setLeaderId(null)（原 setTarget(null) 语义）
 ```
@@ -1554,15 +1619,16 @@ export interface AgentPickerCardProps {
   capabilities?: { tools: string[]; mcps: string[]; skills: string[]; deniedTools: string[] };
   selected?: boolean;
   onToggle?: () => void;
-  /** Crown 主 agent 控制（CollabSessionDialog 多选 >1 时启用） */
+  /** 主 agent 控制（预览 B rev2）：leader=true → 名称旁 Crown 12px 状态徽标（非交互）；onSetLeader 由已选卡底部 radio 行触发；showLeaderControl=radio 行出现条件（已选>1） */
   leader?: boolean;
   onSetLeader?: () => void;
+  showLeaderControl?: boolean;
   /** 右侧元信息插槽（在线态 / source 徽标 / 加入按钮） */
   trailing?: ReactNode;
 }
 ```
 
-**定值合同**（Task 10 批准稿回填；描述两行截断对齐 MembersPanel 卡片合同 `line-clamp-2` + 空「暂无说明」斜体占位 + 整行 title 全文）
+**定值合同**（Task 10 rev2 批准稿回填；描述两行截断对齐 MembersPanel 卡片合同 `line-clamp-2` + 空「暂无说明」斜体占位 + 整行 title 全文；Crown=名称旁 12px accent 状态徽标（紧随名称，非交互）；主 agent 指定=已选卡底部 radio 行（13px radio + 12px「主 agent」标签，互斥）；hover 底色 surface-2 + border-strong（对齐 MembersPanel 已批合同）；引导文案「已选 N 个成员——指定一名主 agent 负责接待与任务分派」tertiary 12px）
 
 - [ ] **Step 1: 写失败测试**
 
@@ -1571,7 +1637,7 @@ export interface AgentPickerCardProps {
 2. 徽标：`Wrench 2` / `Server 1` / `Sparkles 3` 计数正确；**计数 0 分类不渲染**（`queryByTitle('MCP 服务器')` 为 null）
 3. deniedTools 命中的 plugin 工具不计入徽标计数（deniedMatch 语义）
 4. 点击徽标行 → 展开三区 chip（工具名/MCP 名/技能名）；denied 命中项带删除线类；再点收起
-5. selected/onToggle 勾选态；leader=true 时 Crown `aria-pressed=true`
+5. selected/onToggle 勾选态；leader=true 时名称旁 Crown 徽标存在（`leader-badge` 锚点）；showLeaderControl=true 时「主 agent」radio 行渲染且互斥
 6. trailing 插槽内容渲染在行尾
 
 `AddAgentDialog.test.tsx` 追加：def 行渲染徽标（def 级计数——def.defaultTools 长度，title 含「默认能力」）。
