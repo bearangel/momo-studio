@@ -1254,6 +1254,19 @@ describe('receiveMessage 桶内上浮（spec 2026-10-22 §4.2）', () => {
     expect(s[0]!.lastMessageAt).toBe(999);
   });
 
+  // 判别性用例（审查修复）：旧全局 unshift 会把靠下的置顶会话顶到首位、
+  // 打乱置顶区内部顺序——本用例在旧逻辑下必红，锁死「置顶来消息不得移动」。
+  it('置顶会话来消息：位置不动（两枚置顶，靠下的那条也不越位）', () => {
+    const pinnedA = mkSummary('pinnedA', { pinnedAt: 500 });
+    const pinnedB = mkSummary('pinnedB', { pinnedAt: 100 });
+    const un1 = mkSummary('un1', {});
+    useSessionStore.setState({ sessions: [pinnedA, pinnedB, un1] });
+    useSessionStore.getState().receiveMessage(msg('pinnedB', 999));
+    const s = useSessionStore.getState().sessions;
+    expect(s.map((x) => x.id)).toEqual(['pinnedA', 'pinnedB', 'un1']);
+    expect(s[1]!.lastMessageAt).toBe(999);
+  });
+
   it('非置顶会话来消息：上浮至同组桶顶，不越置顶区、不越组', () => {
     const pinned = mkSummary('pinned', { pinnedAt: 500 });
     const g1a = mkSummary('g1a', { groupId: 'g1' });
