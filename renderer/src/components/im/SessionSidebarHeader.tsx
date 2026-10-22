@@ -67,7 +67,7 @@ export function SessionSidebarHeader() {
       <button
         type="button"
         aria-label="协作会话"
-        title="协作会话：选择单个 agent 或团队"
+        title="协作会话：选择多个成员或团队"
         onClick={() => setCollabOpen(true)}
         className="flex-1 text-xs px-2 py-1.5 rounded bg-surface-2 text-secondary hover:text-primary transition-colors flex items-center justify-center gap-1"
       >

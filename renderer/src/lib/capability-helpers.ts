@@ -13,7 +13,7 @@
 //   default = Layer1 ∪ Layer2
 //   value   = (default + deltas.addedX) - deltas.removedX  ← 从已存 deltas 反推
 //   保存时：addedX = value - default；removedX = default - value
-import type { AgentDefinition, AssignmentDeltas, WorkspaceAllocation } from '../ipc/types';
+import type { AgentDefinition, AssignmentDeltas, EffectiveCapabilities, WorkspaceAllocation } from '../ipc/types';
 
 /**
  * 能力集合：三类能力的当前勾选值（绝对集合，与 mode 无关）。
@@ -43,6 +43,19 @@ export function defToCapabilities(def: AgentDefinition): Capabilities {
     tools: def.defaultTools.map((t) => t.ref),
     mcps: (def.defaultMcps ?? []).map((m) => m.ref),
     skills: (def.defaultSkills ?? []).map((s) => s.ref),
+  };
+}
+
+/** def 级生效能力降级形态（spec 2026-10-22 §6.1 消费契约）：
+ *  agent:getEffectiveCapabilities 的 record 缺 key 是合法态——用 def 默认清单补位
+ *  （deniedTools 取 def 级基线），供 AgentPickerCard 三弹窗降级展示。
+ *  禁止用空桶 {tools:[],…} 冒充降级——那会把未知成员显示成零能力。 */
+export function defToEffectiveCaps(def: AgentDefinition): EffectiveCapabilities {
+  return {
+    tools: def.defaultTools.map((t) => t.ref),
+    mcps: (def.defaultMcps ?? []).map((m) => m.ref),
+    skills: (def.defaultSkills ?? []).map((s) => s.ref),
+    deniedTools: def.deniedTools ?? [],
   };
 }
 

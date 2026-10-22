@@ -7,15 +7,23 @@
 //
 // v2.1 P2 Task 15：手写 modal 外壳 → Dialog 原子件；空态 → EmptyState（icon=Bot）；
 // iconEmoji 缺省 → Avatar bot（对齐 MentionInput / MembersPanel 先例）。
-import { useEffect, useState, type FormEvent } from 'react';
+//
+// 2026-10-22 Task 13（spec §6.3）：radio 行 → AgentPickerCard 单选模式（整卡点选，
+// selected 以 accent 边框 + radiogroup/aria-checked 表达）+ 描述直出（def.description）
+// + 能力徽标（getEffectiveCapabilities 批量；record 缺 key 是合法态 → def 级降级，
+// capabilityMode 标注「默认能力」，绝不可空桶冒充零能力）+ 展开手风琴（单开）。
+// D13 单成员自动预选 / 多成员不预选行为原样保留。
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Bot } from 'lucide-react';
 import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
-import { Avatar } from '../ui/Avatar';
+import { AgentPickerCard } from '../agent/AgentPickerCard';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { EmptyState } from '../ui/EmptyState';
-import type { WorkspaceAgentMember } from '../../ipc/types';
+import { ipc } from '../../ipc/client';
+import { defToEffectiveCaps } from '../../lib/capability-helpers';
+import type { EffectiveCapabilities, WorkspaceAgentMember } from '../../ipc/types';
 
 interface Props {
   workspaceId: string;
@@ -25,16 +33,20 @@ interface Props {
 }
 
 export function DefaultAgentPickerDialog({ workspaceId, onContinue, onClose }: Props) {
-  const { members, loadMembers } = useAgentStore();
+  const { members, definitions, loadMembers, loadDefinitions } = useAgentStore();
   const setDefaultAgent = useWorkspaceStore((s) => s.setDefaultAgent);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Task 13：生效能力（instanceId → IPC 批量产物）+ 展开手风琴（每弹窗单开）
+  const [capsByInstance, setCapsByInstance] = useState<Record<string, EffectiveCapabilities>>({});
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   useEffect(() => {
     void loadMembers(workspaceId);
-  }, [workspaceId, loadMembers]);
+    void loadDefinitions(workspaceId);
+  }, [workspaceId, loadMembers, loadDefinitions]);
 
   // D13：仅一名成员时自动预选——唯一选项无需用户手动点选即可直接继续；
   // 多成员不预选（避免替用户做选择）
@@ -44,8 +56,46 @@ export function DefaultAgentPickerDialog({ workspaceId, onContinue, onClose }: P
     }
   }, [members, selectedId]);
 
-  // v2.2：agentName/iconEmoji 由后端 JOIN definitions 产出，不依赖 definitions 加载时序
-  const memberLabel = (m: WorkspaceAgentMember): string => m.agentName;
+  // 批量拉生效能力（打开/成员表变化时）。ipc Proxy 在 window.api 未挂载时同步抛
+  // TypeError（测试环境）——整体包 try；失败保持空 record 由 def 级降级承担展示。
+  useEffect(() => {
+    const ids = members.map((m) => m.instanceId);
+    if (ids.length === 0) {
+      setCapsByInstance({});
+      return;
+    }
+    let cancelled = false;
+    try {
+      void ipc.agent
+        .getEffectiveCapabilities(ids)
+        .then((record) => {
+          if (!cancelled) setCapsByInstance(record ?? {});
+        })
+        .catch(() => {
+          if (!cancelled) setCapsByInstance({});
+        });
+    } catch {
+      setCapsByInstance({});
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [members]);
+
+  const defMap = useMemo(() => new Map(definitions.map((d) => [d.id, d])), [definitions]);
+
+  // 徽标数据：优先 IPC 生效能力；record 缺 key（Task 12 合法态）→ def 级降级
+  const capsForMember = (
+    m: WorkspaceAgentMember,
+  ): { caps: EffectiveCapabilities; mode: 'effective' | 'default' } | undefined => {
+    const eff = capsByInstance[m.instanceId];
+    if (eff) return { caps: eff, mode: 'effective' };
+    const def = defMap.get(m.agentDefinitionId);
+    return def ? { caps: defToEffectiveCaps(def), mode: 'default' } : undefined;
+  };
+
+  const toggleRowExpand = (key: string): void =>
+    setExpandedId((cur) => (cur === key ? null : key));
 
   const handleSubmit = async (e: FormEvent): Promise<void> => {
     e.preventDefault();
@@ -84,27 +134,29 @@ export function DefaultAgentPickerDialog({ workspaceId, onContinue, onClose }: P
           />
         ) : (
           <>
-            <fieldset className="flex flex-col gap-1.5">
-              {members.map((m) => (
-                <label
-                  key={m.instanceId}
-                  className="flex items-center gap-2 text-sm text-secondary px-2 py-1.5 rounded hover:bg-surface-3"
-                >
-                  <input
-                    type="radio"
-                    name="default-agent"
-                    aria-label={memberLabel(m)}
-                    checked={selectedId === m.instanceId}
-                    onChange={() => setSelectedId(m.instanceId)}
+            <fieldset
+              role="radiogroup"
+              aria-label="默认会话智能体"
+              className="flex flex-col gap-1.5"
+            >
+              {members.map((m) => {
+                const capInfo = capsForMember(m);
+                return (
+                  <AgentPickerCard
+                    key={m.instanceId}
+                    id={m.instanceId}
+                    name={m.agentName}
+                    iconEmoji={m.iconEmoji}
+                    description={defMap.get(m.agentDefinitionId)?.description}
+                    capabilities={capInfo?.caps}
+                    capabilityMode={capInfo?.mode}
+                    selected={selectedId === m.instanceId}
+                    onSelect={() => setSelectedId(m.instanceId)}
+                    expanded={expandedId === m.instanceId}
+                    onToggleExpand={() => toggleRowExpand(m.instanceId)}
                   />
-                  <span>
-                    {m.iconEmoji || (
-                      <Avatar name={memberLabel(m)} bot size="sm" />
-                    )}
-                  </span>
-                  <span>{memberLabel(m)}</span>
-                </label>
-              ))}
+                );
+              })}
             </fieldset>
 
             {error && <div className="text-status-error text-sm mt-2">{error}</div>}

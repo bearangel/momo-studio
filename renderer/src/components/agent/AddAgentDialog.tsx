@@ -7,6 +7,11 @@
 // - 行结构：iconEmoji + 名称 + source 徽标（系统预置/自定义）+ 描述 + 「加入」
 // - 加入成功：store.addMember 追加 members → 列表响应式重算，该行消失
 // - UNIQUE 竞态兜底：addMember 报错 → 行内 error + loadMembers 重同步
+//
+// 2026-10-22 Task 13（spec §6.3）：def 行 → AgentPickerCard——描述从单行 truncate
+// 统一为两行合同（空「暂无说明」占位）+ def 级能力徽标（def 行无 instanceId，能力
+// 恒为 def 级降级 defToEffectiveCaps，capabilityMode="default"，不触 IPC）+
+// 展开手风琴（单开）。source 徽标与「加入」按钮移入 trailing 插槽。
 import { useEffect, useMemo, useState } from 'react';
 import { Bot } from 'lucide-react';
 import { useAgentStore } from '../../stores/agent.store';
@@ -14,7 +19,9 @@ import { useWorkspaceStore } from '../../stores/workspace.store';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { EmptyState } from '../ui/EmptyState';
+import { defToEffectiveCaps } from '../../lib/capability-helpers';
 import type { AgentDefinition } from '../../ipc/types';
+import { AgentPickerCard } from './AgentPickerCard';
 
 interface Props {
   onClose: () => void;
@@ -25,6 +32,8 @@ export function AddAgentDialog({ onClose }: Props) {
   const { definitions, members, loadDefinitions, loadMembers, addMember } = useAgentStore();
   const [joiningId, setJoiningId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Task 13：展开手风琴（每弹窗单开）
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   useEffect(() => {
     if (workspace) {
@@ -40,6 +49,9 @@ export function AddAgentDialog({ onClose }: Props) {
     [members],
   );
   const addableDefs = definitions.filter((d) => !memberDefIds.has(d.id));
+
+  const toggleRowExpand = (key: string): void =>
+    setExpandedId((cur) => (cur === key ? null : key));
 
   const handleAdd = async (def: AgentDefinition): Promise<void> => {
     if (!workspace) return;
@@ -80,28 +92,32 @@ export function AddAgentDialog({ onClose }: Props) {
             />
           )
         ) : (
-          <div className="flex flex-col max-h-96 overflow-y-auto">
+          <div className="flex flex-col gap-1.5 max-h-96 overflow-y-auto">
             {addableDefs.map((d) => (
-              <div
+              <AgentPickerCard
                 key={d.id}
-                className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-surface-3"
-              >
-                <span className="text-lg leading-none">{d.iconEmoji}</span>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm text-primary truncate">{d.name}</div>
-                  <div className="text-xs text-tertiary truncate">{d.description}</div>
-                </div>
-                <span className="text-xs text-tertiary shrink-0">
-                  {d.source === 'builtin' ? '系统预置' : d.source === 'plugin' ? '插件' : '自定义'}
-                </span>
-                <Button
-                  size="sm"
-                  onClick={() => void handleAdd(d)}
-                  disabled={joiningId !== null}
-                >
-                  {joiningId === d.id ? '加入中…' : '加入'}
-                </Button>
-              </div>
+                name={d.name}
+                iconEmoji={d.iconEmoji}
+                description={d.description}
+                capabilities={defToEffectiveCaps(d)}
+                capabilityMode="default"
+                expanded={expandedId === d.id}
+                onToggleExpand={() => toggleRowExpand(d.id)}
+                trailing={
+                  <>
+                    <span className="text-xs text-tertiary shrink-0">
+                      {d.source === 'builtin' ? '系统预置' : d.source === 'plugin' ? '插件' : '自定义'}
+                    </span>
+                    <Button
+                      size="sm"
+                      onClick={() => void handleAdd(d)}
+                      disabled={joiningId !== null}
+                    >
+                      {joiningId === d.id ? '加入中…' : '加入'}
+                    </Button>
+                  </>
+                }
+              />
             ))}
           </div>
         )}

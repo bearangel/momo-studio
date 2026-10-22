@@ -6,6 +6,9 @@
 // Mock 策略（momo-test-rules）：window.api 桩（agent 命名空间）；
 // store setState 注入 action 桩——loadMembers 用 mockImplementation 回写 store，
 // 仿真「加入成功后成员列表更新 → 行消失」的真实数据流。
+// 2026-10-22 Task 13 扩展：def 行换 AgentPickerCard——def 级能力徽标（计数 =
+// defaultTools 长度，title 含「默认能力」）+ 描述两行合同（空描述「暂无说明」占位）。
+// def 行无 instanceId，能力恒为 def 级降级（不触 getEffectiveCapabilities IPC）。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { AddAgentDialog } from './AddAgentDialog';
@@ -148,6 +151,63 @@ describe('AddAgentDialog — 列表与过滤', () => {
     await screen.findByText('内置编码员');
     expect(screen.getByText('系统预置')).toBeInTheDocument();
     expect(screen.getByText('自定义')).toBeInTheDocument();
+  });
+});
+
+describe('AddAgentDialog — def 级能力徽标与描述合同（2026-10-22 Task 13）', () => {
+  it('def 行渲染 def 级徽标：计数 = defaultTools/defaultMcps 长度，title 含「默认能力」', async () => {
+    seedStore(
+      [
+        def({
+          id: 'def-c',
+          name: '审查员',
+          slug: 'reviewer',
+          description: '负责代码评审与重构建议',
+          defaultTools: [
+            { kind: 'builtin', ref: 'builtin:read_file' },
+            { kind: 'plugin', ref: 'plugin:search/web' },
+          ],
+          defaultMcps: [{ kind: 'mcp', ref: 'mcp:github' }],
+          defaultSkills: [],
+        }),
+      ],
+      [],
+    );
+    render(<AddAgentDialog onClose={() => {}} />);
+    expect(await screen.findByTitle('默认能力：内置工具')).toHaveTextContent(/^2$/);
+    expect(screen.getByTitle('默认能力：MCP 服务器')).toHaveTextContent(/^1$/);
+    // 0 计数分类不渲染
+    expect(screen.queryByTitle('默认能力：技能')).not.toBeInTheDocument();
+    // 描述直出（def.description）
+    expect(screen.getByText('负责代码评审与重构建议')).toBeInTheDocument();
+  });
+
+  it('deniedTools 命中的 def 工具不计入徽标计数（plugin:<id>/* 组模式）', async () => {
+    seedStore(
+      [
+        def({
+          id: 'def-c',
+          name: '审查员',
+          slug: 'reviewer',
+          defaultTools: [
+            { kind: 'plugin', ref: 'plugin:search/web' },
+            { kind: 'plugin', ref: 'plugin:search/fetch' },
+            { kind: 'builtin', ref: 'builtin:read' },
+          ],
+          deniedTools: ['plugin:search/*'],
+        }),
+      ],
+      [],
+    );
+    render(<AddAgentDialog onClose={() => {}} />);
+    expect(await screen.findByTitle('默认能力：内置工具')).toHaveTextContent(/^1$/);
+  });
+
+  it('空描述 → 「暂无说明」占位（描述两行合同统一）', async () => {
+    seedStore([def({ id: 'def-c', name: '审查员', slug: 'reviewer', description: '' })], []);
+    render(<AddAgentDialog onClose={() => {}} />);
+    expect(await screen.findByText('审查员')).toBeInTheDocument();
+    expect(screen.getByText('暂无说明')).toBeInTheDocument();
   });
 });
 

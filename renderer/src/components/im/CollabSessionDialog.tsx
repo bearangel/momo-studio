@@ -14,18 +14,31 @@
 // checkbox 多选卡 + 主 agent 指定（已选卡底部 radio 行，>1 已选时显示）+ leader 名旁
 // Crown 徽标（非交互）；提交 payload 恒 members 形态（单选亦然）；页签改名。
 // 不变量（§5.3）：首个选中默认 leader；取消 leader 回落剩余首个；切页签清空勾选与 leader。
-import { useEffect, useState, type FormEvent } from 'react';
+//
+// 2026-10-22 Task 13（spec §6.2/§6.3）：成员行/未加入 def 行 → AgentPickerCard——
+// 描述直出（def.description 两行合同）+ 能力徽标（getEffectiveCapabilities 批量；
+// record 缺 key 是合法态 → defToEffectiveCaps def 级降级，绝不可空桶冒充零能力）+
+// 展开三区手风琴（expandedId 单开）。Task 11 全部锚点（checkbox/leader-radio/
+// leader-badge/引导文案/页签名/payload）经卡片 data-testid 与 aria 面原样保留。
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Crown } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import { useUiStore } from '../../stores/ui.store';
 import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
-import { Avatar } from '../ui/Avatar';
+import { AgentPickerCard } from '../agent/AgentPickerCard';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { Input } from '../ui/Input';
 import { cn } from '../../lib/cn';
-import type { CollabTarget, Team, WorkspaceAgentMember } from '../../ipc/types';
+import { ipc } from '../../ipc/client';
+import { defToEffectiveCaps } from '../../lib/capability-helpers';
+import type {
+  CollabTarget,
+  EffectiveCapabilities,
+  Team,
+  WorkspaceAgentMember,
+} from '../../ipc/types';
 
 interface Props {
   onClose: () => void;
@@ -50,6 +63,9 @@ export function CollabSessionDialog({ onClose }: Props) {
   const [creating, setCreating] = useState(false);
   // 加入中的 def id——addMember IPC 含 agent 启动（秒级），按钮进 pending 态防重复点击/误解
   const [joiningId, setJoiningId] = useState<string | null>(null);
+  // Task 13：生效能力（instanceId → IPC 批量产物）+ 展开手风琴（每弹窗单开）
+  const [capsByInstance, setCapsByInstance] = useState<Record<string, EffectiveCapabilities>>({});
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   useEffect(() => {
     if (workspace) {
@@ -59,6 +75,33 @@ export function CollabSessionDialog({ onClose }: Props) {
     }
   }, [workspace, loadMembers, loadTeams, loadDefinitions]);
 
+  // 批量拉生效能力（打开/成员表变化时）。ipc Proxy 在 window.api 未挂载时同步抛
+  // TypeError（测试环境）——整体包 try（useTaskEntityNames 先例），失败保持空 record
+  // 由 def 级降级承担展示，弹窗可用性不放大。
+  useEffect(() => {
+    const ids = members.map((m) => m.instanceId);
+    if (ids.length === 0) {
+      setCapsByInstance({});
+      return;
+    }
+    let cancelled = false;
+    try {
+      void ipc.agent
+        .getEffectiveCapabilities(ids)
+        .then((record) => {
+          if (!cancelled) setCapsByInstance(record ?? {});
+        })
+        .catch(() => {
+          if (!cancelled) setCapsByInstance({});
+        });
+    } catch {
+      setCapsByInstance({});
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [members]);
+
   // 已启用（def 在库）但未加入本空间的 agent——启用是全局的、成员是按空间的；
   // 就近提供「加入」入口，免得用户去资源库停用重启用绕一圈（2026-10-10 走查反馈）
   const notJoined = workspace
@@ -67,11 +110,28 @@ export function CollabSessionDialog({ onClose }: Props) {
 
   // v2.2：agentName/iconEmoji 由后端 JOIN definitions 产出（members 数据面），
   // 不再依赖 definitions 的加载时序——此前 defMap 恒空时落到 agentUserId 显示 ID。
+  // Task 13：defMap 兼任描述/降级徽标数据源（WorkspaceAgentMember 无 description）。
+  const defMap = useMemo(() => new Map(definitions.map((d) => [d.id, d])), [definitions]);
   const memberLabel = (m: WorkspaceAgentMember): string => m.agentName;
   const teamLeaderLabel = (t: Team): string => {
     const leader = t.members.find((m) => m.instanceId === t.leaderInstanceId);
     return leader ? memberLabel(leader) : '';
   };
+
+  // 徽标数据：优先 IPC 生效能力；record 缺 key（Task 12 合法态）→ def 级降级
+  // （capabilityMode 标注「默认能力」tooltip 语义），def 亦缺则无徽标行
+  const capsForMember = (
+    m: WorkspaceAgentMember,
+  ): { caps: EffectiveCapabilities; mode: 'effective' | 'default' } | undefined => {
+    const eff = capsByInstance[m.instanceId];
+    if (eff) return { caps: eff, mode: 'effective' };
+    const def = defMap.get(m.agentDefinitionId);
+    return def ? { caps: defToEffectiveCaps(def), mode: 'default' } : undefined;
+  };
+
+  // 手风琴单开：再点同行收起
+  const toggleRowExpand = (key: string): void =>
+    setExpandedId((cur) => (cur === key ? null : key));
 
   // 勾选/取消一个成员。不变量（spec §5.3）：
   // 取消的恰是当前 leader → 回落剩余首个；新勾选时若无 leader → 首个选中者默认当选
@@ -176,81 +236,70 @@ export function CollabSessionDialog({ onClose }: Props) {
                 已选 {selectedIds.length} 个成员——指定一名主 agent 负责接待与任务分派
               </p>
             )}
-            {members.map((m) => (
-              <div key={m.instanceId} className="rounded hover:bg-surface-3">
-                <label className="flex items-center gap-2 text-sm text-secondary px-2 py-1.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    aria-label={memberLabel(m)}
-                    checked={selectedIds.includes(m.instanceId)}
-                    onChange={() => toggle(m.instanceId)}
-                  />
-                  <span>
-                    {m.iconEmoji || <Avatar name={memberLabel(m)} bot size="sm" />}
-                  </span>
-                  <span>{memberLabel(m)}</span>
-                  {/* Crown 徽标（rev2：非交互徽标，随 leader 迁移；恰 1 个已选时不显示） */}
-                  {selectedIds.length > 1 && leaderId === m.instanceId && (
+            {members.map((m) => {
+              const capInfo = capsForMember(m);
+              return (
+                <AgentPickerCard
+                  key={m.instanceId}
+                  id={m.instanceId}
+                  name={memberLabel(m)}
+                  iconEmoji={m.iconEmoji}
+                  description={defMap.get(m.agentDefinitionId)?.description}
+                  capabilities={capInfo?.caps}
+                  capabilityMode={capInfo?.mode}
+                  selected={selectedIds.includes(m.instanceId)}
+                  onToggle={() => toggle(m.instanceId)}
+                  leader={selectedIds.length > 1 && leaderId === m.instanceId}
+                  onSetLeader={() => setLeaderId(m.instanceId)}
+                  showLeaderControl={selectedIds.length > 1 && selectedIds.includes(m.instanceId)}
+                  expanded={expandedId === m.instanceId}
+                  onToggleExpand={() => toggleRowExpand(m.instanceId)}
+                  trailing={
                     <span
-                      data-testid={`leader-badge-${m.instanceId}`}
-                      title="主 agent：负责接待用户输入与任务分派"
-                      className="shrink-0 text-accent-500"
+                      className={cn(
+                        'text-[10px] px-1.5 py-0.5 rounded',
+                        m.lastRunning
+                          ? 'bg-status-success/20 text-status-success'
+                          : 'bg-surface-2 text-tertiary',
+                      )}
                     >
-                      <Crown size={12} strokeWidth={1.75} aria-hidden />
+                      {m.lastRunning ? '在线' : '离线'}
                     </span>
-                  )}
-                  <span
-                    className={cn(
-                      'ml-auto text-[10px] px-1.5 py-0.5 rounded',
-                      m.lastRunning
-                        ? 'bg-status-success/20 text-status-success'
-                        : 'bg-surface-2 text-tertiary',
-                    )}
-                  >
-                    {m.lastRunning ? '在线' : '离线'}
-                  </span>
-                </label>
-                {/* 主 agent 指定行（>1 已选时显示于已选卡底部；name 同组互斥） */}
-                {selectedIds.length > 1 && selectedIds.includes(m.instanceId) && (
-                  <label className="mt-1 flex items-center gap-1.5 text-xs text-secondary px-2 pb-1.5 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="collab-leader"
-                      data-testid={`leader-radio-${m.instanceId}`}
-                      checked={leaderId === m.instanceId}
-                      onChange={() => setLeaderId(m.instanceId)}
-                    />
-                    主 agent
-                  </label>
-                )}
-              </div>
-            ))}
+                  }
+                />
+              );
+            })}
             {notJoined.length > 0 && (
               <div className="border-t border-subtle pt-2 mt-1 flex flex-col gap-1">
                 <div className="text-xs text-tertiary">已启用、未加入本工作空间（加入后可选）</div>
                 {notJoined.map((d) => (
-                  <div
+                  <AgentPickerCard
                     key={d.id}
-                    className="flex items-center gap-2 text-sm text-secondary px-2 py-1 rounded hover:bg-surface-3"
-                  >
-                    <span>{d.iconEmoji || <Avatar name={d.name} bot size="sm" />}</span>
-                    <span className="truncate">{d.name}</span>
-                    <button
-                      type="button"
-                      aria-label={`加入 ${d.name}`}
-                      disabled={joiningId !== null}
-                      className="ml-auto text-xs text-accent-600 dark:text-accent-300 hover:underline disabled:opacity-50"
-                      onClick={() => {
-                        if (!workspace) return;
-                        setJoiningId(d.id);
-                        void addMember(workspace.id, d.id)
-                          .catch(() => undefined)
-                          .finally(() => setJoiningId(null));
-                      }}
-                    >
-                      {joiningId === d.id ? '加入中…' : '+ 加入'}
-                    </button>
-                  </div>
+                    name={d.name}
+                    iconEmoji={d.iconEmoji}
+                    description={d.description}
+                    capabilities={defToEffectiveCaps(d)}
+                    capabilityMode="default"
+                    expanded={expandedId === `def:${d.id}`}
+                    onToggleExpand={() => toggleRowExpand(`def:${d.id}`)}
+                    trailing={
+                      <button
+                        type="button"
+                        aria-label={`加入 ${d.name}`}
+                        disabled={joiningId !== null}
+                        className="text-xs text-accent-600 dark:text-accent-300 hover:underline disabled:opacity-50"
+                        onClick={() => {
+                          if (!workspace) return;
+                          setJoiningId(d.id);
+                          void addMember(workspace.id, d.id)
+                            .catch(() => undefined)
+                            .finally(() => setJoiningId(null));
+                        }}
+                      >
+                        {joiningId === d.id ? '加入中…' : '+ 加入'}
+                      </button>
+                    }
+                  />
                 ))}
               </div>
             )}
