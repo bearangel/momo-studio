@@ -135,6 +135,24 @@ export function getAgentDefinition(id: string): AgentDefinition | null {
   return row ? rowToDef(row) : null;
 }
 
+/**
+ * 按 instance_id 取单个成员（跨 workspace 查询）。
+ * 与 listMembers 的差别：入参是成员主键而非 workspaceId，且带出 agentName/iconEmoji。
+ * 消费方：effective-capabilities（批量生效能力查询按 instanceId 定位成员）。
+ * 不存在返回 null。
+ */
+export function getMemberByInstanceId(instanceId: string): WorkspaceAgentMember | null {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `SELECT wam.*, d.name, d.icon_emoji FROM workspace_agent_members wam
+       JOIN agent_definitions d ON d.id = wam.agent_definition_id
+       WHERE wam.instance_id = ?`,
+    )
+    .get(instanceId) as WorkspaceMemberRow | undefined;
+  return row ? rowToMember(row) : null;
+}
+
 /** 列出某 workspace 下所有 agent 成员（v2.2：JOIN definitions 带出 agentName/iconEmoji） */
 export function listMembers(workspaceId: string): WorkspaceAgentMember[] {
   const db = getDb();

@@ -187,6 +187,7 @@ describe('通道注册面（spec §5）', () => {
       'agent:getBuiltinSuggestions',
       'agent:getMemberDeltas',
       'agent:setMemberDeltas',
+      'agent:getEffectiveCapabilities',
       'agent:start',
       'team:list',
       'team:create',

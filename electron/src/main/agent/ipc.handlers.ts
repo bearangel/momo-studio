@@ -8,6 +8,7 @@
 //   - agent:createCustom / updateDefinition / deleteDefinition —— def 管理
 //   - agent:listMembers / removeMember / setMemberApiKeyOverride —— 成员制（原 assignment 系列平移）
 //   - agent:getMemberDeltas / setMemberDeltas —— Layer 3 能力 delta
+//   - agent:getEffectiveCapabilities —— 成员生效能力批量查询（与 spawn 同源合并，spec 2026-10-22 §6.1）
 //   - agent:start / stop / isRunning / getBuiltinSuggestions
 //   - team:list/create/rename/delete/setLeader/addMember/removeMember —— 团队（spec §4.2）
 //
@@ -60,6 +61,7 @@ import {
   setAssignmentDeltas,
   type AssignmentDeltas,
 } from './assignment-capabilities';
+import { getEffectiveCapabilities } from './effective-capabilities';
 import { buildToolCatalog } from './tools/catalog';
 import type { WorkspaceAgentMember } from './types';
 import type { ThinkingConfig } from '../llm/provider-presets';
@@ -354,6 +356,12 @@ export function registerAgentHandlers(): void {
       setAssignmentDeltas(instanceId, deltas);
     },
   );
+
+  // 批量查成员生效能力（spec 2026-10-22 §6.1）：与 spawn 同源三层合并；
+  // 未知 instanceId 在服务层省略条目（renderer 降级 def 级徽标）
+  ipcMain.handle('agent:getEffectiveCapabilities', (_evt, instanceIds: string[]) => {
+    return getEffectiveCapabilities(instanceIds);
+  });
 
   // 重启 agent：解析 apiKey 后 spawn runtime（v2 Task 10：无 Matrix token）
   ipcMain.handle(

@@ -539,6 +539,18 @@ export interface AssignmentDeltas {
   removedPluginTools: string[];
 }
 
+/**
+ * 合并后的成员生效能力（spec 2026-10-22 §6.1），与 electron 端
+ * capability-merger.ts 的 MergedCapabilities 结构对齐。
+ * deniedTools：def 级基线 ∪ 成员级禁用 − 成员级重新启用（同源合并终态）。
+ */
+export interface EffectiveCapabilities {
+  tools: string[];
+  mcps: string[];
+  skills: string[];
+  deniedTools: string[];
+}
+
 /** 一条可识别的 commit message 模式，与 electron 端 CommitPattern 对齐 */
 export interface CommitPattern {
   code: string;
@@ -2087,6 +2099,12 @@ export interface ApiSurface {
     getMemberDeltas(instanceId: string): Promise<AssignmentDeltas>;
     /** v25：原 setAssignmentDeltas 平移更名（幂等全量替换） */
     setMemberDeltas(instanceId: string, deltas: AssignmentDeltas): Promise<void>;
+    /**
+     * spec 2026-10-22 §6.1：批量取成员生效能力（与 spawn 同源三层合并）。
+     * 未知 / 已移出的 instanceId 在主进程侧省略条目（键不存在）——
+     * 消费方须按「缺键 → 降级定义级徽标」处理，不得视作空能力集。
+     */
+    getEffectiveCapabilities(instanceIds: string[]): Promise<Record<string, EffectiveCapabilities>>;
     onRuntimeChanged(callback: () => void): () => void;
     /** Task 6：中断指定 streamSessionId 的活跃流式会话（原按 roomId 中断，修同房覆盖问题） */
     abortStream(streamSessionId: string): Promise<void>;

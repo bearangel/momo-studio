@@ -120,6 +120,9 @@ const api: ApiSurface = {
     getMemberDeltas: (instanceId: string) => invoke('agent:getMemberDeltas', instanceId),
     setMemberDeltas: (instanceId: string, deltas: AssignmentDeltas) =>
       invoke('agent:setMemberDeltas', instanceId, deltas),
+    // spec 2026-10-22 §6.1：批量生效能力（与 spawn 同源合并）；未知 id 主进程侧省略
+    getEffectiveCapabilities: (instanceIds: string[]) =>
+      invoke('agent:getEffectiveCapabilities', instanceIds),
     onRuntimeChanged: (callback) => {
       const handler = (): void => callback();
       ipcRenderer.on('agent:runtimeChanged', handler);
