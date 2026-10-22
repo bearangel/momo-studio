@@ -190,18 +190,35 @@ export function listSessionMembers(sessionId: string): Array<{ instanceId: strin
 
 // ─── 分组与置顶（spec 2026-10-22 §4.1）──────────────────────────────────────
 
+/**
+ * 组色轮转盘（预览 A rev2 批准定值 light 档，spec 2026-10-22 §4.4）。
+ * 与 renderer/src/lib/group-colors.ts 对齐（镜像纪律）——renderer 侧由 Task 7 建；
+ * 迁移 068 的存量回填 CASE 分支与本数组顺序一致，改一处必同步三处。
+ */
+export const GROUP_COLOR_PALETTE = [
+  '#5E6AD2', '#23835C', '#B7791F', '#D33F49', '#6E56CF', '#3E8F8C',
+] as const;
+
 export interface SessionGroupRow {
   id: string;
   workspaceId: string;
   name: string;
   position: number;
+  /** 组色（#RRGGBB）。存量行迁移 068 回填后非空；groupRowToCamel 以 ?? '' 防御 */
+  color: string;
   createdAt: number;
 }
 
-type GroupSqlRow = { id: string; workspace_id: string; name: string; position: number; created_at: number };
+type GroupSqlRow = {
+  id: string; workspace_id: string; name: string;
+  position: number; color: string | null; created_at: number;
+};
 
 function groupRowToCamel(r: GroupSqlRow): SessionGroupRow {
-  return { id: r.id, workspaceId: r.workspace_id, name: r.name, position: r.position, createdAt: r.created_at };
+  return {
+    id: r.id, workspaceId: r.workspace_id, name: r.name,
+    position: r.position, color: r.color ?? '', createdAt: r.created_at,
+  };
 }
 
 export function listSessionGroups(workspaceId: string): SessionGroupRow[] {
@@ -217,9 +234,13 @@ export function insertSessionGroup(workspaceId: string, name: string): SessionGr
   // position 步进契约镜像 task_groups：(max + 1024)，同 workspace 内单调递增
   const max = db.prepare('SELECT COALESCE(MAX(position), 0) AS p FROM session_groups WHERE workspace_id = ?')
     .get(workspaceId) as { p: number };
+  // 组色建组即定值：按该 workspace 既有组数轮转（迁移 068 后不再有 NULL 色）
+  const count = db.prepare('SELECT COUNT(*) AS c FROM session_groups WHERE workspace_id = ?')
+    .get(workspaceId) as { c: number };
+  const color = GROUP_COLOR_PALETTE[count.c % GROUP_COLOR_PALETTE.length];
   db.prepare(
-    'INSERT INTO session_groups (id, workspace_id, name, position, created_at) VALUES (?, ?, ?, ?, ?)',
-  ).run(id, workspaceId, name, max.p + 1024, Date.now());
+    'INSERT INTO session_groups (id, workspace_id, name, position, color, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+  ).run(id, workspaceId, name, max.p + 1024, color, Date.now());
   return groupRowToCamel(
     db.prepare('SELECT * FROM session_groups WHERE id = ?').get(id) as GroupSqlRow,
   );
@@ -227,6 +248,11 @@ export function insertSessionGroup(workspaceId: string, name: string): SessionGr
 
 export function renameSessionGroup(id: string, name: string): void {
   getDb().prepare('UPDATE session_groups SET name = ? WHERE id = ?').run(name, id);
+}
+
+/** 组色直写（预览 A rev2）：组表无 updated_at，单 UPDATE 不带时间戳。 */
+export function setSessionGroupColor(id: string, color: string): void {
+  getDb().prepare('UPDATE session_groups SET color = ? WHERE id = ?').run(color, id);
 }
 
 /** 删组（事务）：组内会话回落未分组 → 删组行。置顶位 pinned_at 独立保留（spec §4.1）。 */

@@ -1,7 +1,7 @@
 // electron/tests/im/session-group-ipc.test.ts
 //
-// 会话分组 / 置顶六通道契约锁（spec 2026-10-22 §7）：
-//   sessionGroup:list / create / rename / delete
+// 会话分组 / 置顶七通道契约锁（spec 2026-10-22 §7 + 预览 A rev2 组色）：
+//   sessionGroup:list / create / rename / delete / setColor
 //   session:setPinned / session:moveToGroup（handler 同址注册在
 //   im/session-group.ipc.handlers.ts——语义属 session，通道名按 spec §7）
 //
@@ -11,8 +11,9 @@
 // DB 隔离沿用 tests/storage/sessions-group-repo.test.ts 模式（临时目录 +
 // runMigrations + closeDb 复位单例）。
 //
-// 覆盖：六通道注册面 / create 空名中文报错 / CRUD 全链路 / list 的
-// workspace 隔离 / moveToGroup 跨 workspace 与会话不存在错误路径 /
+// 覆盖：七通道注册面 / create 空名中文报错 / CRUD 全链路 / list 的
+// workspace 隔离 / setColor 合法 hex 落库与非法值中文报错 /
+// moveToGroup 跨 workspace 与会话不存在错误路径 /
 // groupId=null 合法移出分组 / setPinned 落库与取消回 NULL。
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
@@ -70,13 +71,14 @@ afterEach(() => {
 const call = (ch: string, ...args: unknown[]): Promise<unknown> =>
   handlers.get(ch)!(null, ...args) as Promise<unknown>;
 
-describe('六通道注册面（spec §7）', () => {
-  it('sessionGroup 四通道 + session:setPinned / session:moveToGroup 全部注册', () => {
+describe('七通道注册面（spec §7 + 预览 A rev2 组色）', () => {
+  it('sessionGroup 五通道 + session:setPinned / session:moveToGroup 全部注册', () => {
     for (const ch of [
       'sessionGroup:list',
       'sessionGroup:create',
       'sessionGroup:rename',
       'sessionGroup:delete',
+      'sessionGroup:setColor',
       'session:setPinned',
       'session:moveToGroup',
     ]) {
@@ -129,6 +131,21 @@ describe('sessionGroup CRUD 全链路', () => {
     await call('sessionGroup:delete', g.id);
 
     expect(getSession(s.id)!.groupId).toBeNull();
+  });
+});
+
+describe('sessionGroup:setColor（组色，预览 A rev2）', () => {
+  it('合法 hex 落库，list 读回', async () => {
+    const g = (await call('sessionGroup:create', WS, 'G')) as { id: string };
+    await call('sessionGroup:setColor', g.id, '#AB12CD');
+    const list = (await call('sessionGroup:list', WS)) as Array<{ id: string; color: string }>;
+    expect(list[0]!.color).toBe('#AB12CD');
+  });
+
+  it("'red' / '#GGGGGG' 非法 hex → 中文报错「颜色值格式不正确」", async () => {
+    const g = (await call('sessionGroup:create', WS, 'G')) as { id: string };
+    await expect(call('sessionGroup:setColor', g.id, 'red')).rejects.toThrow('颜色值格式不正确');
+    await expect(call('sessionGroup:setColor', g.id, '#GGGGGG')).rejects.toThrow('颜色值格式不正确');
   });
 });
 

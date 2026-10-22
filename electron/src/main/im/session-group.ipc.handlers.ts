@@ -1,10 +1,10 @@
 // electron/src/main/im/session-group.ipc.handlers.ts
 //
-// 会话分组与置顶的 IPC 面（spec 2026-10-22 §7）：六通道同址注册——
-//   sessionGroup:list / create / rename / delete  分组 CRUD（按 workspace）
-//   session:setPinned / session:moveToGroup         会话行写面（通道名属
-//                                                   session 命名空间，但与
-//                                                   分组校验耦合，同址注册避免拆两文件）
+// 会话分组与置顶的 IPC 面（spec 2026-10-22 §7 + 预览 A rev2 组色）：七通道同址注册——
+//   sessionGroup:list / create / rename / delete / setColor  分组 CRUD + 组色
+//   session:setPinned / session:moveToGroup                   会话行写面（通道名属
+//                                                             session 命名空间，但与
+//                                                             分组校验耦合，同址注册避免拆两文件）
 //
 // 边界分工：repo 层（storage/sessions/repo.ts）只做纯写入，不做跨工作空间
 // 校验；会话不存在与「组是否属于该会话所在工作空间」两条业务约束收在 handler
@@ -19,6 +19,7 @@ import {
   deleteSessionGroup,
   setSessionPinned,
   setSessionGroup,
+  setSessionGroupColor,
 } from '../storage/sessions/repo';
 
 /**
@@ -51,6 +52,12 @@ export function registerSessionGroupIpcHandlers(): void {
   // 删组：单事务内组内会话回落未分组后删组行（置顶位独立保留，spec §4.1）
   ipcMain.handle('sessionGroup:delete', async (_evt, groupId: string) => {
     deleteSessionGroup(groupId);
+  });
+
+  // 组色直写（预览 A rev2）：#RRGGBB 严格校验，非法值中文报错
+  ipcMain.handle('sessionGroup:setColor', async (_evt, groupId: string, color: string) => {
+    if (!/^#[0-9A-Fa-f]{6}$/.test(color)) throw new Error('颜色值格式不正确');
+    setSessionGroupColor(groupId, color);
   });
 
   // 置顶切换：true=写时间戳（重置顶上浮置顶区）/ false=NULL。与分组互不影响。

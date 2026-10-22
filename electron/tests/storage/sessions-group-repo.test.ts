@@ -16,6 +16,7 @@ import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import {
   insertSession, getSession, insertSessionGroup, listSessionGroups,
   renameSessionGroup, deleteSessionGroup, setSessionPinned, setSessionGroup,
+  setSessionGroupColor, GROUP_COLOR_PALETTE,
 } from '../../src/main/storage/sessions/repo';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-session-group-repo-${Date.now()}`);
@@ -81,5 +82,20 @@ describe('置顶/归组写函数', () => {
     const b = insertSession({ workspaceId: WS, title: 'b' });
     expect(getSession(a.id)!.sessionType).toBe('quick');
     expect(getSession(b.id)!.sessionType).toBeNull();
+  });
+});
+
+describe('组色（spec §4.4，预览 A rev2 批准定值）', () => {
+  it('连建 7 组颜色 = palette[(n-1) % 6] 循环（第 7 组回到 palette[0]）', () => {
+    const names = ['G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7'];
+    const groups = names.map((n) => insertSessionGroup(WS, n));
+    const expected = [...GROUP_COLOR_PALETTE, GROUP_COLOR_PALETTE[0]!];
+    expect(groups.map((g) => g.color)).toEqual(expected);
+  });
+
+  it('setSessionGroupColor 落库读回', () => {
+    const g = insertSessionGroup(WS, 'G');
+    setSessionGroupColor(g.id, '#AB12CD');
+    expect(listSessionGroups(WS)[0]!.color).toBe('#AB12CD');
   });
 });

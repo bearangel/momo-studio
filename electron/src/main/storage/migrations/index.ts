@@ -42,6 +42,7 @@ import { migration064 } from './064_codegraph_plugin_tool_to_mcp';
 import { migration065 } from './065_plugin_mcp_backfill_allocations';
 import { migration066 } from './066_plugin_scoped_activation';
 import * as migration067 from './067_session_groups_pin_type';
+import * as migration068 from './068_session_group_color';
 
 export interface Migration {
   version: number;
@@ -1141,6 +1142,12 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // pinned_at/group_id/session_type 三列 + 存量 chat 行按成员数回填类型。
     version: migration067.version,
     sql: migration067.up,
+  },
+  {
+    // 组色系统（预览 A rev2，spec 2026-10-22 §4.4）：session_groups 加 color 列，
+    // 存量组按 (position, created_at, id) 序 6 色轮转回填。
+    version: migration068.version,
+    sql: migration068.up,
   },
 ];
 

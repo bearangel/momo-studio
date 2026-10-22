@@ -502,6 +502,8 @@ const api: ApiSurface = {
       invoke<SessionGroupRow>('sessionGroup:create', workspaceId, name),
     rename: (groupId: string, name: string) => invoke<void>('sessionGroup:rename', groupId, name),
     delete: (groupId: string) => invoke<void>('sessionGroup:delete', groupId),
+    setColor: (groupId: string, color: string) =>
+      invoke<void>('sessionGroup:setColor', groupId, color),
   },
   dialog: {
     pickDirectory: (opts) => invoke('dialog:pickDirectory', opts),

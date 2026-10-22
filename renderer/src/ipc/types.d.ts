@@ -1360,6 +1360,8 @@ export interface SessionGroupRow {
   name: string;
   /** 同 workspace 内单调递增（建组 = 当前 max + 1024） */
   position: number;
+  /** 组色 #RRGGBB（预览 A rev2）。存量行迁移 068 轮转回填后非空；建组即由 repo 定值 */
+  color: string;
   createdAt: number;
 }
 
@@ -1520,6 +1522,8 @@ export interface SessionGroupApiSurface {
   rename(groupId: string, name: string): Promise<void>;
   /** 删组：组内会话回落未分组（置顶位独立保留），不删会话 */
   delete(groupId: string): Promise<void>;
+  /** 组色直写（预览 A rev2）；非 #RRGGBB 格式 reject「颜色值格式不正确」 */
+  setColor(groupId: string, color: string): Promise<void>;
 }
 
 /**
