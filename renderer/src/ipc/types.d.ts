@@ -1367,8 +1367,14 @@ export interface SessionGroupRow {
 
 /**
  * v25 spec §4.4：协作会话目标——单个 agent 或团队（快照展开）。
+ * 2026-10-22 spec §5.1：新增第三态 `members`——建会时多选临时组队，
+ * leaderInstanceId 必须落在 instanceIds 内（主 agent）。
+ * 镜像自 electron/src/main/im/session-ops.ts（两端同步契约）。
  */
-export type CollabTarget = { type: 'agent'; instanceId: string } | { type: 'team'; teamId: string };
+export type CollabTarget =
+  | { type: 'agent'; instanceId: string }
+  | { type: 'team'; teamId: string }
+  | { type: 'members'; instanceIds: string[]; leaderInstanceId: string };
 
 /**
  * v2.0 P1 Task 8：session: 命名空间 IPC 契约（会话内核，纯 SQLite 无 Matrix）。

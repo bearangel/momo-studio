@@ -7,7 +7,7 @@
 //   - 创建路径统一走 insertSessionWithMembers 事务核心：sessions 行与全部
 //     session_members 行（含 is_leader 快照）同事务提交，任一失败整笔回滚。
 //   - 双流程（spec §4.4）：createQuickSession 默认 agent 直达；
-//     createCollabSession 按 target（单 agent / 团队快照展开）写成员，
+//     createCollabSession 按 target（单 agent / 团队快照展开 / 临时组队）写成员，
 //     leader 成员 is_leader=1。
 //   - title 语义（spec D4）：占位标题（'新会话'）配 title_auto=1（命名服务
 //     可接管）；用户实名配 title_auto=0（永不自动改名）。
@@ -31,12 +31,17 @@ import {
 } from '../storage/sessions/repo';
 import { getWorkspace } from '../workspace/crud';
 import { listTeams } from '../agent/team';
+// listMembers 取自只读叶子模块 agent-queries（断环先例见该文件头注：
+// 叶子不反向依赖 crud，故此处引入不构成 im → agent → im 环）
+import { listMembers } from '../agent/agent-queries';
 import { resolveVisionCapability } from '../agent/spawn-helpers';
 
-/** 协作会话目标（spec §4.4）：单个 agent 或团队（建会时快照展开） */
+/** 协作会话目标（spec §4.4 + 2026-10-22 §5.1）：
+ *  单 agent / 团队快照展开 / 建会临时组队（members 多选 + 主 agent） */
 export type CollabTarget =
   | { type: 'agent'; instanceId: string }
-  | { type: 'team'; teamId: string };
+  | { type: 'team'; teamId: string }
+  | { type: 'members'; instanceIds: string[]; leaderInstanceId: string };
 
 /** 快速/协作会话留空时的占位标题（Task 8 命名服务接管前的默认，spec D4） */
 export const PLACEHOLDER_TITLE = '新会话';
@@ -180,6 +185,8 @@ export function createQuickSession(workspaceId: string): SessionRow {
  * - target 单 agent → 单成员 is_leader=1
  * - target 团队 → listTeams 取当前成员快照展开写入；leader 成员 is_leader=1
  *   （建会后团队变更不影响本会话，spec §7「团队编辑」行）
+ * - target members → 建会临时组队（spec 2026-10-22 §5.1）：多选 + 主 agent，
+ *   去重后校验成员集合法性并按 is_leader 快照写入
  * - title 留空（null/空白）→ 占位标题 + title_auto=1；用户命名 → title_auto=0
  */
 export function createCollabSession(
@@ -196,6 +203,18 @@ export function createCollabSession(
   let members: MemberWrite[];
   if (target.type === 'agent') {
     members = [{ instanceId: target.instanceId, isLeader: true }];
+  } else if (target.type === 'members') {
+    // 校验顺序（spec 2026-10-22 §5.2）：先去重 → 空列表 → leader 越集 → 成员存在性
+    const ids = [...new Set(target.instanceIds)];
+    if (ids.length === 0) throw new Error('会话目标不能为空：请至少选择一个 agent');
+    if (!ids.includes(target.leaderInstanceId)) throw new Error('主 agent 必须是所选成员之一');
+    const validIds = new Set(listMembers(workspaceId).map((m) => m.instanceId));
+    const invalid = ids.find((id) => !validIds.has(id));
+    if (invalid !== undefined) {
+      throw new Error(`成员不存在或不属于当前工作空间：${invalid}`);
+    }
+    // leader 唯一（ids 已去重 → 恰一条 isLeader=true），其余成员 is_leader=0
+    members = ids.map((id) => ({ instanceId: id, isLeader: id === target.leaderInstanceId }));
   } else {
     const team = listTeams(workspaceId).find((t) => t.id === target.teamId);
     if (!team) throw new Error(`团队不存在: ${target.teamId}`);
