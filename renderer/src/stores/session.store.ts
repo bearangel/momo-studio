@@ -380,11 +380,27 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // (last_message_at, created_at)（空会话按创建时间居首），且
       // SessionSummary 无 createdAt，全量 sort 必把空会话压底、与主进程
       // 契约打架。收到最新消息的会话有效时间最大，上浮即正确位置。
+      // （上段「全局 unshift」语义已由 067 排序契约（spec 2026-10-22 §4.2）
+      // 接替——见下方桶内上浮。）
+      // 列表实时性（语义演进 spec 2026-10-22 §4.2）：
+      //   - 置顶会话：只原地更新 lastMessageAt，不移动（置顶区顺序=置顶时间）
+      //   - 非置顶会话：桶内上浮——移至「未置顶且同 groupId」首个位置；不越置顶区、不越组
+      //     （主进程全局序保证同桶连续，findIndex 首个命中即桶头）
       const sIdx = state.sessions.findIndex((s) => s.id === msg.sessionId);
       if (sIdx === -1) return { messagesBySession: map };
-      const updated = { ...state.sessions[sIdx]!, lastMessageAt: msg.createdAt };
-      const sessions = state.sessions.filter((s) => s.id !== msg.sessionId);
-      sessions.unshift(updated);
+      const target = state.sessions[sIdx]!;
+      const updated = { ...target, lastMessageAt: msg.createdAt };
+
+      if (updated.pinnedAt != null) {
+        const next = [...state.sessions];
+        next[sIdx] = updated;
+        return { messagesBySession: map, sessions: next };
+      }
+      const rest = state.sessions.filter((s) => s.id !== msg.sessionId);
+      const bucketHead = rest.findIndex((s) => s.pinnedAt == null && s.groupId === updated.groupId);
+      // 组内无他人（自己即桶头）：保持原相对位（过滤前 sIdx 映射到过滤后 = sIdx）
+      const insertAt = bucketHead !== -1 ? bucketHead : Math.min(sIdx, rest.length);
+      const sessions = [...rest.slice(0, insertAt), updated, ...rest.slice(insertAt)];
       return { messagesBySession: map, sessions };
     });
     // A 子系统：流式→持久化由 MessageList 通过 streamSessionId 去重处理，

@@ -1219,3 +1219,68 @@ describe('receiveMessage 同 id 原位替换', () => {
   });
 });
 
+// === receiveMessage 桶内上浮（spec 2026-10-22 §4.2）===
+// 语义：置顶会话来消息原地更新（置顶区顺序=置顶时间，不动）；非置顶会话
+// 上浮至「同分组桶」顶部——不越置顶区、不越组。Task 7 RoomList 渲染依赖
+// 此排序契约。
+describe('receiveMessage 桶内上浮（spec 2026-10-22 §4.2）', () => {
+  /** 构造 SessionSummary（pinnedAt/groupId/groupName/sessionType 按用例覆写） */
+  const mkSummary = (id: string, over: Partial<SessionSummary>): SessionSummary => ({
+    id,
+    workspaceId: 'ws',
+    title: id,
+    titleAuto: false,
+    kind: 'chat',
+    lastMessageAt: null,
+    members: [],
+    pinnedAt: null,
+    groupId: null,
+    groupName: null,
+    sessionType: 'quick',
+    ...over,
+  });
+  /** 构造目标会话实时消息——复用文件既有 mk 工厂（真实 ImMessage 全字段） */
+  const msg = (sessionId: string, createdAt: number): ImMessage =>
+    mk(`m-${sessionId}-${createdAt}`, 'x', createdAt, sessionId);
+
+  it('置顶会话来消息：原地更新 lastMessageAt，位置不动', () => {
+    const pinned = mkSummary('pinned', { pinnedAt: 500 });
+    const other = mkSummary('other', {});
+    const store = useSessionStore.getState();
+    useSessionStore.setState({ sessions: [pinned, other] });
+    store.receiveMessage(msg('pinned', 999));
+    const s = useSessionStore.getState().sessions;
+    expect(s.map((x) => x.id)).toEqual(['pinned', 'other']);
+    expect(s[0]!.lastMessageAt).toBe(999);
+  });
+
+  it('非置顶会话来消息：上浮至同组桶顶，不越置顶区、不越组', () => {
+    const pinned = mkSummary('pinned', { pinnedAt: 500 });
+    const g1a = mkSummary('g1a', { groupId: 'g1' });
+    const g1b = mkSummary('g1b', { groupId: 'g1' });
+    const g2a = mkSummary('g2a', { groupId: 'g2' });
+    const un1 = mkSummary('un1', {});
+    useSessionStore.setState({ sessions: [pinned, g1a, g1b, g2a, un1] });
+    useSessionStore.getState().receiveMessage(msg('g1b', 999));
+    expect(useSessionStore.getState().sessions.map((x) => x.id))
+      .toEqual(['pinned', 'g1b', 'g1a', 'g2a', 'un1']);
+  });
+
+  it('未分组会话来消息：上浮至未分组桶顶（分组之后）', () => {
+    const g1a = mkSummary('g1a', { groupId: 'g1' });
+    const un1 = mkSummary('un1', {});
+    const un2 = mkSummary('un2', {});
+    useSessionStore.setState({ sessions: [g1a, un1, un2] });
+    useSessionStore.getState().receiveMessage(msg('un2', 999));
+    expect(useSessionStore.getState().sessions.map((x) => x.id)).toEqual(['g1a', 'un2', 'un1']);
+  });
+
+  it('组内唯一会话来消息：保持原位（同组无他人可插队）', () => {
+    const g1a = mkSummary('g1a', { groupId: 'g1' });
+    const g2a = mkSummary('g2a', { groupId: 'g2' });
+    useSessionStore.setState({ sessions: [g1a, g2a] });
+    useSessionStore.getState().receiveMessage(msg('g2a', 999));
+    expect(useSessionStore.getState().sessions.map((x) => x.id)).toEqual(['g1a', 'g2a']);
+  });
+});
+
