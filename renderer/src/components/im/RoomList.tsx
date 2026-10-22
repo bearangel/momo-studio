@@ -687,7 +687,12 @@ export function RoomList() {
         <MoveToGroupDialog
           session={moving}
           workspaceId={activeWorkspaceId}
-          onClose={() => setMoving(null)}
+          onClose={() => {
+            setMoving(null);
+            // 内联建组路径会变更组集合：不重拉则新组头不出现、被移会话落孤儿
+            // 路径渲染进未分组（移动到既有组/移出分组多一次 list 调用无害）
+            void loadGroups(activeWorkspaceId);
+          }}
         />
       )}
       {creatingGroup && (

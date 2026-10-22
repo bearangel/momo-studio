@@ -692,3 +692,28 @@ describe('RoomList — 分组 CRUD 与组色面板', () => {
     expect(screen.queryByTestId('session-group-header')).not.toBeInTheDocument();
   });
 });
+
+describe('RoomList — 移动弹窗内联建组后组重拉（T7 审查修复）', () => {
+  it('弹窗内联建组提交 → create + moveToGroup(新组 id) + 弹窗关闭后 sessionGroup.list 再次调用', async () => {
+    sessionState.sessions = [makeSession({ id: 's1', title: '会话A' })];
+    apiGroup().create.mockResolvedValue(makeGroup({ id: 'g9', name: '新组' }));
+    render(<RoomList />);
+    await waitFor(() => expect(apiGroup().list).toHaveBeenCalledTimes(1)); // 挂载初拉
+
+    fireEvent.click(screen.getByLabelText('移动到分组'));
+    const dialog = await screen.findByRole('dialog', { name: '移动「会话A」到分组' });
+    // 基线含弹窗自身挂载的 list（radio 数据源）；断言提交关闭后 RoomList 侧重拉
+    // 发生（新组头否则不出现，会话落孤儿路径渲染进未分组）
+    const baseline = apiGroup().list.mock.calls.length;
+
+    fireEvent.change(within(dialog).getByRole('textbox'), { target: { value: '新组' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: '移动' }));
+
+    expect(await waitFor(() => apiSession().moveToGroup)).toHaveBeenCalledWith('s1', 'g9');
+    expect(apiGroup().create).toHaveBeenCalledWith('ws-1', '新组');
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '移动「会话A」到分组' })).not.toBeInTheDocument(),
+    );
+    await waitFor(() => expect(apiGroup().list.mock.calls.length).toBeGreaterThan(baseline));
+  });
+});
