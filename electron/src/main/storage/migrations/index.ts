@@ -41,6 +41,7 @@ import { migration063 } from './063_remove_p2p_lsp_residue';
 import { migration064 } from './064_codegraph_plugin_tool_to_mcp';
 import { migration065 } from './065_plugin_mcp_backfill_allocations';
 import { migration066 } from './066_plugin_scoped_activation';
+import * as migration067 from './067_session_groups_pin_type';
 
 export interface Migration {
   version: number;
@@ -1134,6 +1135,12 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 插件作用域激活存量回填（spec 2026-10-21 §4）：全部 ws × plugin = enabled=1
     version: migration066.version,
     sql: migration066.up,
+  },
+  {
+    // 会话体验优化（spec 2026-10-22 §3）：session_groups 表 + sessions
+    // pinned_at/group_id/session_type 三列 + 存量 chat 行按成员数回填类型。
+    version: migration067.version,
+    sql: migration067.up,
   },
 ];
 
