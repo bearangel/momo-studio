@@ -10,6 +10,7 @@ import {
   GROUP_COLOR_PALETTE_DARK,
   groupTintColor,
   groupDotColor,
+  groupBorderColor,
 } from './group-colors';
 
 describe('GROUP_COLOR_PALETTE —— 浅色板 6 槽位字面量锁（T6b 补锁）', () => {
@@ -91,5 +92,31 @@ describe('groupDotColor —— 圆点 / swatch 展示色', () => {
   it('自定义 hex 未命中查表 → 两主题均原值直用', () => {
     expect(groupDotColor('#123456', 'dark')).toBe('#123456');
     expect(groupDotColor('#ABCDEF', 'light')).toBe('#ABCDEF');
+  });
+});
+
+describe('groupBorderColor —— 分组整体卡片边框色（2026-10-22 右键菜单预览批准定值）', () => {
+  it('浅主题 alpha 0.45（#5E6AD2 → 94,106,210）', () => {
+    expect(groupBorderColor('#5E6AD2', 'light')).toBe('rgba(94, 106, 210, 0.45)');
+  });
+
+  it('暗主题查提亮档表后 alpha 0.5（#5E6AD2 → 提亮档 138,147,224）', () => {
+    expect(groupBorderColor('#5E6AD2', 'dark')).toBe('rgba(138, 147, 224, 0.5)');
+  });
+
+  it('全部 6 色板槽位两主题均产出对应 alpha（防单点侥幸）', () => {
+    for (let i = 0; i < GROUP_COLOR_PALETTE.length; i++) {
+      expect(groupBorderColor(GROUP_COLOR_PALETTE[i]!, 'light')).toMatch(/, 0\.45\)$/);
+      expect(groupBorderColor(GROUP_COLOR_PALETTE[i]!, 'dark')).toMatch(/, 0\.5\)$/);
+    }
+  });
+
+  it('暗主题自定义 hex 未命中查表 → 原值 alpha 0.5', () => {
+    expect(groupBorderColor('#12AB34', 'dark')).toBe('rgba(18, 171, 52, 0.5)');
+  });
+
+  it('非法 hex 防御返回 transparent（错误路径）', () => {
+    expect(groupBorderColor('not-a-color', 'light')).toBe('transparent');
+    expect(groupBorderColor('', 'dark')).toBe('transparent');
   });
 });

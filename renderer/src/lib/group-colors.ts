@@ -42,3 +42,19 @@ export function groupDotColor(hex: string, theme: GroupColorTheme): string {
   const idx = (GROUP_COLOR_PALETTE as readonly string[]).indexOf(hex);
   return idx === -1 ? hex : (GROUP_COLOR_PALETTE_DARK[idx] ?? hex);
 }
+
+/**
+ * 分组整体卡片边框色（2026-10-22 右键菜单改造预览批准）：展开态组头+组内会话
+ * 包在同一 1px 边框内。浅主题原色 alpha 0.45；暗主题先查提亮档表再 alpha 0.5
+ * （与圆点同套换色逻辑）；非法输入防御返回 transparent。
+ */
+export function groupBorderColor(hex: string, theme: GroupColorTheme): string {
+  const src = groupDotColor(hex, theme);
+  const m = HEX_RE.exec(src);
+  if (!m) return 'transparent';
+  const v = m[1]!;
+  const r = parseInt(v.slice(0, 2), 16);
+  const g = parseInt(v.slice(2, 4), 16);
+  const b = parseInt(v.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${theme === 'dark' ? 0.5 : 0.45})`;
+}
