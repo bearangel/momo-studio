@@ -628,7 +628,7 @@ describe('TypePageShell - 插件启停与卸载（P1）', () => {
     expect(screen.getByText('cg-usage')).toBeTruthy();
     expect(screen.getByText('导航员')).toBeTruthy();
     expect(screen.getByText(/面板 ×1/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /禁用/ }));
+    fireEvent.click(screen.getByRole('button', { name: /停用/ }));
     expect(onTogglePlugin).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'custom-plugin-cg' }),
       false,

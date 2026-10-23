@@ -36,6 +36,8 @@ const previewBuiltinPresetMock = vi.fn();
 
 const pluginGetDetailMock = vi.fn();
 
+const providerListMock = vi.fn();
+
 const mockApi = {
   agent: {
     list: agentListMock,
@@ -45,6 +47,9 @@ const mockApi = {
   },
   plugin: {
     getDetail: pluginGetDetailMock,
+  },
+  provider: {
+    list: providerListMock,
   },
 };
 
@@ -57,6 +62,7 @@ beforeEach(() => {
     slug: 'pm', name: '项目经理', iconEmoji: '👔', description: '',
     systemPrompt: '协调', tools: ['read_file'], mcps: [], skills: [],
   });
+  providerListMock.mockReset().mockResolvedValue([]);
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 });
 
@@ -285,5 +291,130 @@ describe('ResourceDetail - 插件组件清单（spec 2026-10-21 §9②：getDeta
     pluginGetDetailMock.mockRejectedValue(new Error('boom'));
     render(<ResourceDetail item={pluginItem()} onClose={vi.fn()} />);
     expect(await screen.findByText(/组件清单加载失败/)).toBeTruthy();
+  });
+});
+
+describe('ResourceDetail — 详情面板验收缺陷回归锁（2026-10-23 D2/D3/D4/D5）', () => {
+  function pluginDetailFixture(): void {
+    pluginGetDetailMock.mockResolvedValue({
+      pluginId: 'cg',
+      mcps: [{ name: 'codegraph' }],
+      tools: [],
+      skills: [],
+      agents: [],
+      panels: [],
+      service: false,
+      config: false,
+    });
+  }
+
+  it('D2: 元数据节无任何行（dev 源插件无 installedAt、无 marketplace 段）→ 整节隐藏不留空悬标题', () => {
+    pluginDetailFixture();
+    const item = baseItem({
+      id: 'custom-plugin-cg', type: 'plugin', slug: 'cg',
+      plugin: { id: 'cg', state: 'active', devSource: true, sourcePath: '/x', components: [], enabled: true },
+    });
+    render(<ResourceDetail item={item} onClose={vi.fn()} />);
+    expect(screen.queryByText('元数据')).not.toBeInTheDocument();
+  });
+
+  it('D2 反向: custom 项有 installedAt → 元数据节保留', () => {
+    const item = baseItem({
+      source: 'custom', type: 'skill',
+      custom: { installedAt: '2026-08-12T03:00:00.000Z' },
+    });
+    render(<ResourceDetail item={item} onClose={vi.fn()} />);
+    expect(screen.getByText('元数据')).toBeInTheDocument();
+  });
+
+  it('D3: 源目录长路径按斜杠断行——含 <wbr> 断点且不逐字符断词（无 break-all）', () => {
+    pluginDetailFixture();
+    const item = baseItem({
+      id: 'custom-plugin-cg', type: 'plugin', slug: 'cg',
+      plugin: {
+        id: 'cg', state: 'active', devSource: true,
+        sourcePath: '/Users/foo/dev/AiProject/plugins/codegraph',
+        components: [], enabled: true,
+      },
+    });
+    render(<ResourceDetail item={item} onClose={vi.fn()} />);
+    const code = screen.getByTestId('plugin-source-path');
+    expect(code.textContent).toBe('/Users/foo/dev/AiProject/plugins/codegraph');
+    expect(code.querySelectorAll('wbr').length).toBeGreaterThanOrEqual(5);
+    expect(code.className).not.toContain('break-all');
+  });
+
+  it('D4: 定义预览 model 行显示供应商名称，不出现裸 UUID', async () => {
+    providerListMock.mockResolvedValue([{
+      id: 'prov-uuid-1', name: '智谱 GLM', baseUrl: 'https://a', defaultModel: null,
+      isDefault: false, createdAt: '', platform: 'openai' as const, presetKey: null,
+    }]);
+    agentListMock.mockResolvedValue([{
+      id: 'def-1', name: '边界助手', slug: '边界助手', version: '1.0.0', runtime: 'local',
+      systemPrompt: '你是边界助手', defaultTools: [{ kind: 'builtin', ref: 'read_file' }],
+      source: 'custom', description: '', iconEmoji: '🤖', workspaceId: null,
+      modelProviderId: 'prov-uuid-1', modelName: 'glm-5.3',
+    } as AgentDefinition]);
+    const item = baseItem({
+      id: 'custom-agent-def-1', source: 'custom', type: 'agent', slug: 'def-1',
+      installed: true, removable: true,
+      custom: { installedAt: '2026-08-12T03:00:00.000Z', agentSystemPromptHash: 'h' },
+    });
+    render(<ResourceDetail item={item} onClose={vi.fn()} />);
+    expect(await screen.findByText(/model: 智谱 GLM \/ glm-5\.3/)).toBeInTheDocument();
+    expect(screen.queryByText(/prov-uuid-1/)).not.toBeInTheDocument();
+  });
+
+  it('D4 错误路径: 供应商列表拉取失败 → UUID 原样直出（不空白、不崩面板）', async () => {
+    providerListMock.mockRejectedValue(new Error('IPC 不可用'));
+    agentListMock.mockResolvedValue([{
+      id: 'def-2', name: '回落助手', slug: '回落助手', version: '1.0.0', runtime: 'local',
+      systemPrompt: 'x', defaultTools: [], source: 'custom', description: '',
+      iconEmoji: '🤖', workspaceId: null, modelProviderId: 'prov-uuid-2', modelName: 'glm-4.7',
+    } as AgentDefinition]);
+    const item = baseItem({
+      id: 'custom-agent-def-2', source: 'custom', type: 'agent', slug: 'def-2',
+      installed: true, removable: true,
+      custom: { installedAt: '2026-08-12T03:00:00.000Z', agentSystemPromptHash: 'h' },
+    });
+    render(<ResourceDetail item={item} onClose={vi.fn()} />);
+    expect(await screen.findByText(/model: prov-uuid-2 \/ glm-4\.7/)).toBeInTheDocument();
+  });
+
+  it('D5: mcp 停用态徽标「已停用」（不再「已禁用」）+ 启停按钮文案「停用」', () => {
+    const onToggleMcp = vi.fn();
+    const item = baseItem({
+      source: 'custom', type: 'mcp', installed: true, removable: true,
+      mcp: { enabled: false },
+      custom: { installedAt: '2026-08-12T03:00:00.000Z', mcpConfig: { command: 'npx', args: [] } },
+    });
+    render(<ResourceDetail item={item} onClose={vi.fn()} onToggleMcp={onToggleMcp} />);
+    expect(screen.getByText('已停用')).toBeInTheDocument();
+    expect(screen.queryByText('已禁用')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /启用/ })).toBeInTheDocument();
+  });
+
+  it('D5: mcp 启用态启停按钮文案「停用」（不再「禁用」）', () => {
+    const onToggleMcp = vi.fn();
+    const item = baseItem({
+      source: 'custom', type: 'mcp', installed: true, removable: true,
+      mcp: { enabled: true },
+      custom: { installedAt: '2026-08-12T03:00:00.000Z', mcpConfig: { command: 'npx', args: [] } },
+    });
+    render(<ResourceDetail item={item} onClose={vi.fn()} onToggleMcp={onToggleMcp} />);
+    expect(screen.getByRole('button', { name: /停用/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^禁用$/ })).not.toBeInTheDocument();
+  });
+
+  it('D5: 插件停用态徽标「已停用」+ 启停按钮「启用」（与卡片/开关措辞同一族）', () => {
+    const onTogglePlugin = vi.fn();
+    pluginDetailFixture();
+    const item = baseItem({
+      id: 'custom-plugin-cg', type: 'plugin', slug: 'cg', installed: true,
+      plugin: { id: 'cg', state: 'active', devSource: true, sourcePath: null, components: [], enabled: false },
+    });
+    render(<ResourceDetail item={item} onClose={vi.fn()} onTogglePlugin={onTogglePlugin} />);
+    expect(screen.getByText('已停用')).toBeInTheDocument();
+    expect(screen.queryByText('已禁用')).not.toBeInTheDocument();
   });
 });

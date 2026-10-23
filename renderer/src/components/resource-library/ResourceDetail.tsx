@@ -22,13 +22,14 @@
 // v2.1 Task 15：内容区三段式（状态 / 配置预览 / 元数据，「描述」保留为导语）；
 // custom agent 新增定义预览——经 ipc.agent.list 反查 def（资源 slug = def.id，
 // 与 View 层 handleEditAgent 同口径），YAML-ish 只读渲染 systemPrompt 前 200 字。
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { Bot, Blocks, Check, Copy, Package, Pencil, Power, Puzzle, RotateCw, Settings2, Trash2, X } from 'lucide-react';
-import type { BuiltinPresetPreview, ResourceItem } from '../../ipc/types';
+import type { BuiltinPresetPreview, ModelProvider, ResourceItem } from '../../ipc/types';
 import { ipc } from '../../ipc/client';
 import type { PluginDetail } from '../../ipc/types';
 import { useWorkspaceStore } from '../../stores/workspace.store';
+import { useProviderStore } from '../../stores/provider.store';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import type { BadgeTone } from '../ui/Badge';
@@ -109,6 +110,24 @@ function CapChips({ names }: { names: string[] }): React.JSX.Element {
   );
 }
 
+/**
+ * 源目录路径 code：按斜杠断行（每段后 <wbr>），超长单段由 overflow-wrap:anywhere
+ * 兜底——不逐字符断词（验收 D3：break-all 会把 plugins 拆成 plug/ins）。
+ */
+function PathCode({ path }: { path: string }): React.JSX.Element {
+  return (
+    <code data-testid="plugin-source-path" className="text-xs text-secondary [overflow-wrap:anywhere]">
+      {path.split('/').map((seg, i) => (
+        <Fragment key={i}>
+          {i > 0 && '/'}
+          {seg}
+          <wbr />
+        </Fragment>
+      ))}
+    </code>
+  );
+}
+
 export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onEnable, onConfigure, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onTogglePlugin, onReloadPlugin, onForkPreset, onDisable }: Props) {
   // 插件组件清单（spec 2026-10-21 §9②）：面板打开即拉；item 切换重拉
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
@@ -144,17 +163,32 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
     // custom agent 资源 slug = def.id（UUID）——与 View 层 handleEditAgent 同口径
     ipc.agent
       .list()
-      .then((defs) => {
+      .then(async (defs) => {
         if (cancelled) return;
         const def = defs.find((d) => d.source === 'custom' && d.id === item.slug);
         if (!def) {
           setDefPreview(null);
           return;
         }
+        // D4（2026-10-23 验收）：model 行显示供应商名称而非裸 UUID——providers
+        // 未加载时拉一次；失败回落 UUID 直出（定义仍可读，不因名称解析失败空白）
+        let providers = useProviderStore.getState().providers;
+        if (providers.length === 0) {
+          try {
+            await useProviderStore.getState().loadProviders();
+            providers = useProviderStore.getState().providers;
+          } catch {
+            providers = [];
+          }
+        }
+        if (cancelled) return;
+        const providerLabel = def.modelProviderId
+          ? providers.find((p: ModelProvider) => p.id === def.modelProviderId)?.name ?? def.modelProviderId
+          : '(未配置)';
         const promptHead = def.systemPrompt.slice(0, 200);
         setDefPreview(
           `# ${def.name} (${def.slug})\n` +
-            `model: ${def.modelProviderId || '(未配置)'} / ${def.modelName}\n` +
+            `model: ${providerLabel} / ${def.modelName}\n` +
             `tools: ${def.defaultTools.map((t) => t.ref).join(', ') || '(空)'}\n` +
             `mcps: ${(def.defaultMcps ?? []).map((m) => m.ref).join(', ') || '(空)'}\n` +
             `skills: ${(def.defaultSkills ?? []).map((s) => s.ref).join(', ') || '(空)'}\n\n` +
@@ -233,9 +267,9 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
             <span className="text-xs text-tertiary">
               {TYPE_LABEL[item.type]}{item.version && ` · v${item.version}`}
             </span>
-            {/* 组⑤：禁用态徽章（mcp DB 行派生项 / plugin workspace 级启停） */}
-            {item.mcp && !item.mcp.enabled && <Badge tone="warning">已禁用</Badge>}
-            {item.plugin && !item.plugin.enabled && <Badge tone="warning">已禁用</Badge>}
+            {/* 组⑤：停用态徽章（mcp DB 行派生项 / plugin workspace 级启停；D5 措辞与卡片/开关联动统一为「停用」族） */}
+            {item.mcp && !item.mcp.enabled && <Badge tone="warning">已停用</Badge>}
+            {item.plugin && !item.plugin.enabled && <Badge tone="warning">已停用</Badge>}
             {/* plugin 源 mcp/skill/agent 行：来源插件停用（矩阵 C7 管理面徽标） */}
             {item.pluginDisabled && <Badge tone="warning">插件已停用</Badge>}
             {/* dev 源插件目录缺失降级态（读路径自愈：目录恢复即消） */}
@@ -338,7 +372,7 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
                 {item.plugin.sourcePath && (
                   <div>
                     <div className="text-xs text-tertiary mb-1">源目录</div>
-                    <code className="text-xs text-secondary break-all">{item.plugin.sourcePath}</code>
+                    <PathCode path={item.plugin.sourcePath} />
                   </div>
                 )}
               </>
@@ -392,7 +426,8 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
           </div>
         </section>
 
-        {/* ── 元数据 ── */}
+        {/* ── 元数据（D2：无任何行时整节隐藏——dev 源插件无 installedAt 不留空悬标题） ── */}
+        {((hasMarketplaceMeta && item.marketplace) || item.custom?.installedAt) && (
         <section>
           <div className="text-xs text-tertiary mb-1">元数据</div>
           <div className="flex flex-col gap-3">
@@ -431,6 +466,7 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
             )}
           </div>
         </section>
+        )}
       </div>
 
       <div className="px-4 py-3 border-t border-subtle flex gap-2">
@@ -508,7 +544,7 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
             编辑
           </Button>
         )}
-        {/* 组⑤：MCP 启停（mcp_definitions DB 行派生项）。禁用 = 定义保留、运行时切断 */}
+        {/* 组⑤：MCP 启停（mcp_definitions DB 行派生项）。停用 = 定义保留、运行时切断 */}
         {item.type === 'mcp' && item.installed && item.mcp && onToggleMcp && (
           <Button
             size="sm"
@@ -517,7 +553,7 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
             className="inline-flex items-center gap-1"
           >
             <Power size={12} strokeWidth={1.75} aria-hidden />
-            {item.mcp.enabled ? '禁用' : '启用'}
+            {item.mcp.enabled ? '停用' : '启用'}
           </Button>
         )}
         {/* 插件启停（workspace 级，spec 2026-10-15 §7.1）——对齐 MCP 启停形态 */}
@@ -529,7 +565,7 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
             className="inline-flex items-center gap-1"
           >
             <Power size={12} strokeWidth={1.75} aria-hidden />
-            {item.plugin.enabled ? '禁用' : '启用'}
+            {item.plugin.enabled ? '停用' : '启用'}
           </Button>
         )}
         {/* 插件重载（P2 §3.3：改码→重载即生效，dev 源日常流） */}
