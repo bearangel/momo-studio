@@ -160,7 +160,9 @@ function MessageBubbleBody({ message, isSelf, senderName }: Props) {
     }
     try {
       const content = await ipc.file.read(message.workspaceId, filePath);
-      useEditorStore.getState().openFile(filePath, content);
+      // workspaceId 显式传入：消息可能属于非活跃空间，tab 必须落入该空间的
+      // 分片，否则会污染当前空间的 tabs（保存时按当前空间解析相对路径 → 写错文件）
+      useEditorStore.getState().openFile(filePath, content, message.workspaceId);
     } catch {
       markFailed(filePath);
     }

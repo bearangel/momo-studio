@@ -287,8 +287,9 @@ describe('MessageBubble context chip 渲染（v2.11 Task 11）', () => {
     // 仅设置 api，不替换整个 window（保留 jsdom Window 的其它属性，避免破坏 react-dom）
     (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
     mockApi.file.read.mockReset();
-    // 编辑器是真实 zustand store：逐用例重置，避免 activeTab 跨用例泄漏
-    useEditorStore.setState({ tabs: [], activeTab: null });
+    // 编辑器是真实 zustand store：逐用例重置（分片化后含 byWorkspace 与绑定，
+    // 仿真 App 顶层 effect 先于任何 openFile 的时序）；消息 chip 用例的 ws-1 即活跃空间
+    useEditorStore.setState({ tabs: [], activeTab: null, byWorkspace: {}, currentWorkspaceId: 'ws-1' });
   });
 
   it('owner 消息渲染技能与文件 chip', () => {
@@ -317,6 +318,20 @@ describe('MessageBubble context chip 渲染（v2.11 Task 11）', () => {
     });
     expect(mockApi.file.read).toHaveBeenCalledWith('ws-1', 'src/a.ts');
     expect(useEditorStore.getState().tabs[0]!.content).toBe('const a = 1;');
+  });
+
+  it('消息属于非活跃空间 → tab 落入该空间分片，不污染当前空间（隔离回归锁）', async () => {
+    mockApi.file.read.mockResolvedValue('ws-2 的内容');
+    render(<MessageBubble message={makeMsg('m1', {
+      sender: 'owner', body: 'x', workspaceId: 'ws-2',
+      contextJson: JSON.stringify({ skills: [], files: [{ path: 'report.md' }] }),
+    })} isSelf={true} />);
+    fireEvent.click(screen.getByRole('button', { name: 'report.md' }));
+    await waitFor(() => {
+      // 落 ws-2 分片：当前 ws-1 镜像不出现该 tab
+      expect(useEditorStore.getState().tabs).toEqual([]);
+      expect(useEditorStore.getState().byWorkspace['ws-2']!.tabs.map((t) => t.filePath)).toEqual(['report.md']);
+    });
   });
 
   it('agent 消息不渲染 context chip（回归锁）', () => {
@@ -517,7 +532,7 @@ describe('MessageBubble 会话引用 chip（2026-09-30 跨会话引用 Task 10�
     mockStreams.clear();
     (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
     mockApi.file.read.mockReset();
-    useEditorStore.setState({ tabs: [], activeTab: null });
+    useEditorStore.setState({ tabs: [], activeTab: null, byWorkspace: {}, currentWorkspaceId: 'ws-1' });
   });
 
   it('owner 消息带 sessions → 渲染「引用会话」chip（标题）', () => {

@@ -11,6 +11,7 @@
 // （新装用户无标记；仅 MainShell 分支承载升级提示）。
 import { useEffect, useState, useCallback } from 'react';
 import { useWorkspaceStore } from './stores/workspace.store';
+import { useEditorStore } from './stores/editor.store';
 import { subscribeSessionChannels, useSessionStore } from './stores/session.store';
 import { useWriteGrantStore } from './stores/write-grant.store';
 import { CreateWorkspaceDialog } from './components/workspace/CreateWorkspaceDialog';
@@ -76,6 +77,13 @@ export function App() {
   useEffect(() => {
     void load().finally(() => setBootstrapped(true));
   }, [load]);
+
+  // 编辑器分片绑定（工作空间隔离）：activeWorkspaceId 变化即切换 editor.store
+  // 当前分片。放 App 顶层保证在任何 openFile（文件树点击/消息 chip）前完成绑定
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
+  useEffect(() => {
+    useEditorStore.getState().setWorkspace(activeWorkspaceId);
+  }, [activeWorkspaceId]);
 
   // 新装引导：bootstrapped 后（及向导每次收尾后）拉取一次性状态；失败静默按 pending。
   // wizardOpen 只在此处置 true（boot 时 pending 且无 ws）或置 false（收尾重拉见终态）
