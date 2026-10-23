@@ -279,14 +279,29 @@ describe('ProviderModelPicker — 空供应商指引（D5，预览 S3 after）',
     expect(screen.getByRole('button', { name: '去设置创建供应商 →' })).toBeInTheDocument();
   });
 
-  it('点击「去设置创建供应商」→ 切设置视图并定位模型服务分类', () => {
+  it('点击「去设置创建供应商」→ 先内联确认（D1：切视图会卸载宿主弹窗丢已填表单）；「仍要前往」才切设置视图', () => {
     useUiStore.setState({ activeView: 'agents' });
     useSettingsStore.setState({ activeCategory: 'memory' });
     useProviderStore.setState({ providers: [], loading: false });
     renderPicker();
     fireEvent.click(screen.getByRole('button', { name: '去设置创建供应商 →' }));
+    expect(useUiStore.getState().activeView).toBe('agents');
+    expect(screen.getByText(/已填内容不会保存/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '仍要前往' }));
     expect(useUiStore.getState().activeView).toBe('settings');
     expect(useSettingsStore.getState().activeCategory).toBe('model_provider');
+  });
+
+  it('确认条「取消」→ 不切视图且确认条收回，可重新发起（D1）', () => {
+    useProviderStore.setState({ providers: [], loading: false });
+    useUiStore.setState({ activeView: 'agents' });
+    renderPicker();
+    fireEvent.click(screen.getByRole('button', { name: '去设置创建供应商 →' }));
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(useUiStore.getState().activeView).toBe('agents');
+    expect(screen.queryByText(/已填内容不会保存/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '去设置创建供应商 →' }));
+    expect(screen.getByText(/已填内容不会保存/)).toBeInTheDocument();
   });
 
   it('providers 非空 → 不渲染指引块（回归：正常路径不受影响）', () => {

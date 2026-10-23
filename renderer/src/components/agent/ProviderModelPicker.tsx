@@ -96,7 +96,10 @@ export function ProviderModelPicker({
   }, [models, modelId, onModelInfo]);
 
   // D5（预览 S3 after）：无供应商 → 空下拉不再裸奔，给出原因与出路。
-  // 必须置于全部 hook 之后（提前 return 不影响 hook 顺序）
+  // 必须置于全部 hook 之后（提前 return 不影响 hook 顺序）。
+  // D1（2026-10-23 验收）：openProviderSettings 切视图会卸载宿主弹窗（向导等
+  // 已填表单随之丢失）——「去设置」首击只亮内联确认条，「仍要前往」才真正跳转。
+  const [confirmLeave, setConfirmLeave] = useState(false);
   if (providers.length === 0) {
     return (
       <div className="flex flex-col gap-3" data-testid="provider-empty-guide">
@@ -114,13 +117,33 @@ export function ProviderModelPicker({
           <span>暂无模型供应商。请先到 设置 → 模型服务 创建（如 GLM / DeepSeek / OpenAI）。</span>
         </div>
         <div className="text-center">
-          <button
-            type="button"
-            onClick={openProviderSettings}
-            className="text-xs text-accent-600 dark:text-accent-300 underline underline-offset-2"
-          >
-            去设置创建供应商 →
-          </button>
+          {confirmLeave ? (
+            <span className="inline-flex flex-wrap items-center justify-center gap-2 text-xs">
+              <span className="text-status-warning">跳转将关闭表单，已填内容不会保存</span>
+              <button
+                type="button"
+                onClick={openProviderSettings}
+                className="text-accent-600 dark:text-accent-300 underline underline-offset-2"
+              >
+                仍要前往
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmLeave(false)}
+                className="text-secondary underline underline-offset-2"
+              >
+                取消
+              </button>
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirmLeave(true)}
+              className="text-xs text-accent-600 dark:text-accent-300 underline underline-offset-2"
+            >
+              去设置创建供应商 →
+            </button>
+          )}
         </div>
       </div>
     );
