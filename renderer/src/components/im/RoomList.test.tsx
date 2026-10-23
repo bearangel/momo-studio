@@ -13,6 +13,15 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import type { SessionGroupRow, SessionMemberInfo, SessionSummary } from '../../ipc/types';
 
+// react-colorful 桩：取色器交互面收敛为一个可驱动按钮（onChange 注入预览色）
+vi.mock('react-colorful', () => ({
+  HexColorPicker: ({ onChange }: { onChange: (hex: string) => void }) => (
+    <button type="button" data-testid="hex-color-picker" onClick={() => onChange('#abcdef')}>
+      picker
+    </button>
+  ),
+}));
+
 // vi.hoisted：mock store 状态在 vi.mock 工厂注册前完成初始化
 const { sessionState, workspaceState } = vi.hoisted(() => ({
   sessionState: {
@@ -691,7 +700,23 @@ describe('RoomList — 分组 CRUD 与组色面板', () => {
     expect(screen.getByText(/只删除分组，组内 0 个会话将回到未分组/)).toBeInTheDocument();
   });
 
-  it('色板面板：6 swatch + 恢复默认 + 自定义且零文字；点 swatch → setColor(组, 色板值)', async () => {
+  it('设置组色 → 换色浮层（看板同款）：6 预设 swatch + 取色器 + 应用；当前色打勾', async () => {
+    sessionState.sessions = [makeSession({ id: 'sa', title: '组内甲', groupId: 'g1', groupName: '项目 A' })];
+    apiGroup().list.mockResolvedValue([makeGroup({ id: 'g1', name: '项目 A', color: '#5E6AD2' })]);
+    render(<RoomList />);
+    await screen.findByTestId('session-group-header');
+    fireEvent.contextMenu(screen.getByTestId('session-group-header'));
+    fireEvent.click(screen.getByText('设置组色'));
+
+    const popover = screen.getByTestId('session-color-popover');
+    expect(within(popover).getAllByRole('button', { name: /设为#/ })).toHaveLength(6);
+    expect(within(popover).getByTestId('hex-color-picker')).toBeInTheDocument();
+    expect(within(popover).getByRole('button', { name: '应用' })).toBeInTheDocument();
+    // 当前色 #5E6AD2 swatch 打勾
+    expect(within(popover).getByRole('button', { name: '设为#5E6AD2' }).querySelector('svg')).toBeInTheDocument();
+  });
+
+  it('点预设 swatch → setColor + 浮层立即关闭（选色不消失回归锁）', async () => {
     sessionState.sessions = [makeSession({ id: 'sa', title: '组内甲', groupId: 'g1', groupName: '项目 A' })];
     apiGroup().list.mockResolvedValue([makeGroup({ id: 'g1', name: '项目 A' })]);
     render(<RoomList />);
@@ -699,56 +724,41 @@ describe('RoomList — 分组 CRUD 与组色面板', () => {
     fireEvent.contextMenu(screen.getByTestId('session-group-header'));
     fireEvent.click(screen.getByText('设置组色'));
 
-    const panel = screen.getByTestId('group-palette');
-    // 面板零文字：无可見文本内容
-    expect(panel.textContent).toBe('');
-    expect(within(panel).getAllByRole('button')).toHaveLength(8); // 6 swatch + 恢复默认 + 自定义
-
-    fireEvent.click(within(panel).getByLabelText('色板 2'));
+    fireEvent.click(within(screen.getByTestId('session-color-popover')).getByRole('button', { name: '设为#23835C' }));
     await waitFor(() => expect(apiGroup().setColor).toHaveBeenCalledWith('g1', '#23835C'));
+    expect(screen.queryByTestId('session-color-popover')).not.toBeInTheDocument();
   });
 
-  it('恢复默认 = GROUP_COLOR_PALETTE[组序 % 6]（第 0 组 → 首色；第 1 组 → 次色）', async () => {
-    sessionState.sessions = [makeSession({ id: 'su', title: '未分组会话' })];
-    apiGroup().list.mockResolvedValue([
-      makeGroup({ id: 'g0', name: '甲组' }),
-      makeGroup({ id: 'g1', name: '乙组' }),
-    ]);
+  it('自定义取色：取色器 onChange 只更预览（零 IPC）；「应用」才 setColor + 关闭', async () => {
+    sessionState.sessions = [makeSession({ id: 'sa', title: '组内甲', groupId: 'g1', groupName: '项目 A' })];
+    apiGroup().list.mockResolvedValue([makeGroup({ id: 'g1', name: '项目 A', color: '#5E6AD2' })]);
     render(<RoomList />);
-    await waitFor(() => expect(screen.getAllByTestId('session-group-header')).toHaveLength(2));
-    const headers = screen.getAllByTestId('session-group-header');
-    fireEvent.contextMenu(headers[0]!);
+    await screen.findByTestId('session-group-header');
+    fireEvent.contextMenu(screen.getByTestId('session-group-header'));
     fireEvent.click(screen.getByText('设置组色'));
-    fireEvent.click(within(screen.getByTestId('group-palette')).getByLabelText('恢复默认色'));
-    await waitFor(() => expect(apiGroup().setColor).toHaveBeenCalledWith('g0', '#5E6AD2'));
 
-    fireEvent.contextMenu(headers[1]!);
-    fireEvent.click(screen.getByText('设置组色'));
-    fireEvent.click(within(screen.getByTestId('group-palette')).getByLabelText('恢复默认色'));
-    await waitFor(() => expect(apiGroup().setColor).toHaveBeenCalledWith('g1', '#23835C'));
+    const popover = screen.getByTestId('session-color-popover');
+    // 初始预览 = 当前组色
+    expect(within(popover).getByText('#5e6ad2')).toBeInTheDocument();
+    fireEvent.click(within(popover).getByTestId('hex-color-picker'));
+    expect(apiGroup().setColor).not.toHaveBeenCalled();
+    expect(within(popover).getByText('#abcdef')).toBeInTheDocument();
+
+    fireEvent.click(within(popover).getByRole('button', { name: '应用' }));
+    await waitFor(() => expect(apiGroup().setColor).toHaveBeenCalledWith('g1', '#abcdef'));
+    expect(screen.queryByTestId('session-color-popover')).not.toBeInTheDocument();
   });
 
-  it('自定义颜色：hex trim 后 setColor；非法值不发送', async () => {
+  it('浮层遮罩点击关闭（不落色）', async () => {
     sessionState.sessions = [makeSession({ id: 'sa', title: '组内甲', groupId: 'g1', groupName: '项目 A' })];
     apiGroup().list.mockResolvedValue([makeGroup({ id: 'g1', name: '项目 A' })]);
     render(<RoomList />);
     await screen.findByTestId('session-group-header');
     fireEvent.contextMenu(screen.getByTestId('session-group-header'));
     fireEvent.click(screen.getByText('设置组色'));
-    fireEvent.click(within(screen.getByTestId('group-palette')).getByLabelText('自定义颜色'));
-
-    const input = screen.getByLabelText('自定义颜色');
-    // 首尾空白 + 合法 hex → trim 后发送（regex $ 尾换行洞由 renderer 堵）
-    fireEvent.change(input, { target: { value: '  #A1B2C3  ' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
-    await waitFor(() => expect(apiGroup().setColor).toHaveBeenCalledWith('g1', '#A1B2C3'));
-
-    // 非法值 → 不发送
-    fireEvent.click(within(screen.getByTestId('group-palette')).getByLabelText('自定义颜色'));
-    const input2 = screen.getByLabelText('自定义颜色');
-    fireEvent.change(input2, { target: { value: 'zzz' } });
-    fireEvent.keyDown(input2, { key: 'Enter' });
-    expect(apiGroup().setColor).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId('color-popover-overlay'));
+    expect(screen.queryByTestId('session-color-popover')).not.toBeInTheDocument();
+    expect(apiGroup().setColor).not.toHaveBeenCalled();
   });
 
   it('sessionGroup.list 失败 → 降级为无分组平铺，列表照常渲染（错误路径）', async () => {

@@ -27,24 +27,22 @@ import { EmptyState } from '../ui/EmptyState';
 import { cn } from '../../lib/cn';
 import { deriveSessionType, type SessionType } from '../../lib/session-type';
 import {
-  GROUP_COLOR_PALETTE,
   groupBorderColor,
   groupDotColor,
   groupTintColor,
   type GroupColorTheme,
 } from '../../lib/group-colors';
 import { MoveToGroupDialog } from './MoveToGroupDialog';
+import { SessionGroupColorPopover } from './SessionGroupColorPopover';
 import { BatchSessionContextMenu, GroupContextMenu, SessionContextMenu } from './SessionContextMenu';
 import type { SessionGroupRow, SessionSummary } from '../../ipc/types';
 import {
-  Ban,
   ChevronDown,
   ChevronRight,
   FolderPlus,
   ListTodo,
   MessageSquare,
   Pin,
-  Plus,
   Search,
   Users,
   X,
@@ -306,87 +304,6 @@ function GroupHeader({
   );
 }
 
-interface GroupPaletteProps {
-  group: SessionGroupRow;
-  /** 组在列表中的序（恢复默认 = 色板[序 % 6]） */
-  index: number;
-  theme: GroupColorTheme;
-  onPick: (color: string) => void;
-}
-
-/** Palette 面板（原地展开，预览 A 定值）：6 swatch + 恢复默认 + ＋自定义——面板内零文字 */
-function GroupPalette({ group, index, theme, onPick }: GroupPaletteProps) {
-  const [customOpen, setCustomOpen] = useState(false);
-  const [customHex, setCustomHex] = useState('');
-
-  const submitCustom = (): void => {
-    // trim 后才发（regex $ 可匹配尾换行——不能依赖后端校验堵空白）
-    const v = customHex.trim();
-    if (/^#[0-9A-Fa-f]{6}$/.test(v)) {
-      onPick(v);
-      setCustomOpen(false);
-      setCustomHex('');
-    }
-    // 非法值不发送（面板零文字约束：无错误文案位；格式提示走 title）
-  };
-
-  return (
-    <div
-      data-testid="group-palette"
-      className="flex items-center gap-1.5 h-7 px-3"
-      style={{ backgroundColor: groupTintColor(group.color, theme) }}
-    >
-      {GROUP_COLOR_PALETTE.map((hex, i) => (
-        <button
-          key={hex}
-          type="button"
-          aria-label={`色板 ${i + 1}`}
-          title={`色板 ${i + 1}`}
-          onClick={() => onPick(hex)}
-          className="h-3.5 w-3.5 rounded-full border border-strong shrink-0 transition-transform hover:scale-110"
-          style={{ backgroundColor: groupDotColor(hex, theme) }}
-        />
-      ))}
-      <button
-        type="button"
-        aria-label="恢复默认色"
-        title="恢复默认色"
-        onClick={() => onPick(GROUP_COLOR_PALETTE[index % GROUP_COLOR_PALETTE.length] ?? '#5E6AD2')}
-        className="text-tertiary hover:text-primary shrink-0"
-      >
-        <Ban size={12} strokeWidth={1.75} aria-hidden />
-      </button>
-      {customOpen ? (
-        <input
-          aria-label="自定义颜色"
-          title="自定义颜色（#RRGGBB）"
-          value={customHex}
-          onChange={(e) => setCustomHex(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') submitCustom();
-            if (e.key === 'Escape') {
-              setCustomOpen(false);
-              setCustomHex('');
-            }
-          }}
-          autoFocus
-          className="w-16 h-5 rounded border border-subtle bg-surface-1 px-1 text-[11px] uppercase text-primary outline-none focus:border-focus"
-        />
-      ) : (
-        <button
-          type="button"
-          aria-label="自定义颜色"
-          title="自定义颜色"
-          onClick={() => setCustomOpen(true)}
-          className="h-3.5 w-3.5 rounded-full border border-dashed border-strong text-tertiary shrink-0 inline-flex items-center justify-center hover:text-primary"
-        >
-          <Plus size={10} strokeWidth={1.75} aria-hidden />
-        </button>
-      )}
-    </div>
-  );
-}
-
 // ─── RoomList 主体 ────────────────────────────────────────────────────────────
 
 export function RoomList() {
@@ -418,7 +335,12 @@ export function RoomList() {
   const [deletingGroup, setDeletingGroup] = useState<{ group: SessionGroupRow; count: number } | null>(
     null,
   );
-  const [paletteFor, setPaletteFor] = useState<string | null>(null);
+  // 换色浮层态（取代旧 paletteFor 行内色板）：目标组 + 弹出坐标
+  const [colorPopover, setColorPopover] = useState<{
+    group: SessionGroupRow;
+    x: number;
+    y: number;
+  } | null>(null);
   // 右键菜单态：会话行/组头两类目标 + 弹出坐标（动作复用既有 handler）
   const [menu, setMenu] = useState<
     | { kind: 'session'; session: SessionSummary; x: number; y: number }
@@ -818,7 +740,7 @@ export function RoomList() {
           }}
         >
           {pinned.map((session) => renderSessionItem(session, true))}
-          {groups.map((group, index) => {
+          {groups.map((group) => {
             const items = byGroup.get(group.id) ?? [];
             const collapsed = collapsedIds.has(group.id);
             const openGroupMenu = (e: { clientX: number; clientY: number }): void =>
@@ -839,8 +761,7 @@ export function RoomList() {
                   dropHot={dropTarget === `group:${group.id}`}
                 />
               );
-            }
-            // 展开态（预览批准定值）：组头 + 组内会话包在同一组色 1px 边框整体卡片
+            }            // 展开态（预览批准定值）：组头 + 组内会话包在同一组色 1px 边框整体卡片
             // （rounded-lg 单圆角 · overflow-hidden 让 tint 顶到卡片内缘）
             return (
               <div
@@ -867,14 +788,6 @@ export function RoomList() {
                   onToggleCollapsed={() => toggleCollapsed(group.id)}
                   onContextMenu={openGroupMenu}
                 />
-                {paletteFor === group.id && (
-                  <GroupPalette
-                    group={group}
-                    index={index}
-                    theme={theme}
-                    onPick={(color) => applyGroupColor(group.id, color)}
-                  />
-                )}
                 {items.map((session) => renderSessionItem(session, false, true))}
               </div>
             );
@@ -968,7 +881,7 @@ export function RoomList() {
         <GroupContextMenu
           x={menu.x}
           y={menu.y}
-          onPalette={() => setPaletteFor(paletteFor === menu.group.id ? null : menu.group.id)}
+          onPalette={() => setColorPopover({ group: menu.group, x: menu.x, y: menu.y })}
           onRename={() => setRenamingGroup(menu.group)}
           onDelete={() =>
             setDeletingGroup({
@@ -996,6 +909,16 @@ export function RoomList() {
           confirmLabel="解散"
           onConfirm={() => void handleBatchDissolve()}
           onClose={() => setDissolvingBatch(null)}
+        />
+      )}
+      {colorPopover && (
+        <SessionGroupColorPopover
+          x={colorPopover.x}
+          y={colorPopover.y}
+          group={colorPopover.group}
+          theme={theme}
+          onPick={(color) => applyGroupColor(colorPopover.group.id, color)}
+          onClose={() => setColorPopover(null)}
         />
       )}
     </div>
