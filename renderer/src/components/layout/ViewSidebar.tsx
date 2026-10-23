@@ -44,26 +44,22 @@ export function ViewSidebar() {
   );
   const workspace = useWorkspaceStore((s) => s.getActive());
   const openFile = useEditorStore((s) => s.openFile);
+  const showBinaryNotice = useEditorStore((s) => s.showBinaryNotice);
 
   // 与 MiddlePanel 原 files 分支逻辑一致：IPC 读文件 → 打开编辑器 tab。
-  // 2026-10-11 功能优化：改走 readForEditor——二进制文件（图片/PDF 等非 utf-8）
-  // 自动转系统默认应用打开，不再以乱码文本进编辑器。失败 alert 经
-  // ipcErrorMessage 剥净 IPC 包装（主进程消息已带中文上下文，D1 修复）。
+  // 2026-10-23 ④：二进制文件改走 VS Code 式占位卡（编辑区显式按钮触发外部
+  // 打开），不再点击即静默拉起系统应用。
   const handleSelectFile = useCallback(
     async (filePath: string) => {
       if (!workspace) return;
       const result = await ipc.file.readForEditor(workspace.id, filePath);
       if (result.kind === 'binary') {
-        try {
-          await ipc.file.openWithDefaultApp(workspace.id, filePath);
-        } catch (e) {
-          alert(ipcErrorMessage(e));
-        }
+        showBinaryNotice(filePath);
         return;
       }
       openFile(filePath, result.content);
     },
-    [workspace, openFile],
+    [workspace, openFile, showBinaryNotice],
   );
 
   // 面板模式（P4）：activeKey 非空 → 侧栏槽整体让给 PanelHost（主区不动）

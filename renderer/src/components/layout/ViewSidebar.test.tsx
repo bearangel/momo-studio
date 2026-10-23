@@ -140,7 +140,13 @@ describe('ViewSidebar handleSelectFile（readForEditor 分流，功能优化 202
       loading: false,
       error: null,
     });
-    useEditorStore.setState({ tabs: [], activeTab: null });
+    useEditorStore.setState({
+      tabs: [],
+      activeTab: null,
+      pendingBinary: null,
+      byWorkspace: {},
+      currentWorkspaceId: 'ws-1',
+    });
   });
 
   it('文本文件 → readForEditor 返回内容，打开编辑器 tab', async () => {
@@ -156,32 +162,16 @@ describe('ViewSidebar handleSelectFile（readForEditor 分流，功能优化 202
     expect(fileApi.openWithDefaultApp).not.toHaveBeenCalled();
   });
 
-  it('二进制文件 → 不开编辑器 tab，自动转系统默认应用打开', async () => {
+  it('二进制文件 → 写 pendingBinary 占位，不建 tab 也不自动拉起外部应用（④ 回归锁）', async () => {
     fileApi.readForEditor.mockResolvedValue({ kind: 'binary' });
     render(<ViewSidebar />);
     fireEvent.click(screen.getByTestId('file-tree-stub'));
     await waitFor(() => {
-      expect(fileApi.openWithDefaultApp).toHaveBeenCalledWith('ws-1', 'a.ts');
+      expect(useEditorStore.getState().pendingBinary).toBe('a.ts');
     });
     expect(useEditorStore.getState().tabs).toEqual([]);
-  });
-
-  it('外部打开失败 → alert 剥净 IPC 包装后的单层中文文案（D1 回归锁）', async () => {
-    const alertMock = vi.spyOn(window, 'alert').mockImplementation(() => {});
-    fileApi.readForEditor.mockResolvedValue({ kind: 'binary' });
-    // 真机实测形态（qa-reports/2026-10-11-file-area-real-acceptance cmd#128）：
-    // Electron 给 ipcMain.handle 的 throw 包两层前缀后 reject
-    fileApi.openWithDefaultApp.mockRejectedValue(
-      new Error(
-        "Error invoking remote method 'file:openWithDefaultApp': Error: 外部应用打开失败: Failed to open path",
-      ),
-    );
-    render(<ViewSidebar />);
-    fireEvent.click(screen.getByTestId('file-tree-stub'));
-    await waitFor(() => {
-      expect(alertMock).toHaveBeenCalledWith('外部应用打开失败: Failed to open path');
-    });
-    alertMock.mockRestore();
+    // 点击本身绝不触发外部程序——显式按钮才开（BinaryFileNotice.test 覆盖）
+    expect(fileApi.openWithDefaultApp).not.toHaveBeenCalled();
   });
 });
 

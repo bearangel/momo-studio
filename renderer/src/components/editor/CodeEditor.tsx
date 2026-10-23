@@ -11,9 +11,10 @@ import { ipc } from '../../ipc/client';
 import { cn } from '../../lib/cn';
 import { EmptyState } from '../ui/EmptyState';
 import { SidebarRestoreButton } from '../layout/SidebarRestoreButton';
+import { BinaryFileNotice } from './BinaryFileNotice';
 
 export function CodeEditor() {
-  const { tabs, activeTab, updateContent, markSaved, setActive, closeTab } =
+  const { tabs, activeTab, pendingBinary, updateContent, markSaved, setActive, closeTab } =
     useEditorStore();
   const workspace = useWorkspaceStore((s) => s.getActive());
   const resolved = useThemeStore((s) => s.resolved);
@@ -53,8 +54,8 @@ export function CodeEditor() {
     [setActive],
   );
 
-  // 无 tab 时显示空状态（v2.2：顶部补恢复按钮行，收起时侧边栏入口不丢失）
-  if (tabs.length === 0) {
+  // 无 tab 且无二进制占位时显示空状态（v2.2：顶部补恢复按钮行，收起时侧边栏入口不丢失）
+  if (tabs.length === 0 && pendingBinary === null) {
     return (
       <div className="flex flex-1 flex-col">
         <div className="flex h-[30px] shrink-0 items-center border-b border-subtle bg-surface-1 px-1.5">
@@ -109,8 +110,13 @@ export function CodeEditor() {
         })}
       </div>
 
-      {/* Monaco 编辑器 */}
-      {activeTabData && (
+      {/* 二进制占位（④ VS Code 式）：替代 Monaco 主体；tab 栏保持可见可点击返回 */}
+      {pendingBinary !== null && workspace && (
+        <BinaryFileNotice workspaceId={workspace.id} filePath={pendingBinary} />
+      )}
+
+      {/* Monaco 编辑器（无二进制占位时渲染） */}
+      {activeTabData && pendingBinary === null && (
         <Editor
           height="100%"
           theme={
