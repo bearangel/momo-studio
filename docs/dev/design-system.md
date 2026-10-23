@@ -51,6 +51,11 @@ import { Star } from 'lucide-react';
 - 命名导入（tree-shaking）；默认 16/1.75，活动栏 20；颜色继承 currentColor
 - **禁止**：emoji 作图标、CDN 图标、背景图图标
 - 纯图标按钮必须 `aria-label`（IconButton 已在类型层面强制）
+- **已批准例外——文件树类型图标**（2026-10-23 方案 A，预览批准稿）：文件/目录的类型
+  图标用 Material Icon Theme 内联彩色 SVG（`file-icons.generated.ts`，devDep
+  `@iconify-json/material-icon-theme` codegen，MIT），组件 `FileTypeIcon` /
+  `FolderTypeIcon`。中间调品牌色亮暗底通用，无 per-theme 变体；白名单变更重跑
+  `pnpm gen:file-icons`。方案 B 的 `--icon-*` token 随之退役（仅历史参考）。
 
 ## 4. 原子组件优先
 
