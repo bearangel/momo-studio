@@ -135,14 +135,15 @@ describe('ResourceCard 状态矩阵（P1 预览 §D 契约锁，13 形态）', (
     expect(screen.queryByRole('button', { name: /删除/ })).toBeNull();
   });
 
-  it('⑦ mcp·custom 禁用态：warning「已禁用」替代 ✓已安装（组⑤）', () => {
+  it('⑦ mcp·custom 停用态：warning「已停用」替代 ✓已安装（组⑤；D5 措辞统一）', () => {
     render(
       <ResourceCard
         item={mkItem({ id: 'custom-mcp-wiki', slug: 'wiki', mcp: { enabled: false } })}
         selected={false} onSelect={noop}
       />,
     );
-    expect(screen.getByText('已禁用')).toBeTruthy();
+    expect(screen.getByText('已停用')).toBeTruthy();
+    expect(screen.queryByText('已禁用')).toBeNull();
     expect(screen.queryByText('已安装')).toBeNull();
   });
 

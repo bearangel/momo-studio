@@ -167,7 +167,7 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
     set({
       installNotice: enabled
         ? `已启用「${name}」`
-        : `已禁用「${name}」，正在运行的连接已断开`,
+        : `已停用「${name}」，正在运行的连接已断开`,
     });
     await get().load();
   },
@@ -180,7 +180,7 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
       set({ error: `启停失败：${(err as Error).message}` });
       return;
     }
-    set({ installNotice: enabled ? `已启用插件「${id}」` : `已禁用插件「${id}」` });
+    set({ installNotice: enabled ? `已启用插件「${id}」` : `已停用插件「${id}」` });
     await get().load();
   },
 

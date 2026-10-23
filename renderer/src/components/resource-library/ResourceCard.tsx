@@ -147,9 +147,9 @@ export function ResourceCard({
           </span>
         )}
         {/* 已安装静态标记：installed 且不可删的 builtin 非 agent 项（随应用分发语义）。
-            mcp DB 行派生项在禁用态改显「已禁用」（warning，组⑤） */}
+            mcp DB 行派生项在停用态改显「已停用」（warning，组⑤；D5 措辞统一） */}
         {item.mcp && !item.mcp.enabled ? (
-          <span className="inline-flex items-center gap-1 text-xs text-status-warning">已禁用</span>
+          <span className="inline-flex items-center gap-1 text-xs text-status-warning">已停用</span>
         ) : (
           item.installed &&
           !item.removable &&

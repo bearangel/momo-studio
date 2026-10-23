@@ -205,12 +205,12 @@ describe('resource.store 资源库重设计（activeType 单态）', () => {
     expect(resourceList).toHaveBeenLastCalledWith({ type: 'skill' });
   });
 
-  it('setMcpEnabled 成功：notice 带名称与禁用语义 + 列表刷新（组⑤）', async () => {
+  it('setMcpEnabled 成功：notice 带名称与停用语义 + 列表刷新（组⑤；D5 措辞统一）', async () => {
     resourceSetMcpEnabled.mockResolvedValue(undefined);
     await useResourceStore.getState().setMcpEnabled('github', false);
     expect(resourceSetMcpEnabled).toHaveBeenCalledWith('github', false);
     const state = useResourceStore.getState();
-    expect(state.installNotice).toContain('已禁用');
+    expect(state.installNotice).toContain('已停用');
     expect(state.installNotice).toContain('github');
     expect(state.error).toBeNull();
     expect(resourceList).toHaveBeenCalled();
@@ -246,7 +246,7 @@ describe('resource.store — 插件启停（P1）', () => {
     const store = useResourceStore.getState();
     await store.setPluginEnabled('cg', 'ws1', false);
     expect(pluginSetEnabled).toHaveBeenCalledWith('cg', 'ws1', false);
-    expect(useResourceStore.getState().installNotice).toContain('已禁用');
+    expect(useResourceStore.getState().installNotice).toContain('已停用');
     expect(useResourceStore.getState().installNotice).toContain('cg');
     expect(resourceList).toHaveBeenCalled();
   });
