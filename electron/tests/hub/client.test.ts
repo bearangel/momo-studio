@@ -11,22 +11,37 @@ class FakeSocket extends EventEmitter implements WebSocketLike {
   close(): void { this.emit('close', 1000, Buffer.from('')); }
   terminate(): void { this.emit('close', 1006, Buffer.from('')); }
 }
+/** 单连接的 hello 脚本：应答内容 + hub 是否随后主动断开 */
+interface HelloScript {
+  /** hello 应答：true 放行 / false 拒绝（版本不匹配） */
+  ok: boolean;
+  /** 应答后 hub 主动断开该连接的延迟（ms）——真实 hub 4402；断开事件晚于客户端重连 */
+  closeAfterMs?: number;
+}
+
 class FakeServer extends EventEmitter {
   sockets: FakeSocket[] = [];
   /** 每条连接的建立时刻（fake clock）——退避节奏断言用 */
   createdAt: number[] = [];
   /** 每条连接的握手请求头——hub 鉴权闸门读的就是它（Bearer deviceToken） */
   headers: Array<Record<string, string>> = [];
+  /** 逐连接 hello 脚本——第 n 条连接用第 n 条（缺省走 replyHello 的统一行为） */
+  helloScripts: HelloScript[] = [];
   /** 回放 hello 应答；mutate 为 true 时回放失败应答 */
   replyHello(fail = false): void {
     this.on('to-server', (raw: string, sock: FakeSocket) => {
       const env = JSON.parse(raw) as { kind: string; method: string; id: string };
-      if (env.kind === 'req' && env.method === RPC.hello) {
-        const res = JSON.stringify(fail
-          ? { v: 1, kind: 'res', id: env.id, method: RPC.hello, ok: false, payload: { code: 'proto_version_mismatch', message: 'hub=2.0.0' } }
-          : { v: 1, kind: 'res', id: env.id, method: RPC.hello, ok: true, payload: { hubId: 'hub', protoVer: PROTOCOL_VERSION, serverTime: 0, onlineNodes: [] } });
-        // 回包经微任务投递——真实 hub 走网络往返，绝不在 send() 同栈内同步回包
-        queueMicrotask(() => sock.emit('message', res));
+      if (env.kind !== 'req' || env.method !== RPC.hello) return;
+      const script = this.helloScripts[this.sockets.indexOf(sock)];
+      const ok = script ? script.ok : !fail;
+      const res = JSON.stringify(ok
+        ? { v: 1, kind: 'res', id: env.id, method: RPC.hello, ok: true, payload: { hubId: 'hub', protoVer: PROTOCOL_VERSION, serverTime: 0, onlineNodes: [] } }
+        : { v: 1, kind: 'res', id: env.id, method: RPC.hello, ok: false, payload: { code: 'proto_version_mismatch', message: 'hub=2.0.0' } });
+      // 回包经微任务投递——真实 hub 走网络往返，绝不在 send() 同栈内同步回包
+      queueMicrotask(() => sock.emit('message', res));
+      // hub 侧主动断开（真实 hub：版本不匹配即 socket.close(4402)）——断开事件可能晚于客户端重连
+      if (script?.closeAfterMs !== undefined) {
+        setTimeout(() => sock.emit('close', 4402, Buffer.from('proto_version_mismatch')), script.closeAfterMs);
       }
     });
   }
@@ -175,6 +190,35 @@ describe('HubClient 心跳与事件', () => {
     expect(errors.some((e) => e?.includes('hub=2.0.0'))).toBe(true);
     client.stop();
   });
+
+  it('hello 被拒 + hub 关闭旧连接 → 恰好重连一次并最终 online', async () => {
+    const { factory, server } = makeFactory();
+    // 第一条连接：hello 被拒，hub 在 150ms 后才断开（真实 hub 4402——断开事件晚于客户端重连）；
+    // 第二条连接起：hello 放行
+    server.helloScripts = [
+      { ok: false, closeAfterMs: 150 },
+      { ok: true },
+    ];
+    server.replyHello();
+    const states: string[] = [];
+    const client = createHubClient({
+      url: 'ws://x/ws', nodeName: 'a', deviceToken: 't',
+      onStateChange: (s) => states.push(s), onEvent: () => undefined, ws: factory,
+      backoffBaseMs: 100, backoffMaxMs: 100,
+    });
+    client.start();
+    await flushMicrotasks();                    // 第一条连接被拒 → 关闭 + 退避重连
+    await vi.advanceTimersByTimeAsync(400);    // t100 第二条连接放行 → online；t150 旧连接的 close 到达
+    await flushMicrotasks();
+    expect(client.state()).toBe('online');
+    // 恰好一次重连——旧连接迟到的 close 不得再调度一条（否则多出一条僵尸连接）
+    expect(server.sockets.length).toBe(2);
+    // online 之后不得回退 connecting（旧连接的 close 不得打断新连接）
+    const onlineAt = states.indexOf('online');
+    expect(onlineAt).toBeGreaterThanOrEqual(0);
+    expect(states.slice(onlineAt)).not.toContain('connecting');
+    client.stop();
+  });
 });
 
 describe('enrollOverHttp', () => {
@@ -186,5 +230,15 @@ describe('enrollOverHttp', () => {
     await expect(enrollOverHttp('http://h', 'tok', 'name', { fetchJson })).rejects.toThrow('加入凭证无效');
     await expect(enrollOverHttp('http://h', 'tok', 'name', { fetchJson })).resolves.toEqual({ nodeId: 'n1', deviceToken: 'dt' });
     await expect(enrollOverHttp('http://h', 'tok', 'name', { fetchJson })).rejects.toThrow('无法连接 hub');
+  });
+
+  it('invalid_name → 节点名非法（1-64 个字符）', async () => {
+    const fetchJson = vi.fn().mockResolvedValueOnce({ error: 'invalid_name' });
+    await expect(enrollOverHttp('http://h', 'tok', 'name', { fetchJson })).rejects.toThrow('节点名非法（1-64 个字符）');
+  });
+
+  it('响应缺字段 → hub 响应异常', async () => {
+    const fetchJson = vi.fn().mockResolvedValueOnce({});
+    await expect(enrollOverHttp('http://h', 'tok', 'name', { fetchJson })).rejects.toThrow('hub 响应异常');
   });
 });

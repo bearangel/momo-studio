@@ -44,12 +44,14 @@ export function createHubClient(opts: HubClientOpts): HubClient {
   const max = opts.backoffMaxMs ?? 30_000;
 
   let state: HubConnectionState = 'disconnected';
+  // 当前连接（身份守卫基准）——过期连接（已被新连接取代）的 close 一律不碰状态/计时器/重连
   let sock: WebSocketLike | null = null;
+  // 当前连接私有计时器（hello 超时/心跳）的清理入口——stop 时立即掐断，不依赖 close 事件
+  let clearCurrentTimers: (() => void) | null = null;
+  // 待触发的重连计时器——stop 时清除（否则停机后仍会重连）
+  let reconnectTimer: NodeJS.Timeout | null = null;
   let attempts = 0;
   let stopped = true;
-  let helloTimer: NodeJS.Timeout | null = null;
-  let heartbeatTimer: NodeJS.Timeout | null = null;
-  let pongSincePing = true;
   let lastError: string | undefined;
 
   const setState = (s: HubConnectionState, err?: string): void => {
@@ -57,16 +59,15 @@ export function createHubClient(opts: HubClientOpts): HubClient {
     opts.onStateChange(s, err);
   };
 
-  const clearTimers = (): void => {
-    if (helloTimer) { clearTimeout(helloTimer); helloTimer = null; }
-    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
-  };
-
   const scheduleReconnect = (): void => {
     if (stopped) return;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     const delay = Math.min(base * 2 ** attempts, max);
     attempts += 1;
-    setTimeout(() => connect(), delay);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, delay);
   };
 
   const connect = (): void => {
@@ -74,6 +75,19 @@ export function createHubClient(opts: HubClientOpts): HubClient {
     setState('connecting');
     const s = wsFactory(opts.url, { authorization: `Bearer ${opts.deviceToken}` });
     sock = s;
+
+    // 本连接私有的计时器与心跳标记——绝不跨连接共享：
+    // 旧连接的 close 不得清掉新连接的 hello 超时/心跳（否则新连接成僵尸连接）。
+    let helloTimer: NodeJS.Timeout | null = null;
+    let heartbeatTimer: NodeJS.Timeout | null = null;
+    let pongSincePing = true;
+
+    const clearSocketTimers = (): void => {
+      if (helloTimer) { clearTimeout(helloTimer); helloTimer = null; }
+      if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    };
+    clearCurrentTimers = clearSocketTimers;
+
     s.on('error', (err) => { lastError = err.message; });
     s.on('open', () => {
       s.send(encodeEnvelope(makeRequest(RPC.hello, { protoVer: PROTOCOL_VERSION, nodeName: opts.nodeName })));
@@ -99,18 +113,26 @@ export function createHubClient(opts: HubClientOpts): HubClient {
           }, heartbeatMs);
           return;
         }
-        // hello 被拒（如版本不匹配）——记错误并按退避重连（hub 可能刚升级）
+        // hello 被拒（如版本不匹配）——记错误 → 关闭被拒连接 → 按退避重连。
+        // 顺序要紧：先摘除当前连接身份（sock = null），其后 hub 发来的 close 事件
+        // 会被身份守卫拦下、不重复调度重连（否则一条被拒连接会连出两条新连接）。
         lastError = (res.payload as { message?: string } | null)?.message ?? 'hello 被拒';
-        clearTimers();
+        clearSocketTimers();
+        if (clearCurrentTimers === clearSocketTimers) clearCurrentTimers = null;
         setState('connecting', lastError);
+        sock = null;
+        s.close();
         scheduleReconnect();
         return;
       }
       if (res.method === RPC.ping && res.ok) pongSincePing = true;
     });
     s.on('close', () => {
-      clearTimers();
-      if (sock === s) sock = null;
+      // 身份守卫：过期连接（已被新连接取代）的 close 不清计时器、不改状态、不调度重连
+      if (sock !== s) return;
+      sock = null;
+      if (clearCurrentTimers === clearSocketTimers) clearCurrentTimers = null;
+      clearSocketTimers();
       if (!stopped) { setState('connecting', lastError); scheduleReconnect(); }
     });
   };
@@ -124,9 +146,12 @@ export function createHubClient(opts: HubClientOpts): HubClient {
     },
     stop(): void {
       stopped = true;
-      clearTimers();
-      sock?.close();
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      clearCurrentTimers?.();
+      clearCurrentTimers = null;
+      const s = sock;
       sock = null;
+      s?.close();
       setState('disconnected');
     },
     state(): HubConnectionState { return state; },
