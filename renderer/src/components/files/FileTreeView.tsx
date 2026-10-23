@@ -1,7 +1,7 @@
 // renderer/src/components/files/FileTreeView.tsx
 // 递归文件树视图：按目录路径加载条目，渲染子目录（可展开/折叠）与文件（可选中）
 import { useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, Folder, FolderOpen } from 'lucide-react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useFileStore } from '../../stores/file.store';
 import { useEditorStore } from '../../stores/editor.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -10,7 +10,7 @@ import { PromptDialog } from '../common/PromptDialog';
 import { cn } from '../../lib/cn';
 import { ipcErrorMessage } from '../../lib/ipc-error';
 import { sortDirEntries } from './sort-entries';
-import { fileIconFor, FOLDER_ICON_CLASS } from './file-icon';
+import { FileTypeIcon, FolderTypeIcon } from './file-icon';
 import { ipc } from '../../ipc/client';
 
 interface Props {
@@ -137,11 +137,7 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
                 ) : (
                   <ChevronRight size={12} strokeWidth={1.75} aria-hidden className="shrink-0" />
                 )}
-                {entryExpanded ? (
-                  <FolderOpen size={14} strokeWidth={1.75} aria-hidden className={cn('shrink-0', FOLDER_ICON_CLASS)} />
-                ) : (
-                  <Folder size={14} strokeWidth={1.75} aria-hidden className={cn('shrink-0', FOLDER_ICON_CLASS)} />
-                )}
+                <FolderTypeIcon name={entry.name} expanded={entryExpanded} />
                 <span className="truncate">{entry.name}</span>
               </button>
               {entryExpanded && (
@@ -155,8 +151,7 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
           );
         }
 
-        // 文件节点：点击时更新选中状态并通知外部；图标按扩展名映射（方案 B）
-        const { icon: FileIcon, className: iconCls } = fileIconFor(entry.name);
+        // 文件节点：点击时更新选中状态并通知外部；图标方案 A（Material 内联 SVG）
         return (
           <button
             key={fullPath}
@@ -174,7 +169,7 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
             )}
             style={{ paddingLeft: depth * 16 + 20 }}
           >
-            <FileIcon size={14} strokeWidth={1.75} aria-hidden className={cn('shrink-0', iconCls)} />
+            <FileTypeIcon name={entry.name} />
             <span className="truncate">{entry.name}</span>
           </button>
         );

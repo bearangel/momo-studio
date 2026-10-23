@@ -320,12 +320,12 @@ describe('FileTree 排序（功能优化 2026-10-11：目录优先 + 自然排�
   });
 });
 
-describe('FileTree 类型图标（2026-10-11 方案 B）', () => {
+describe('FileTree 类型图标（2026-10-23 方案 A：Material 内联 SVG）', () => {
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it('目录树：文件行按扩展名映射着色（.ts→code紫 / .png→violet），目录行琥珀', async () => {
+  it('目录树：文件行按解析规则渲染彩色 SVG，目录行渲染 folder 变体', async () => {
     mockApi.file.list.mockResolvedValue([
       { name: 'src', isDirectory: true, size: 0 },
       { name: 'app.tsx', isDirectory: false, size: 1 },
@@ -334,10 +334,15 @@ describe('FileTree 类型图标（2026-10-11 方案 B）', () => {
     ]);
     render(<FileTree onSelectFile={() => {}} />);
     await screen.findByText('app.tsx');
-    expect(document.querySelector('svg.text-icon-code')).not.toBeNull();
-    expect(document.querySelector('svg.text-status-violet')).not.toBeNull();
-    expect(document.querySelector('svg.text-tertiary')).not.toBeNull(); // 未知扩展中性兜底
-    expect(document.querySelector('svg.text-icon-folder')).not.toBeNull();
+    // app.tsx → typescript 蓝（#0288d1 资产）；png → image；未知扩展 → document 兜底
+    expect(document.querySelector('svg[viewBox="0 0 16 16"] path')).not.toBeNull();
+    const tsRow = screen.getByText('app.tsx').closest('button');
+    expect(tsRow?.querySelector('svg path')?.getAttribute('fill')).toBe('#0288d1');
+    const unknownRow = screen.getByText('data.unknownext').closest('button');
+    expect(unknownRow?.querySelector('svg path')).not.toBeNull();
+    // 目录行：src 命中 folder-src 变体
+    const srcRow = screen.getByText('src').closest('button');
+    expect(srcRow?.querySelectorAll('svg').length).toBeGreaterThanOrEqual(2);
   });
 
   it('搜索结果：命中行与文件树同套类型图标', async () => {
@@ -352,8 +357,11 @@ describe('FileTree 类型图标（2026-10-11 方案 B）', () => {
       await vi.advanceTimersByTimeAsync(200);
     });
     expect(screen.getByText('app.tsx')).toBeInTheDocument();
-    expect(document.querySelector('svg.text-icon-folder')).not.toBeNull();
-    expect(document.querySelector('svg.text-icon-code')).not.toBeNull();
+    // 文件行带内联彩色 SVG；目录行（docs）带 folder 变体 SVG
+    const fileRow = screen.getByText('app.tsx').closest('button');
+    expect(fileRow?.querySelector('svg path')?.getAttribute('fill')).toBe('#0288d1');
+    const dirRow = screen.getByText('docs').closest('div');
+    expect(dirRow?.querySelector('svg path')).not.toBeNull();
   });
 });
 
