@@ -3,7 +3,7 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHubClient, enrollOverHttp, type WsFactory, type WebSocketLike } from '../../src/main/hub/client';
-import { EVT, PROTOCOL_VERSION, RPC, encodeEnvelope, type EventEnvelope } from '../../src/main/hub/protocol';
+import { EVT, PROTOCOL_VERSION, RPC, encodeEnvelope, parseEnvelope, type EventEnvelope } from '../../src/main/hub/protocol';
 
 class FakeSocket extends EventEmitter implements WebSocketLike {
   sent: string[] = [];
@@ -15,6 +15,8 @@ class FakeServer extends EventEmitter {
   sockets: FakeSocket[] = [];
   /** 每条连接的建立时刻（fake clock）——退避节奏断言用 */
   createdAt: number[] = [];
+  /** 每条连接的握手请求头——hub 鉴权闸门读的就是它（Bearer deviceToken） */
+  headers: Array<Record<string, string>> = [];
   /** 回放 hello 应答；mutate 为 true 时回放失败应答 */
   replyHello(fail = false): void {
     this.on('to-server', (raw: string, sock: FakeSocket) => {
@@ -32,13 +34,14 @@ class FakeServer extends EventEmitter {
 
 function makeFactory(): { factory: WsFactory; server: FakeServer } {
   const server = new FakeServer();
-  const factory: WsFactory = () => {
+  const factory: WsFactory = (url: string, headers: Record<string, string>) => {
     const s = new FakeSocket();
     // 上行帧转发给服务端并带上 socket 本体——回包须定位到发起请求的那条连接
     // （同 hub 服务端「会话自持有连接」纪律：绝不按 nodeId 反查注册表）。
     s.on('to-server', (raw: string) => server.emit('to-server', raw, s));
     server.sockets.push(s);
     server.createdAt.push(Date.now());
+    server.headers.push(headers);
     queueMicrotask(() => s.emit('open'));
     return s;
   };
@@ -92,6 +95,13 @@ describe('HubClient 状态机', () => {
     expect(states).toEqual(['connecting']);
     await flushMicrotasks();
     expect(states).toEqual(['connecting', 'online']);
+    // 握手契约：hub 鉴权闸门读 authorization 头，缺失即 4401 拒连
+    expect(server.headers[0]).toEqual({ authorization: 'Bearer t' });
+    // 首帧必须是 hello 请求信封（真 protocol 解析——形状即契约）
+    const hello = parseEnvelope(server.sockets[0]!.sent[0]!);
+    expect(hello?.kind).toBe('req');
+    expect(hello?.method).toBe(RPC.hello);
+    expect(hello?.payload).toEqual({ protoVer: PROTOCOL_VERSION, nodeName: 'a' });
     client.stop();
     expect(client.state()).toBe('disconnected');
   });
