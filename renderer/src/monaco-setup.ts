@@ -41,3 +41,19 @@ self.MonacoEnvironment = {
 
 // 让 @monaco-editor/react 使用本地打包的 monaco 实例，而非从 jsdelivr CDN 拉取。
 loader.config({ monaco });
+
+// 4) 文法预载（2026-10-23 高亮缺失修复）：monaco 0.5x 起基础文法改为按语言懒加载
+//    （registerLanguage 的 loader → 动态 import），应用 boot 不预载则文件首开存在
+//    无色窗口——真机实测 .ts 打开 10s+ 仍全 mtk1（tokenize 正常、仅文法未到），
+//    用户体感「没有高亮」。boot 即对编辑器语言集并发预载（空 model 触发真实注册
+//    链 onLanguageEncountered → LazyLanguageLoader → tokens factory，随后即弃），
+//    恢复 0.4x 时代同步注册的即时着色。预载集须覆盖 CodeEditor detectLanguage
+//    的全部映射目标（扩充映射时同步补这里）。
+const PRELOAD_LANG_IDS = [
+  'typescript', 'javascript', 'json', 'css', 'scss', 'less', 'html', 'xml',
+  'markdown', 'yaml', 'python', 'go', 'rust', 'shell', 'c', 'cpp', 'java',
+  'ini', 'ruby', 'php', 'swift', 'kotlin', 'sql',
+];
+for (const langId of PRELOAD_LANG_IDS) {
+  monaco.editor.createModel('', langId).dispose();
+}
