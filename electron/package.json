@@ -99,6 +99,7 @@
     "js-yaml": "^5.2.2",
     "keytar": "^7.9.0",
     "mammoth": "^1.12.3",
+    "momo-hub-protocol": "github:bearangel/momo-hub#v0.1.0",
     "pdfjs-dist": "^3.11.174",
     "pdfkit": "^0.20.2",
     "pptxgenjs": "^4.0.1",
