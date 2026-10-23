@@ -145,7 +145,7 @@ describe('TypePageShell（已安装单态，P2.3 Task 1）', () => {
     // 前端过滤语义：无 IPC
     expect(listMock).not.toHaveBeenCalled();
     // 列表收窄到 builtin 项
-    expect(document.querySelectorAll('[data-testid^="resource-row-"]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-testid^="resource-card-"]')).toHaveLength(1);
   });
 
   it('加载失败显示重试按钮，点击重新拉取（组③）', async () => {
@@ -427,30 +427,36 @@ describe('TypePageShell - 详情面板拖宽（组③ B8）', () => {
   });
 });
 
-// ── 组④ C11：列表键盘导航（↑/↓/Home/End 行间移焦 + Enter 开详情）──────────
-describe('TypePageShell - 列表键盘导航（组④ C11）', () => {
-  it('列表容器 role=list；↑/↓/Home/End 移动行焦点，Enter 打开详情', () => {
+// ── 组④ C11：列表键盘导航（卡片化 2D 升级——列数按 offsetTop 动态推导）──────
+describe('TypePageShell - 列表键盘导航（组④ C11，卡片化 2D）', () => {
+  it('列表容器为流式网格（定值锁）；↑/↓/Home/End 移动卡片焦点，Enter 打开详情', () => {
     useResourceStore.setState({ items: [itemA, builtinItem] });
     render(
       <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
     );
-    expect(screen.getByRole('list', { name: '资源列表' })).toBeTruthy();
+    const list = screen.getByRole('list', { name: '资源列表' });
+    // P1 预览批准定值：流式网格容器（auto-fill minmax + content-start 防行拉伸）
+    expect(list).toHaveClass('grid', 'gap-2', 'content-start', 'p-3');
+    expect(list.className).toContain('grid-cols-[repeat(auto-fill,minmax(240px,1fr))]');
 
-    const rowA = screen.getByRole('button', { name: '甲，描述甲' });
-    const rowB = screen.getByRole('button', { name: '乙，描述乙' });
-    rowA.focus();
-    expect(document.activeElement).toBe(rowA);
+    const cardA = screen.getByRole('button', { name: '甲，描述甲' });
+    const cardB = screen.getByRole('button', { name: '乙，描述乙' });
+    // jsdom 无布局引擎——注入 offsetTop 模拟窄容器单列网格（1 卡一行），↑↓ 即相邻跳
+    Object.defineProperty(cardA, 'offsetTop', { value: 0, configurable: true });
+    Object.defineProperty(cardB, 'offsetTop', { value: 100, configurable: true });
+    cardA.focus();
+    expect(document.activeElement).toBe(cardA);
 
-    fireEvent.keyDown(rowA, { key: 'ArrowDown' });
-    expect(document.activeElement).toBe(rowB);
-    fireEvent.keyDown(rowB, { key: 'ArrowUp' });
-    expect(document.activeElement).toBe(rowA);
-    fireEvent.keyDown(rowA, { key: 'Home' });
-    expect(document.activeElement).toBe(rowA);
-    fireEvent.keyDown(rowA, { key: 'End' });
-    expect(document.activeElement).toBe(rowB);
+    fireEvent.keyDown(cardA, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(cardB);
+    fireEvent.keyDown(cardB, { key: 'ArrowUp' });
+    expect(document.activeElement).toBe(cardA);
+    fireEvent.keyDown(cardA, { key: 'Home' });
+    expect(document.activeElement).toBe(cardA);
+    fireEvent.keyDown(cardA, { key: 'End' });
+    expect(document.activeElement).toBe(cardB);
 
-    fireEvent.keyDown(rowB, { key: 'Enter' });
+    fireEvent.keyDown(cardB, { key: 'Enter' });
     expect(screen.getByLabelText('关闭详情')).toBeTruthy();
   });
 });

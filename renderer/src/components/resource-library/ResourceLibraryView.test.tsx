@@ -126,7 +126,7 @@ describe('ResourceLibraryView（三页壳）', () => {
 });
 
 // ── 安装链路回归锁（终审 Important-3；P2.3 Task 1 起单态语义）─────────────
-// 链路：ResourceRow 安装按钮 → View.onInstall → store.installResource（真实实现，
+// 链路：ResourceCard 安装按钮 → View.onInstall → store.installResource（真实实现，
 // 经 mock IPC 边界）→ 成功横幅。registry 侧包装流（smithery needsConfig 弹窗 /
 // marketplace agent 配置引导）已随网络获取模式移除——onInstall 只剩本地安装语义。
 describe('安装链路回归锁（单态）', () => {
@@ -136,7 +136,7 @@ describe('安装链路回归锁（单态）', () => {
     });
     render(<ResourceLibraryView />);
     fireEvent.click(
-      within(screen.getByTestId('resource-row-marketplace-agent-g')).getByRole('button', { name: '安装' }),
+      within(screen.getByTestId('resource-card-marketplace-agent-g')).getByRole('button', { name: '安装' }),
     );
     await waitFor(() => expect(resourceInstall).toHaveBeenCalledWith('marketplace-agent-g'));
     // 成功横幅经真实 store 链路渲染（installNotice → shell 横幅）
@@ -154,7 +154,7 @@ describe('安装链路回归锁（单态）', () => {
     });
     render(<ResourceLibraryView />);
     fireEvent.click(
-      within(screen.getByTestId('resource-row-marketplace-mcp-g')).getByRole('button', { name: '安装' }),
+      within(screen.getByTestId('resource-card-marketplace-mcp-g')).getByRole('button', { name: '安装' }),
     );
     await waitFor(() => expect(resourceInstall).toHaveBeenCalledWith('marketplace-mcp-g'));
     await waitFor(() => expect(screen.getByTestId('install-notice')).toBeTruthy());
@@ -178,7 +178,7 @@ describe('DXT/MCPB 导入入口', () => {
 
 // ── 预置启用链路（「启用预置库」菜单已删）───────────────────────────────────
 // AddMenu 入口与 PresetLibraryDialog 已删（与列表行启用路径完全重复）——预置启用
-// 收敛为：列表行「启用」按钮（ResourceRow 按 builtin.agentEnabled 渲染）→
+// 收敛为：列表卡「启用」按钮（ResourceCard 按 builtin.agentEnabled 渲染）→
 // openPresetDialog（builtin-<slug> def 反查）→ EnablePresetDialog。
 describe('预置启用链路（菜单入口已删）', () => {
   it('Agent 页「＋」菜单无「启用预置库」；仅剩新建智能体 / 导入 YAML 两项', () => {
@@ -206,8 +206,8 @@ describe('预置启用链路（菜单入口已删）', () => {
     ]);
     render(<ResourceLibraryView />);
     // mount 首拉是异步——等行渲染再点
-    const row = await screen.findByTestId('resource-row-agent-coder');
-    fireEvent.click(within(row).getByRole('button', { name: '启用' }));
+    const card = await screen.findByTestId('resource-card-agent-coder');
+    fireEvent.click(within(card).getByRole('button', { name: '启用' }));
     // agent.list 返回空 = 未启用 → def undefined → EnablePresetDialog 以 enable 模式挂载
     await screen.findByRole('dialog', { name: '启用预设智能体：程序员' });
     await waitFor(() => expect(agentList).toHaveBeenCalled());

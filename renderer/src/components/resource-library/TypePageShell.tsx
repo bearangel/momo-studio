@@ -1,6 +1,7 @@
 // renderer/src/components/resource-library/TypePageShell.tsx
 // 资源页公共骨架：单行工具栏（标题 + 搜索(flex) + 来源下拉(带计数) + 外部市场 +
-// AddMenu）+ 已安装行列表 + 右侧详情面板（可拖宽，280–560px，宽度持久化）。
+// AddMenu）+ 已安装卡片网格（2026-10-23 卡片化：流式网格 minmax(240px,1fr)，
+// 随详情面板拖宽/窗口缩放自动增减列）+ 右侧详情面板（可拖宽，280–560px，宽度持久化）。
 // 三页同构，type 参数驱动。P2.3 起恒「已安装」单态；2026-10-09 组③：
 // 工具栏改单行（原 chips 在窄窗折行 95px，走查 B10 方案 B）、来源筛选前端化
 // （下拉计数需全量数据）、详情面板 B8 方案 B 拖拽调宽、加载失败加重试按钮。
@@ -20,7 +21,8 @@ import { AddMenu } from './AddMenu';
 import type { AddMenuItem } from './AddMenu';
 import { ExternalMarketplacePopover } from './ExternalMarketplacePopover';
 import { DanglingRefsCard } from './DanglingRefsCard';
-import { ResourceRow, TYPE_ICON } from './ResourceRow';
+import { ResourceCard } from './ResourceCard';
+import { TYPE_ICON } from './type-icons';
 import { ResourceDetail } from './ResourceDetail';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 
@@ -380,21 +382,24 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
               <EmptyState icon={Icon} title={EMPTY_COPY[type]} description="从右上角「＋」选择添加方式" />
             )
           ) : (
-            <div role="list" aria-label="资源列表" className="flex-1 overflow-auto p-4 flex flex-col gap-1.5">
+            // 流式网格（2026-10-23 卡片化 P1 预览批准定值）：minmax(240px,1fr)
+            // auto-fill——列数随容器宽度自动增减；content-start 防 auto 行在
+            // 高容器下被 align-content:stretch 拉伸铺满整屏
+            <div role="list" aria-label="资源列表" className="flex-1 overflow-auto p-3 grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-2 content-start">
               {filteredItems.map((item) => (
-            <ResourceRow
-              key={item.id}
-              item={item}
-              selected={selectedId === item.id}
-              onSelect={setSelectedId}
-              onInstall={onInstall}
-              onDelete={requestDelete}
-              onEnable={onOpenPreset}
-              onEdit={onEditAgent}
-              onConfigure={onOpenPreset}
-              onDisable={onDisableAgent}
-              onTogglePlugin={onTogglePlugin}
-            />
+                <ResourceCard
+                  key={item.id}
+                  item={item}
+                  selected={selectedId === item.id}
+                  onSelect={setSelectedId}
+                  onInstall={onInstall}
+                  onDelete={requestDelete}
+                  onEnable={onOpenPreset}
+                  onEdit={onEditAgent}
+                  onConfigure={onOpenPreset}
+                  onDisable={onDisableAgent}
+                  onTogglePlugin={onTogglePlugin}
+                />
               ))}
             </div>
           )}
