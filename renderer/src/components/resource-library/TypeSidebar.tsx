@@ -3,7 +3,7 @@
 // 插件第四项（spec 2026-10-15 P1）。选中态 = bg-surface-active + accent 文字（设计系统规范）。
 import type { ResourceType } from '../../ipc/types';
 import { cn } from '../../lib/cn';
-import { TYPE_ICON } from './ResourceRow';
+import { TYPE_ICON } from './type-icons';
 
 /** 三类型后接「扩展」分隔组；插件是容纳前三者的更大单元（P1 预览确认稿） */
 const TYPES: Array<{ key: ResourceType; label: string }> = [
