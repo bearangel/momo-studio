@@ -105,7 +105,8 @@
     "pptxgenjs": "^4.0.1",
     "simple-git": "^3.36.0",
     "turndown": "7",
-    "undici": "^6.28.0"
+    "undici": "^6.28.0",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",
@@ -115,6 +116,7 @@
     "@types/node": "^24.0.0",
     "@types/pdfkit": "^0.17.6",
     "@types/turndown": "^5.0.6",
+    "@types/ws": "^8.5.0",
     "@vitest/coverage-v8": "^3.2.7",
     "concurrently": "^8.2.0",
     "electron": "^44.9.0",
