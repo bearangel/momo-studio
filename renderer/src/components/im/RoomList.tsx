@@ -15,7 +15,8 @@
 // 既有语义保留：标题搜索过滤 / 重命名 PromptDialog / 解散 ConfirmDialog /
 // 空态 EmptyState / 切 workspace 清过滤。写面一律直调 ipc + refreshSessionList
 // （不新增 store action，与 rename/delete 先例一致）。
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { DragEvent as ReactDragEvent } from 'react';
 import { useSessionStore } from '../../stores/session.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useThemeStore } from '../../stores/theme.store';
@@ -27,27 +28,24 @@ import { cn } from '../../lib/cn';
 import { deriveSessionType, type SessionType } from '../../lib/session-type';
 import {
   GROUP_COLOR_PALETTE,
+  groupBorderColor,
   groupDotColor,
   groupTintColor,
   type GroupColorTheme,
 } from '../../lib/group-colors';
 import { MoveToGroupDialog } from './MoveToGroupDialog';
+import { BatchSessionContextMenu, GroupContextMenu, SessionContextMenu } from './SessionContextMenu';
 import type { SessionGroupRow, SessionSummary } from '../../ipc/types';
 import {
   Ban,
   ChevronDown,
   ChevronRight,
-  FolderInput,
   FolderPlus,
   ListTodo,
   MessageSquare,
-  Palette,
-  Pencil,
   Pin,
-  PinOff,
   Plus,
   Search,
-  Trash2,
   Users,
   X,
   Zap,
@@ -81,6 +79,52 @@ function ipcErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+// 批量拖影定值（drag-ghost-stack 预览批准）：克隆真实行卡层叠错落
+const GHOST_WIDTH_PX = 204;
+const GHOST_LAYER_OFFSET_PX = 6;
+const GHOST_MAX_LAYERS = 3;
+
+/**
+ * 构造批量拖影节点：最多 3 层克隆的真实会话行卡（每层 +6px,+6px 错落、
+ * 深层透明 0.8/0.6），N>3 时顶层右上 ×N 徽标。源行不在 DOM（如折叠组内）
+ * 的层跳过。节点挂 body 外（setDragImage 栅格化后 dragEnd 移除）。
+ */
+function buildDragGhost(
+  layerSessions: SessionSummary[],
+  total: number,
+  theme: GroupColorTheme,
+): HTMLDivElement {
+  const ghost = document.createElement('div');
+  ghost.style.cssText = `position:fixed;top:-1000px;left:-1000px;width:${GHOST_WIDTH_PX}px;z-index:9999`;
+  layerSessions.slice(-GHOST_MAX_LAYERS).forEach((s, i) => {
+    const src = document.querySelector<HTMLElement>(`[data-session-id="${s.id}"]`);
+    if (!src) return;
+    const wrap = document.createElement('div');
+    wrap.style.cssText =
+      `position:absolute;left:${GHOST_LAYER_OFFSET_PX * i}px;top:${GHOST_LAYER_OFFSET_PX * i}px;` +
+      `width:${GHOST_WIDTH_PX}px;height:36px;border-radius:6px;overflow:hidden;` +
+      'background:rgb(var(--surface-1));border:1px solid rgb(var(--border-subtle));' +
+      'box-shadow:0 4px 14px rgba(0,0,0,.18);' +
+      (i > 0 ? `opacity:${i === 1 ? '0.8' : '0.6'};` : '');
+    const clone = src.cloneNode(true) as HTMLElement;
+    clone.style.cssText = 'width:100%;height:100%;';
+    wrap.appendChild(clone);
+    ghost.appendChild(wrap);
+  });
+  if (total > GHOST_MAX_LAYERS) {
+    const badge = document.createElement('div');
+    badge.textContent = `×${total}`;
+    badge.style.cssText =
+      'position:absolute;right:-9px;top:-9px;padding:2px 6px;border-radius:9px;' +
+      'background:rgb(var(--border-focus));font:600 10px/-1 system-ui;' +
+      `color:${theme === 'dark' ? 'rgb(var(--bg-canvas))' : '#fff'};` +
+      'box-shadow:0 2px 6px rgba(0,0,0,.3);';
+    ghost.appendChild(badge);
+  }
+  document.body.appendChild(ghost);
+  return ghost;
+}
+
 // ─── 会话行 ───────────────────────────────────────────────────────────────────
 
 interface SessionItemProps {
@@ -91,42 +135,67 @@ interface SessionItemProps {
   showGroupBadge: boolean;
   /** 所属组色（查 groups 表；组不可见时 undefined → 不渲染圆点） */
   groupColor: string | undefined;
-  onSelect: () => void;
-  onTogglePin: () => void;
-  onMove: () => void;
-  onRename: () => void;
-  onDissolve: () => void;
+  /** 组内行（整体卡片内）水平边距 4px；独立行（置顶/未分组/搜索）6px（预览定值） */
+  inGroupCard: boolean;
+  /** 多选选中态（方案 A：surface-active 底 + 左 2px accent 竖条） */
+  selected: boolean;
+  /** 行点击（含修饰键）：RoomList 内判定 激活/范围选/追加 */
+  onRowClick: (mods: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean }) => void;
+  /** 右键 → RoomList 开会话菜单（坐标取弹出点） */
+  onContextMenu: (e: { clientX: number; clientY: number }) => void;
+  onRowDragStart: (e: { dataTransfer: DataTransfer | null }) => void;
+  onRowDragEnd: () => void;
 }
 
-/** 会话行：28px 紧凑密度 + 类型图标 14px + 工具条钮 12px + Pin 10px + 圆点 6px（预览 A 定值） */
+/** 会话行（2026-10-22 右键菜单改造 · 预览批准定值）：36px 卡片行
+ *  （h-9 · mx-1.5/my-0.5 · rounded-md），hover/active 整行圆角底色高亮；
+ *  无 hover 工具条——全部操作走右键菜单；类型图标 14px + Pin 10px 徽标 +
+ *  圆点 6px 保留（v2.2 图标极简约束）。多选改造：selected 态 + 可拖拽。 */
 function SessionItem({
   session,
   active,
   theme,
   showGroupBadge,
   groupColor,
-  onSelect,
-  onTogglePin,
-  onMove,
-  onRename,
-  onDissolve,
+  inGroupCard,
+  selected,
+  onRowClick,
+  onContextMenu,
+  onRowDragStart,
+  onRowDragEnd,
 }: SessionItemProps) {
   const { Icon, label } = TYPE_ICON[deriveSessionType(session)];
   const pinned = session.pinnedAt != null;
   return (
-    <div className="group/row relative">
+    <div className={cn('my-0.5', inGroupCard ? 'mx-1' : 'mx-1.5')}>
       <button
         type="button"
-        onClick={onSelect}
+        draggable
+        onDragStart={onRowDragStart}
+        onDragEnd={onRowDragEnd}
+        data-session-id={session.id}
+        data-selected={selected || undefined}
+        onClick={(e) =>
+          onRowClick({ shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey })
+        }
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onContextMenu(e);
+        }}
         className={cn(
-          'w-full h-7 text-left pl-3 pr-2 text-sm transition-colors border-l-2 flex items-center gap-2',
+          'relative w-full h-9 rounded-md text-left px-2.5 text-[13px] transition-colors flex items-center gap-2',
           active
-            ? 'bg-surface-active border-transparent text-accent-600 dark:text-accent-300'
-            : 'border-transparent text-secondary hover:bg-surface-3',
-          // 置顶行右侧让位恒显 Pin：8 + 10 + 8 = 26px（预览 A 定值）
-          pinned && 'pr-[26px]',
+            ? 'bg-surface-active text-accent-600 dark:text-accent-300'
+            : cn('text-secondary hover:bg-surface-3', selected && 'bg-surface-active'),
         )}
       >
+        {selected && (
+          <span
+            data-testid="sel-bar"
+            aria-hidden
+            className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-accent-500"
+          />
+        )}
         <span
           role="img"
           aria-label={label}
@@ -160,66 +229,6 @@ function SessionItem({
           </span>
         )}
       </button>
-      {/* hover 工具条：四裸钮无独立底色（继承行 hover 底色）；置顶行左移让位恒显 Pin */}
-      <span
-        className={cn(
-          'absolute top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 transition-opacity group-hover/row:opacity-100',
-          pinned ? 'right-[26px]' : 'right-2',
-        )}
-      >
-        <button
-          type="button"
-          title={pinned ? '取消置顶' : '置顶'}
-          aria-label={pinned ? '取消置顶' : '置顶'}
-          onClick={(e) => {
-            e.stopPropagation();
-            onTogglePin();
-          }}
-          className="text-tertiary hover:text-primary"
-        >
-          {pinned ? (
-            <PinOff size={12} strokeWidth={1.75} aria-hidden />
-          ) : (
-            <Pin size={12} strokeWidth={1.75} aria-hidden />
-          )}
-        </button>
-        <button
-          type="button"
-          title="移动到分组"
-          aria-label="移动到分组"
-          onClick={(e) => {
-            e.stopPropagation();
-            onMove();
-          }}
-          className="text-tertiary hover:text-primary"
-        >
-          <FolderInput size={12} strokeWidth={1.75} aria-hidden />
-        </button>
-        <button
-          type="button"
-          title="重命名"
-          aria-label="重命名"
-          onClick={(e) => {
-            e.stopPropagation();
-            onRename();
-          }}
-          className="text-tertiary hover:text-primary"
-        >
-          <Pencil size={12} strokeWidth={1.75} aria-hidden />
-        </button>
-        <button
-          type="button"
-          title="解散"
-          aria-label="解散"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDissolve();
-          }}
-          className="text-tertiary hover:text-status-error"
-        >
-          <Trash2 size={12} strokeWidth={1.75} aria-hidden />
-        </button>
-      </span>
     </div>
   );
 }
@@ -231,22 +240,31 @@ interface GroupHeaderProps {
   count: number;
   collapsed: boolean;
   theme: GroupColorTheme;
+  /** 展开态组头在整体卡片内（tint 顶到卡片内缘，无独立边距/圆角）；折叠态为独立 tint 圆角条 */
+  inCard: boolean;
   onToggleCollapsed: () => void;
-  onPalette: () => void;
-  onRename: () => void;
-  onDelete: () => void;
+  /** 右键 → RoomList 开组头菜单 */
+  onContextMenu: (e: { clientX: number; clientY: number }) => void;
+  /** 折叠态作拖拽放置目标（展开态目标为外层组卡） */
+  dropHandlers?: {
+    onDragOver: (e: ReactDragEvent<HTMLElement>) => void;
+    onDragLeave: (e: ReactDragEvent<HTMLElement>) => void;
+    onDrop: (e: ReactDragEvent<HTMLElement>) => void;
+  };
+  dropHot?: boolean;
 }
 
-/** 组头：整行组色 tint（hover 不加深，仅浮现操作钮）+ 折叠 chevron + 名称 + 计数 */
+/** 组头：tint 底色 + 折叠 chevron + 名称 + 计数；hover 操作钮已移除——操作走右键菜单 */
 function GroupHeader({
   group,
   count,
   collapsed,
   theme,
+  inCard,
   onToggleCollapsed,
-  onPalette,
-  onRename,
-  onDelete,
+  onContextMenu,
+  dropHandlers,
+  dropHot = false,
 }: GroupHeaderProps) {
   return (
     <div
@@ -261,8 +279,21 @@ function GroupHeader({
           onToggleCollapsed();
         }
       }}
-      className="group/hdr relative flex items-center gap-1.5 h-7 px-3 cursor-pointer select-none"
-      style={{ backgroundColor: groupTintColor(group.color, theme) }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onContextMenu(e);
+      }}
+      {...(dropHandlers ?? {})}
+      className={cn(
+        'flex items-center gap-1.5 h-7 px-2.5 cursor-pointer select-none',
+        !inCard && 'mx-1.5 my-0.5 rounded-md',
+      )}
+      style={{
+        backgroundColor: groupTintColor(group.color, theme),
+        ...(dropHot
+          ? { outline: `2px solid ${groupDotColor(group.color, theme)}`, outlineOffset: '-2px' }
+          : {}),
+      }}
     >
       {collapsed ? (
         <ChevronRight size={12} strokeWidth={1.75} className="text-tertiary shrink-0" aria-hidden />
@@ -271,45 +302,6 @@ function GroupHeader({
       )}
       <span className="text-xs font-medium text-secondary truncate">{group.name}</span>
       <span className="text-xs text-tertiary shrink-0">({count})</span>
-      {/* 操作条：Palette·Pencil·Trash2 裸钮，直接落在 tint 上（无独立底色） */}
-      <span className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 transition-opacity group-hover/hdr:opacity-100">
-        <button
-          type="button"
-          title="设置组色"
-          aria-label="设置组色"
-          onClick={(e) => {
-            e.stopPropagation();
-            onPalette();
-          }}
-          className="text-tertiary hover:text-primary"
-        >
-          <Palette size={12} strokeWidth={1.75} aria-hidden />
-        </button>
-        <button
-          type="button"
-          title="重命名分组"
-          aria-label="重命名分组"
-          onClick={(e) => {
-            e.stopPropagation();
-            onRename();
-          }}
-          className="text-tertiary hover:text-primary"
-        >
-          <Pencil size={12} strokeWidth={1.75} aria-hidden />
-        </button>
-        <button
-          type="button"
-          title="删除分组"
-          aria-label="删除分组"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          className="text-tertiary hover:text-status-error"
-        >
-          <Trash2 size={12} strokeWidth={1.75} aria-hidden />
-        </button>
-      </span>
     </div>
   );
 }
@@ -420,13 +412,34 @@ export function RoomList() {
   // 分组 / 折叠 / 弹窗态（Task 7）
   const [groups, setGroups] = useState<SessionGroupRow[]>([]);
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
-  const [moving, setMoving] = useState<SessionSummary | null>(null);
+  const [moving, setMoving] = useState<SessionSummary[] | null>(null);
   const [creatingGroup, setCreatingGroup] = useState(false);
   const [renamingGroup, setRenamingGroup] = useState<SessionGroupRow | null>(null);
   const [deletingGroup, setDeletingGroup] = useState<{ group: SessionGroupRow; count: number } | null>(
     null,
   );
   const [paletteFor, setPaletteFor] = useState<string | null>(null);
+  // 右键菜单态：会话行/组头两类目标 + 弹出坐标（动作复用既有 handler）
+  const [menu, setMenu] = useState<
+    | { kind: 'session'; session: SessionSummary; x: number; y: number }
+    | { kind: 'group'; group: SessionGroupRow; x: number; y: number }
+    | { kind: 'batch'; sessions: SessionSummary[]; x: number; y: number }
+    | null
+  >(null);
+  // 多选（2026-10-22 多选+拖拽改造）：selectedIds + 范围选锚点；瞬态不落库
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
+  const [anchorId, setAnchorId] = useState<string | null>(null);
+  const [dissolvingBatch, setDissolvingBatch] = useState<SessionSummary[] | null>(null);
+  // DnD：拖拽中标记（控制移出条浮现/目标高亮）+ 当前拖拽 id 集（drop 可靠源）
+  const [dragging, setDragging] = useState(false);
+  const [draggingIds, setDraggingIds] = useState<string[]>([]);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const dragGhostRef = useRef<HTMLDivElement | null>(null);
+
+  const clearSelection = useCallback((): void => {
+    setSelectedIds(new Set());
+    setAnchorId(null);
+  }, []);
 
   const loadGroups = useCallback(async (workspaceId: string | null): Promise<void> => {
     if (!workspaceId) return;
@@ -439,11 +452,12 @@ export function RoomList() {
   }, []);
 
   useEffect(() => {
-    // 切 workspace：重拉分组 + 恢复该工作空间的折叠态；过滤清空（spec §6）
+    // 切 workspace：重拉分组 + 恢复该工作空间的折叠态；过滤与多选清空（spec §6）
     setFilter('');
+    clearSelection();
     setCollapsedIds(readCollapsed(activeWorkspaceId));
     void loadGroups(activeWorkspaceId);
-  }, [activeWorkspaceId, loadGroups]);
+  }, [activeWorkspaceId, loadGroups, clearSelection]);
 
   useEffect(() => {
     // 切换 workspace 时按当前 workspace 过滤会话；workspace 尚未就绪时
@@ -535,6 +549,110 @@ export function RoomList() {
       .catch((err: unknown) => alert(`设置组色失败：${ipcErrorMessage(err)}`));
   };
 
+  // Escape 清空多选（菜单开着时让位给菜单自身的 Escape）
+  useEffect(() => {
+    if (selectedIds.size === 0) return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape' && menu == null) clearSelection();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedIds.size, menu, clearSelection]);
+
+  /** 批量解散：逐个 delete，首个失败 alert 并中断；收尾刷新 + 清选择 */
+  const handleBatchDissolve = async (): Promise<void> => {
+    const batch = dissolvingBatch;
+    setDissolvingBatch(null);
+    if (!batch) return;
+    for (const s of batch) {
+      try {
+        await ipc.session.delete(s.id);
+      } catch (err) {
+        alert(`解散失败：${ipcErrorMessage(err)}`);
+        break;
+      }
+    }
+    refreshSessionList();
+    clearSelection();
+  };
+
+  const handleRowDragStart = (session: SessionSummary, e: { dataTransfer: DataTransfer | null }): void => {
+    // 拖选中行=拖整批；拖非选中行=只拖该行（选择重置）
+    const ids = selectedIds.has(session.id) ? [...selectedIds] : [session.id];
+    if (!selectedIds.has(session.id)) clearSelection();
+    setDraggingIds(ids);
+    setDragging(true);
+    const dt = e.dataTransfer;
+    if (dt) {
+      try {
+        dt.setData('text/plain', JSON.stringify(ids));
+        dt.effectAllowed = 'move';
+        if (ids.length > 1) {
+          dragGhostRef.current = buildDragGhost(
+            sessions.filter((s) => selectedIds.has(s.id) || s.id === session.id),
+            ids.length,
+            theme,
+          );
+          dt.setDragImage(dragGhostRef.current, 100, 18);
+        }
+      } catch {
+        // dataTransfer 不可用（异常环境）：拖拽降级——内部状态仍可完成 drop
+      }
+    }
+  };
+
+  const handleRowDragEnd = (): void => {
+    setDragging(false);
+    setDraggingIds([]);
+    setDropTarget(null);
+    if (dragGhostRef.current) {
+      dragGhostRef.current.remove();
+      dragGhostRef.current = null;
+    }
+  };
+
+  /** drop 统一入口：目标组 id（null=移出分组）；draggingIds 优先，dataTransfer 兜底 */
+  const handleDrop = async (
+    e: { preventDefault: () => void; dataTransfer: DataTransfer | null },
+    targetGroupId: string | null,
+  ): Promise<void> => {
+    e.preventDefault();
+    let ids = draggingIds;
+    if (ids.length === 0) {
+      const raw = e.dataTransfer?.getData('text/plain') ?? '';
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        ids = Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
+      } catch {
+        ids = [];
+      }
+    }
+    handleRowDragEnd();
+    for (const id of ids) {
+      try {
+        await ipc.session.moveToGroup(id, targetGroupId);
+      } catch (err) {
+        alert(`移动失败：${ipcErrorMessage(err)}`);
+        break;
+      }
+    }
+    refreshSessionList();
+    clearSelection();
+  };
+
+  const dropHandlers = (key: string, targetGroupId: string | null) => ({
+    onDragOver: (e: ReactDragEvent<HTMLElement>): void => {
+      e.preventDefault();
+      setDropTarget(key);
+    },
+    onDragLeave: (e: ReactDragEvent<HTMLElement>): void => {
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropTarget(null);
+    },
+    onDrop: (e: ReactDragEvent<HTMLElement>): void => {
+      void handleDrop(e, targetGroupId);
+    },
+  });
+
   if (loading && sessions.length === 0) {
     return (
       <div className="w-full flex-1 min-h-0 bg-surface-1 flex items-center justify-center">
@@ -576,7 +694,44 @@ export function RoomList() {
   }
   const colorByGroupId = new Map(groups.map((g) => [g.id, g.color] as const));
 
-  const renderSessionItem = (session: SessionSummary, showGroupBadge: boolean) => (
+  // 多选范围序：非过滤态 = 置顶区 → 各组（组序）→ 未分组（DOM 顺序）；过滤态 = 拍平序
+  const flatOrder =
+    q === ''
+      ? [...pinned, ...groups.flatMap((g) => byGroup.get(g.id) ?? []), ...ungrouped].map((s) => s.id)
+      : visibleSessions.map((s) => s.id);
+
+  const handleRowClick = (
+    session: SessionSummary,
+    mods: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean },
+  ): void => {
+    if (mods.shiftKey) {
+      const indexById = new Map(flatOrder.map((id, i) => [id, i] as const));
+      const targetIdx = indexById.get(session.id);
+      if (targetIdx == null) return;
+      const anchorIdx = anchorId != null ? indexById.get(anchorId) : undefined;
+      const from = anchorIdx ?? targetIdx;
+      const [lo, hi] = from <= targetIdx ? [from, targetIdx] : [targetIdx, from];
+      setSelectedIds(new Set(flatOrder.slice(lo, hi + 1)));
+      if (anchorIdx == null) setAnchorId(session.id);
+      return;
+    }
+    if (mods.metaKey || mods.ctrlKey) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(session.id)) next.delete(session.id);
+        else next.add(session.id);
+        return next;
+      });
+      setAnchorId(session.id);
+      return;
+    }
+    clearSelection();
+    // 普通点击同时立锚点（后续 Shift 范围选的起点）
+    setAnchorId(session.id);
+    void selectSession(session.id);
+  };
+
+  const renderSessionItem = (session: SessionSummary, showGroupBadge: boolean, inGroupCard = false) => (
     <SessionItem
       key={session.id}
       session={session}
@@ -584,11 +739,25 @@ export function RoomList() {
       theme={theme}
       showGroupBadge={showGroupBadge}
       groupColor={session.groupId != null ? colorByGroupId.get(session.groupId) : undefined}
-      onSelect={() => void selectSession(session.id)}
-      onTogglePin={() => handleTogglePin(session)}
-      onMove={() => setMoving(session)}
-      onRename={() => setRenaming({ sessionId: session.id, oldTitle: session.title })}
-      onDissolve={() => setDissolving({ sessionId: session.id, title: session.title })}
+      inGroupCard={inGroupCard}
+      selected={selectedIds.has(session.id)}
+      onRowClick={(mods) => handleRowClick(session, mods)}
+      onContextMenu={(e) => {
+        // 集内>1 → 批量菜单；集外 → 清空选择开单行菜单（桌面惯例）
+        if (selectedIds.has(session.id) && selectedIds.size > 1) {
+          setMenu({
+            kind: 'batch',
+            sessions: sessions.filter((s) => selectedIds.has(s.id)),
+            x: e.clientX,
+            y: e.clientY,
+          });
+          return;
+        }
+        if (selectedIds.size > 0) clearSelection();
+        setMenu({ kind: 'session', session, x: e.clientX, y: e.clientY });
+      }}
+      onRowDragStart={(e) => handleRowDragStart(session, e)}
+      onRowDragEnd={handleRowDragEnd}
     />
   );
 
@@ -598,7 +767,10 @@ export function RoomList() {
         <Search size={14} strokeWidth={1.75} className="text-tertiary shrink-0" aria-hidden />
         <input
           value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+          onChange={(e) => {
+            setFilter(e.target.value);
+            clearSelection();
+          }}
           placeholder="搜索会话"
           aria-label="搜索会话"
           className="flex-1 min-w-0 bg-transparent text-sm text-primary placeholder:text-tertiary outline-none"
@@ -630,26 +802,70 @@ export function RoomList() {
         </div>
       ) : q !== '' ? (
         // 搜索拍平态：无组头无置顶区结构，平铺保留类型图标 + Pin + 圆点 + 组名后缀
-        <div className="flex-1 overflow-auto">
+        <div
+          className="flex-1 overflow-auto"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) clearSelection();
+          }}
+        >
           {visibleSessions.map((session) => renderSessionItem(session, true))}
         </div>
       ) : (
-        <div className="flex-1 overflow-auto">
+        <div
+          className="flex-1 overflow-auto"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) clearSelection();
+          }}
+        >
           {pinned.map((session) => renderSessionItem(session, true))}
           {groups.map((group, index) => {
             const items = byGroup.get(group.id) ?? [];
             const collapsed = collapsedIds.has(group.id);
+            const openGroupMenu = (e: { clientX: number; clientY: number }): void =>
+              setMenu({ kind: 'group', group, x: e.clientX, y: e.clientY });
+            if (collapsed) {
+              // 折叠态：组头为独立 tint 圆角条（无边框包裹——无内容可包），兼作拖拽放置目标
+              return (
+                <GroupHeader
+                  key={group.id}
+                  group={group}
+                  count={items.length}
+                  collapsed={collapsed}
+                  theme={theme}
+                  inCard={false}
+                  onToggleCollapsed={() => toggleCollapsed(group.id)}
+                  onContextMenu={openGroupMenu}
+                  dropHandlers={dropHandlers(`group:${group.id}`, group.id)}
+                  dropHot={dropTarget === `group:${group.id}`}
+                />
+              );
+            }
+            // 展开态（预览批准定值）：组头 + 组内会话包在同一组色 1px 边框整体卡片
+            // （rounded-lg 单圆角 · overflow-hidden 让 tint 顶到卡片内缘）
             return (
-              <div key={group.id}>
+              <div
+                key={group.id}
+                data-testid="session-group-card"
+                {...dropHandlers(`group:${group.id}`, group.id)}
+                className="mx-1.5 my-0.5 rounded-lg border overflow-hidden"
+                style={{
+                  borderColor: groupBorderColor(group.color, theme),
+                  ...(dropTarget === `group:${group.id}`
+                    ? {
+                        outline: `2px solid ${groupDotColor(group.color, theme)}`,
+                        outlineOffset: '-2px',
+                      }
+                    : {}),
+                }}
+              >
                 <GroupHeader
                   group={group}
                   count={items.length}
                   collapsed={collapsed}
                   theme={theme}
+                  inCard={true}
                   onToggleCollapsed={() => toggleCollapsed(group.id)}
-                  onPalette={() => setPaletteFor(paletteFor === group.id ? null : group.id)}
-                  onRename={() => setRenamingGroup(group)}
-                  onDelete={() => setDeletingGroup({ group, count: items.length })}
+                  onContextMenu={openGroupMenu}
                 />
                 {paletteFor === group.id && (
                   <GroupPalette
@@ -659,11 +875,26 @@ export function RoomList() {
                     onPick={(color) => applyGroupColor(group.id, color)}
                   />
                 )}
-                {!collapsed && items.map((session) => renderSessionItem(session, false))}
+                {items.map((session) => renderSessionItem(session, false, true))}
               </div>
             );
           })}
           {ungrouped.map((session) => renderSessionItem(session, false))}
+          {/* 移出分组放置条：仅拖拽期间浮现（防误放，预览批准定值） */}
+          {dragging && q === '' && (
+            <div
+              data-testid="ungroup-drop-zone"
+              {...dropHandlers('ungroup', null)}
+              className={cn(
+                'flex items-center justify-center h-9 mx-1.5 mt-1.5 rounded-md border-[1.5px] border-dashed text-xs select-none',
+                dropTarget === 'ungroup'
+                  ? 'border-focus border-solid bg-surface-active text-accent-600 dark:text-accent-300'
+                  : 'border-strong text-tertiary',
+              )}
+            >
+              拖到此处移出分组
+            </div>
+          )}
         </div>
       )}
       {renaming && (
@@ -685,7 +916,7 @@ export function RoomList() {
       )}
       {moving && activeWorkspaceId != null && (
         <MoveToGroupDialog
-          session={moving}
+          sessions={moving}
           workspaceId={activeWorkspaceId}
           onClose={() => {
             setMoving(null);
@@ -719,6 +950,52 @@ export function RoomList() {
           confirmLabel="删除"
           onConfirm={() => void handleDeleteGroup(deletingGroup.group.id)}
           onClose={() => setDeletingGroup(null)}
+        />
+      )}
+      {menu?.kind === 'session' && (
+        <SessionContextMenu
+          x={menu.x}
+          y={menu.y}
+          pinned={menu.session.pinnedAt != null}
+          onTogglePin={() => handleTogglePin(menu.session)}
+          onMove={() => setMoving([menu.session])}
+          onRename={() => setRenaming({ sessionId: menu.session.id, oldTitle: menu.session.title })}
+          onDissolve={() => setDissolving({ sessionId: menu.session.id, title: menu.session.title })}
+          onClose={() => setMenu(null)}
+        />
+      )}
+      {menu?.kind === 'group' && (
+        <GroupContextMenu
+          x={menu.x}
+          y={menu.y}
+          onPalette={() => setPaletteFor(paletteFor === menu.group.id ? null : menu.group.id)}
+          onRename={() => setRenamingGroup(menu.group)}
+          onDelete={() =>
+            setDeletingGroup({
+              group: menu.group,
+              count: byGroup.get(menu.group.id)?.length ?? 0,
+            })
+          }
+          onClose={() => setMenu(null)}
+        />
+      )}
+      {menu?.kind === 'batch' && (
+        <BatchSessionContextMenu
+          x={menu.x}
+          y={menu.y}
+          count={menu.sessions.length}
+          onMove={() => setMoving(menu.sessions)}
+          onDissolve={() => setDissolvingBatch(menu.sessions)}
+          onClose={() => setMenu(null)}
+        />
+      )}
+      {dissolvingBatch && (
+        <ConfirmDialog
+          title="解散会话"
+          message={`确定解散 ${dissolvingBatch.length} 个会话？\n所有成员将被移除。`}
+          confirmLabel="解散"
+          onConfirm={() => void handleBatchDissolve()}
+          onClose={() => setDissolvingBatch(null)}
         />
       )}
     </div>

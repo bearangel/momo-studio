@@ -57,11 +57,11 @@ function makeSession(overrides: Partial<SessionSummary> & { id: string }): Sessi
 }
 
 /** 默认场景：会话已属 g1（一组），可选 g2（二组） */
-function setup(groups: SessionGroupRow[], session?: SessionSummary): void {
+function setup(groups: SessionGroupRow[], sessions?: SessionSummary[]): void {
   groupList.mockResolvedValue(groups);
   render(
     <MoveToGroupDialog
-      session={session ?? makeSession({ id: 's1', title: '会话A', groupId: 'g1', groupName: '一组' })}
+      sessions={sessions ?? [makeSession({ id: 's1', title: '会话A', groupId: 'g1', groupName: '一组' })]}
       workspaceId="ws-1"
       onClose={() => {}}
     />,
@@ -101,7 +101,7 @@ describe('MoveToGroupDialog — 渲染与预选', () => {
   });
 
   it('未分组会话（groupId NULL）预选「未分组」', async () => {
-    setup([makeGroup({ id: 'g1', name: '一组' })], makeSession({ id: 's1', title: '会话A' }));
+    setup([makeGroup({ id: 'g1', name: '一组' })], [makeSession({ id: 's1', title: '会话A' })]);
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByRole('radio', { name: '未分组' })).toBeChecked();
   });
@@ -176,12 +176,56 @@ describe('MoveToGroupDialog — 错误路径', () => {
     groupList.mockRejectedValue(new Error('db locked'));
     render(
       <MoveToGroupDialog
-        session={makeSession({ id: 's1', title: '会话A' })}
+        sessions={[makeSession({ id: 's1', title: '会话A' })]}
         workspaceId="ws-1"
         onClose={() => {}}
       />,
     );
     expect(await screen.findByText('db locked')).toBeInTheDocument();
     expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+});
+
+describe('MoveToGroupDialog — 批量路径（多选 >1）', () => {
+  it('标题为「移动 N 个会话到分组」；首个会话所属组预选', async () => {
+    setup(
+      [makeGroup({ id: 'g1', name: '一组' }), makeGroup({ id: 'g2', name: '二组' })],
+      [
+        makeSession({ id: 's1', title: '甲', groupId: 'g1' }),
+        makeSession({ id: 's2', title: '乙' }),
+      ],
+    );
+    const dialog = await screen.findByRole('dialog', { name: '移动 2 个会话到分组' });
+    expect(within(dialog).getByRole('radio', { name: '一组' })).toBeChecked();
+  });
+
+  it('选既有组提交 → 整批逐个 moveToGroup + refreshSessionList', async () => {
+    setup(
+      [makeGroup({ id: 'g1', name: '一组' }), makeGroup({ id: 'g2', name: '二组' })],
+      [makeSession({ id: 's1', title: '甲' }), makeSession({ id: 's2', title: '乙' })],
+    );
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: '二组' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: '移动' }));
+
+    await waitFor(() => expect(sessionMoveToGroup).toHaveBeenCalledWith('s1', 'g2'));
+    await waitFor(() => expect(sessionMoveToGroup).toHaveBeenCalledWith('s2', 'g2'));
+    expect(sessionMoveToGroup).toHaveBeenCalledTimes(2);
+    expect(sessionState.refreshSessionList).toHaveBeenCalled();
+  });
+
+  it('内联新名提交 → create 一次 + 整批移入新组', async () => {
+    setup(
+      [makeGroup({ id: 'g1', name: '一组' })],
+      [makeSession({ id: 's1', title: '甲' }), makeSession({ id: 's2', title: '乙' })],
+    );
+    groupCreate.mockResolvedValue(makeGroup({ id: 'g9', name: '新组' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByRole('textbox'), { target: { value: '新组' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: '移动' }));
+
+    await waitFor(() => expect(groupCreate).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(sessionMoveToGroup).toHaveBeenCalledWith('s1', 'g9'));
+    await waitFor(() => expect(sessionMoveToGroup).toHaveBeenCalledWith('s2', 'g9'));
   });
 });

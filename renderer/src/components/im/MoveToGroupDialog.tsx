@@ -13,7 +13,8 @@ import { Input } from '../ui/Input';
 import type { SessionGroupRow, SessionSummary } from '../../ipc/types';
 
 interface Props {
-  session: SessionSummary;
+  /** 本次移动的会话集（单个右键路径传 [session]；多选批量路径传选中集） */
+  sessions: SessionSummary[];
   workspaceId: string;
   onClose: () => void;
 }
@@ -21,10 +22,10 @@ interface Props {
 /** radio 哨兵值：目标「未分组」（moveToGroup(null)） */
 const UNGROUPED = '__ungrouped__';
 
-export function MoveToGroupDialog({ session, workspaceId, onClose }: Props) {
+export function MoveToGroupDialog({ sessions, workspaceId, onClose }: Props) {
   const refreshSessionList = useSessionStore((s) => s.refreshSessionList);
   const [groups, setGroups] = useState<SessionGroupRow[]>([]);
-  const [selected, setSelected] = useState<string>(session.groupId ?? UNGROUPED);
+  const [selected, setSelected] = useState<string>(sessions[0]?.groupId ?? UNGROUPED);
   const [newName, setNewName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +45,9 @@ export function MoveToGroupDialog({ session, workspaceId, onClose }: Props) {
         const created = await ipc.sessionGroup.create(workspaceId, name);
         target = created.id;
       }
-      await ipc.session.moveToGroup(session.id, target);
+      for (const s of sessions) {
+        await ipc.session.moveToGroup(s.id, target);
+      }
       refreshSessionList();
       onClose();
     } catch (err) {
@@ -54,8 +57,13 @@ export function MoveToGroupDialog({ session, workspaceId, onClose }: Props) {
     }
   };
 
+  const title =
+    sessions.length === 1
+      ? `移动「${sessions[0]!.title}」到分组`
+      : `移动 ${sessions.length} 个会话到分组`;
+
   return (
-    <Dialog open onClose={onClose} title={`移动「${session.title}」到分组`} width={360}>
+    <Dialog open onClose={onClose} title={title} width={360}>
       <form onSubmit={handleSubmit} className="flex flex-col gap-3">
         <fieldset className="flex flex-col gap-1.5">
           {groups.map((g) => (

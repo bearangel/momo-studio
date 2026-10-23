@@ -184,13 +184,18 @@ describe('RoomList — 列表项不渲染图标（v2.2 移除）', () => {
     expect(screen.getByText('只读会话')).toBeInTheDocument();
   });
 
-  it('悬停操作按钮保留（重命名 / 解散）', () => {
+  it('右键菜单承载操作（原 hover 工具条已移除）', () => {
     sessionState.sessions = [
       makeSession({ id: 's1', title: '会话A', members: [makeMember({ instanceId: 'i1' })] }),
     ];
     render(<RoomList />);
-    expect(screen.getByLabelText('重命名')).toBeInTheDocument();
-    expect(screen.getByLabelText('解散')).toBeInTheDocument();
+    expect(screen.queryByLabelText('重命名')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('解散')).not.toBeInTheDocument();
+    fireEvent.contextMenu(screen.getByRole('button', { name: /会话A/ }));
+    expect(screen.getByText('置顶')).toBeInTheDocument();
+    expect(screen.getByText('移入分组…')).toBeInTheDocument();
+    expect(screen.getByText('重命名')).toBeInTheDocument();
+    expect(screen.getByText('解散会话')).toBeInTheDocument();
   });
 
   it('点击列表项 → selectSession(会话 id)', () => {
@@ -211,7 +216,8 @@ describe('RoomList — 解散会话确认（D10：原生 confirm → ConfirmDial
   it('点「解散」→ 弹「解散会话」ConfirmDialog（含成员移除说明），未确认不调 delete', () => {
     sessionState.sessions = [makeSession({ id: 's1', title: '会话A' })];
     render(<RoomList />);
-    fireEvent.click(screen.getByLabelText('解散'));
+    fireEvent.contextMenu(screen.getByRole('button', { name: /会话A/ }));
+    fireEvent.click(screen.getByText('解散会话'));
 
     const dialog = screen.getByRole('dialog', { name: '解散会话' });
     expect(within(dialog).getByText(/确定解散会话「会话A」/)).toBeInTheDocument();
@@ -224,7 +230,8 @@ describe('RoomList — 解散会话确认（D10：原生 confirm → ConfirmDial
     const del = (window as unknown as { api: { session: { delete: ReturnType<typeof vi.fn> } } }).api.session.delete;
     del.mockResolvedValue(undefined);
     render(<RoomList />);
-    fireEvent.click(screen.getByLabelText('解散'));
+    fireEvent.contextMenu(screen.getByRole('button', { name: /会话A/ }));
+    fireEvent.click(screen.getByText('解散会话'));
 
     fireEvent.click(within(screen.getByRole('dialog', { name: '解散会话' })).getByRole('button', { name: '解散' }));
 
@@ -239,7 +246,8 @@ describe('RoomList — 解散会话确认（D10：原生 confirm → ConfirmDial
     sessionState.sessions = [makeSession({ id: 's1', title: '会话A' })];
     const del = (window as unknown as { api: { session: { delete: ReturnType<typeof vi.fn> } } }).api.session.delete;
     render(<RoomList />);
-    fireEvent.click(screen.getByLabelText('解散'));
+    fireEvent.contextMenu(screen.getByRole('button', { name: /会话A/ }));
+    fireEvent.click(screen.getByText('解散会话'));
 
     fireEvent.click(within(screen.getByRole('dialog', { name: '解散会话' })).getByRole('button', { name: '取消' }));
 
@@ -253,7 +261,8 @@ describe('RoomList — 解散会话确认（D10：原生 confirm → ConfirmDial
     del.mockRejectedValue(new Error('会话不存在'));
     const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
     render(<RoomList />);
-    fireEvent.click(screen.getByLabelText('解散'));
+    fireEvent.contextMenu(screen.getByRole('button', { name: /会话A/ }));
+    fireEvent.click(screen.getByText('解散会话'));
 
     fireEvent.click(within(screen.getByRole('dialog', { name: '解散会话' })).getByRole('button', { name: '解散' }));
 
@@ -326,8 +335,9 @@ describe('RoomList — 标题搜索过滤', () => {
     fireEvent.change(screen.getByLabelText('搜索会话'), { target: { value: '目标' } });
     fireEvent.click(screen.getByText('目标会话'));
     expect(sessionState.selectSession).toHaveBeenCalledWith('s1');
-    expect(screen.getByLabelText('重命名')).toBeInTheDocument();
-    expect(screen.getByLabelText('解散')).toBeInTheDocument();
+    fireEvent.contextMenu(screen.getByRole('button', { name: /目标会话/ }));
+    expect(screen.getByText('重命名')).toBeInTheDocument();
+    expect(screen.getByText('解散会话')).toBeInTheDocument();
   });
 
   it('切换 workspace 时清空过滤（spec §6）', () => {
@@ -524,38 +534,88 @@ describe('RoomList — 搜索拍平态（spec §4）', () => {
   });
 });
 
-describe('RoomList — 行工具条四钮与置顶（预览 A 定值）', () => {
-  it('悬停工具条四钮：置顶 / 移动到分组 / 重命名 / 解散', () => {
+describe('RoomList — 右键菜单操作（2026-10-22 改造）', () => {
+  it('菜单「置顶」→ ipc.session.setPinned(id, true) + refreshSessionList', async () => {
     sessionState.sessions = [makeSession({ id: 's1', title: '会话A' })];
     render(<RoomList />);
-    expect(screen.getByLabelText('置顶')).toBeInTheDocument();
-    expect(screen.getByLabelText('移动到分组')).toBeInTheDocument();
-    expect(screen.getByLabelText('重命名')).toBeInTheDocument();
-    expect(screen.getByLabelText('解散')).toBeInTheDocument();
-  });
-
-  it('点「置顶」→ ipc.session.setPinned(id, true) + refreshSessionList', async () => {
-    sessionState.sessions = [makeSession({ id: 's1', title: '会话A' })];
-    render(<RoomList />);
-    fireEvent.click(screen.getByLabelText('置顶'));
+    fireEvent.contextMenu(screen.getByRole('button', { name: /会话A/ }));
+    fireEvent.click(screen.getByText('置顶'));
     await waitFor(() => expect(apiSession().setPinned).toHaveBeenCalledWith('s1', true));
     expect(sessionState.refreshSessionList).toHaveBeenCalled();
   });
 
-  it('已置顶会话工具条为「取消置顶」→ setPinned(id, false)', async () => {
+  it('已置顶会话菜单为「取消置顶」→ setPinned(id, false)', async () => {
     sessionState.sessions = [makeSession({ id: 's1', title: '会话A', pinnedAt: 5 })];
     render(<RoomList />);
-    fireEvent.click(screen.getByLabelText('取消置顶'));
+    fireEvent.contextMenu(screen.getByRole('button', { name: /会话A/ }));
+    fireEvent.click(screen.getByText('取消置顶'));
     await waitFor(() => expect(apiSession().setPinned).toHaveBeenCalledWith('s1', false));
   });
 
-  it('点「移动到分组」→ 打开 MoveToGroupDialog', async () => {
+  it('菜单「移入分组…」→ 打开 MoveToGroupDialog', async () => {
     sessionState.sessions = [makeSession({ id: 's1', title: '会话A' })];
     render(<RoomList />);
-    fireEvent.click(screen.getByLabelText('移动到分组'));
+    fireEvent.contextMenu(screen.getByRole('button', { name: /会话A/ }));
+    fireEvent.click(screen.getByText('移入分组…'));
     await waitFor(() =>
       expect(screen.getByRole('dialog', { name: '移动「会话A」到分组' })).toBeInTheDocument(),
     );
+  });
+
+  it('菜单条目点击后菜单关闭（动作与关闭原子）', () => {
+    sessionState.sessions = [makeSession({ id: 's1', title: '会话A' })];
+    render(<RoomList />);
+    fireEvent.contextMenu(screen.getByRole('button', { name: /会话A/ }));
+    fireEvent.click(screen.getByText('重命名'));
+    expect(screen.queryByText('解散会话')).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: '重命名会话' })).toBeInTheDocument();
+  });
+});
+
+describe('RoomList — 行卡片化与整体分组卡片（2026-10-22 改造定值）', () => {
+  function setupBuckets(): void {
+    sessionState.sessions = [
+      makeSession({ id: 'sp', title: '置顶会话', pinnedAt: 100, groupId: 'g1', groupName: '项目 A' }),
+      makeSession({ id: 'sa', title: '组内甲', groupId: 'g1', groupName: '项目 A' }),
+      makeSession({ id: 'su', title: '未分组会话' }),
+    ];
+    apiGroup().list.mockResolvedValue([makeGroup({ id: 'g1', name: '项目 A' })]);
+  }
+
+  it('会话行 36px 卡片：h-9 + rounded-md；无 hover 工具条', () => {
+    sessionState.sessions = [makeSession({ id: 's1', title: '会话A' })];
+    render(<RoomList />);
+    const row = screen.getByRole('button', { name: /会话A/ });
+    expect(row).toHaveClass('h-9', 'rounded-md');
+  });
+
+  it('展开分组：组头与组内行包在同一组色边框卡片（borderColor light α.45）', async () => {
+    setupBuckets();
+    render(<RoomList />);
+    const card = await screen.findByTestId('session-group-card');
+    expect(card).toHaveStyle({ borderColor: 'rgba(94, 106, 210, 0.45)' });
+    expect(card).toContainElement(screen.getByTestId('session-group-header'));
+    expect(card).toContainElement(screen.getByRole('button', { name: /组内甲/ }));
+    // 置顶区/未分组行不在卡片内
+    expect(card).not.toContainElement(screen.getByRole('button', { name: /置顶会话/ }));
+    expect(card).not.toContainElement(screen.getByRole('button', { name: /未分组会话/ }));
+  });
+
+  it('折叠分组：无卡片边框（组头退化为独立 tint 条）', async () => {
+    setupBuckets();
+    render(<RoomList />);
+    await screen.findByTestId('session-group-card');
+    fireEvent.click(screen.getByTestId('session-group-header'));
+    expect(screen.queryByTestId('session-group-card')).not.toBeInTheDocument();
+    expect(screen.getByTestId('session-group-header')).toBeInTheDocument();
+  });
+
+  it('搜索拍平行同样支持右键菜单', () => {
+    sessionState.sessions = [makeSession({ id: 's1', title: '目标会话' })];
+    render(<RoomList />);
+    fireEvent.change(screen.getByLabelText('搜索会话'), { target: { value: '目标' } });
+    fireEvent.contextMenu(screen.getByRole('button', { name: /目标会话/ }));
+    expect(screen.getByText('解散会话')).toBeInTheDocument();
   });
 });
 
@@ -592,7 +652,8 @@ describe('RoomList — 分组 CRUD 与组色面板', () => {
     apiGroup().list.mockResolvedValue([makeGroup({ id: 'g1', name: '项目 A' })]);
     render(<RoomList />);
     await screen.findByTestId('session-group-header');
-    fireEvent.click(screen.getByLabelText('重命名分组'));
+    fireEvent.contextMenu(screen.getByTestId('session-group-header'));
+    fireEvent.click(screen.getByText('重命名分组'));
     const dialog = screen.getByRole('dialog', { name: '重命名分组' });
     expect((within(dialog).getByRole('textbox') as HTMLInputElement).value).toBe('项目 A');
     fireEvent.change(within(dialog).getByRole('textbox'), { target: { value: '项目 B' } });
@@ -610,7 +671,8 @@ describe('RoomList — 分组 CRUD 与组色面板', () => {
     apiGroup().list.mockResolvedValue([makeGroup({ id: 'g1', name: '项目 A' })]);
     render(<RoomList />);
     await screen.findByTestId('session-group-header');
-    fireEvent.click(screen.getByLabelText('删除分组'));
+    fireEvent.contextMenu(screen.getByTestId('session-group-header'));
+    fireEvent.click(screen.getByText('删除分组'));
     const dialog = screen.getByRole('dialog', { name: '删除分组' });
     expect(within(dialog).getByText(/只删除分组，组内 2 个会话将回到未分组/)).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: '删除' }));
@@ -624,7 +686,8 @@ describe('RoomList — 分组 CRUD 与组色面板', () => {
     apiGroup().list.mockResolvedValue([makeGroup({ id: 'g0', name: '空组' })]);
     render(<RoomList />);
     await screen.findByTestId('session-group-header');
-    fireEvent.click(screen.getByLabelText('删除分组'));
+    fireEvent.contextMenu(screen.getByTestId('session-group-header'));
+    fireEvent.click(screen.getByText('删除分组'));
     expect(screen.getByText(/只删除分组，组内 0 个会话将回到未分组/)).toBeInTheDocument();
   });
 
@@ -633,7 +696,8 @@ describe('RoomList — 分组 CRUD 与组色面板', () => {
     apiGroup().list.mockResolvedValue([makeGroup({ id: 'g1', name: '项目 A' })]);
     render(<RoomList />);
     await screen.findByTestId('session-group-header');
-    fireEvent.click(screen.getByLabelText('设置组色'));
+    fireEvent.contextMenu(screen.getByTestId('session-group-header'));
+    fireEvent.click(screen.getByText('设置组色'));
 
     const panel = screen.getByTestId('group-palette');
     // 面板零文字：无可見文本内容
@@ -653,11 +717,13 @@ describe('RoomList — 分组 CRUD 与组色面板', () => {
     render(<RoomList />);
     await waitFor(() => expect(screen.getAllByTestId('session-group-header')).toHaveLength(2));
     const headers = screen.getAllByTestId('session-group-header');
-    fireEvent.click(within(headers[0]!).getByLabelText('设置组色'));
+    fireEvent.contextMenu(headers[0]!);
+    fireEvent.click(screen.getByText('设置组色'));
     fireEvent.click(within(screen.getByTestId('group-palette')).getByLabelText('恢复默认色'));
     await waitFor(() => expect(apiGroup().setColor).toHaveBeenCalledWith('g0', '#5E6AD2'));
 
-    fireEvent.click(within(headers[1]!).getByLabelText('设置组色'));
+    fireEvent.contextMenu(headers[1]!);
+    fireEvent.click(screen.getByText('设置组色'));
     fireEvent.click(within(screen.getByTestId('group-palette')).getByLabelText('恢复默认色'));
     await waitFor(() => expect(apiGroup().setColor).toHaveBeenCalledWith('g1', '#23835C'));
   });
@@ -667,7 +733,8 @@ describe('RoomList — 分组 CRUD 与组色面板', () => {
     apiGroup().list.mockResolvedValue([makeGroup({ id: 'g1', name: '项目 A' })]);
     render(<RoomList />);
     await screen.findByTestId('session-group-header');
-    fireEvent.click(screen.getByLabelText('设置组色'));
+    fireEvent.contextMenu(screen.getByTestId('session-group-header'));
+    fireEvent.click(screen.getByText('设置组色'));
     fireEvent.click(within(screen.getByTestId('group-palette')).getByLabelText('自定义颜色'));
 
     const input = screen.getByLabelText('自定义颜色');
@@ -700,7 +767,8 @@ describe('RoomList — 移动弹窗内联建组后组重拉（T7 审查修复）
     render(<RoomList />);
     await waitFor(() => expect(apiGroup().list).toHaveBeenCalledTimes(1)); // 挂载初拉
 
-    fireEvent.click(screen.getByLabelText('移动到分组'));
+    fireEvent.contextMenu(screen.getByRole('button', { name: /会话A/ }));
+    fireEvent.click(screen.getByText('移入分组…'));
     const dialog = await screen.findByRole('dialog', { name: '移动「会话A」到分组' });
     // 基线含弹窗自身挂载的 list（radio 数据源）；断言提交关闭后 RoomList 侧重拉
     // 发生（新组头否则不出现，会话落孤儿路径渲染进未分组）
@@ -715,5 +783,235 @@ describe('RoomList — 移动弹窗内联建组后组重拉（T7 审查修复）
       expect(screen.queryByRole('dialog', { name: '移动「会话A」到分组' })).not.toBeInTheDocument(),
     );
     await waitFor(() => expect(apiGroup().list.mock.calls.length).toBeGreaterThan(baseline));
+  });
+});
+
+// ═══ 多选 + 拖拽入组（2026-10-22 改造 · 预览批准：方案 A 选中态） ═══
+
+/** dataTransfer 桩（jsdom 无原生 DataTransfer；RoomList 侧 try/catch 兜底） */
+function makeDt(payload?: string): {
+  setData: ReturnType<typeof vi.fn>;
+  getData: ReturnType<typeof vi.fn>;
+  setDragImage: ReturnType<typeof vi.fn>;
+  effectAllowed: string;
+} {
+  return {
+    setData: vi.fn(),
+    getData: vi.fn(() => payload ?? ''),
+    setDragImage: vi.fn(),
+    effectAllowed: 'move',
+  };
+}
+
+function rowOf(title: string): HTMLElement {
+  return screen.getByRole('button', { name: new RegExp(title) });
+}
+
+describe('RoomList — Shift/Cmd 多选', () => {
+  function setupRows(): void {
+    sessionState.sessions = [
+      makeSession({ id: 's1', title: '甲会话' }),
+      makeSession({ id: 's2', title: '乙会话' }),
+      makeSession({ id: 's3', title: '丙会话' }),
+      makeSession({ id: 's4', title: '丁会话' }),
+    ];
+  }
+
+  it('选中态视觉锁（方案 A）：data-selected + surface-active 底 + 左竖条 span', () => {
+    setupRows();
+    render(<RoomList />);
+    fireEvent.click(rowOf('乙会话'), { metaKey: true });
+    const row = rowOf('乙会话');
+    expect(row).toHaveAttribute('data-selected', 'true');
+    expect(row).toHaveClass('bg-surface-active');
+    expect(row.querySelector('[data-testid="sel-bar"]')).toBeInTheDocument();
+  });
+
+  it('Cmd+点击追加且不激活；再点同行移除', () => {
+    setupRows();
+    render(<RoomList />);
+    fireEvent.click(rowOf('甲会话'), { metaKey: true });
+    fireEvent.click(rowOf('乙会话'), { metaKey: true });
+    expect(rowOf('甲会话')).toHaveAttribute('data-selected', 'true');
+    expect(rowOf('乙会话')).toHaveAttribute('data-selected', 'true');
+    expect(sessionState.selectSession).not.toHaveBeenCalled();
+    fireEvent.click(rowOf('甲会话'), { metaKey: true });
+    expect(rowOf('甲会话')).not.toHaveAttribute('data-selected');
+    expect(rowOf('乙会话')).toHaveAttribute('data-selected', 'true');
+  });
+
+  it('普通点击后 Shift+点击 = 锚点到当前的连续范围', () => {
+    setupRows();
+    render(<RoomList />);
+    fireEvent.click(rowOf('甲会话'));
+    fireEvent.click(rowOf('丙会话'), { shiftKey: true });
+    for (const t of ['甲会话', '乙会话', '丙会话']) {
+      expect(rowOf(t)).toHaveAttribute('data-selected', 'true');
+    }
+    expect(rowOf('丁会话')).not.toHaveAttribute('data-selected');
+  });
+
+  it('Shift 无锚点时选自身', () => {
+    setupRows();
+    render(<RoomList />);
+    fireEvent.click(rowOf('乙会话'), { shiftKey: true });
+    expect(rowOf('乙会话')).toHaveAttribute('data-selected', 'true');
+    expect(rowOf('甲会话')).not.toHaveAttribute('data-selected');
+  });
+
+  it('普通点击 = 激活并清空选择', () => {
+    setupRows();
+    render(<RoomList />);
+    fireEvent.click(rowOf('甲会话'), { metaKey: true });
+    fireEvent.click(rowOf('乙会话'), { metaKey: true });
+    fireEvent.click(rowOf('丙会话'));
+    expect(sessionState.selectSession).toHaveBeenCalledWith('s3');
+    expect(rowOf('甲会话')).not.toHaveAttribute('data-selected');
+    expect(rowOf('乙会话')).not.toHaveAttribute('data-selected');
+  });
+
+  it('Escape 清空选择', () => {
+    setupRows();
+    render(<RoomList />);
+    fireEvent.click(rowOf('甲会话'), { metaKey: true });
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(rowOf('甲会话')).not.toHaveAttribute('data-selected');
+  });
+
+  it('搜索词变化清空选择', () => {
+    setupRows();
+    render(<RoomList />);
+    fireEvent.click(rowOf('甲会话'), { metaKey: true });
+    fireEvent.change(screen.getByLabelText('搜索会话'), { target: { value: '乙' } });
+    expect(rowOf('乙会话')).not.toHaveAttribute('data-selected');
+  });
+});
+
+describe('RoomList — 批量右键菜单与批量解散', () => {
+  function setupSelected(): void {
+    sessionState.sessions = [
+      makeSession({ id: 's1', title: '甲会话' }),
+      makeSession({ id: 's2', title: '乙会话' }),
+      makeSession({ id: 's3', title: '丙会话' }),
+    ];
+    render(<RoomList />);
+    fireEvent.click(rowOf('甲会话'), { metaKey: true });
+    fireEvent.click(rowOf('乙会话'), { metaKey: true });
+  }
+
+  it('选中>1 右键选中行 → 批量菜单（无置顶/重命名）', () => {
+    setupSelected();
+    fireEvent.contextMenu(rowOf('乙会话'));
+    expect(screen.getByText('移入分组… (2)')).toBeInTheDocument();
+    expect(screen.getByText('解散会话 ×2')).toBeInTheDocument();
+    expect(screen.queryByText('置顶')).not.toBeInTheDocument();
+    expect(screen.queryByText('重命名')).not.toBeInTheDocument();
+  });
+
+  it('右键非选中行 → 清空选择 + 单行菜单', () => {
+    setupSelected();
+    fireEvent.contextMenu(rowOf('丙会话'));
+    expect(screen.getByText('置顶')).toBeInTheDocument();
+    expect(rowOf('甲会话')).not.toHaveAttribute('data-selected');
+  });
+
+  it('批量解散 → ConfirmDialog「2 个会话」→ 逐个 delete + refresh + 清选择', async () => {
+    setupSelected();
+    const del = (window as unknown as { api: { session: { delete: ReturnType<typeof vi.fn> } } }).api.session.delete;
+    fireEvent.contextMenu(rowOf('乙会话'));
+    fireEvent.click(screen.getByText('解散会话 ×2'));
+    expect(screen.getByText(/确定解散 2 个会话/)).toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole('dialog', { name: '解散会话' })).getByRole('button', { name: '解散' }));
+    await waitFor(() => expect(del).toHaveBeenCalledWith('s1'));
+    await waitFor(() => expect(del).toHaveBeenCalledWith('s2'));
+    expect(sessionState.refreshSessionList).toHaveBeenCalled();
+  });
+
+  it('批量菜单「移入分组…」→ 批量移动弹窗（移动 2 个会话到分组）', async () => {
+    setupSelected();
+    fireEvent.contextMenu(rowOf('甲会话'));
+    fireEvent.click(screen.getByText('移入分组… (2)'));
+    await waitFor(() =>
+      expect(screen.getByRole('dialog', { name: '移动 2 个会话到分组' })).toBeInTheDocument(),
+    );
+  });
+});
+
+describe('RoomList — 拖拽入组（HTML5 DnD）', () => {
+  function setupDnd(): void {
+    sessionState.sessions = [
+      makeSession({ id: 'sa', title: '组内甲', groupId: 'g1', groupName: '项目 A' }),
+      makeSession({ id: 'su', title: '未分组会话' }),
+    ];
+    apiGroup().list.mockResolvedValue([
+      makeGroup({ id: 'g1', name: '项目 A' }),
+      makeGroup({ id: 'g2', name: '空组 B' }),
+    ]);
+  }
+
+  it('dragStart 未选中行 → dataTransfer 单 id；drop 展开组卡 → moveToGroup(id, g)', async () => {
+    setupDnd();
+    render(<RoomList />);
+    const cards = await screen.findAllByTestId('session-group-card');
+    const dt = makeDt(JSON.stringify(['su']));
+    fireEvent.dragStart(rowOf('未分组会话'), { dataTransfer: dt });
+    expect(dt.setData).toHaveBeenCalledWith('text/plain', JSON.stringify(['su']));
+    expect(dt.setDragImage).not.toHaveBeenCalled();
+
+    fireEvent.drop(cards[0]!, { dataTransfer: makeDt(JSON.stringify(['su'])) });
+    await waitFor(() => expect(apiSession().moveToGroup).toHaveBeenCalledWith('su', 'g1'));
+    expect(sessionState.refreshSessionList).toHaveBeenCalled();
+  });
+
+  it('选中 2 行后拖拽 → dataTransfer 含整批；drop 折叠组条 → moveToGroup ×2', async () => {
+    setupDnd();
+    render(<RoomList />);
+    await screen.findAllByTestId('session-group-card');
+    fireEvent.click(rowOf('未分组会话'), { metaKey: true });
+    // 折叠 g2（空组）：点其组头
+    const headers = screen.getAllByTestId('session-group-header');
+    fireEvent.click(headers[1]!);
+
+    const dt = makeDt();
+    fireEvent.dragStart(rowOf('未分组会话'), { dataTransfer: dt });
+    // 组内甲 也选中（跨组选择）
+    fireEvent.click(rowOf('组内甲'), { metaKey: true });
+    fireEvent.dragStart(rowOf('组内甲'), { dataTransfer: dt });
+    expect(dt.setData).toHaveBeenLastCalledWith('text/plain', JSON.stringify(['su', 'sa']));
+    // 批量拖影 = 叠层克隆卡（setDragImage 收到节点）；单行拖动不设自定义影
+    expect(dt.setDragImage).toHaveBeenCalledTimes(1);
+
+    // 折叠后的 g2 组头（第二个）为放置目标
+    const headersAfterCollapse = screen.getAllByTestId('session-group-header');
+    fireEvent.drop(headersAfterCollapse[1]!, { dataTransfer: makeDt(JSON.stringify(['su', 'sa'])) });
+    await waitFor(() => expect(apiSession().moveToGroup).toHaveBeenCalledWith('su', 'g2'));
+    await waitFor(() => expect(apiSession().moveToGroup).toHaveBeenCalledWith('sa', 'g2'));
+  });
+
+  it('拖拽期间浮现移出条；drop → moveToGroup(id, null)', async () => {
+    setupDnd();
+    render(<RoomList />);
+    await screen.findAllByTestId('session-group-card');
+    expect(screen.queryByTestId('ungroup-drop-zone')).not.toBeInTheDocument();
+
+    fireEvent.dragStart(rowOf('组内甲'), { dataTransfer: makeDt(JSON.stringify(['sa'])) });
+    expect(screen.getByTestId('ungroup-drop-zone')).toBeInTheDocument();
+    fireEvent.drop(screen.getByTestId('ungroup-drop-zone'), { dataTransfer: makeDt(JSON.stringify(['sa'])) });
+    await waitFor(() => expect(apiSession().moveToGroup).toHaveBeenCalledWith('sa', null));
+  });
+
+  it('dragOver 组卡 → 高亮 outline；dragEnd 后清理拖拽态', async () => {
+    setupDnd();
+    render(<RoomList />);
+    const cards = await screen.findAllByTestId('session-group-card');
+    fireEvent.dragStart(rowOf('未分组会话'), { dataTransfer: makeDt(JSON.stringify(['su'])) });
+    fireEvent.dragOver(cards[0]!, { dataTransfer: makeDt() });
+    // 高亮色 = groupDotColor 浅档原值 #5E6AD2（预览定值：实色组色）
+    const card = cards[0]!;
+    expect(card).toHaveStyle({ outline: '2px solid #5E6AD2', outlineOffset: '-2px' });
+
+    fireEvent.dragEnd(rowOf('未分组会话'));
+    expect(screen.queryByTestId('ungroup-drop-zone')).not.toBeInTheDocument();
+    expect(card).not.toHaveStyle({ outline: '2px solid #5E6AD2' });
   });
 });
