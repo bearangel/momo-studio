@@ -35,10 +35,13 @@ import {
 import { MoveToGroupDialog } from './MoveToGroupDialog';
 import { SessionGroupColorPopover } from './SessionGroupColorPopover';
 import { BatchSessionContextMenu, GroupContextMenu, SessionContextMenu } from './SessionContextMenu';
+import { DefaultAgentPickerDialog } from './DefaultAgentPickerDialog';
+import { CollabSessionDialog } from './CollabSessionDialog';
 import type { SessionGroupRow, SessionSummary } from '../../ipc/types';
 import {
   ChevronDown,
   ChevronRight,
+  Crosshair,
   FolderPlus,
   ListTodo,
   MessageSquare,
@@ -58,6 +61,11 @@ const TYPE_ICON: Record<SessionType, { Icon: typeof Zap; label: string }> = {
 /** 折叠持久化键：按工作空间隔离（JSON 数组 = 折叠中的组 id 集） */
 const collapsedStorageKey = (workspaceId: string): string =>
   `momo.sessionGroups.collapsed.${workspaceId}`;
+
+function writeCollapsedIds(workspaceId: string | null, ids: ReadonlySet<string>): void {
+  if (!workspaceId) return;
+  localStorage.setItem(collapsedStorageKey(workspaceId), JSON.stringify([...ids]));
+}
 
 function readCollapsed(workspaceId: string | null): Set<string> {
   if (!workspaceId) return new Set();
@@ -313,6 +321,11 @@ export function RoomList() {
   const loadSessions = useSessionStore((s) => s.loadSessions);
   const refreshSessionList = useSessionStore((s) => s.refreshSessionList);
   const loading = useSessionStore((s) => s.loading);
+  const createQuickSession = useSessionStore((s) => s.createQuickSession);
+  const setPendingCreateGroupId = useSessionStore((s) => s.setPendingCreateGroupId);
+  const revealSessionId = useSessionStore((s) => s.revealSessionId);
+  const setRevealSessionId = useSessionStore((s) => s.setRevealSessionId);
+  const workspace = useWorkspaceStore((s) => s.getActive());
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const theme = useThemeStore((s) => s.resolved);
 
@@ -341,6 +354,23 @@ export function RoomList() {
     x: number;
     y: number;
   } | null>(null);
+  // 分组菜单建会（建后归组）：pending 目标写 store；无默认 agent 先弹 Picker
+  const [quickPickerOpen, setQuickPickerOpen] = useState(false);
+  const [collabOpen, setCollabOpen] = useState(false);
+
+  const handleGroupQuickCreate = (group: SessionGroupRow): void => {
+    setPendingCreateGroupId(group.id);
+    if (workspace?.defaultAgentInstanceId) {
+      void createQuickSession(workspace.id);
+    } else {
+      setQuickPickerOpen(true);
+    }
+  };
+
+  const handleGroupCollabCreate = (group: SessionGroupRow): void => {
+    setPendingCreateGroupId(group.id);
+    setCollabOpen(true);
+  };
   // 右键菜单态：会话行/组头两类目标 + 弹出坐标（动作复用既有 handler）
   const [menu, setMenu] = useState<
     | { kind: 'session'; session: SessionSummary; x: number; y: number }
@@ -363,6 +393,7 @@ export function RoomList() {
     setAnchorId(null);
   }, []);
 
+  const [groupsLoaded, setGroupsLoaded] = useState(false);
   const loadGroups = useCallback(async (workspaceId: string | null): Promise<void> => {
     if (!workspaceId) return;
     try {
@@ -370,6 +401,8 @@ export function RoomList() {
     } catch {
       // 拉组失败降级：全部会话按未分组平铺渲染（有回归锁），不阻塞列表
       setGroups([]);
+    } finally {
+      setGroupsLoaded(true);
     }
   }, []);
 
@@ -377,6 +410,7 @@ export function RoomList() {
     // 切 workspace：重拉分组 + 恢复该工作空间的折叠态；过滤与多选清空（spec §6）
     setFilter('');
     clearSelection();
+    setGroupsLoaded(false);
     setCollapsedIds(readCollapsed(activeWorkspaceId));
     void loadGroups(activeWorkspaceId);
   }, [activeWorkspaceId, loadGroups, clearSelection]);
@@ -470,6 +504,41 @@ export function RoomList() {
       .then(() => loadGroups(activeWorkspaceId))
       .catch((err: unknown) => alert(`设置组色失败：${ipcErrorMessage(err)}`));
   };
+
+  // 定位会话信号消费：目标组折叠 → 先展开（持久化，行渲染后下轮再滚）；
+  // 行在 DOM → scrollIntoView 居中 + 清信号；目标不在列表（已删/过滤未命中）→ 清信号防悬挂。
+  // groupsLoaded 门控：组列表未就绪时 groupId 折叠判定不可靠（会话被临时按未分组
+  // 渲染，提前消费会漏展开——挂载竞态回归锁在 test）；revealedRef 去重防无关
+  // 状态扰动触发二次滚动（mock store 不回写时同样成立）
+  const revealedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!revealSessionId) {
+      revealedRef.current = null;
+      return;
+    }
+    if (revealedRef.current === revealSessionId) return;
+    const target = sessions.find((s) => s.id === revealSessionId);
+    if (!target) {
+      setRevealSessionId(null);
+      revealedRef.current = revealSessionId;
+      return;
+    }
+    if (!groupsLoaded && target.groupId != null) return;
+    if (target.groupId != null && collapsedIds.has(target.groupId)) {
+      // 展开轮不记 ref：下一轮（行已渲染）继续执行滚动终态
+      setCollapsedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(target.groupId!);
+        writeCollapsedIds(activeWorkspaceId, next);
+        return next;
+      });
+      return;
+    }
+    const el = document.querySelector(`[data-session-id="${revealSessionId}"]`);
+    if (el) el.scrollIntoView({ block: 'center' });
+    setRevealSessionId(null);
+    revealedRef.current = revealSessionId;
+  }, [revealSessionId, sessions, collapsedIds, groupsLoaded, activeWorkspaceId, setRevealSessionId]);
 
   // Escape 清空多选（菜单开着时让位给菜单自身的 Escape）
   useEffect(() => {
@@ -710,6 +779,21 @@ export function RoomList() {
         )}
         <button
           type="button"
+          aria-label="定位当前会话"
+          title="定位当前会话：滚动到当前会话并展开所在分组"
+          disabled={activeSessionId == null}
+          onClick={() => {
+            if (activeSessionId != null) setRevealSessionId(activeSessionId);
+          }}
+          className={cn(
+            'text-tertiary hover:text-primary shrink-0',
+            activeSessionId == null && 'opacity-40 cursor-not-allowed',
+          )}
+        >
+          <Crosshair size={14} strokeWidth={1.75} aria-hidden />
+        </button>
+        <button
+          type="button"
           aria-label="新建分组"
           title="新建分组"
           onClick={() => setCreatingGroup(true)}
@@ -881,6 +965,8 @@ export function RoomList() {
         <GroupContextMenu
           x={menu.x}
           y={menu.y}
+          onQuickCreate={() => handleGroupQuickCreate(menu.group)}
+          onCollabCreate={() => handleGroupCollabCreate(menu.group)}
           onPalette={() => setColorPopover({ group: menu.group, x: menu.x, y: menu.y })}
           onRename={() => setRenamingGroup(menu.group)}
           onDelete={() =>
@@ -919,6 +1005,27 @@ export function RoomList() {
           theme={theme}
           onPick={(color) => applyGroupColor(colorPopover.group.id, color)}
           onClose={() => setColorPopover(null)}
+        />
+      )}
+      {quickPickerOpen && workspace && (
+        <DefaultAgentPickerDialog
+          workspaceId={workspace.id}
+          onContinue={() => {
+            setQuickPickerOpen(false);
+            void createQuickSession(workspace.id);
+          }}
+          onClose={() => {
+            setQuickPickerOpen(false);
+            setPendingCreateGroupId(null);
+          }}
+        />
+      )}
+      {collabOpen && (
+        <CollabSessionDialog
+          onClose={() => {
+            setCollabOpen(false);
+            setPendingCreateGroupId(null);
+          }}
         />
       )}
     </div>

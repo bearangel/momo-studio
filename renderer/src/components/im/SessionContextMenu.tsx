@@ -139,10 +139,12 @@ export function SessionContextMenu({
   );
 }
 
-/** 组头右键菜单：设置组色 / 重命名分组 ‖ 删除分组（danger） */
+/** 组头右键菜单：新建快速/协作会话（建后归组）‖ 设置组色 / 重命名分组 ‖ 删除分组（danger） */
 export function GroupContextMenu({
   x,
   y,
+  onQuickCreate,
+  onCollabCreate,
   onPalette,
   onRename,
   onDelete,
@@ -150,6 +152,8 @@ export function GroupContextMenu({
 }: {
   x: number;
   y: number;
+  onQuickCreate: () => void;
+  onCollabCreate: () => void;
   onPalette: () => void;
   onRename: () => void;
   onDelete: () => void;
@@ -157,6 +161,9 @@ export function GroupContextMenu({
 }): JSX.Element {
   return (
     <MenuShell x={x} y={y} testId="group-context-menu" onClose={onClose}>
+      <MenuButton label="新建快速会话" onAction={onQuickCreate} onClose={onClose} />
+      <MenuButton label="新建协作会话" onAction={onCollabCreate} onClose={onClose} />
+      <MenuSeparator />
       <MenuButton label="设置组色" onAction={onPalette} onClose={onClose} />
       <MenuButton label="重命名分组" onAction={onRename} onClose={onClose} />
       <MenuSeparator />

@@ -22,6 +22,23 @@ vi.mock('react-colorful', () => ({
   ),
 }));
 
+// 建会弹窗轻桩（分组菜单建会入口测试）：只锁「打开/继续/关闭」编排，弹窗内部交互由各自测试文件覆盖
+vi.mock('./CollabSessionDialog', () => ({
+  CollabSessionDialog: () => <div role="dialog" aria-label="协作会话创建" />,
+}));
+vi.mock('./DefaultAgentPickerDialog', () => ({
+  DefaultAgentPickerDialog: ({ onContinue, onClose }: { onContinue: () => void; onClose: () => void }) => (
+    <div role="dialog" aria-label="选择默认 agent">
+      <button type="button" onClick={onContinue}>
+        继续建会
+      </button>
+      <button type="button" onClick={onClose}>
+        取消
+      </button>
+    </div>
+  ),
+}));
+
 // vi.hoisted：mock store 状态在 vi.mock 工厂注册前完成初始化
 const { sessionState, workspaceState } = vi.hoisted(() => ({
   sessionState: {
@@ -31,9 +48,14 @@ const { sessionState, workspaceState } = vi.hoisted(() => ({
     loadSessions: vi.fn(),
     refreshSessionList: vi.fn(),
     loading: false,
+    createQuickSession: vi.fn(),
+    setPendingCreateGroupId: vi.fn(),
+    revealSessionId: null as string | null,
+    setRevealSessionId: vi.fn(),
   },
   workspaceState: {
     activeWorkspaceId: 'ws-1',
+    getActive: () => ({ id: 'ws-1', defaultAgentInstanceId: 'inst-default' }),
   },
 }));
 
@@ -114,9 +136,14 @@ function resetState(): void {
   sessionState.loadSessions = vi.fn().mockResolvedValue(undefined);
   sessionState.refreshSessionList = vi.fn();
   sessionState.loading = false;
+  sessionState.createQuickSession = vi.fn().mockResolvedValue(true);
+  sessionState.setPendingCreateGroupId = vi.fn();
+  sessionState.revealSessionId = null;
+  sessionState.setRevealSessionId = vi.fn();
   // 「切换 workspace」用例会改写 activeWorkspaceId 且模块级状态跨用例存活——
   // 显式复位防泄漏到后续 describe（曾致折叠键/建组参数落到 ws-2）
   workspaceState.activeWorkspaceId = 'ws-1';
+  workspaceState.getActive = () => ({ id: 'ws-1', defaultAgentInstanceId: 'inst-default' });
 }
 
 beforeEach(() => {
@@ -1025,3 +1052,104 @@ describe('RoomList — 拖拽入组（HTML5 DnD）', () => {
     expect(card).not.toHaveStyle({ outline: '2px solid #5E6AD2' });
   });
 });
+
+describe('RoomList — 分组菜单建会入口（建后归组）', () => {
+  function setupGroup(): void {
+    sessionState.sessions = [makeSession({ id: 'sa', title: '组内甲', groupId: 'g1', groupName: '项目 A' })];
+    apiGroup().list.mockResolvedValue([makeGroup({ id: 'g1', name: '项目 A' })]);
+  }
+
+  async function openGroupMenu(): Promise<void> {
+    await screen.findByTestId('session-group-header');
+    fireEvent.contextMenu(screen.getByTestId('session-group-header'));
+  }
+
+  it('组头菜单含「新建快速会话 / 新建协作会话」两条目', async () => {
+    setupGroup();
+    render(<RoomList />);
+    await openGroupMenu();
+    expect(screen.getByText('新建快速会话')).toBeInTheDocument();
+    expect(screen.getByText('新建协作会话')).toBeInTheDocument();
+  });
+
+  it('有默认 agent：点新建快速会话 → pending 归组 + createQuickSession（归组编排下沉 store）', async () => {
+    setupGroup();
+    render(<RoomList />);
+    await openGroupMenu();
+    fireEvent.click(screen.getByText('新建快速会话'));
+    expect(sessionState.setPendingCreateGroupId).toHaveBeenCalledWith('g1');
+    await waitFor(() => expect(sessionState.createQuickSession).toHaveBeenCalledWith('ws-1'));
+  });
+
+  it('无默认 agent：点新建快速会话 → 弹默认 agent 选择弹窗；取消则清 pending', async () => {
+    setupGroup();
+    workspaceState.getActive = () => ({ id: 'ws-1', defaultAgentInstanceId: '' });
+    render(<RoomList />);
+    await openGroupMenu();
+    fireEvent.click(screen.getByText('新建快速会话'));
+    expect(sessionState.createQuickSession).not.toHaveBeenCalled();
+    const dialog = screen.getByRole('dialog', { name: '选择默认 agent' });
+    fireEvent.click(within(dialog).getByRole('button', { name: '取消' }));
+    expect(sessionState.setPendingCreateGroupId).toHaveBeenCalledWith(null);
+  });
+
+  it('点新建协作会话 → 打开协作会话弹窗 + pending 归组', async () => {
+    setupGroup();
+    render(<RoomList />);
+    await openGroupMenu();
+    fireEvent.click(screen.getByText('新建协作会话'));
+    expect(sessionState.setPendingCreateGroupId).toHaveBeenCalledWith('g1');
+    expect(screen.getByRole('dialog', { name: '协作会话创建' })).toBeInTheDocument();
+  });
+});
+
+describe('RoomList — 定位会话（reveal 信号：展开折叠组 + 滚动居中）', () => {
+  beforeEach(() => {
+    // jsdom 无原生滚动实现：mock 成可断言 spy
+    window.HTMLElement.prototype.scrollIntoView = vi.fn();
+  });
+
+  it('reveal 目标行在 DOM → scrollIntoView(block center) + 消费清信号', () => {
+    sessionState.sessions = [makeSession({ id: 's1', title: '会话A' })];
+    sessionState.revealSessionId = 's1';
+    render(<RoomList />);
+    expect(window.HTMLElement.prototype.scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(sessionState.setRevealSessionId).toHaveBeenCalledWith(null);
+  });
+
+  it('reveal 目标在折叠组 → 自动展开（持久化）后滚动', async () => {
+    localStorage.setItem('momo.sessionGroups.collapsed.ws-1', JSON.stringify(['g1']));
+    sessionState.sessions = [makeSession({ id: 'sa', title: '组内甲', groupId: 'g1', groupName: '项目 A' })];
+    apiGroup().list.mockResolvedValue([makeGroup({ id: 'g1', name: '项目 A' })]);
+    sessionState.revealSessionId = 'sa';
+    render(<RoomList />);
+    // 挂载即折叠：reveal effect 展开 → 行出现 → 滚动（跨两轮 effect，waitFor 兜时序）
+    await waitFor(() => expect(screen.getByRole('button', { name: /组内甲/ })).toBeInTheDocument());
+    await waitFor(() => expect(window.HTMLElement.prototype.scrollIntoView).toHaveBeenCalled());
+    expect(JSON.parse(localStorage.getItem('momo.sessionGroups.collapsed.ws-1')!)).toEqual([]);
+  });
+
+  it('reveal 目标不在列表 → 信号清理（防悬挂）', () => {
+    sessionState.sessions = [makeSession({ id: 's1', title: '会话A' })];
+    sessionState.revealSessionId = 's-gone';
+    render(<RoomList />);
+    expect(sessionState.setRevealSessionId).toHaveBeenCalledWith(null);
+    expect(window.HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it('定位按钮：点击 → setRevealSessionId(activeSessionId)', () => {
+    sessionState.sessions = [makeSession({ id: 's1', title: '会话A' })];
+    sessionState.activeSessionId = 's1';
+    render(<RoomList />);
+    fireEvent.click(screen.getByLabelText('定位当前会话'));
+    expect(sessionState.setRevealSessionId).toHaveBeenCalledWith('s1');
+  });
+
+  it('无激活会话 → 定位按钮禁用', () => {
+    sessionState.sessions = [makeSession({ id: 's1', title: '会话A' })];
+    sessionState.activeSessionId = null;
+    render(<RoomList />);
+    expect(screen.getByLabelText('定位当前会话')).toBeDisabled();
+  });
+});
+

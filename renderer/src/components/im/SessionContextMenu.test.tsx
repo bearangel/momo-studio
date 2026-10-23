@@ -49,17 +49,32 @@ describe('SessionContextMenu —— 会话行右键菜单', () => {
 });
 
 describe('GroupContextMenu —— 组头右键菜单', () => {
-  function setup(): { onPalette: ReturnType<typeof vi.fn>; onDelete: ReturnType<typeof vi.fn> } {
+  function setup(): { onQuickCreate: ReturnType<typeof vi.fn>; onCollabCreate: ReturnType<typeof vi.fn>; onPalette: ReturnType<typeof vi.fn>; onDelete: ReturnType<typeof vi.fn> } {
+    const onQuickCreate = vi.fn();
+    const onCollabCreate = vi.fn();
     const onPalette = vi.fn();
     const onRename = vi.fn();
     const onDelete = vi.fn();
-    render(<GroupContextMenu x={10} y={10} onPalette={onPalette} onRename={onRename} onDelete={onDelete} onClose={vi.fn()} />);
-    return { onPalette, onDelete };
+    render(
+      <GroupContextMenu
+        x={10}
+        y={10}
+        onQuickCreate={onQuickCreate}
+        onCollabCreate={onCollabCreate}
+        onPalette={onPalette}
+        onRename={onRename}
+        onDelete={onDelete}
+        onClose={vi.fn()}
+      />,
+    );
+    return { onQuickCreate, onCollabCreate, onPalette, onDelete };
   }
 
-  it('渲染三条目：设置组色 / 重命名分组 / 删除分组（danger）', () => {
+  it('渲染五条目：新建快速会话 / 新建协作会话 ‖ 设置组色 / 重命名分组 ‖ 删除分组（danger）', () => {
     setup();
     const menu = screen.getByTestId('group-context-menu');
+    expect(within(menu).getByText('新建快速会话')).toBeInTheDocument();
+    expect(within(menu).getByText('新建协作会话')).toBeInTheDocument();
     expect(within(menu).getByText('设置组色')).toBeInTheDocument();
     expect(within(menu).getByText('重命名分组')).toBeInTheDocument();
     expect(within(menu).getByText('删除分组')).toHaveClass('text-status-error');
@@ -69,6 +84,12 @@ describe('GroupContextMenu —— 组头右键菜单', () => {
     const { onPalette } = setup();
     fireEvent.click(screen.getByText('设置组色'));
     expect(onPalette).toHaveBeenCalledTimes(1);
+  });
+
+  it('点「新建快速会话」→ onQuickCreate + onClose（关闭由宿主承接）', () => {
+    const { onQuickCreate } = setup();
+    fireEvent.click(screen.getByText('新建快速会话'));
+    expect(onQuickCreate).toHaveBeenCalledTimes(1);
   });
 });
 
