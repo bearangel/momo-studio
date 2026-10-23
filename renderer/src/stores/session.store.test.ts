@@ -59,6 +59,7 @@ const mockApi = {
     get: vi.fn(),
     createQuick: vi.fn(),
     createCollab: vi.fn(),
+    moveToGroup: vi.fn(),
     rename: vi.fn(),
     delete: vi.fn(),
     // 真实 preload 返回 { readOnly }（types.d.ts SessionApiSurface 契约）——
@@ -127,6 +128,8 @@ beforeEach(() => {
   mockApi.session.loadOlder.mockReset();
   mockApi.session.createQuick.mockReset();
   mockApi.session.createQuick.mockResolvedValue(MOCK_QUICK_SESSION);
+  mockApi.session.moveToGroup.mockReset();
+  mockApi.session.moveToGroup.mockResolvedValue(undefined);
   mockApi.session.createCollab.mockReset();
   mockApi.session.createCollab.mockResolvedValue(MOCK_COLLAB_SESSION);
   // 订阅 mock 只清调用记录（保留返回值实现），保证 toHaveBeenCalledTimes 按用例计数
@@ -613,6 +616,106 @@ describe('session.store — createQuickSession / createCollabSession（v25 spec 
     expect(ok).toBe(false);
     expect(useSessionStore.getState().error).toBe('数据库锁定');
     expect(useSessionStore.getState().needsDefaultAgent).toBe(false);
+  });
+
+  it('归组无 pending：不调 moveToGroup（存量无组路径行为不变）', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+    await useSessionStore.getState().createQuickSession('ws-a');
+    expect(mockApi.session.moveToGroup).not.toHaveBeenCalled();
+  });
+
+  it('createQuickSession 显式 groupId → 建会后 moveToGroup(新会话, 组) + 列表重拉', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+    const listCalls = mockApi.session.list.mock.calls.length;
+
+    const ok = await useSessionStore.getState().createQuickSession('ws-a', 'g-1');
+    expect(ok).toBe(true);
+    expect(mockApi.session.moveToGroup).toHaveBeenCalledWith('sess-quick', 'g-1');
+    // 归组后重拉权威序（组内位置由主进程排序契约决定）
+    expect(mockApi.session.list.mock.calls.length).toBeGreaterThan(listCalls);
+  });
+
+  it('pendingCreateGroupId 兜底消费：显式参数优先，用后即清', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+    useSessionStore.getState().setPendingCreateGroupId('g-pending');
+
+    await useSessionStore.getState().createQuickSession('ws-a');
+    expect(mockApi.session.moveToGroup).toHaveBeenCalledWith('sess-quick', 'g-pending');
+    expect(useSessionStore.getState().pendingCreateGroupId).toBeNull();
+
+    // 显式参数覆盖 pending
+    useSessionStore.getState().setPendingCreateGroupId('g-pending');
+    await useSessionStore.getState().createQuickSession('ws-a', 'g-explicit');
+    expect(mockApi.session.moveToGroup).toHaveBeenLastCalledWith('sess-quick', 'g-explicit');
+    expect(useSessionStore.getState().pendingCreateGroupId).toBeNull();
+  });
+
+  it('NO_DEFAULT_AGENT 时 pendingCreateGroupId 保留（Picker 重试仍归组）', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+    useSessionStore.getState().setPendingCreateGroupId('g-1');
+    mockApi.session.createQuick.mockRejectedValueOnce(new Error('NO_DEFAULT_AGENT: 未设置'));
+
+    const ok = await useSessionStore.getState().createQuickSession('ws-a');
+    expect(ok).toBe(false);
+    expect(useSessionStore.getState().pendingCreateGroupId).toBe('g-1');
+    expect(mockApi.session.moveToGroup).not.toHaveBeenCalled();
+  });
+
+  it('moveToGroup 失败 → error 写入 + pending 清 + 仍返回 true（会话已建不回滚）', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+    useSessionStore.getState().setPendingCreateGroupId('g-1');
+    mockApi.session.moveToGroup.mockRejectedValueOnce(new Error('分组不存在'));
+
+    const ok = await useSessionStore.getState().createQuickSession('ws-a');
+    expect(ok).toBe(true);
+    expect(useSessionStore.getState().error).toBe('移入分组失败：分组不存在');
+    expect(useSessionStore.getState().pendingCreateGroupId).toBeNull();
+  });
+
+  it('建会成功（quick/collab，含归组路径）→ revealSessionId 置新会话 id（定位信号）', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+    await useSessionStore.getState().createQuickSession('ws-a', 'g-1');
+    expect(useSessionStore.getState().revealSessionId).toBe('sess-quick');
+
+    await useSessionStore.getState().createCollabSession('ws-a', undefined, {
+      type: 'agent',
+      instanceId: 'inst-1',
+    });
+    expect(useSessionStore.getState().revealSessionId).toBe('sess-collab');
+  });
+
+  it('归组建会：reveal 信号在权威重拉之后置位（store 内 groupId 已落定，时序回归锁）', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+    // 刷新调用返回权威版（带 groupId）；若实现提前发信号/不 await 重拉，
+    // action 返回时 store 内仍是 activateNewSession 的 groupId=null 副本
+    mockApi.session.list.mockResolvedValueOnce([
+      { ...MOCK_QUICK_SESSION, groupId: 'g-1', groupName: '一组' },
+    ]);
+
+    await useSessionStore.getState().createQuickSession('ws-a', 'g-1');
+    const st = useSessionStore.getState();
+    expect(st.revealSessionId).toBe('sess-quick');
+    expect(st.sessions.find((s) => s.id === 'sess-quick')?.groupId).toBe('g-1');
+  });
+
+  it('建会失败 → revealSessionId 不置位（无定位副作用）', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+    mockApi.session.createQuick.mockRejectedValueOnce(new Error('NO_DEFAULT_AGENT: 未设置'));
+    await useSessionStore.getState().createQuickSession('ws-a');
+    expect(useSessionStore.getState().revealSessionId).toBeNull();
+  });
+
+  it('createCollabSession 显式 groupId → 建会后归组 + pending 清', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+    useSessionStore.getState().setPendingCreateGroupId('g-2');
+
+    const ok = await useSessionStore.getState().createCollabSession('ws-a', undefined, {
+      type: 'agent',
+      instanceId: 'inst-1',
+    });
+    expect(ok).toBe(true);
+    expect(mockApi.session.moveToGroup).toHaveBeenCalledWith('sess-collab', 'g-2');
+    expect(useSessionStore.getState().pendingCreateGroupId).toBeNull();
   });
 
   it('createCollabSession 成功激活会话并透传 title/target', async () => {

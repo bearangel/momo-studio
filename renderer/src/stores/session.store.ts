@@ -118,17 +118,33 @@ interface SessionState {
    * 快速会话（spec §4.4）：免弹窗直达 workspace 默认 agent。
    * 成功 → 新会话置顶并激活，返回 true；无默认 agent → needsDefaultAgent=true，
    * 返回 false；其他错误 → error 写入，返回 false。
+   * groupId（显式参数或缺省读 pendingCreateGroupId）：建会成功后归入该组
+   * （分组右键菜单建会入口；归组失败 error 提示、会话不回滚）。
    */
-  createQuickSession: (workspaceId: string) => Promise<boolean>;
+  createQuickSession: (workspaceId: string, groupId?: string) => Promise<boolean>;
   /**
    * 协作会话（spec §4.4）：指定单 agent 或团队（成员快照展开）。
    * title 传 undefined = 动态命名（占位标题起步）。
+   * groupId 语义同 createQuickSession（建后归组）。
    */
   createCollabSession: (
     workspaceId: string,
     title: string | undefined,
     target: CollabTarget,
+    groupId?: string,
   ) => Promise<boolean>;
+  /**
+   * 待归组 id（分组建会入口写入）：createQuick/Collab 缺省 groupId 时消费。
+   * NO_DEFAULT_AGENT 等建会失败保留（Picker 重试仍归组）；消费或归组失败即清。
+   */
+  pendingCreateGroupId: string | null;
+  setPendingCreateGroupId: (id: string | null) => void;
+  /**
+   * 待定位会话信号（建会成功 / 定位按钮写入；RoomList 消费：折叠组展开 +
+   * 行滚动居中后置回 null）。会话不在当前列表（已删/过滤未命中）由消费方清理。
+   */
+  revealSessionId: string | null;
+  setRevealSessionId: (id: string | null) => void;
   /** 向前翻页加载更早历史（用户滚到顶部触发；防抖 + 到底短路） */
   loadOlder: (sessionId: string) => Promise<void>;
   /**
@@ -162,6 +178,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   membersError: null,
   commandHint: null,
   commandPendingBySession: new Map(),
+  pendingCreateGroupId: null,
+  setPendingCreateGroupId: (id) => set({ pendingCreateGroupId: id }),
+  revealSessionId: null,
+  setRevealSessionId: (id) => set({ revealSessionId: id }),
   thinkingPendingBySession: new Map(),
 
   loadSessions: async (workspaceId) => {
@@ -469,17 +489,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     return result;
   },
 
-  createQuickSession: async (workspaceId) => {
+  createQuickSession: async (workspaceId, groupId) => {
     set({ error: null, needsDefaultAgent: false });
+    const targetGroup = groupId ?? get().pendingCreateGroupId;
     try {
       const session = await ipc.session.createQuick(workspaceId);
       activateNewSession(set, session);
       set((s) => ({ inputFocusTick: s.inputFocusTick + 1 }));
       await get().selectSession(session.id);
+      await assignToGroup(get, set, session.id, targetGroup, workspaceId);
+      // 定位信号最后置位：归组+权威重拉完成后才 reveal——提前发会被 RoomList
+      // 按 groupId=null 的临时行消费掉（折叠组展开失效，2026-10-23 主机实测）
+      set({ revealSessionId: session.id });
       return true;
     } catch (err) {
       // Electron IPC 错误只保 message——以子串识别结构化错误（types.d.ts 契约）
       if ((err as Error).message.includes('NO_DEFAULT_AGENT')) {
+        // 建会未成：pending 保留（引导弹窗选好默认后重试仍归组）
         set({ needsDefaultAgent: true });
       } else {
         set({ error: (err as Error).message });
@@ -488,13 +514,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
-  createCollabSession: async (workspaceId, title, target) => {
+  createCollabSession: async (workspaceId, title, target, groupId) => {
     set({ error: null });
+    const targetGroup = groupId ?? get().pendingCreateGroupId;
     try {
       const session = await ipc.session.createCollab(workspaceId, title, target);
       activateNewSession(set, session);
       set((s) => ({ inputFocusTick: s.inputFocusTick + 1 }));
       await get().selectSession(session.id);
+      await assignToGroup(get, set, session.id, targetGroup, workspaceId);
+      set({ revealSessionId: session.id });
       return true;
     } catch (err) {
       set({ error: (err as Error).message });
@@ -517,6 +546,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       needsDefaultAgent: false,
       activeSessionReadOnly: false,
       inputFocusTick: 0,
+      pendingCreateGroupId: null,
+      revealSessionId: null,
       fileTriggerTick: 0,
       loadingOlderBySession: new Map(),
       hasMoreBySession: new Map(),
@@ -527,6 +558,28 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
   },
 }));
+
+/**
+ * 建会后归组（分组建会入口编排）：moveToGroup + 重拉权威序；pending 用后即清。
+ * 归组失败只写 error 提示——会话已建不回滚（返回 true 语义不变）。
+ */
+async function assignToGroup(
+  get: () => SessionState,
+  set: (updater: (state: SessionState) => Partial<SessionState>) => void,
+  sessionId: string,
+  targetGroup: string | null | undefined,
+  workspaceId: string,
+): Promise<void> {
+  if (!targetGroup) return;
+  set(() => ({ pendingCreateGroupId: null }));
+  try {
+    await ipc.session.moveToGroup(sessionId, targetGroup);
+    // await 权威重拉（非 void refresh）：调用方在会话 groupId 落定后才发定位信号
+    await get().loadSessions(workspaceId);
+  } catch (err) {
+    set(() => ({ error: `移入分组失败：${(err as Error).message}` }));
+  }
+}
 
 /** 新建会话置顶加入列表并设为激活（消息/成员由随后 selectSession 拉取） */
 function activateNewSession(
