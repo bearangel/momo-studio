@@ -82,7 +82,20 @@ export async function initHub(): Promise<void> {
 export async function hubConfigure(input: { hubUrl: string; nodeName: string }): Promise<HubStatus> {
   const store = configStore();
   const prev: HubConfigRow | null = store.read();
-  store.write({ hubUrl: normUrl(input.hubUrl), nodeName: input.nodeName.trim(), nodeId: prev?.nodeId ?? null });
+  const hubUrl = normUrl(input.hubUrl);
+  const nodeName = input.nodeName.trim();
+  if (prev && prev.hubUrl !== hubUrl) {
+    // 换址 = 换 hub：旧 device token 是旧 hub 签发的，对新 hub 无效——拿它连新 hub
+    // 会连出「鉴权失败 + 退避重连」的死循环。故断开旧连接、清凭证、nodeId 归零，
+    // 不起新连接（用户必须重新 enroll 才能接入新 hub）。
+    client?.stop();
+    client = null;
+    await clearDeviceToken();
+    store.write({ hubUrl, nodeName, nodeId: null });
+    return hubGetStatus();
+  }
+  // 同址（仅节点名变化）→ 保留 nodeId 与凭证，照旧连接
+  store.write({ hubUrl, nodeName, nodeId: prev?.nodeId ?? null });
   await initHub();
   return hubGetStatus();
 }
@@ -98,6 +111,10 @@ export async function hubEnroll(input: { hubUrl: string; enrollmentToken: string
 }
 
 export async function hubForget(): Promise<void> {
+  // 先清 lastError 再停连接——client.stop() 内部会 setState('disconnected') 触发一次
+  // 状态广播，若此时 lastError 还是旧值，renderer 会先收到一条带历史错误的
+  // disconnected 事件。
+  lastError = null;
   client?.stop();
   client = null;
   configStore().clear();

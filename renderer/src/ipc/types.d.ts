@@ -2508,7 +2508,7 @@ export interface GenerateOnboardingPlanResult {
 export interface OnboardingApiSurface {
   getStatus(): Promise<{ status: OnboardingStatus }>;
   generatePlan(input: GenerateOnboardingPlanInput): Promise<GenerateOnboardingPlanResult>;
-  applyPlan(input: ApplyOnboardingPlanInput): Promise<ApplyOnboardingPlanResult>;
+  applyPlan(input: ApplyOnboardingPlanInput): Promise<OnboardingApplyResult>;
   markDone(input: MarkOnboardingDoneInput): Promise<void>;
 }
 
@@ -2544,6 +2544,8 @@ export interface HubNodePresenceEvent {
   kind: 'online' | 'offline';
   nodeId: string;
   nodeName?: string;
+  /** 事件发生时刻（协议 NodeOnlineEvent/NodeOfflineEvent 原字段，随载荷透传） */
+  at?: number;
 }
 
 /** hub:configure 入参（hub 地址 + 本节点名） */
