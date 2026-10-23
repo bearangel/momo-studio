@@ -2403,6 +2403,8 @@ export interface ApiSurface {
   };
   /** 新装引导（spec 2026-10-10）——main 侧 onboarding/ipc.handlers.ts */
   onboarding: OnboardingApiSurface;
+  /** M0 节点互联（spec 2026-10-23）——main 侧 hub/ipc.handlers.ts */
+  hub: HubApiSurface;
 }
 
 export interface DirEntry {
@@ -2506,6 +2508,65 @@ export interface GenerateOnboardingPlanResult {
 export interface OnboardingApiSurface {
   getStatus(): Promise<{ status: OnboardingStatus }>;
   generatePlan(input: GenerateOnboardingPlanInput): Promise<GenerateOnboardingPlanResult>;
-  applyPlan(input: ApplyOnboardingPlanInput): Promise<OnboardingApplyResult>;
+  applyPlan(input: ApplyOnboardingPlanInput): Promise<ApplyOnboardingPlanResult>;
   markDone(input: MarkOnboardingDoneInput): Promise<void>;
+}
+
+// ─── Hub（M0 节点互联，spec 2026-10-23）────────────────────────────────────
+
+/**
+ * hub 连接状态机（与 electron 端 hub/client.ts 的 HubConnectionState 对齐——
+ * 跨进程独立定义，仅结构对齐）。
+ */
+export type HubConnectionState = 'disconnected' | 'connecting' | 'online';
+
+/**
+ * hub 连接状态快照（与 electron/src/main/hub/index.ts 的 HubStatus 对齐）。
+ * configured = kv_store 有 hub_config 行；state = 当前连接状态机位置。
+ */
+export interface HubStatus {
+  configured: boolean;
+  state: HubConnectionState;
+  hubUrl: string | null;
+  nodeName: string | null;
+  nodeId: string | null;
+  lastError: string | null;
+}
+
+/** hub:stateChanged 推送载荷（连接状态变化 / 错误信息） */
+export interface HubStateChangedEvent {
+  state: HubConnectionState;
+  lastError: string | null;
+}
+
+/** hub:nodePresence 推送载荷（其他节点上下线） */
+export interface HubNodePresenceEvent {
+  kind: 'online' | 'offline';
+  nodeId: string;
+  nodeName?: string;
+}
+
+/** hub:configure 入参（hub 地址 + 本节点名） */
+export interface HubConfigureInput {
+  hubUrl: string;
+  nodeName: string;
+}
+
+/** hub:enroll 入参（hub 地址 + 加入凭证 + 本节点名） */
+export interface HubEnrollInput {
+  hubUrl: string;
+  enrollmentToken: string;
+  nodeName: string;
+}
+
+/** hub 命名空间通道面（spec 2026-10-23：4 invoke + 2 推送） */
+export interface HubApiSurface {
+  getStatus(): Promise<HubStatus>;
+  configure(input: HubConfigureInput): Promise<HubStatus>;
+  enroll(input: HubEnrollInput): Promise<HubStatus>;
+  forget(): Promise<void>;
+  /** 连接状态变化推送订阅（解订阅函数） */
+  onStateChanged(callback: (payload: HubStateChangedEvent) => void): () => void;
+  /** 节点上下线推送订阅（解订阅函数） */
+  onNodePresence(callback: (payload: HubNodePresenceEvent) => void): () => void;
 }

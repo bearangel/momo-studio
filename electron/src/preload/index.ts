@@ -42,6 +42,8 @@ import type {
   PluginPanelInfo,
   PluginToolInfo,
   PluginConfigView,
+  HubStateChangedEvent,
+  HubNodePresenceEvent,
 } from '../../../renderer/src/ipc/types';
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -550,6 +552,23 @@ const api: ApiSurface = {
       return () => {
         ipcRenderer.off('plugin:panelEvent', handler);
       };
+    },
+  },
+  // M0 节点互联（spec 2026-10-23）：hub 连接状态/接入/忘记 + 状态与节点在线推送
+  hub: {
+    getStatus: () => invoke('hub:getStatus'),
+    configure: (input) => invoke('hub:configure', input),
+    enroll: (input) => invoke('hub:enroll', input),
+    forget: () => invoke('hub:forget'),
+    onStateChanged: (callback) => {
+      const handler = (_e: IpcRendererEvent, payload: HubStateChangedEvent): void => callback(payload);
+      ipcRenderer.on('hub:stateChanged', handler);
+      return () => { ipcRenderer.off('hub:stateChanged', handler); };
+    },
+    onNodePresence: (callback) => {
+      const handler = (_e: IpcRendererEvent, payload: HubNodePresenceEvent): void => callback(payload);
+      ipcRenderer.on('hub:nodePresence', handler);
+      return () => { ipcRenderer.off('hub:nodePresence', handler); };
     },
   },
   window: {

@@ -32,6 +32,8 @@ import { registerTaskHandlers } from '../task/ipc.handlers';
 import { registerTaskGroupHandlers } from '../task/groups.ipc.handlers';
 import { registerDialogHandlers } from './dialog.handlers';
 import { registerWindowIpc } from '../window-ipc';
+// M0 节点互联（spec 2026-10-23）：hub 连接管理四通道 + 两推送
+import { registerHubIpc } from '../hub/ipc.handlers';
 // 新装引导（spec 2026-10-10）：status / 方案生成 / 方案应用 / 完成标记
 import { registerOnboardingHandlers } from '../onboarding/ipc.handlers';
 import type { WorkspaceIpcOpts } from '../workspace/ipc.handlers';
@@ -87,6 +89,8 @@ export function registerIpcHandlers(opts: WorkspaceIpcOpts = {}): void {
   registerDialogHandlers();
   // 新装引导（spec 2026-10-10）
   registerOnboardingHandlers();
+  // M0 节点互联（spec 2026-10-23）：hub 连接管理四通道 + 两推送
+  registerHubIpc();
   // 窗口控制（自绘 titlebar）——注册先于窗口创建，getWin 每次调用时懒查首个窗口
   registerWindowIpc(() => BrowserWindow.getAllWindows()[0] ?? null);
 }

@@ -39,6 +39,8 @@ import { BROWSER_SHOT_SCHEME } from './browser/protocol';
 // browser 工具 IPC 桥（主机验收 P0 修复）：runtime 子进程 browser-op 请求的
 // 主进程路由——assembleBrowserSubsystem 产出的真实 policy/manager 在此注册
 import { initBrowserOpRouter } from './browser/op-router';
+// M0 节点互联（spec 2026-10-23）：hub 连接生命周期（app ready 后自动连接 / 退出前断开）
+import { initHub, stopHub } from './hub/index';
 
 // 单实例锁（v2.10 Windows 全平台化 Task 4）：同一用户数据目录只允许一个实例。
 // 无锁 = 已有实例在运行——app.quit() 后不进入任何 boot（whenReady 不注册、
@@ -177,6 +179,14 @@ if (!app.requestSingleInstanceLock()) {
         onWorkspaceSwitched: (wsId, dir) => browserBoot.switchWorkspace(wsId, dir),
       });
 
+      // M0 节点互联（spec 2026-10-23）：已配置 hub 且 keychain 有 device token 时
+      // 自动连上（fire-and-forget——连接失败只写 lastError，不阻塞启动）。
+      void initHub().catch((err) => {
+        logger.warn('hub 自动连接失败（不影响应用启动）', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+
       // v2.5：boot 逐 workspace journal 配额清理（T6 移交）——registerIpcHandlers 内
       // registerJournalIpc 已注入 store；清理失败只 warn 不阻塞启动（安全网自身
       // 不能变成故障点，与 maybeEnforceQuota 节流触发器同处理）。
@@ -248,5 +258,7 @@ if (!app.requestSingleInstanceLock()) {
     destroyAllTaskDrivenRuntimes();
     destroyRouterService();
     stopTaskRuntime();
+    // M0 节点互联（spec 2026-10-23）：断开 hub 长连接（幂等——stop 内部先摘连接身份）
+    stopHub();
   });
 }
