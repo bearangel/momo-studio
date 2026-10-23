@@ -172,7 +172,8 @@ export function CodeEditor() {
   );
 }
 
-// 根据扩展名映射 Monaco 语言 ID
+// 根据扩展名映射 Monaco 语言 ID（目标 id 须在 monaco-setup.ts 的 PRELOAD_LANG_IDS
+// 预载集内，否则首开有无色窗口——2026-10-23 高亮缺失教训）
 function detectLanguage(filePath: string): string {
   const ext = filePath.split('.').pop()?.toLowerCase();
   const map: Record<string, string> = {
@@ -180,16 +181,40 @@ function detectLanguage(filePath: string): string {
     tsx: 'typescript',
     js: 'javascript',
     jsx: 'javascript',
+    mjs: 'javascript',
+    cjs: 'javascript',
     json: 'json',
     md: 'markdown',
     py: 'python',
     go: 'go',
     rs: 'rust',
     css: 'css',
+    scss: 'scss',
+    less: 'less',
     html: 'html',
+    htm: 'html',
+    vue: 'html',
     yaml: 'yaml',
     yml: 'yaml',
+    toml: 'ini',
+    ini: 'ini',
     sh: 'shell',
+    bash: 'shell',
+    zsh: 'shell',
+    c: 'c',
+    h: 'c',
+    cpp: 'cpp',
+    cc: 'cpp',
+    cxx: 'cpp',
+    hpp: 'cpp',
+    java: 'java',
+    rb: 'ruby',
+    php: 'php',
+    swift: 'swift',
+    kt: 'kotlin',
+    kts: 'kotlin',
+    xml: 'xml',
+    sql: 'sql',
   };
   return map[ext ?? ''] ?? 'plaintext';
 }
