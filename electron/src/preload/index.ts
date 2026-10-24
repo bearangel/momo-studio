@@ -432,7 +432,7 @@ const api: ApiSurface = {
       query?: string,
       page?: number,
     ) =>
-      invoke<{ entries: RegistryListEntry[]; degraded: boolean; hasMore: boolean }>(
+      invoke<{ entries: RegistryListEntry[]; degraded: boolean; hasMore: boolean; notEnrolled?: boolean }>(
         'resource:registryList',
         providerKey,
         type,
@@ -461,7 +461,11 @@ const api: ApiSurface = {
     previewBuiltinPreset: (slug: string) =>
       invoke<BuiltinPresetPreview>('resource:previewBuiltinPreset', slug),
     // 走查 D9：远程目录降级态（资源库「网络目录暂时不可达」提示条数据源）
-    getCatalogStatus: () => invoke<{ degraded: boolean }>('resource:getCatalogStatus'),
+    getCatalogStatus: () =>
+      invoke<{
+        degraded: boolean;
+        sources?: Array<{ source: 'marketplace' | 'hub'; degraded: boolean }>;
+      }>('resource:getCatalogStatus'),
   },
   task: {
     create: (input) => invoke<TaskRow>('task:create', input),

@@ -417,10 +417,13 @@ describe('registerResourceHandlers', () => {
     const providers = (await handler()) as Array<{
       key: string; label: string; region: string; types: string[]; degraded: boolean;
     }>;
-    expect(providers.map((p) => p.key)).toEqual(['builtin', 'smithery']);
+    expect(providers.map((p) => p.key)).toEqual(['builtin', 'smithery', 'hub']);
     expect(providers[0]).toMatchObject({ region: 'local', degraded: false });
     expect(providers[0]!.types).toEqual(['agent', 'mcp', 'skill']);
     expect(providers[1]).toMatchObject({ label: 'Smithery', region: 'intl', degraded: false });
+    // M1c：momo-hub 为资源库第五源——region=local（自建节点），plugin 类型不在册
+    expect(providers[2]).toMatchObject({ label: 'momo-hub', region: 'local', degraded: false });
+    expect(providers[2]!.types).toEqual(['agent', 'mcp', 'skill']);
   });
 
   it('resource:registryList builtin 分支：marketplace 源 + 前端同款过滤排序映射（hasMore 恒 false）', async () => {

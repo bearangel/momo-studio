@@ -145,12 +145,13 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
   const mcpEnv = item.custom?.mcpConfig?.env;
   const envEntries = mcpEnv ? Object.entries(mcpEnv) : [];
 
-  // hub 源（smithery）经 marketplace 元数据段渲染（spec 2026-09-22 §4.4）；
-  // builtin/marketplace 也走同一段——一处定义两处复用，避免门控漂移
+  // hub 源（smithery / momo-hub）经 marketplace 元数据段渲染（spec 2026-09-22 §4.4；
+  // M1c momo-hub 同款）；builtin/marketplace 也走同一段——一处定义两处复用，避免门控漂移
   const hasMarketplaceMeta =
     item.source === 'builtin' ||
     item.source === 'marketplace' ||
-    item.source === 'smithery';
+    item.source === 'smithery' ||
+    item.source === 'hub';
 
   // custom agent 定义预览（只读 YAML-ish）；非 custom agent 项恒为 null
   const [defPreview, setDefPreview] = useState<string | null>(null);

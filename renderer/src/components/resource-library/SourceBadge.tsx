@@ -15,6 +15,7 @@ const SOURCE_BADGE: Record<ResourceSource, { label: string; tone: BadgeTone }> =
   custom:      { label: '自定义', tone: 'neutral' },
   marketplace: { label: '网络资源', tone: 'violet' },
   smithery:    { label: 'Smithery', tone: 'violet' },
+  hub:         { label: 'momo-hub', tone: 'violet' },
   plugin:      { label: '插件', tone: 'accent' },
 };
 

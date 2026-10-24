@@ -72,6 +72,7 @@ import {
 } from './mcp-config';
 import { HUB_PROVIDERS } from './hub';
 import { isSmitheryDegraded } from './hub/smithery';
+import { isHubCatalogDegraded } from './hub/momo-hub';
 import { installPackage, uninstallPackage } from '../marketplace/installer';
 import { fetchCatalog, isCatalogDegraded } from '../marketplace/client';
 import { deleteRegistered, registerMcpDefinition } from '../mcp/host-manager';
@@ -386,7 +387,8 @@ export function registerResourceHandlers(): void {
       region: p.region,
       types: [...p.types],
       // 新增 provider 默认视为可达（false），接入退避后再挂各自探测函数
-      degraded: p.key === 'smithery' ? isSmitheryDegraded() : false,
+      degraded:
+        p.key === 'smithery' ? isSmitheryDegraded() : p.key === 'hub' ? isHubCatalogDegraded() : false,
     }));
     return [
       {
@@ -508,8 +510,13 @@ export function registerResourceHandlers(): void {
 
   // resource:getCatalogStatus — 远程目录降级态（走查 D9）。renderer 资源库据此
   // 显示「网络目录暂时不可达」提示条，区分「离线降级」与「目录为空」。
+  // sources 逐源聚合（M1c）：marketplace 远程目录 + momo-hub 目录各自的降级态。
   ipcMain.handle('resource:getCatalogStatus', () => ({
     degraded: isCatalogDegraded(),
+    sources: [
+      { source: 'marketplace' as const, degraded: isCatalogDegraded() },
+      { source: 'hub' as const, degraded: isHubCatalogDegraded() },
+    ],
   }));
 
   // resource:listBuiltinPresets — 预置清单只读（P2.3 spec §5）。本地直读

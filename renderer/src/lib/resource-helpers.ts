@@ -13,6 +13,7 @@ const SOURCE_LABELS: Record<ResourceSource, string> = {
   custom: '自定义',
   marketplace: '网络资源',
   smithery: 'Smithery',
+  hub: 'momo-hub',
   plugin: '插件',
 };
 

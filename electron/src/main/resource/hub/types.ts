@@ -24,13 +24,15 @@ export interface HubListResult {
   degraded: boolean;
   /** 请求页之后还有更多页（smithery 按 pagination.totalPages 判定；错误路径恒 false） */
   hasMore: boolean;
+  /** 未接入引导态（hub 未配置——空目录 + degraded=false，UI 引导链到设置） */
+  notEnrolled?: boolean;
 }
 
-/** hub provider 契约——每个网络注册表一个实现（smithery；modelscope 已于 P2.1 移除） */
+/** hub provider 契约——每个网络注册表一个实现（smithery；momo-hub 为 M1c 新增第五源） */
 export interface HubProvider {
-  readonly key: 'smithery';
+  readonly key: 'smithery' | 'hub';
   readonly label: string;
-  readonly region: 'intl' | 'cn';
+  readonly region: 'intl' | 'cn' | 'local';
   readonly types: ResourceType[];
   /** page 1 起始（2026-09-23 实测 Smithery page 参数 1 起、page=0 被 422 拒绝） */
   list(type: ResourceType, query?: string, page?: number): Promise<HubListResult>;

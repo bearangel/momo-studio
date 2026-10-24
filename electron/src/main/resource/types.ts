@@ -15,6 +15,7 @@ export type ResourceType = 'agent' | 'mcp' | 'skill' | 'plugin';
  *   - marketplace  网络资源（远程 catalog 下载安装）
  *   - custom       自定义（用户本地注册 / 上传）
  *   - smithery     Smithery registry 安装（P2 双轨·国际，spec 2026-09-22）
+ *   - hub          momo-hub 自建节点资源（M1c 第五源，spec 2026-10-24 §6.1）
  *
  * modelscope（魔搭社区）已于 P2.1 移除；p2p 共享已于 2026-10-20 随 P2P 子系统移除。
  */
@@ -23,6 +24,7 @@ export type ResourceSource =
   | 'marketplace'
   | 'custom'
   | 'smithery'
+  | 'hub'
   // D2：插件自带资源（MCP server 等）——随插件生命周期，不可手动删
   | 'plugin';
 
@@ -117,6 +119,7 @@ const SOURCE_LABELS: Record<ResourceSource, string> = {
   custom: '自定义',
   marketplace: '网络资源',
   smithery: 'Smithery',
+  hub: 'momo-hub',
   plugin: '插件',
 };
 
@@ -146,7 +149,7 @@ export function buildResourceId(source: ResourceSource, type: ResourceType, slug
  */
 export function parseResourceId(id: string): { source: ResourceSource; type: ResourceType; slug: string } | null {
   // slug 部分允许任意非空字符（包括 UUID 中的连字符），用贪婪匹配
-  const m = id.match(/^(builtin|marketplace|custom|smithery|plugin)-(agent|mcp|skill|plugin)-(.+)$/);
+  const m = id.match(/^(builtin|marketplace|custom|smithery|hub|plugin)-(agent|mcp|skill|plugin)-(.+)$/);
   if (!m || !m[3]) return null;
   return {
     source: m[1] as ResourceSource,

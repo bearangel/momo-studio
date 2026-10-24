@@ -849,10 +849,17 @@ export type ResourceType = 'agent' | 'mcp' | 'skill' | 'plugin';
  *   - marketplace  网络资源（远程 catalog 下载安装）
  *   - custom       自定义（用户本地注册 / 上传）
  *   - smithery     Smithery registry 安装（P2 双轨·国际，spec 2026-09-22）
+ *   - hub          momo-hub 自建节点资源（M1c 第五源，spec 2026-10-24 §6.1）
  * modelscope 已于 P2.1 移除；p2p 共享已于 2026-10-20 随 P2P 子系统移除。
  * 与 electron 端 resource/types.ts 的 ResourceSource 对齐。
  */
-export type ResourceSource = 'builtin' | 'marketplace' | 'custom' | 'smithery' | 'plugin';
+export type ResourceSource =
+  | 'builtin'
+  | 'marketplace'
+  | 'custom'
+  | 'smithery'
+  | 'hub'
+  | 'plugin';
 
 /**
  * v1.7 资源列表过滤条件，所有字段可选，undefined 表示不过滤该维度。
@@ -1063,7 +1070,7 @@ export interface PluginApiSurface {
  * hub 项 degraded 取各自退避状态（UI 置灰信号，不隐藏）。
  */
 export interface RegistryProviderMeta {
-  key: 'builtin' | 'smithery';
+  key: 'builtin' | 'smithery' | 'hub';
   label: string;
   region: 'local' | 'intl' | 'cn';
   types: ResourceType[];
@@ -2334,7 +2341,13 @@ export interface ApiSurface {
       type: ResourceType,
       query?: string,
       page?: number,
-    ): Promise<{ entries: RegistryListEntry[]; degraded: boolean; hasMore: boolean }>;
+    ): Promise<{
+      entries: RegistryListEntry[];
+      degraded: boolean;
+      hasMore: boolean;
+      /** M1c：未接入引导态（hub 未配置——空目录 + degraded=false，UI 引导链到设置） */
+      notEnrolled?: boolean;
+    }>;
     /**
      * P2.2 Task 6：查看已装远程 MCP 配置（McpConfigDialog 打开时拉取）。
      * bare=true 时无 schema（裸表单回显 url/headers）；三级降级在主进程完成。
@@ -2378,8 +2391,12 @@ export interface ApiSurface {
     /**
      * 2026-10-12 D9：市场目录健康状态（主进程探测 catalog 源可达性；离线/网络
      * 受限时 degraded=true）。资源库 agent 页据此显示「当前显示本地目录」降级提示。
+     * M1c：sources 逐源聚合（marketplace 远程目录 + momo-hub 目录各自降级态）。
      */
-    getCatalogStatus(): Promise<{ degraded: boolean }>;
+    getCatalogStatus(): Promise<{
+      degraded: boolean;
+      sources?: Array<{ source: 'marketplace' | 'hub'; degraded: boolean }>;
+    }>;
   };
   task: TaskApiSurface;
   /** 看板重构 Task 7：任务组通道面（taskGroup:*，groups.ipc.handlers.ts） */
