@@ -255,20 +255,22 @@ export function registerResourceHandlers(): void {
     }
     switch (item.source) {
       case 'marketplace': {
-        // 警告：uninstallPackage 按 installed_packages.item_id 查删——该列存的是 catalog 的
-        // MarketplaceItem.id（opaque），不是 ResourceItem.id。直接传 item.id 会查无此行 →
-        // 静默 no-op（用户以为删成功但实际没删）。须 fetchCatalog 按 slug 反查 catalog 原 id。
+        // 警告：uninstallPackage 按 installed_packages.item_id + item_type 查删——
+        // item_id 列存的是 catalog 的 MarketplaceItem.id（opaque），不是
+        // ResourceItem.id。直接传 item.id 会查无此行 → 静默 no-op（用户以为删成功
+        // 但实际没删）。须 fetchCatalog 按 slug 反查 catalog 原 id 与 type。
         const catalog = await fetchCatalog();
         const catalogItem = catalog.items.find((ci) => ci.slug === item.slug);
         if (!catalogItem) {
           throw new Error(`marketplace catalog 中未找到 slug=${item.slug}（可能 catalog 已变更）`);
         }
-        return uninstallPackage(catalogItem.id);
+        return uninstallPackage(catalogItem.id, catalogItem.type);
       }
       case 'hub': {
         // hub 记账 item_id = `hub:{slug}`（hubPackageItemId 单点前缀）——同款陷阱：
-        // 传 ResourceItem.id 会查无此行 → 静默 no-op
-        return uninstallHubPackage(item.slug);
+        // 传 ResourceItem.id 会查无此行 → 静默 no-op。type 从当前资源上下文透传
+        //（T15a-F1：同 slug 跨类型记账碰撞时按类型路由，不碰运气）
+        return uninstallHubPackage(item.type, item.slug);
       }
       case 'custom': {
         let deleted: unknown;

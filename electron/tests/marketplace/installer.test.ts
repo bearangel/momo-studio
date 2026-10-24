@@ -198,13 +198,13 @@ describe('marketplace/installer listInstalled / uninstallPackage', () => {
     const { cachePath } = await installPackage(item);
     expect(fs.existsSync(cachePath)).toBe(true);
 
-    uninstallPackage(item.id);
+    uninstallPackage(item.id, item.type);
     expect(fs.existsSync(cachePath)).toBe(false);
     expect(listInstalled()).toHaveLength(0);
   });
 
   it('uninstallPackage 未安装的 itemId 静默跳过', () => {
-    expect(() => uninstallPackage('does-not-exist')).not.toThrow();
+    expect(() => uninstallPackage('does-not-exist', 'agent')).not.toThrow();
   });
 
   it('listInstalled 字段映射为 camelCase', async () => {

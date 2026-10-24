@@ -363,8 +363,22 @@ function collectRegularFiles(root: string, excludeDotFiles: string[]): string[] 
   return out;
 }
 
-/** 目录 → tar.gz（显式清单入 tar：白名单外条目物理上进不了归档；数组参数不经 shell） */
-async function tarDirectory(root: string, excludeDotFiles: string[], nameHint: string): Promise<string> {
+/** 发布包体积上限（200MB，hub 端 413 同款；与插件链 MAX_PUBLISH_ARCHIVE_BYTES
+ *  对称——本地预检避免白传 200MB 后才被服务端拒） */
+export const MAX_PUBLISH_PACKAGE_BYTES = 200 * 1024 * 1024;
+
+/**
+ * 目录 → tar.gz（显式清单入 tar：白名单外条目物理上进不了归档；数组参数不经 shell）。
+ * 归档体积预检（T15a-F3）：tar 后以归档实际尺寸为准（压缩率不可预知，源尺寸小
+ * 不代表归档小），超 maxBytes 即拒——agent/skill/mcp 三类共用路径；上限经参数
+ * 注入（缺省生产常量），测试以小上限走同一终检路径。
+ */
+export async function tarDirectory(
+  root: string,
+  excludeDotFiles: string[],
+  nameHint: string,
+  maxBytes: number = MAX_PUBLISH_PACKAGE_BYTES,
+): Promise<string> {
   const entries = collectRegularFiles(root, excludeDotFiles);
   if (entries.length === 0) throw new Error(`打包目录为空，拒绝发布: ${root}`);
   assertSafeTarMembers(entries); // `..` / 绝对路径成员终审（与安装侧同源守卫）
@@ -373,7 +387,11 @@ async function tarDirectory(root: string, excludeDotFiles: string[], nameHint: s
     `publish-${nameHint}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}.tar.gz`,
   );
   try {
-    await execFileAsync('tar', ['-czf', archivePath, '-C', root, ...entries]);
+    await execFileAsync('tar', ['czf', archivePath, '-C', root, ...entries]);
+    const sizeBytes = fs.statSync(archivePath).size;
+    if (sizeBytes > maxBytes) {
+      throw new Error('资源包超过 200MB 上限，请精简后重试');
+    }
     return archivePath;
   } catch (err) {
     fs.rmSync(archivePath, { force: true }); // 失败不留半成品

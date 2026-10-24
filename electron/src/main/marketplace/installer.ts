@@ -442,14 +442,24 @@ export function listInstalled(): InstalledPackage[] {
   }));
 }
 
-/** 卸载包：删缓存目录 + 删 DB 记录 */
-export function uninstallPackage(itemId: string): void {
+/**
+ * 卸载包：删缓存目录 + 删 DB 记录。
+ * 类型过滤（T15a-F1）：item_id 不是跨类型唯一键（hub 记账 `hub:{slug}` 下
+ * 同 slug 的 agent 与插件共用 item_id）——DELETE 与 rm cache_path 均须按
+ * item_id + itemType 双键圈定，防卸载一方误删另一方的记账与缓存。
+ */
+export function uninstallPackage(itemId: string, itemType: string): void {
   const db = getDb();
-  const row = db
-    .prepare('SELECT cache_path FROM installed_packages WHERE item_id = ?')
-    .get(itemId) as { cache_path: string } | undefined;
-  if (!row) return;
-  fs.rmSync(row.cache_path, { recursive: true, force: true });
-  db.prepare('DELETE FROM installed_packages WHERE item_id = ?').run(itemId);
-  logger.info('包已卸载', { itemId });
+  const rows = db
+    .prepare('SELECT cache_path FROM installed_packages WHERE item_id = ? AND item_type = ?')
+    .all(itemId, itemType) as Array<{ cache_path: string }>;
+  if (rows.length === 0) return;
+  for (const row of rows) {
+    fs.rmSync(row.cache_path, { recursive: true, force: true });
+  }
+  db.prepare('DELETE FROM installed_packages WHERE item_id = ? AND item_type = ?').run(
+    itemId,
+    itemType,
+  );
+  logger.info('包已卸载', { itemId, itemType });
 }

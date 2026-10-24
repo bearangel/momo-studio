@@ -99,7 +99,7 @@ vi.mock('../../src/main/logger', () => ({
 
 import * as manager from '../../src/main/hub/index';
 import { registerHubIpc } from '../../src/main/hub/ipc.handlers';
-import { buildPublishPackage, publishToHub } from '../../src/main/hub/publish';
+import { buildPublishPackage, publishToHub, tarDirectory } from '../../src/main/hub/publish';
 
 // ── 环境脚手架 ────────────────────────────────────────────────────────────
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-hubpub-'));
@@ -483,5 +483,32 @@ describe('IPC 接线与推送链', () => {
       channel: 'hub:resourcePublished',
       payload: { slug: 's1', type: 'skill', name: '技能', version: '1.0.0', author: 'peer', at: 123 },
     });
+  });
+});
+
+describe('T15a-F3：发布体积预检（tarDirectory 归档终检）', () => {
+  function mkSrc(name: string, size: number): string {
+    const dir = path.join(tmpRoot, name);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'SKILL.md'), 'x'.repeat(size));
+    return dir;
+  }
+
+  it('归档实际尺寸超注入上限 → 拒（人话错误）+ 半成品归档清理', async () => {
+    const dir = mkSrc('size-cap-src', 4096);
+    // 注入 16 字节上限走同一 tar + statSync 终检路径（生产默认 200MB 无法在单测造出）
+    await expect(tarDirectory(dir, [], 'size-cap', 16)).rejects.toThrow(/资源包超过 200MB 上限/);
+    const tmpDir = path.join(tmpRoot, 'tmp');
+    const leftovers = fs.existsSync(tmpDir)
+      ? fs.readdirSync(tmpDir).filter((f) => f.startsWith('publish-size-cap'))
+      : [];
+    expect(leftovers).toEqual([]);
+  });
+
+  it('上限内 → 放行并返回归档路径（生产默认常量路径）', async () => {
+    const dir = mkSrc('size-ok-src', 64);
+    const archivePath = await tarDirectory(dir, [], 'size-ok');
+    expect(fs.existsSync(archivePath)).toBe(true);
+    fs.rmSync(archivePath, { force: true });
   });
 });

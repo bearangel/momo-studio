@@ -29,7 +29,13 @@ import { downloadFile } from '../marketplace/installer';
 import { isValidSha256Hex, type MarketplaceItem } from '../marketplace/types';
 import { resolvePluginsDir } from '../paths';
 import { parseManifest } from './manifest';
-import { assertMinAppVersion, assertSafeTarMembers, finalizePluginInstall } from './installer';
+import {
+  assertMinAppVersion,
+  assertSafeTarMembers,
+  finalizePluginInstall,
+  MAX_ENTRIES,
+  MAX_TOTAL_UNCOMPRESSED,
+} from './installer';
 import type { PluginManifest, PluginRecord } from './types';
 
 const execFileAsync = promisify(execFile);
@@ -44,9 +50,21 @@ function listTarMembers(archivePath: string): string[] {
     .filter((l) => l !== '' && !l.endsWith('/'));
 }
 
-/** 解压后条目形态终审：lstat 语义 walk（Dirent 不跟随链接），symlink 与
- *  FIFO/设备等非常规条目整包拒绝——与打包侧 collectPackEntries 对称 */
-function assertRegularEntries(root: string): void {
+/**
+ * 解压后条目形态终审 + 解压炸弹守卫：lstat 语义 walk（Dirent 不跟随链接），
+ * symlink 与 FIFO/设备等非常规条目整包拒绝——与打包侧 collectPackEntries 对称。
+ * 炸弹守卫（T15a-F2）：walk 顺带累计条目数与解压总量，超 zip 链同款上限
+ * （MAX_ENTRIES / MAX_TOTAL_UNCOMPRESSED 自 plugin/installer 单源引入——两链
+ * 同闸防漂移）即拒。tar 与 zip 头一样可说谎，解压后的实际尺寸才是权威。
+ * 上限经参数注入（缺省生产常量），测试以小上限走同一 walk 路径。
+ */
+export function assertRegularEntries(
+  root: string,
+  maxTotal: number = MAX_TOTAL_UNCOMPRESSED,
+  maxEntries: number = MAX_ENTRIES,
+): void {
+  let count = 0;
+  let total = 0;
   const walk = (dir: string): void => {
     for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
       if (ent.isDirectory()) {
@@ -58,6 +76,14 @@ function assertRegularEntries(root: string): void {
       }
       if (!ent.isFile()) {
         throw new Error(`插件包含非常规文件条目（FIFO/设备等），拒绝安装: ${ent.name}`);
+      }
+      count += 1;
+      if (count > maxEntries) {
+        throw new Error(`插件条目数超限（${count} > ${maxEntries}）`);
+      }
+      total += fs.statSync(path.join(dir, ent.name)).size;
+      if (total > maxTotal) {
+        throw new Error(`插件解压总量超限（${total} > ${maxTotal} 字节）`);
       }
     }
   };

@@ -518,7 +518,7 @@ describe('T10 e2e：resource:list 并入 hub 已装项 + 五源并列', () => {
     ).cache_path;
     expect(fs.existsSync(cachePath)).toBe(true);
 
-    uninstallHubPackage('hub-e2e-skill');
+    uninstallHubPackage('skill', 'hub-e2e-skill');
 
     expect(fs.existsSync(cachePath)).toBe(false);
     const row = getDb()

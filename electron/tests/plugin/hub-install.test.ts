@@ -35,7 +35,12 @@ import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { getPlugin } from '../../src/main/plugin/registry';
-import { uninstallPlugin } from '../../src/main/plugin/installer';
+import {
+  uninstallPlugin,
+  MAX_TOTAL_UNCOMPRESSED,
+  MAX_ENTRIES,
+} from '../../src/main/plugin/installer';
+import { assertRegularEntries } from '../../src/main/plugin/hub-install';
 import { listRegistered } from '../../src/main/mcp/host-manager';
 import { listResources } from '../../src/main/resource/library';
 import {
@@ -47,7 +52,7 @@ import {
   __setHubContextResolverForTest,
   hubPackageItemId,
 } from '../../src/main/resource/hub/momo-hub';
-import { __resetTrustedDownloadOriginsForTest } from '../../src/main/marketplace/installer';
+import { __resetTrustedDownloadOriginsForTest, installPackage } from '../../src/main/marketplace/installer';
 import { resolvePluginInstalledDir, resolvePluginsDir } from '../../src/main/paths';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-hub-plugin-${Date.now()}`);
@@ -384,7 +389,7 @@ describe('T12：卸载级联两条入口', () => {
     });
     const dir = resolvePluginInstalledDir('hub-plug-a', '0.2.0');
 
-    uninstallHubPackage('hub-plug-a');
+    uninstallHubPackage('plugin', 'hub-plug-a');
 
     expect(getPlugin('hub-plug-a')).toBeNull();
     expect(fs.existsSync(dir)).toBe(false);
@@ -417,7 +422,7 @@ describe('T12：卸载级联两条入口', () => {
     // 模拟插件行先行消失（如直连 plugin:uninstall 的旧版本残留账）
     getDb().prepare('DELETE FROM plugins WHERE id = ?').run('hub-plug-a');
 
-    expect(() => uninstallHubPackage('hub-plug-a')).not.toThrow();
+    expect(() => uninstallHubPackage('plugin', 'hub-plug-a')).not.toThrow();
     const row = getDb()
       .prepare('SELECT id FROM installed_packages WHERE item_id = ?')
       .get(hubPackageItemId('hub-plug-a'));
@@ -466,7 +471,7 @@ describe('T12：hub 页签可见性与去重（消费面）', () => {
     expect(ghost!.installed).toBe(true);
     expect(ghost!.removable).toBe(true);
 
-    uninstallHubPackage('hub-plug-a');
+    uninstallHubPackage('plugin', 'hub-plug-a');
     // 目录仍在线：条目回到「未装可装」态（installed=false / installable=true）
     const after = await listHubCatalogResources('plugin');
     const restored = after.find((i) => i.id === 'hub-plugin-hub-plug-a');
@@ -474,5 +479,74 @@ describe('T12：hub 页签可见性与去重（消费面）', () => {
     expect(restored!.installed).toBe(false);
     expect(restored!.installable).toBe(true);
     expect(restored!.removable).toBe(false);
+  });
+});
+
+describe('T15a-F1：hub 插件重装不误删同 slug 的 hub agent 记账', () => {
+  it('重装置换旧账只清 plugin 行——agent 记账与缓存原封不动', async () => {
+    const opts = { appVersion: '2.1.0', workspaceId: TEST_WS };
+    await installHubPackage('plugin', 'hub-plug-a', opts);
+    // 同 item_id 的 hub agent 记账（真实 installPackage inline 链产出，缓存目录真落盘）
+    const { cachePath } = await installPackage({
+      id: hubPackageItemId('hub-plug-a'),
+      type: 'agent',
+      slug: 'hub-plug-a',
+      name: 'Hub Agent 同名',
+      version: '1.0.0',
+      author: 'node-test',
+      description: '与插件同 slug 的 hub agent',
+      readme: '# 同名碰撞',
+      tags: [],
+      category: '',
+      iconEmoji: '🤖',
+      verificationStatus: 'unverified',
+      downloadUrl: '',
+      checksum: '',
+      sizeBytes: 1,
+      installCount: 0,
+    });
+    expect(fs.existsSync(path.join(cachePath, 'manifest.yaml'))).toBe(true);
+
+    // 重装触发记账置换 DELETE（修复前：无类型过滤连坐删 agent 行）
+    await installHubPackage('plugin', 'hub-plug-a', opts);
+
+    const agentRow = getDb()
+      .prepare("SELECT id FROM installed_packages WHERE item_id = ? AND item_type = 'agent'")
+      .get(hubPackageItemId('hub-plug-a'));
+    expect(agentRow).toBeDefined();
+    expect(fs.existsSync(path.join(cachePath, 'manifest.yaml'))).toBe(true);
+    // plugin 记账仍是单行（置换语义不变）
+    const pluginRows = getDb()
+      .prepare("SELECT id FROM installed_packages WHERE item_id = ? AND item_type = 'plugin'")
+      .all(hubPackageItemId('hub-plug-a')) as unknown[];
+    expect(pluginRows).toHaveLength(1);
+  });
+});
+
+describe('T15a-F2：tar 解压炸弹守卫（assertRegularEntries）', () => {
+  /** 造一个 N 文件目录（每文件 ~1KB），走与解压终审同一 walk 路径 */
+  function makeDir(name: string, fileCount: number, fileSize = 1024): string {
+    const dir = path.join(tmpRoot, name);
+    fs.mkdirSync(path.join(dir, 'tools'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'momo-plugin.json'), '{}');
+    for (let i = 0; i < fileCount; i++) {
+      fs.writeFileSync(path.join(dir, 'tools', `f${i}.bin`), Buffer.alloc(fileSize, 1));
+    }
+    return dir;
+  }
+
+  it('条目数超注入上限 → 拒（同 walk 路径）', () => {
+    const dir = makeDir('bomb-entries', 3); // manifest + 3 文件 = 4 条目
+    expect(() => assertRegularEntries(dir, MAX_TOTAL_UNCOMPRESSED, 3)).toThrow(/条目数超限/);
+  });
+
+  it('解压总量超注入上限 → 拒（同 walk 路径）', () => {
+    const dir = makeDir('bomb-size', 2, 4096); // ≥ 8KB
+    expect(() => assertRegularEntries(dir, 4096, MAX_ENTRIES)).toThrow(/解压总量超限/);
+  });
+
+  it('上限内常规包 → 放行（生产默认上限不误伤）', () => {
+    const dir = makeDir('bomb-ok', 3);
+    expect(() => assertRegularEntries(dir)).not.toThrow();
   });
 });

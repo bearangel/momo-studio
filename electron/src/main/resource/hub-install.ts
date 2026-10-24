@@ -247,9 +247,13 @@ export async function installHubPackage(
       opts?.workspaceId ?? '',
     );
     // 记账：cache_path 指向真实 installed 目录（信息性——卸载走 plugin 级联，
-    // 不经 marketplace 缓存链的 cache_path 删除语义）
+    // 不经 marketplace 缓存链的 cache_path 删除语义）。置换旧账只清 plugin 行
+    //（T15a-F1：`hub:{slug}` 不是跨类型唯一键，同 slug 的 agent/skill/mcp
+    // 记账不得被重装连带抹掉）
     const db = getDb();
-    db.prepare('DELETE FROM installed_packages WHERE item_id = ?').run(hubPackageItemId(slug));
+    db.prepare(
+      "DELETE FROM installed_packages WHERE item_id = ? AND item_type = 'plugin'",
+    ).run(hubPackageItemId(slug));
     db.prepare(
       `INSERT INTO installed_packages (id, item_id, item_type, slug, version, cache_path, checksum)
        VALUES (?, ?, 'plugin', ?, ?, ?, ?)`,
@@ -266,24 +270,26 @@ export async function installHubPackage(
   return installPackage(item);
 }
 
-/** momo-hub 已装包卸载（幂等）：plugin 项级联 plugin 域卸载链（PluginRecord /
- *  目录 / MCP / 记账全清）；其余走 marketplace 缓存链卸载 */
-export function uninstallHubPackage(slug: string): void {
+/**
+ * momo-hub 已装包卸载（幂等）：plugin 项级联 plugin 域卸载链（PluginRecord /
+ * 目录 / MCP / 记账全清）；其余走 marketplace 缓存链卸载。
+ * type 由调用方上下文透传（T15a-F1）：`hub:{slug}` 不是跨类型唯一键，按 DB 行
+ * 反查路由会在 agent 与插件同 slug 时错删另一方——资源库删除入口手里就有
+ * item.type，路由目标用当前上下文而非账表碰运气。
+ */
+export function uninstallHubPackage(type: ResourceType, slug: string): void {
   // 记账 item_id = `hub:{slug}`（hubPackageItemId 单点前缀）——传 ResourceItem.id
   // 会查无此行 → 静默 no-op（marketplace 同款陷阱，见 ipc.handlers delete 分支）
-  const row = getDb()
-    .prepare('SELECT item_type FROM installed_packages WHERE item_id = ?')
-    .get(hubPackageItemId(slug)) as { item_type?: string } | undefined;
-  if (row?.item_type === 'plugin') {
+  if (type === 'plugin') {
     // 插件行在场 → plugin 级联（uninstallPlugin 内部同删记账，keepData=true——
     // 数据销毁须经插件设置页显式选择，资源页一键卸载保守保留）；
-    // 插件行已消失（幽灵账）→ 直删记账行兜底
+    // 插件行已消失（幽灵账）→ 落到下方类型限定直删兜底
     if (getPlugin(slug)) {
       uninstallPlugin(slug, true);
       return;
     }
   }
-  uninstallPackage(hubPackageItemId(slug));
+  uninstallPackage(hubPackageItemId(slug), type);
 }
 
 /** hub 卸载：删 mcp_definitions 行 + 级联清理 agent 引用 + installed_packages 记账（幂等） */

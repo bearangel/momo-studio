@@ -36,10 +36,10 @@ import { listAllPluginSkills } from './assembly';
 import { removePluginCapabilityGrants } from '../agent/grant-cleanup';
 import type { PluginRecord } from './types';
 
-/** zip bomb 守卫：累计解压上限 200MB */
-const MAX_TOTAL_UNCOMPRESSED = 200 * 1024 * 1024;
-/** entry 数量上限 */
-const MAX_ENTRIES = 5000;
+/** zip bomb 守卫：累计解压上限 200MB（zip 链与 hub tar 链共用——单源导出防两链上限漂移） */
+export const MAX_TOTAL_UNCOMPRESSED = 200 * 1024 * 1024;
+/** entry 数量上限（单源导出，同上） */
+export const MAX_ENTRIES = 5000;
 const MANIFEST_NAME = 'momo-plugin.json';
 
 /** 宽松版本比较：数字三元组，prerelease 忽略。a<b → -1，a>b → 1，相等 → 0 */
@@ -357,9 +357,11 @@ export function uninstallPlugin(id: string, keepData: boolean): void {
   // hub 记账级联：hub 安装的插件（item_id = `hub:{id}`）卸载时同步删
   // installed_packages 行——否则 hub 页签残留「已从 momo-hub 安装」幽灵行
   //（插件设置页 / 资源库插件页两入口都汇入本函数，此处是唯一收口）。
-  // 非 hub 安装（无该前缀行）为幂等 no-op。cache_path 指向的 installed 目录
-  // 已在上/下行删除，uninstallPackage 的 rm force 为 no-op。
-  uninstallPackage(hubPackageItemId(id));
+  // 类型限定（T15a-F1）：`hub:{slug}` 不是跨类型唯一键——只删 item_type='plugin'
+  // 行，同 item_id 的 agent/skill/mcp 记账不动。非 hub 安装（无该前缀行）为
+  // 幂等 no-op。cache_path 指向的 installed 目录已在上/下行删除，
+  // uninstallPackage 的 rm force 为 no-op。
+  uninstallPackage(hubPackageItemId(id), 'plugin');
   if (rec.source === 'zip') {
     fs.rmSync(path.join(resolvePluginsDir(), 'installed', id), { recursive: true, force: true });
   }

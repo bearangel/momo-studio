@@ -278,7 +278,8 @@ describe('registerResourceHandlers', () => {
     await handler({}, 'marketplace-skill-remote');
     // 必须传 catalog 的 MarketplaceItem.id（'catalog-id-remote'），不是 ResourceItem.id
     // （'marketplace-skill-remote'）——后者会让 uninstallPackage 查无此行触发静默 no-op。
-    expect(uninstallPackage).toHaveBeenCalledWith('catalog-id-remote');
+    // type 同取 catalog 原值（T15a-F1 类型双键）。
+    expect(uninstallPackage).toHaveBeenCalledWith('catalog-id-remote', 'skill');
   });
 
   it('resource:registerMcp 转调 registerMcpDefinition（source=custom，id/version 主进程补全）', async () => {
@@ -574,7 +575,7 @@ describe('registerResourceHandlers', () => {
     const deleteCall = calls.find((c: unknown[]) => c[0] === 'resource:delete');
     const handler = deleteCall![1] as (evt: unknown, id: string) => Promise<void>;
     await handler({}, 'hub-skill-hub-e2e-skill');
-    expect(hubInstallMocks.uninstallHubPackage).toHaveBeenCalledWith('hub-e2e-skill');
+    expect(hubInstallMocks.uninstallHubPackage).toHaveBeenCalledWith('skill', 'hub-e2e-skill');
   });
 
   it('resource:install hub 分支（P2.1 Task 3 两态）：未装 smithery 条目 → 拉详情直装 + needsConfig:false', async () => {
