@@ -127,8 +127,8 @@ function publishAuthor(): string {
 // ──────────────────────────────────────────────────────────────────────────
 
 /** agent 定义 → K8s 风格 manifest.yaml 文本（parseAgentManifest 可逆；与 installer
- *  createInlinePackage 同构——安装侧零特判） */
-function agentManifestYaml(def: AgentDefinition): string {
+ *  createInlinePackage 同构——安装侧零特判）。M2c 快照构建器复用（custom 定义内嵌）。 */
+export function agentManifestYaml(def: AgentDefinition): string {
   // model.platform 经 provider 实例解析（manifest 校验只认 openai/anthropic）；
   // 定义未挂 provider（null）时兜底 openai——安装侧本就允许用户改配
   const platform = (def.modelProviderId ? getProvider(def.modelProviderId)?.platform : undefined) ?? 'openai';
@@ -339,8 +339,9 @@ async function buildPluginPackage(
  * 白名单 walk（plugin/publish-pack collectPackEntries 同语义，skill 目录用）：
  * 仅常规文件入包；排除 excludeDotFiles 标记；symlink / FIFO / 设备条目整包拒绝
  * （lstat 语义不跟随）；条目按名排序（确定性清单）。
+ * M2c 快照构建器复用（custom skill 目录枚举）。
  */
-function collectRegularFiles(root: string, excludeDotFiles: string[]): string[] {
+export function collectRegularFiles(root: string, excludeDotFiles: string[]): string[] {
   const excluded = new Set(excludeDotFiles);
   const out: string[] = [];
   const walk = (dir: string, relBase: string): void => {
