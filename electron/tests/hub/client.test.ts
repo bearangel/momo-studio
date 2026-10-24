@@ -27,6 +27,11 @@ class FakeServer extends EventEmitter {
   headers: Array<Record<string, string>> = [];
   /** 逐连接 hello 脚本——第 n 条连接用第 n 条（缺省走 replyHello 的统一行为） */
   helloScripts: HelloScript[] = [];
+  /**
+   * hello 成功应答的载荷覆盖（null = 默认载荷）。
+   * 真实 hub 自 M0 T6 起随 hello 下发 onlineNodes 快照；置 null 可仿真字段缺失。
+   */
+  helloPayload: Record<string, unknown> | null = null;
   /** 回放 hello 应答；mutate 为 true 时回放失败应答 */
   replyHello(fail = false): void {
     this.on('to-server', (raw: string, sock: FakeSocket) => {
@@ -34,8 +39,10 @@ class FakeServer extends EventEmitter {
       if (env.kind !== 'req' || env.method !== RPC.hello) return;
       const script = this.helloScripts[this.sockets.indexOf(sock)];
       const ok = script ? script.ok : !fail;
+      const payload = this.helloPayload
+        ?? { hubId: 'hub', protoVer: PROTOCOL_VERSION, serverTime: 0, onlineNodes: [] };
       const res = JSON.stringify(ok
-        ? { v: 1, kind: 'res', id: env.id, method: RPC.hello, ok: true, payload: { hubId: 'hub', protoVer: PROTOCOL_VERSION, serverTime: 0, onlineNodes: [] } }
+        ? { v: 1, kind: 'res', id: env.id, method: RPC.hello, ok: true, payload }
         : { v: 1, kind: 'res', id: env.id, method: RPC.hello, ok: false, payload: { code: 'proto_version_mismatch', message: 'hub=2.0.0' } });
       // 回包经微任务投递——真实 hub 走网络往返，绝不在 send() 同栈内同步回包
       queueMicrotask(() => sock.emit('message', res));
@@ -217,6 +224,60 @@ describe('HubClient 心跳与事件', () => {
     const onlineAt = states.indexOf('online');
     expect(onlineAt).toBeGreaterThanOrEqual(0);
     expect(states.slice(onlineAt)).not.toContain('connecting');
+    client.stop();
+  });
+});
+
+describe('HubClient hello 快照透出（OBS-1）', () => {
+  it('hello 成功 → 回调 onHelloSnapshot 一次（payload.onlineNodes 原样透传）', async () => {
+    const { factory, server } = makeFactory();
+    const onlineNodes = [
+      { nodeId: 'n2', nodeName: '客厅小主机' },
+      { nodeId: 'n3', nodeName: '办公室 MacBook' },
+    ];
+    server.helloPayload = { hubId: 'hub', protoVer: PROTOCOL_VERSION, serverTime: 0, onlineNodes };
+    server.replyHello();
+    const snapshots: Array<Array<{ nodeId: string; nodeName: string }>> = [];
+    const client = createHubClient({
+      url: 'ws://x/ws', nodeName: 'a', deviceToken: 't',
+      onStateChange: () => undefined, onEvent: () => undefined, ws: factory,
+      onHelloSnapshot: (nodes) => snapshots.push(nodes),
+    });
+    client.start();
+    await flushMicrotasks();
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]).toEqual(onlineNodes);
+    client.stop();
+  });
+
+  it('hello 被拒 → 不回调 onHelloSnapshot（快照只在成功分支透出）', async () => {
+    const { factory, server } = makeFactory();
+    server.replyHello(true);
+    const snapshots: Array<Array<{ nodeId: string; nodeName: string }>> = [];
+    const client = createHubClient({
+      url: 'ws://x/ws', nodeName: 'a', deviceToken: 't',
+      onStateChange: () => undefined, onEvent: () => undefined, ws: factory,
+      onHelloSnapshot: (nodes) => snapshots.push(nodes),
+    });
+    client.start();
+    await flushMicrotasks();
+    expect(snapshots).toHaveLength(0);
+    client.stop();
+  });
+
+  it('hello 载荷缺 onlineNodes → 回调空数组（不抛，回调面恒为数组）', async () => {
+    const { factory, server } = makeFactory();
+    server.helloPayload = { hubId: 'hub', protoVer: PROTOCOL_VERSION, serverTime: 0 };
+    server.replyHello();
+    const snapshots: Array<Array<{ nodeId: string; nodeName: string }>> = [];
+    const client = createHubClient({
+      url: 'ws://x/ws', nodeName: 'a', deviceToken: 't',
+      onStateChange: () => undefined, onEvent: () => undefined, ws: factory,
+      onHelloSnapshot: (nodes) => snapshots.push(nodes),
+    });
+    client.start();
+    await flushMicrotasks();
+    expect(snapshots).toEqual([[]]);
     client.stop();
   });
 });

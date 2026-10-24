@@ -128,6 +128,13 @@ describe('HubSettingsPanel', () => {
     expect(screen.getByText('本机')).toBeInTheDocument();
   });
 
+  it('已连接：在线列表 helper 文案改为「连接时同步」（OBS-1：快照随连接下发）', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
+    render(<HubSettingsPanel />);
+    expect(await screen.findByText(/在线状态在连接时同步/)).toBeInTheDocument();
+    expect(screen.queryByText(/上线通知驱动/)).not.toBeInTheDocument();
+  });
+
   it('订阅先于快照（防丢事件：onStateChanged/onNodePresence 注册先于 getStatus 调用）', async () => {
     api.hub.getStatus.mockResolvedValue(UNENROLLED);
     render(<HubSettingsPanel />);

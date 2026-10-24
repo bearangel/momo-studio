@@ -27,11 +27,23 @@ export interface HubClientOpts {
   deviceToken: string;
   onStateChange(state: HubConnectionState, lastError?: string): void;
   onEvent(evt: EventEnvelope): void;
+  /**
+   * hello 应答成功时的在线节点快照回调（OBS-1）——hub 自 M0 T6 起随 hello 应答
+   * 下发 onlineNodes；缺失/非数组时回调空数组（恒为数组，消费面无需判空）。
+   */
+  onHelloSnapshot?: (nodes: Array<{ nodeId: string; nodeName: string }>) => void;
   ws?: WsFactory;
   helloTimeoutMs?: number; // 默认 5000
   heartbeatMs?: number;    // 默认 25000（发 ping；下一拍无 res 即判死重连）
   backoffBaseMs?: number;  // 默认 1000
   backoffMaxMs?: number;   // 默认 30000
+}
+
+/** hello 应答载荷里的 onlineNodes 快照——原样透传；非数组（字段缺失/异形）归一为空数组。 */
+function readOnlineNodes(payload: unknown): Array<{ nodeId: string; nodeName: string }> {
+  const raw = (payload as { onlineNodes?: unknown } | null | undefined)?.onlineNodes;
+  if (!Array.isArray(raw)) return [];
+  return raw as Array<{ nodeId: string; nodeName: string }>;
 }
 
 export interface HubClient { start(): void; stop(): void; state(): HubConnectionState }
@@ -106,6 +118,8 @@ export function createHubClient(opts: HubClientOpts): HubClient {
           attempts = 0;
           pongSincePing = true;
           setState('online');
+          // hello 成功 → 透出在线节点快照（OBS-1：hub 已下发，client 不得丢弃）
+          opts.onHelloSnapshot?.(readOnlineNodes(res.payload));
           heartbeatTimer = setInterval(() => {
             if (!pongSincePing) { s.terminate(); return; }
             pongSincePing = false;

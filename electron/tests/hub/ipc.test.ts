@@ -14,6 +14,7 @@ vi.mock('../../src/main/hub/index', () => ({
   hubConfigure: vi.fn(async (input: { hubUrl: string }) => ({ configured: true, state: 'connecting', hubUrl: input.hubUrl, nodeName: 'a', nodeId: null, lastError: null })),
   hubEnroll: vi.fn(async () => ({ configured: true, state: 'connecting', hubUrl: 'http://h', nodeName: 'a', nodeId: 'n1', lastError: null })),
   hubForget: vi.fn(async () => undefined),
+  replayPresenceSeed: vi.fn(),
 }));
 
 import { registerHubIpc } from '../../src/main/hub/ipc.handlers';
@@ -40,5 +41,11 @@ describe('hub IPC 接线', () => {
     registerHubIpc();
     await handlers.get('hub:forget')!();
     expect(manager.hubForget).toHaveBeenCalledTimes(1);
+  });
+
+  it('getStatus → 顺带重播在线节点种子（面板挂载晚于 hello 的补齐面）', async () => {
+    registerHubIpc();
+    await handlers.get('hub:getStatus')!();
+    expect(manager.replayPresenceSeed).toHaveBeenCalledTimes(1);
   });
 });

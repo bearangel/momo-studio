@@ -12,7 +12,8 @@
 //   message 即主进程原文，直接抛给调用方展示）
 // - forget 后重拉快照：主进程 forget 广播只带 state/lastError，configured 仍是旧值——必须
 //   重拉才能让面板回到未接入表单（重拉 rejection 经 forget() 抛给面板危险区错误行呈现）
-// - 在线节点表纯事件增量维护（M0 无补拉；冷启动为空属预期，面板文案注明上线通知驱动）
+// - 在线节点表由 hub:nodePresence 事件维护（连接时 hello 快照种子 + 之后上下线增量；
+//   按 nodeId 去重——同节点多条消息只留一行）
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
 import type {

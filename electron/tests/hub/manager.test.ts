@@ -16,6 +16,7 @@ interface CapturedOpts {
   deviceToken: string;
   onStateChange(state: string, err?: string): void;
   onEvent(evt: EventEnvelope): void;
+  onHelloSnapshot?: (nodes: Array<{ nodeId: string; nodeName: string }>) => void;
 }
 
 interface CapturedClient {
@@ -151,6 +152,85 @@ describe('hub manager 推送面', () => {
       channel: 'hub:nodePresence',
       payload: { kind: 'offline', nodeId: 'n2', at: 456 },
     });
+  });
+
+  it('hello 快照 → 逐节点广播 presence 种子，排除本机 nodeId（不与自合成行重复）', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    m.sent.length = 0;
+    // enroll 派生的本机 nodeId = 'node-1'（mock enroll 第 1 次返回）——必须被排除
+    m.clients[0]!.opts.onHelloSnapshot!([
+      { nodeId: 'node-1', nodeName: '本机' },
+      { nodeId: 'node-2', nodeName: '客厅小主机' },
+    ]);
+    expect(m.sent).toEqual([
+      {
+        channel: 'hub:nodePresence',
+        payload: { kind: 'online', nodeId: 'node-2', nodeName: '客厅小主机' },
+      },
+    ]);
+  });
+
+  it('hello 快照含多个对端 → 各播一条 presence 种子（本机缺席时全量播）', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    m.sent.length = 0;
+    m.clients[0]!.opts.onHelloSnapshot!([
+      { nodeId: 'node-2', nodeName: '客厅小主机' },
+      { nodeId: 'node-3', nodeName: '书房台式机' },
+    ]);
+    expect(m.sent).toEqual([
+      { channel: 'hub:nodePresence', payload: { kind: 'online', nodeId: 'node-2', nodeName: '客厅小主机' } },
+      { channel: 'hub:nodePresence', payload: { kind: 'online', nodeId: 'node-3', nodeName: '书房台式机' } },
+    ]);
+  });
+
+  it('重播种子 → 面板挂载晚于 hello 时仍见全量在线节点', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    m.clients[0]!.opts.onHelloSnapshot!([{ nodeId: 'node-2', nodeName: '客厅小主机' }]);
+    m.sent.length = 0;
+    manager.replayPresenceSeed();
+    expect(m.sent).toEqual([
+      { channel: 'hub:nodePresence', payload: { kind: 'online', nodeId: 'node-2', nodeName: '客厅小主机' } },
+    ]);
+  });
+
+  it('重播种子 → 排除本机节点（与自合成行不重复）', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    m.clients[0]!.opts.onHelloSnapshot!([
+      { nodeId: 'node-1', nodeName: '本机' },
+      { nodeId: 'node-2', nodeName: '客厅小主机' },
+    ]);
+    m.sent.length = 0;
+    manager.replayPresenceSeed();
+    expect(m.sent).toEqual([
+      { channel: 'hub:nodePresence', payload: { kind: 'online', nodeId: 'node-2', nodeName: '客厅小主机' } },
+    ]);
+  });
+
+  it('忘记接入 → 种子清空（重播不推陈旧节点）', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    m.clients[0]!.opts.onHelloSnapshot!([{ nodeId: 'node-2', nodeName: '客厅小主机' }]);
+    await manager.hubForget();
+    m.sent.length = 0;
+    manager.replayPresenceSeed();
+    expect(m.sent).toEqual([]);
+  });
+
+  it('新连接开始 → 旧种子作废（重播不推上个连接的陈旧节点）', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    m.clients[0]!.opts.onHelloSnapshot!([{ nodeId: 'node-2', nodeName: '客厅小主机' }]);
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't2', nodeName: 'n' });
+    m.sent.length = 0;
+    manager.replayPresenceSeed();
+    expect(m.sent).toEqual([]);
+  });
+
+  it('换 hub 地址 → 旧快照作废（重播不推上个 hub 的节点）', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://a:8787', enrollmentToken: 't', nodeName: 'n' });
+    m.clients[0]!.opts.onHelloSnapshot!([{ nodeId: 'node-2', nodeName: '客厅小主机' }]);
+    await manager.hubConfigure({ hubUrl: 'https://b:8787', nodeName: 'n' });
+    m.sent.length = 0;
+    manager.replayPresenceSeed();
+    expect(m.sent).toEqual([]);
   });
 });
 

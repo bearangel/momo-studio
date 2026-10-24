@@ -19,6 +19,10 @@ export interface HubStatus {
 
 let client: HubClient | null = null;
 let lastError: string | null = null;
+// 当前连接的在线节点快照（hello 成功时写入，已排除本机）——renderer 拉状态时重播，
+// 使「面板挂载晚于 hello」也见全量在线节点（快照是 hub 唯一的存量下发面：
+// 协议 onlineNodes 注释明言「后续增量走 node.online/offline 事件」）
+let presenceSeed: Array<{ nodeId: string; nodeName: string }> | null = null;
 
 const configStore = () => createHubConfigStore(getDb());
 
@@ -38,8 +42,15 @@ export function hubGetStatus(): HubStatus {
   };
 }
 
-function startClient(hubUrl: string, nodeName: string, deviceToken: string): void {
+function startClient(
+  hubUrl: string,
+  nodeName: string,
+  deviceToken: string,
+  nodeId: string | null,
+): void {
   client?.stop();
+  // 新连接开始 → 上个连接的快照作废（重播不得推陈旧节点）
+  presenceSeed = null;
   client = createHubClient({
     url: wsUrlOf(hubUrl),
     nodeName,
@@ -47,6 +58,8 @@ function startClient(hubUrl: string, nodeName: string, deviceToken: string): voi
     onStateChange(state, err) {
       if (err) lastError = err;
       if (state === 'online') lastError = null;
+      // 掉线 → 快照过期（断连期间收不到 peer 上下线事件）
+      else presenceSeed = null;
       broadcast('hub:stateChanged', { state, lastError });
     },
     onEvent(evt: EventEnvelope) {
@@ -56,8 +69,30 @@ function startClient(hubUrl: string, nodeName: string, deviceToken: string): voi
         broadcast('hub:nodePresence', { kind: 'offline', ...(evt.payload as { nodeId: string }) });
       }
     },
+    // OBS-1：hello 应答里的在线节点快照 → 逐节点播 presence 种子（在线列表初始面）。
+    // 本机节点排除——renderer 用状态快照自合成「本机」行，重复播会双行。
+    onHelloSnapshot(nodes) {
+      presenceSeed = nodes.filter((n) => n.nodeId !== nodeId);
+      broadcastPresenceSeed(presenceSeed);
+    },
   });
   client.start();
+}
+
+/** presence 种子播报（在线列表初始面）——节点集合已排除本机。 */
+function broadcastPresenceSeed(nodes: Array<{ nodeId: string; nodeName: string }>): void {
+  for (const n of nodes) {
+    broadcast('hub:nodePresence', { kind: 'online', nodeId: n.nodeId, nodeName: n.nodeName });
+  }
+}
+
+/**
+ * 在线节点快照重播——renderer 拉状态时补发。
+ * 消费面已在位（store 先订阅后拉快照），故拉状态即是把存量快照递给晚挂载的面板。
+ */
+export function replayPresenceSeed(): void {
+  if (!presenceSeed) return;
+  broadcastPresenceSeed(presenceSeed);
 }
 
 /** hubUrl（http/https origin）→ ws/wss URL + /ws 路径。 */
@@ -76,7 +111,7 @@ export async function initHub(): Promise<void> {
   if (!cfg) return;
   const token = await getDeviceToken();
   if (!token) { logger.warn('hub 已配置但 keychain 无 device token（跳过连接）'); return; }
-  startClient(cfg.hubUrl, cfg.nodeName, token);
+  startClient(cfg.hubUrl, cfg.nodeName, token, cfg.nodeId);
 }
 
 export async function hubConfigure(input: { hubUrl: string; nodeName: string }): Promise<HubStatus> {
@@ -93,6 +128,8 @@ export async function hubConfigure(input: { hubUrl: string; nodeName: string }):
     lastError = null;
     client?.stop();
     client = null;
+    // 换 hub → 旧 hub 的在线快照作废（重播不得推上个 hub 的节点）
+    presenceSeed = null;
     await clearDeviceToken();
     store.write({ hubUrl, nodeName, nodeId: null });
     return hubGetStatus();
@@ -109,7 +146,7 @@ export async function hubEnroll(input: { hubUrl: string; enrollmentToken: string
   const r = await enrollOverHttp(hubUrl, input.enrollmentToken, nodeName);
   await setDeviceToken(r.deviceToken);
   configStore().write({ hubUrl, nodeName, nodeId: r.nodeId });
-  startClient(hubUrl, nodeName, r.deviceToken);
+  startClient(hubUrl, nodeName, r.deviceToken, r.nodeId);
   return hubGetStatus();
 }
 
@@ -120,6 +157,7 @@ export async function hubForget(): Promise<void> {
   lastError = null;
   client?.stop();
   client = null;
+  presenceSeed = null;
   configStore().clear();
   await clearDeviceToken();
   broadcast('hub:stateChanged', { state: 'disconnected', lastError: null });

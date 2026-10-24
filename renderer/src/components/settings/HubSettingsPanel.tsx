@@ -183,8 +183,8 @@ function EnrolledView({ status }: { status: HubStatus }) {
   }, [confirming]);
 
   const nodeId = status.nodeId ?? '';
-  // 本机行由快照合成（M0 hello 的 onlineNodes 不下发 renderer，列表纯事件增量——
-  // 冷启动时本机行也要在场）；其余行排除本机 id，hub 回显自己也不双行
+  // 本机行由状态快照合成（hub 侧 hello 快照只播对端节点）；其余行排除本机 id，
+  // hub 回显自己也不双行
   const others = nodes.filter((n) => n.nodeId !== nodeId);
   const rows: Array<{ nodeId: string; nodeName: string; self: boolean }> = [
     ...(nodeId !== ''
@@ -284,7 +284,7 @@ function EnrolledView({ status }: { status: HubStatus }) {
         </ul>
         {online && (
           <p className="text-xs text-tertiary">
-            在线状态由 hub 上线通知驱动——面板打开后新上线的节点才会出现（M0 冷启动限制）
+            在线状态在连接时同步——连接成功时随 hub 在线快照一并更新，之后随上下线通知实时刷新
           </p>
         )}
       </div>
