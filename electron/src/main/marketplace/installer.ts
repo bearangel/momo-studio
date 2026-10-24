@@ -48,8 +48,9 @@ export const MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024;
 // installPackage 的地址闸与 downloadFile 的流式下载闸——两段规则同源，
 // 避免「安装放行但下载再拒」的规则漂移。
 //
-// 信任集是进程内单调集合（配置变更即新增一个 origin），不落库：
-// 进程重启后 provider 初始化会重新注册当前配置的 hubUrl。
+// 信任集是进程内集合，不落库：进程重启后 provider 初始化会重新注册当前配置
+// 的 hubUrl；忘记接入 / 换址时经 unregister 撤销旧 origin（F2——不能单调只增，
+// 否则旧 hub 的下载授权残留）。
 // ────────────────────────────────────────────────────────────────────────────
 
 /** 已注册的可信下载源（归一后的 origin 串） */
@@ -79,6 +80,15 @@ export function registerTrustedDownloadOrigin(origin: string): void {
     return;
   }
   trustedDownloadOrigins.add(normalized);
+}
+
+/**
+ * 撤销可信下载源（F2：忘记接入 / 换址时收回旧 hub origin 的下载授权）。
+ * 与 register 同一归一逻辑——带尾斜杠的入参落在同一归一键上；未注册的
+ * origin 幂等无操作。
+ */
+export function unregisterTrustedDownloadOrigin(origin: string): void {
+  trustedDownloadOrigins.delete(normalizeTrustedOrigin(origin));
 }
 
 /**

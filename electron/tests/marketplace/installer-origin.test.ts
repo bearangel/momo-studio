@@ -16,6 +16,8 @@
 //   4. https 恒放行（信任集为空也不受影响——既有 marketplace 语义不变）
 //   5. origin 尾斜杠归一（注册 'http://h:1/' 放行 'http://h:1/resources/x'）
 //   6. origin 边界（'http://h:1' 不放行 'http://h:1.evil.test/x'——前缀相似非同一源）
+//   7. unregister 撤销：注册后撤销 → 旧 origin 的 http URL 复拒（归一一致，
+//      F2——信任集必须可随忘记/换址收回，不能单调只增）
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execSync } from 'node:child_process';
@@ -28,6 +30,8 @@ import {
   installPackage,
   downloadFile,
   registerTrustedDownloadOrigin,
+  unregisterTrustedDownloadOrigin,
+  isTrustedDownloadUrl,
   __resetTrustedDownloadOriginsForTest,
 } from '../../src/main/marketplace/installer';
 import type { MarketplaceItem } from '../../src/main/marketplace/types';
@@ -152,5 +156,14 @@ describe('T8: installPackage 下载源白名单（hub origin 信任集）', () =
     const item = makeItem({ downloadUrl: 'http://127.0.0.1:9999.evil.test/pkg.tar.gz' });
     await expect(installPackage(item)).rejects.toThrow(/https/);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('unregister：注册后撤销 → 旧 origin 的 http URL 复拒（归一一致——尾斜杠差异不影响撤销）', () => {
+    registerTrustedDownloadOrigin('http://127.0.0.1:9999');
+    expect(isTrustedDownloadUrl('http://127.0.0.1:9999/pkg.tar.gz')).toBe(true);
+
+    // 带尾斜杠撤销与不带尾斜杠注册落在同一归一键上
+    unregisterTrustedDownloadOrigin('http://127.0.0.1:9999/');
+    expect(isTrustedDownloadUrl('http://127.0.0.1:9999/pkg.tar.gz')).toBe(false);
   });
 });

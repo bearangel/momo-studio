@@ -6,6 +6,10 @@ import { logger } from '../logger';
 import { createHubClient, enrollOverHttp, type HubClient, type HubConnectionState } from './client';
 import { createHubConfigStore, type HubConfigRow } from './config-store';
 import { clearDeviceToken, getDeviceToken, setDeviceToken } from './creds';
+import {
+  registerTrustedDownloadOrigin,
+  unregisterTrustedDownloadOrigin,
+} from '../marketplace/installer';
 import { EVT, type EventEnvelope } from './protocol';
 
 export interface HubStatus {
@@ -141,6 +145,10 @@ export async function hubConfigure(input: { hubUrl: string; nodeName: string }):
     // 换 hub → 旧 hub 的在线快照作废（重播不得推上个 hub 的节点）
     presenceSeed = null;
     await clearDeviceToken();
+    // 下载授权随址收回（F2）：撤旧 hub origin、登新址（下次目录拉取亦会重登，
+    // 此处即时生效——避免换址后旧 hub 的 http 下载授权残留）
+    unregisterTrustedDownloadOrigin(prev.hubUrl);
+    registerTrustedDownloadOrigin(hubUrl);
     store.write({ hubUrl, nodeName, nodeId: null });
     return hubGetStatus();
   }
@@ -164,12 +172,15 @@ export async function hubForget(): Promise<void> {
   // 先清 lastError 再停连接——client.stop() 内部会 setState('disconnected') 触发一次
   // 状态广播，若此时 lastError 还是旧值，renderer 会先收到一条带历史错误的
   // disconnected 事件。
+  const prev = configStore().read();
   lastError = null;
   client?.stop();
   client = null;
   presenceSeed = null;
   configStore().clear();
   await clearDeviceToken();
+  // 下载授权随接入收回（F2）：旧 hub origin 立即撤出 installer 信任集
+  if (prev) unregisterTrustedDownloadOrigin(prev.hubUrl);
   broadcast('hub:stateChanged', { state: 'disconnected', lastError: null });
 }
 

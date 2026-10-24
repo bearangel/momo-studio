@@ -209,7 +209,10 @@ export function createHubCatalogSource(
   async function load(): Promise<HubCatalogLoad> {
     const ctx = await resolveContext();
     if (!ctx) {
-      // 未接入引导态：空目录 + degraded=false + 零网络
+      // 未接入引导态：空目录 + 零网络。degraded 必须在此复位——忘记接入
+      // （hubForget → configured=false）后，isDegraded() 若仍挂着上次失败的
+      // true，与 notEnrolled 分支输出的 degraded=false 两面结论相反（F1）。
+      degraded = false;
       return { catalog: EMPTY_CATALOG, hubUrl: null, degraded: false, notEnrolled: true };
     }
     // hub origin 入 installer 信任集（配置变更后下次拉取即重新登记）

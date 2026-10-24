@@ -7,8 +7,14 @@
 // 3. hubForget 的四步次序：停连接 → 清 kv 配置 → 清 keychain → 广播。
 // 4. startClient 先停旧连接（连续两次 enroll 不留双连接）。
 // 5. hubConfigure 的换址分叉（换址强制重新接入 / 同址仅改名保留凭证）。
+// 6. 信任源撤销（F2）：forget / 换址收回旧 hub origin 的下载授权。
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EventEnvelope } from '../../src/main/hub/protocol';
+import {
+  isTrustedDownloadUrl,
+  registerTrustedDownloadOrigin,
+  __resetTrustedDownloadOriginsForTest,
+} from '../../src/main/marketplace/installer';
 
 interface CapturedOpts {
   url: string;
@@ -106,6 +112,7 @@ beforeEach(async () => {
   m.sent.length = 0;
   m.clients.length = 0;
   m.enrollCalls.length = 0;
+  __resetTrustedDownloadOriginsForTest();
 });
 
 describe('hub manager 推送面', () => {
@@ -348,5 +355,37 @@ describe('hub manager 换址分叉', () => {
     expect(m.clients).toHaveLength(2);
     expect(status.nodeId).toBe('node-1');
     expect(status.state).toBe('connecting');
+  });
+});
+
+describe('hub manager 信任源撤销（F2）', () => {
+  it('hubForget → 撤当前 hubUrl 的下载信任（授权随接入收回）', async () => {
+    await manager.hubEnroll({ hubUrl: 'http://a:8787', enrollmentToken: 't', nodeName: 'n' });
+    // 模拟目录拉取时的 origin 登记（生产路径：momo-hub load() 调 register）
+    registerTrustedDownloadOrigin('http://a:8787');
+    expect(isTrustedDownloadUrl('http://a:8787/resources/x/download')).toBe(true);
+
+    await manager.hubForget();
+
+    expect(isTrustedDownloadUrl('http://a:8787/resources/x/download')).toBe(false);
+  });
+
+  it('换址 → 旧 origin 撤销、新 origin 登记', async () => {
+    await manager.hubEnroll({ hubUrl: 'http://a:8787', enrollmentToken: 't', nodeName: 'n' });
+    registerTrustedDownloadOrigin('http://a:8787');
+
+    await manager.hubConfigure({ hubUrl: 'http://b:8787', nodeName: 'n' });
+
+    expect(isTrustedDownloadUrl('http://a:8787/resources/x/download')).toBe(false);
+    expect(isTrustedDownloadUrl('http://b:8787/resources/x/download')).toBe(true);
+  });
+
+  it('同址改名 → 信任保持（不撤销也不重复登记）', async () => {
+    await manager.hubEnroll({ hubUrl: 'http://a:8787', enrollmentToken: 't', nodeName: 'n1' });
+    registerTrustedDownloadOrigin('http://a:8787');
+
+    await manager.hubConfigure({ hubUrl: 'http://a:8787/', nodeName: 'n2' });
+
+    expect(isTrustedDownloadUrl('http://a:8787/resources/x/download')).toBe(true);
   });
 });
