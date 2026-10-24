@@ -68,6 +68,7 @@ interface PluginFixture {
 
 const fixtures = new Map<string, PluginFixture>();
 let hubRequests: string[] = [];
+let hubAuths: Array<string | undefined> = [];
 let hub: { url: string; close: () => Promise<void> } | null = null;
 
 /** 最小合法插件目录（manifest + 工具模块 + mcp.json）；extra 允许注入额外条目 */
@@ -123,11 +124,21 @@ function addPluginFixture(slug: string, extra?: (dir: string) => void, badChecks
   fixtures.set(slug, { slug, version: '0.2.0', archive, checksum: badChecksum ?? sha256(archive) });
 }
 
-/** 起 mock hub：catalog（plugin 项）+ download 真字节流 */
-async function startMockHub(): Promise<{ url: string; close: () => Promise<void> }> {
+/**
+ * 起 mock hub：catalog（plugin 项）+ download 真字节流。
+ * 鉴权仿真（D1 保真锁——真实 hub 语义 spec §3.1：全端点 Bearer 鉴权）：无 / 错
+ * Bearer 一律 401，不进业务 responder；期望 token 与注入的 hub 上下文一致。
+ */
+async function startMockHub(expectedAuth = 'tok-plug'): Promise<{ url: string; close: () => Promise<void> }> {
   const server = http.createServer((req, res) => {
     const url = req.url ?? '';
     hubRequests.push(url);
+    hubAuths.push(req.headers.authorization);
+    if (req.headers.authorization !== `Bearer ${expectedAuth}`) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'unauthorized' }));
+      return;
+    }
     if (url === '/resources/catalog') {
       const items = [...fixtures.values()].map((f) => ({
         slug: f.slug,
@@ -190,6 +201,7 @@ beforeEach(async () => {
     .run(TEST_WS);
   fixtures.clear();
   hubRequests = [];
+  hubAuths = [];
   __resetTrustedDownloadOriginsForTest();
   // marketplace 远程目录禁网（fetch 拦截 → 回退本地 catalog，零真实外网）
   vi.spyOn(globalThis, 'fetch').mockImplementation(((
@@ -274,6 +286,9 @@ describe('T12：hub 插件安装——与本地安装等价', () => {
     // 下载真的打到 mock hub（信任集放行 http origin；catalog 自报 host 未被采信）
     expect(hubRequests).toContain('/resources/hub-plug-a/0.2.0/download');
     expect(hubRequests.some((u) => u.includes('untrusted.example.com'))).toBe(false);
+    // D1 锁：下载请求带 Bearer 凭证（鉴权仿真层放行即证明——修复前裸下载此处 401）
+    const dlIdx = hubRequests.indexOf('/resources/hub-plug-a/0.2.0/download');
+    expect(hubAuths[dlIdx]).toBe('Bearer tok-plug');
     // 安装完成零半成品残留
     expect(stagingLeftovers()).toEqual([]);
   });
@@ -358,6 +373,45 @@ describe('T12：hub 插件安装——与本地安装等价', () => {
       ),
     ).rejects.toThrow(/校验和/);
     expect(getPlugin('hub-plug-nochecksum')).toBeNull();
+  });
+
+  it('下载请求无凭证（installPluginHubArchive 不带 headers）→ mock hub 401 → 人话报错 + 零残留（D1 专项）', async () => {
+    // D1 修复前的真实形态：下载链裸 fetch 无 Authorization 打全鉴权 hub。
+    // 先拉目录暖信任集（hub origin 注册——真实时序：用户先浏览目录再安装）。
+    // 仿真层 401 → 人话错误（含鉴权提示）+ staging/归档零残留 + 不落库
+    await listHubCatalogResources('plugin');
+    const { installPluginHubArchive } = await import('../../src/main/plugin/hub-install');
+    const fixture = fixtures.get('hub-plug-a')!;
+    await expect(
+      installPluginHubArchive(
+        {
+          id: 'hub:hub-plug-a',
+          type: 'plugin',
+          slug: 'hub-plug-a',
+          name: 'Hub 演示插件',
+          version: '0.2.0',
+          author: 'node-test',
+          description: '',
+          readme: '',
+          tags: [],
+          category: '',
+          iconEmoji: '',
+          verificationStatus: 'unverified',
+          downloadUrl: `${hub!.url}/resources/hub-plug-a/0.2.0/download`,
+          checksum: fixture.checksum,
+          sizeBytes: 0,
+          installCount: 0,
+        },
+        '2.1.0',
+        TEST_WS,
+      ),
+    ).rejects.toThrow(/下载失败: HTTP 401（鉴权失败/);
+
+    const dlIdx = hubRequests.indexOf('/resources/hub-plug-a/0.2.0/download');
+    expect(dlIdx).toBeGreaterThanOrEqual(0);
+    expect(hubAuths[dlIdx]).toBeUndefined();
+    expect(getPlugin('hub-plug-a')).toBeNull();
+    expect(stagingLeftovers()).toEqual([]);
   });
 
   it('重复安装幂等：plugins 表单行 / 记账单行 / installed 单版本目录', async () => {

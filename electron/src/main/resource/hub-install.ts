@@ -39,6 +39,7 @@ import {
   hubPackageItemId,
   HUB_ITEM_ID_PREFIX,
   listHubMarketplaceItems,
+  resolveHubContext,
 } from './hub/momo-hub';
 
 const SMITHERY_BASE = 'https://registry.smithery.ai';
@@ -229,6 +230,17 @@ export interface InstallHubOptions {
   workspaceId?: string;
 }
 
+/**
+ * hub 下载链鉴权头（D1）：hub spec §3.1 三个资源端点全部 Bearer 鉴权，目录拉取
+ * 与包下载必须同凭证。token 与目录源共用 resolveHubContext（生产 = keychain
+ * deviceToken；测试注入 mock 上下文同缝生效）；无凭证（未接入 / keychain 空）
+ * 返回 undefined——hub 侧 401 由下载错误路径人话报出。
+ */
+async function hubAuthHeaders(): Promise<Record<string, string> | undefined> {
+  const ctx = await resolveHubContext();
+  return ctx?.deviceToken ? { Authorization: `Bearer ${ctx.deviceToken}` } : undefined;
+}
+
 export async function installHubPackage(
   type: ResourceType,
   slug: string,
@@ -240,11 +252,13 @@ export async function installHubPackage(
       `momo-hub 目录中未找到 ${type} 条目「${slug}」（可能尚未接入 hub、hub 离线或该条目已下架）`,
     );
   }
+  const headers = await hubAuthHeaders();
   if (item.type === 'plugin') {
     const rec = await installPluginHubArchive(
       item,
       opts?.appVersion ?? '999.0.0',
       opts?.workspaceId ?? '',
+      headers,
     );
     // 记账：cache_path 指向真实 installed 目录（信息性——卸载走 plugin 级联，
     // 不经 marketplace 缓存链的 cache_path 删除语义）。置换旧账只清 plugin 行
@@ -267,7 +281,7 @@ export async function installHubPackage(
     );
     return { cachePath: resolvePluginInstalledDir(rec.id, rec.version) };
   }
-  return installPackage(item);
+  return installPackage(item, undefined, headers);
 }
 
 /**

@@ -124,10 +124,11 @@ export interface InstalledPackage {
   installedAt: string;
 }
 
-/** 安装一个 marketplace 包 */
+/** 安装一个 marketplace 包（headers 经 downloadFile 透传——hub 链注入 Bearer 凭证） */
 export async function installPackage(
   item: MarketplaceItem,
   _workspaceId?: string,
+  headers?: Record<string, string>,
 ): Promise<{ cachePath: string }> {
   // S1 注入防线：slug/version 会被拼进路径与子进程参数，任何 shell 元字符
   // 都必须在首次使用前被拒绝（checksum 校验不缓解路径注入）。
@@ -166,7 +167,7 @@ export async function installPackage(
   if (item.downloadUrl) {
     // 远程包：下载 → 校验 → 解压
     const archivePath = path.join(cachePath, 'package.tar.gz');
-    await downloadFile(item.downloadUrl, archivePath);
+    await downloadFile(item.downloadUrl, archivePath, undefined, headers);
 
     if (item.checksum) {
       const actualChecksum = await computeChecksum(archivePath);
@@ -292,18 +293,25 @@ function registerInstalledPackage(item: MarketplaceItem, cachePath: string): voi
  * 下载文件到本地（流式写盘 + 大小上限防护）。
  * 超过 maxBytes 时中断流、删除半成品文件并抛错——不依赖 Content-Length
  * （该头可伪造），以实际落盘字节数为准。
+ *
+ * headers（可选）：请求头透传通道——hub 下载端点要求 Bearer 鉴权（hub spec
+ * §3.1 三个资源端点全部鉴权），hub 安装链经此注入 `Authorization: Bearer
+ * <deviceToken>`；marketplace 公网下载不传，行为不变。
  */
 export async function downloadFile(
   url: string,
   dest: string,
   maxBytes: number = MAX_DOWNLOAD_BYTES,
+  headers?: Record<string, string>,
 ): Promise<void> {
   if (!isTrustedDownloadUrl(url)) {
     throw new Error(`下载地址必须是 https 或已注册的可信源: ${url}`);
   }
-  const response = await fetch(url);
+  const response = await fetch(url, { headers });
   if (!response.ok || !response.body) {
-    throw new Error(`下载失败: HTTP ${response.status}`);
+    // 401 人话提示：hub 资源端点全鉴权，凭证缺失/失效是用户可自诊的常见态
+    const hint = response.status === 401 ? '（鉴权失败：hub 凭证缺失或已失效，请检查 hub 接入配置）' : '';
+    throw new Error(`下载失败: HTTP ${response.status}${hint}`);
   }
   // Readable.fromWeb 将 web ReadableStream 转 Node Readable，类型干净无需 as
   const source = Readable.fromWeb(response.body);

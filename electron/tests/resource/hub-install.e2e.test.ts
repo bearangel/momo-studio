@@ -46,6 +46,7 @@ import {
   isHubCatalogDegraded,
 } from '../../src/main/resource/hub/momo-hub';
 import {
+  installPackage,
   isTrustedDownloadUrl,
   __resetTrustedDownloadOriginsForTest,
 } from '../../src/main/marketplace/installer';
@@ -64,9 +65,17 @@ interface HubFixture {
   checksum: string;
 }
 
-/** mock hub 收到的请求路径（catalog / download 分流断言） */
+/** mock hub 收到的请求路径与鉴权头（catalog / download 分流断言 + D1 Bearer 锁） */
 let hubRequests: string[] = [];
-let hub: { url: string; close: () => Promise<void> } | null = null;
+let hubAuths: Array<string | undefined> = [];
+let hub: MockHub | null = null;
+
+/** mock hub 句柄：鉴权仿真层支持运行中轮换期望 token（仿真凭证中途失效） */
+interface MockHub {
+  url: string;
+  setExpectedAuth(token: string): void;
+  close(): Promise<void>;
+}
 
 /** 目录 fixture 表（slug → fixture） */
 const fixtures = new Map<string, HubFixture>();
@@ -169,11 +178,23 @@ function catalogItem(fixture: HubFixture, downloadHost: string): Record<string, 
   };
 }
 
-/** 起真 mock hub（catalog + download 真字节流） */
-async function startMockHub(): Promise<{ url: string; close: () => Promise<void> }> {
+/**
+ * 起真 mock hub（catalog + download 真字节流）。
+ * 鉴权仿真（D1 保真锁——真实 hub 语义 spec §3.1：三个资源端点全部 Bearer 鉴权）：
+ * 无 / 错 Bearer 一律 401，不进业务 responder。默认期望 token 与注入的 hub
+ * 上下文一致（tok-e2e）；setExpectedAuth 可运行中轮换（仿真凭证失效）。
+ */
+async function startMockHub(expectedAuth: string = 'tok-e2e'): Promise<MockHub> {
+  let auth = expectedAuth;
   const server = http.createServer((req, res) => {
     const url = req.url ?? '';
     hubRequests.push(url);
+    hubAuths.push(req.headers.authorization);
+    if (req.headers.authorization !== `Bearer ${auth}`) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'unauthorized' }));
+      return;
+    }
     if (url === '/resources/catalog') {
       const items = [...fixtures.values()].map((f) => catalogItem(f, 'http://untrusted.example.com'));
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -197,6 +218,9 @@ async function startMockHub(): Promise<{ url: string; close: () => Promise<void>
   const addr = server.address() as AddressInfo;
   return {
     url: `http://127.0.0.1:${addr.port}`,
+    setExpectedAuth(token: string): void {
+      auth = token;
+    },
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections();
@@ -228,6 +252,7 @@ beforeEach(async () => {
   runMigrations();
   fixtures.clear();
   hubRequests = [];
+  hubAuths = [];
   __resetTrustedDownloadOriginsForTest();
   __resetCatalogCacheForTest();
   blockMarketplaceNetwork();
@@ -378,6 +403,73 @@ describe('T10 e2e：hub→安装全链（agent / skill / mcp）', () => {
     // 下载请求真的到达 mock hub（catalog 自报的 untrusted host 未被采信）
     expect(hubRequests).toContain('/resources/hub-e2e-agent/1.0.0/download');
     expect(hubRequests.some((u) => u.includes('untrusted.example.com'))).toBe(false);
+    // D1 锁：下载请求与目录请求同凭证（Bearer 随下载链发出——鉴权仿真层放行即证明）
+    const dlIdx = hubRequests.indexOf('/resources/hub-e2e-agent/1.0.0/download');
+    expect(hubAuths[dlIdx]).toBe('Bearer tok-e2e');
+  });
+});
+
+describe('T10 e2e：D1 下载链鉴权（错误路径专项）', () => {
+  /** 由目录 fixture 构造可直接喂 installPackage 的 MarketplaceItem（不经目录链） */
+  function directInstallItem(): Parameters<typeof installPackage>[0] {
+    const fixture = fixtures.get('hub-e2e-agent')!;
+    return {
+      id: hubPackageItemId(fixture.slug),
+      type: fixture.type,
+      slug: fixture.slug,
+      name: fixture.name,
+      version: fixture.version,
+      author: 'node-e2e',
+      description: '',
+      readme: '',
+      tags: [],
+      category: '',
+      iconEmoji: '',
+      verificationStatus: 'unverified',
+      downloadUrl: `${hub!.url}/resources/${fixture.slug}/${fixture.version}/download`,
+      checksum: fixture.checksum,
+      sizeBytes: fixture.archive.length,
+      installCount: 0,
+    };
+  }
+
+  it('下载请求无凭证（downloadFile 不带 headers）→ mock hub 401 → 安装失败人话 + 不落账', async () => {
+    // 先拉目录暖信任集（hub origin 注册进 installer——真实时序：用户先浏览目录
+    // 再安装）。随后直连 installPackage 不传 headers——D1 修复前的真实形态（裸
+    // fetch 无 Authorization 打全鉴权 hub）。仿真层 401 → 人话错误（含鉴权提示）。
+    await listHubCatalogResources('agent');
+    await expect(installPackage(directInstallItem())).rejects.toThrow(
+      /下载失败: HTTP 401（鉴权失败/,
+    );
+
+    // 下载确实打到了 mock hub 且无 Bearer
+    const dlIdx = hubRequests.indexOf('/resources/hub-e2e-agent/1.0.0/download');
+    expect(dlIdx).toBeGreaterThanOrEqual(0);
+    expect(hubAuths[dlIdx]).toBeUndefined();
+    // 不落账、不注册
+    const row = getDb()
+      .prepare('SELECT id FROM installed_packages WHERE item_id = ?')
+      .get(hubPackageItemId('hub-e2e-agent'));
+    expect(row).toBeUndefined();
+    expect(listAgentDefinitions().find((d) => d.slug === 'hub-e2e-agent')).toBeUndefined();
+  });
+
+  it('凭证中途失效（hub 轮换 token）→ 下载 401 → 安装失败人话 + 不落账', async () => {
+    // 先拉目录建立 TTL 缓存（token 合法）——仿真真实时序：目录已缓存，hub 侧
+    // 轮换 token 后安装，目录零网络直返，下载持旧 token 打真端点 → 401
+    await listHubCatalogResources('agent');
+    hub!.setExpectedAuth('tok-rotated');
+
+    await expect(installHubPackage('agent', 'hub-e2e-agent')).rejects.toThrow(
+      /下载失败: HTTP 401（鉴权失败/,
+    );
+
+    const dlIdx = hubRequests.indexOf('/resources/hub-e2e-agent/1.0.0/download');
+    expect(hubAuths[dlIdx]).toBe('Bearer tok-e2e');
+    const row = getDb()
+      .prepare('SELECT id FROM installed_packages WHERE item_id = ?')
+      .get(hubPackageItemId('hub-e2e-agent'));
+    expect(row).toBeUndefined();
   });
 });
 

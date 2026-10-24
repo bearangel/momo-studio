@@ -19,6 +19,9 @@
 //   7. SWR：首拉阻塞 / TTL 内零网络 / 退避窗内零网络 / 退避过后直返 lastGood +
 //      后台单飞刷新（并发两次只发一次网络）
 //   8. hub origin 注册进 installer 信任集（下载放行）
+//   9. 鉴权仿真（D1 保真缺口修复）：mock hub 对无 / 错 Bearer 一律 401——
+//      仿真真实 hub 语义（spec §3.1 全端点鉴权），防「mock 宽松全绿、真实
+//      hub 401」的保真缺口复发
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import http from 'node:http';
@@ -47,7 +50,10 @@ interface MockHub {
   close: () => Promise<void>;
 }
 
-async function startMockHub(responder: Responder): Promise<MockHub> {
+async function startMockHub(
+  responder: Responder,
+  auth: string | null = 'tok-123',
+): Promise<MockHub> {
   const requests: MockHub['requests'] = [];
   const server = http.createServer((req, res) => {
     requests.push({
@@ -55,6 +61,12 @@ async function startMockHub(responder: Responder): Promise<MockHub> {
       url: req.url ?? '',
       auth: req.headers.authorization,
     });
+    // 鉴权仿真（真实 hub 语义）：无 / 错 Bearer 一律 401，不进 responder
+    if (auth !== null && req.headers.authorization !== `Bearer ${auth}`) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'unauthorized' }));
+      return;
+    }
     responder(req, res);
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -221,13 +233,39 @@ describe('T9: momo-hub provider 目录源', () => {
   });
 
   it('Bearer deviceToken 头随目录请求发出', async () => {
-    hub = await startMockHub(jsonResponder(200, catalogPayload()));
+    hub = await startMockHub(jsonResponder(200, catalogPayload()), 'tok-abc');
     const source = createHubCatalogSource(resolverFor(hub.url, 'tok-abc'));
     await source.load();
 
     expect(hub.requests).toHaveLength(1);
     expect(hub.requests[0]!.url).toBe('/resources/catalog');
     expect(hub.requests[0]!.auth).toBe('Bearer tok-abc');
+  });
+
+  it('鉴权仿真：无 Bearer（keychain 空）→ mock hub 401 → degraded=true（D1 保真锁）', async () => {
+    hub = await startMockHub(jsonResponder(200, catalogPayload()));
+    // deviceToken=null → fetchCatalog 不带 Authorization → 仿真层 401
+    const source = createHubCatalogSource(resolverFor(hub.url, null));
+    const provider = createHubProvider(source);
+
+    const result = await provider.list('agent');
+
+    expect(result.entries).toHaveLength(0);
+    expect(result.degraded).toBe(true);
+    expect(hub.requests[0]!.auth).toBeUndefined();
+  });
+
+  it('鉴权仿真：错 Bearer → mock hub 401 → degraded=true（D1 保真锁）', async () => {
+    hub = await startMockHub(jsonResponder(200, catalogPayload()));
+    // 上下文 token 与 hub 期望不一致（token 失效 / 伪造）→ 仿真层 401
+    const source = createHubCatalogSource(resolverFor(hub.url, 'tok-wrong'));
+    const provider = createHubProvider(source);
+
+    const result = await provider.list('agent');
+
+    expect(result.entries).toHaveLength(0);
+    expect(result.degraded).toBe(true);
+    expect(hub.requests[0]!.auth).toBe('Bearer tok-wrong');
   });
 
   it('401（token 失效）→ degraded=true + 空目录（不静默空目录）', async () => {

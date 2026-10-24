@@ -100,6 +100,7 @@ export async function installPluginHubArchive(
   item: MarketplaceItem,
   currentAppVersion: string,
   originWorkspaceId: string,
+  headers?: Record<string, string>,
 ): Promise<PluginRecord> {
   if (item.type !== 'plugin') {
     throw new Error(`installPluginHubArchive 仅接受 plugin 条目（收到 ${item.type}）`);
@@ -119,7 +120,8 @@ export async function installPluginHubArchive(
   );
   const archivePath = `${staging}.tar.gz`;
   try {
-    await downloadFile(item.downloadUrl, archivePath);
+    // headers 透传 Bearer 凭证（hub spec §3.1 下载端点鉴权——resource/hub-install 注入）
+    await downloadFile(item.downloadUrl, archivePath, undefined, headers);
     const actual = crypto.createHash('sha256').update(fs.readFileSync(archivePath)).digest('hex');
     if (actual !== item.checksum.toLowerCase()) {
       throw new Error(`hub 插件包校验失败（sha256 不符）: ${item.slug}`);

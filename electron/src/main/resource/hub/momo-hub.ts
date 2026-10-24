@@ -110,6 +110,16 @@ export function __setHubContextResolverForTest(resolver: HubContextResolver | nu
 }
 
 /**
+ * 当前生效的 hub 上下文（安装链 Bearer 凭证消费——D1）。
+ * 与目录源共用同一解析器缝：生产 = HubManager + keychain；测试经
+ * __setHubContextResolverForTest 注入的 mock 上下文对下载鉴权同样生效，
+ * 保证「目录请求带 token、下载请求也带 token」同源不漂移。
+ */
+export function resolveHubContext(): Promise<HubContext | null> {
+  return contextResolver();
+}
+
+/**
  * downloadUrl 基址重写（裁定 RM1-12）：路径部分保留 catalog 给的
  * /resources/{slug}/{version}/download，基址一律换成 studio 自身配置的 hubUrl
  * ——catalog 的 host 由发布方自报，不可信。
