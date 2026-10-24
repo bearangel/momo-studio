@@ -6,6 +6,17 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 节点互联 M0：接入独立 momo-hub 服务
+
+节点互联重新起于**独立仓 momo-hub**（`github:bearangel/momo-hub`）：hub 是独立部署的中心服务（bin 入口 + Dockerfile），studio 侧只做**接入方**。协议包 `momo-hub-protocol` 经 **git tag 单源消费**（`github:bearangel/momo-hub#v0.1.0`——tag 即契约，协议源码变更须重打 tag 并 bump studio pin）——信封 / RPC / 事件 / semver 协商语义全部走协议包，studio 不自造 wire 格式。设计见 momo-hub 仓 `docs/specs/2026-10-23-momo-hub-overall-design.md`，实施计划 `docs/plans/2026-10-23-momo-hub-m0-connection-foundation.md`。
+
+- **hub 独立服务接入（协议 v0.1.0）**：HTTP `POST /enroll` 以加入凭证换 device token（哈希落库 / 时序安全比较 / 同名轮换），token 入系统钥匙串；ws 升级鉴权 `Bearer <deviceToken>` → hello 协商（协议版本 + 节点名）→ 注册表广播在线状态。**换 hub 地址强制重新接入**——旧 device token 是旧 hub 签发的，对新 hub 无效（拿它连新 hub 会连出「鉴权失败 + 退避重连」死循环），故换址即停旧连接、清凭证、nodeId 归零、**清陈旧 lastError**，且不起新连接
+- **连接层（状态机 / 退避 / 心跳 / 换址重接）**：`HubClient` 三态（disconnected → connecting → online）+ **指数退避重连**（1s 起、上限 30s）+ **心跳判死**（25s 一拍，无 pong 即 terminate 重连）+ hello 协商超时（5s）；per-socket 私有计时器与**身份守卫**——过期连接（已被新连接取代）的 close 不清新连接的计时器、不改状态、不调度重连（否则一条被拒连接会连出两条新连接）
+- **设置「节点互联」面板**：接入表单（hub 地址 / 节点名 / 加入凭证）+ 三态状态徽章（已连接绿 / 连接中黄 / 未连接灰）+ lastError 人话原文行 + 在线节点列表（绿点 + 名称 + 「本机」Badge + nodeId 短码）+ 危险区「断开并忘记」**两步确认**（首击描边 → danger 填充「再次点击确认」，3s 自动回落）；IPC 四通道（配置 / 状态快照 / 接入 / 忘记）+ 两推送（`hub:stateChanged` / `hub:nodePresence`）+ preload/types 契约
+- **已知限制**：在线节点列表为**事件增量维护**（M0 无补拉——面板打开后新上线的节点才会出现，冷启动仅本机行）；文件树远程浏览与远端交互（跨节点任务委派 M1 / 资源镜像 M2）尚未提供；hub 单点（无多 hub 联邦 / 无高可用）
+
+版本 `2.1.0-alpha.28`。
+
 ## [未发布] — 移除 P2P 联网与 LSP 子系统
 
 产品方向整改（spec `docs/specs/2026-10-20-remove-p2p-lsp-design.md`）：**P2P 联网子系统整体删除**（Ed25519 身份 / mDNS 发现 / TCP 直连 / hub 死码 / 资源分享与导入 / 任务只读镜像 / `source='p2p'`，-8783 行）——后续联网统一走 momo-hub（未来单独立项）；**LSP 子系统整体删除**（语言检测 / LspManager / 面板 IPC / 休眠工具链 / devDep，-3416 行）——未来以插件形式回归。migration **063** 彻底清（用户裁定 A）：`tasks.source_node_id` 列 DROP、`messages` 的 lan/hub 镜像行删除、`agent_definitions.default_tools` 的 lsp 休眠引用剔除；`ResourceSource` 联合收窄（builtin/marketplace/custom/smithery）、`MessageSource` 收窄（local/matrix）。**行为影响**：设置页「节点互联」分类消失（12→11）、任务看板远端节点分区消失、资源库 P2P 来源筛选消失。userData 残留文件（`p2p-identity.json` / `p2p-trusted-nodes.json` / `lsp-bin/`）无代码读取，保留不清理。依赖卸载四项（bonjour-service / tweetnacl / ws / @types/ws）+ typescript-language-server（devDep）。版本 `2.1.0-alpha.22`。
