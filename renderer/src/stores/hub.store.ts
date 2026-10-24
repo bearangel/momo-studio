@@ -10,6 +10,8 @@
 //   （据实修正 fix round 1 前的失实注释）
 // - enroll 成功用返回的 HubStatus 覆盖本地快照（ipc 代理层已剥 IPC 错误包装前缀，rejection
 //   message 即主进程原文，直接抛给调用方展示）
+// - configure 换址：主进程换址分支清凭证、nodeId 归零 → 返回快照即换址引导态
+//   （configured 仍为 true、nodeId 为 null），面板据此切回预填表单
 // - forget 后重拉快照：主进程 forget 广播只带 state/lastError，configured 仍是旧值——必须
 //   重拉才能让面板回到未接入表单（重拉 rejection 经 forget() 抛给面板危险区错误行呈现）
 // - 在线节点表由 hub:nodePresence 事件维护（连接时 hello 快照种子 + 之后上下线增量；
@@ -17,11 +19,12 @@
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
 import type {
+  HubConfigureInput,
   HubEnrollInput,
   HubNodePresenceEvent,
   HubStateChangedEvent,
   HubStatus,
-} from '../ipc/types.d';
+} from '../ipc/types';
 
 export interface HubNodeRow {
   nodeId: string;
@@ -39,6 +42,8 @@ interface HubState {
   refresh(): void;
   /** 接入（hub:enroll）；成功后 status 覆盖为返回快照，rejection 原样抛给调用方展示 */
   enroll(input: HubEnrollInput): Promise<void>;
+  /** 换址（hub:configure）；成功后 status 覆盖为返回快照，rejection 原样抛给调用方展示 */
+  configure(input: HubConfigureInput): Promise<void>;
   /** 断开并忘记（hub:forget）；成功后重拉快照 + 清空节点表 */
   forget(): Promise<void>;
 }
@@ -111,6 +116,12 @@ export const useHubStore = create<HubState>((set, get) => {
     async enroll(input) {
       const status = await ipc.hub.enroll(input);
       // 重接入即换 hub 身份：旧节点表一并作废
+      set({ status, nodes: [] });
+    },
+
+    async configure(input) {
+      const status = await ipc.hub.configure(input);
+      // 换址即换 hub 身份：旧节点表一并作废（换址分支主进程清凭证归零 nodeId）
       set({ status, nodes: [] });
     },
 

@@ -135,6 +135,85 @@ describe('HubSettingsPanel', () => {
     expect(screen.queryByText(/上线通知驱动/)).not.toBeInTheDocument();
   });
 
+  it('已接入态：修改 hub 地址入口 → 确认后调 configure（新地址）→ 落到换址引导态', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
+    api.hub.configure.mockResolvedValue({
+      ...ENROLLED_ONLINE,
+      state: 'disconnected',
+      hubUrl: 'https://new.example.com:8787',
+      nodeId: null,
+    });
+    render(<HubSettingsPanel />);
+
+    // 入口：已接入态身份区的次级按钮
+    fireEvent.click(await screen.findByRole('button', { name: '修改 hub 地址' }));
+
+    // 弹确认：警告文案 + 新地址输入（预填当前地址）
+    expect(screen.getByText('修改地址后将断开并需要重新接入')).toBeInTheDocument();
+    const input = screen.getByLabelText('新 hub 地址') as HTMLInputElement;
+    expect(input.value).toBe('https://hub.example.com:8787');
+    // 第一步不调 configure（确认前不换址）
+    expect(api.hub.configure).not.toHaveBeenCalled();
+
+    // 第二步：改地址 + 确认
+    fireEvent.change(input, { target: { value: ' https://new.example.com:8787 ' } });
+    fireEvent.click(screen.getByRole('button', { name: '确认修改' }));
+
+    await waitFor(() => expect(api.hub.configure).toHaveBeenCalledTimes(1));
+    expect(api.hub.configure).toHaveBeenCalledWith({
+      hubUrl: 'https://new.example.com:8787',
+      nodeName: '办公室 MacBook',
+    });
+    // 换址后落到换址引导态（configured && nodeId 归零）
+    expect(await screen.findByText('地址已变更，需重新接入')).toBeInTheDocument();
+  });
+
+  it('修改 hub 地址：取消确认 → 不调 configure（面板留在已接入态）', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
+    render(<HubSettingsPanel />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '修改 hub 地址' }));
+    expect(screen.getByText('修改地址后将断开并需要重新接入')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+
+    await waitFor(() =>
+      expect(screen.queryByText('修改地址后将断开并需要重新接入')).not.toBeInTheDocument(),
+    );
+    expect(api.hub.configure).not.toHaveBeenCalled();
+    expect(screen.getByText('本机节点')).toBeInTheDocument();
+  });
+
+  it('修改 hub 地址：configure 失败 → 弹窗内错误原文展示，可重试', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
+    // 仿真真实运行时语义：Electron 会把 ipcMain.handle 的 throw 包上前缀再 reject（D11）
+    api.hub.configure.mockRejectedValue(
+      new Error("Error invoking remote method 'hub:configure': Error: 地址非法"),
+    );
+    render(<HubSettingsPanel />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '修改 hub 地址' }));
+    fireEvent.change(screen.getByLabelText('新 hub 地址'), {
+      target: { value: 'https://new.example.com:8787' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '确认修改' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('地址非法');
+    expect(alert).not.toHaveTextContent('Error invoking');
+    // 失败不换址——仍留在已接入态
+    expect(screen.getByText('本机节点')).toBeInTheDocument();
+  });
+
+  it('修改 hub 地址：地址为空 → 确认钮禁用（不调 configure）', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
+    render(<HubSettingsPanel />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '修改 hub 地址' }));
+    fireEvent.change(screen.getByLabelText('新 hub 地址'), { target: { value: '   ' } });
+    expect(screen.getByRole('button', { name: '确认修改' })).toBeDisabled();
+    expect(api.hub.configure).not.toHaveBeenCalled();
+  });
+
   it('订阅先于快照（防丢事件：onStateChanged/onNodePresence 注册先于 getStatus 调用）', async () => {
     api.hub.getStatus.mockResolvedValue(UNENROLLED);
     render(<HubSettingsPanel />);

@@ -8,12 +8,15 @@
 //   危险区「断开并忘记」两步确认（首击描边→danger 填充「再次点击确认」——ProviderModelPicker 范式）
 // - 态 3 已接入·连接中断：黄点「连接中」徽章 + lastError 原文行 + 自动重连提示 + 列表降级灰点占位
 // - 换址重接（configured && nodeId === null，主进程换址清凭证归零）：提示行 + 预填表单
+// - 换址入口（D1，已接入态）：身份区次级按钮「修改 hub 地址」→ 确认弹窗（改地址 + 断开告警）
+//   → 调 configure → 落到换址引导态
 import { useEffect, useState, type FormEvent } from 'react';
 import { Files, Network, RefreshCw, Send, Trash2 } from 'lucide-react';
 import { useHubStore } from '../../stores/hub.store';
 import type { HubConnectionState, HubStatus } from '../../ipc/types';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
+import { Dialog } from '../ui/Dialog';
 import { Input } from '../ui/Input';
 
 /** 状态徽章三态：6px 圆点 + 12px medium 文字（已连接绿 / 连接中黄 / 未连接灰） */
@@ -171,9 +174,15 @@ function EnrollForm({ status, needsReenroll }: { status: HubStatus; needsReenrol
 function EnrolledView({ status }: { status: HubStatus }) {
   const nodes = useHubStore((s) => s.nodes);
   const forget = useHubStore((s) => s.forget);
+  const configure = useHubStore((s) => s.configure);
   const [confirming, setConfirming] = useState(false);
   const [forgetting, setForgetting] = useState(false);
   const [forgetError, setForgetError] = useState<string | null>(null);
+  // 换址（D1）：已接入态改 hub 地址——确认后调 configure，主进程清凭证归零 nodeId
+  const [readdrOpen, setReaddrOpen] = useState(false);
+  const [readdrUrl, setReaddrUrl] = useState('');
+  const [readdrSubmitting, setReaddrSubmitting] = useState(false);
+  const [readdrError, setReaddrError] = useState<string | null>(null);
 
   // 确认态 3s 自动回落（预览备注 §5.5：防 armed 态滞留成新的误触入口）
   useEffect(() => {
@@ -207,6 +216,26 @@ function EnrolledView({ status }: { status: HubStatus }) {
       setConfirming(false);
     } finally {
       setForgetting(false);
+    }
+  };
+
+  const openReaddr = (): void => {
+    setReaddrUrl(status.hubUrl ?? '');
+    setReaddrError(null);
+    setReaddrOpen(true);
+  };
+
+  const submitReaddr = async (): Promise<void> => {
+    if (readdrSubmitting) return;
+    setReaddrSubmitting(true);
+    setReaddrError(null);
+    try {
+      await configure({ hubUrl: readdrUrl.trim(), nodeName: status.nodeName ?? '' });
+      setReaddrOpen(false);
+    } catch (err) {
+      setReaddrError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setReaddrSubmitting(false);
     }
   };
 
@@ -253,6 +282,12 @@ function EnrolledView({ status }: { status: HubStatus }) {
             </span>
           </span>
         </div>
+      </div>
+
+      <div className="flex justify-end">
+        <Button variant="secondary" size="sm" onClick={openReaddr}>
+          修改 hub 地址
+        </Button>
       </div>
 
       <div className="flex flex-col gap-2">
@@ -335,6 +370,40 @@ function EnrolledView({ status }: { status: HubStatus }) {
           </Button>
         )}
       </div>
+
+      <Dialog
+        open={readdrOpen}
+        onClose={() => setReaddrOpen(false)}
+        title="修改 hub 地址"
+        width={420}
+      >
+        <div className="flex flex-col gap-4">
+          <p className="text-sm text-status-warning">修改地址后将断开并需要重新接入</p>
+          <Input
+            label="新 hub 地址"
+            className="w-full font-mono text-[12.5px]"
+            value={readdrUrl}
+            onChange={(e) => setReaddrUrl(e.target.value)}
+            placeholder="https://hub.example.com:8787"
+          />
+          {readdrError !== null && (
+            <p className="text-xs text-status-error" role="alert">
+              {readdrError}
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setReaddrOpen(false)}>
+              取消
+            </Button>
+            <Button
+              disabled={readdrSubmitting || readdrUrl.trim() === ''}
+              onClick={() => void submitReaddr()}
+            >
+              {readdrSubmitting ? '提交中…' : '确认修改'}
+            </Button>
+          </div>
+        </div>
+      </Dialog>
     </section>
   );
 }
