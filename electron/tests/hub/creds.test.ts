@@ -38,21 +38,32 @@ describe('hub creds', () => {
   });
 });
 
-describe('deriveDeviceTokenScopeSuffix（作用域派生纯函数，D2）', () => {
-  it('默认目录 basename → 空后缀（单实例常态，裸键向后兼容）', () => {
-    expect(deriveDeviceTokenScopeSuffix('/tmp/appData/Momo Studio', 'Momo Studio')).toBe('');
+describe('deriveDeviceTokenScopeSuffix（作用域派生纯函数，D2 + fix round 1 全路径派生）', () => {
+  // 默认 userData 全路径形态（<appData>/<app.name>）——第二参即默认全路径
+  const DEFAULT_UD = '/Users/tom/Library/Application Support/Momo Studio';
+
+  it('默认 userData 全路径 → 空后缀（单实例常态，裸键向后兼容）', () => {
+    expect(deriveDeviceTokenScopeSuffix(DEFAULT_UD, DEFAULT_UD)).toBe('');
   });
 
-  it('隔离目录 basename → sha256 前 8 位 hex（同目录稳定可复现）', () => {
-    const a = deriveDeviceTokenScopeSuffix('/tmp/qa/momo-qa-profile-A', 'Momo Studio');
+  it('非默认路径 → sha256 前 8 位 hex，同路径稳定可复现', () => {
+    const a = deriveDeviceTokenScopeSuffix('/tmp/qa-run-A/profile', DEFAULT_UD);
     expect(a).toMatch(/^[0-9a-f]{8}$/);
-    expect(deriveDeviceTokenScopeSuffix('/tmp/qa/momo-qa-profile-A', 'Momo Studio')).toBe(a);
+    expect(deriveDeviceTokenScopeSuffix('/tmp/qa-run-A/profile', DEFAULT_UD)).toBe(a);
   });
 
-  it('不同隔离目录 → 不同后缀（双实例键不撞）', () => {
-    const a = deriveDeviceTokenScopeSuffix('/tmp/qa/profile-A', 'Momo Studio');
-    const b = deriveDeviceTokenScopeSuffix('/tmp/qa/profile-B', 'Momo Studio');
+  it('验收形态（--user-data-dir=$RUN_DIR/profile）：同 basename 不同父目录 → 不同后缀（同名隔离目录互撞回归锁）', () => {
+    // fix 前：hash basename → 两实例同得后缀 hash('profile')，共享同一作用域键，
+    // 后 enroll 覆盖前者（D5 复发于隔离实例间——M2 多节点验收正是此形态）
+    const a = deriveDeviceTokenScopeSuffix('/tmp/qa-run-A/profile', DEFAULT_UD);
+    const b = deriveDeviceTokenScopeSuffix('/tmp/qa-run-B/profile', DEFAULT_UD);
     expect(a).not.toBe(b);
+  });
+
+  it('边角：隔离目录恰名「Momo Studio」（非默认父目录）→ 仍得非空后缀（不直读默认裸键）', () => {
+    // fix 前（basename 判定）：与默认目录同名 → '' 空后缀，直读默认实例裸键且无 warn
+    const s = deriveDeviceTokenScopeSuffix('/tmp/qa-run-A/Momo Studio', DEFAULT_UD);
+    expect(s).toMatch(/^[0-9a-f]{8}$/);
   });
 });
 

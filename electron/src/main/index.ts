@@ -8,6 +8,7 @@
 // v2.0 P1 Task 12：Matrix/Conduit 全家已删——启动链无外部服务进程，无 /sync，
 // 无登录/会话恢复（单用户本地应用 sender='owner'），SQLite 是唯一状态源。
 import { app, BrowserWindow, ipcMain, protocol } from 'electron';
+import path from 'node:path';
 import { createMainWindow } from './window';
 import { registerIpcHandlers } from './ipc';
 import { runMigrations } from './storage/db';
@@ -180,9 +181,13 @@ if (!app.requestSingleInstanceLock()) {
       });
 
       // D2（M2 Task 1）：hub token 键实例作用域——须在任何 hub 凭证读写（目录拉取
-      // 鉴权 / initHub）之前接线。默认 userData 目录 = 裸键（向后兼容）；隔离实例
-      // （验收/开发并行 profile）= sha256 目录名前 8 位后缀，杜绝同机双实例串味
-      wireHubCredsScope(app.getPath('userData'), app.getName());
+      // 鉴权 / initHub）之前接线。默认 userData 路径 = 裸键（向后兼容）；隔离实例
+      // （--user-data-dir=$RUN_DIR/profile 等）= sha256 完整路径前 8 位后缀——
+      // hash 全路径防同名 profile 目录互撞（fix round 1）
+      wireHubCredsScope(
+        app.getPath('userData'),
+        path.join(app.getPath('appData'), app.getName()),
+      );
 
       // M0 节点互联（spec 2026-10-23）：已配置 hub 且 keychain 有 device token 时
       // 自动连上（fire-and-forget——连接失败只写 lastError，不阻塞启动）。

@@ -19,13 +19,17 @@ const TOKEN_KEY_BASE = 'hub.deviceToken';
 
 /**
  * userData 路径 → token 键作用域后缀（纯函数，可测）。
- * basename 等于默认目录名（app.getName()）→ ''（单实例常态，裸键）；
- * 其余（隔离实例）→ sha256(basename) 前 8 位 hex——稳定、可复现、不泄漏目录名。
+ * 与默认 userData 全路径（<appData>/<app.name>）相等（path.normalize 后）→ ''
+ * （单实例常态，裸键向后兼容）；其余（隔离实例）→ sha256(完整路径) 前 8 位 hex。
+ * hash 全路径而非 basename（fix round 1）：验收启动线固定
+ * --user-data-dir=$RUN_DIR/profile——basename 同为 profile 的多隔离实例会共享
+ * 同一作用域键互撞（后 enroll 覆盖前者）；边角：隔离目录恰与默认目录同名时
+ * basename 判定还会误得空后缀直读裸键。
  */
-export function deriveDeviceTokenScopeSuffix(userDataPath: string, defaultBaseName: string): string {
-  const base = path.basename(userDataPath);
-  if (base === defaultBaseName) return '';
-  return createHash('sha256').update(base).digest('hex').slice(0, 8);
+export function deriveDeviceTokenScopeSuffix(userDataPath: string, defaultUserDataPath: string): string {
+  const dir = path.normalize(userDataPath);
+  if (dir === path.normalize(defaultUserDataPath)) return '';
+  return createHash('sha256').update(dir).digest('hex').slice(0, 8);
 }
 
 /** 生效中的作用域后缀解析器（生产经 wireHubCredsScope 注入；缺省 '' = 裸键） */
