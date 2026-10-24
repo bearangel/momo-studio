@@ -6,6 +6,19 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 节点互联 M1：hub 私有 marketplace（资源分发）
+
+hub 侧（独立仓 momo-hub `v0.1.1`，协议 1.1.0）交付资源仓三端点（发布 multipart 流式收包 / 目录 HubCatalog / 下载 blob 流）+ 发布事件广播（`resource.published`）；studio 侧四类资源（agent / skill / mcp / plugin）发布与安装全链接通。设计见 momo-hub 仓 `docs/specs/2026-10-24-momo-hub-m1-resource-distribution.md`。
+
+- **四类资源发布编排**：打包形态各异（agent 定义→manifest.yaml 可逆 + README / skill cachePath 目录整包 / mcp package.json stub（name=npx 包名）/ plugin 委派打包链）→ multipart 上传（manifest part 先于 package part 定序契约）→ 错误映射人话（409 该版本已存在 / 413 超 200MB / 401 连接失效）+ C3 范围守卫（仅 custom agent 可发布、mcp 仅 npx 形态、url 红线拒）
+- **插件发布打包**：白名单 walk（node_modules / .git / 数据目录不入包）+ 越界拒绝 + 归档校验和锚定（与 hub 端服务端自算对称）
+- **hub 源安装链**：agent / skill / mcp 复用 marketplace 缓存链（hub origin 注册下载信任集放行 http + sha256 校验）；plugin 走归档链（checksum 强制 / tar 成员路径守卫 / symlink 与 FIFO 拒 / manifest.id 与 slug 锚定）复用 `finalizePluginInstall` 与本地 zip 安装完全等价；资源库 hub 第五源页签接入（已装去重 + 幽灵账兜底行）
+- **发布对话框与更新角标**：发布入口矩阵（agent 编辑 / skill 卡 / mcp 设置 / 插件设置）+ `resource.published` 事件链 → hub 页签「有更新」角标四态反馈
+- **M1 收口扫尾（T15a）**：`hub:{slug}` 跨类型记账防误删（`installed_packages` 按 item_id + item_type 双键删除，卸载/重装/级联三处全收口）；hub 插件 tar 解压炸弹守卫（累计 200MB / 5000 条目，与 zip 链同闸单源）；发布归档体积本地预检（tar 后按实际尺寸 >200MB 拒——避免白传满额包才被 hub 413）
+- **已知限制**：hub 资源不可删除/下架（版本不可变 409）；mcp 仅 stdio npx 形态可发布（url 形态无本地包可打）；插件发布不含 node_modules（依赖解析 M1 不做）；目录 TTL 缓存更新窗口盲区（窗口内他节点新发布对本机不可见，角标依赖事件+TTL 双通道）；hub origin 为 http 明文时无内容真实性——checksum 仅防损坏不防篡改（catalog 与包同信道），公网暴露场景应 TLS 反代 + `MOMO_HUB_PUBLIC_ORIGIN`
+
+版本 `2.1.0-alpha.29`。
+
 ## [未发布] — 节点互联 M0：接入独立 momo-hub 服务
 
 节点互联重新起于**独立仓 momo-hub**（`github:bearangel/momo-hub`）：hub 是独立部署的中心服务（bin 入口 + Dockerfile），studio 侧只做**接入方**。协议包 `momo-hub-protocol` 经 **git tag 单源消费**（`github:bearangel/momo-hub#v0.1.0`——tag 即契约，协议源码变更须重打 tag 并 bump studio pin）——信封 / RPC / 事件 / semver 协商语义全部走协议包，studio 不自造 wire 格式。设计见 momo-hub 仓 `docs/specs/2026-10-23-momo-hub-overall-design.md`，实施计划 `docs/plans/2026-10-23-momo-hub-m0-connection-foundation.md`。
