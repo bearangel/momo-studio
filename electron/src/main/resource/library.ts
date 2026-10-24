@@ -1,8 +1,9 @@
 // electron/src/main/resource/library.ts
 //
-// listResources：统一四源（builtin/custom/marketplace/hub）资源列表的主入口。
+// listResources：统一五源（builtin/custom/marketplace/smithery/hub）资源列表的主入口。
 // 内部一次 fetchCatalog（远程优先 + 本地回退），按 downloadUrl 分流到 builtin/marketplace，
-// 再合并 custom（DB/fs 同步读）与 hub（smithery 已装 MCP，P2 Task 5）。
+// 再合并 custom（DB/fs 同步读）、smithery（已装 MCP）与 hub（momo-hub 目录项，
+// installed_packages 的 `hub:` 前缀记账判定已装）。
 // fetchCatalog 失败时只丢 builtin+marketplace，custom/hub 仍正常返回。
 //
 // filter 支持按 type/source 过滤。filter.source 指定时短路不必要源（避免 fetchCatalog）。
@@ -12,7 +13,7 @@ import { listInstalled as listInstalledSkills } from '../skill/zip-uploader';
 import { listBuiltinResources } from './builtin';
 import { listMarketplaceResources } from './marketplace';
 import { listCustomResources } from './custom';
-import { listHubInstalledResources } from './hub-install';
+import { listHubCatalogResources, listHubInstalledResources } from './hub-install';
 import { listPluginResourceRows } from '../plugin/resources';
 import {
   buildResourceId,
@@ -25,7 +26,9 @@ import { logger } from '../logger';
 export async function listResources(filter?: ResourceFilter): Promise<ResourceItem[]> {
   const needCatalog = !filter?.source || filter.source === 'builtin' || filter.source === 'marketplace';
   const needCustom = !filter?.source || filter.source === 'custom';
-  const needHub = !filter?.source || filter.source === 'smithery';
+  const needSmithery = !filter?.source || filter.source === 'smithery';
+  // momo-hub 第五源：目录项经 provider 拉取（未接入/离线降级时为空目录，不抛错）
+  const needHub = !filter?.source || filter.source === 'hub';
 
   // 并行：catalog（如需要）+ custom
   const tasks: Promise<unknown>[] = [];
@@ -52,6 +55,21 @@ export async function listResources(filter?: ResourceFilter): Promise<ResourceIt
       Promise.resolve().then(() => {
         customItems = listCustomResources(filter?.workspaceId);
       }),
+    );
+  }
+
+  let hubItems: ResourceItem[] = [];
+  if (needHub) {
+    tasks.push(
+      listHubCatalogResources(filter?.type)
+        .then((items) => {
+          hubItems = items;
+        })
+        .catch((err) => {
+          logger.warn('listResources: hub 目录拉取失败，hub 源返回空', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }),
     );
   }
 
@@ -89,12 +107,12 @@ export async function listResources(filter?: ResourceFilter): Promise<ResourceIt
     }
   }
 
-  // hub：已装 smithery MCP（mcp_definitions 同步读，无 IO——不参与
+  // smithery：已装 smithery MCP（mcp_definitions 同步读，无 IO——不参与
   // 上面的并行任务）。id 即安装标识（qualifiedName 整体作 slug），Task 6 的
   // installed 翻转依赖本映射。
-  let hubItems: ResourceItem[] = [];
-  if (needHub) {
-    hubItems = listHubInstalledResources(filter?.type);
+  let smitheryItems: ResourceItem[] = [];
+  if (needSmithery) {
+    smitheryItems = listHubInstalledResources(filter?.type);
   }
 
   // 插件（plugins 表同步读，spec 2026-10-15 §8.1）：source 归 custom 轨，
@@ -110,7 +128,14 @@ export async function listResources(filter?: ResourceFilter): Promise<ResourceIt
     }
   }
 
-  let items = [...builtinItems, ...marketplaceItems, ...customItems, ...hubItems, ...pluginItems];
+  let items = [
+    ...builtinItems,
+    ...marketplaceItems,
+    ...customItems,
+    ...smitheryItems,
+    ...hubItems,
+    ...pluginItems,
+  ];
 
   // 按 type 过滤
   if (filter?.type) {

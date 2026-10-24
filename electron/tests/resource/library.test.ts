@@ -14,6 +14,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { listResources, resolveResourceById } from '../../src/main/resource/library';
+import type { ResourceItem } from '../../src/main/resource/types';
 
 const mockCatalog = {
   version: '1.0', updatedAt: '2026-08-11',
@@ -61,11 +62,13 @@ const { skillZipMocks } = vi.hoisted(() => ({
 }));
 vi.mock('../../src/main/skill/zip-uploader', () => skillZipMocks);
 
-// mock hub-install（P2 Task 5：hub 已装 MCP 第五源——真实 DB 行为由
-// tests/resource/hub-install.test.ts 以真实库覆盖，本文件只测四源合并逻辑）
+// mock hub-install（P2 Task 5：smithery 已装 MCP；M1 Task 10：momo-hub 第五源目录项
+// ——真实 DB 行为由 tests/resource/hub-install.test.ts 与 hub-install.e2e.test.ts 以
+// 真实库覆盖，本文件只测五源合并逻辑）
 const { hubInstallMocks } = vi.hoisted(() => ({
   hubInstallMocks: {
     listHubInstalledResources: vi.fn(),
+    listHubCatalogResources: vi.fn(async (): Promise<ResourceItem[]> => []),
   },
 }));
 vi.mock('../../src/main/resource/hub-install', () => hubInstallMocks);
@@ -75,10 +78,12 @@ beforeEach(() => {
   skillZipMocks.listInstalled.mockReturnValue([
     { slug: 'code-review', name: '代码审查', description: '预置审查技能', source: 'builtin', installedAt: null },
     { slug: 'remote', name: '重复条目', description: '与 marketplace 同 slug', source: 'builtin', installedAt: null },
-    { slug: 'my-upload', name: '我的上传', description: 'custom 源应被忽略', source: 'custom', installedAt: '2026-09-16' },
+    { slug: 'my-upload', name: '我的上传', description: 'custom 源应被忽略', source: 'custom', installedAt: '2026-08-11' },
   ]);
   hubInstallMocks.listHubInstalledResources.mockReset();
   hubInstallMocks.listHubInstalledResources.mockReturnValue([]);
+  hubInstallMocks.listHubCatalogResources.mockReset();
+  hubInstallMocks.listHubCatalogResources.mockResolvedValue([]);
 });
 
 describe('listResources', () => {
@@ -140,6 +145,22 @@ describe('listResources', () => {
     expect(items.map((i) => i.source).sort()).toEqual(['builtin', 'builtin', 'custom']);
     expect(items.find((i) => i.slug === 'code-review')).toBeDefined();
     expect(items.find((i) => i.slug === 'remote')?.source).toBe('builtin');
+  });
+
+  it('M1 Task 10：hub 源目录项并入合并面（filter.source=hub 只走 hub 面）', async () => {
+    hubInstallMocks.listHubCatalogResources.mockResolvedValue([
+      { id: 'hub-agent-demo', type: 'agent', source: 'hub', slug: 'demo',
+        name: '演示 Agent', description: 'd', installed: true, installable: false, removable: true },
+    ]);
+
+    const all = await listResources();
+    expect(all.find((i) => i.id === 'hub-agent-demo')).toBeDefined();
+    expect(hubInstallMocks.listHubCatalogResources).toHaveBeenCalledWith(undefined);
+
+    const hubOnly = await listResources({ source: 'hub' });
+    expect(hubOnly.map((i) => i.id)).toEqual(['hub-agent-demo']);
+    // smithery 面不因 hub 过滤而混入
+    expect(hubOnly.every((i) => i.source === 'hub')).toBe(true);
   });
 });
 

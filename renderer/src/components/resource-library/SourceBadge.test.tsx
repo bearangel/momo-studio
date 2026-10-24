@@ -1,7 +1,8 @@
 // renderer/src/components/resource-library/SourceBadge.test.tsx
-// SourceBadge 行为：5 种 source 各显示中文标签 + 对应 Badge tone。
+// SourceBadge 行为：6 种 source 各显示中文标签 + 对应 Badge tone。
 // v2.1 P3 裁定：builtin=accent / custom=neutral / marketplace=violet；
-// P2 hub（smithery）与 marketplace 同为网络安装源，tone 归组 violet。
+// P2 hub（smithery）与 marketplace 同为网络安装源，tone 归组 violet；
+// M1 momo-hub 第五源同为网络安装源 → violet；plugin 与 builtin 同组 accent。
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { SourceBadge } from './SourceBadge';
@@ -25,4 +26,18 @@ describe('SourceBadge', () => {
     expect(screen.getByText('网络资源')).toHaveClass('text-status-violet');
   });
 
+  it('smithery 显示"Smithery" + violet tone（与 marketplace 同为网络安装源）', () => {
+    render(<SourceBadge source="smithery" />);
+    expect(screen.getByText('Smithery')).toHaveClass('text-status-violet');
+  });
+
+  it('hub 显示"momo-hub" + violet tone（M1 第五源——网络安装源同组）', () => {
+    render(<SourceBadge source="hub" />);
+    expect(screen.getByText('momo-hub')).toHaveClass('text-status-violet');
+  });
+
+  it('plugin 显示"插件" + accent tone（与 builtin 同组）', () => {
+    render(<SourceBadge source="plugin" />);
+    expect(screen.getByText('插件')).toHaveClass('bg-surface-active');
+  });
 });

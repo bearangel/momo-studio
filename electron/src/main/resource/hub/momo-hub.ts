@@ -26,7 +26,7 @@ import { logger } from '../../logger';
 import { registerTrustedDownloadOrigin } from '../../marketplace/installer';
 import type { MarketplaceItem } from '../../marketplace/types';
 import { fromCatalogItem } from '../catalog-adapter';
-import type { ResourceItem } from '../types';
+import type { ResourceItem, ResourceType } from '../types';
 import type { HubEntry, HubListResult, HubProvider } from './types';
 
 /** 成功缓存 TTL（与 marketplace/client.ts 同档 5min） */
@@ -39,7 +39,7 @@ export const HUB_CATALOG_FAILURE_BACKOFF_MS = 60 * 1000;
 const DEFAULT_TIMEOUT_MS = 3000;
 
 /** hub 资源类型 → marketplace 可安装类型（plugin 在 M1c 不接通，M1d 解开） */
-type HubMarketplaceType = 'agent' | 'mcp' | 'skill';
+export type HubMarketplaceType = 'agent' | 'mcp' | 'skill';
 
 /** 空目录（未接入 / 首拉失败且无 lastGood 时的占位） */
 const EMPTY_CATALOG: HubCatalog = { version: '0', updatedAt: '', items: [] };
@@ -97,6 +97,18 @@ async function defaultResolveHubContext(): Promise<HubContext | null> {
   return { hubUrl: normalizeHubUrl(status.hubUrl), deviceToken };
 }
 
+/** 生效中的上下文解析器（生产 = HubManager + keychain；测试可注入 mock hub） */
+let contextResolver: HubContextResolver = defaultResolveHubContext;
+
+/**
+ * 测试用：把默认目录源的上下文解析器换成注入的 mock（进程内 node:http mock hub），
+ * 传 null 恢复生产解析器。切换即清缓存/退避/降级态——防上一用例的 catalog 串味。
+ */
+export function __setHubContextResolverForTest(resolver: HubContextResolver | null): void {
+  contextResolver = resolver ?? defaultResolveHubContext;
+  defaultSource.resetForTest();
+}
+
 /**
  * downloadUrl 基址重写（裁定 RM1-12）：路径部分保留 catalog 给的
  * /resources/{slug}/{version}/download，基址一律换成 studio 自身配置的 hubUrl
@@ -114,6 +126,19 @@ export function rewriteDownloadUrl(catalogDownloadUrl: string, hubUrl: string): 
   return `${base}${pathPart}`;
 }
 
+/** hub 已装包记账 item_id 前缀（installed_packages.item_id = `hub:{slug}`） */
+export const HUB_ITEM_ID_PREFIX = 'hub:';
+
+/**
+ * hub 已装包的记账 item_id（installed_packages.item_id）——`hub:{slug}` 前缀
+ * 是 hub 来源的唯一标记（零 schema 变更，spec §6.2）。单点真源：目录项 id
+ * （toMarketplaceItem）、卸载查账（uninstallPackage）、已装态判定共用本函数，
+ * 避免前缀散落各处漂移。
+ */
+export function hubPackageItemId(slug: string): string {
+  return `${HUB_ITEM_ID_PREFIX}${slug}`;
+}
+
 /**
  * HubResourceMeta → MarketplaceItem（spec §6.2：installPackage 原样复用）。
  * versions 数组丢弃语义（M1c 不做版本比较——hub 的 versions[0] 是时序最新而非
@@ -123,7 +148,7 @@ export function rewriteDownloadUrl(catalogDownloadUrl: string, hubUrl: string): 
 export function toMarketplaceItem(meta: HubResourceMeta, hubUrl: string): MarketplaceItem {
   return {
     // item_id 前缀 'hub:'——零 schema 变更区分 hub 来源（spec §6.2）
-    id: `hub:${meta.slug}`,
+    id: hubPackageItemId(meta.slug),
     type: meta.type as HubMarketplaceType,
     slug: meta.slug,
     name: meta.name,
@@ -268,7 +293,7 @@ export function createHubCatalogSource(
 }
 
 /** 生产单例（HubManager 配置 + keychain 凭证） */
-const defaultSource = createHubCatalogSource(defaultResolveHubContext);
+const defaultSource = createHubCatalogSource(() => contextResolver());
 
 /** hub 目录当前是否降级——resource:getCatalogStatus 聚合消费 */
 export function isHubCatalogDegraded(): boolean {
@@ -282,12 +307,28 @@ export async function listHubResourceMetas(type?: HubMarketplaceType): Promise<H
 }
 
 /** hub 目录项 → MarketplaceItem（installPackage 原样消费——spec §6.2） */
-export async function listHubMarketplaceItems(type?: HubMarketplaceType): Promise<MarketplaceItem[]> {
+export async function listHubMarketplaceItems(type?: ResourceType): Promise<MarketplaceItem[]> {
   const { catalog, hubUrl } = await defaultSource.load();
   if (!hubUrl) return [];
   return catalog.items
     .filter((m) => isMarketplaceType(m.type) && (!type || m.type === type))
     .map((m) => toMarketplaceItem(m, hubUrl));
+}
+
+/**
+ * hub 目录项按 type + slug 精确查（安装分支消费）。
+ * 版本取目录当前版本（meta.version）——hub 的 versions[0] 是时序最新而非 semver
+ * 最大，故不做 semver 比较（更新语义裁定在更新角标任务落地）。
+ */
+export async function findHubMarketplaceItem(
+  type: ResourceType,
+  slug: string,
+): Promise<MarketplaceItem | null> {
+  const { catalog, hubUrl } = await defaultSource.load();
+  if (!hubUrl) return null;
+  const meta = catalog.items.find((m) => m.type === type && m.slug === slug);
+  if (!meta || !isMarketplaceType(meta.type)) return null;
+  return toMarketplaceItem(meta, hubUrl);
 }
 
 /** MarketplaceItem → HubEntry（registryList 消费面——与 smithery 同构） */

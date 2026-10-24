@@ -11,7 +11,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildResourceId, parseResourceId, sourceLabel,
-  type ResourceItem, type ResourceFilter,
+  type ResourceItem,
 } from '../../src/main/resource/types';
 
 describe('resource/types', () => {
@@ -75,6 +75,32 @@ describe('ResourceSource 扩展（P2 双轨 hub）', () => {
     expect(parseResourceId('evil-mcp-x')).toBeNull();
     // P2.1 移除 modelscope 后其前缀回落为未知 source——反解必须拒绝
     expect(parseResourceId('modelscope-mcp-x')).toBeNull();
+  });
+});
+
+// M1 第五源契约锁：hub（momo-hub）前缀 + 中文标签 + 徽标文案口径。
+// hub 源的资源 id 形如 `hub-{type}-{slug}`（parseResourceId 反解出 source='hub'），
+// 与 marketplace/smithery 同构但独立前缀——安装记账走 installed_packages 的
+// `hub:{slug}` item_id（零 schema 变更）。
+describe('ResourceSource 扩展（M1 momo-hub 第五源）', () => {
+  it('parseResourceId 解析 hub 前缀（agent / mcp / skill 三类）', () => {
+    expect(parseResourceId('hub-agent-demo-agent')).toEqual({
+      source: 'hub', type: 'agent', slug: 'demo-agent',
+    });
+    expect(parseResourceId('hub-mcp-demo-mcp')).toEqual({
+      source: 'hub', type: 'mcp', slug: 'demo-mcp',
+    });
+    expect(parseResourceId('hub-skill-demo-skill')).toEqual({
+      source: 'hub', type: 'skill', slug: 'demo-skill',
+    });
+  });
+  it('buildResourceId ↔ parseResourceId 往返一致', () => {
+    const id = buildResourceId('hub', 'agent', 'demo-agent');
+    expect(id).toBe('hub-agent-demo-agent');
+    expect(parseResourceId(id)).toEqual({ source: 'hub', type: 'agent', slug: 'demo-agent' });
+  });
+  it('sourceLabel(hub) = momo-hub', () => {
+    expect(sourceLabel('hub')).toBe('momo-hub');
   });
 });
 

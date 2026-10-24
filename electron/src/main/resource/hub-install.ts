@@ -1,13 +1,19 @@
 // electron/src/main/resource/hub-install.ts
 //
-// hub MCP 安装/卸载与已装映射（spec §4.3）。
+// hub 资源安装/卸载与已装映射（spec §4.3）。
+//
+// 两个 hub 源分工：
+//   - smithery（国际注册表）：MCP 直连安装——详情 deploymentUrl → streamable_http
+//     注册（见下方 installSmitheryRemote），P2.1 Task 3 起。
+//   - momo-hub（自建节点，第五源）：目录项 → MarketplaceItem → installPackage
+//     全链复用（spec §6.2），安装/卸载记账走 installed_packages，item_id 带
+//     `hub:` 前缀（与 marketplace 同表不同前缀，卸载互不误伤）。
+//
 // P2.1 Task 3 直连翻转：install-config 端点已 404（死码移除），Smithery 安装改为
 // 详情接口取 deploymentUrl → streamable_http 直连注册（免账号 A1）。配置字段按
 // configSchema 的 x-from 元数据分流：'query' 拼进 URL query（encodeURIComponent），
 // 其余（含缺省——实证样本均无 x-from，spec D5）进 headers。P2.2 Task 2 起
 // 分流段单点收敛为 composeRemoteConfig（安装/编辑共用）。
-// 记账走 installed_packages（item_id = `${source}:${slug}`），与 marketplace 同表
-// 不同前缀，卸载互不误伤。
 // 魔搭 remote 安装轨已于 P2.1 移除（registry 100% hosted 后放弃）；P3 若公开
 // API 落地再评估。
 //
@@ -22,6 +28,14 @@ import { registerMcpDefinition, listRegistered, deleteRegistered, isAllowedRemot
 import { removeMcpRefsFromAgents } from '../agent/crud';
 import type { McpConfigSchema } from '../mcp/types';
 import { buildResourceId, type ResourceItem, type ResourceType } from './types';
+import { fromCatalogItem } from './catalog-adapter';
+import { installPackage, listInstalled, uninstallPackage } from '../marketplace/installer';
+import {
+  findHubMarketplaceItem,
+  hubPackageItemId,
+  HUB_ITEM_ID_PREFIX,
+  listHubMarketplaceItems,
+} from './hub/momo-hub';
 
 const SMITHERY_BASE = 'https://registry.smithery.ai';
 
@@ -145,6 +159,65 @@ export function listHubInstalledResources(type?: ResourceType): ResourceItem[] {
       // 组⑤：启停态透出（详情 toggle / 行「已禁用」标记消费）
       mcp: { enabled: m.enabled },
     }));
+}
+
+/**
+ * momo-hub 目录项 → ResourceItem（source='hub'）——资源库第五源的并入面。
+ *
+ * 安装态口径与 marketplace 同款（catalog-adapter.fromCatalogItem）：
+ * installed_packages.item_id = `hub:{slug}` 命中即视为已装 → installable /
+ * removable 随之翻转。目录不可达（未接入 / 离线降级）时，已装但目录已无的条目
+ * 走本地缓存形态兜底——installed_packages 行自带 slug/version/type，不依赖
+ * 网络仍可见、可卸载。
+ */
+export async function listHubCatalogResources(type?: ResourceType): Promise<ResourceItem[]> {
+  const items = await listHubMarketplaceItems(type);
+  const mapped = items.map((item) => fromCatalogItem(item, 'hub'));
+  const catalogSlugs = new Set(mapped.map((i) => i.slug));
+  for (const row of listInstalled()) {
+    if (!row.itemId.startsWith(HUB_ITEM_ID_PREFIX)) continue;
+    const slug = row.itemId.slice(HUB_ITEM_ID_PREFIX.length);
+    if (catalogSlugs.has(slug)) continue;
+    if (row.itemType !== 'agent' && row.itemType !== 'mcp' && row.itemType !== 'skill') continue;
+    mapped.push({
+      id: buildResourceId('hub', row.itemType, slug),
+      type: row.itemType,
+      source: 'hub',
+      slug,
+      name: slug,
+      description: '已从 momo-hub 安装（当前目录中已无此条目）',
+      version: row.version,
+      installed: true,
+      installable: false,
+      removable: true,
+    });
+  }
+  return mapped;
+}
+
+/**
+ * momo-hub 条目安装：目录查项（按 type + slug）→ installPackage 全链。
+ * 版本取目录当前版本（meta.version，非 semver 比较——更新语义裁定见 T14）。
+ * 目录查不到 → 人话错误（未接入 / 已下架 / slug 拼错）。
+ */
+export async function installHubPackage(
+  type: ResourceType,
+  slug: string,
+): Promise<{ cachePath: string }> {
+  const item = await findHubMarketplaceItem(type, slug);
+  if (!item) {
+    throw new Error(
+      `momo-hub 目录中未找到 ${type} 条目「${slug}」（可能尚未接入 hub、hub 离线或该条目已下架）`,
+    );
+  }
+  return installPackage(item);
+}
+
+/** momo-hub 已装包卸载：删缓存目录 + installed_packages 记账（幂等） */
+export function uninstallHubPackage(slug: string): void {
+  // 记账 item_id = `hub:{slug}`（hubPackageItemId 单点前缀）——传 ResourceItem.id
+  // 会查无此行 → 静默 no-op（marketplace 同款陷阱，见 ipc.handlers delete 分支）
+  uninstallPackage(hubPackageItemId(slug));
 }
 
 /** hub 卸载：删 mcp_definitions 行 + 级联清理 agent 引用 + installed_packages 记账（幂等） */

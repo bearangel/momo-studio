@@ -187,6 +187,55 @@ describe('ResourceCard 状态矩阵（P1 预览 §D 契约锁，13 形态）', (
   });
 });
 
+describe('ResourceCard 五源并列渲染（M1 Task 10 回归锁）', () => {
+  it('builtin / marketplace / custom / smithery / hub 五源卡片同屏渲染，各挂自己的来源徽标', () => {
+    const sources: Array<{ source: ResourceItem['source']; label: string }> = [
+      { source: 'builtin', label: '系统预置' },
+      { source: 'marketplace', label: '网络资源' },
+      { source: 'custom', label: '自定义' },
+      { source: 'smithery', label: 'Smithery' },
+      { source: 'hub', label: 'momo-hub' },
+    ];
+    render(
+      <div role="list">
+        {sources.map((s, i) => (
+          <ResourceCard
+            key={s.source}
+            item={mkItem({
+              id: `${s.source}-mcp-x${i}`, type: 'mcp', source: s.source, slug: `x${i}`,
+              name: `卡${i}`, installed: false, installable: true, removable: false,
+            })}
+            selected={false} onSelect={noop} onInstall={noop}
+          />
+        ))}
+      </div>,
+    );
+    // 五个来源徽标同时在场——不互相遮蔽（source 标签契约锁）
+    for (const s of sources) {
+      expect(screen.getByText(s.label)).toBeTruthy();
+    }
+    // 五张卡各自的来源标签不串位
+    expect(screen.getAllByText(/系统预置|网络资源|自定义|Smithery|momo-hub/)).toHaveLength(5);
+  });
+
+  it('hub 未装条目显示安装钮（installable）——安装走 resource:install 的 hub 分支', () => {
+    const onInstall = vi.fn();
+    render(
+      <ResourceCard
+        item={mkItem({
+          id: 'hub-agent-hub-e2e-agent', type: 'agent', source: 'hub', slug: 'hub-e2e-agent',
+          name: '演示 Agent', installed: false, installable: true, removable: false,
+        })}
+        selected={false} onSelect={noop} onInstall={onInstall}
+      />,
+    );
+    expect(screen.getByRole('button', { name: '安装' })).toBeTruthy();
+    expect(screen.getByText('momo-hub')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '安装' }));
+    expect(onInstall).toHaveBeenCalledWith('hub-agent-hub-e2e-agent');
+  });
+});
+
 describe('ResourceCard 插件面（spec 2026-10-21 §9①：恒显徽标 + 卡内启停开关）', () => {
   function mkPlugin(over: Partial<NonNullable<ResourceItem['plugin']>>): ResourceItem {
     return mkItem({

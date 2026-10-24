@@ -58,6 +58,8 @@ import {
   fetchSmitheryDetail,
   installSmitheryRemote,
   uninstallHubMcp,
+  installHubPackage,
+  uninstallHubPackage,
   type SmitheryInstallResult,
 } from './hub-install';
 import {
@@ -155,11 +157,13 @@ export function registerResourceHandlers(): void {
     return resolveResourceById(id);
   });
 
-  // resource:install — marketplace 安装（P4 Task 5）+ hub 安装（P2.1 Task 3）
+  // resource:install — marketplace 安装（P4 Task 5）+ hub 安装（P2.1 Task 3 / M1 Task 10）
   // marketplace：installPackage 底层需要完整的 MarketplaceItem（含 downloadUrl/checksum 等），
   // ResourceItem 不携带这些字段，故先 fetchCatalog 按 slug 找到原 catalog item 再传入。
-  // hub：smithery 详情 deploymentUrl 直连（两态返回——needsConfig 见
+  // smithery：详情 deploymentUrl 直连（两态返回——needsConfig 见
   // installSmitheryEntry；renderer types.d.ts 的 SmitheryInstallResult 有镜像）。
+  // hub（momo-hub 第五源）：目录项 → MarketplaceItem → installPackage 全链
+  // （installHubPackage 内查目录，版本取目录当前版本）。
   const __resourceInstall = async (_evt: unknown, id: string): Promise<unknown> => {
     const item = await resolveResourceById(id);
     if (!item) {
@@ -169,10 +173,18 @@ export function registerResourceHandlers(): void {
       if (hubParsed?.type === 'mcp' && hubParsed.source === 'smithery') {
         return installSmitheryEntry(hubParsed.slug);
       }
+      // momo-hub 条目：hub 离线/降级时目录拉不到、library 里查不到——
+      // 仍按 id 反解三元组进安装链（installHubPackage 内部查目录，失败给人话错误）
+      if (hubParsed?.source === 'hub' && hubParsed.type !== 'plugin') {
+        return installHubPackage(hubParsed.type, hubParsed.slug);
+      }
       throw new Error(`资源 ${id} 不存在`);
     }
     if (!item.installable) throw new Error(`「${item.name}」不可安装`);
 
+    if (item.source === 'hub') {
+      return installHubPackage(item.type, item.slug);
+    }
     if (item.source !== 'marketplace') {
       throw new Error(`source=${item.source} 不支持 install 操作`);
     }
@@ -244,6 +256,11 @@ export function registerResourceHandlers(): void {
           throw new Error(`marketplace catalog 中未找到 slug=${item.slug}（可能 catalog 已变更）`);
         }
         return uninstallPackage(catalogItem.id);
+      }
+      case 'hub': {
+        // hub 记账 item_id = `hub:{slug}`（hubPackageItemId 单点前缀）——同款陷阱：
+        // 传 ResourceItem.id 会查无此行 → 静默 no-op
+        return uninstallHubPackage(item.slug);
       }
       case 'custom': {
         let deleted: unknown;

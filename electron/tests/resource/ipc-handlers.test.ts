@@ -88,6 +88,10 @@ const { hubInstallMocks } = vi.hoisted(() => ({
     installSmitheryRemote: vi.fn(),
     uninstallHubMcp: vi.fn(),
     listHubInstalledResources: vi.fn(() => []),
+    // M1 Task 10：momo-hub 第五源安装/卸载（真实链路由 tests/resource/
+    // hub-install.e2e.test.ts 以真 mock hub + 真归档覆盖；本文件只锁 IPC 路由）
+    installHubPackage: vi.fn(async () => ({ cachePath: '/tmp/hub-cache' })),
+    uninstallHubPackage: vi.fn(),
   },
 }));
 vi.mock('../../src/main/resource/hub-install', () => hubInstallMocks);
@@ -498,6 +502,63 @@ describe('registerResourceHandlers', () => {
       type: string,
     ) => Promise<unknown>;
     await expect(handler({}, 'mcphub', 'mcp')).rejects.toThrow(/未知 registry provider/);
+  });
+
+  it('resource:install hub 分支（M1 Task 10）：hub 源条目 → installHubPackage(type, slug)', async () => {
+    // hub 目录项已在 library（未装项也在目录面——marketplace 同款口径）
+    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      id: 'hub-agent-hub-e2e-agent',
+      type: 'agent',
+      source: 'hub',
+      slug: 'hub-e2e-agent',
+      name: '演示 Agent',
+      installable: true,
+    });
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
+    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
+    await handler({}, 'hub-agent-hub-e2e-agent');
+    expect(hubInstallMocks.installHubPackage).toHaveBeenCalledWith('agent', 'hub-e2e-agent');
+  });
+
+  it('resource:install hub 分支：hub 离线（library 查不到）→ 仍按 id 反解进安装链', async () => {
+    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
+    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
+    await handler({}, 'hub-skill-hub-e2e-skill');
+    expect(hubInstallMocks.installHubPackage).toHaveBeenCalledWith('skill', 'hub-e2e-skill');
+  });
+
+  it('resource:install 非 marketplace / 非 hub 源仍抛「不支持 install 操作」', async () => {
+    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      id: 'custom-agent-uuid1',
+      type: 'agent',
+      source: 'custom',
+      slug: 'uuid1',
+      name: 'my agent',
+      installable: true,
+    });
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
+    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
+    await expect(handler({}, 'custom-agent-uuid1')).rejects.toThrow(/不支持 install 操作/);
+  });
+
+  it('resource:delete hub-* 路由到 uninstallHubPackage（slug → `hub:` 前缀寻址）', async () => {
+    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      id: 'hub-skill-hub-e2e-skill',
+      type: 'skill',
+      source: 'hub',
+      slug: 'hub-e2e-skill',
+      removable: true,
+      name: '演示技能',
+    });
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const deleteCall = calls.find((c: unknown[]) => c[0] === 'resource:delete');
+    const handler = deleteCall![1] as (evt: unknown, id: string) => Promise<void>;
+    await handler({}, 'hub-skill-hub-e2e-skill');
+    expect(hubInstallMocks.uninstallHubPackage).toHaveBeenCalledWith('hub-e2e-skill');
   });
 
   it('resource:install hub 分支（P2.1 Task 3 两态）：未装 smithery 条目 → 拉详情直装 + needsConfig:false', async () => {
