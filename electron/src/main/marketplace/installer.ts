@@ -141,6 +141,11 @@ export async function installPackage(
       `非法 version: "${item.version}"（仅允许数字/字母/点/加号/减号）`,
     );
   }
+  if (item.type === 'plugin') {
+    // plugin 必经 plugin 域注册链（PluginRecord 落库 + 组件激活，hub 安装链的
+    // plugin 分支委派 plugin/hub-install）——缓存目录链装不出可用插件，fail-fast
+    throw new Error('plugin 包不支持 marketplace 缓存链安装（须走插件注册链）');
+  }
   if (item.downloadUrl !== '' && !isTrustedDownloadUrl(item.downloadUrl)) {
     throw new Error(
       `downloadUrl 必须是 https 地址或已注册的可信源: ${item.downloadUrl}`,

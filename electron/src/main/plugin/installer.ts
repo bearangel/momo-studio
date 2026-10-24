@@ -24,6 +24,8 @@ import { validatePanelsAtRoot, notifyPanelsChanged } from './panel-sync';
 import { normalizeConfigSchema, sensitiveRef, evictPluginConfigCache } from './config-store';
 import { deleteSecret } from '../storage/keychain';
 import { upsertPlugin, getPlugin, removePluginRecord, setPluginEnabled } from './registry';
+import { uninstallPackage } from '../marketplace/installer';
+import { hubPackageItemId } from '../resource/hub/momo-hub';
 import { registerPluginAgents, removePluginAgents } from './agent-sync';
 import { syncPluginHooks, removePluginHooks } from './hook-sync';
 import { startPluginService, stopPluginService } from './service-manager';
@@ -58,6 +60,9 @@ function assertMinAppVersion(minAppVersion: string | undefined, currentAppVersio
     throw new Error(`插件需要应用版本 ≥ ${minAppVersion}，当前 ${currentAppVersion}`);
   }
 }
+
+/** hub 归档链复用（两链同版本闸——单源导出防规则漂移） */
+export { assertMinAppVersion };
 
 /** 解压 entry 相对路径防御：段含 .. / 绝对路径 → 不落盘（读外部恶意 zip 的真防线） */
 export function isSafeEntryRelPath(rel: string): boolean {
@@ -125,6 +130,51 @@ function extractVendorArchives(manifest: PluginManifest, staging: string): void 
   }
 }
 
+/**
+ * staging → 注册的共用核心（zip 上传链 / hub 归档链两链同轨——等价性的物理保证）：
+ * manifest 校验 → 原子落位 installed/<id>/<version>/ → PluginRecord 落库 →
+ * 声明式组件激活（hooks/service/agents/mcp + 安装 ws 单行启用）→ 事件广播。
+ * staging 由调用方解压完毕后传入；成功时 staging 被 rename 消费，失败时由
+ * 调用方的 catch 清理（rename 后失败 staging 已不存在，rm force 为 no-op）。
+ */
+export function finalizePluginInstall(
+  staging: string,
+  manifest: PluginManifest,
+  originWorkspaceId: string,
+): PluginRecord {
+  validateManifest(manifest, staging);
+  validatePanelsAtRoot(staging, manifest, manifest.id);
+  if (manifest.config) normalizeConfigSchema(manifest.config);
+  extractVendorArchives(manifest, staging);
+
+  const target = resolvePluginInstalledDir(manifest.id, manifest.version);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
+  fs.renameSync(staging, target);
+
+  const rec: PluginRecord = {
+    id: manifest.id,
+    version: manifest.version,
+    manifestJson: JSON.stringify(manifest),
+    state: 'active',
+    source: 'zip',
+    sourcePath: null,
+    installedAt: new Date().toISOString(),
+  };
+  upsertPlugin(rec);
+  // 单版本驻留：清同插件旧版本目录（spec §7.1）
+  const versionRoot = path.dirname(target);
+  for (const dir of fs.readdirSync(versionRoot)) {
+    if (dir !== manifest.version) {
+      fs.rmSync(path.join(versionRoot, dir), { recursive: true, force: true });
+    }
+  }
+  activateDeclarativeComponents(rec, originWorkspaceId);
+  emitPluginEvent('resourceInstalled', { type: 'plugin', id: rec.id });
+  notifyPanelsChanged(); // I1 修复：zip 是 marketplace 主通道，与 dev 链对齐
+  return rec;
+}
+
 export async function installPluginZip(
   data: Buffer,
   currentAppVersion: string,
@@ -159,7 +209,6 @@ export async function installPluginZip(
     resolvePluginsDir(),
     `.staging-${manifest.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   );
-  const target = resolvePluginInstalledDir(manifest.id, manifest.version);
   try {
     fs.mkdirSync(staging, { recursive: true });
     // 实际解压尺寸守卫（审查 I2 纵深防御）：zip 头声明的 size 可说谎——声明值
@@ -182,45 +231,7 @@ export async function installPluginZip(
       fs.mkdirSync(path.dirname(abs), { recursive: true });
       fs.writeFileSync(abs, buf);
     }
-    validateManifest(manifest, staging);
-    validatePanelsAtRoot(staging, manifest, manifest.id);
-    if (manifest.config) normalizeConfigSchema(manifest.config);
-    extractVendorArchives(manifest, staging);
-
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
-    fs.renameSync(staging, target);
-
-    upsertPlugin({
-      id: manifest.id,
-      version: manifest.version,
-      manifestJson: JSON.stringify(manifest),
-      state: 'active',
-      source: 'zip',
-      sourcePath: null,
-      installedAt: new Date().toISOString(),
-    });
-    // 单版本驻留：清同插件旧版本目录（spec §7.1）
-    const versionRoot = path.dirname(target);
-    for (const dir of fs.readdirSync(versionRoot)) {
-      if (dir !== manifest.version) {
-        fs.rmSync(path.join(versionRoot, dir), { recursive: true, force: true });
-      }
-    }
-    const rec: PluginRecord = {
-      id: manifest.id,
-      version: manifest.version,
-      manifestJson: JSON.stringify(manifest),
-      state: 'active',
-      source: 'zip',
-      sourcePath: null,
-      installedAt: new Date().toISOString(),
-    };
-    upsertPlugin(rec);
-    activateDeclarativeComponents(rec, originWorkspaceId);
-    emitPluginEvent('resourceInstalled', { type: 'plugin', id: rec.id });
-    notifyPanelsChanged(); // I1 修复：zip 是 marketplace 主通道，与 dev 链对齐
-    return rec;
+    return finalizePluginInstall(staging, manifest, originWorkspaceId);
   } catch (err) {
     fs.rmSync(staging, { recursive: true, force: true });
     throw err;
@@ -343,6 +354,12 @@ export function uninstallPlugin(id: string, keepData: boolean): void {
   removePluginRecord(id);
   emitPluginEvent('resourceRemoved', { type: 'plugin', id });
   notifyPanelsChanged();
+  // hub 记账级联：hub 安装的插件（item_id = `hub:{id}`）卸载时同步删
+  // installed_packages 行——否则 hub 页签残留「已从 momo-hub 安装」幽灵行
+  //（插件设置页 / 资源库插件页两入口都汇入本函数，此处是唯一收口）。
+  // 非 hub 安装（无该前缀行）为幂等 no-op。cache_path 指向的 installed 目录
+  // 已在上/下行删除，uninstallPackage 的 rm force 为 no-op。
+  uninstallPackage(hubPackageItemId(id));
   if (rec.source === 'zip') {
     fs.rmSync(path.join(resolvePluginsDir(), 'installed', id), { recursive: true, force: true });
   }

@@ -201,13 +201,19 @@ describe('T9: momo-hub provider 目录源', () => {
     );
   });
 
-  it('plugin 项在 M1c 过滤不输出（消费面 M1d 接通）', async () => {
+  it('plugin 项输出（T12 消费面接通：M1c 预过滤解开）+ provider types 含 plugin', async () => {
     hub = await startMockHub(jsonResponder(200, catalogPayload()));
     const source = createHubCatalogSource(resolverFor(hub.url));
     const provider = createHubProvider(source);
 
+    // provider 元信息含 plugin（resource:registryProviders 透传——hub 页签类型面）
+    expect(provider.types).toContain('plugin');
+
     const pluginResult = await provider.list('plugin');
-    expect(pluginResult.entries).toHaveLength(0);
+    expect(pluginResult.entries).toHaveLength(1);
+    expect(pluginResult.entries[0]!.type).toBe('plugin');
+    expect(pluginResult.entries[0]!.item.slug).toBe('demo-plugin');
+    expect(pluginResult.entries[0]!.item.installable).toBe(true);
 
     const skillResult = await provider.list('skill');
     expect(skillResult.entries).toHaveLength(1);

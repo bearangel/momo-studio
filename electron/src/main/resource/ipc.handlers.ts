@@ -44,7 +44,7 @@ import { emitPluginEvent } from '../plugin/event-sources';
 //
 
 import { randomUUID } from 'node:crypto';
-import { ipcMain, shell } from 'electron';
+import { ipcMain, shell, app } from 'electron';
 import { logger } from '../logger';
 import { listResources, resolveResourceById } from './library';
 import {
@@ -91,6 +91,7 @@ import { importGitRepoSkills, scanGitRepoSkills } from '../skill/git-import';
 import { deleteDefinition, removeMcpRefsFromAgents } from '../agent/crud';
 import { broadcastSessionListChanged } from '../im/session-service';
 import { listBuiltinPresetAgents, previewBuiltinPresetAgent } from '../agent/builtin';
+import { getActiveWorkspaceId } from '../workspace/ipc.handlers';
 
 /** resource:registerMcp 入参——注册自定义 MCP 的最小配置（id / version 由主进程补全） */
 export interface RegisterMcpInput {
@@ -142,6 +143,12 @@ function assertMcpName(name: string): void {
   }
 }
 
+/** hub 安装上下文（plugin 链消费：minAppVersion 闸 + enablement 作用域——
+ *  与 plugin:installZip 的取值口径一致：renderer 显式传 ws 缺省取活动工作区） */
+function hubInstallContext(): { appVersion: string; workspaceId?: string } {
+  return { appVersion: app.getVersion(), workspaceId: getActiveWorkspaceId() ?? undefined };
+}
+
 /**
  * 注册 resource:* 命名空间的 IPC handler。
  * 在 app ready 后由 registerIpcHandlers（ipc/index.ts）统一调用。
@@ -174,16 +181,17 @@ export function registerResourceHandlers(): void {
         return installSmitheryEntry(hubParsed.slug);
       }
       // momo-hub 条目：hub 离线/降级时目录拉不到、library 里查不到——
-      // 仍按 id 反解三元组进安装链（installHubPackage 内部查目录，失败给人话错误）
-      if (hubParsed?.source === 'hub' && hubParsed.type !== 'plugin') {
-        return installHubPackage(hubParsed.type, hubParsed.slug);
+      // 仍按 id 反解三元组进安装链（installHubPackage 内部查目录，失败给人话错误）。
+      // plugin 自 T12 起同链安装（plugin 域注册链 + 记账）
+      if (hubParsed?.source === 'hub') {
+        return installHubPackage(hubParsed.type, hubParsed.slug, hubInstallContext());
       }
       throw new Error(`资源 ${id} 不存在`);
     }
     if (!item.installable) throw new Error(`「${item.name}」不可安装`);
 
     if (item.source === 'hub') {
-      return installHubPackage(item.type, item.slug);
+      return installHubPackage(item.type, item.slug, hubInstallContext());
     }
     if (item.source !== 'marketplace') {
       throw new Error(`source=${item.source} 不支持 install 操作`);

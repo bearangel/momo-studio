@@ -4,8 +4,10 @@
 // MarketplaceItem 是单条可安装项（agent / mcp / skill）。字段与 renderer 端
 // 通过 IPC 传输，因此保持纯数据（无方法）。
 
-/** 可安装项类型：agent（子 agent 定义）/ mcp（MCP server 包）/ skill（技能包） */
-export type ItemType = 'agent' | 'mcp' | 'skill';
+/** 可安装项类型：agent（子 agent 定义）/ mcp（MCP server 包）/ skill（技能包）/
+ *  plugin（插件包——仅 hub 链可装：marketplace 缓存链不支持，必经 plugin 域
+ *  注册链，installer.installPackage 对 plugin 类型 fail-fast 拒绝） */
+export type ItemType = 'agent' | 'mcp' | 'skill' | 'plugin';
 
 /** 校验状态：unverified < community < verified < official，UI 据此显示徽标 */
 export type VerificationStatus = 'unverified' | 'community' | 'verified' | 'official';

@@ -38,8 +38,8 @@ export const HUB_CATALOG_FAILURE_BACKOFF_MS = 60 * 1000;
 /** 单次请求超时（与 marketplace/client.ts 同档 3s，避免 UI 长时间卡住） */
 const DEFAULT_TIMEOUT_MS = 3000;
 
-/** hub 资源类型 → marketplace 可安装类型（plugin 在 M1c 不接通，M1d 解开） */
-export type HubMarketplaceType = 'agent' | 'mcp' | 'skill';
+/** hub 资源类型 → marketplace 可安装类型（plugin 自 T12 起接通安装链） */
+export type HubMarketplaceType = 'agent' | 'mcp' | 'skill' | 'plugin';
 
 /** 空目录（未接入 / 首拉失败且无 lastGood 时的占位） */
 const EMPTY_CATALOG: HubCatalog = { version: '0', updatedAt: '', items: [] };
@@ -168,9 +168,9 @@ export function toMarketplaceItem(meta: HubResourceMeta, hubUrl: string): Market
   };
 }
 
-/** plugin 项在 M1c 过滤不输出（plugin 消费面 M1d 接通） */
+/** 协议四类全部可输出（plugin 自 T12 起接通——安装链走 plugin 域注册入口） */
 function isMarketplaceType(type: string): type is HubMarketplaceType {
-  return type === 'agent' || type === 'mcp' || type === 'skill';
+  return type === 'agent' || type === 'mcp' || type === 'skill' || type === 'plugin';
 }
 
 /**
@@ -367,13 +367,12 @@ export function createHubProvider(source: HubCatalogSource): HubProvider {
     key: 'hub',
     label: 'momo-hub',
     region: 'local',
-    types: ['agent', 'mcp', 'skill'],
+    types: ['agent', 'mcp', 'skill', 'plugin'],
     async list(type, query, _page): Promise<HubListResult> {
       const { catalog, hubUrl, degraded: deg, notEnrolled } = await source.load();
       if (notEnrolled || !hubUrl) {
         return { entries: [], degraded: false, hasMore: false, notEnrolled: true };
       }
-      // plugin 项在 M1c 过滤不输出（消费面 M1d 接通）；type='plugin' 的请求恒空
       const items = catalog.items
         .filter((m) => isMarketplaceType(m.type))
         .filter((m) => m.type === type)

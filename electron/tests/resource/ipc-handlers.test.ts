@@ -34,6 +34,9 @@ const { shellOpenExternal } = vi.hoisted(() => ({
 vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
   shell: { openExternal: shellOpenExternal },
+  // T12：resource:install hub 分支经 hubInstallContext 读 app.getVersion()
+  // （plugin 链 minAppVersion 闸）——边界 mock 仿真真实返回
+  app: { getVersion: () => '2.1.0-test' },
 }));
 
 // mock library
@@ -425,9 +428,9 @@ describe('registerResourceHandlers', () => {
     expect(providers[0]).toMatchObject({ region: 'local', degraded: false });
     expect(providers[0]!.types).toEqual(['agent', 'mcp', 'skill']);
     expect(providers[1]).toMatchObject({ label: 'Smithery', region: 'intl', degraded: false });
-    // M1c：momo-hub 为资源库第五源——region=local（自建节点），plugin 类型不在册
+    // T12：plugin 自 M1d 接通——provider types 四类在册（安装链走 plugin 域注册入口）
     expect(providers[2]).toMatchObject({ label: 'momo-hub', region: 'local', degraded: false });
-    expect(providers[2]!.types).toEqual(['agent', 'mcp', 'skill']);
+    expect(providers[2]!.types).toEqual(['agent', 'mcp', 'skill', 'plugin']);
   });
 
   it('resource:registryList builtin 分支：marketplace 源 + 前端同款过滤排序映射（hasMore 恒 false）', async () => {
@@ -504,7 +507,7 @@ describe('registerResourceHandlers', () => {
     await expect(handler({}, 'mcphub', 'mcp')).rejects.toThrow(/未知 registry provider/);
   });
 
-  it('resource:install hub 分支（M1 Task 10）：hub 源条目 → installHubPackage(type, slug)', async () => {
+  it('resource:install hub 分支（M1 Task 10）：hub 源条目 → installHubPackage(type, slug, ctx)', async () => {
     // hub 目录项已在 library（未装项也在目录面——marketplace 同款口径）
     (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       id: 'hub-agent-hub-e2e-agent',
@@ -518,16 +521,29 @@ describe('registerResourceHandlers', () => {
     const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
     const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
     await handler({}, 'hub-agent-hub-e2e-agent');
-    expect(hubInstallMocks.installHubPackage).toHaveBeenCalledWith('agent', 'hub-e2e-agent');
+    // T12：第三参安装上下文（appVersion 必带；workspaceId 无活动工作区时 undefined）
+    expect(hubInstallMocks.installHubPackage).toHaveBeenCalledWith('agent', 'hub-e2e-agent', {
+      appVersion: '2.1.0-test',
+      workspaceId: undefined,
+    });
   });
 
-  it('resource:install hub 分支：hub 离线（library 查不到）→ 仍按 id 反解进安装链', async () => {
+  it('resource:install hub 分支：hub 离线（library 查不到）→ 仍按 id 反解进安装链（plugin 同链）', async () => {
     (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
     const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
     const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
     const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
     await handler({}, 'hub-skill-hub-e2e-skill');
-    expect(hubInstallMocks.installHubPackage).toHaveBeenCalledWith('skill', 'hub-e2e-skill');
+    expect(hubInstallMocks.installHubPackage).toHaveBeenCalledWith('skill', 'hub-e2e-skill', {
+      appVersion: '2.1.0-test',
+      workspaceId: undefined,
+    });
+    // T12：plugin 类型不再被 id 反解分支拦截（T9 第三处过滤解开）
+    await handler({}, 'hub-plugin-hub-e2e-plugin');
+    expect(hubInstallMocks.installHubPackage).toHaveBeenCalledWith('plugin', 'hub-e2e-plugin', {
+      appVersion: '2.1.0-test',
+      workspaceId: undefined,
+    });
   });
 
   it('resource:install 非 marketplace / 非 hub 源仍抛「不支持 install 操作」', async () => {

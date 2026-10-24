@@ -30,6 +30,10 @@ import type { McpConfigSchema } from '../mcp/types';
 import { buildResourceId, type ResourceItem, type ResourceType } from './types';
 import { fromCatalogItem } from './catalog-adapter';
 import { installPackage, listInstalled, uninstallPackage } from '../marketplace/installer';
+import { installPluginHubArchive } from '../plugin/hub-install';
+import { uninstallPlugin } from '../plugin/installer';
+import { getPlugin, listPlugins } from '../plugin/registry';
+import { resolvePluginInstalledDir } from '../paths';
 import {
   findHubMarketplaceItem,
   hubPackageItemId,
@@ -173,13 +177,26 @@ export function listHubInstalledResources(type?: ResourceType): ResourceItem[] {
 export async function listHubCatalogResources(type?: ResourceType): Promise<ResourceItem[]> {
   const items = await listHubMarketplaceItems(type);
   const mapped = items.map((item) => fromCatalogItem(item, 'hub'));
-  const catalogSlugs = new Set(mapped.map((i) => i.slug));
+  // plugin 去重（消费面裁定）：已装插件的管理面 = plugins 表行（listPluginResourceRows
+  // 的 custom-plugin-* 行，带启停/卸载 namespace）——hub 目录行在插件注册在场时
+  // 隐藏，同物理插件不出现两张卡；注册行消失（幽灵账）时目录/兜底行恢复可见可卸
+  const pluginIds = new Set(listPlugins().map((p) => p.id));
+  const visible = mapped.filter((i) => !(i.type === 'plugin' && pluginIds.has(i.slug)));
+  const catalogSlugs = new Set(visible.map((i) => i.slug));
   for (const row of listInstalled()) {
     if (!row.itemId.startsWith(HUB_ITEM_ID_PREFIX)) continue;
     const slug = row.itemId.slice(HUB_ITEM_ID_PREFIX.length);
     if (catalogSlugs.has(slug)) continue;
-    if (row.itemType !== 'agent' && row.itemType !== 'mcp' && row.itemType !== 'skill') continue;
-    mapped.push({
+    if (
+      row.itemType !== 'agent' &&
+      row.itemType !== 'mcp' &&
+      row.itemType !== 'skill' &&
+      row.itemType !== 'plugin'
+    ) {
+      continue;
+    }
+    if (row.itemType === 'plugin' && pluginIds.has(slug)) continue;
+    visible.push({
       id: buildResourceId('hub', row.itemType, slug),
       type: row.itemType,
       source: 'hub',
@@ -192,17 +209,30 @@ export async function listHubCatalogResources(type?: ResourceType): Promise<Reso
       removable: true,
     });
   }
-  return mapped;
+  return visible;
 }
 
 /**
- * momo-hub 条目安装：目录查项（按 type + slug）→ installPackage 全链。
+ * momo-hub 条目安装：目录查项（按 type + slug）→ 分型安装链。
+ *   - agent / mcp / skill：installPackage 全链（marketplace 缓存链，spec §6.2）
+ *   - plugin：plugin 域注册链（installPluginHubArchive——PluginRecord 落库 +
+ *     组件激活 + installed 目录落位，与本地 zip 安装完全等价）+ installed_packages
+ *     记账（item_type='plugin'，页签已装态判定源）
  * 版本取目录当前版本（meta.version，非 semver 比较——更新语义裁定见 T14）。
  * 目录查不到 → 人话错误（未接入 / 已下架 / slug 拼错）。
  */
+export interface InstallHubOptions {
+  /** 应用版本（plugin 链 minAppVersion 闸消费；缺省跳过版本闸） */
+  appVersion?: string;
+  /** 安装作用域工作空间（plugin 链 enablement 单行落此 ws；缺省报错——与
+   *  本地安装同语义：无作用域不装） */
+  workspaceId?: string;
+}
+
 export async function installHubPackage(
   type: ResourceType,
   slug: string,
+  opts?: InstallHubOptions,
 ): Promise<{ cachePath: string }> {
   const item = await findHubMarketplaceItem(type, slug);
   if (!item) {
@@ -210,13 +240,49 @@ export async function installHubPackage(
       `momo-hub 目录中未找到 ${type} 条目「${slug}」（可能尚未接入 hub、hub 离线或该条目已下架）`,
     );
   }
+  if (item.type === 'plugin') {
+    const rec = await installPluginHubArchive(
+      item,
+      opts?.appVersion ?? '999.0.0',
+      opts?.workspaceId ?? '',
+    );
+    // 记账：cache_path 指向真实 installed 目录（信息性——卸载走 plugin 级联，
+    // 不经 marketplace 缓存链的 cache_path 删除语义）
+    const db = getDb();
+    db.prepare('DELETE FROM installed_packages WHERE item_id = ?').run(hubPackageItemId(slug));
+    db.prepare(
+      `INSERT INTO installed_packages (id, item_id, item_type, slug, version, cache_path, checksum)
+       VALUES (?, ?, 'plugin', ?, ?, ?, ?)`,
+    ).run(
+      randomUUID(),
+      hubPackageItemId(slug),
+      slug,
+      rec.version,
+      resolvePluginInstalledDir(rec.id, rec.version),
+      item.checksum,
+    );
+    return { cachePath: resolvePluginInstalledDir(rec.id, rec.version) };
+  }
   return installPackage(item);
 }
 
-/** momo-hub 已装包卸载：删缓存目录 + installed_packages 记账（幂等） */
+/** momo-hub 已装包卸载（幂等）：plugin 项级联 plugin 域卸载链（PluginRecord /
+ *  目录 / MCP / 记账全清）；其余走 marketplace 缓存链卸载 */
 export function uninstallHubPackage(slug: string): void {
   // 记账 item_id = `hub:{slug}`（hubPackageItemId 单点前缀）——传 ResourceItem.id
   // 会查无此行 → 静默 no-op（marketplace 同款陷阱，见 ipc.handlers delete 分支）
+  const row = getDb()
+    .prepare('SELECT item_type FROM installed_packages WHERE item_id = ?')
+    .get(hubPackageItemId(slug)) as { item_type?: string } | undefined;
+  if (row?.item_type === 'plugin') {
+    // 插件行在场 → plugin 级联（uninstallPlugin 内部同删记账，keepData=true——
+    // 数据销毁须经插件设置页显式选择，资源页一键卸载保守保留）；
+    // 插件行已消失（幽灵账）→ 直删记账行兜底
+    if (getPlugin(slug)) {
+      uninstallPlugin(slug, true);
+      return;
+    }
+  }
   uninstallPackage(hubPackageItemId(slug));
 }
 

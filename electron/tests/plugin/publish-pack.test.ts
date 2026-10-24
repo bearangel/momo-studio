@@ -232,6 +232,28 @@ describe('packPluginForPublish', () => {
     await expect(packPluginForPublish('pp-big', 64)).rejects.toThrow(/超限/);
   });
 
+  it('归档尺寸终检分支（T12 携带）：源和 < 上限 < 归档实际尺寸——tar 元数据开销触发', async () => {
+    const dir = path.join(tmpRoot, 'arch-limit-plugin');
+    mkPlugin(dir, 'pp-arch', (d) => {
+      // 不可压缩随机字节：保证 gzip 压不掉 tar 元数据开销（归档 > 源和的前提）
+      fs.writeFileSync(path.join(d, 'pad.bin'), crypto.randomBytes(80));
+    });
+    registerDev(dir, 'pp-arch');
+
+    // 前提锚定：源累计与归档实际尺寸分别落在注入上限（300B）的两侧
+    const probe = await packPluginForPublish('pp-arch');
+    const sourceSum = ['momo-plugin.json', 'tools/main.js', 'pad.bin']
+      .map((f) => fs.statSync(path.join(dir, f)).size)
+      .reduce((a, b) => a + b, 0);
+    expect(sourceSum).toBeLessThan(300);
+    expect(probe.sizeBytes).toBeGreaterThan(300);
+    fs.rmSync(probe.archivePath, { force: true }); // 探针归档手动清（成功打包不自动删）
+
+    // 300B 上限：快速失败分支放行（源和 < 300），归档实际尺寸终检拦下
+    await expect(packPluginForPublish('pp-arch', 300)).rejects.toThrow(/发布归档超限/);
+    expect(publishArtifacts()).toEqual([]);
+  });
+
   it('插件不存在 → 中文错误', async () => {
     await expect(packPluginForPublish('no-such-plugin')).rejects.toThrow(/不存在/);
   });
