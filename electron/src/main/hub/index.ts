@@ -21,7 +21,8 @@ let client: HubClient | null = null;
 let lastError: string | null = null;
 // 当前连接的在线节点快照（hello 成功时写入，已排除本机）——renderer 拉状态时重播，
 // 使「面板挂载晚于 hello」也见全量在线节点（快照是 hub 唯一的存量下发面：
-// 协议 onlineNodes 注释明言「后续增量走 node.online/offline 事件」）
+// 协议 onlineNodes 注释明言「后续增量走 node.online/offline 事件」）。
+// 集合由快照（存量）+ node.online/offline 事件（增量）共同维护——重播的是权威视图
 let presenceSeed: Array<{ nodeId: string; nodeName: string }> | null = null;
 
 const configStore = () => createHubConfigStore(getDb());
@@ -64,9 +65,18 @@ function startClient(
     },
     onEvent(evt: EventEnvelope) {
       if (evt.method === EVT.nodeOnline) {
-        broadcast('hub:nodePresence', { kind: 'online', ...(evt.payload as { nodeId: string; nodeName: string }) });
+        const p = evt.payload as { nodeId: string; nodeName: string };
+        broadcast('hub:nodePresence', { kind: 'online', ...p });
+        // 种子 upsert——快照是存量面、事件是增量面，两者合成权威在线集合
+        // （hello 后上线者入集合，否则重播漏行；本机排除，同捕获点过滤）
+        if (presenceSeed && p.nodeId !== nodeId) {
+          presenceSeed = [...presenceSeed.filter((n) => n.nodeId !== p.nodeId), { nodeId: p.nodeId, nodeName: p.nodeName }];
+        }
       } else if (evt.method === EVT.nodeOffline) {
-        broadcast('hub:nodePresence', { kind: 'offline', ...(evt.payload as { nodeId: string }) });
+        const p = evt.payload as { nodeId: string };
+        broadcast('hub:nodePresence', { kind: 'offline', ...p });
+        // 种子 remove——已下线者不得残留（否则重播推幽灵行）
+        if (presenceSeed) presenceSeed = presenceSeed.filter((n) => n.nodeId !== p.nodeId);
       }
     },
     // OBS-1：hello 应答里的在线节点快照 → 逐节点播 presence 种子（在线列表初始面）。

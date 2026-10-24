@@ -183,6 +183,46 @@ describe('hub manager 推送面', () => {
     ]);
   });
 
+  it('种子随事件维护：node.online 入集合、node.offline 出集合，重播反映最新集合', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    m.clients[0]!.opts.onHelloSnapshot!([{ nodeId: 'node-2', nodeName: '客厅小主机' }]);
+    // hello 后新节点上线 → 进种子（否则重播漏行）
+    m.clients[0]!.opts.onEvent({
+      v: 1, kind: 'evt', method: 'node.online',
+      payload: { nodeId: 'node-3', nodeName: '书房台式机', at: 7 },
+    });
+    m.sent.length = 0;
+    manager.replayPresenceSeed();
+    expect(m.sent).toEqual([
+      { channel: 'hub:nodePresence', payload: { kind: 'online', nodeId: 'node-2', nodeName: '客厅小主机' } },
+      { channel: 'hub:nodePresence', payload: { kind: 'online', nodeId: 'node-3', nodeName: '书房台式机' } },
+    ]);
+    // 下线 → 出种子（否则重播推幽灵行）
+    m.clients[0]!.opts.onEvent({
+      v: 1, kind: 'evt', method: 'node.offline',
+      payload: { nodeId: 'node-2', at: 8 },
+    });
+    m.sent.length = 0;
+    manager.replayPresenceSeed();
+    expect(m.sent).toEqual([
+      { channel: 'hub:nodePresence', payload: { kind: 'online', nodeId: 'node-3', nodeName: '书房台式机' } },
+    ]);
+  });
+
+  it('node.online 事件带本机 nodeId → 不入种子（重播不与自合成行重复）', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    m.clients[0]!.opts.onHelloSnapshot!([{ nodeId: 'node-2', nodeName: '客厅小主机' }]);
+    m.clients[0]!.opts.onEvent({
+      v: 1, kind: 'evt', method: 'node.online',
+      payload: { nodeId: 'node-1', nodeName: '本机', at: 9 },
+    });
+    m.sent.length = 0;
+    manager.replayPresenceSeed();
+    expect(m.sent).toEqual([
+      { channel: 'hub:nodePresence', payload: { kind: 'online', nodeId: 'node-2', nodeName: '客厅小主机' } },
+    ]);
+  });
+
   it('重播种子 → 面板挂载晚于 hello 时仍见全量在线节点', async () => {
     await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
     m.clients[0]!.opts.onHelloSnapshot!([{ nodeId: 'node-2', nodeName: '客厅小主机' }]);

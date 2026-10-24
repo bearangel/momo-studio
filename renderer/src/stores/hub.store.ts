@@ -16,6 +16,9 @@
 //   重拉才能让面板回到未接入表单（重拉 rejection 经 forget() 抛给面板危险区错误行呈现）
 // - 在线节点表由 hub:nodePresence 事件维护（连接时 hello 快照种子 + 之后上下线增量；
 //   按 nodeId 去重——同节点多条消息只留一行）
+// - 非 online 态（connecting/disconnected）→ 节点表清空：断连期间收不到 peer 上下线
+//   事件，列表必陈旧；不清则重连后幽灵行复现（面板非 online 本就隐藏列表，重连后
+//   由 hello 快照种子重新填充）
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
 import type {
@@ -84,11 +87,17 @@ export const useHubStore = create<HubState>((set, get) => {
         if (get().status === null) {
           // 快照未落地：暂存待重放（直接 set 会用 null status 丢掉完整身份字段）
           pendingState = e;
+          // 非 online 态 → 节点表一并作废（断连期间收不到上下线事件，列表必陈旧）
+          if (e.state !== 'online') set({ nodes: [] });
           return;
         }
         set((s) =>
           s.status
-            ? { status: { ...s.status, state: e.state, lastError: e.lastError } }
+            ? {
+                status: { ...s.status, state: e.state, lastError: e.lastError },
+                // 非 online 态 → 节点表作废（重连后由 hello 快照种子重新填充）
+                ...(e.state === 'online' ? {} : { nodes: [] }),
+              }
             : {},
         );
       });

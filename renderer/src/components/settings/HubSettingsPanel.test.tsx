@@ -214,6 +214,38 @@ describe('HubSettingsPanel', () => {
     expect(api.hub.configure).not.toHaveBeenCalled();
   });
 
+  it('断线清空：connecting 清节点表，重连后种子重填（幽灵行不复现）', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
+    render(<HubSettingsPanel />);
+    await screen.findByText('在线节点');
+
+    act(() => {
+      presenceCb?.({ kind: 'online', nodeId: 'b7d204ff', nodeName: '客厅小主机', at: 1 });
+    });
+    expect(await screen.findByText('客厅小主机')).toBeInTheDocument();
+    expect(screen.getByText('2 台')).toBeInTheDocument();
+
+    // 断线 → 列表降级占位（节点表清空）
+    act(() => {
+      stateChangedCb?.({ state: 'connecting', lastError: '连接超时' });
+    });
+    expect(screen.getByText('连接中断——在线节点列表暂停更新')).toBeInTheDocument();
+
+    // 重连 → online；对端未再上报则不再出现（幽灵行不复现）
+    act(() => {
+      stateChangedCb?.({ state: 'online', lastError: null });
+    });
+    expect(screen.getByText('1 台')).toBeInTheDocument();
+    expect(screen.queryByText('客厅小主机')).not.toBeInTheDocument();
+
+    // 新快照种子到达 → 重新填充
+    act(() => {
+      presenceCb?.({ kind: 'online', nodeId: 'b7d204ff', nodeName: '客厅小主机', at: 2 });
+    });
+    expect(await screen.findByText('客厅小主机')).toBeInTheDocument();
+    expect(screen.getByText('2 台')).toBeInTheDocument();
+  });
+
   it('订阅先于快照（防丢事件：onStateChanged/onNodePresence 注册先于 getStatus 调用）', async () => {
     api.hub.getStatus.mockResolvedValue(UNENROLLED);
     render(<HubSettingsPanel />);
