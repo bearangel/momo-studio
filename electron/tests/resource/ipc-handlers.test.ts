@@ -158,7 +158,7 @@ import {
   isBundleInstalled,
 } from '../../src/main/mcp/bundle-import';
 import { deleteDefinition, removeMcpRefsFromAgents } from '../../src/main/agent/crud';
-import { uninstallPackage } from '../../src/main/marketplace/installer';
+import { installPackage, uninstallPackage } from '../../src/main/marketplace/installer';
 import { setBuiltinAgentsDir } from '../../src/main/agent/builtin';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -527,6 +527,69 @@ describe('registerResourceHandlers', () => {
       appVersion: '2.1.0-test',
       workspaceId: undefined,
     });
+  });
+
+  it('resource:install 已装 hub 项（installable=false）→ 放行 installHubPackage（D6：更新=同 slug 重装新版本）', async () => {
+    // D6「更新」死路回归锁：renderer 更新按钮与安装按钮同走 resource:install，
+    // 已装 hub 项 installable 恒 false（fromCatalogItem / 兜底行口径）——守卫
+    // 不得拦截 hub 分支（更新语义 = 重装目录新版本，全链 e2e 见
+    // hub-update-install.e2e.test.ts）
+    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      id: 'hub-agent-hub-e2e-agent',
+      type: 'agent',
+      source: 'hub',
+      slug: 'hub-e2e-agent',
+      name: '演示 Agent',
+      installed: true,
+      installable: false,
+      removable: true,
+      version: '1.0.0',
+    });
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
+    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
+    await expect(handler({}, 'hub-agent-hub-e2e-agent')).resolves.toBeDefined();
+    expect(hubInstallMocks.installHubPackage).toHaveBeenCalledWith('agent', 'hub-e2e-agent', {
+      appVersion: '2.1.0-test',
+      workspaceId: undefined,
+    });
+  });
+
+  it('resource:install marketplace 已装项（installable=false）→ 守卫仍拦「不可安装」（D6 既有保护回归锁）', async () => {
+    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      id: 'marketplace-agent-installed',
+      type: 'agent',
+      source: 'marketplace',
+      slug: 'installed-agent',
+      name: '已装市场 Agent',
+      installed: true,
+      installable: false,
+    });
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
+    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
+    await expect(handler({}, 'marketplace-agent-installed')).rejects.toThrow(/不可安装/);
+    expect(hubInstallMocks.installHubPackage).not.toHaveBeenCalled();
+    expect(installPackage).not.toHaveBeenCalled();
+  });
+
+  it('resource:install smithery 已装项（installable=false）→ 守卫仍拦（hub 放行不外溢到 smithery）', async () => {
+    // listHubInstalledResources 恒置 installable=false——smithery 已装重装由
+    // 守卫拦截的既有契约（ipc.handlers 注释明示），D6 hub 前置不得改变该面
+    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      id: 'smithery-mcp-weather',
+      type: 'mcp',
+      source: 'smithery',
+      slug: 'weather',
+      name: 'weather',
+      installed: true,
+      installable: false,
+    });
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
+    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
+    await expect(handler({}, 'smithery-mcp-weather')).rejects.toThrow(/不可安装/);
+    expect(installPackage).not.toHaveBeenCalled();
   });
 
   it('resource:install hub 分支：hub 离线（library 查不到）→ 仍按 id 反解进安装链（plugin 同链）', async () => {

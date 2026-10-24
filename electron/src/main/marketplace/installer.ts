@@ -187,11 +187,28 @@ export async function installPackage(
   // 标记已安装
   fs.writeFileSync(path.join(cachePath, '.installed'), new Date().toISOString());
 
-  // 注册到 SQLite
+  // 注册到 SQLite——按 item_id + item_type 真 upsert（D6：hub 更新语义 = 同 slug
+  // 重装新版本，裸 INSERT（随机 id 主键，OR REPLACE 永不冲突）会在旧版本行旁再
+  // 插一行 → 幽灵账兜底行翻倍。先清同键旧账与旧版本缓存目录再插（同款纪律见
+  // hub-install plugin 分支；T15a-F1：item_id 非跨类型唯一键，DELETE 必须带
+  // item_type，防误删同 slug 另一类型的账）。cache_path 相同（同版本路径重建）
+  // 时跳过 rm——目录里是刚解压完的新内容。
   const db = getDb();
+  const staleRows = db
+    .prepare('SELECT cache_path FROM installed_packages WHERE item_id = ? AND item_type = ?')
+    .all(item.id, item.type) as Array<{ cache_path: string }>;
+  for (const row of staleRows) {
+    if (row.cache_path !== cachePath) {
+      fs.rmSync(row.cache_path, { recursive: true, force: true });
+    }
+  }
+  db.prepare('DELETE FROM installed_packages WHERE item_id = ? AND item_type = ?').run(
+    item.id,
+    item.type,
+  );
   const id = crypto.randomUUID();
   db.prepare(
-    `INSERT OR REPLACE INTO installed_packages (id, item_id, item_type, slug, version, cache_path, checksum)
+    `INSERT INTO installed_packages (id, item_id, item_type, slug, version, cache_path, checksum)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(id, item.id, item.type, item.slug, item.version, cachePath, item.checksum);
 

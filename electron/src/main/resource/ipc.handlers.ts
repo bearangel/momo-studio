@@ -188,11 +188,16 @@ export function registerResourceHandlers(): void {
       }
       throw new Error(`资源 ${id} 不存在`);
     }
-    if (!item.installable) throw new Error(`「${item.name}」不可安装`);
-
+    // hub 分支前置于 installable 守卫（D6「更新」死路）：已装 hub 项 installable
+    // 恒 false（fromCatalogItem / 兜底行口径），但更新语义 = 同 slug 重装目录新
+    // 版本（cache 按 version 分目录 + installed_packages upsert，T10 语义），
+    // renderer 更新按钮与安装按钮同走 resource:install——守卫不得拦截。
+    // marketplace / smithery 已装重装仍由下方守卫拦（既有保护不动）。
     if (item.source === 'hub') {
       return installHubPackage(item.type, item.slug, hubInstallContext());
     }
+    if (!item.installable) throw new Error(`「${item.name}」不可安装`);
+
     if (item.source !== 'marketplace') {
       throw new Error(`source=${item.source} 不支持 install 操作`);
     }
