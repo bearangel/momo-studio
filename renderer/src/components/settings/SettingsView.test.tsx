@@ -1,8 +1,9 @@
 // renderer/src/components/settings/SettingsView.test.tsx
 //
 // SettingsView 行为测试（P2 Task 4；v2.2 P1 记忆分类入列后为 9 分类；v2.4 安全沙箱入列后为 10 分类；
-// v2.7 浏览器入列后为 11 分类；「语言服务」已随 LSP 子系统下架摘除（2026-10-08）回到 11 分类）：
-// - 渲染 11 个分类菜单项（顺序：模型服务/默认模型/会话设置/记忆/外观/安全沙箱/浏览器/Git 策略/审计日志/关于）
+// v2.7 浏览器入列后为 11 分类；「语言服务」已随 LSP 子系统下架摘除（2026-10-08）；
+// momo-hub M0（2026-10-23）「节点互联」以 hub 语境回归（browser 后插入）→ 12 分类）：
+// - 渲染 12 个分类菜单项（顺序：模型服务/默认模型/会话设置/插件/记忆/外观/安全沙箱/浏览器/节点互联/Git 策略/审计日志/关于）
 // - 已删除 account 分类
 // - 顶部「← 返回」按钮点击后 setActiveView('im')
 // - 全局 Esc 键返回 im 视图（仅 settings 视图挂载时生效）
@@ -89,6 +90,22 @@ const mockApi = {
     updateSettings: vi.fn().mockResolvedValue({ ok: true }),
     clearBrowsingData: vi.fn().mockResolvedValue(undefined),
   },
+  // momo-hub M0：节点互联面板挂载 init 订阅两推送 + 拉快照（未接入形状）
+  hub: {
+    getStatus: vi.fn().mockResolvedValue({
+      configured: false,
+      state: 'disconnected' as const,
+      hubUrl: null,
+      nodeName: null,
+      nodeId: null,
+      lastError: null,
+    }),
+    configure: vi.fn(),
+    enroll: vi.fn(),
+    forget: vi.fn(),
+    onStateChanged: vi.fn(() => () => undefined),
+    onNodePresence: vi.fn(() => () => undefined),
+  },
 };
 
 describe('SettingsView', () => {
@@ -105,11 +122,11 @@ describe('SettingsView', () => {
     vi.clearAllMocks();
   });
 
-  it('渲染 11 个分类菜单项且顺序符合规范（lucide 图标无 emoji；语言服务/节点互联已下架）', () => {
+  it('渲染 12 个分类菜单项且顺序符合规范（lucide 图标无 emoji；节点互联以 hub 语境回归）', () => {
     render(<SettingsView />);
     const nav = screen.getByRole('navigation', { name: '设置分类' });
     const navButtons = Array.from(nav.querySelectorAll('button'));
-    expect(navButtons.length).toBe(11);
+    expect(navButtons.length).toBe(12);
     const labels = navButtons.map((b) => b.textContent ?? '');
     expect(labels).toEqual([
       '模型服务',
@@ -120,12 +137,25 @@ describe('SettingsView', () => {
       '外观',
       '安全沙箱',
       '浏览器',
+      '节点互联',
       'Git 策略',
       '审计日志',
       '关于',
     ]);
     // 分类图标均为 SVG（lucide），断言 nav 内不存在 emoji 文本
-    expect(nav.querySelectorAll('svg').length).toBe(11);
+    expect(nav.querySelectorAll('svg').length).toBe(12);
+  });
+
+  it('点击「节点互联」分类切换 activeCategory 并渲染面板（订阅推送 + 拉快照）', async () => {
+    render(<SettingsView />);
+    fireEvent.click(screen.getByRole('button', { name: '节点互联' }));
+    expect(useSettingsStore.getState().activeCategory).toBe('hub');
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: '节点互联' })).toBeInTheDocument();
+    });
+    expect(mockApi.hub.getStatus).toHaveBeenCalled();
+    expect(mockApi.hub.onStateChanged).toHaveBeenCalled();
+    expect(mockApi.hub.onNodePresence).toHaveBeenCalled();
   });
 
   it('点击「记忆」分类切换 activeCategory 并渲染面板（拉 memory.list）', async () => {

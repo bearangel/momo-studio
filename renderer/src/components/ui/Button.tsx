@@ -7,7 +7,7 @@ import { forwardRef, type ButtonHTMLAttributes } from 'react';
 import { cn } from '../../lib/cn';
 
 interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
+  variant?: 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-outline';
   size?: 'sm' | 'md' | 'lg';
 }
 
@@ -17,6 +17,9 @@ const VARIANT_CLASSES: Record<NonNullable<Props['variant']>, string> = {
     'border border-accent-500 text-accent-600 dark:text-accent-300 hover:bg-surface-active',
   ghost: 'text-secondary hover:bg-surface-3 hover:text-primary',
   danger: 'bg-status-error text-inverse hover:bg-status-error/90',
+  // 危险描边（momo-hub M0 两步确认首击态）：透明底 + error 描边/文字——降低误触权重，
+  // 确认态切 danger 填充（预览 task-11 态 2 危险区定值）
+  'danger-outline': 'border border-status-error text-status-error hover:bg-status-error-tint',
 };
 
 export const Button = forwardRef<HTMLButtonElement, Props>(

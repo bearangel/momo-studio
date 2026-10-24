@@ -10,6 +10,7 @@ export type SettingsCategory =
   | 'appearance'
   | 'sandbox'
   | 'browser'
+  | 'hub'
   | 'git_policy'
   | 'audit_log'
   | 'plugins'
