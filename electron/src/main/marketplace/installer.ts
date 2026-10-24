@@ -38,6 +38,71 @@ const execFileAsync = promisify(execFile);
 /** 单个包下载大小上限（200MB）：流式累计，超限中断，防超大归档撑爆磁盘/内存 */
 export const MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024;
 
+// ────────────────────────────────────────────────────────────────────────────
+// 可信下载源信任集（T8 / spec M1 §6.2 C2）
+//
+// hub 是自建节点，origin 常为 http://host:port（明文自托管），既有
+// 「downloadUrl 必须是 https」硬闸会把 hub 资源全部拒掉。但放开明文等于
+// 放弃防线——故引入**信任集**：studio 自身配置的 hubUrl 注册进本模块级集合，
+// 只有落在信任 origin 之下（或 https）的地址才放行。信任集同时约束
+// installPackage 的地址闸与 downloadFile 的流式下载闸——两段规则同源，
+// 避免「安装放行但下载再拒」的规则漂移。
+//
+// 信任集是进程内单调集合（配置变更即新增一个 origin），不落库：
+// 进程重启后 provider 初始化会重新注册当前配置的 hubUrl。
+// ────────────────────────────────────────────────────────────────────────────
+
+/** 已注册的可信下载源（归一后的 origin 串） */
+const trustedDownloadOrigins = new Set<string>();
+
+/** origin 归一：去首尾空白 + 去尾斜杠（'http://h:1/' → 'http://h:1'） */
+function normalizeTrustedOrigin(origin: string): string {
+  return origin.trim().replace(/\/+$/, '');
+}
+
+/**
+ * 注册可信下载源（hub origin）——studio 自身配置的 hubUrl 经此入口登记。
+ * 非 http(s) 协议或 URL 解析失败 → 记 warn 并忽略（不静默信任垃圾值）。
+ */
+export function registerTrustedDownloadOrigin(origin: string): void {
+  const normalized = normalizeTrustedOrigin(origin);
+  if (normalized === '') return;
+  let parsed: URL;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    logger.warn('注册可信下载源失败：origin 不是合法 URL', { origin: normalized });
+    return;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    logger.warn('注册可信下载源失败：协议非 http(s)', { origin: normalized });
+    return;
+  }
+  trustedDownloadOrigins.add(normalized);
+}
+
+/**
+ * 下载地址是否受信：https 恒放行（既有 marketplace 语义不变）；否则须落在
+ * 某信任 origin 之下，且 origin 边界严格——其后必须是路径/查询/片段起始符
+ * 或字符串结束，否则 'http://h:1' 会误放行 'http://h:1.evil.test/x'。
+ */
+export function isTrustedDownloadUrl(url: string): boolean {
+  if (url.startsWith('https://')) return true;
+  for (const origin of trustedDownloadOrigins) {
+    if (!url.startsWith(origin)) continue;
+    const rest = url.slice(origin.length);
+    if (rest === '' || rest.startsWith('/') || rest.startsWith('?') || rest.startsWith('#')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** 测试用：清空可信下载源信任集（隔离用例间信任状态） */
+export function __resetTrustedDownloadOriginsForTest(): void {
+  trustedDownloadOrigins.clear();
+}
+
 /** 已安装包记录（camelCase，与 renderer 端类型约定一致） */
 export interface InstalledPackage {
   id: string;
@@ -66,8 +131,10 @@ export async function installPackage(
       `非法 version: "${item.version}"（仅允许数字/字母/点/加号/减号）`,
     );
   }
-  if (item.downloadUrl !== '' && !item.downloadUrl.startsWith('https://')) {
-    throw new Error(`downloadUrl 必须是 https 地址: ${item.downloadUrl}`);
+  if (item.downloadUrl !== '' && !isTrustedDownloadUrl(item.downloadUrl)) {
+    throw new Error(
+      `downloadUrl 必须是 https 地址或已注册的可信源: ${item.downloadUrl}`,
+    );
   }
 
   const cacheBase = path.join(resolveUserDataDir(), 'cache', `${item.type}s`);
@@ -216,8 +283,8 @@ export async function downloadFile(
   dest: string,
   maxBytes: number = MAX_DOWNLOAD_BYTES,
 ): Promise<void> {
-  if (!url.startsWith('https://')) {
-    throw new Error(`下载地址必须是 https: ${url}`);
+  if (!isTrustedDownloadUrl(url)) {
+    throw new Error(`下载地址必须是 https 或已注册的可信源: ${url}`);
   }
   const response = await fetch(url);
   if (!response.ok || !response.body) {
