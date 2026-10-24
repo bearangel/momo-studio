@@ -40,11 +40,37 @@ function shortNodeId(nodeId: string): string {
 
 export function HubSettingsPanel() {
   const status = useHubStore((s) => s.status);
+  const loadError = useHubStore((s) => s.loadError);
   const init = useHubStore((s) => s.init);
+  const refresh = useHubStore((s) => s.refresh);
 
   useEffect(() => init(), [init]);
 
   if (status === null) {
+    if (loadError !== null) {
+      // 快照失败态：错误行 + 重试（不留在「加载中」死滞；标题保留上下文）
+      return (
+        <section className="flex max-w-[560px] flex-col gap-6" aria-label="节点互联设置">
+          <div>
+            <h2 className="mb-1 flex items-center gap-2 text-base font-medium text-primary">
+              <Network size={16} strokeWidth={1.75} aria-hidden />
+              节点互联
+            </h2>
+            <p className="text-sm text-secondary">连接 momo-hub 中心服务，跨设备同步资源与任务。</p>
+          </div>
+          <div className="flex flex-col gap-2">
+            <p className="text-xs text-status-error" role="alert">
+              {loadError}
+            </p>
+            <div>
+              <Button size="sm" onClick={refresh}>
+                重试
+              </Button>
+            </div>
+          </div>
+        </section>
+      );
+    }
     return <div className="p-4 text-sm text-secondary">加载中...</div>;
   }
 

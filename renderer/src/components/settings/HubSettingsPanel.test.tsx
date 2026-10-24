@@ -77,7 +77,7 @@ beforeEach(() => {
   stateChangedCb = undefined;
   presenceCb = undefined;
   (globalThis as unknown as { window: { api: typeof api } }).window.api = api;
-  useHubStore.setState({ status: null, nodes: [] });
+  useHubStore.setState({ status: null, nodes: [], loadError: null });
 });
 
 describe('HubSettingsPanel', () => {
@@ -232,5 +232,27 @@ describe('HubSettingsPanel', () => {
     expect(screen.getByText('连接中断——在线节点列表暂停更新')).toBeInTheDocument();
     // 断连时恰是最需要忘记的时刻——危险区保留
     expect(screen.getByRole('button', { name: /断开并忘记/ })).toBeInTheDocument();
+  });
+
+  it('快照失败：loadError 错误行 + 重试按钮出现，无「加载中」死滞', async () => {
+    api.hub.getStatus.mockRejectedValue(new Error('Error invoking remote method: boom'));
+    render(<HubSettingsPanel />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('状态读取失败');
+    expect(screen.getByRole('button', { name: '重试' })).toBeInTheDocument();
+    expect(screen.queryByText('加载中...')).not.toBeInTheDocument();
+  });
+
+  it('快照失败后点重试：getStatus 转 resolve → 面板恢复正常渲染，错误行消退', async () => {
+    api.hub.getStatus
+      .mockRejectedValueOnce(new Error('Error invoking remote method: boom'))
+      .mockResolvedValue(ENROLLED_ONLINE);
+    render(<HubSettingsPanel />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '重试' }));
+    expect(await screen.findByText('已连接')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText('加载中...')).not.toBeInTheDocument();
   });
 });
