@@ -47,6 +47,13 @@ import type {
   HubPublishResourceInput,
   HubPublishResult,
   HubResourcePublishedEvent,
+  HubGroupChangedEvent,
+  HubGroupListResult,
+  HubGroupCreateResult,
+  HubGroupInviteResult,
+  HubGroupJoinResult,
+  HubGroupLeaveResult,
+  HubGroupTransferResult,
 } from '../../../renderer/src/ipc/types';
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -582,6 +589,17 @@ const api: ApiSurface = {
       const handler = (_e: IpcRendererEvent, payload: HubResourcePublishedEvent): void => callback(payload);
       ipcRenderer.on('hub:resourcePublished', handler);
       return () => { ipcRenderer.off('hub:resourcePublished', handler); };
+    },
+    groupList: () => invoke<HubGroupListResult>('hub:groupList'),
+    groupCreate: (input) => invoke<HubGroupCreateResult>('hub:groupCreate', input),
+    groupInvite: (input) => invoke<HubGroupInviteResult>('hub:groupInvite', input),
+    groupJoin: (input) => invoke<HubGroupJoinResult>('hub:groupJoin', input),
+    groupLeave: (input) => invoke<HubGroupLeaveResult>('hub:groupLeave', input),
+    groupTransfer: (input) => invoke<HubGroupTransferResult>('hub:groupTransfer', input),
+    onGroupChanged: (callback) => {
+      const handler = (_e: IpcRendererEvent, payload: HubGroupChangedEvent): void => callback(payload);
+      ipcRenderer.on('hub:groupChanged', handler);
+      return () => { ipcRenderer.off('hub:groupChanged', handler); };
     },
   },
   window: {

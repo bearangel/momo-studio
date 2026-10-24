@@ -161,6 +161,19 @@ describe('hub manager 推送面', () => {
     });
   });
 
+  it('group.changed 事件 → 广播 hub:groupChanged（M2b 桥：三字段显式挑出）', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    m.sent.length = 0;
+    m.clients[0]!.opts.onEvent({
+      v: 1, kind: 'evt', method: 'group.changed',
+      payload: { groupId: 'g1', kind: 'leaderChanged', nodeId: 'n2', extra: '不透传' },
+    });
+    expect(m.sent).toContainEqual({
+      channel: 'hub:groupChanged',
+      payload: { groupId: 'g1', kind: 'leaderChanged', nodeId: 'n2' },
+    });
+  });
+
   it('hello 快照 → 逐节点广播 presence 种子，排除本机 nodeId（不与自合成行重复）', async () => {
     await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
     m.sent.length = 0;

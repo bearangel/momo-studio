@@ -1,9 +1,9 @@
-// hub 连接层：状态机 + 指数退避重连 + 心跳判死 + enroll HTTP 客户端。
+// hub 连接层：状态机 + 指数退避重连 + 心跳判死 + enroll HTTP 客户端 + RPC 关联器。
 // ws 经工厂注入（测试 fake / 生产 'ws'）；信封语义全部走 protocol 包（不自制 wire 格式）。
 import WebSocket from 'ws';
 import {
   PROTOCOL_VERSION, RPC, encodeEnvelope, makeRequest, parseEnvelope,
-  type EventEnvelope, type ResponseEnvelope,
+  type EventEnvelope, type ResponseEnvelope, type RpcErrorPayload,
 } from './protocol';
 
 export type HubConnectionState = 'disconnected' | 'connecting' | 'online';
@@ -46,7 +46,25 @@ function readOnlineNodes(payload: unknown): Array<{ nodeId: string; nodeName: st
   return raw as Array<{ nodeId: string; nodeName: string }>;
 }
 
-export interface HubClient { start(): void; stop(): void; state(): HubConnectionState }
+export interface HubClient {
+  start(): void;
+  stop(): void;
+  state(): HubConnectionState;
+  /**
+   * RPC 请求-响应关联器（M2 spec §3.1）：信封 id → pending 映射。
+   * - res.ok=false → reject Error(RpcErrorPayload.message)（hub 端人话原文）
+   * - 非 online → 直接 reject（不排队不发半途请求）
+   * - 连接断开 / stop → 全部 pending reject「连接已重置」（不留悬挂 Promise）
+   * - timeoutMs 超时 → reject（缺省 10s）
+   */
+  request<T = unknown>(method: string, payload: unknown, timeoutMs?: number): Promise<T>;
+}
+
+interface PendingEntry {
+  resolve(payload: unknown): void;
+  reject(err: Error): void;
+  timer: NodeJS.Timeout;
+}
 
 export function createHubClient(opts: HubClientOpts): HubClient {
   const wsFactory = opts.ws ?? defaultWsFactory;
@@ -65,6 +83,16 @@ export function createHubClient(opts: HubClientOpts): HubClient {
   let attempts = 0;
   let stopped = true;
   let lastError: string | undefined;
+  // RPC 关联器待答表：请求信封 id → pending（跨连接存续；断开/停机时全部清偿）
+  const pending = new Map<string, PendingEntry>();
+
+  const rejectAllPending = (message: string): void => {
+    for (const entry of pending.values()) {
+      clearTimeout(entry.timer);
+      entry.reject(new Error(message));
+    }
+    pending.clear();
+  };
 
   const setState = (s: HubConnectionState, err?: string): void => {
     state = s;
@@ -111,6 +139,15 @@ export function createHubClient(opts: HubClientOpts): HubClient {
       if (env.kind === 'evt') { opts.onEvent(env); return; }
       if (env.kind !== 'res') return;
       const res = env as ResponseEnvelope;
+      // RPC 关联器优先按 id 清偿（hello/ping 的 id 从不入表，落到下方方法匹配）
+      const entry = pending.get(res.id);
+      if (entry) {
+        pending.delete(res.id);
+        clearTimeout(entry.timer);
+        if (res.ok) entry.resolve(res.payload);
+        else entry.reject(new Error((res.payload as RpcErrorPayload | null)?.message ?? `hub 拒绝: ${res.method}`));
+        return;
+      }
       if (res.method === RPC.hello) {
         if (!helloTimer) return; // 迟到响应（已进入重连）——忽略
         clearTimeout(helloTimer); helloTimer = null;
@@ -147,6 +184,8 @@ export function createHubClient(opts: HubClientOpts): HubClient {
       sock = null;
       if (clearCurrentTimers === clearSocketTimers) clearCurrentTimers = null;
       clearSocketTimers();
+      // 本连接上的在途请求全部清偿——不留悬挂 Promise 等一个永不到来的 res
+      rejectAllPending('hub 连接已重置，请求未完成，请重试');
       if (!stopped) { setState('connecting', lastError); scheduleReconnect(); }
     });
   };
@@ -166,9 +205,35 @@ export function createHubClient(opts: HubClientOpts): HubClient {
       const s = sock;
       sock = null;
       s?.close();
+      rejectAllPending('hub 连接已停止，请求未完成');
       setState('disconnected');
     },
     state(): HubConnectionState { return state; },
+    request<T = unknown>(method: string, payload: unknown, timeoutMs = 10_000): Promise<T> {
+      return new Promise<T>((resolve, reject) => {
+        if (stopped || state !== 'online' || !sock) {
+          reject(new Error('hub 未连接，请稍后重试'));
+          return;
+        }
+        const env = makeRequest(method, payload);
+        const timer = setTimeout(() => {
+          pending.delete(env.id);
+          reject(new Error(`请求超时：${method}`));
+        }, timeoutMs);
+        pending.set(env.id, {
+          resolve: (p): void => resolve(p as T),
+          reject,
+          timer,
+        });
+        try {
+          sock.send(encodeEnvelope(env));
+        } catch (err) {
+          pending.delete(env.id);
+          clearTimeout(timer);
+          reject(err instanceof Error ? err : new Error('发送失败'));
+        }
+      });
+    },
   };
 }
 

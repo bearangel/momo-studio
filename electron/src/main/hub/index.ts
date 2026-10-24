@@ -17,6 +17,7 @@ import {
   unregisterTrustedDownloadOrigin,
 } from '../marketplace/installer';
 import { EVT, type EventEnvelope } from './protocol';
+import { bridgeGroupChanged } from './groups';
 
 export interface HubStatus {
   configured: boolean;
@@ -51,6 +52,15 @@ export function hubGetStatus(): HubStatus {
     nodeId: cfg?.nodeId ?? null,
     lastError,
   };
+}
+
+/**
+ * RPC 请求面（M2 组管理消费）——透传 client 关联器；未建连/未配置时人话拒绝。
+ * 错误语义由 client.request 单点定义（hub 人话原文 / 连接已重置 / 超时）。
+ */
+export function hubRequest<T>(method: string, payload: unknown, timeoutMs?: number): Promise<T> {
+  if (!client) return Promise.reject(new Error('hub 未连接，请先在设置中接入 momo-hub'));
+  return client.request<T>(method, payload, timeoutMs);
 }
 
 function startClient(
@@ -95,6 +105,8 @@ function startClient(
           slug: p.slug, type: p.type, name: p.name, version: p.version, author: p.author, at: p.at,
         });
       }
+      // 工作组事件桥（M2b）：group.changed → hub:groupChanged（载荷挑字段，见桥内注释）
+      bridgeGroupChanged(evt, broadcast);
     },
     // OBS-1：hello 应答里的在线节点快照 → 逐节点播 presence 种子（在线列表初始面）。
     // 本机节点排除——renderer 用状态快照自合成「本机」行，重复播会双行。

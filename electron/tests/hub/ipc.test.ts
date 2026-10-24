@@ -1,4 +1,5 @@
 // hub IPC 面接线锁：通道注册与 payload 透传（manager 逻辑在 client.test 已锁，这里只锁接线）。
+// 工作组六通道（M2b T4）：真实 groups 客户端 + mock hubRequest——断言方法名与载荷映射。
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const handlers = new Map<string, (...args: unknown[]) => unknown>();
@@ -15,6 +16,7 @@ vi.mock('../../src/main/hub/index', () => ({
   hubEnroll: vi.fn(async () => ({ configured: true, state: 'connecting', hubUrl: 'http://h', nodeName: 'a', nodeId: 'n1', lastError: null })),
   hubForget: vi.fn(async () => undefined),
   replayPresenceSeed: vi.fn(),
+  hubRequest: vi.fn(async () => ({})),
 }));
 
 // publishToHub 只锁接线（透传入参）——打包/上传矩阵在 publish.test.ts
@@ -26,12 +28,17 @@ import { registerHubIpc } from '../../src/main/hub/ipc.handlers';
 import * as manager from '../../src/main/hub/index';
 import { publishToHub } from '../../src/main/hub/publish';
 
+const GROUP_CHANNELS = ['hub:groupCreate', 'hub:groupInvite', 'hub:groupJoin', 'hub:groupLeave', 'hub:groupList', 'hub:groupTransfer'];
+
 beforeEach(() => { handlers.clear(); vi.clearAllMocks(); });
 
 describe('hub IPC 接线', () => {
-  it('注册五通道；getStatus 透传 manager', async () => {
+  it('注册十一通道；getStatus 透传 manager', async () => {
     registerHubIpc();
-    expect([...handlers.keys()].sort()).toEqual(['hub:configure', 'hub:enroll', 'hub:forget', 'hub:getStatus', 'hub:publishResource']);
+    expect([...handlers.keys()].sort()).toEqual([
+      ...GROUP_CHANNELS,
+      'hub:configure', 'hub:enroll', 'hub:forget', 'hub:getStatus', 'hub:publishResource',
+    ].sort());
     expect(await handlers.get('hub:getStatus')!()).toEqual(await manager.hubGetStatus());
   });
 
@@ -60,5 +67,43 @@ describe('hub IPC 接线', () => {
     const out = await handlers.get('hub:publishResource')!(null, { type: 'skill', ref: 's1', meta: { name: 'N' } });
     expect(publishToHub).toHaveBeenCalledWith({ type: 'skill', ref: 's1', meta: { name: 'N' } });
     expect(out).toEqual({ slug: 's1', version: '1.0.0', checksum: 'c', sizeBytes: 1 });
+  });
+});
+
+describe('hub IPC 工作组六通道（M2b T4）', () => {
+  it('groupList → hubRequest("group.list", {})；回执透传', async () => {
+    registerHubIpc();
+    vi.mocked(manager.hubRequest).mockResolvedValueOnce({ groups: [{ groupId: 'g1', groupName: 'T', leaderNodeId: 'n1', members: [] }] });
+    const out = await handlers.get('hub:groupList')!();
+    expect(manager.hubRequest).toHaveBeenCalledWith('group.list', {}, undefined);
+    expect(out).toEqual({ groups: [{ groupId: 'g1', groupName: 'T', leaderNodeId: 'n1', members: [] }] });
+  });
+
+  it('groupCreate → group.create {groupName}（trim 归 renderer 表单，主进程原样透传）', async () => {
+    registerHubIpc();
+    vi.mocked(manager.hubRequest).mockResolvedValueOnce({ groupId: 'g1', nodeId: 'n1' });
+    const out = await handlers.get('hub:groupCreate')!(null, { groupName: 'TeamA' });
+    expect(manager.hubRequest).toHaveBeenCalledWith('group.create', { groupName: 'TeamA' }, undefined);
+    expect(out).toEqual({ groupId: 'g1', nodeId: 'n1' });
+  });
+
+  it('groupInvite/groupJoin/groupLeave/groupTransfer → 方法名与载荷逐项映射', async () => {
+    registerHubIpc();
+    await handlers.get('hub:groupInvite')!(null, { groupId: 'g1' });
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('group.invite', { groupId: 'g1' }, undefined);
+    await handlers.get('hub:groupJoin')!(null, { inviteCode: 'c1' });
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('group.join', { inviteCode: 'c1' }, undefined);
+    await handlers.get('hub:groupLeave')!(null, { groupId: 'g1' });
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('group.leave', { groupId: 'g1' }, undefined);
+    await handlers.get('hub:groupTransfer')!(null, { groupId: 'g1', toNodeId: 'n2' });
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('group.transfer', { groupId: 'g1', toNodeId: 'n2' }, undefined);
+    expect(manager.hubRequest).toHaveBeenCalledTimes(4);
+  });
+
+  it('hubRequest rejection 原样抛出（IPC 通道不吞错）', async () => {
+    registerHubIpc();
+    vi.mocked(manager.hubRequest).mockRejectedValueOnce(new Error('仅组长（leader）可执行该操作'));
+    await expect(handlers.get('hub:groupTransfer')!(null, { groupId: 'g1', toNodeId: 'n2' }))
+      .rejects.toThrow('仅组长（leader）可执行该操作');
   });
 });

@@ -18,6 +18,7 @@ import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { Input } from '../ui/Input';
+import { GroupPanel } from './GroupPanel';
 
 /** 状态徽章三态：6px 圆点 + 12px medium 文字（已连接绿 / 连接中黄 / 未连接灰） */
 const CONN_META: Record<HubConnectionState, { label: string; text: string; dot: string }> = {
@@ -328,14 +329,16 @@ function EnrolledView({ status }: { status: HubStatus }) {
         <div className="flex items-center gap-2 text-[13px] text-disabled">
           <Send size={16} strokeWidth={1.75} aria-hidden className="shrink-0" />
           任务委派——把任务派给其他节点上的 agent
-          <Badge className="ml-auto">M1 即将提供</Badge>
+          <Badge className="ml-auto">M2 后续批次</Badge>
         </div>
         <div className="flex items-center gap-2 text-[13px] text-disabled">
           <Files size={16} strokeWidth={1.75} aria-hidden className="shrink-0" />
           资源镜像——跨节点同步资源库
-          <Badge className="ml-auto">M2 即将提供</Badge>
+          <Badge className="ml-auto">M2 后续批次</Badge>
         </div>
       </div>
+
+      <GroupPanel />
 
       <div className="flex flex-col gap-2 rounded-lg border border-subtle bg-surface-2 p-3">
         <div className="text-sm">

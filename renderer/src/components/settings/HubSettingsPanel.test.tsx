@@ -33,6 +33,14 @@ const api = {
       presenceCb = cb;
       return () => undefined;
     }),
+    // 工作组面板（M2b）挂载在已接入视图内——mock 面补齐组通道面（默认空组）
+    groupList: vi.fn(async () => ({ groups: [] })),
+    groupCreate: vi.fn(),
+    groupInvite: vi.fn(),
+    groupJoin: vi.fn(),
+    groupLeave: vi.fn(),
+    groupTransfer: vi.fn(),
+    onGroupChanged: vi.fn(() => () => undefined),
   },
 };
 

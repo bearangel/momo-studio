@@ -2625,7 +2625,55 @@ export interface HubEnrollInput {
   nodeName: string;
 }
 
-/** hub 命名空间通道面（spec 2026-10-23：4 invoke + 2 推送；M1 T13 增发布 1 invoke + 1 推送） */
+/** hub:groupChanged 推送载荷（协议 GroupChangedEvent 镜像——组成员变动/组长转移的组内广播） */
+export interface HubGroupChangedEvent {
+  groupId: string;
+  kind: 'joined' | 'left' | 'leaderChanged';
+  nodeId: string;
+}
+
+/** 工作组成员行（协议 GroupMember 镜像——online 为 hub 侧 presence 融合结果） */
+export interface HubGroupMember {
+  nodeId: string;
+  name: string;
+  online: boolean;
+}
+
+/** 工作组信息（协议 GroupInfo 镜像） */
+export interface HubGroupInfo {
+  groupId: string;
+  groupName: string;
+  leaderNodeId: string;
+  members: HubGroupMember[];
+}
+
+export interface HubGroupListResult {
+  groups: HubGroupInfo[];
+}
+
+export interface HubGroupCreateResult {
+  groupId: string;
+  /** 创建者自身节点 id（回显） */
+  nodeId: string;
+}
+
+export interface HubGroupInviteResult {
+  inviteCode: string;
+}
+
+export interface HubGroupJoinResult {
+  groupId: string;
+}
+
+export interface HubGroupLeaveResult {
+  ok: boolean;
+}
+
+export interface HubGroupTransferResult {
+  ok: boolean;
+}
+
+/** hub 命名空间通道面（spec 2026-10-23：4 invoke + 2 推送；M1 T13 增发布 1 invoke + 1 推送；M2b T4 增工作组 6 invoke + 1 推送） */
 export interface HubApiSurface {
   getStatus(): Promise<HubStatus>;
   configure(input: HubConfigureInput): Promise<HubStatus>;
@@ -2633,10 +2681,24 @@ export interface HubApiSurface {
   forget(): Promise<void>;
   /** 发布本地资源到 momo-hub（四类；非 online / C3 越界 / hub 错误码均以人话 rejection 抛出） */
   publishResource(input: HubPublishResourceInput): Promise<HubPublishResult>;
+  /** 工作组列表（仅自己所在的组；成员在线态由 hub presence 融合） */
+  groupList(): Promise<HubGroupListResult>;
+  /** 创建组（创建者即 leader） */
+  groupCreate(input: { groupName: string }): Promise<HubGroupCreateResult>;
+  /** 生成组邀请码（再生成即撤销旧码——单组单有效码） */
+  groupInvite(input: { groupId: string }): Promise<HubGroupInviteResult>;
+  /** 凭码入组（无效/已撤销码 → not_found 人话 rejection；幂等） */
+  groupJoin(input: { inviteCode: string }): Promise<HubGroupJoinResult>;
+  /** 退组（leader 需先转移组长身份） */
+  groupLeave(input: { groupId: string }): Promise<HubGroupLeaveResult>;
+  /** 转移组长（仅 leader 可调；目标须为组成员） */
+  groupTransfer(input: { groupId: string; toNodeId: string }): Promise<HubGroupTransferResult>;
   /** 连接状态变化推送订阅（解订阅函数） */
   onStateChanged(callback: (payload: HubStateChangedEvent) => void): () => void;
   /** 节点上下线推送订阅（解订阅函数） */
   onNodePresence(callback: (payload: HubNodePresenceEvent) => void): () => void;
   /** 资源发布成功推送订阅（解订阅函数）——含本机与其他节点的发布 */
   onResourcePublished(callback: (payload: HubResourcePublishedEvent) => void): () => void;
+  /** 工作组变动推送订阅（解订阅函数）——组成员变动/组长转移（组内广播，含自己触发的） */
+  onGroupChanged(callback: (payload: HubGroupChangedEvent) => void): () => void;
 }

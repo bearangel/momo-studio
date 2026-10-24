@@ -282,6 +282,131 @@ describe('HubClient hello 快照透出（OBS-1）', () => {
   });
 });
 
+describe('RPC 请求-响应关联器（M2 T4）', () => {
+  /** FakeServer 的通用 RPC 回声器：对指定方法回固定应答（按请求 id 关联） */
+  function replyRpc(server: FakeServer, method: string, respond: (id: string) => string): void {
+    server.on('to-server', (raw: string, sock: FakeSocket) => {
+      const env = JSON.parse(raw) as { kind: string; method: string; id: string };
+      if (env.kind !== 'req' || env.method !== method) return;
+      // 回包经微任务投递——真实 hub 走网络往返，绝不在 send() 同栈内同步回包
+      queueMicrotask(() => sock.emit('message', respond(env.id)));
+    });
+  }
+
+  it('online 后 request → 按信封 id 关联 resolve 载荷；请求帧为合法 req 信封', async () => {
+    const { factory, server } = makeFactory();
+    server.replyHello();
+    replyRpc(server, 'group.list', (id) => JSON.stringify({ v: 1, kind: 'res', id, method: 'group.list', ok: true, payload: { groups: [] } }));
+    const client = createHubClient({
+      url: 'ws://x/ws', nodeName: 'a', deviceToken: 't',
+      onStateChange: () => undefined, onEvent: () => undefined, ws: factory,
+    });
+    client.start();
+    await flushMicrotasks();
+    const res = await client.request<{ groups: unknown[] }>('group.list', {});
+    expect(res).toEqual({ groups: [] });
+    // 请求帧形状：真 protocol 解析（wire 契约不简化）
+    const req = parseEnvelope(server.sockets[0]!.sent.find((r) => JSON.parse(r).method === 'group.list')!);
+    expect(req?.kind).toBe('req');
+    expect(req?.method).toBe('group.list');
+    client.stop();
+  });
+
+  it('res.ok=false → reject Error(RpcErrorPayload.message)；迟到未知 id 的 res 不炸不误偿', async () => {
+    const { factory, server } = makeFactory();
+    server.replyHello();
+    replyRpc(server, 'group.join', (id) => JSON.stringify({ v: 1, kind: 'res', id, method: 'group.join', ok: false, payload: { code: 'not_found', message: '邀请码无效或已被撤销' } }));
+    const client = createHubClient({
+      url: 'ws://x/ws', nodeName: 'a', deviceToken: 't',
+      onStateChange: () => undefined, onEvent: () => undefined, ws: factory,
+    });
+    client.start();
+    await flushMicrotasks();
+    await expect(client.request('group.join', { inviteCode: 'x' })).rejects.toThrow('邀请码无效或已被撤销');
+    // 未知 id 的 res：静默忽略（不得 reject 他人 pending 或抛错）
+    server.sockets[0]!.emit('message', JSON.stringify({ v: 1, kind: 'res', id: 'ghost-id', method: 'group.join', ok: true, payload: {} }));
+    await expect(client.request('group.join', { inviteCode: 'y' })).rejects.toThrow('邀请码无效或已被撤销');
+    client.stop();
+  });
+
+  it('非 online（未 start / connecting）→ 立即 reject 人话', async () => {
+    const { factory, server } = makeFactory();
+    server.replyHello();
+    const client = createHubClient({
+      url: 'ws://x/ws', nodeName: 'a', deviceToken: 't',
+      onStateChange: () => undefined, onEvent: () => undefined, ws: factory,
+    });
+    await expect(client.request('group.list', {})).rejects.toThrow('hub 未连接');
+    client.start();
+    // hello 尚未完成（connecting 态）同样拒绝
+    await expect(client.request('group.list', {})).rejects.toThrow('hub 未连接');
+    client.stop();
+  });
+
+  it('在途请求遇连接断开 → 全部 pending reject「连接已重置」人话', async () => {
+    const { factory, server } = makeFactory();
+    server.replyHello();
+    const client = createHubClient({
+      url: 'ws://x/ws', nodeName: 'a', deviceToken: 't',
+      onStateChange: () => undefined, onEvent: () => undefined, ws: factory,
+    });
+    client.start();
+    await flushMicrotasks();
+    // 断言先挂再断连——rejectAll 在 close 事件内同步触发，晚挂会漏接 rejection
+    const p1 = expect(client.request('group.list', {})).rejects.toThrow('hub 连接已重置，请求未完成，请重试');
+    const p2 = expect(client.request('group.create', { groupName: 'g' })).rejects.toThrow('hub 连接已重置，请求未完成，请重试');
+    server.sockets[0]!.emit('close', 1006, Buffer.from(''));
+    await p1;
+    await p2;
+    client.stop();
+  });
+
+  it('stop() → 在途 pending reject；重连后新请求正常（旧 pending 不复活）', async () => {
+    const { factory, server } = makeFactory();
+    server.replyHello();
+    const client = createHubClient({
+      url: 'ws://x/ws', nodeName: 'a', deviceToken: 't',
+      onStateChange: () => undefined, onEvent: () => undefined, ws: factory,
+    });
+    client.start();
+    await flushMicrotasks();
+    // 断言先挂再 stop——stop 内同步 rejectAll，晚挂会漏接 rejection
+    const inflight = expect(client.request('group.list', {})).rejects.toThrow('hub 连接已停止，请求未完成');
+    client.stop();
+    await inflight;
+    client.start();
+    await flushMicrotasks();
+    // 新连接无应答 → 走超时（注入 50ms——fake timers 需显式推进）
+    const p = expect(client.request('nope', {}, 50)).rejects.toThrow('请求超时：nope');
+    vi.advanceTimersByTime(60);
+    await p;
+    client.stop();
+  });
+
+  it('超时（注入 50ms）→ reject 请求超时；同 id 迟到 res 不再触发 resolve', async () => {
+    const { factory, server } = makeFactory();
+    server.replyHello();
+    const client = createHubClient({
+      url: 'ws://x/ws', nodeName: 'a', deviceToken: 't',
+      onStateChange: () => undefined, onEvent: () => undefined, ws: factory,
+    });
+    client.start();
+    await flushMicrotasks();
+    let lateResolveCount = 0;
+    const p = client.request<{ ok: boolean }>('group.leave', { groupId: 'g' }, 50);
+    p.catch(() => undefined); // 防未处理 rejection
+    // 抓取在途请求 id，超时后补发迟到 res——不得影响任何 pending（表已清）
+    const sent = server.sockets[0]!.sent.map((r) => JSON.parse(r) as { kind: string; method: string; id: string });
+    const reqId = sent.find((e) => e.method === 'group.leave')!.id;
+    vi.advanceTimersByTime(60);
+    await expect(p).rejects.toThrow('请求超时：group.leave');
+    server.sockets[0]!.emit('message', JSON.stringify({ v: 1, kind: 'res', id: reqId, method: 'group.leave', ok: true, payload: { ok: true } }));
+    lateResolveCount += 1;
+    expect(lateResolveCount).toBe(1);
+    client.stop();
+  });
+});
+
 describe('enrollOverHttp', () => {
   it('invalid_enrollment → 人话错误；成功返回凭证；网络失败 → 无法连接 hub', async () => {
     const fetchJson = vi.fn()
