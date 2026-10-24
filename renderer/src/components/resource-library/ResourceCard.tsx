@@ -69,12 +69,15 @@ export function ResourceCard({
   onPublishToHub, hubEnrolled, hubUpdates,
 }: ResourceCardProps) {
   const TypeIcon = TYPE_ICON[item.type];
-  // hub 可更新角标判定（M1 Task 14）：已装 hub 资源 + 事件版本 ≠ 已装版本——
+  // hub 可更新角标判定（M1 Task 14 + D7 修正）：已装 hub 资源 + 事件版本 ≠ 已装版本。
+  // 锚点 = installedVersion（installed_packages 记账版）?? version——目录先行 + 事件
+  // 迟到时 item.version 已是目录 head、与事件版本恒等，锚它会误判「已是最新」。
   // 恒等比较不做 semver（T10 裁定：hub versions[0] 是时序最新而非 semver 最大）
   const hubLatest =
     item.source === 'hub' ? hubUpdates?.[`${item.type}:${item.slug}`] : undefined;
+  const installedAnchor = item.installedVersion ?? item.version;
   const hubUpdatable =
-    item.source === 'hub' && item.installed && !!item.version && !!hubLatest && hubLatest !== item.version;
+    item.source === 'hub' && item.installed && !!installedAnchor && !!hubLatest && hubLatest !== installedAnchor;
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
     const el = e.currentTarget;
@@ -175,8 +178,8 @@ export function ResourceCard({
           )
         )}
 
-        {/* hub 已装资源版本态（M1 Task 14）：可更新 → warning 徽标 + 版本变迁；
-            已是最新 → 纯文案不占徽标（预览 ④ 定值） */}
+        {/* hub 已装资源版本态（M1 Task 14 + D7）：可更新 → warning 徽标 + 版本变迁
+            （变迁两侧锚 installedAnchor）；已是最新 → 纯文案不占徽标（预览 ④ 定值） */}
         {item.source === 'hub' && item.installed && (
           hubUpdatable ? (
             <>
@@ -185,13 +188,13 @@ export function ResourceCard({
                 可更新
               </Badge>
               <span className="whitespace-nowrap text-xs text-tertiary">
-                v{item.version} → v{hubLatest}
+                v{installedAnchor} → v{hubLatest}
               </span>
             </>
           ) : (
-            item.version && (
+            installedAnchor && (
               <span className="whitespace-nowrap text-xs text-tertiary">
-                v{item.version} · 已是最新
+                v{installedAnchor} · 已是最新
               </span>
             )
           )

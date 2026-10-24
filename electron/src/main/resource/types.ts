@@ -55,6 +55,12 @@ export interface ResourceItem {
   name: string;
   description: string;
   version?: string;
+  /**
+   * 已装版本（D7，M2 Task 1）：installed_packages 记账行版本。hub 已装项的
+   * 「可更新」角标锚定本字段而非 version（目录 head）——目录先行 + 事件迟到时
+   * 二者不相等，锚 head 会把物理旧版误判「已是最新」。仅 installed 行携带。
+   */
+  installedVersion?: string;
   iconEmoji?: string;
   /** 是否已安装到本地（builtin 永远 true） */
   installed: boolean;

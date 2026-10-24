@@ -372,6 +372,48 @@ describe('ResourceCard hub 可更新角标（M1 Task 14：事件链末端徽标�
     expect(screen.getByText('v1.1.0 · 已是最新')).toBeTruthy();
   });
 
+  // D7（M2 Task 1）：角标锚 installedVersion（已装版）而非 item.version（目录 head）。
+  // M1 T14 报告「已是最新断言盲区」：目录先行 + 事件迟到时 item.version 已是目录
+  // head、与事件版本恒等 → 旧锚点把物理旧版误判「已是最新」
+  it('D7 目录先行 + 事件迟到（version=head、installedVersion=旧版、事件版本=head）→ 锚 installedVersion 显示可更新', () => {
+    const onInstall = vi.fn();
+    render(
+      <ResourceCard
+        item={hubItem({ version: '1.2.0', installedVersion: '1.0.0' })}
+        selected={false} onSelect={noop} onInstall={onInstall}
+        hubUpdates={{ 'agent:meeting': '1.2.0' }}
+      />,
+    );
+    expect(screen.getByText('可更新')).toBeTruthy();
+    expect(screen.getByText('v1.0.0 → v1.2.0')).toBeTruthy();
+    expect(screen.queryByText(/已是最新/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '更新' }));
+    expect(onInstall).toHaveBeenCalledWith('hub-agent-meeting');
+  });
+
+  it('D7 已是最新文案同锚 installedVersion（无事件时显示 v1.0.0 · 已是最新而非目录 head）', () => {
+    render(
+      <ResourceCard
+        item={hubItem({ version: '1.2.0', installedVersion: '1.0.0' })}
+        selected={false} onSelect={noop}
+      />,
+    );
+    expect(screen.getByText('v1.0.0 · 已是最新')).toBeTruthy();
+    expect(screen.queryByText(/v1\.2\.0/)).toBeNull();
+  });
+
+  it('事件版本等于已装版本（installedVersion 在场）：已是最新形态', () => {
+    render(
+      <ResourceCard
+        item={hubItem({ version: '1.2.0', installedVersion: '1.2.0' })}
+        selected={false} onSelect={noop}
+        hubUpdates={{ 'agent:meeting': '1.2.0' }}
+      />,
+    );
+    expect(screen.queryByText('可更新')).toBeNull();
+    expect(screen.getByText('v1.2.0 · 已是最新')).toBeTruthy();
+  });
+
   it('事件缺席（hubUpdates 无该键）：已装 hub 卡同为已是最新形态', () => {
     render(<ResourceCard item={hubItem()} selected={false} onSelect={noop} />);
     expect(screen.getByText('v1.1.0 · 已是最新')).toBeTruthy();

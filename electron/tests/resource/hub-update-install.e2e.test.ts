@@ -44,6 +44,7 @@ import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { listAgentDefinitions } from '../../src/main/agent/crud';
 import { registerResourceHandlers } from '../../src/main/resource/ipc.handlers';
 import { hubPackageItemId, __setHubContextResolverForTest } from '../../src/main/resource/hub/momo-hub';
+import { listHubCatalogResources } from '../../src/main/resource/hub-install';
 import {
   __resetTrustedDownloadOriginsForTest,
 } from '../../src/main/marketplace/installer';
@@ -274,5 +275,40 @@ describe('D6 e2e：已装 hub 项经 resource:install 更新（「更新」死�
     // D6 修复前：兜底行 installable=false → 守卫抛「不可安装」（误导——条目明明
     // 装过）。修复后：进 installHubPackage → 目录查不到 → 人话错误
     await expect(handler({}, RES_ID)).rejects.toThrow(/momo-hub 目录中未找到/);
+  });
+});
+
+describe('D7 e2e：目录行透出已装版本（角标锚 installedVersion 数据面）', () => {
+  it('目录先行 + 已装旧版：version=目录 head、installedVersion=记账版本（「可更新」判定源）', async () => {
+    const handler = resourceInstallHandler();
+    await handler({}, RES_ID); // 首装 v1.0.0（记账/注册全真链）
+
+    // 目录升版 + TTL 过期传播（renderer 场景：目录快照先行、hubUpdates 事件迟到——
+    // M1 T14 报告「已是最新断言盲区」：旧锚点 item.version 恒等于事件版本）
+    const v11 = agentPackage(SLUG, '1.1.0');
+    fixtures.set(SLUG, { archive: v11, checksum: sha256(v11), version: '1.1.0' });
+    __setHubContextResolverForTest(async () => ({ hubUrl, deviceToken: 'tok-e2e' }));
+
+    const items = await listHubCatalogResources('agent');
+    const it = items.find((i) => i.slug === SLUG);
+    expect(it).toBeDefined();
+    expect(it!.installed).toBe(true);
+    expect(it!.version).toBe('1.1.0'); // 目录 head（展示面不变）
+    expect(it!.installedVersion).toBe('1.0.0'); // 已装版（D7 角标锚点）
+  });
+
+  it('幽灵账兜底行（目录已无此条目）：installedVersion = 记账版本', async () => {
+    const handler = resourceInstallHandler();
+    await handler({}, RES_ID);
+
+    fixtures.delete(SLUG);
+    __setHubContextResolverForTest(async () => ({ hubUrl, deviceToken: 'tok-e2e' }));
+
+    const items = await listHubCatalogResources('agent');
+    const it = items.find((i) => i.slug === SLUG);
+    expect(it).toBeDefined();
+    expect(it!.installed).toBe(true);
+    expect(it!.installedVersion).toBe('1.0.0');
+    expect(it!.version).toBe('1.0.0'); // 兜底行无目录元数据，version 即记账版本
   });
 });

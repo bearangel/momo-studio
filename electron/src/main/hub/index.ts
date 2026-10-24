@@ -5,7 +5,13 @@ import { getDb } from '../storage/db';
 import { logger } from '../logger';
 import { createHubClient, enrollOverHttp, type HubClient, type HubConnectionState } from './client';
 import { createHubConfigStore, type HubConfigRow } from './config-store';
-import { clearDeviceToken, getDeviceToken, setDeviceToken } from './creds';
+import {
+  clearDeviceToken,
+  deriveDeviceTokenScopeSuffix,
+  getDeviceToken,
+  setDeviceToken,
+  setDeviceTokenScopeResolver,
+} from './creds';
 import {
   registerTrustedDownloadOrigin,
   unregisterTrustedDownloadOrigin,
@@ -125,6 +131,16 @@ function wsUrlOf(hubUrl: string): string {
 }
 
 function normUrl(hubUrl: string): string { return hubUrl.trim().replace(/\/$/, ''); }
+
+/**
+ * D2：token 键实例作用域接线（app ready 后、任何 hub 凭证读写前调用一次）。
+ * 入参取值而非 app 对象——creds.ts 保持 Electron-free（派生纯函数可测，见
+ * deriveDeviceTokenScopeSuffix）。默认 userData 目录 basename === defaultBaseName
+ * → 空后缀 = 裸键（单实例向后兼容）；隔离实例 → sha256 前 8 位后缀。
+ */
+export function wireHubCredsScope(userDataPath: string, defaultBaseName: string): void {
+  setDeviceTokenScopeResolver(() => deriveDeviceTokenScopeSuffix(userDataPath, defaultBaseName));
+}
 
 /** app ready 后调用：已配置且有凭证则自动连接。 */
 export async function initHub(): Promise<void> {

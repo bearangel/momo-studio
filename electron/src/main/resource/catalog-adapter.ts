@@ -38,9 +38,14 @@ import { listAgentDefinitions } from '../agent/crud';
 export function fromCatalogItem(item: MarketplaceItem, source: ResourceSource): ResourceItem {
   const id = buildResourceId(source, item.type, item.slug);
 
-  // 安装状态：builtin 恒已装；marketplace/hub 查 installed_packages 表
-  const installedPackageIds = listMarketplaceInstalled().map((p) => p.itemId);
-  const installed = source === 'builtin' ? true : installedPackageIds.includes(item.id);
+  // 安装状态：builtin 恒已装；marketplace/hub 查 installed_packages 表。
+  // installedVersion（D7）：记账行版本——hub 角标「可更新」判定的锚点数据
+  //（与目录 head version 区分：目录先行 + 事件迟到时两者不等）
+  const installedRow =
+    source === 'builtin'
+      ? undefined
+      : listMarketplaceInstalled().find((p) => p.itemId === item.id);
+  const installed = source === 'builtin' ? true : installedRow !== undefined;
 
   // 预设启用态（spec 2026-09-22 §6）：仅 builtin agent 计算——按 slug 匹配
   // agent_definitions（与 marketplace install 的 slug 复用同口径，不分 source）
@@ -60,6 +65,7 @@ export function fromCatalogItem(item: MarketplaceItem, source: ResourceSource): 
     name: item.name,
     description: item.description,
     version: item.version,
+    installedVersion: installedRow?.version,
     iconEmoji: item.iconEmoji,
     installed,
     // installable / removable 按 source + installed 状态推导

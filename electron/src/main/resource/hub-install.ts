@@ -205,6 +205,8 @@ export async function listHubCatalogResources(type?: ResourceType): Promise<Reso
       name: slug,
       description: '已从 momo-hub 安装（当前目录中已无此条目）',
       version: row.version,
+      // 兜底行无目录元数据，installedVersion = version = 记账版本（D7 锚点恒在场）
+      installedVersion: row.version,
       installed: true,
       installable: false,
       removable: true,

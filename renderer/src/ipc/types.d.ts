@@ -922,6 +922,12 @@ export interface ResourceItem {
   name: string;
   description: string;
   version?: string;
+  /**
+   * 已装版本（D7，M2 Task 1）：installed_packages 记账行版本。
+   * hub 已装项「可更新」角标锚定本字段（?? version）——目录先行 + 事件迟到时
+   * version（目录 head）与事件版本恒等，锚它会误判「已是最新」。仅 installed 行携带。
+   */
+  installedVersion?: string;
   iconEmoji?: string;
   /** 是否已安装到本地（builtin 永远 true） */
   installed: boolean;
