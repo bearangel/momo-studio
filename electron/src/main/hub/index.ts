@@ -88,6 +88,9 @@ export async function hubConfigure(input: { hubUrl: string; nodeName: string }):
     // 换址 = 换 hub：旧 device token 是旧 hub 签发的，对新 hub 无效——拿它连新 hub
     // 会连出「鉴权失败 + 退避重连」的死循环。故断开旧连接、清凭证、nodeId 归零，
     // 不起新连接（用户必须重新 enroll 才能接入新 hub）。
+    // 换址重置陈旧错误——先清 lastError 再停连接（同 hubForget）：
+    // client.stop() 会广播 disconnected，lastError 未清则 renderer 收到带历史错误的事件。
+    lastError = null;
     client?.stop();
     client = null;
     await clearDeviceToken();

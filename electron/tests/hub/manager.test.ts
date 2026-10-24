@@ -210,6 +210,15 @@ describe('hub manager 换址分叉', () => {
     expect(status.nodeId).toBeNull();
   });
 
+  it('换址后 lastError 清零（换址重置陈旧错误，不留历史错误）', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://a:8787', enrollmentToken: 't', nodeName: 'n1' });
+    m.clients[0]!.opts.onStateChange('connecting', '连接超时');
+    expect(manager.hubGetStatus().lastError).toBe('连接超时');
+    const status = await manager.hubConfigure({ hubUrl: 'https://b:8787', nodeName: 'n2' });
+    expect(status.lastError).toBeNull();
+    expect(manager.hubGetStatus().lastError).toBeNull();
+  });
+
   it('同址仅改节点名：保留 nodeId 与凭证，照旧连接', async () => {
     await manager.hubEnroll({ hubUrl: 'https://a:8787', enrollmentToken: 't', nodeName: 'n1' });
     m.calls.length = 0;
