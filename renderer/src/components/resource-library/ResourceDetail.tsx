@@ -24,12 +24,13 @@
 // 与 View 层 handleEditAgent 同口径），YAML-ish 只读渲染 systemPrompt 前 200 字。
 import { Fragment, useEffect, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { Bot, Blocks, Check, Copy, Package, Pencil, Power, Puzzle, RotateCw, Settings2, Trash2, X } from 'lucide-react';
+import { Bot, Blocks, Check, Copy, ExternalLink, Package, Pencil, Power, Puzzle, RotateCw, Settings2, Trash2, Upload, X } from 'lucide-react';
 import type { BuiltinPresetPreview, ModelProvider, ResourceItem } from '../../ipc/types';
 import { ipc } from '../../ipc/client';
 import type { PluginDetail } from '../../ipc/types';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useProviderStore } from '../../stores/provider.store';
+import { useUiStore } from '../../stores/ui.store';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import type { BadgeTone } from '../ui/Badge';
@@ -61,6 +62,10 @@ interface Props {
   onForkPreset?: (preview: BuiltinPresetPreview) => void;
   /** builtin agent 停用（2026-10-10）：View 层挂影响面披露确认框后走 disablePreset 级联 */
   onDisable?: (id: string) => void;
+  /** 发布到 momo-hub（M1 Task 14）：custom 资源四类型限定显示；View 层挂 PublishDialog */
+  onPublishToHub?: (item: ResourceItem) => void;
+  /** hub 是否已接入——false 时发布入口禁用 + 引导条（去设置链接） */
+  hubEnrolled?: boolean;
 }
 
 /** 资源类型兜底图标（item.iconEmoji 优先——用户数据照渲染） */
@@ -128,7 +133,8 @@ function PathCode({ path }: { path: string }): React.JSX.Element {
   );
 }
 
-export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onEnable, onConfigure, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onTogglePlugin, onReloadPlugin, onForkPreset, onDisable }: Props) {
+export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onEnable, onConfigure, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onTogglePlugin, onReloadPlugin, onForkPreset, onDisable, onPublishToHub, hubEnrolled }: Props) {
+  const setActiveView = useUiStore((s) => s.setActiveView);
   // 插件组件清单（spec 2026-10-21 §9②）：面板打开即拉；item 切换重拉
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const [pluginDetail, setPluginDetail] = useState<PluginDetail | Error | null>(null);
@@ -470,7 +476,8 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
         )}
       </div>
 
-      <div className="px-4 py-3 border-t border-subtle flex gap-2">
+      <div className="flex flex-col gap-2 px-4 py-3 border-t border-subtle">
+        <div className="flex gap-2">
         {/* 安装按钮：仅 installable 且未安装时显示 */}
         {item.installable && !item.installed && onInstall && (
           <Button size="sm" onClick={() => onInstall(item.id)}>
@@ -581,6 +588,19 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
             重载
           </Button>
         )}
+        {/* 发布到 momo-hub（M1 Task 14）：custom 资源四类型；未接入禁用（引导条承接跳设置） */}
+        {item.source === 'custom' && onPublishToHub && (
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={!hubEnrolled}
+            onClick={() => hubEnrolled && onPublishToHub(item)}
+            className="inline-flex items-center gap-1"
+          >
+            <Upload size={12} strokeWidth={1.75} aria-hidden />
+            发布到 hub
+          </Button>
+        )}
         {/* 删除按钮：仅 installed 且 removable 时显示（custom 上传项；plugin 显示「卸载…」） */}
         {item.installed && item.removable && onDelete && (
           <Button
@@ -606,6 +626,22 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
             <Check size={12} strokeWidth={1.75} aria-hidden />
             已安装
           </span>
+        )}
+        </div>
+        {/* 未接入引导条（M1 Task 14 / T10 移交形态）：灰条 + 去设置链接——与 hub 页签引导条同款 */}
+        {item.source === 'custom' && onPublishToHub && !hubEnrolled && (
+          <p data-testid="hub-publish-guide" className="self-start inline-flex items-center gap-1 rounded-md bg-surface-3 px-3 py-1.5 text-xs text-secondary">
+            未接入 momo-hub——
+            <button
+              type="button"
+              className="inline-flex items-center gap-0.5 font-medium text-accent-600 dark:text-accent-300 hover:underline"
+              onClick={() => setActiveView('settings')}
+            >
+              去设置
+              <ExternalLink size={12} strokeWidth={1.75} aria-hidden />
+            </button>
+            接入后可发布到组内
+          </p>
         )}
       </div>
     </div>

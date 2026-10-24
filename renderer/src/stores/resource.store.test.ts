@@ -18,15 +18,27 @@ const resourceList = vi.fn();
 const resourceInstall = vi.fn();
 const resourceSetMcpEnabled = vi.fn();
 const pluginSetEnabled = vi.fn();
+const resourceGetCatalogStatus = vi.fn();
+// M1 Task 14：hub 发布事件订阅（onResourcePublished 回调捕获）
+let publishedCb: ((e: { slug: string; type: string; name: string; version: string; author: string; at: number }) => void) | undefined;
+const hubOnResourcePublished = vi.fn((cb: (e: { slug: string; type: string; name: string; version: string; author: string; at: number }) => void) => {
+  publishedCb = cb;
+  // 仿真真实解订阅语义（ipcRenderer.off 后回调不再可达）——mock 收窄铁律
+  return () => { publishedCb = undefined; };
+});
 
 const mockApi = {
   resource: {
     list: resourceList,
     install: resourceInstall,
     setMcpEnabled: resourceSetMcpEnabled,
+    getCatalogStatus: resourceGetCatalogStatus,
   },
   plugin: {
     setEnabled: pluginSetEnabled,
+  },
+  hub: {
+    onResourcePublished: hubOnResourcePublished,
   },
 };
 
@@ -278,5 +290,80 @@ describe('resource.store — 插件启停（P1）', () => {
       // 恢复块在 import 时执行——上面 resetModules 后新实例已恢复；此处仅回归旧实例无崩
       expect(true).toBe(true);
     });
+  });
+});
+
+describe('resource.store — hub 发布事件 → 更新角标态（M1 Task 14）', () => {
+  const hubInstalled: ResourceItem = {
+    id: 'hub-agent-meeting', type: 'agent', source: 'hub', slug: 'meeting',
+    name: '会议纪要生成器', description: 'd', version: '1.1.0',
+    installed: true, installable: false, removable: true,
+  };
+
+  beforeEach(() => {
+    useResourceStore.setState({ hubUpdates: {}, hubDegraded: false });
+  });
+
+  it('initHubUpdates：订阅 hub:onResourcePublished，事件按 type:slug 记录并覆盖最新版本；dispose 停止记录', () => {
+    const dispose = useResourceStore.getState().initHubUpdates();
+    expect(hubOnResourcePublished).toHaveBeenCalledTimes(1);
+
+    publishedCb?.({ slug: 'meeting', type: 'agent', name: '会议纪要生成器', version: '1.2.0', author: '同机', at: 1 });
+    expect(useResourceStore.getState().hubUpdates).toEqual({ 'agent:meeting': '1.2.0' });
+
+    publishedCb?.({ slug: 'meeting', type: 'agent', name: '会议纪要生成器', version: '1.3.0', author: '同机', at: 2 });
+    expect(useResourceStore.getState().hubUpdates).toEqual({ 'agent:meeting': '1.3.0' });
+
+    publishedCb?.({ slug: 'pdf-summary', type: 'skill', name: 'PDF 摘要器', version: '1.0.0', author: '他机', at: 3 });
+    expect(useResourceStore.getState().hubUpdates).toEqual({ 'agent:meeting': '1.3.0', 'skill:pdf-summary': '1.0.0' });
+
+    dispose();
+    publishedCb?.({ slug: 'gone', type: 'mcp', name: 'x', version: '2.0.0', author: 'y', at: 4 });
+    expect(useResourceStore.getState().hubUpdates).toEqual({ 'agent:meeting': '1.3.0', 'skill:pdf-summary': '1.0.0' });
+  });
+
+  it('installResource hub 项成功：安装/更新横幅区分 + hubUpdates 键消退（徽标消退契约）', async () => {
+    // 更新场景：before 已装（1.1.0）→ 横幅「已从 momo-hub 更新」+ 角标键清除
+    useResourceStore.setState({
+      items: [hubInstalled],
+      hubUpdates: { 'agent:meeting': '1.2.0' },
+    });
+    resourceList.mockResolvedValue([{ ...hubInstalled, version: '1.2.0' }]);
+    await useResourceStore.getState().installResource('hub-agent-meeting');
+    expect(useResourceStore.getState().installNotice).toBe('已从 momo-hub 更新「会议纪要生成器」');
+    expect(useResourceStore.getState().hubUpdates).toEqual({});
+
+    // 首装场景：before 未装 → 横幅「已从 momo-hub 安装」
+    useResourceStore.setState({
+      items: [{ ...hubInstalled, installed: false, installable: true, removable: false }],
+      installNotice: null,
+    });
+    resourceList.mockResolvedValue([hubInstalled]);
+    await useResourceStore.getState().installResource('hub-agent-meeting');
+    expect(useResourceStore.getState().installNotice).toBe('已从 momo-hub 安装「会议纪要生成器」');
+  });
+
+  it('installResource 非 hub 项：横幅维持「已导入至自定义」既有契约（回归）', async () => {
+    useResourceStore.setState({ items: [] });
+    await useResourceStore.getState().installResource('p2p-agent-x1y2-research');
+    expect(useResourceStore.getState().installNotice).toBe('已导入至「自定义」');
+  });
+
+  it('loadCatalogStatus：sources[].hub 降级位写入 hubDegraded；sources 缺席回 false', async () => {
+    resourceGetCatalogStatus.mockResolvedValueOnce({
+      degraded: false,
+      sources: [
+        { source: 'marketplace', degraded: false },
+        { source: 'hub', degraded: true },
+      ],
+    });
+    await useResourceStore.getState().loadCatalogStatus();
+    expect(useResourceStore.getState().hubDegraded).toBe(true);
+    expect(useResourceStore.getState().catalogDegraded).toBe(false);
+
+    resourceGetCatalogStatus.mockResolvedValueOnce({ degraded: true });
+    await useResourceStore.getState().loadCatalogStatus();
+    expect(useResourceStore.getState().hubDegraded).toBe(false);
+    expect(useResourceStore.getState().catalogDegraded).toBe(true);
   });
 });

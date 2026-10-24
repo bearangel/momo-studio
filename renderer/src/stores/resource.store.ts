@@ -25,6 +25,7 @@ import { ipc } from '../ipc/client';
 import { useWorkspaceStore } from './workspace.store';
 import type { ViewKey } from './ui.store';
 import type {
+  HubResourcePublishedEvent,
   ResourceItem,
   ResourceFilter,
   ResourceType,
@@ -49,6 +50,17 @@ interface ResourceStore {
    * 查询失败按 false——宁可漏报不误报降级。
    */
   catalogDegraded: boolean;
+  /**
+   * M1 Task 14：momo-hub 目录降级标志（getCatalogStatus sources[].hub）——
+   * hub 页签「hub 暂不可达」黄条数据源。失败按 false（同 D9 宁漏报不误报）。
+   */
+  hubDegraded: boolean;
+  /**
+   * M1 Task 14：hub 发布事件带来的最新版本表（key `${type}:${slug}` → 版本）。
+   * 已装 hub 资源与该表恒等比较（禁 semver——T10 裁定）得「可更新」角标；
+   * installResource 成功后消键（徽标消退契约）。
+   */
+  hubUpdates: Record<string, string>;
   /** 当前 type tab，'all' = 不限 */
   typeFilter: ResourceFilter['type'] | 'all';
   /** 当前 source tab，'all' = 不限 */
@@ -74,6 +86,11 @@ interface ResourceStore {
   /** D9：拉取市场目录健康状态（degraded 写 catalogDegraded；失败静默回 false） */
   loadCatalogStatus: () => Promise<void>;
   /**
+   * M1 Task 14：订阅 hub:resourcePublished（含本机与其他节点的发布），按
+   * `${type}:${slug}` 记录最新版本到 hubUpdates。返回解订阅函数（View 卸载调用）。
+   */
+  initHubUpdates: () => () => void;
+  /**
    * 组⑤：MCP 启停——写库 + 禁用时断开运行实例；成功横幅 + 列表刷新，
    * 失败落 error 字段（红色横幅）。name 为 MCP 注册名（item.slug）。
    */
@@ -97,6 +114,8 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   error: null,
   installNotice: null,
   catalogDegraded: false,
+  hubDegraded: false,
+  hubUpdates: {},
   typeFilter: 'all',
   sourceFilter: 'all',
   query: '',
@@ -149,11 +168,22 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   loadCatalogStatus: async () => {
     try {
       const r = await ipc.resource.getCatalogStatus();
-      set({ catalogDegraded: r.degraded });
+      set({
+        catalogDegraded: r.degraded,
+        hubDegraded: r.sources?.find((s) => s.source === 'hub')?.degraded ?? false,
+      });
     } catch {
       // 通道未就绪（主进程并行接线）或查询失败——不误报降级
-      set({ catalogDegraded: false });
+      set({ catalogDegraded: false, hubDegraded: false });
     }
+  },
+
+  initHubUpdates: () => {
+    return ipc.hub.onResourcePublished((e: HubResourcePublishedEvent) => {
+      set((s) => ({
+        hubUpdates: { ...s.hubUpdates, [`${e.type}:${e.slug}`]: e.version },
+      }));
+    });
   },
 
   setMcpEnabled: async (name, enabled) => {
@@ -186,6 +216,7 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
 
   installResource: async (id) => {
     set({ error: null });
+    const before = get().items.find((i) => i.id === id);
     try {
       const result = await ipc.resource.install(id);
       // P2.1 Task 3：smithery needsConfig 两态——需要用户补配置时未安装，
@@ -194,6 +225,23 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
         return result;
       }
       await get().load();
+      const after = get().items.find((i) => i.id === id);
+      if (after?.source === 'hub') {
+        // hub 项：横幅区分首装/更新 + 消角标键（「成功后徽标消退」契约，M1 Task 14）
+        const { hubUpdates } = get();
+        const key = `${after.type}:${after.slug}`;
+        if (key in hubUpdates) {
+          const next = { ...hubUpdates };
+          delete next[key];
+          set({ hubUpdates: next });
+        }
+        set({
+          installNotice: before?.installed
+            ? `已从 momo-hub 更新「${after.name}」`
+            : `已从 momo-hub 安装「${after.name}」`,
+        });
+        return true;
+      }
       // 落地 ok → 设置成功横幅；item 在 load 后会出现在「自定义」筛选下
       set({ installNotice: '已导入至「自定义」' });
       return true;

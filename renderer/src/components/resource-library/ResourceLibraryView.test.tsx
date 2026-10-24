@@ -23,6 +23,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { ResourceLibraryView } from './ResourceLibraryView';
 import { useResourceStore } from '../../stores/resource.store';
+import { useHubStore } from '../../stores/hub.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import type { AgentDefinition, ResourceItem, ResourceType } from '../../ipc/types';
 
@@ -36,6 +37,8 @@ const agentList = vi.fn();
 const agentBuiltinSuggestions = vi.fn();
 const providerList = vi.fn();
 const settingsGetGlobal = vi.fn();
+const hubGetStatus = vi.fn();
+const hubOnResourcePublished = vi.fn(() => () => undefined);
 
 const mockApi = {
   resource: {
@@ -47,6 +50,7 @@ const mockApi = {
   agent: { list: agentList, getBuiltinSuggestions: agentBuiltinSuggestions },
   provider: { list: providerList },
   settings: { getGlobal: settingsGetGlobal },
+  hub: { getStatus: hubGetStatus, onResourcePublished: hubOnResourcePublished },
 };
 
 // marketplace 可安装项工厂（安装链路回归锁用）
@@ -73,6 +77,11 @@ beforeEach(() => {
   agentBuiltinSuggestions.mockReset().mockResolvedValue({});
   providerList.mockReset().mockResolvedValue([]);
   settingsGetGlobal.mockReset().mockResolvedValue({});
+  hubGetStatus.mockReset().mockResolvedValue({
+    configured: false, state: 'disconnected', hubUrl: null, nodeName: null, nodeId: null, lastError: null,
+  });
+  hubOnResourcePublished.mockClear();
+  useHubStore.setState({ status: null, nodes: [], loadError: null });
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
   localStorage.clear();
@@ -239,5 +248,43 @@ describe('Git 仓库导入入口（P2.6 Task 3）', () => {
     fireEvent.click(screen.getByRole('button', { name: /MCP/ }));
     fireEvent.click(screen.getByRole('button', { name: '添加服务器' }));
     expect(screen.queryByText('从 Git 仓库导入…')).toBeNull();
+  });
+});
+
+describe('ResourceLibraryView — hub 发布链路接线（M1 Task 14）', () => {
+  it('mount 拉 hub 状态 + 订阅 onResourcePublished（角标事件源接线）', async () => {
+    render(<ResourceLibraryView />);
+    await waitFor(() => expect(hubGetStatus).toHaveBeenCalled());
+    expect(hubOnResourcePublished).toHaveBeenCalled();
+  });
+
+  it('custom 卡「发布到 hub」→ PublishDialog 挂载（onPublishToHub 端到端）', async () => {
+    hubGetStatus.mockResolvedValue({
+      configured: true, state: 'online', hubUrl: 'http://192.168.1.8:8717',
+      nodeName: '办公室 MacBook', nodeId: 'a3f9c2e1dead', lastError: null,
+    });
+    resourceList.mockResolvedValue([
+      {
+        id: 'custom-mcp-wiki', type: 'mcp', source: 'custom', slug: 'wiki', name: '维基搜索',
+        description: 'd', installed: true, installable: false, removable: true,
+      },
+    ]);
+    render(<ResourceLibraryView />);
+    const btn = await screen.findByRole('button', { name: '发布到 hub' });
+    expect((btn as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(btn);
+    expect(screen.getByText('发布到 momo-hub')).toBeTruthy();
+  });
+
+  it('未接入：custom 卡发布入口禁用（门控透传）', async () => {
+    resourceList.mockResolvedValue([
+      {
+        id: 'custom-mcp-wiki', type: 'mcp', source: 'custom', slug: 'wiki', name: '维基搜索',
+        description: 'd', installed: true, installable: false, removable: true,
+      },
+    ]);
+    render(<ResourceLibraryView />);
+    const btn = await screen.findByRole('button', { name: '发布到 hub' });
+    expect((btn as HTMLButtonElement).disabled).toBe(true);
   });
 });

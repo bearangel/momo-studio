@@ -13,9 +13,10 @@
 // ←→↑↓/Home/End 网格导航（列数按 offsetTop 分组动态推导——详情面板拖宽/
 // 窗口缩放引起重排后列数变化，不写死）。
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { Check, Trash2 } from 'lucide-react';
+import { Check, RefreshCw, Trash2 } from 'lucide-react';
 import type { ResourceItem } from '../../ipc/types';
 import { cn } from '../../lib/cn';
+import { Badge } from '../ui/Badge';
 import { SourceBadge } from './SourceBadge';
 import { Switch } from '../ui/Switch';
 import { TYPE_ICON } from './type-icons';
@@ -38,6 +39,12 @@ interface ResourceCardProps {
   onDisable?: (id: string) => void;
   /** 插件工作空间级启停（spec 2026-10-21 §9①：卡内开关；View 层接 store.setPluginEnabled） */
   onTogglePlugin?: (item: ResourceItem, next: boolean) => void;
+  /** 发布到 momo-hub 入口（M1 Task 14）：custom 资源四类型限定显示 */
+  onPublishToHub?: (item: ResourceItem) => void;
+  /** hub 是否已接入（enrolled）——false 时发布入口禁用 + title 引导 */
+  hubEnrolled?: boolean;
+  /** hub 发布事件带来的最新版本表（key `${type}:${slug}` → 版本；角标判定源） */
+  hubUpdates?: Record<string, string>;
 }
 
 /** 网格焦点移动：pick 基于全量卡片数组、当前索引与「当前行的列数」给出目标卡。
@@ -59,8 +66,15 @@ function moveFocus(
 
 export function ResourceCard({
   item, selected, onSelect, onInstall, onDelete, onEnable, onEdit, onConfigure, onDisable, onTogglePlugin,
+  onPublishToHub, hubEnrolled, hubUpdates,
 }: ResourceCardProps) {
   const TypeIcon = TYPE_ICON[item.type];
+  // hub 可更新角标判定（M1 Task 14）：已装 hub 资源 + 事件版本 ≠ 已装版本——
+  // 恒等比较不做 semver（T10 裁定：hub versions[0] 是时序最新而非 semver 最大）
+  const hubLatest =
+    item.source === 'hub' ? hubUpdates?.[`${item.type}:${item.slug}`] : undefined;
+  const hubUpdatable =
+    item.source === 'hub' && item.installed && !!item.version && !!hubLatest && hubLatest !== item.version;
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
     const el = e.currentTarget;
@@ -161,6 +175,28 @@ export function ResourceCard({
           )
         )}
 
+        {/* hub 已装资源版本态（M1 Task 14）：可更新 → warning 徽标 + 版本变迁；
+            已是最新 → 纯文案不占徽标（预览 ④ 定值） */}
+        {item.source === 'hub' && item.installed && (
+          hubUpdatable ? (
+            <>
+              <Badge tone="warning" className="shrink-0">
+                <RefreshCw size={12} strokeWidth={1.75} aria-hidden />
+                可更新
+              </Badge>
+              <span className="whitespace-nowrap text-xs text-tertiary">
+                v{item.version} → v{hubLatest}
+              </span>
+            </>
+          ) : (
+            item.version && (
+              <span className="whitespace-nowrap text-xs text-tertiary">
+                v{item.version} · 已是最新
+              </span>
+            )
+          )
+        )}
+
         {/* ── 右：操作簇 ───────────────────────────────────────────── */}
         <span className="flex gap-1 items-center ml-auto shrink-0">
           {/* 插件启停开关（spec 2026-10-21 §9①） */}
@@ -180,6 +216,28 @@ export function ResourceCard({
               onClick={(e) => { e.stopPropagation(); onInstall(item.id); }}
             >
               安装
+            </button>
+          )}
+          {/* 更新：hub 已装且事件版本较新——走既有安装链拉新版本（M1 Task 14） */}
+          {hubUpdatable && onInstall && (
+            <button
+              type="button"
+              className="text-xs px-2 py-0.5 rounded bg-surface-active text-accent-600 dark:text-accent-300 hover:opacity-80"
+              onClick={(e) => { e.stopPropagation(); onInstall(item.id); }}
+            >
+              更新
+            </button>
+          )}
+          {/* 发布到 hub：custom 资源四类型限定；未接入禁用 + title 引导（M1 Task 14） */}
+          {item.source === 'custom' && onPublishToHub && (
+            <button
+              type="button"
+              disabled={!hubEnrolled}
+              title={hubEnrolled ? undefined : '未接入 momo-hub——去「设置 → 节点互联」接入后可发布'}
+              className="text-xs px-2 py-0.5 rounded bg-surface-active text-accent-600 dark:text-accent-300 hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={(e) => { e.stopPropagation(); if (hubEnrolled) onPublishToHub(item); }}
+            >
+              发布到 hub
             </button>
           )}
           {/* 编辑：custom agent 专属（定义编辑入口） */}

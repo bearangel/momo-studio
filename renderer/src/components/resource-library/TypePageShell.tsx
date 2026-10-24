@@ -6,11 +6,12 @@
 // 工具栏改单行（原 chips 在窄窗折行 95px，走查 B10 方案 B）、来源筛选前端化
 // （下拉计数需全量数据）、详情面板 B8 方案 B 拖拽调宽、加载失败加重试按钮。
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { TriangleAlert } from 'lucide-react';
+import { ExternalLink, TriangleAlert } from 'lucide-react';
 import type { BuiltinPresetPreview, DefinitionImpact, ResourceItem, ResourceSource, ResourceType } from '../../ipc/types';
 import { ipc } from '../../ipc/client';
 import { useSessionStore } from '../../stores/session.store';
 import { useResourceStore } from '../../stores/resource.store';
+import { useHubStore } from '../../stores/hub.store';
 import { useUiStore } from '../../stores/ui.store';
 import { EmptyState } from '../ui/EmptyState';
 import { Input } from '../ui/Input';
@@ -30,11 +31,13 @@ import { ConfirmDialog } from '../ui/ConfirmDialog';
  * 来源下拉选项（组③ B10 方案 B）。marketplace / smithery 不设选项：P2.3 起 UI
  * 无网络安装入口，两源在新装实例永远 0 行——死入口只制造误导（走查 N4）。
  * 历史安装项计入「全部来源」总数，徽章保留来源标识。
+ * M1 Task 14（T10 移交）：hub 页签入列——momo-hub 目录/已装行的浏览入口。
  */
 const SOURCE_OPTIONS: ReadonlyArray<{ key: SourceOptionKey; label: string }> = [
   { key: 'all', label: '全部来源' },
   { key: 'builtin', label: '预置' },
   { key: 'custom', label: '自定义' },
+  { key: 'hub', label: 'momo-hub' },
 ];
 
 /** 来源计数形状（与 SOURCE_OPTIONS 的 key 一一对应；其余来源只计入 all） */
@@ -42,6 +45,7 @@ interface SourceCounts {
   all: number;
   builtin: number;
   custom: number;
+  hub: number;
 }
 
 type SourceOptionKey = keyof SourceCounts;
@@ -132,14 +136,21 @@ interface TypePageShellProps {
   onForkPreset?: (preview: BuiltinPresetPreview) => void;
   /** builtin agent 停用入口（2026-10-10 披露式级联：View 层挂影响面确认框） */
   onDisableAgent?: (id: string) => void;
+  /** 发布到 momo-hub 入口（M1 Task 14）：custom 资源限定；PublishDialog 挂在 View 层 */
+  onPublishToHub?: (item: ResourceItem) => void;
 }
 
-export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPreset, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onTogglePlugin, onReloadPlugin, onForkPreset, onDisableAgent }: TypePageShellProps) {
+export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPreset, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onTogglePlugin, onReloadPlugin, onForkPreset, onDisableAgent, onPublishToHub }: TypePageShellProps) {
   const {
-    items, loading, error, installNotice, catalogDegraded, sourceFilter, query,
+    items, loading, error, installNotice, catalogDegraded, hubDegraded, hubUpdates, sourceFilter, query,
     setSourceFilter, setQuery, deleteResource, load, loadCatalogStatus,
   } = useResourceStore();
   const setActiveView = useUiStore((s) => s.setActiveView);
+  // hub 接入态（M1 Task 14）：发布入口门控 + hub 页签引导条判定源；
+  // 快照未落地（null）按未知处理——不门控也不挂条（避免加载期误报）
+  const hubStatus = useHubStore((s) => s.status);
+  const hubEnrolled = hubStatus !== null && hubStatus.configured && hubStatus.nodeId !== null;
+  const hubNotEnrolled = hubStatus !== null && !hubEnrolled;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<ResourceItem | null>(null);
   /** 插件卸载目标（keepData 双按钮弹窗，spec §7.2——与通用删除确认分流） */
@@ -149,10 +160,11 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
   const [detailWidth, setDetailWidth] = useState<number>(readInitialDetailWidth);
   const Icon = TYPE_ICON[type];
 
-  // D9：catalog 只影响 agent 预置目录的远程部分——仅 agent 页探测降级状态
+  // D9：catalog 只影响 agent 预置目录的远程部分——agent 页探测 marketplace 降级；
+  // M1 Task 14 起 hub 页签可从任意类型页进入，hub 目录降级态（hubDegraded）同探
   useEffect(() => {
-    if (type === 'agent') void loadCatalogStatus();
-  }, [type, loadCatalogStatus]);
+    void loadCatalogStatus();
+  }, [loadCatalogStatus]);
 
   // ── 详情面板拖宽（组③ B8 方案 B）：手柄在面板左缘，鼠标左移 = 变宽 ──────
   const widthRef = useRef(detailWidth);
@@ -282,10 +294,11 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
   };
 
   // 来源计数（下拉选项标签；marketplace/smithery 只计入 all）
-  const counts: SourceCounts = { all: items.length, builtin: 0, custom: 0 };
+  const counts: SourceCounts = { all: items.length, builtin: 0, custom: 0, hub: 0 };
   for (const i of items) {
     if (i.source === 'builtin') counts.builtin += 1;
     else if (i.source === 'custom') counts.custom += 1;
+    else if (i.source === 'hub') counts.hub += 1;
   }
 
   // 详情数据：从「过滤后」列表解析——选中项被搜索/筛选排除时详情面板自动收起
@@ -349,6 +362,35 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
         </div>
       )}
 
+      {/* hub 页签提示条（M1 Task 14 / T10 移交）：未接入灰条（引导去设置）与
+          degraded 黄条互斥呈现——未接入时目录零网络拉取，degraded 不可信（F1） */}
+      {sourceFilter === 'hub' && hubNotEnrolled && (
+        <div
+          data-testid="hub-not-enrolled-notice"
+          className="mx-4 mt-2 px-3 py-1.5 rounded-md bg-surface-3 text-secondary text-xs inline-flex items-center gap-1.5 self-start"
+        >
+          未接入 momo-hub——
+          <button
+            type="button"
+            className="inline-flex items-center gap-0.5 font-medium text-accent-600 dark:text-accent-300 hover:underline"
+            onClick={() => setActiveView('settings')}
+          >
+            去设置
+            <ExternalLink size={12} strokeWidth={1.75} aria-hidden />
+          </button>
+          接入后可安装组内共享资源
+        </div>
+      )}
+      {sourceFilter === 'hub' && !hubNotEnrolled && hubDegraded && (
+        <div
+          data-testid="hub-degraded-notice"
+          className="mx-4 mt-2 px-3 py-1.5 rounded-md bg-status-warning-tint text-status-warning text-xs inline-flex items-center gap-1.5 self-start"
+        >
+          <TriangleAlert size={14} strokeWidth={1.75} aria-hidden />
+          hub 暂不可达（离线或网络受限），展示最近目录。
+        </div>
+      )}
+
       {/* MCP 悬空引用提示卡（spec §6.3）——仅 MCP 页挂载；空/null 静默不渲染 */}
       {type === 'mcp' && <DanglingRefsCard />}
 
@@ -399,6 +441,9 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
                   onConfigure={onOpenPreset}
                   onDisable={onDisableAgent}
                   onTogglePlugin={onTogglePlugin}
+                  onPublishToHub={onPublishToHub}
+                  hubEnrolled={hubEnrolled}
+                  hubUpdates={hubUpdates}
                 />
               ))}
             </div>
@@ -432,6 +477,8 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
               onReloadPlugin={onReloadPlugin}
               onForkPreset={onForkPreset}
               onDisable={onDisableAgent}
+              onPublishToHub={onPublishToHub}
+              hubEnrolled={hubEnrolled}
             />
           </div>
         )}

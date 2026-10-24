@@ -276,6 +276,134 @@ describe('ResourceCard 插件面（spec 2026-10-21 §9①：恒显徽标 + 卡�
   });
 });
 
+describe('ResourceCard 发布到 hub 入口（M1 Task 14：custom × 四类型 × 接入态矩阵）', () => {
+  const pluginNs = { id: 'cg-plugin', state: 'active' as const, devSource: false, sourcePath: null, components: [], enabled: true };
+
+  it('四类型 custom 卡均渲染「发布到 hub」；点击不冒泡并回传整 item', () => {
+    const onPublish = vi.fn();
+    const onSelect = vi.fn();
+    const types = ['agent', 'skill', 'mcp', 'plugin'] as const;
+    render(
+      <div role="list">
+        {types.map((t) => (
+          <ResourceCard
+            key={t}
+            item={mkItem({
+              id: `custom-${t}-x`, type: t, slug: `${t}-x`, name: `卡${t}`,
+              ...(t === 'plugin' ? { plugin: { ...pluginNs, id: 'plugin-x' } } : {}),
+            })}
+            selected={false} onSelect={onSelect} hubEnrolled onPublishToHub={onPublish}
+          />
+        ))}
+      </div>,
+    );
+    const btns = screen.getAllByRole('button', { name: '发布到 hub' });
+    expect(btns).toHaveLength(4);
+    fireEvent.click(btns[0]!);
+    expect(onPublish).toHaveBeenCalledWith(expect.objectContaining({ type: 'agent' }));
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('非 custom 源（builtin/marketplace/smithery/hub）不渲染发布入口', () => {
+    render(
+      <div role="list">
+        {(['builtin', 'marketplace', 'smithery', 'hub'] as const).map((s) => (
+          <ResourceCard
+            key={s}
+            item={mkItem({ id: `${s}-mcp-y`, source: s, slug: 'y', name: `卡${s}`, installed: false, installable: true, removable: false })}
+            selected={false} onSelect={noop} hubEnrolled onPublishToHub={noop}
+          />
+        ))}
+      </div>,
+    );
+    expect(screen.queryByRole('button', { name: '发布到 hub' })).toBeNull();
+  });
+
+  it('未接入（hubEnrolled=false）：入口禁用 + title 引导去设置', () => {
+    render(
+      <ResourceCard
+        item={mkItem({})} selected={false} onSelect={noop}
+        hubEnrolled={false} onPublishToHub={noop}
+      />,
+    );
+    const btn = screen.getByRole('button', { name: '发布到 hub' }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(btn.title).toMatch(/未接入 momo-hub/);
+  });
+
+  it('onPublishToHub 缺席（未接线调用方）不渲染入口——prop 可选回归', () => {
+    render(<ResourceCard item={mkItem({})} selected={false} onSelect={noop} hubEnrolled />);
+    expect(screen.queryByRole('button', { name: '发布到 hub' })).toBeNull();
+  });
+});
+
+describe('ResourceCard hub 可更新角标（M1 Task 14：事件链末端徽标）', () => {
+  const hubItem = (over: Partial<ResourceItem> = {}): ResourceItem =>
+    mkItem({
+      id: 'hub-agent-meeting', type: 'agent', source: 'hub', slug: 'meeting',
+      name: '会议纪要生成器', version: '1.1.0', installed: true, installable: false, removable: true,
+      ...over,
+    });
+
+  it('已装 + 事件版本较新：warning「可更新」徽标 + v1.1.0 → v1.2.0 + 「更新」按钮走 onInstall 安装链', () => {
+    const onInstall = vi.fn();
+    render(
+      <ResourceCard
+        item={hubItem()} selected={false} onSelect={noop} onInstall={onInstall}
+        hubUpdates={{ 'agent:meeting': '1.2.0' }}
+      />,
+    );
+    expect(screen.getByText('可更新')).toBeTruthy();
+    expect(screen.getByText('v1.1.0 → v1.2.0')).toBeTruthy();
+    expect(screen.queryByText(/已是最新/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '更新' }));
+    expect(onInstall).toHaveBeenCalledWith('hub-agent-meeting');
+  });
+
+  it('事件版本等于已装版本：已是最新形态（v1.1.0 · 已是最新），不占徽标', () => {
+    render(
+      <ResourceCard
+        item={hubItem()} selected={false} onSelect={noop}
+        hubUpdates={{ 'agent:meeting': '1.1.0' }}
+      />,
+    );
+    expect(screen.queryByText('可更新')).toBeNull();
+    expect(screen.queryByRole('button', { name: '更新' })).toBeNull();
+    expect(screen.getByText('v1.1.0 · 已是最新')).toBeTruthy();
+  });
+
+  it('事件缺席（hubUpdates 无该键）：已装 hub 卡同为已是最新形态', () => {
+    render(<ResourceCard item={hubItem()} selected={false} onSelect={noop} />);
+    expect(screen.getByText('v1.1.0 · 已是最新')).toBeTruthy();
+    expect(screen.queryByText('可更新')).toBeNull();
+  });
+
+  it('未装 hub 卡：不显示已是最新也不显示角标（安装钮语义不变）', () => {
+    const onInstall = vi.fn();
+    render(
+      <ResourceCard
+        item={hubItem({ installed: false, installable: true, removable: false })}
+        selected={false} onSelect={noop} onInstall={onInstall}
+        hubUpdates={{ 'agent:meeting': '1.2.0' }}
+      />,
+    );
+    expect(screen.queryByText(/已是最新/)).toBeNull();
+    expect(screen.queryByText('可更新')).toBeNull();
+    expect(screen.getByRole('button', { name: '安装' })).toBeTruthy();
+  });
+
+  it('非 hub 源不受 hubUpdates 影响（custom 卡无角标无已是最新）', () => {
+    render(
+      <ResourceCard
+        item={mkItem({ version: '1.0.0' })} selected={false} onSelect={noop}
+        hubUpdates={{ 'mcp:x': '2.0.0' }}
+      />,
+    );
+    expect(screen.queryByText(/已是最新/)).toBeNull();
+    expect(screen.queryByText('可更新')).toBeNull();
+  });
+});
+
 describe('ResourceCard 2D 键盘导航（列数按 offsetTop 动态推导）', () => {
   /** 模拟 2 行 × 3 列网格。jsdom 无布局引擎——Object.defineProperty 注入
    *  offsetTop 仿真浏览器「同值 offsetTop = 同一视觉行」的真实分组语义。 */

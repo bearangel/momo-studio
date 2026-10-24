@@ -14,6 +14,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { ResourceDetail } from './ResourceDetail';
 import type { AgentDefinition, ResourceItem } from '../../ipc/types';
+import { useUiStore } from '../../stores/ui.store';
 
 /** 测试用基线 item，默认为 builtin agent */
 const baseItem = (overrides: Partial<ResourceItem> = {}): ResourceItem => ({
@@ -416,5 +417,43 @@ describe('ResourceDetail — 详情面板验收缺陷回归锁（2026-10-23 D2/D
     render(<ResourceDetail item={item} onClose={vi.fn()} onTogglePlugin={onTogglePlugin} />);
     expect(screen.getByText('已停用')).toBeInTheDocument();
     expect(screen.queryByText('已禁用')).not.toBeInTheDocument();
+  });
+});
+
+describe('ResourceDetail 发布到 hub 入口（M1 Task 14：custom 限定 + 未接入引导）', () => {
+  const noop = (): void => undefined;
+  const customAgent = (): ResourceItem =>
+    baseItem({
+      id: 'custom-agent-def-9', source: 'custom', type: 'agent', slug: 'def-9',
+      name: '代码评审员', installed: true, removable: true,
+    });
+
+  it('custom 项渲染「发布到 hub」；点击回传整 item', () => {
+    const onPublish = vi.fn();
+    const item = customAgent();
+    render(<ResourceDetail item={item} onClose={noop} onPublishToHub={onPublish} hubEnrolled />);
+    fireEvent.click(screen.getByRole('button', { name: /发布到 hub/ }));
+    expect(onPublish).toHaveBeenCalledWith(item);
+  });
+
+  it('未接入：按钮禁用 + 引导条「未接入 momo-hub——去设置」；点去设置切 settings 视图', () => {
+    useUiStore.setState({ activeView: 'im' });
+    render(<ResourceDetail item={customAgent()} onClose={noop} onPublishToHub={vi.fn()} hubEnrolled={false} />);
+    const btn = screen.getByRole('button', { name: /发布到 hub/ }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(screen.getByText(/未接入 momo-hub/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /去设置/ }));
+    expect(useUiStore.getState().activeView).toBe('settings');
+  });
+
+  it('已接入：不渲染引导条', () => {
+    render(<ResourceDetail item={customAgent()} onClose={noop} onPublishToHub={vi.fn()} hubEnrolled />);
+    expect(screen.queryByText(/未接入 momo-hub/)).toBeNull();
+  });
+
+  it('非 custom 源（builtin）不渲染发布入口与引导条', () => {
+    render(<ResourceDetail item={baseItem({})} onClose={noop} onPublishToHub={vi.fn()} hubEnrolled={false} />);
+    expect(screen.queryByRole('button', { name: /发布到 hub/ })).toBeNull();
+    expect(screen.queryByText(/未接入 momo-hub/)).toBeNull();
   });
 });

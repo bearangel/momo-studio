@@ -16,9 +16,11 @@ interface Props {
   width?: number;
   /** 容器可访问名覆盖（默认取 title）——弹窗内控件 aria-label 与标题撞名时用它区分 */
   ariaLabel?: string;
+  /** 标题前置图标（16px lucide 语义位；缺省不渲染——存量调用方零变化） */
+  icon?: ReactNode;
 }
 
-export function Dialog({ open, onClose, title, children, footer, width = 480, ariaLabel }: Props) {
+export function Dialog({ open, onClose, title, children, footer, width = 480, ariaLabel, icon }: Props) {
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -54,7 +56,8 @@ export function Dialog({ open, onClose, title, children, footer, width = 480, ar
         )}
         style={{ width }}
       >
-        <header className="px-5 pb-3 pt-4">
+        <header className="flex items-center gap-2 px-5 pb-3 pt-4">
+          {icon}
           <h2 className="text-sm font-semibold text-primary">{title}</h2>
         </header>
         <div className="flex-1 overflow-auto px-5 pb-2 text-[13px] text-secondary">{children}</div>

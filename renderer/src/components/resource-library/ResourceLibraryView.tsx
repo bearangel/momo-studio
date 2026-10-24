@@ -8,6 +8,7 @@
 import { useEffect, useState } from 'react';
 import { useResourceStore } from '../../stores/resource.store';
 import { useAgentStore } from '../../stores/agent.store';
+import { useHubStore } from '../../stores/hub.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useSessionStore } from '../../stores/session.store';
 import { ipc } from '../../ipc/client';
@@ -28,6 +29,7 @@ import { ImportAgentYamlDialog } from './ImportAgentYamlDialog';
 import { GitImportDialog } from './GitImportDialog';
 import { InstallPluginZipDialog } from './InstallPluginZipDialog';
 import { RegisterPluginDirDialog } from './RegisterPluginDirDialog';
+import { PublishDialog } from './PublishDialog';
 import type { AgentDefinition, BuiltinPresetPreview, DefinitionImpact, McpConfigUpdateInput, ResourceItem, ResourceType } from '../../ipc/types';
 
 export function ResourceLibraryView() {
@@ -64,11 +66,20 @@ export function ResourceLibraryView() {
     name: string;
     impact: DefinitionImpact | null;
   } | null>(null);
+  // 发布到 momo-hub 目标（M1 Task 14）：custom 资源卡片/详情「发布到 hub」入口置位
+  const [publishTarget, setPublishTarget] = useState<ResourceItem | null>(null);
 
   // 冷启动首拉（旧视图同语义；后续刷新由 setActiveType/setSourceFilter/store 写操作触发）
   useEffect(() => {
     void load();
   }, [load]);
+
+  // M1 Task 14：hub 状态首拉（发布入口门控 + hub 页签引导条数据源；订阅推送留
+  // 设置面板 init，此处仅快照）+ 订阅发布事件（更新角标事件源，卸载解订阅）
+  useEffect(() => {
+    if (useHubStore.getState().status === null) useHubStore.getState().refresh();
+    return useResourceStore.getState().initHubUpdates();
+  }, []);
 
   // ── agent 专属回调（自旧 View 平移，逻辑不变）─────────────────────────
   const handleEditAgent = async (itemId: string): Promise<void> => {
@@ -236,6 +247,7 @@ export function ResourceLibraryView() {
           }}
         onForkPreset={handleForkPreset}
         onDisableAgent={handleDisablePreset}
+        onPublishToHub={(item) => setPublishTarget(item)}
       />
 
       {/* 弹窗组（Task 10/12/13 的新弹窗接线后追加在此） */}
@@ -318,6 +330,10 @@ export function ResourceLibraryView() {
           onClose={() => setMcpEditTarget(null)}
           onSuccess={() => { setMcpEditTarget(null); void load(); }}
         />
+      )}
+      {/* M1 Task 14：发布到 momo-hub 弹窗（custom 资源卡片/详情入口置位） */}
+      {publishTarget && (
+        <PublishDialog item={publishTarget} onClose={() => setPublishTarget(null)} />
       )}
       {/* P2.2 Task 7：远程 MCP 配置编辑弹窗（McpConfigDialog mount 拉 getMcpConfig） */}
       {configTarget && (

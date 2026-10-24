@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, within, waitFor, act } from '@testing-library/react';
 import { TypePageShell, buildImpactMessage } from './TypePageShell';
 import { useResourceStore } from '../../stores/resource.store';
+import { useHubStore } from '../../stores/hub.store';
 import { useUiStore } from '../../stores/ui.store';
 import type { ResourceItem } from '../../ipc/types';
 
@@ -68,10 +69,11 @@ beforeEach(() => {
 
   useResourceStore.setState({
     items: [], loading: false, error: null, installNotice: null,
-    catalogDegraded: false,
+    catalogDegraded: false, hubDegraded: false, hubUpdates: {},
     typeFilter: 'mcp', sourceFilter: 'all', query: '',
     activeType: 'mcp',
   });
+  useHubStore.setState({ status: null, nodes: [], loadError: null });
   useUiStore.setState({ activeView: 'marketplace' });
 });
 
@@ -293,13 +295,14 @@ describe('TypePageShell - 删除二次确认（P2.5 Task 4）', () => {
 
 // ── 2026-10-09 真机走查修复：筛选状态诚实性 ──────────────────────────────
 describe('TypePageShell - 筛选状态诚实性（走查 N1/N2/N4 + A2）', () => {
-  it('来源下拉无「网络」选项（P2.3 后 marketplace 源无新增产出——死筛选不设入口）', () => {
+  it('来源下拉无「网络/Smithery」死选项（P2.3 后两源无新增产出；M1 起 hub 为活源入列——四选项）', () => {
     render(
       <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
     );
     const select = screen.getByLabelText('来源筛选');
     expect(within(select).queryByRole('option', { name: /网络/ })).toBeNull();
-    expect(within(select).getAllByRole('option')).toHaveLength(3);
+    expect(within(select).queryByRole('option', { name: /Smithery/ })).toBeNull();
+    expect(within(select).getAllByRole('option')).toHaveLength(4);
   });
 
   it('搜索无匹配 → 「没有匹配的资源」+ 清除筛选按钮（不得误报空库）', () => {
@@ -669,5 +672,83 @@ describe('TypePageShell - 插件启停与卸载（P1）', () => {
     fireEvent.click(screen.getByRole('button', { name: '卸载并保留数据' }));
     await waitFor(() => expect(uninstallMock).toHaveBeenCalledWith('cg', true));
     expect(await screen.findByText(/已卸载/)).toBeTruthy();
+  });
+});
+
+describe('TypePageShell hub 页签与提示条（M1 Task 14：T10 移交三项落位）', () => {
+  const hubRow: ResourceItem = {
+    id: 'hub-agent-meeting', type: 'mcp', source: 'hub', slug: 'meeting', name: '会议纪要',
+    description: '纪要生成', version: '1.1.0', installed: false, installable: true, removable: false,
+  };
+  const NOT_ENROLLED = {
+    configured: false, state: 'disconnected' as const, hubUrl: null, nodeName: null, nodeId: null, lastError: null,
+  };
+  const ENROLLED_ONLINE = {
+    configured: true, state: 'online' as const, hubUrl: 'http://192.168.1.8:8717',
+    nodeName: '办公室 MacBook', nodeId: 'a3f9c2e1dead', lastError: null,
+  };
+
+  it('来源下拉含 momo-hub 选项（网络 / Smithery 仍不设死入口）——hub 页签回归', () => {
+    render(<TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />);
+    const select = screen.getByLabelText('来源筛选');
+    expect(within(select).getByRole('option', { name: /momo-hub/ })).toBeTruthy();
+    expect(within(select).queryByRole('option', { name: /网络/ })).toBeNull();
+    expect(within(select).queryByRole('option', { name: /Smithery/ })).toBeNull();
+  });
+
+  it('hub 源行计入 momo-hub 选项计数；选 hub 只显示 hub 行（前端筛选同语义）', () => {
+    useResourceStore.setState({
+      items: [hubRow, { ...itemA }],
+      sourceFilter: 'all', query: '',
+    });
+    render(<TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />);
+    const select = screen.getByLabelText('来源筛选');
+    expect(within(select).getByRole('option', { name: /全部来源 2/ })).toBeTruthy();
+    expect(within(select).getByRole('option', { name: /momo-hub 1/ })).toBeTruthy();
+    fireEvent.change(select, { target: { value: 'hub' } });
+    expect(screen.getByText('会议纪要')).toBeTruthy();
+    expect(screen.queryByText('甲')).toBeNull();
+  });
+
+  it('未接入引导灰条：sourceFilter=hub 且未接入 → 灰条 + 去设置切 settings；非 hub 筛选不挂条', () => {
+    useHubStore.setState({ status: NOT_ENROLLED, nodes: [], loadError: null });
+    useResourceStore.setState({ items: [hubRow], sourceFilter: 'all', query: '' });
+    const { rerender } = render(
+      <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
+    );
+    expect(screen.queryByTestId('hub-not-enrolled-notice')).toBeNull();
+    useResourceStore.getState().setSourceFilter('hub');
+    rerender(
+      <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
+    );
+    const bar = screen.getByTestId('hub-not-enrolled-notice');
+    expect(bar.textContent).toMatch(/未接入 momo-hub/);
+    expect(bar.textContent).toMatch(/接入后可安装组内共享资源/);
+    expect(screen.queryByTestId('hub-degraded-notice')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /去设置/ }));
+    expect(useUiStore.getState().activeView).toBe('settings');
+  });
+
+  it('degraded 黄条：已接入 + hub 目录降级 → 「hub 暂不可达」黄条；未接入时不显示黄条', () => {
+    useResourceStore.setState({ items: [hubRow], sourceFilter: 'hub', query: '', hubDegraded: true });
+    useHubStore.setState({ status: ENROLLED_ONLINE, nodes: [], loadError: null });
+    render(<TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />);
+    const bar = screen.getByTestId('hub-degraded-notice');
+    expect(bar.textContent).toMatch(/hub 暂不可达（离线或网络受限），展示最近目录。/);
+    expect(screen.queryByTestId('hub-not-enrolled-notice')).toBeNull();
+    // 未接入 → degraded 不可信（F1：notEnrolled 路径复位 degraded），只剩灰条
+    act(() => {
+      useHubStore.setState({ status: NOT_ENROLLED, nodes: [], loadError: null });
+    });
+    expect(screen.queryByTestId('hub-degraded-notice')).toBeNull();
+    expect(screen.getByTestId('hub-not-enrolled-notice')).toBeTruthy();
+  });
+
+  it('已接入且未降级：hub 筛选下两条都不挂', () => {
+    useResourceStore.setState({ items: [hubRow], sourceFilter: 'hub', query: '', hubDegraded: false });
+    useHubStore.setState({ status: ENROLLED_ONLINE, nodes: [], loadError: null });
+    render(<TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />);
+    expect(screen.queryByTestId('hub-not-enrolled-notice')).toBeNull();
+    expect(screen.queryByTestId('hub-degraded-notice')).toBeNull();
   });
 });
