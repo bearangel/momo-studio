@@ -44,6 +44,9 @@ import type {
   PluginConfigView,
   HubStateChangedEvent,
   HubNodePresenceEvent,
+  HubPublishResourceInput,
+  HubPublishResult,
+  HubResourcePublishedEvent,
 } from '../../../renderer/src/ipc/types';
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -573,6 +576,12 @@ const api: ApiSurface = {
       const handler = (_e: IpcRendererEvent, payload: HubNodePresenceEvent): void => callback(payload);
       ipcRenderer.on('hub:nodePresence', handler);
       return () => { ipcRenderer.off('hub:nodePresence', handler); };
+    },
+    publishResource: (input: HubPublishResourceInput) => invoke<HubPublishResult>('hub:publishResource', input),
+    onResourcePublished: (callback) => {
+      const handler = (_e: IpcRendererEvent, payload: HubResourcePublishedEvent): void => callback(payload);
+      ipcRenderer.on('hub:resourcePublished', handler);
+      return () => { ipcRenderer.off('hub:resourcePublished', handler); };
     },
   },
   window: {

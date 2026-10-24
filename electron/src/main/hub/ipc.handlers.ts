@@ -1,6 +1,7 @@
 // hub 命名空间 IPC——通道名与 types.d.ts / preload 逐一对齐（momo-boundary-rules）。
 import { ipcMain } from 'electron';
 import { hubConfigure, hubEnroll, hubForget, hubGetStatus, replayPresenceSeed } from './index';
+import { publishToHub, type PublishInput } from './publish';
 
 export function registerHubIpc(): void {
   ipcMain.handle('hub:getStatus', () => {
@@ -12,4 +13,5 @@ export function registerHubIpc(): void {
   ipcMain.handle('hub:configure', (_evt, input: { hubUrl: string; nodeName: string }) => hubConfigure(input));
   ipcMain.handle('hub:enroll', (_evt, input: { hubUrl: string; enrollmentToken: string; nodeName: string }) => hubEnroll(input));
   ipcMain.handle('hub:forget', () => hubForget());
+  ipcMain.handle('hub:publishResource', (_evt, input: PublishInput) => publishToHub(input));
 }

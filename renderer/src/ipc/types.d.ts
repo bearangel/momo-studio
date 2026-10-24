@@ -2565,6 +2565,47 @@ export interface HubNodePresenceEvent {
   at?: number;
 }
 
+/** hub:resourcePublished 推送载荷（协议 ResourcePublishedEvent 镜像——发布成功后 hub 广播全部在线节点） */
+export interface HubResourcePublishedEvent {
+  slug: string;
+  type: 'agent' | 'mcp' | 'skill' | 'plugin';
+  name: string;
+  version: string;
+  /** 发布方节点名（hub 端以鉴权节点名记账，RM1-8） */
+  author: string;
+  /** 发布时刻（ms） */
+  at: number;
+}
+
+/** hub:publishResource 入参的发布面元数据（全部可选——缺省由主进程从本地定义回填） */
+export interface HubPublishMeta {
+  name?: string;
+  /** 须过 hub version 白名单（数字/字母/点/加号/减号） */
+  version?: string;
+  description?: string;
+  /** README 正文（上限 64KB——超限主进程客户端预校验拒绝） */
+  readme?: string;
+  tags?: string[];
+  category?: string;
+  iconEmoji?: string;
+}
+
+/** hub:publishResource 入参（与 electron 端 hub/publish.ts PublishInput 对齐） */
+export interface HubPublishResourceInput {
+  type: 'agent' | 'mcp' | 'skill' | 'plugin';
+  /** 定位键：agent=定义 id / skill=slug / mcp=注册名 / plugin=插件 id */
+  ref: string;
+  meta?: HubPublishMeta;
+}
+
+/** hub:publishResource 回执（hub 201 应答——checksum/sizeBytes 为服务端自算权威值） */
+export interface HubPublishResult {
+  slug: string;
+  version: string;
+  checksum: string;
+  sizeBytes: number;
+}
+
 /** hub:configure 入参（hub 地址 + 本节点名） */
 export interface HubConfigureInput {
   hubUrl: string;
@@ -2578,14 +2619,18 @@ export interface HubEnrollInput {
   nodeName: string;
 }
 
-/** hub 命名空间通道面（spec 2026-10-23：4 invoke + 2 推送） */
+/** hub 命名空间通道面（spec 2026-10-23：4 invoke + 2 推送；M1 T13 增发布 1 invoke + 1 推送） */
 export interface HubApiSurface {
   getStatus(): Promise<HubStatus>;
   configure(input: HubConfigureInput): Promise<HubStatus>;
   enroll(input: HubEnrollInput): Promise<HubStatus>;
   forget(): Promise<void>;
+  /** 发布本地资源到 momo-hub（四类；非 online / C3 越界 / hub 错误码均以人话 rejection 抛出） */
+  publishResource(input: HubPublishResourceInput): Promise<HubPublishResult>;
   /** 连接状态变化推送订阅（解订阅函数） */
   onStateChanged(callback: (payload: HubStateChangedEvent) => void): () => void;
   /** 节点上下线推送订阅（解订阅函数） */
   onNodePresence(callback: (payload: HubNodePresenceEvent) => void): () => void;
+  /** 资源发布成功推送订阅（解订阅函数）——含本机与其他节点的发布 */
+  onResourcePublished(callback: (payload: HubResourcePublishedEvent) => void): () => void;
 }

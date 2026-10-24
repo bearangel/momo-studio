@@ -17,15 +17,21 @@ vi.mock('../../src/main/hub/index', () => ({
   replayPresenceSeed: vi.fn(),
 }));
 
+// publishToHub 只锁接线（透传入参）——打包/上传矩阵在 publish.test.ts
+vi.mock('../../src/main/hub/publish', () => ({
+  publishToHub: vi.fn(async (input: { type: string; ref: string }) => ({ slug: input.ref, version: '1.0.0', checksum: 'c', sizeBytes: 1 })),
+}));
+
 import { registerHubIpc } from '../../src/main/hub/ipc.handlers';
 import * as manager from '../../src/main/hub/index';
+import { publishToHub } from '../../src/main/hub/publish';
 
 beforeEach(() => { handlers.clear(); vi.clearAllMocks(); });
 
 describe('hub IPC 接线', () => {
-  it('注册四通道；getStatus 透传 manager', async () => {
+  it('注册五通道；getStatus 透传 manager', async () => {
     registerHubIpc();
-    expect([...handlers.keys()].sort()).toEqual(['hub:configure', 'hub:enroll', 'hub:forget', 'hub:getStatus']);
+    expect([...handlers.keys()].sort()).toEqual(['hub:configure', 'hub:enroll', 'hub:forget', 'hub:getStatus', 'hub:publishResource']);
     expect(await handlers.get('hub:getStatus')!()).toEqual(await manager.hubGetStatus());
   });
 
@@ -47,5 +53,12 @@ describe('hub IPC 接线', () => {
     registerHubIpc();
     await handlers.get('hub:getStatus')!();
     expect(manager.replayPresenceSeed).toHaveBeenCalledTimes(1);
+  });
+
+  it('publishResource 透传 publishToHub（入参原样 + 回执透传）', async () => {
+    registerHubIpc();
+    const out = await handlers.get('hub:publishResource')!(null, { type: 'skill', ref: 's1', meta: { name: 'N' } });
+    expect(publishToHub).toHaveBeenCalledWith({ type: 'skill', ref: 's1', meta: { name: 'N' } });
+    expect(out).toEqual({ slug: 's1', version: '1.0.0', checksum: 'c', sizeBytes: 1 });
   });
 });

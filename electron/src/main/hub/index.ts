@@ -81,6 +81,13 @@ function startClient(
         broadcast('hub:nodePresence', { kind: 'offline', ...p });
         // 种子 remove——已下线者不得残留（否则重播推幽灵行）
         if (presenceSeed) presenceSeed = presenceSeed.filter((n) => n.nodeId !== p.nodeId);
+      } else if (evt.method === EVT.resourcePublished) {
+        // 发布成功广播（spec §3.3/§5）——六字段显式挑出（协议 ResourcePublishedEvent 形状，
+        // 不透传整个 payload 防信封杂字段渗入 renderer 契约）
+        const p = evt.payload as { slug: string; type: string; name: string; version: string; author: string; at: number };
+        broadcast('hub:resourcePublished', {
+          slug: p.slug, type: p.type, name: p.name, version: p.version, author: p.author, at: p.at,
+        });
       }
     },
     // OBS-1：hello 应答里的在线节点快照 → 逐节点播 presence 种子（在线列表初始面）。
