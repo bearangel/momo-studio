@@ -53,6 +53,8 @@ vi.mock('../../src/main/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
+import { logger } from '../../src/main/logger';
+
 import {
   buildWorkspaceSnapshot,
   findForbiddenFields,
@@ -342,6 +344,39 @@ describe('buildWorkspaceSnapshot 清单全量', () => {
     expect(r.manifest.config.teams).toEqual([]);
     expect(validateSnapshotManifest(r.manifest)).not.toBeNull();
     expect(tarList(r.archivePath)).toEqual(['manifest.json']);
+  });
+});
+
+// ── 1b. MCP 无记账告警（T8a 交接补丁——上批评审 Important）──────────────────
+
+describe('MCP 无 hub 记账告警', () => {
+  it('marketplace MCP 无记账 → logger.warn 且名字仍入清单（不占 resources 位）；custom 来源无记账不 warn', async () => {
+    const wsId = await mkWorkspace('MCP 无记账空间');
+    await seedMember(wsId, 'def-mcp-warn', '成员丙');
+    registerMcpDefinition({
+      id: randomUUID(), name: 'orphan-market-mcp', version: '1.0.0',
+      command: 'npx', args: ['orphan-pkg'], source: 'marketplace',
+    });
+    registerMcpDefinition({
+      id: randomUUID(), name: 'custom-no-acc', version: '1.0.0',
+      command: 'npx', args: ['custom-pkg'], source: 'custom',
+    });
+
+    const r = await buildWorkspaceSnapshot(wsId);
+
+    // 名字仍入清单（manifest 结构不变——T8b 应用器对解析失败给兜底语义）
+    expect([...r.manifest.config.mcpEnabled].sort()).toEqual(['custom-no-acc', 'orphan-market-mcp']);
+    // 不占 resources 补装位（无记账 → 对 hub 仓发起安装必然失败）
+    expect(r.manifest.resources).not.toContainEqual({ type: 'mcp', slug: 'orphan-market-mcp' });
+
+    // leader 可见信号：仅 marketplace 来源 warn 一次；custom 来源（本机自管重建）不 warn
+    const warnsBy = (name: string): Array<Array<unknown>> =>
+      vi.mocked(logger.warn).mock.calls.filter(
+        (c) => (c[1] as { name?: string } | undefined)?.name === name,
+      );
+    expect(warnsBy('orphan-market-mcp')).toHaveLength(1);
+    expect(String(warnsBy('orphan-market-mcp')[0]![0])).toContain('MCP 无 hub 记账');
+    expect(warnsBy('custom-no-acc')).toHaveLength(0);
   });
 });
 

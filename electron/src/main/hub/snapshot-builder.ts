@@ -14,7 +14,8 @@
 //   teams         ——listTeams（agent/team）
 //   mcpEnabled    ——listRegistered（mcp/host-manager）过滤：enabled && stdio && 无 url
 //                    && 非 plugin 来源（红线：url 形态/凭证头零进快照；plugin 来源
-//                    MCP 由插件激活面重建，不占引用位）
+//                    MCP 由插件激活面重建，不占引用位）；marketplace 来源无 hub 记账
+//                    → logger.warn（leader 可见信号，名字仍入清单——T8b 兜底解析）
 //   skills        ——listInstalled（skill/zip-uploader；builtin/marketplace/custom 三源）
 //   pluginsEnabled——listPlugins + isPluginEnabled（plugin/registry）+ installed_packages
 //                    hub: 前缀记账反查（resource/hub/momo-hub）；无记账的 zip/dev 插件
@@ -261,7 +262,10 @@ function splitAgentMember(
   return { member: { name: def.name, slug: def.slug }, resource };
 }
 
-/** MCP 启用清单：enabled && stdio && 无 url && 非 plugin 来源（红线 + 重建语义双闸）。 */
+/** MCP 启用清单：enabled && stdio && 无 url && 非 plugin 来源（红线 + 重建语义双闸）。
+ *  marketplace 来源（含 hub 记账形态——DB 层 hub 安装同落 source='marketplace'）且无
+ *  hub 记账命中 → logger.warn（与插件 excludedPlugins 同待遇的 leader 可见信号）；
+ *  名字仍入清单（manifest 结构不变），T8b 应用器对解析失败给兜底语义。 */
 function collectMcpEnabled(acc: HubAccounting): {
   mcpEnabled: string[];
   resources: SnapshotResourceRef[];
@@ -271,7 +275,14 @@ function collectMcpEnabled(acc: HubAccounting): {
   for (const m of listRegistered()) {
     if (!m.enabled || m.transport !== 'stdio' || m.url || m.source === 'plugin') continue;
     mcpEnabled.push(m.name);
-    if (acc.has('mcp', m.name)) resources.push({ type: 'mcp', slug: m.name });
+    if (acc.has('mcp', m.name)) {
+      resources.push({ type: 'mcp', slug: m.name });
+    } else if (m.source === 'marketplace') {
+      logger.warn('MCP 无 hub 记账（纯 marketplace 目录来源），目标节点可能无法解析', {
+        name: m.name,
+        source: m.source,
+      });
+    }
   }
   return { mcpEnabled, resources };
 }
