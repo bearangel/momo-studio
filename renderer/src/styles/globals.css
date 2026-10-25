@@ -254,3 +254,12 @@ html.dark .md-codeblock .shiki span {
   height: 12px;
   border-radius: 0 0 5px 5px;
 }
+
+/* ── 远程查看回放：view.appended 淡入追加（task-14 预览定值 150ms opacity）── */
+@keyframes view-fade-in {
+  from { opacity: 0.55; }
+  to { opacity: 1; }
+}
+.view-fade-in {
+  animation: view-fade-in 150ms ease-out;
+}

@@ -34,6 +34,14 @@ const api = {
     onTaskCompleted: vi.fn(() => () => undefined),
     onTaskFailed: vi.fn(() => () => undefined),
     onTaskInterrupted: vi.fn(() => () => undefined),
+    // 查看面板（M2e T14）挂载在 GroupPanel 内——mock 面补齐 view.* 通道
+    //（默认不打开面板：onViewAppended 捕获回调即可，拉取面不触达）
+    onViewAppended: vi.fn(() => () => undefined),
+  },
+  // ViewPanel 空间选择前置步按需拉本机工作空间（picking 时才调；默认空表）
+  workspace: {
+    list: vi.fn(async () => []),
+    switch: vi.fn(async () => undefined),
   },
 };
 

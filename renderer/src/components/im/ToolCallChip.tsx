@@ -8,7 +8,7 @@
 // resultTruncated 置位时展开区提供「展开完整结果」，经 session:getMessageToolResults
 // 按消息批量拉全量、stream.store.expandToolResults 按 seq 替换（chip 随段重渲染）。
 import { useState } from 'react';
-import { CircleCheck, CircleX, ChevronDown, ChevronRight, Loader2, TriangleAlert } from 'lucide-react';
+import { CircleCheck, CircleX, ChevronDown, ChevronRight, Loader2, TriangleAlert, Wrench } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { describeToolCall } from '../../lib/describe-tool-call';
 import { ipc } from '../../ipc/client';
@@ -26,6 +26,12 @@ interface Props {
   resultTruncated?: boolean;
   /** 关联消息 id（截断展开拉取用；嵌套子流场景由上层传入） */
   messageId?: string;
+  /**
+   * 中性 tint（T12/T14 进度流与远程回放用）：outcome 未知（只有工具名摘要、
+   * 无成败结果）时不得谎报 success/error——降中性灰 chip + Wrench 图标。
+   * 缺省 'auto' = 按成功/失败/执行中三态着色（本地会话流语义）。
+   */
+  tone?: 'auto' | 'neutral';
 }
 
 /** 结果折叠阈值：超过 N 行显示前 N 行 + 展开条 */
@@ -56,6 +62,7 @@ export function ToolCallChip({
   defaultExpanded,
   resultTruncated,
   messageId,
+  tone = 'auto',
 }: Props) {
   const [expanded, setExpanded] = useState(defaultExpanded ?? false);
   const [resultExpanded, setResultExpanded] = useState(false);
@@ -79,13 +86,15 @@ export function ToolCallChip({
 
   const denied =
     !isExecuting && success === false && result !== undefined && isPermissionDenied(result);
-  const toneCls =
-    isExecuting || denied
+  const neutral = tone === 'neutral' && !isExecuting;
+  const toneCls = neutral
+    ? 'bg-surface-2 text-secondary'
+    : isExecuting || denied
       ? 'bg-status-warning-tint text-status-warning'
       : success
         ? 'bg-status-success-tint text-status-success'
         : 'bg-status-error-tint text-status-error';
-  const StatusIcon = isExecuting ? Loader2 : denied ? TriangleAlert : success ? CircleCheck : CircleX;
+  const StatusIcon = isExecuting ? Loader2 : neutral ? Wrench : denied ? TriangleAlert : success ? CircleCheck : CircleX;
   const { summary, extraArgs } = describeToolCall(toolName, args);
 
   const resultLines = result !== undefined ? result.split('\n') : [];

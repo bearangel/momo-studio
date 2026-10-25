@@ -10,11 +10,13 @@
 //   错误文案原样呈现）
 // - group.changed 推送 → store 重拉（事件驱动列表刷新）
 import { useEffect, useState, type FormEvent } from 'react';
-import { HardDriveDownload, Send, Users } from 'lucide-react';
+import { Eye, HardDriveDownload, Send, Users } from 'lucide-react';
 import { useHubStore } from '../../stores/hub.store';
 import { useHubGroupStore } from '../../stores/hub-group.store';
 import { useHubMirrorStore } from '../../stores/hub-mirror.store';
 import { useHubDelegationStore } from '../../stores/hub-delegation.store';
+import { useHubViewStore } from '../../stores/hub-view.store';
+import { useWorkspaceStore } from '../../stores/workspace.store';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { CopyButton } from '../ui/CopyButton';
@@ -22,6 +24,7 @@ import { Input } from '../ui/Input';
 import { MirrorWizard } from '../hub/MirrorWizard';
 import { DelegationPanel } from '../hub/DelegationPanel';
 import { DelegationWizard } from '../hub/DelegationWizard';
+import { ViewPanel } from '../hub/ViewPanel';
 
 export function GroupPanel() {
   const online = useHubStore((s) => s.status?.state === 'online');
@@ -79,6 +82,7 @@ export function GroupPanel() {
       )}
       <MirrorWizard />
       <DelegationWizard />
+      <ViewPanel />
       <div className="border-t border-subtle pt-4">
         <DelegationPanel />
       </div>
@@ -198,6 +202,8 @@ function GroupCard({ group }: GroupCardProps) {
   const leave = useHubGroupStore((s) => s.leave);
   const openMirrorWizard = useHubMirrorStore((s) => s.openWizard);
   const openDelegationWizard = useHubDelegationStore((s) => s.openWizard);
+  const openViewPanel = useHubViewStore((s) => s.openPanel);
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
   const [busy, setBusy] = useState(false);
   const [confirmingLeave, setConfirmingLeave] = useState(false);
   const isLeader = selfNodeId === group.leaderNodeId;
@@ -207,6 +213,11 @@ function GroupCard({ group }: GroupCardProps) {
     const timer = setTimeout(() => setConfirmingLeave(false), 3000);
     return () => clearTimeout(timer);
   }, [confirmingLeave]);
+
+  /** 「查看工作空间」入口：仅 leader + 在线成员 + 非本机（本机空间直接打开，离线无入口） */
+  const onViewWorkspace = (m: { nodeId: string; name: string }): void => {
+    openViewPanel({ targetNodeId: m.nodeId, targetName: m.name, workspaces: workspaces.map((w) => ({ id: w.id, name: w.name })) });
+  };
 
   const code = inviteCodes[group.groupId];
 
@@ -262,11 +273,22 @@ function GroupCard({ group }: GroupCardProps) {
             {m.name}
             {m.nodeId === group.leaderNodeId && <Badge tone="accent">组长</Badge>}
             {m.nodeId === selfNodeId && <Badge>本机</Badge>}
-            {m.nodeId !== group.leaderNodeId && m.nodeId !== selfNodeId && (
+            {isLeader && m.nodeId !== selfNodeId && m.online && (
               <Button
                 variant="ghost"
                 size="sm"
                 className="ml-auto h-6 px-2 text-xs"
+                onClick={() => onViewWorkspace(m)}
+              >
+                <Eye size={12} strokeWidth={1.75} aria-hidden />
+                查看工作空间
+              </Button>
+            )}
+            {m.nodeId !== group.leaderNodeId && m.nodeId !== selfNodeId && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className={`${isLeader ? '' : 'ml-auto'} h-6 px-2 text-xs`}
                 disabled={busy}
                 onClick={() => void onTransfer(m.nodeId)}
               >

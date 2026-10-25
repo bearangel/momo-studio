@@ -180,13 +180,13 @@ function TaskRow({ task }: { task: HubTaskRecord }) {
   );
 }
 
-/** 进度流单条增量：工具摘要 → ToolCallChip；其余 → surface-2 文本气泡 */
+/** 进度流单条增量：工具摘要 → ToolCallChip（中性 tint——outcome 未知不谎报 success）；其余 → surface-2 文本气泡 */
 function StreamEntryBody({ excerpt }: { excerpt: string }) {
   const tool = /^调用工具 (\S+)$/.exec(excerpt);
   if (tool) {
     return (
       <div className="my-0.5">
-        <ToolCallChip toolName={tool[1]!} args={{}} success />
+        <ToolCallChip toolName={tool[1]!} args={{}} success tone="neutral" />
       </div>
     );
   }
