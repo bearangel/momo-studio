@@ -76,6 +76,12 @@ export interface HubClient {
    * - timeoutMs 超时 → reject（缺省 10s）
    */
   request<T = unknown>(method: string, payload: unknown, timeoutMs?: number): Promise<T>;
+  /**
+   * 本端主动上行 res 信封（M2e 委派 task.report——id=taskId 对账键）。
+   * 走当前在线连接；离线/停机返回 false 不抛（调用方缓冲重试），不入 pending
+   * 关联器（hub 侧对 report 无应答）。send 抛错按 false 处理（连接将进重连）。
+   */
+  sendRes(id: string, method: string, payload: unknown): boolean;
 }
 
 interface PendingEntry {
@@ -276,6 +282,15 @@ export function createHubClient(opts: HubClientOpts): HubClient {
           reject(err instanceof Error ? err : new Error('发送失败'));
         }
       });
+    },
+    sendRes(id: string, method: string, payload: unknown): boolean {
+      if (stopped || state !== 'online' || !sock) return false;
+      try {
+        sock.send(encodeEnvelope({ v: 1, kind: 'res', id, method, ok: true, payload }));
+        return true;
+      } catch {
+        return false; // 连接半关（send 同步抛）——上层缓冲待重连
+      }
     },
   };
 }

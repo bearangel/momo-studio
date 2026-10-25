@@ -17,6 +17,8 @@ vi.mock('../../src/main/hub/index', () => ({
   hubForget: vi.fn(async () => undefined),
   replayPresenceSeed: vi.fn(),
   hubRequest: vi.fn(async () => ({})),
+  hubGetDelegationSettings: vi.fn(() => ({ acceptTasks: true, maxConcurrent: 2 })),
+  hubSetDelegationSettings: vi.fn(async (input: { acceptTasks: boolean; maxConcurrent: number }) => input),
 }));
 
 // publishToHub 只锁接线（透传入参）——打包/上传矩阵在 publish.test.ts
@@ -30,15 +32,17 @@ import { publishToHub } from '../../src/main/hub/publish';
 
 const GROUP_CHANNELS = ['hub:groupCreate', 'hub:groupInvite', 'hub:groupJoin', 'hub:groupLeave', 'hub:groupList', 'hub:groupTransfer'];
 const MIRROR_CHANNELS = ['hub:snapshotBuildUpload', 'hub:mirrorWorkspace'];
+const DELEGATION_CHANNELS = ['hub:getDelegationSettings', 'hub:setDelegationSettings'];
 
 beforeEach(() => { handlers.clear(); vi.clearAllMocks(); });
 
 describe('hub IPC 接线', () => {
-  it('注册十三通道；getStatus 透传 manager', async () => {
+  it('注册十五通道；getStatus 透传 manager', async () => {
     registerHubIpc();
     expect([...handlers.keys()].sort()).toEqual([
       ...GROUP_CHANNELS,
       ...MIRROR_CHANNELS,
+      ...DELEGATION_CHANNELS,
       'hub:configure', 'hub:enroll', 'hub:forget', 'hub:getStatus', 'hub:publishResource',
     ].sort());
     expect(await handlers.get('hub:getStatus')!()).toEqual(await manager.hubGetStatus());
@@ -69,6 +73,16 @@ describe('hub IPC 接线', () => {
     const out = await handlers.get('hub:publishResource')!(null, { type: 'skill', ref: 's1', meta: { name: 'N' } });
     expect(publishToHub).toHaveBeenCalledWith({ type: 'skill', ref: 's1', meta: { name: 'N' } });
     expect(out).toEqual({ slug: 's1', version: '1.0.0', checksum: 'c', sizeBytes: 1 });
+  });
+
+  it('委派设置两通道：get 透传 hubGetDelegationSettings；set 透传入参并回传归一化值', async () => {
+    registerHubIpc();
+    const got = await handlers.get('hub:getDelegationSettings')!();
+    expect(got).toEqual({ acceptTasks: true, maxConcurrent: 2 });
+    expect(manager.hubGetDelegationSettings).toHaveBeenCalledTimes(1);
+    const set = await handlers.get('hub:setDelegationSettings')!(null, { acceptTasks: false, maxConcurrent: 4 });
+    expect(set).toEqual({ acceptTasks: false, maxConcurrent: 4 });
+    expect(manager.hubSetDelegationSettings).toHaveBeenCalledWith({ acceptTasks: false, maxConcurrent: 4 });
   });
 });
 

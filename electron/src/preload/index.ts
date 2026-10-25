@@ -59,6 +59,7 @@ import type {
   HubMirrorResultEvent,
   HubSnapshotBuildUploadResult,
   HubWorkspaceMirroredEvent,
+  HubDelegationSettings,
 } from '../../../renderer/src/ipc/types';
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -608,6 +609,8 @@ const api: ApiSurface = {
     },
     snapshotBuildUpload: (input) => invoke<HubSnapshotBuildUploadResult>('hub:snapshotBuildUpload', input),
     mirrorWorkspace: (input: HubMirrorWorkspaceInput) => invoke<HubMirrorAcceptResult>('hub:mirrorWorkspace', input),
+    getDelegationSettings: () => invoke<HubDelegationSettings>('hub:getDelegationSettings'),
+    setDelegationSettings: (input: HubDelegationSettings) => invoke<HubDelegationSettings>('hub:setDelegationSettings', input),
     onMirrorResult: (callback) => {
       const handler = (_e: IpcRendererEvent, payload: HubMirrorResultEvent): void => callback(payload);
       ipcRenderer.on('hub:mirrorResult', handler);

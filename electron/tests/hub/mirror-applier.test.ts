@@ -509,7 +509,7 @@ describe('applyMirrorSnapshot 并发对账', () => {
     expect(second.code).toBe('conflict');
     expect(second.message).toContain('mirror_in_progress');
 
-    releaseFirst?.();
+    releaseFirst!(); // Promise executor 内赋值——TS 流分析不可达，非空断言直呼
     const firstOutcome = await first;
     expect(firstOutcome.ok).toBe(true);
   });

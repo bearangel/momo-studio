@@ -6,12 +6,15 @@
 //   5. 非关联 res（mirror.result，id=mirrorId 非本端请求）→ onUnsolicitedRes 透出，
 //      不污染 pending 关联器；随后同 id RPC 正常（关联器优先级锁）
 //   6. 回执走当前在线连接；连接被取代后不回执（身份守卫——stale socket 回执无意义）
+//   7. sendRes：本端主动上行 res 信封（task.report，id=taskId 对账键——M2e 委派）；
+//      离线/停机返回 false 不抛（调用方缓冲重试），不入 pending 关联器
 // ws 经工厂注入（client.test.ts 同款 FakeSocket/FakeServer）——信封编解码用真 protocol。
 import { EventEmitter } from 'node:events';
 import { describe, expect, it } from 'vitest';
 import { createHubClient, type WsFactory, type WebSocketLike } from '../../src/main/hub/client';
 import { PROTOCOL_VERSION, RPC, encodeEnvelope, parseEnvelope, type RequestEnvelope, type ResponseEnvelope } from '../../src/main/hub/protocol';
 import { MIRROR_WIRE } from '../../src/main/hub/mirror-wire';
+import { TASK_WIRE } from '../../src/main/hub/delegation-wire';
 
 class FakeSocket extends EventEmitter implements WebSocketLike {
   sent: string[] = [];
@@ -168,11 +171,59 @@ describe('HubClient 非关联 res 透出（mirror.result）', () => {
     // pending 关联器不受影响：正常 RPC 请求-应答仍通
     const pong = client.request(RPC.ping, { ts: 1 }, 1000);
     await flushMicrotasks();
-    const pingEnv = sockets[0]!.sent.map((r) => parseEnvelope(r)).find((e) => e?.kind === 'req' && e.method === RPC.ping);
+    const pingEnv = sockets[0]!.sent
+      .map((r) => parseEnvelope(r))
+      .find((e): e is RequestEnvelope => e !== null && e.kind === 'req' && e.method === RPC.ping);
     expect(pingEnv).toBeDefined();
     deliver(sockets[0]!, { v: 1, kind: 'res', id: pingEnv!.id, method: RPC.ping, ok: true, payload: { ts: 1, serverTime: 2 } });
     await expect(pong).resolves.toEqual({ ts: 1, serverTime: 2 });
     expect(unsolicited).toHaveLength(1); // ping 应答走关联器，不再进 unsolicited
+    client.stop();
+  });
+});
+
+describe('HubClient 主动上行 res（task.report——M2e 委派）', () => {
+  it('online 时 sendRes → 当前连接上行 res 信封（id/method/payload 原样）；返 true', async () => {
+    const { factory, sockets } = makeFactory();
+    const client = createHubClient({
+      url: 'ws://x/ws', nodeName: 'a', deviceToken: 't',
+      onStateChange: () => undefined, onEvent: () => undefined, ws: factory,
+    });
+    client.start();
+    await flushMicrotasks();
+
+    const sent = client.sendRes('task-1', TASK_WIRE.report, {
+      status: 'running', sessionId: 'sess-1', progress: { lastSeq: 3, excerpt: '开始' },
+    });
+    expect(sent).toBe(true);
+    const res = findRes(sockets[0]!, 'task-1');
+    expect(res).toBeDefined();
+    expect(res!.method).toBe(TASK_WIRE.report);
+    expect(res!.ok).toBe(true);
+    expect(res!.payload).toEqual({ status: 'running', sessionId: 'sess-1', progress: { lastSeq: 3, excerpt: '开始' } });
+    client.stop();
+  });
+
+  it('未连接/停机 → sendRes 返 false 不抛（调用方缓冲重试）；重连后可再发', async () => {
+    const { factory, sockets } = makeFactory();
+    const client = createHubClient({
+      url: 'ws://x/ws', nodeName: 'a', deviceToken: 't',
+      onStateChange: () => undefined, onEvent: () => undefined, ws: factory,
+    });
+    // start 前（disconnected）
+    expect(client.sendRes('task-1', TASK_WIRE.report, { status: 'running' })).toBe(false);
+
+    client.start();
+    await flushMicrotasks();
+    client.stop();
+    // 停机后（disconnected）
+    expect(client.sendRes('task-1', TASK_WIRE.report, { status: 'running' })).toBe(false);
+    expect(sockets[0]!.sent.some((r) => parseEnvelope(r)?.kind === 'res')).toBe(false);
+
+    // 重连后恢复可用
+    client.start();
+    await flushMicrotasks();
+    expect(client.sendRes('task-1', TASK_WIRE.report, { status: 'running' })).toBe(true);
     client.stop();
   });
 });

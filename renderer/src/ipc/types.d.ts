@@ -2625,6 +2625,17 @@ export interface HubEnrollInput {
   nodeName: string;
 }
 
+/**
+ * hub 委派子节点设置（M2e T10）：接受开关 + 并发上限。
+ * 主进程 kv 存储；set 返回归一化值（maxConcurrent 夹取 [1,8]）。
+ */
+export interface HubDelegationSettings {
+  /** 是否接受其他节点派来的委派任务（关闭 = 一律 declined） */
+  acceptTasks: boolean;
+  /** 同时执行的委派任务上限 */
+  maxConcurrent: number;
+}
+
 /** hub:groupChanged 推送载荷（协议 GroupChangedEvent 镜像——组成员变动/组长转移的组内广播） */
 export interface HubGroupChangedEvent {
   groupId: string;
@@ -2762,6 +2773,10 @@ export interface HubApiSurface {
   snapshotBuildUpload(input: { workspaceId: string }): Promise<HubSnapshotBuildUploadResult>;
   /** 发起镜像（两段式第一段 → 受理回执 mirrorId；终态经 onMirrorResult 推送） */
   mirrorWorkspace(input: HubMirrorWorkspaceInput): Promise<HubMirrorAcceptResult>;
+  /** 读取委派子节点设置（接受开关/并发上限；缺省 true/2） */
+  getDelegationSettings(): Promise<HubDelegationSettings>;
+  /** 写入委派子节点设置（返回归一化值——maxConcurrent 夹取 [1,8]） */
+  setDelegationSettings(input: HubDelegationSettings): Promise<HubDelegationSettings>;
   /** 连接状态变化推送订阅（解订阅函数） */
   onStateChanged(callback: (payload: HubStateChangedEvent) => void): () => void;
   /** 节点上下线推送订阅（解订阅函数） */

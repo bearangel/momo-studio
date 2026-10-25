@@ -41,6 +41,11 @@ const api = {
     groupLeave: vi.fn(),
     groupTransfer: vi.fn(),
     onGroupChanged: vi.fn(() => () => undefined),
+    // 委派子节点区段（M2e T10）——默认接受开/并发 2；set 回显归一化值
+    getDelegationSettings: vi.fn(async () => ({ acceptTasks: true, maxConcurrent: 2 })),
+    setDelegationSettings: vi.fn(async (input: { acceptTasks: boolean; maxConcurrent: number }) => input),
+    onMirrorResult: vi.fn(() => () => undefined),
+    onWorkspaceMirrored: vi.fn(() => () => undefined),
   },
 };
 
@@ -380,5 +385,29 @@ describe('HubSettingsPanel', () => {
     expect(await screen.findByText('已连接')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByText('加载中...')).not.toBeInTheDocument();
+  });
+
+  it('委派子节点区段：开关即时保存；并发上限失焦保存且回显主进程归一化值', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
+    api.hub.setDelegationSettings.mockResolvedValueOnce({ acceptTasks: false, maxConcurrent: 2 })
+      .mockResolvedValueOnce({ acceptTasks: false, maxConcurrent: 8 });
+    render(<HubSettingsPanel />);
+
+    expect(await screen.findByText('任务委派（子节点）')).toBeInTheDocument();
+    // 开关：点击即保存（Switch role=switch）
+    fireEvent.click(screen.getByRole('switch', { name: '接受任务委派' }));
+    await waitFor(() =>
+      expect(api.hub.setDelegationSettings).toHaveBeenCalledWith({ acceptTasks: false, maxConcurrent: 2 }),
+    );
+    expect((screen.getByRole('switch', { name: '接受任务委派' }) as HTMLButtonElement).getAttribute('aria-checked')).toBe('false');
+
+    // 并发上限：失焦保存；主进程归一化（99 → 8）后回显
+    const input = screen.getByLabelText('并发上限') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '99' } });
+    fireEvent.blur(input);
+    await waitFor(() =>
+      expect(api.hub.setDelegationSettings).toHaveBeenLastCalledWith({ acceptTasks: false, maxConcurrent: 99 }),
+    );
+    await waitFor(() => expect((screen.getByLabelText('并发上限') as HTMLInputElement).value).toBe('8'));
   });
 });

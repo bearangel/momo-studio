@@ -1,6 +1,9 @@
 // hub 命名空间 IPC——通道名与 types.d.ts / preload 逐一对齐（momo-boundary-rules）。
 import { ipcMain } from 'electron';
-import { hubConfigure, hubEnroll, hubForget, hubGetStatus, hubRequest, replayPresenceSeed } from './index';
+import {
+  hubConfigure, hubEnroll, hubForget, hubGetDelegationSettings, hubGetStatus, hubRequest,
+  hubSetDelegationSettings, replayPresenceSeed,
+} from './index';
 import { createGroupClient } from './groups';
 import { publishToHub, type PublishInput } from './publish';
 import { buildAndUploadWorkspaceSnapshot } from './snapshot-upload';
@@ -40,4 +43,8 @@ export function registerHubIpc(): void {
     strategy: 'replace',
     ...(input.confirm !== undefined ? { confirm: input.confirm } : {}),
   }));
+  // 委派子节点设置两通道（M2e T10）：接受开关 + 并发上限（set 返回归一化值）
+  ipcMain.handle('hub:getDelegationSettings', () => hubGetDelegationSettings());
+  ipcMain.handle('hub:setDelegationSettings', (_evt, input: { acceptTasks: boolean; maxConcurrent: number }) =>
+    hubSetDelegationSettings(input));
 }

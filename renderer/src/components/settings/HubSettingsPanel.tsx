@@ -11,14 +11,102 @@
 // - 换址入口（D1，已接入态）：身份区次级按钮「修改 hub 地址」→ 确认弹窗（改地址 + 断开告警）
 //   → 调 configure → 落到换址引导态
 import { useEffect, useState, type FormEvent } from 'react';
-import { Files, Network, RefreshCw, Send, Trash2 } from 'lucide-react';
+import { Files, Network, RefreshCw, Trash2 } from 'lucide-react';
 import { useHubStore } from '../../stores/hub.store';
-import type { HubConnectionState, HubStatus } from '../../ipc/types';
+import { ipc } from '../../ipc/client';
+import type { HubConnectionState, HubDelegationSettings, HubStatus } from '../../ipc/types';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { Input } from '../ui/Input';
+import { Switch } from '../ui/Switch';
 import { GroupPanel } from './GroupPanel';
+
+/**
+ * 委派子节点区段（M2e T10，RM2-3 复用表单豁免——Switch/Input 既有原子）：
+ * 接受开关（即时保存）+ 并发上限（失焦/回车保存，主进程夹取 [1,8] 后回显）。
+ */
+function DelegationSection() {
+  const [settings, setSettings] = useState<HubDelegationSettings | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [concurrencyDraft, setConcurrencyDraft] = useState('');
+
+  useEffect(() => {
+    void ipc.hub
+      .getDelegationSettings()
+      .then((s) => {
+        setSettings(s);
+        setConcurrencyDraft(String(s.maxConcurrent));
+      })
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+  }, []);
+
+  if (settings === null) {
+    return (
+      <div className="flex flex-col gap-2">
+        <div className="text-sm font-medium text-primary">任务委派（子节点）</div>
+        {error !== null ? (
+          <p className="text-xs text-status-error" role="alert">{error}</p>
+        ) : (
+          <p className="text-xs text-tertiary">加载中…</p>
+        )}
+      </div>
+    );
+  }
+
+  const save = async (next: HubDelegationSettings): Promise<void> => {
+    setError(null);
+    try {
+      const normalized = await ipc.hub.setDelegationSettings(next);
+      setSettings(normalized);
+      setConcurrencyDraft(String(normalized.maxConcurrent));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="text-sm font-medium text-primary">任务委派（子节点）</div>
+      <div className="flex flex-col gap-3 rounded-lg border border-subtle bg-surface-1 p-3">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <div className="text-[13px] text-primary">接受其他节点派来的任务</div>
+            <p className="text-xs text-tertiary">关闭后新委派一律婉拒（declined）；已在本机运行的任务不受影响</p>
+          </div>
+          <Switch
+            checked={settings.acceptTasks}
+            onChange={(next) => void save({ ...settings, acceptTasks: next })}
+            aria-label="接受任务委派"
+          />
+        </div>
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <div className="text-[13px] text-primary">并发上限</div>
+            <p className="text-xs text-tertiary">同时执行的委派任务数（1-8，超出婉拒）</p>
+          </div>
+          <Input
+            type="number"
+            min={1}
+            max={8}
+            className="w-20"
+            value={concurrencyDraft}
+            onChange={(e) => setConcurrencyDraft(e.target.value)}
+            onBlur={() => {
+              const n = Number(concurrencyDraft);
+              if (Number.isFinite(n) && n !== settings.maxConcurrent) {
+                void save({ ...settings, maxConcurrent: n });
+              }
+            }}
+            aria-label="并发上限"
+          />
+        </div>
+        {error !== null && <p className="text-xs text-status-error" role="alert">{error}</p>}
+      </div>
+    </div>
+  );
+}
+
 
 /** 状态徽章三态：6px 圆点 + 12px medium 文字（已连接绿 / 连接中黄 / 未连接灰） */
 const CONN_META: Record<HubConnectionState, { label: string; text: string; dot: string }> = {
@@ -325,16 +413,13 @@ function EnrolledView({ status }: { status: HubStatus }) {
         )}
       </div>
 
+      <DelegationSection />
+
       <div className="flex flex-col gap-2 rounded-lg border border-subtle bg-surface-1 p-3">
-        <div className="flex items-center gap-2 text-[13px] text-disabled">
-          <Send size={16} strokeWidth={1.75} aria-hidden className="shrink-0" />
-          任务委派——把任务派给其他节点上的 agent
-          <Badge className="ml-auto">M2 后续批次</Badge>
-        </div>
         <div className="flex items-center gap-2 text-[13px] text-disabled">
           <Files size={16} strokeWidth={1.75} aria-hidden className="shrink-0" />
           资源镜像——跨节点同步资源库
-          <Badge className="ml-auto">M2 后续批次</Badge>
+          <Badge className="ml-auto">已上线（镜像向导）</Badge>
         </div>
       </div>
 

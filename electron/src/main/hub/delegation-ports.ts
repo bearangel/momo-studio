@@ -1,0 +1,158 @@
+// 委派执行器生产端口装配（M2e T10/T11）——全部边界实装，delegation-runner 保持纯端口消费。
+// 会话执行复用既有入口：createCollabSession（单 agent 目标 is_leader=1——路由接待
+// 语义要求）/ sendUserMessage（systemKickoff：任务书非用户手输，跳过冲突检测与
+// #T 激活两个用户语义钩子）/ RouterService.stopAll（会话级急停，三级中断既有入口）。
+// 完成观测：轮询会话最新 agent 流行 status（messages 表是回合终态单一真相源——
+// stream-relay end 路径回写 done/failed/aborted；重启后 sweepStaleStreaming 兜底）。
+import { getDb } from '../storage/db';
+import { listWorkspaces, getWorkspace } from '../workspace/crud';
+import { listMembers, getAgentDefinition } from '../agent/agent-queries';
+import { createCollabSession } from '../im/session-ops';
+import { sendUserMessage } from '../im/session-service';
+import { getRouterService } from '../agent/router-bootstrap';
+import type { DelegationRunPorts, DelegationTail, TurnTerminal } from './delegation-runner';
+import type { HubDelegationSettings } from './delegation-settings';
+import { TASK_WIRE, type TaskReportPayload } from './delegation-wire';
+import type { HubClient } from './client';
+import { TASK_RPC } from './protocol';
+import { logger } from '../logger';
+
+/** agent 流行终态轮询周期（1s——messages.status 单一真相源，非高频面） */
+const TURN_POLL_MS = 1000;
+
+type Row = { id: string; sender: string; status: string; stream_session_id: string | null };
+
+/** 会话内最新 agent 流行（sender 非 owner 的顶层流行）——回合终态判定对象 */
+function latestAgentStreamRow(sessionId: string): Row | null {
+  const row = getDb()
+    .prepare(
+      `SELECT id, sender, status, stream_session_id FROM messages
+       WHERE session_id = ? AND stream_session_id IS NOT NULL
+         AND parent_stream_session_id IS NULL AND segment_of IS NULL
+         AND sender != 'owner'
+       ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+    )
+    .get(sessionId) as Row | undefined;
+  return row ?? null;
+}
+
+/**
+ * 回合终态订阅：轮询最新 agent 流行 status。
+ * 'streaming'=在跑（继续等）；终态行（done/failed/aborted）回调一次；
+ * 无流行（用户消息已落、agent 尚未开始）继续等——路由失败时 sendUserMessage
+ * 链路已写启动失败气泡（writeStreamStartFailure，failed 行），轮询可捕获。
+ */
+function watchTurnProduct(sessionId: string, onTerminal: (t: TurnTerminal) => void): () => void {
+  let settled = false;
+  const timer = setInterval(() => {
+    if (settled) return;
+    const row = latestAgentStreamRow(sessionId);
+    if (!row || row.status === 'streaming') return;
+    settled = true;
+    clearInterval(timer);
+    onTerminal({
+      status: row.status === 'done' ? 'done' : row.status === 'failed' ? 'failed' : 'aborted',
+    });
+  }, TURN_POLL_MS);
+  timer.unref?.();
+  return () => {
+    settled = true;
+    clearInterval(timer);
+  };
+}
+
+type EventRow = { rid: number; event_type: string; payload_json: string };
+
+/**
+ * 会话尾部增量（进度拍原料）：message_events 按 rowid 单调游标（RF#5 lastSeq——
+ * rowid 是插入序全序键，天然单调不丢）。excerpt 取批内末条可读文本
+ * （text_delta / final.body / tool_call_start 工具名），恒非空兜底占位。
+ */
+function sessionTailProduct(sessionId: string, afterRowId: number): DelegationTail | null {
+  const rows = getDb()
+    .prepare(
+      `SELECT e.rowid AS rid, e.event_type, e.payload_json FROM message_events e
+       JOIN messages m ON m.id = e.message_id
+       WHERE m.session_id = ? AND e.rowid > ?
+       ORDER BY e.rowid ASC`,
+    )
+    .all(sessionId, afterRowId) as EventRow[];
+  if (rows.length === 0) return null;
+  let lastSeq = afterRowId;
+  let excerpt = '';
+  for (const r of rows) {
+    lastSeq = r.rid;
+    const p = JSON.parse(r.payload_json) as Record<string, unknown>;
+    if (r.event_type === 'text_delta' && typeof p.delta === 'string' && p.delta.trim()) {
+      excerpt = p.delta;
+    } else if (r.event_type === 'final' && typeof p.body === 'string' && p.body.trim()) {
+      excerpt = p.body;
+    } else if (r.event_type === 'tool_call_start' && typeof p.toolName === 'string') {
+      excerpt = `调用工具 ${p.toolName}`;
+    }
+  }
+  return { lastSeq, excerpt: excerpt.trim() || '（无文本增量）' };
+}
+
+export interface WireDelegationPortsOpts {
+  /** 当前连接惰性取用（连接随 hubConfigure/Forget 重建——端口不持有过期引用） */
+  clientGetter: () => HubClient | null;
+  /** 本机 nodeId（task.list 结果过滤——hub 返回所在组全部中断任务，只恢复派给本机的） */
+  selfNodeId: () => string | null;
+  /** 设置实时读取（hub/index 持 settings store——开关/并发上限即时生效） */
+  settings: () => HubDelegationSettings;
+}
+
+export function wireDelegationRunnerPorts(opts: WireDelegationPortsOpts): DelegationRunPorts {
+  const { clientGetter, selfNodeId, settings } = opts;
+  return {
+    settings,
+    findWorkspaceByName(name) {
+      return listWorkspaces().find((w) => w.name === name) ?? null;
+    },
+    resolveAgentInstance(workspaceId, agentSlug) {
+      const members = listMembers(workspaceId);
+      if (agentSlug !== undefined) {
+        const hit = members.find((m) => getAgentDefinition(m.agentDefinitionId)?.slug === agentSlug);
+        return hit?.instanceId ?? null;
+      }
+      const fallback = getWorkspace(workspaceId)?.defaultAgentInstanceId ?? null;
+      return fallback && members.some((m) => m.instanceId === fallback) ? fallback : null;
+    },
+    createDelegatedSession(input) {
+      // MC1：普通 collab 会话（单 agent 目标 is_leader=1）+ 标题=任务书摘要
+      return createCollabSession(input.workspaceId, input.title, {
+        type: 'agent',
+        instanceId: input.memberInstanceId,
+      }).id;
+    },
+    startTurn: async (input) => {
+      await sendUserMessage({
+        sessionId: input.sessionId,
+        body: input.body,
+        systemKickoff: true,
+      });
+    },
+    stopSession(sessionId) {
+      const stopped = getRouterService()?.stopAll(sessionId);
+      logger.info('委派取消停跑', { sessionId, stopped });
+    },
+    watchTurn: watchTurnProduct,
+    sessionTail: sessionTailProduct,
+    report: (taskId: string, payload: TaskReportPayload) => {
+      const client = clientGetter();
+      return Promise.resolve(client ? client.sendRes(taskId, TASK_WIRE.report, payload) : false);
+    },
+    listInterruptedDelegations: async () => {
+      const client = clientGetter();
+      if (!client) return [];
+      const res = await client.request<{
+        tasks: Array<{ taskId: string; title: string; workspaceName: string; targetNodeId: string }>;
+      }>(TASK_RPC.list, { status: 'interrupted' });
+      const me = selfNodeId();
+      return res.tasks
+        .filter((t) => me === null || t.targetNodeId === me)
+        .map((t) => ({ taskId: t.taskId, title: t.title, workspaceName: t.workspaceName }));
+    },
+  };
+}
