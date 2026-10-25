@@ -65,6 +65,12 @@ import type {
   HubTaskDelegateResult,
   HubTaskProgressEvent,
   HubTaskTerminalEvent,
+  HubViewSettings,
+  HubViewOverview,
+  HubViewSessionSummary,
+  HubViewMessagePage,
+  HubViewLocalTask,
+  HubViewAppendedEvent,
 } from '../../../renderer/src/ipc/types';
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -629,6 +635,22 @@ const api: ApiSurface = {
     taskList: (input?: { groupId?: string }) => invoke<HubTaskListResult>('hub:taskList', input ?? {}),
     taskDelegate: (input: HubTaskDelegateInput) => invoke<HubTaskDelegateResult>('hub:taskDelegate', input),
     taskCancel: (input: { taskId: string }) => invoke<{ ok: boolean }>('hub:taskCancel', input),
+    getViewSettings: () => invoke<HubViewSettings>('hub:getViewSettings'),
+    setViewSettings: (input: HubViewSettings) => invoke<HubViewSettings>('hub:setViewSettings', input),
+    viewWorkspace: (input: { targetNodeId: string; workspaceName: string }) => invoke<HubViewOverview>('hub:viewWorkspace', input),
+    viewSessions: (input: { targetNodeId: string; workspaceName: string; beforeSeq?: number; limit: number }) =>
+      invoke<{ sessions: HubViewSessionSummary[] }>('hub:viewSessions', input),
+    viewMessages: (input: { targetNodeId: string; sessionId: string; workspaceName?: string; fromSeq: number; limit: number }) =>
+      invoke<HubViewMessagePage>('hub:viewMessages', input),
+    viewTasks: (input: { targetNodeId: string; workspaceName: string }) =>
+      invoke<{ tasks: HubViewLocalTask[] }>('hub:viewTasks', input),
+    viewSubscribe: (input: { targetNodeId: string; sessionId: string }) => invoke<{ ok: boolean }>('hub:viewSubscribe', input),
+    viewUnsubscribe: (input: { targetNodeId: string; sessionId: string }) => invoke<{ ok: boolean }>('hub:viewUnsubscribe', input),
+    onViewAppended: (callback) => {
+      const handler = (_e: IpcRendererEvent, payload: HubViewAppendedEvent): void => callback(payload);
+      ipcRenderer.on('hub:viewAppended', handler);
+      return () => { ipcRenderer.off('hub:viewAppended', handler); };
+    },
     onTaskProgress: (callback) => {
       const handler = (_e: IpcRendererEvent, payload: HubTaskProgressEvent): void => callback(payload);
       ipcRenderer.on('hub:taskProgress', handler);

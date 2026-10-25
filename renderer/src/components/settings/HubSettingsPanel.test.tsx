@@ -54,6 +54,10 @@ const api = {
     onTaskCompleted: vi.fn(() => () => undefined),
     onTaskFailed: vi.fn(() => () => undefined),
     onTaskInterrupted: vi.fn(() => () => undefined),
+    // 远程查看同意区段（M2e T14/T15）——默认允许；set 回显新值
+    getViewSettings: vi.fn(async () => ({ allowGroupView: true })),
+    setViewSettings: vi.fn(async (input: { allowGroupView: boolean }) => input),
+    onViewAppended: vi.fn(() => () => undefined),
   },
 };
 
@@ -417,5 +421,29 @@ describe('HubSettingsPanel', () => {
       expect(api.hub.setDelegationSettings).toHaveBeenLastCalledWith({ acceptTasks: false, maxConcurrent: 99 }),
     );
     await waitFor(() => expect((screen.getByLabelText('并发上限') as HTMLInputElement).value).toBe('8'));
+  });
+});
+
+describe('HubSettingsPanel 远程查看同意区段（M2e T14/T15）', () => {
+  it('默认允许：「允许本组查看」开关在位且开；拨到关 → setViewSettings(false) 即时保存（主进程侧即时上报 hub）', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
+    render(<HubSettingsPanel />);
+
+    const sw = await screen.findByRole('switch', { name: '允许本组查看' });
+    expect(sw.getAttribute('aria-checked')).toBe('true');
+
+    api.hub.setViewSettings.mockResolvedValueOnce({ allowGroupView: false });
+    await act(async () => {
+      fireEvent.click(sw);
+    });
+    await waitFor(() => expect(api.hub.setViewSettings).toHaveBeenCalledWith({ allowGroupView: false }));
+    expect(sw.getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('读取失败：错误文案呈现（不静默吞）', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
+    api.hub.getViewSettings.mockRejectedValueOnce(new Error('kv 读取失败'));
+    render(<HubSettingsPanel />);
+    expect(await screen.findByText('kv 读取失败')).toBeDefined();
   });
 });

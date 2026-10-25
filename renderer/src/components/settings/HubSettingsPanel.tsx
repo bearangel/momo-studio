@@ -14,7 +14,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Files, Network, RefreshCw, Trash2 } from 'lucide-react';
 import { useHubStore } from '../../stores/hub.store';
 import { ipc } from '../../ipc/client';
-import type { HubConnectionState, HubDelegationSettings, HubStatus } from '../../ipc/types';
+import type { HubConnectionState, HubDelegationSettings, HubStatus, HubViewSettings } from '../../ipc/types';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
@@ -99,6 +99,65 @@ function DelegationSection() {
               }
             }}
             aria-label="并发上限"
+          />
+        </div>
+        {error !== null && <p className="text-xs text-status-error" role="alert">{error}</p>}
+      </div>
+    </div>
+  );
+}
+
+
+/**
+ * 远程查看同意区段（M2e T14/T15，spec §5.5 双层同意节点层，RM2-3 复用 Switch 豁免）：
+ * 「允许本组查看」开关（默认开）——即时保存 + 主进程即时上报 hub（离线由重连重报兜底）。
+ */
+function ViewConsentSection() {
+  const [settings, setSettings] = useState<HubViewSettings | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void ipc.hub
+      .getViewSettings()
+      .then(setSettings)
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+  }, []);
+
+  if (settings === null) {
+    return (
+      <div className="flex flex-col gap-2">
+        <div className="text-sm font-medium text-primary">远程查看（子节点）</div>
+        {error !== null ? (
+          <p className="text-xs text-status-error" role="alert">{error}</p>
+        ) : (
+          <p className="text-xs text-tertiary">加载中…</p>
+        )}
+      </div>
+    );
+  }
+
+  const save = async (next: HubViewSettings): Promise<void> => {
+    setError(null);
+    try {
+      setSettings(await ipc.hub.setViewSettings(next));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="text-sm font-medium text-primary">远程查看（子节点）</div>
+      <div className="flex flex-col gap-3 rounded-lg border border-subtle bg-surface-1 p-3">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <div className="text-[13px] text-primary">允许本组查看</div>
+            <p className="text-xs text-tertiary">关闭后，同组组长对本机的远程查看请求将被拒绝（403）；已建立的尾部订阅随之停发</p>
+          </div>
+          <Switch
+            checked={settings.allowGroupView}
+            onChange={(next) => void save({ allowGroupView: next })}
+            aria-label="允许本组查看"
           />
         </div>
         {error !== null && <p className="text-xs text-status-error" role="alert">{error}</p>}
@@ -414,6 +473,8 @@ function EnrolledView({ status }: { status: HubStatus }) {
       </div>
 
       <DelegationSection />
+
+      <ViewConsentSection />
 
       <div className="flex flex-col gap-2 rounded-lg border border-subtle bg-surface-1 p-3">
         <div className="flex items-center gap-2 text-[13px] text-disabled">

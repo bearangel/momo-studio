@@ -49,6 +49,8 @@ vi.mock('../../src/main/hub/client', () => ({
       start: (): void => { rec.state = 'connecting'; },
       stop: (): void => { rec.state = 'disconnected'; },
       state: (): string => rec.state,
+      // 查看同意上报链（M2e T14）在 online 回调发起 view.consent——桩补 request 面
+      request: async (): Promise<unknown> => ({ ok: true }),
     };
   },
   enrollOverHttp: vi.fn(async () => ({ nodeId: 'node-1', deviceToken: 'tok-1' })),

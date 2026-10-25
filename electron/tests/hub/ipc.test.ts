@@ -19,6 +19,8 @@ vi.mock('../../src/main/hub/index', () => ({
   hubRequest: vi.fn(async () => ({})),
   hubGetDelegationSettings: vi.fn(() => ({ acceptTasks: true, maxConcurrent: 2 })),
   hubSetDelegationSettings: vi.fn(async (input: { acceptTasks: boolean; maxConcurrent: number }) => input),
+  hubGetViewSettings: vi.fn(() => ({ allowGroupView: true })),
+  hubSetViewSettings: vi.fn(async (input: { allowGroupView: boolean }) => input),
 }));
 
 // publishToHub 只锁接线（透传入参）——打包/上传矩阵在 publish.test.ts
@@ -34,17 +36,23 @@ const GROUP_CHANNELS = ['hub:groupCreate', 'hub:groupInvite', 'hub:groupJoin', '
 const MIRROR_CHANNELS = ['hub:snapshotBuildUpload', 'hub:mirrorWorkspace'];
 const DELEGATION_CHANNELS = ['hub:getDelegationSettings', 'hub:setDelegationSettings'];
 const TASK_CHANNELS = ['hub:taskList', 'hub:taskDelegate', 'hub:taskCancel'];
+const VIEW_CHANNELS = [
+  'hub:getViewSettings', 'hub:setViewSettings',
+  'hub:viewWorkspace', 'hub:viewSessions', 'hub:viewMessages', 'hub:viewTasks',
+  'hub:viewSubscribe', 'hub:viewUnsubscribe',
+];
 
 beforeEach(() => { handlers.clear(); vi.clearAllMocks(); });
 
 describe('hub IPC 接线', () => {
-  it('注册十八通道；getStatus 透传 manager', async () => {
+  it('注册二十六通道；getStatus 透传 manager', async () => {
     registerHubIpc();
     expect([...handlers.keys()].sort()).toEqual([
       ...GROUP_CHANNELS,
       ...MIRROR_CHANNELS,
       ...DELEGATION_CHANNELS,
       ...TASK_CHANNELS,
+      ...VIEW_CHANNELS,
       'hub:configure', 'hub:enroll', 'hub:forget', 'hub:getStatus', 'hub:publishResource',
     ].sort());
     expect(await handlers.get('hub:getStatus')!()).toEqual(await manager.hubGetStatus());
@@ -175,5 +183,33 @@ describe('hub IPC 委派 leader 侧三通道（M2e T12）', () => {
     vi.mocked(manager.hubRequest).mockRejectedValueOnce(new Error('任务已处于终态 done，不可取消'));
     await expect(handlers.get('hub:taskCancel')!(null, { taskId: 'tk-2' }))
       .rejects.toThrow('任务已处于终态 done，不可取消');
+  });
+});
+
+describe('hub IPC 远程查看通道（M2e T14）', () => {
+  it('查看设置两通道：get/set 透传 manager', async () => {
+    registerHubIpc();
+    const got = await handlers.get('hub:getViewSettings')!();
+    expect(got).toEqual({ allowGroupView: true });
+    const set = await handlers.get('hub:setViewSettings')!(null, { allowGroupView: false });
+    expect(set).toEqual({ allowGroupView: false });
+    expect(manager.hubSetViewSettings).toHaveBeenCalledWith({ allowGroupView: false });
+  });
+
+  it('view 六通道 → view.* 方法名与载荷逐项映射（载荷原样透传——hub 定向转发）', async () => {
+    registerHubIpc();
+    await handlers.get('hub:viewWorkspace')!(null, { targetNodeId: 'n2', workspaceName: 'ws' });
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('view.workspace', { targetNodeId: 'n2', workspaceName: 'ws' });
+    await handlers.get('hub:viewSessions')!(null, { targetNodeId: 'n2', workspaceName: 'ws', limit: 20 });
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('view.sessions', { targetNodeId: 'n2', workspaceName: 'ws', limit: 20 });
+    await handlers.get('hub:viewMessages')!(null, { targetNodeId: 'n2', sessionId: 's', fromSeq: 0, limit: 50, workspaceName: 'ws' });
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('view.messages', { targetNodeId: 'n2', sessionId: 's', fromSeq: 0, limit: 50, workspaceName: 'ws' });
+    await handlers.get('hub:viewTasks')!(null, { targetNodeId: 'n2', workspaceName: 'ws' });
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('view.tasks', { targetNodeId: 'n2', workspaceName: 'ws' });
+    await handlers.get('hub:viewSubscribe')!(null, { targetNodeId: 'n2', sessionId: 's' });
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('view.subscribe', { targetNodeId: 'n2', sessionId: 's' });
+    await handlers.get('hub:viewUnsubscribe')!(null, { targetNodeId: 'n2', sessionId: 's' });
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('view.unsubscribe', { targetNodeId: 'n2', sessionId: 's' });
+    expect(manager.hubRequest).toHaveBeenCalledTimes(6);
   });
 });

@@ -1,13 +1,13 @@
 // hub 命名空间 IPC——通道名与 types.d.ts / preload 逐一对齐（momo-boundary-rules）。
 import { ipcMain } from 'electron';
 import {
-  hubConfigure, hubEnroll, hubForget, hubGetDelegationSettings, hubGetStatus, hubRequest,
-  hubSetDelegationSettings, replayPresenceSeed,
+  hubConfigure, hubEnroll, hubForget, hubGetDelegationSettings, hubGetStatus, hubGetViewSettings,
+  hubRequest, hubSetDelegationSettings, hubSetViewSettings, replayPresenceSeed,
 } from './index';
 import { createGroupClient } from './groups';
 import { publishToHub, type PublishInput } from './publish';
 import { buildAndUploadWorkspaceSnapshot } from './snapshot-upload';
-import { RPC, TASK_RPC } from './protocol';
+import { RPC, TASK_RPC, VIEW_RPC } from './protocol';
 
 // 组管理客户端单点：绑定 hubRequest（IPC 面复用同一实例；纯函数集，无状态）
 const groups = createGroupClient((method, payload, timeoutMs) => hubRequest(method, payload, timeoutMs));
@@ -65,4 +65,22 @@ export function registerHubIpc(): void {
     },
   }, undefined));
   ipcMain.handle('hub:taskCancel', (_evt, input: { taskId: string }) => hubRequest(TASK_RPC.cancel, input, undefined));
+  // 查看同意设置两通道（M2e T14/T15：允许本组查看开关——set 内即时上报 hub）
+  ipcMain.handle('hub:getViewSettings', () => hubGetViewSettings());
+  ipcMain.handle('hub:setViewSettings', (_evt, input: { allowGroupView: boolean }) => hubSetViewSettings(input));
+  // 远程查看 leader 侧六通道（M2e T14，spec §3.1 view.*——hub 定向转发目标节点）
+  ipcMain.handle('hub:viewWorkspace', (_evt, input: { targetNodeId: string; workspaceName: string }) =>
+    hubRequest(VIEW_RPC.workspace, input));
+  ipcMain.handle('hub:viewSessions', (_evt, input: {
+    targetNodeId: string; workspaceName: string; beforeSeq?: number; limit: number;
+  }) => hubRequest(VIEW_RPC.sessions, input));
+  ipcMain.handle('hub:viewMessages', (_evt, input: {
+    targetNodeId: string; sessionId: string; workspaceName?: string; fromSeq: number; limit: number;
+  }) => hubRequest(VIEW_RPC.messages, input));
+  ipcMain.handle('hub:viewTasks', (_evt, input: { targetNodeId: string; workspaceName: string }) =>
+    hubRequest(VIEW_RPC.tasks, input));
+  ipcMain.handle('hub:viewSubscribe', (_evt, input: { targetNodeId: string; sessionId: string }) =>
+    hubRequest(VIEW_RPC.subscribe, input));
+  ipcMain.handle('hub:viewUnsubscribe', (_evt, input: { targetNodeId: string; sessionId: string }) =>
+    hubRequest(VIEW_RPC.unsubscribe, input));
 }

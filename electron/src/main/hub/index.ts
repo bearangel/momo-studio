@@ -25,7 +25,10 @@ import { createDelegationRunner, type DelegationRunner } from './delegation-runn
 import { wireDelegationRunnerPorts } from './delegation-ports';
 import { createHubDelegationSettingsStore, type HubDelegationSettings } from './delegation-settings';
 import { createHubDelegationStore } from './delegation-store';
-import type { TaskAssignedEvent } from './protocol';
+import { ViewServer } from './view-server';
+import { createHubViewSettingsStore, type HubViewSettings } from './view-settings';
+import { VIEW_WIRE } from './view-wire';
+import { VIEW_RPC, type TaskAssignedEvent } from './protocol';
 
 export interface HubStatus {
   configured: boolean;
@@ -46,6 +49,7 @@ let presenceSeed: Array<{ nodeId: string; nodeName: string }> | null = null;
 
 const configStore = () => createHubConfigStore(getDb());
 const delegationSettingsStore = () => createHubDelegationSettingsStore(getDb());
+const viewSettingsStore = () => createHubViewSettingsStore(getDb());
 
 /** 委派设置面（IPC 消费——开关/并发上限即时生效：runner 每次读取现值） */
 export function hubGetDelegationSettings(): HubDelegationSettings {
@@ -56,9 +60,52 @@ export function hubSetDelegationSettings(input: HubDelegationSettings): HubDeleg
   return delegationSettingsStore().write(input);
 }
 
+/** 查看同意设置面（IPC 消费——「允许本组查看」开关，默认 true）。 */
+export function hubGetViewSettings(): HubViewSettings {
+  return viewSettingsStore().read();
+}
+
+export function hubSetViewSettings(input: HubViewSettings): HubViewSettings {
+  const normalized = viewSettingsStore().write(input);
+  // 变更即时上报（spec §5.5：节点上线时上报 + 变更即时上报）——离线时跳过，
+  // 重连由 onStateChange(online) 的重报链兜底（RM2-9 断线清除回默认 + 重报覆盖）
+  void reportViewConsent();
+  return normalized;
+}
+
 // 委派执行器模块级单例（taskExecutor 同款模式）：与连接生命周期解耦——
 // 连接重建（换址/重接入）不改 runner（本地委派账本跨连接存续，重连对账续传）。
 let delegationRunner: DelegationRunner | null = null;
+
+// 远程查看服务端模块级单例（同款模式）：连接经 clientGetter 惰性取用，
+// 连接重建不换实例（订阅登记跨连接存续，hub 侧订阅在目标断开时已注销——
+// leader 重订阅走全新 view.subscribe 转发，无陈旧登记复活面）。
+let viewServer: ViewServer | null = null;
+
+function ensureViewServer(): ViewServer {
+  if (viewServer) return viewServer;
+  viewServer = new ViewServer({
+    clientGetter: () => client,
+    settings: () => viewSettingsStore().read(),
+  });
+  return viewServer;
+}
+
+/** view.consent 上行（hello 后/重连/开关变更三入口共用）——非 online 静默跳过。 */
+function reportViewConsent(): Promise<void> {
+  if (!client || client.state() !== 'online') return Promise.resolve();
+  const allowed = viewSettingsStore().read().allowGroupView;
+  return client
+    .request(VIEW_WIRE.consent, { allowed })
+    .then(() => {
+      logger.info('查看开关已上报', { allowed });
+    })
+    .catch((err) => {
+      logger.warn('查看开关上报失败（重连时重报兜底）', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+}
 
 /** 委派执行器懒构造（首次收到 task.assigned / 重连恢复时需要） */
 function ensureDelegationRunner(nodeId: string | null): DelegationRunner {
@@ -146,6 +193,10 @@ async function handleHubRequest(req: RequestEnvelope): Promise<HubResponderResul
       } satisfies RpcErrorPayload,
     };
   }
+  // view.* 六方法（M2e T14 查看服务端）：目标节点只读组装/尾部订阅
+  if ((Object.values(VIEW_RPC) as readonly string[]).includes(req.method)) {
+    return ensureViewServer().handleViewRequest(req);
+  }
   return { ok: false, payload: { code: 'unknown_method', message: `节点不支持的方法: ${req.method}` } satisfies RpcErrorPayload };
 }
 
@@ -199,6 +250,9 @@ function startClient(
         // 重连恢复（T11）：中断任务对账续传 + 缓冲进度拍冲刷（fire-and-forget——
         // 状态回调不 await 恢复链，连接状态机不被对账阻塞）
         void ensureDelegationRunner(nodeId).handleOnline();
+        // 查看开关重报（T13 交接——RM2-9：hub 断线清除 consent 回默认 true，
+        // 重连必须重报本地设置，否则关闭态节点重连后即恢复可查看）
+        void reportViewConsent();
       }
       // 掉线 → 快照过期（断连期间收不到 peer 上下线事件）
       else presenceSeed = null;
@@ -279,6 +333,14 @@ function startClient(
       }
       // 工作组事件桥（M2b）：group.changed → hub:groupChanged（载荷挑字段，见桥内注释）
       bridgeGroupChanged(evt, broadcast);
+      // view.appended（M2e T14 leader 侧）：hub 定向推的尾部增量 → 查看面板实时追加。
+      // 载荷挑字段（协议 ViewAppendedEvent 形状，异形载荷丢弃——presence 桥同款纪律）
+      if (evt.method === EVT.viewAppended) {
+        const p = evt.payload as { sessionId?: unknown; events?: unknown };
+        if (typeof p.sessionId === 'string' && Array.isArray(p.events)) {
+          broadcast('hub:viewAppended', { sessionId: p.sessionId, events: p.events });
+        }
+      }
     },
     // OBS-1：hello 应答里的在线节点快照 → 逐节点播 presence 种子（在线列表初始面）。
     // 本机节点排除——renderer 用状态快照自合成「本机」行，重复播会双行。
@@ -404,4 +466,6 @@ export function stopHub(): void {
   client = null;
   delegationRunner?.destroy();
   delegationRunner = null;
+  viewServer?.destroy();
+  viewServer = null;
 }

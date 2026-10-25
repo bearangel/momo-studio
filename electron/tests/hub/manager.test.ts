@@ -43,6 +43,8 @@ const m = vi.hoisted(() => ({
   cfg: { row: null as null | { hubUrl: string; nodeName: string; nodeId: string | null } },
   token: null as string | null,
   seq: 0,
+  reqs: [] as Array<{ method: string; payload: unknown }>,
+  viewSettings: { allowGroupView: true },
 }));
 
 vi.mock('electron', () => ({
@@ -71,11 +73,23 @@ vi.mock('../../src/main/hub/client', () => ({
       start: (): void => { rec.starts += 1; rec.state = 'connecting'; m.calls.push('client.start'); },
       stop: (): void => { rec.stops += 1; rec.state = 'disconnected'; m.calls.push('client.stop'); },
       state: (): string => rec.state,
+      request: async (method: string, payload: unknown): Promise<unknown> => {
+        m.reqs.push({ method, payload });
+        return { ok: true };
+      },
     };
   },
   enrollOverHttp: vi.fn(async (hubUrl: string, enrollmentToken: string, nodeName: string) => {
     m.enrollCalls.push({ hubUrl, enrollmentToken, nodeName });
     return { nodeId: `node-${m.enrollCalls.length}`, deviceToken: `tok-${m.enrollCalls.length}` };
+  }),
+}));
+
+// 查看同意设置内存替身（kv 面由 view-settings.test 直测；此处锁上报链时序）
+vi.mock('../../src/main/hub/view-settings', () => ({
+  createHubViewSettingsStore: () => ({
+    read: () => ({ ...m.viewSettings }),
+    write: (input: { allowGroupView: boolean }) => { m.viewSettings = { ...input }; return { ...input }; },
   }),
 }));
 
@@ -112,6 +126,8 @@ beforeEach(async () => {
   m.sent.length = 0;
   m.clients.length = 0;
   m.enrollCalls.length = 0;
+  m.reqs.length = 0;
+  m.viewSettings = { allowGroupView: true };
   __resetTrustedDownloadOriginsForTest();
 });
 
@@ -455,5 +471,71 @@ describe('hub manager 信任源撤销（F2）', () => {
     await manager.hubConfigure({ hubUrl: 'http://a:8787/', nodeName: 'n2' });
 
     expect(isTrustedDownloadUrl('http://a:8787/resources/x/download')).toBe(true);
+  });
+});
+
+describe('hub manager 查看同意上报链（M2e T14/T15）', () => {
+  /** 置当前 client 为 online（替身不复刻状态迁移——显式置位后 manager 回调才走上报分支） */
+  const markOnline = (): void => {
+    const rec = m.clients[m.clients.length - 1]!;
+    rec.state = 'online';
+  };
+
+  it('hello 成功（onStateChange online）→ 上行 view.consent {allowed:true}（默认开）', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    markOnline();
+    m.reqs.length = 0;
+    m.clients[0]!.opts.onStateChange('online');
+    // 委派重连对账（task.list）与 consent 上行同拍发起——只锁 consent 面
+    expect(m.reqs.filter((r) => r.method === 'view.consent')).toEqual([{ method: 'view.consent', payload: { allowed: true } }]);
+  });
+
+  it('重连即重报（T13 交接——RM2-9）：开关关闭后掉线重连 → 上行 {allowed:false} 覆盖 hub 默认态', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    markOnline();
+    m.reqs.length = 0;
+    m.viewSettings = { allowGroupView: false };
+    // 掉线 → 重连（hub 侧 consent 已被清除回默认 true——节点必须重报本地设置）
+    m.clients[0]!.opts.onStateChange('online');
+    expect(m.reqs.filter((r) => r.method === 'view.consent')).toEqual([{ method: 'view.consent', payload: { allowed: false } }]);
+  });
+
+  it('开关变更即时上报：hubSetViewSettings(false) → 在线连接立即上行；离线跳过（重连重报兜底）', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    m.reqs.length = 0;
+    // 离线（connecting）→ set 跳过即时上报
+    const normalized = manager.hubSetViewSettings({ allowGroupView: false });
+    expect(normalized).toEqual({ allowGroupView: false });
+    expect(m.reqs).toEqual([]);
+    // 上线（重连链）→ 重报生效
+    markOnline();
+    m.clients[0]!.opts.onStateChange('online');
+    expect(m.reqs.filter((r) => r.method === 'view.consent')).toEqual([{ method: 'view.consent', payload: { allowed: false } }]);
+    // 在线变更 → 即时上行
+    m.reqs.length = 0;
+    manager.hubSetViewSettings({ allowGroupView: true });
+    expect(m.reqs).toEqual([{ method: 'view.consent', payload: { allowed: true } }]);
+    expect(manager.hubGetViewSettings()).toEqual({ allowGroupView: true });
+  });
+
+  it('view.appended 事件 → 广播 hub:viewAppended（sessionId+events 挑字段，异形丢弃）', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    m.sent.length = 0;
+    m.clients[0]!.opts.onEvent({
+      v: 1, kind: 'evt', method: 'view.appended',
+      payload: { sessionId: 'sess-1', events: [{ seq: 7, at: 1, role: 'assistant', content: 'x' }], extra: '不透传' },
+    });
+    expect(m.sent).toEqual([
+      {
+        channel: 'hub:viewAppended',
+        payload: { sessionId: 'sess-1', events: [{ seq: 7, at: 1, role: 'assistant', content: 'x' }] },
+      },
+    ]);
+    m.sent.length = 0;
+    m.clients[0]!.opts.onEvent({
+      v: 1, kind: 'evt', method: 'view.appended',
+      payload: { sessionId: 'sess-1', events: '异形' },
+    });
+    expect(m.sent).toEqual([]);
   });
 });

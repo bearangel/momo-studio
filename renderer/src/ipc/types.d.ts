@@ -2797,6 +2797,66 @@ export interface HubTaskTerminalEvent {
   reason?: string;
 }
 
+/**
+ * hub 查看同意设置（M2e T14/T15）：「允许本组查看」开关。
+ * 主进程 kv 存储；默认 true；set 即时上报 hub（离线由重连重报兜底）。
+ */
+export interface HubViewSettings {
+  /** 允许同组组长查看本机工作空间（关闭 = hub 对 view.* 返 forbidden） */
+  allowGroupView: boolean;
+}
+
+/** 远程查看——目标节点工作空间概览（协议 ViewOverview 镜像，七字段） */
+export interface HubViewOverview {
+  overview: {
+    name: string;
+    description: string;
+    sessionCount: number;
+  };
+  agentMembers: Array<{ name: string; agentSlug?: string }>;
+  teams: Array<{ name: string; leaderName: string; memberNames: string[] }>;
+  mcpEnabled: string[];
+  skills: string[];
+  pluginsEnabled: string[];
+  resourcesSummary: { agent: number; mcp: number; skill: number; plugin: number };
+}
+
+/** 远程查看——会话摘要行（协议 ViewSessionSummary 镜像） */
+export interface HubViewSessionSummary {
+  sessionId: string;
+  title: string;
+  lastSeq: number;
+  updatedAt: number;
+}
+
+/** 远程查看——消息条目（协议 ViewMessage 镜像：seq 全序单调，富形态序列化进 content） */
+export interface HubViewMessage {
+  seq: number;
+  at: number;
+  role: string;
+  content: string;
+}
+
+/** 远程查看——消息回放页（协议 ViewMessagePage 镜像） */
+export interface HubViewMessagePage {
+  messages: HubViewMessage[];
+  hasMore: boolean;
+}
+
+/** 远程查看——目标节点本地任务行（协议 ViewLocalTask 镜像） */
+export interface HubViewLocalTask {
+  taskId: string;
+  title: string;
+  status: string;
+  updatedAt: number;
+}
+
+/** hub:viewAppended 推送载荷（协议 ViewAppendedEvent 镜像——订阅会话的尾部增量批） */
+export interface HubViewAppendedEvent {
+  sessionId: string;
+  events: HubViewMessage[];
+}
+
 /** hub 命名空间通道面（spec 2026-10-23：4 invoke + 2 推送；M1 T13 增发布 1 invoke + 1 推送；M2b T4 增工作组 6 invoke + 1 推送；M2c T8b 增镜像 2 invoke + 2 推送） */
 export interface HubApiSurface {
   getStatus(): Promise<HubStatus>;
@@ -2831,6 +2891,33 @@ export interface HubApiSurface {
   taskDelegate(input: HubTaskDelegateInput): Promise<HubTaskDelegateResult>;
   /** 取消委派（pending/running/interrupted 可取消；终态 conflict 人话 rejection） */
   taskCancel(input: { taskId: string }): Promise<{ ok: boolean }>;
+  /** 读取查看同意设置（允许本组查看开关；缺省 true） */
+  getViewSettings(): Promise<HubViewSettings>;
+  /** 写入查看同意设置（set 即时上报 hub；离线由重连重报兜底） */
+  setViewSettings(input: HubViewSettings): Promise<HubViewSettings>;
+  /** 远程查看：目标工作空间概览+配置七子段（M2e T14 四视图数据源之一） */
+  viewWorkspace(input: { targetNodeId: string; workspaceName: string }): Promise<HubViewOverview>;
+  /** 远程查看：目标工作空间会话列表（lastSeq 降序分页） */
+  viewSessions(input: {
+    targetNodeId: string;
+    workspaceName: string;
+    beforeSeq?: number;
+    limit: number;
+  }): Promise<{ sessions: HubViewSessionSummary[] }>;
+  /** 远程查看：会话消息回放页（seq 升序；workspaceName 为可选作用域校验附加键） */
+  viewMessages(input: {
+    targetNodeId: string;
+    sessionId: string;
+    workspaceName?: string;
+    fromSeq: number;
+    limit: number;
+  }): Promise<HubViewMessagePage>;
+  /** 远程查看：目标工作空间本地 #T 任务列表 */
+  viewTasks(input: { targetNodeId: string; workspaceName: string }): Promise<{ tasks: HubViewLocalTask[] }>;
+  /** 远程查看：订阅会话尾部增量（进入回放视图自动调；断开/离开自动 unsubscribe） */
+  viewSubscribe(input: { targetNodeId: string; sessionId: string }): Promise<{ ok: boolean }>;
+  /** 远程查看：注销尾部订阅（幂等清理——hub 侧 consent 关闭不阻断退订） */
+  viewUnsubscribe(input: { targetNodeId: string; sessionId: string }): Promise<{ ok: boolean }>;
   /** 连接状态变化推送订阅（解订阅函数） */
   onStateChanged(callback: (payload: HubStateChangedEvent) => void): () => void;
   /** 节点上下线推送订阅（解订阅函数） */
@@ -2851,4 +2938,6 @@ export interface HubApiSurface {
   onTaskFailed(callback: (payload: HubTaskTerminalEvent) => void): () => void;
   /** 委派中断推送订阅（定向→本机 leader；目标节点离线，重连自动续跑） */
   onTaskInterrupted(callback: (payload: HubTaskTerminalEvent) => void): () => void;
+  /** 查看尾部增量推送订阅（定向→本机 leader；订阅会话的 view.appended 批） */
+  onViewAppended(callback: (payload: HubViewAppendedEvent) => void): () => void;
 }

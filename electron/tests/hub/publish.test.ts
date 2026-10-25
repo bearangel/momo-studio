@@ -88,6 +88,8 @@ vi.mock('../../src/main/hub/client', () => ({
       start: (): void => { rec.starts += 1; rec.state = 'connecting'; },
       stop: (): void => { rec.stops += 1; rec.state = 'disconnected'; },
       state: (): string => rec.state,
+      // 查看同意上报链（M2e T14）在 online 回调发起 view.consent——桩补 request 面
+      request: async (): Promise<unknown> => ({ ok: true }),
     };
   },
   enrollOverHttp: vi.fn(async () => ({ nodeId: 'node-1', deviceToken: 'tok-1' })),
@@ -450,13 +452,14 @@ describe('C3 范围守卫与人话错误', () => {
 
 // ── 4. IPC 接线 + resourcePublished 推送链 ─────────────────────────────────
 describe('IPC 接线与推送链', () => {
-  it('registerHubIpc 注册十八通道（M1 发布 + M2b 工作组 + M2c 镜像 + M2e 委派设置与 task.* 三通道）', () => {
+  it('registerHubIpc 注册二十六通道（M1 发布 + M2b 工作组 + M2c 镜像 + M2e 委派设置/task.*/查看八通道）', () => {
     registerHubIpc();
     expect([...m.handlers.keys()].sort()).toEqual([
       'hub:configure', 'hub:enroll', 'hub:forget', 'hub:getDelegationSettings', 'hub:getStatus',
-      'hub:groupCreate', 'hub:groupInvite', 'hub:groupJoin', 'hub:groupLeave', 'hub:groupList', 'hub:groupTransfer',
-      'hub:mirrorWorkspace', 'hub:publishResource', 'hub:setDelegationSettings', 'hub:snapshotBuildUpload',
-      'hub:taskCancel', 'hub:taskDelegate', 'hub:taskList',
+      'hub:getViewSettings', 'hub:groupCreate', 'hub:groupInvite', 'hub:groupJoin', 'hub:groupLeave', 'hub:groupList',
+      'hub:groupTransfer', 'hub:mirrorWorkspace', 'hub:publishResource', 'hub:setDelegationSettings', 'hub:setViewSettings',
+      'hub:snapshotBuildUpload', 'hub:taskCancel', 'hub:taskDelegate', 'hub:taskList',
+      'hub:viewMessages', 'hub:viewSessions', 'hub:viewSubscribe', 'hub:viewTasks', 'hub:viewUnsubscribe', 'hub:viewWorkspace',
     ]);
   });
 
