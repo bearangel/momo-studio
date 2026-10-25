@@ -2673,7 +2673,72 @@ export interface HubGroupTransferResult {
   ok: boolean;
 }
 
-/** hub 命名空间通道面（spec 2026-10-23：4 invoke + 2 推送；M1 T13 增发布 1 invoke + 1 推送；M2b T4 增工作组 6 invoke + 1 推送） */
+/** hub:snapshotBuildUpload 回执（向导 S2 完成态消费；manifest 不出主进程——计数摘要形态） */
+export interface HubSnapshotBuildUploadResult {
+  /** hub 存档 id（workspace.mirror 引用键） */
+  snapshotId: string;
+  /** 服务端自算权威 checksum（sha256 hex） */
+  checksum: string;
+  version: string;
+  sizeBytes: number;
+  /** 无 hub 记账被排除的插件 id（S1 excluded 提示条） */
+  excludedPlugins: string[];
+  summary: {
+    members: number;
+    /** 内嵌自定义定义数（members 子集） */
+    embeddedMembers: number;
+    teams: number;
+    mcp: number;
+    skills: number;
+    plugins: number;
+    providers: number;
+    /** hub 补装位资源总数 */
+    resources: number;
+  };
+}
+
+/** hub:mirrorWorkspace 入参（M2c 镜像发起——strategy 恒 'replace' 由主进程落） */
+export interface HubMirrorWorkspaceInput {
+  groupId: string;
+  targetNodeId: string;
+  workspaceName: string;
+  snapshotId: string;
+  /** 两段式第二击：conflict 确认后带 true 重发 */
+  confirm?: boolean;
+}
+
+/** workspace.mirror 第一段受理回执（协议 MirrorAcceptRes 镜像） */
+export interface HubMirrorAcceptResult {
+  accepted: boolean;
+  mirrorId: string;
+}
+
+/** hub:mirrorResult 推送载荷（两段式第二段——成功/失败/conflict 差异摘要） */
+export interface HubMirrorResultEvent {
+  mirrorId: string;
+  ok: boolean;
+  /** ok=true 时在场 */
+  appliedResources?: string[];
+  /** ok=true 且目标有软失败引用时在场 */
+  unresolvedRefs?: string[];
+  /** ok=false 时在场（conflict / node_offline / …） */
+  code?: string;
+  message?: string;
+  /** code=conflict 时在场 */
+  diffSummary?: { added: number; removed: number; changed: number };
+}
+
+/** hub:workspaceMirrored 推送载荷（协议 WorkspaceMirroredEvent 镜像——组内广播） */
+export interface HubWorkspaceMirroredEvent {
+  groupId: string;
+  targetNodeId: string;
+  workspaceName: string;
+  snapshotId: string;
+  appliedResources: string[];
+  unresolvedRefs?: string[];
+}
+
+/** hub 命名空间通道面（spec 2026-10-23：4 invoke + 2 推送；M1 T13 增发布 1 invoke + 1 推送；M2b T4 增工作组 6 invoke + 1 推送；M2c T8b 增镜像 2 invoke + 2 推送） */
 export interface HubApiSurface {
   getStatus(): Promise<HubStatus>;
   configure(input: HubConfigureInput): Promise<HubStatus>;
@@ -2693,6 +2758,10 @@ export interface HubApiSurface {
   groupLeave(input: { groupId: string }): Promise<HubGroupLeaveResult>;
   /** 转移组长（仅 leader 可调；目标须为组成员） */
   groupTransfer(input: { groupId: string; toNodeId: string }): Promise<HubGroupTransferResult>;
+  /** 构建工作空间配置快照并上传 hub 存档（向导 S2；红线 knownSecrets 复检在主进程） */
+  snapshotBuildUpload(input: { workspaceId: string }): Promise<HubSnapshotBuildUploadResult>;
+  /** 发起镜像（两段式第一段 → 受理回执 mirrorId；终态经 onMirrorResult 推送） */
+  mirrorWorkspace(input: HubMirrorWorkspaceInput): Promise<HubMirrorAcceptResult>;
   /** 连接状态变化推送订阅（解订阅函数） */
   onStateChanged(callback: (payload: HubStateChangedEvent) => void): () => void;
   /** 节点上下线推送订阅（解订阅函数） */
@@ -2701,4 +2770,8 @@ export interface HubApiSurface {
   onResourcePublished(callback: (payload: HubResourcePublishedEvent) => void): () => void;
   /** 工作组变动推送订阅（解订阅函数）——组成员变动/组长转移（组内广播，含自己触发的） */
   onGroupChanged(callback: (payload: HubGroupChangedEvent) => void): () => void;
+  /** 镜像两段式第二段推送订阅（解订阅函数）——成功/失败/conflict 差异摘要（定向→本机 leader） */
+  onMirrorResult(callback: (payload: HubMirrorResultEvent) => void): () => void;
+  /** 镜像完成组内广播订阅（解订阅函数）——组内皆可见谁被镜像到什么版本 */
+  onWorkspaceMirrored(callback: (payload: HubWorkspaceMirroredEvent) => void): () => void;
 }

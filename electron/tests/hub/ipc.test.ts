@@ -29,14 +29,16 @@ import * as manager from '../../src/main/hub/index';
 import { publishToHub } from '../../src/main/hub/publish';
 
 const GROUP_CHANNELS = ['hub:groupCreate', 'hub:groupInvite', 'hub:groupJoin', 'hub:groupLeave', 'hub:groupList', 'hub:groupTransfer'];
+const MIRROR_CHANNELS = ['hub:snapshotBuildUpload', 'hub:mirrorWorkspace'];
 
 beforeEach(() => { handlers.clear(); vi.clearAllMocks(); });
 
 describe('hub IPC 接线', () => {
-  it('注册十一通道；getStatus 透传 manager', async () => {
+  it('注册十三通道；getStatus 透传 manager', async () => {
     registerHubIpc();
     expect([...handlers.keys()].sort()).toEqual([
       ...GROUP_CHANNELS,
+      ...MIRROR_CHANNELS,
       'hub:configure', 'hub:enroll', 'hub:forget', 'hub:getStatus', 'hub:publishResource',
     ].sort());
     expect(await handlers.get('hub:getStatus')!()).toEqual(await manager.hubGetStatus());

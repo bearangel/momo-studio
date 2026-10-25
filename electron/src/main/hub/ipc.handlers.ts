@@ -3,6 +3,8 @@ import { ipcMain } from 'electron';
 import { hubConfigure, hubEnroll, hubForget, hubGetStatus, hubRequest, replayPresenceSeed } from './index';
 import { createGroupClient } from './groups';
 import { publishToHub, type PublishInput } from './publish';
+import { buildAndUploadWorkspaceSnapshot } from './snapshot-upload';
+import { RPC } from './protocol';
 
 // 组管理客户端单点：绑定 hubRequest（IPC 面复用同一实例；纯函数集，无状态）
 const groups = createGroupClient((method, payload, timeoutMs) => hubRequest(method, payload, timeoutMs));
@@ -25,4 +27,17 @@ export function registerHubIpc(): void {
   ipcMain.handle('hub:groupJoin', (_evt, input: { inviteCode: string }) => groups.join(input.inviteCode));
   ipcMain.handle('hub:groupLeave', (_evt, input: { groupId: string }) => groups.leave(input.groupId));
   ipcMain.handle('hub:groupTransfer', (_evt, input: { groupId: string; toNodeId: string }) => groups.transfer(input.groupId, input.toNodeId));
+  // 镜像发起链（M2c T8b，向导 S2/S4 消费）
+  ipcMain.handle('hub:snapshotBuildUpload', (_evt, input: { workspaceId: string }) =>
+    buildAndUploadWorkspaceSnapshot(input.workspaceId));
+  ipcMain.handle('hub:mirrorWorkspace', (_evt, input: {
+    groupId: string; targetNodeId: string; workspaceName: string; snapshotId: string; confirm?: boolean;
+  }) => hubRequest(RPC.workspace.mirror, {
+    groupId: input.groupId,
+    targetNodeId: input.targetNodeId,
+    workspaceName: input.workspaceName,
+    snapshotId: input.snapshotId,
+    strategy: 'replace',
+    ...(input.confirm !== undefined ? { confirm: input.confirm } : {}),
+  }));
 }

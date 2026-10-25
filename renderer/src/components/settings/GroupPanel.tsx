@@ -10,13 +10,15 @@
 //   错误文案原样呈现）
 // - group.changed 推送 → store 重拉（事件驱动列表刷新）
 import { useEffect, useState, type FormEvent } from 'react';
-import { Users } from 'lucide-react';
+import { HardDriveDownload, Users } from 'lucide-react';
 import { useHubStore } from '../../stores/hub.store';
 import { useHubGroupStore } from '../../stores/hub-group.store';
+import { useHubMirrorStore } from '../../stores/hub-mirror.store';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { CopyButton } from '../ui/CopyButton';
 import { Input } from '../ui/Input';
+import { MirrorWizard } from '../hub/MirrorWizard';
 
 export function GroupPanel() {
   const online = useHubStore((s) => s.status?.state === 'online');
@@ -72,6 +74,7 @@ export function GroupPanel() {
           <JoinForm compact />
         </div>
       )}
+      <MirrorWizard />
     </section>
   );
 }
@@ -186,8 +189,10 @@ function GroupCard({ group }: GroupCardProps) {
   const invite = useHubGroupStore((s) => s.invite);
   const transfer = useHubGroupStore((s) => s.transfer);
   const leave = useHubGroupStore((s) => s.leave);
+  const openMirrorWizard = useHubMirrorStore((s) => s.openWizard);
   const [busy, setBusy] = useState(false);
   const [confirmingLeave, setConfirmingLeave] = useState(false);
+  const isLeader = selfNodeId === group.leaderNodeId;
 
   useEffect(() => {
     if (!confirmingLeave) return;
@@ -264,6 +269,17 @@ function GroupCard({ group }: GroupCardProps) {
         ))}
       </ul>
       <div className="flex flex-wrap items-center gap-2">
+        {isLeader && (
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={busy}
+            onClick={() => openMirrorWizard(group.groupId, group.groupName)}
+          >
+            <HardDriveDownload size={14} strokeWidth={1.75} aria-hidden />
+            镜像工作空间…
+          </Button>
+        )}
         <Button variant="secondary" size="sm" disabled={busy} onClick={() => void onInvite()}>
           {busy ? '生成中…' : code ? '重新生成邀请码' : '生成邀请码'}
         </Button>

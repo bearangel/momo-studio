@@ -54,6 +54,11 @@ import type {
   HubGroupJoinResult,
   HubGroupLeaveResult,
   HubGroupTransferResult,
+  HubMirrorWorkspaceInput,
+  HubMirrorAcceptResult,
+  HubMirrorResultEvent,
+  HubSnapshotBuildUploadResult,
+  HubWorkspaceMirroredEvent,
 } from '../../../renderer/src/ipc/types';
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -600,6 +605,18 @@ const api: ApiSurface = {
       const handler = (_e: IpcRendererEvent, payload: HubGroupChangedEvent): void => callback(payload);
       ipcRenderer.on('hub:groupChanged', handler);
       return () => { ipcRenderer.off('hub:groupChanged', handler); };
+    },
+    snapshotBuildUpload: (input) => invoke<HubSnapshotBuildUploadResult>('hub:snapshotBuildUpload', input),
+    mirrorWorkspace: (input: HubMirrorWorkspaceInput) => invoke<HubMirrorAcceptResult>('hub:mirrorWorkspace', input),
+    onMirrorResult: (callback) => {
+      const handler = (_e: IpcRendererEvent, payload: HubMirrorResultEvent): void => callback(payload);
+      ipcRenderer.on('hub:mirrorResult', handler);
+      return () => { ipcRenderer.off('hub:mirrorResult', handler); };
+    },
+    onWorkspaceMirrored: (callback) => {
+      const handler = (_e: IpcRendererEvent, payload: HubWorkspaceMirroredEvent): void => callback(payload);
+      ipcRenderer.on('hub:workspaceMirrored', handler);
+      return () => { ipcRenderer.off('hub:workspaceMirrored', handler); };
     },
   },
   window: {
