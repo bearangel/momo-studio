@@ -7,7 +7,7 @@ import {
 import { createGroupClient } from './groups';
 import { publishToHub, type PublishInput } from './publish';
 import { buildAndUploadWorkspaceSnapshot } from './snapshot-upload';
-import { RPC } from './protocol';
+import { RPC, TASK_RPC } from './protocol';
 
 // 组管理客户端单点：绑定 hubRequest（IPC 面复用同一实例；纯函数集，无状态）
 const groups = createGroupClient((method, payload, timeoutMs) => hubRequest(method, payload, timeoutMs));
@@ -47,4 +47,22 @@ export function registerHubIpc(): void {
   ipcMain.handle('hub:getDelegationSettings', () => hubGetDelegationSettings());
   ipcMain.handle('hub:setDelegationSettings', (_evt, input: { acceptTasks: boolean; maxConcurrent: number }) =>
     hubSetDelegationSettings(input));
+  // 委派 leader 侧三通道（M2e T12，spec §3.1 task.*）：list（组过滤）/ delegate
+  // （账本先行 pending）/ cancel（可取消态单点校验在 hub）；载荷采用 renderer 契约形状
+  ipcMain.handle('hub:taskList', (_evt, input?: { groupId?: string }) =>
+    hubRequest(TASK_RPC.list, { ...(input?.groupId !== undefined ? { groupId: input.groupId } : {}) }, undefined));
+  ipcMain.handle('hub:taskDelegate', (_evt, input: {
+    groupId: string; targetNodeId: string; workspaceName: string;
+    title: string; prompt: string; agentSlug?: string;
+  }) => hubRequest(TASK_RPC.delegate, {
+    groupId: input.groupId,
+    targetNodeId: input.targetNodeId,
+    workspaceName: input.workspaceName,
+    task: {
+      title: input.title,
+      prompt: input.prompt,
+      ...(input.agentSlug !== undefined && input.agentSlug !== '' ? { agentSlug: input.agentSlug } : {}),
+    },
+  }, undefined));
+  ipcMain.handle('hub:taskCancel', (_evt, input: { taskId: string }) => hubRequest(TASK_RPC.cancel, input, undefined));
 }

@@ -219,6 +219,29 @@ function startClient(
         }
         return;
       }
+      // ── leader 侧委派事件桥（M2e T12）：hub 定向→本机 leader 的账本迁移与进度拍，
+      // 挑字段转发 renderer（与 presence 桥同款纪律——异形载荷丢弃）。
+      // task.cancelled 无 leader 推送（hub 只定向→目标节点停跑；leader 的取消态
+      // 由 task.cancel RPC 回执 + 下一次 task.list 拉取对账），不造无生产者的通道。
+      if (evt.method === EVT.taskProgress) {
+        const p = evt.payload as { taskId?: unknown; sessionId?: unknown; lastSeq?: unknown; excerpt?: unknown };
+        if (typeof p.taskId === 'string' && typeof p.sessionId === 'string' && typeof p.lastSeq === 'number' && typeof p.excerpt === 'string') {
+          broadcast('hub:taskProgress', { taskId: p.taskId, sessionId: p.sessionId, lastSeq: p.lastSeq, excerpt: p.excerpt });
+        }
+        return;
+      }
+      if (evt.method === EVT.taskCompleted || evt.method === EVT.taskFailed || evt.method === EVT.taskInterrupted) {
+        const p = evt.payload as { taskId?: unknown; reason?: unknown };
+        if (typeof p.taskId !== 'string') return;
+        const channel =
+          evt.method === EVT.taskCompleted ? 'hub:taskCompleted' : evt.method === EVT.taskFailed ? 'hub:taskFailed' : 'hub:taskInterrupted';
+        // reason 语义只在 failed（协议注释：done 不携带）——completed/interrupted 不透传
+        broadcast(channel, {
+          taskId: p.taskId,
+          ...(channel === 'hub:taskFailed' && typeof p.reason === 'string' ? { reason: p.reason } : {}),
+        });
+        return;
+      }
       if (evt.method === EVT.nodeOnline) {
         const p = evt.payload as { nodeId: string; nodeName: string };
         broadcast('hub:nodePresence', { kind: 'online', ...p });

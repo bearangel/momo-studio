@@ -46,6 +46,14 @@ const api = {
     setDelegationSettings: vi.fn(async (input: { acceptTasks: boolean; maxConcurrent: number }) => input),
     onMirrorResult: vi.fn(() => () => undefined),
     onWorkspaceMirrored: vi.fn(() => () => undefined),
+    // 委派面板区段（M2e T12）挂载在 GroupPanel 内——mock 面补齐 task.* 通道（默认空账本）
+    taskList: vi.fn(async () => ({ tasks: [] })),
+    taskDelegate: vi.fn(),
+    taskCancel: vi.fn(),
+    onTaskProgress: vi.fn(() => () => undefined),
+    onTaskCompleted: vi.fn(() => () => undefined),
+    onTaskFailed: vi.fn(() => () => undefined),
+    onTaskInterrupted: vi.fn(() => () => undefined),
   },
 };
 

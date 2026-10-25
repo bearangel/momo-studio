@@ -33,16 +33,18 @@ import { publishToHub } from '../../src/main/hub/publish';
 const GROUP_CHANNELS = ['hub:groupCreate', 'hub:groupInvite', 'hub:groupJoin', 'hub:groupLeave', 'hub:groupList', 'hub:groupTransfer'];
 const MIRROR_CHANNELS = ['hub:snapshotBuildUpload', 'hub:mirrorWorkspace'];
 const DELEGATION_CHANNELS = ['hub:getDelegationSettings', 'hub:setDelegationSettings'];
+const TASK_CHANNELS = ['hub:taskList', 'hub:taskDelegate', 'hub:taskCancel'];
 
 beforeEach(() => { handlers.clear(); vi.clearAllMocks(); });
 
 describe('hub IPC 接线', () => {
-  it('注册十五通道；getStatus 透传 manager', async () => {
+  it('注册十八通道；getStatus 透传 manager', async () => {
     registerHubIpc();
     expect([...handlers.keys()].sort()).toEqual([
       ...GROUP_CHANNELS,
       ...MIRROR_CHANNELS,
       ...DELEGATION_CHANNELS,
+      ...TASK_CHANNELS,
       'hub:configure', 'hub:enroll', 'hub:forget', 'hub:getStatus', 'hub:publishResource',
     ].sort());
     expect(await handlers.get('hub:getStatus')!()).toEqual(await manager.hubGetStatus());
@@ -121,5 +123,57 @@ describe('hub IPC 工作组六通道（M2b T4）', () => {
     vi.mocked(manager.hubRequest).mockRejectedValueOnce(new Error('仅组长（leader）可执行该操作'));
     await expect(handlers.get('hub:groupTransfer')!(null, { groupId: 'g1', toNodeId: 'n2' }))
       .rejects.toThrow('仅组长（leader）可执行该操作');
+  });
+});
+
+describe('hub IPC 委派 leader 侧三通道（M2e T12）', () => {
+  it('taskList → task.list；groupId 缺省发空载荷、指定原样透传', async () => {
+    registerHubIpc();
+    vi.mocked(manager.hubRequest).mockResolvedValueOnce({ tasks: [] });
+    await handlers.get('hub:taskList')!();
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('task.list', {}, undefined);
+
+    vi.mocked(manager.hubRequest).mockResolvedValueOnce({ tasks: [] });
+    await handlers.get('hub:taskList')!(null, { groupId: 'g1' });
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('task.list', { groupId: 'g1' }, undefined);
+  });
+
+  it('taskDelegate → task.delegate；任务书嵌套成形 + agentSlug 空串剥除', async () => {
+    registerHubIpc();
+    vi.mocked(manager.hubRequest).mockResolvedValueOnce({ taskId: 'tk-1' });
+    const out = await handlers.get('hub:taskDelegate')!(null, {
+      groupId: 'g1', targetNodeId: 'n2', workspaceName: 'product-dev',
+      title: '重构登录', prompt: '请重构登录模块。', agentSlug: '',
+    });
+    expect(manager.hubRequest).toHaveBeenCalledWith('task.delegate', {
+      groupId: 'g1',
+      targetNodeId: 'n2',
+      workspaceName: 'product-dev',
+      task: { title: '重构登录', prompt: '请重构登录模块。' },
+    }, undefined);
+    expect(out).toEqual({ taskId: 'tk-1' });
+
+    await handlers.get('hub:taskDelegate')!(null, {
+      groupId: 'g1', targetNodeId: 'n2', workspaceName: 'product-dev',
+      title: '重构登录', prompt: '请重构登录模块。', agentSlug: 'coder',
+    });
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('task.delegate', {
+      groupId: 'g1',
+      targetNodeId: 'n2',
+      workspaceName: 'product-dev',
+      task: { title: '重构登录', prompt: '请重构登录模块。', agentSlug: 'coder' },
+    }, undefined);
+  });
+
+  it('taskCancel → task.cancel 原样透传；rejection 人话不吞', async () => {
+    registerHubIpc();
+    vi.mocked(manager.hubRequest).mockResolvedValueOnce({ ok: true });
+    const out = await handlers.get('hub:taskCancel')!(null, { taskId: 'tk-1' });
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('task.cancel', { taskId: 'tk-1' }, undefined);
+    expect(out).toEqual({ ok: true });
+
+    vi.mocked(manager.hubRequest).mockRejectedValueOnce(new Error('任务已处于终态 done，不可取消'));
+    await expect(handlers.get('hub:taskCancel')!(null, { taskId: 'tk-2' }))
+      .rejects.toThrow('任务已处于终态 done，不可取消');
   });
 });

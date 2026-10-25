@@ -60,6 +60,11 @@ import type {
   HubSnapshotBuildUploadResult,
   HubWorkspaceMirroredEvent,
   HubDelegationSettings,
+  HubTaskListResult,
+  HubTaskDelegateInput,
+  HubTaskDelegateResult,
+  HubTaskProgressEvent,
+  HubTaskTerminalEvent,
 } from '../../../renderer/src/ipc/types';
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -620,6 +625,29 @@ const api: ApiSurface = {
       const handler = (_e: IpcRendererEvent, payload: HubWorkspaceMirroredEvent): void => callback(payload);
       ipcRenderer.on('hub:workspaceMirrored', handler);
       return () => { ipcRenderer.off('hub:workspaceMirrored', handler); };
+    },
+    taskList: (input?: { groupId?: string }) => invoke<HubTaskListResult>('hub:taskList', input ?? {}),
+    taskDelegate: (input: HubTaskDelegateInput) => invoke<HubTaskDelegateResult>('hub:taskDelegate', input),
+    taskCancel: (input: { taskId: string }) => invoke<{ ok: boolean }>('hub:taskCancel', input),
+    onTaskProgress: (callback) => {
+      const handler = (_e: IpcRendererEvent, payload: HubTaskProgressEvent): void => callback(payload);
+      ipcRenderer.on('hub:taskProgress', handler);
+      return () => { ipcRenderer.off('hub:taskProgress', handler); };
+    },
+    onTaskCompleted: (callback) => {
+      const handler = (_e: IpcRendererEvent, payload: HubTaskTerminalEvent): void => callback(payload);
+      ipcRenderer.on('hub:taskCompleted', handler);
+      return () => { ipcRenderer.off('hub:taskCompleted', handler); };
+    },
+    onTaskFailed: (callback) => {
+      const handler = (_e: IpcRendererEvent, payload: HubTaskTerminalEvent): void => callback(payload);
+      ipcRenderer.on('hub:taskFailed', handler);
+      return () => { ipcRenderer.off('hub:taskFailed', handler); };
+    },
+    onTaskInterrupted: (callback) => {
+      const handler = (_e: IpcRendererEvent, payload: HubTaskTerminalEvent): void => callback(payload);
+      ipcRenderer.on('hub:taskInterrupted', handler);
+      return () => { ipcRenderer.off('hub:taskInterrupted', handler); };
     },
   },
   window: {

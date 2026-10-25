@@ -2749,6 +2749,54 @@ export interface HubWorkspaceMirroredEvent {
   unresolvedRefs?: string[];
 }
 
+// ── 委派 leader 侧（M2e T12，协议 delegation.ts 镜像） ──────────────────────
+
+/** 委派账本六态（协议 DelegationStatus 镜像） */
+export type HubDelegationStatus = 'pending' | 'running' | 'done' | 'failed' | 'interrupted' | 'cancelled';
+
+/** 委派账本条目（协议 TaskRecord 镜像——七字段） */
+export interface HubTaskRecord {
+  taskId: string;
+  workspaceName: string;
+  targetNodeId: string;
+  status: HubDelegationStatus;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface HubTaskListResult {
+  tasks: HubTaskRecord[];
+}
+
+/** hub:taskDelegate 入参（任务书三字段——agentSlug 空串等价未指定，主进程剥除） */
+export interface HubTaskDelegateInput {
+  groupId: string;
+  targetNodeId: string;
+  workspaceName: string;
+  title: string;
+  prompt: string;
+  agentSlug?: string;
+}
+
+export interface HubTaskDelegateResult {
+  taskId: string;
+}
+
+/** hub:taskProgress 推送载荷（协议 TaskProgressEvent 镜像——目标 500ms 合并批的直转） */
+export interface HubTaskProgressEvent {
+  taskId: string;
+  sessionId: string;
+  lastSeq: number;
+  excerpt: string;
+}
+
+/** 终态推送载荷（协议 TaskTerminalEvent 镜像——completed/failed{reason}/interrupted 共用） */
+export interface HubTaskTerminalEvent {
+  taskId: string;
+  reason?: string;
+}
+
 /** hub 命名空间通道面（spec 2026-10-23：4 invoke + 2 推送；M1 T13 增发布 1 invoke + 1 推送；M2b T4 增工作组 6 invoke + 1 推送；M2c T8b 增镜像 2 invoke + 2 推送） */
 export interface HubApiSurface {
   getStatus(): Promise<HubStatus>;
@@ -2777,6 +2825,12 @@ export interface HubApiSurface {
   getDelegationSettings(): Promise<HubDelegationSettings>;
   /** 写入委派子节点设置（返回归一化值——maxConcurrent 夹取 [1,8]） */
   setDelegationSettings(input: HubDelegationSettings): Promise<HubDelegationSettings>;
+  /** 委派账本拉取（缺省 groupId = 本节点所在全部组；组过滤需成员身份） */
+  taskList(input?: { groupId?: string }): Promise<HubTaskListResult>;
+  /** 新建委派（leader-only；hub 账本先行 pending，目标离线即拒 node_offline） */
+  taskDelegate(input: HubTaskDelegateInput): Promise<HubTaskDelegateResult>;
+  /** 取消委派（pending/running/interrupted 可取消；终态 conflict 人话 rejection） */
+  taskCancel(input: { taskId: string }): Promise<{ ok: boolean }>;
   /** 连接状态变化推送订阅（解订阅函数） */
   onStateChanged(callback: (payload: HubStateChangedEvent) => void): () => void;
   /** 节点上下线推送订阅（解订阅函数） */
@@ -2789,4 +2843,12 @@ export interface HubApiSurface {
   onMirrorResult(callback: (payload: HubMirrorResultEvent) => void): () => void;
   /** 镜像完成组内广播订阅（解订阅函数）——组内皆可见谁被镜像到什么版本 */
   onWorkspaceMirrored(callback: (payload: HubWorkspaceMirroredEvent) => void): () => void;
+  /** 委派进度拍推送订阅（定向→本机 leader；目标侧 500ms 合并批的直转） */
+  onTaskProgress(callback: (payload: HubTaskProgressEvent) => void): () => void;
+  /** 委派完成推送订阅（定向→本机 leader） */
+  onTaskCompleted(callback: (payload: HubTaskTerminalEvent) => void): () => void;
+  /** 委派失败推送订阅（定向→本机 leader；reason 携带 declined/local_session_lost 等约定值） */
+  onTaskFailed(callback: (payload: HubTaskTerminalEvent) => void): () => void;
+  /** 委派中断推送订阅（定向→本机 leader；目标节点离线，重连自动续跑） */
+  onTaskInterrupted(callback: (payload: HubTaskTerminalEvent) => void): () => void;
 }

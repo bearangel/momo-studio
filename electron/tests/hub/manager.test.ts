@@ -174,6 +174,61 @@ describe('hub manager 推送面', () => {
     });
   });
 
+  it('task.progress 事件 → 广播 hub:taskProgress（M2e T12 桥：四字段全须，异形丢弃）', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    m.sent.length = 0;
+    m.clients[0]!.opts.onEvent({
+      v: 1, kind: 'evt', method: 'task.progress',
+      payload: { taskId: 'tk-1', sessionId: 'sess-1', lastSeq: 42, excerpt: '正在重构登录模块', extra: '不透传' },
+    });
+    expect(m.sent).toEqual([
+      {
+        channel: 'hub:taskProgress',
+        payload: { taskId: 'tk-1', sessionId: 'sess-1', lastSeq: 42, excerpt: '正在重构登录模块' },
+      },
+    ]);
+
+    m.sent.length = 0;
+    m.clients[0]!.opts.onEvent({
+      v: 1, kind: 'evt', method: 'task.progress',
+      payload: { taskId: 'tk-1', sessionId: 'sess-1', lastSeq: '异形', excerpt: 'x' },
+    });
+    expect(m.sent).toEqual([]);
+  });
+
+  it('task.completed/failed/interrupted → 各自通道；failed 携 reason、interrupted 无 reason、异形 taskId 丢弃', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    m.sent.length = 0;
+    m.clients[0]!.opts.onEvent({
+      v: 1, kind: 'evt', method: 'task.completed',
+      payload: { taskId: 'tk-1', reason: '终态不携带也透传防杂——不应出现' },
+    });
+    expect(m.sent).toEqual([{ channel: 'hub:taskCompleted', payload: { taskId: 'tk-1' } }]);
+
+    m.sent.length = 0;
+    m.clients[0]!.opts.onEvent({
+      v: 1, kind: 'evt', method: 'task.failed',
+      payload: { taskId: 'tk-2', reason: 'declined:并发已达上限（2）' },
+    });
+    expect(m.sent).toEqual([
+      { channel: 'hub:taskFailed', payload: { taskId: 'tk-2', reason: 'declined:并发已达上限（2）' } },
+    ]);
+
+    m.sent.length = 0;
+    m.clients[0]!.opts.onEvent({
+      v: 1, kind: 'evt', method: 'task.interrupted',
+      payload: { taskId: 'tk-3' },
+    });
+    expect(m.sent).toEqual([{ channel: 'hub:taskInterrupted', payload: { taskId: 'tk-3' } }]);
+
+    m.sent.length = 0;
+    m.clients[0]!.opts.onEvent({
+      v: 1, kind: 'evt', method: 'task.failed',
+      payload: { taskId: 42 },
+    });
+    expect(m.sent).toEqual([]);
+  });
+
   it('hello 快照 → 逐节点广播 presence 种子，排除本机 nodeId（不与自合成行重复）', async () => {
     await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
     m.sent.length = 0;
