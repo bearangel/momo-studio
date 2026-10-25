@@ -324,6 +324,12 @@ function Step1Pick() {
                 value={s ? `${s.providers} 个` : '类型 + 型号偏好'}
                 note={s ? '（类型 + 型号偏好，不含 API Key）' : '（不含 API Key）'}
               />
+              <SummaryRow
+                icon={<Package size={16} strokeWidth={1.75} aria-hidden />}
+                label="模型绑定"
+                value={s ? (s.modelBinding ? '有' : '无') : '全局默认模型'}
+                note={s ? (s.modelBinding ? '（全局默认模型，不含 API Key）' : '（未设默认模型，目标节点需自配）') : '（设置 → 默认模型）'}
+              />
             </>
           }
         />

@@ -2703,6 +2703,8 @@ export interface HubSnapshotBuildUploadResult {
     skills: number;
     plugins: number;
     providers: number;
+    /** 默认模型绑定段是否在场（D4——S1 摘要「有/无」行） */
+    modelBinding: boolean;
     /** hub 补装位资源总数 */
     resources: number;
   };

@@ -35,7 +35,7 @@ const UPLOAD_RESULT = {
   version: '3',
   sizeBytes: 2_400_000,
   excludedPlugins: ['local-webhook-debug'],
-  summary: { members: 6, embeddedMembers: 2, teams: 2, mcp: 3, skills: 5, plugins: 4, providers: 2, resources: 13 },
+  summary: { members: 6, embeddedMembers: 2, teams: 2, mcp: 3, skills: 5, plugins: 4, providers: 2, modelBinding: true, resources: 13 },
 };
 
 const WORKSPACES = [
@@ -94,12 +94,25 @@ describe('MirrorWizard S1/S2/S3', () => {
   it('S1 红线文案与 excluded 提示（构建后）；未选空间下一步禁用', () => {
     render(<MirrorWizard />);
     expect(screen.getByText(/密钥与对话永远不离开本机/)).toBeInTheDocument();
+    // 模型绑定行：未构建=占位文案；构建后回 S1 呈现有/无（D4）
+    expect(screen.getByText('全局默认模型')).toBeInTheDocument();
+    expect(screen.getByText('模型绑定')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '下一步' })).toBeDisabled();
 
     fireEvent.change(screen.getByLabelText('工作空间'), { target: { value: 'ws-1' } });
     expect(screen.getByRole('button', { name: '下一步' })).toBeEnabled();
     // 尚未构建：excluded 提示条不在场
     expect(screen.queryByText(/local-webhook-debug/)).not.toBeInTheDocument();
+  });
+
+  it('S1 构建后回看：摘要卡含模型绑定行（summary.modelBinding 有/无两态）', async () => {
+    useHubMirrorStore.getState().selectWorkspace('ws-1', 'product-dev');
+    useHubMirrorStore.setState({ step: 2 });
+    render(<MirrorWizard />);
+    await screen.findByText('已上传 hub 存档');
+    useHubMirrorStore.setState({ step: 1 }); // 回看 S1：summary 已在 store
+    expect(await screen.findByText('模型绑定')).toBeInTheDocument();
+    expect(screen.getByText('有')).toBeInTheDocument(); // UPLOAD_RESULT.modelBinding=true
   });
 
   it('S2 自动构建 → 完成态元信息（版本/大小/checksum 短码）+ excluded 提示条', async () => {

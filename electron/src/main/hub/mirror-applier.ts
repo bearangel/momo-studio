@@ -31,7 +31,7 @@ import { promisify } from 'node:util';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
 import { listWorkspaces, createWorkspace } from '../workspace/crud';
-import { listMembers, addMember, removeMember, generateAgentUserId, saveAgentDefinition } from '../agent/crud';
+import { listMembers, addMember, removeMember, generateAgentUserId, saveAgentDefinition, updateAgentDefinition } from '../agent/crud';
 import { listAgentDefinitions, getAgentDefinition } from '../agent/agent-queries';
 import { parseAgentManifest } from '../agent/manifest-parser';
 import { listTeams, createTeam, deleteTeam } from '../agent/team';
@@ -53,6 +53,7 @@ import {
   type SnapshotManifest,
 } from './protocol';
 import type { MirrorApplyOutcome, MirrorApplyPayload } from './mirror-wire';
+import { extractModelBinding, type SnapshotModelBinding } from './snapshot-model-binding';
 
 const execFileAsync = promisify(execFile);
 
@@ -122,11 +123,13 @@ function listTarMembers(archivePath: string): string[] {
     .filter((l) => l !== '' && !l.endsWith('/'));
 }
 
-/** 快照归档 → {manifest, stageDir}（解包到临时目录；调用方负责清理 stageDir）。 */
+/** 快照归档 → {manifest, stageDir, modelBinding}（解包到临时目录；调用方负责清理 stageDir）。
+ *  modelBinding 从**原始** manifest.json 提取（pin 版 validateSnapshotManifest 按「未知
+ *  容忍（剥除）」会剥掉该可选段——snapshot-model-binding.ts 补位纪律）。 */
 async function extractSnapshot(
   bytes: Buffer,
   expectedChecksum: string,
-): Promise<{ manifest: SnapshotManifest; stageDir: string }> {
+): Promise<{ manifest: SnapshotManifest; stageDir: string; modelBinding: SnapshotModelBinding | null }> {
   const stageDir = fs.mkdtempSync(path.join(resolveTmpDir(), 'ws-apply-'));
   const archivePath = path.join(stageDir, 'snapshot.tar.gz');
   try {
@@ -146,12 +149,22 @@ async function extractSnapshot(
     if (!fs.existsSync(manifestPath)) {
       throw new Error('快照包损坏：缺少 manifest.json（构建契约：manifest 在归档根）');
     }
-    const parsed = validateSnapshotManifest(JSON.parse(fs.readFileSync(manifestPath, 'utf-8')));
+    const manifestText = fs.readFileSync(manifestPath, 'utf-8');
+    const rawManifest: unknown = JSON.parse(manifestText);
+    const parsed = validateSnapshotManifest(rawManifest);
     if (parsed === null) {
       throw new Error('快照 manifest 结构校验失败（与 hub 端上传校验不一致——疑似损坏）');
     }
     // 归档临时文件移出 unpack，stage 根只留 manifest 引用面
-    return { manifest: parsed, stageDir: unpack };
+    return {
+      manifest: parsed,
+      stageDir: unpack,
+      modelBinding: extractModelBinding(
+        typeof rawManifest === 'object' && rawManifest !== null
+          ? (rawManifest as Record<string, unknown>)['config']
+          : undefined,
+      ),
+    };
   } finally {
     fs.rmSync(archivePath, { force: true });
   }
@@ -354,6 +367,7 @@ async function applyConfig(
   workspaceId: string,
   manifest: SnapshotManifest,
   stageDir: string,
+  modelBinding: SnapshotModelBinding | null,
 ): Promise<string[]> {
   const unresolved: string[] = [];
   const cfg = manifest.config;
@@ -494,6 +508,36 @@ async function applyConfig(
     }
   }
 
+  // ── modelBinding：默认模型绑定段（D4）。RM2-10：不覆盖目标本机显式选择——
+  //    provider 行已有 defaultModel / 全局 defaultChatModel 有效指向均不写；
+  //    provider 缺席软失败入 unresolved；成员定义缺 modelProviderId 时回写兜底
+  //    （对齐 agent:addMember 的 defaultChatModel 兜底语义——委派首跑 spawn 链
+  //    buildSpawnOpts 硬校验 def.modelProviderId，无回写则首跑必败，即 D4 病灶）──
+  if (modelBinding) {
+    const local = listProviders().find((p) => p.platform === modelBinding.provider);
+    if (!local) {
+      unresolved.push(`modelBinding:${modelBinding.provider}`);
+    } else {
+      if (!local.defaultModel) {
+        await updateProvider({ id: local.id, defaultModel: modelBinding.model });
+      }
+      const providersNow = listProviders();
+      const global = getGlobalSettings().defaultChatModel;
+      const globalGhost = global !== undefined && !providersNow.some((p) => p.id === global.providerId);
+      if (global === undefined || globalGhost) {
+        updateGlobalSettings({
+          defaultChatModel: { providerId: local.id, modelId: modelBinding.model },
+        });
+      }
+      for (const defId of addedDefIds) {
+        const def = getAgentDefinition(defId);
+        if (def && !def.modelProviderId) {
+          updateAgentDefinition({ id: defId, modelProviderId: local.id, modelName: modelBinding.model });
+        }
+      }
+    }
+  }
+
   // ── prefs：白名单键整体覆盖（全局设置——T7 Concerns 4 影响面由向导 S3 明示）──
   const patch: Record<string, string | number | boolean> = {};
   for (const [k, v] of Object.entries(cfg.prefs)) {
@@ -554,11 +598,11 @@ export async function applyMirrorSnapshot(
   let stageRoot: string | null = null;
   try {
     // 1. 取包（下载 + sha256 + 解包 + manifest 校验）
-    let fetched: { manifest: SnapshotManifest; stageDir: string };
+    let fetched: { manifest: SnapshotManifest; stageDir: string; modelBinding: SnapshotModelBinding | null };
     try {
       const { bytes, checksum } = await fetchSnapshotArchive(payload.snapshotId);
       const extracted = await extractSnapshot(bytes, checksum);
-      fetched = { manifest: extracted.manifest, stageDir: extracted.stageDir };
+      fetched = { manifest: extracted.manifest, stageDir: extracted.stageDir, modelBinding: extracted.modelBinding };
       stageRoot = path.dirname(extracted.stageDir);
     } catch (err) {
       return {
@@ -599,8 +643,8 @@ export async function applyMirrorSnapshot(
       };
     }
 
-    // 4. 后配置落库（七子段整体替换；软失败引用入 unresolvedRefs）
-    const unresolvedRefs = await applyConfig(workspaceId, manifest, stageDir);
+    // 4. 后配置落库（七子段 + modelBinding 可选段整体替换；软失败引用入 unresolvedRefs）
+    const unresolvedRefs = await applyConfig(workspaceId, manifest, stageDir, fetched.modelBinding);
 
     logger.info('镜像应用完成', {
       mirrorId: payload.mirrorId,

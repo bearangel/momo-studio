@@ -67,6 +67,15 @@ interface ActiveRun {
 /** excerpt 截断上限（hub EXCERPT_MAX=512 之内留裕量） */
 const EXCERPT_MAX = 200;
 
+/** D6 续传 boot 竞态：startTurn 退避重试次数（重连可早于 RouterService lazy 启动） */
+const RESUME_START_ATTEMPTS = 3;
+/** 退避间隔（固定 1s——boot 竞态窗口量级；测试用 fake timers 驱动） */
+const RESUME_START_BACKOFF_MS = 1000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** 任务书首句摘要（首拍/无增量时的 excerpt 兜底——恒非空 wire 契约） */
 function excerptOfPrompt(prompt: string): string {
   const firstSentence = prompt.split(/[。！？\n]/).find((s) => s.trim().length > 0) ?? '（无文本增量）';
@@ -194,6 +203,31 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
       });
       settleRun(evt.taskId, run, { status: 'failed', error: err instanceof Error ? err.message : String(err) });
     }
+  };
+
+  /**
+   * D6：startTurn 带退避重试。恢复路径专用——B 重连常快于 RouterService lazy 启动，
+   * 生产端口对未就绪显式拒绝（delegation-ports startTurn 守卫）；首跑路径
+   * （handleAssigned）不带重试：任务到达时连接已建立、app 早已 ready，竞争窗口
+   * 理论上存在但极窄，且既有 catch→failed 上报语义不留永卡 running。
+   * 全部尝试失败 → false（调用方 report failed{reason:'resume_boot_timeout'}）。
+   */
+  const startTurnWithRetry = async (input: { sessionId: string; body: string }): Promise<boolean> => {
+    for (let attempt = 1; attempt <= RESUME_START_ATTEMPTS; attempt++) {
+      try {
+        await ports.startTurn(input);
+        return true;
+      } catch (err) {
+        logger.warn('委派续跑回合启动失败（退避重试中）', {
+          sessionId: input.sessionId,
+          attempt,
+          attempts: RESUME_START_ATTEMPTS,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        if (attempt < RESUME_START_ATTEMPTS) await sleep(RESUME_START_BACKOFF_MS);
+      }
+    }
+    return false;
   };
 
   let timer: NodeJS.Timeout | null = null;
@@ -325,17 +359,16 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
         active.set(task.taskId, run);
         attachWatcher(task.taskId, run);
         ensureTimer();
-        try {
-          await ports.startTurn({
-            sessionId: record.sessionId,
-            body: '【委派续传】hub 连接中断后恢复。请回顾本会话已有进展（含任务书与未完成的输出），从中断处继续完成任务。',
+        const started = await startTurnWithRetry({
+          sessionId: record.sessionId,
+          body: '【委派续传】hub 连接中断后恢复。请回顾本会话已有进展（含任务书与未完成的输出），从中断处继续完成任务。',
+        });
+        if (!started) {
+          // D6：不留永卡 running 的幽灵委派——人话 reason 供 leader 侧排障
+          settleRun(task.taskId, run, {
+            status: 'failed',
+            error: 'resume_boot_timeout:本机运行时启动超时（已重试 3 次未就绪），请重启本节点后由 leader 重派',
           });
-        } catch (err) {
-          logger.warn('委派续跑回合启动失败', {
-            taskId: task.taskId,
-            error: err instanceof Error ? err.message : String(err),
-          });
-          settleRun(task.taskId, run, { status: 'failed', error: err instanceof Error ? err.message : String(err) });
         }
       }
     },

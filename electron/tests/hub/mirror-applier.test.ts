@@ -34,8 +34,9 @@ import { upsertPlugin, setPluginEnabled, isPluginEnabled } from '../../src/main/
 import { createWorkspace, listWorkspaces } from '../../src/main/workspace/crud';
 import { getGlobalSettings, updateGlobalSettings } from '../../src/main/settings/crud';
 import { listInstalled } from '../../src/main/skill/zip-uploader';
-import { listMembers } from '../../src/main/agent/agent-queries';
+import { listMembers, getAgentDefinition, listAgentDefinitions } from '../../src/main/agent/agent-queries';
 import { listTeams } from '../../src/main/agent/team';
+import type { SnapshotModelBinding } from '../../src/main/hub/snapshot-model-binding';
 
 // 进程边界替身（snapshot-builder.test.ts 同款——applier → hub-install → momo-hub 链）
 vi.mock('electron', () => ({
@@ -85,9 +86,14 @@ afterEach(() => {
 
 interface ArchiveFixture { bytes: Buffer; checksum: string; manifest: SnapshotManifest }
 
-/** manifest + 可选附加文件（relPath → content）→ tar.gz 字节 + sha256。 */
+/** manifest + 可选附加文件（relPath → content）→ tar.gz 字节 + sha256。
+ *  入参放宽：可携带 modelBinding 可选段（pin 类型尚未含段——补位纪律同源）。 */
+type ManifestWithModelBinding = Omit<SnapshotManifest, 'config'> & {
+  config: SnapshotManifest['config'] & { modelBinding?: SnapshotModelBinding };
+};
+
 async function makeArchive(
-  manifest: SnapshotManifest,
+  manifest: SnapshotManifest | ManifestWithModelBinding,
   extraFiles: Record<string, string> = {},
 ): Promise<ArchiveFixture> {
   const stage = fs.mkdtempSync(path.join(tmpRoot, 'fixture-'));
@@ -112,7 +118,8 @@ async function makeArchive(
 function baseManifest(overrides?: {
   workspaceName?: string;
   resources?: SnapshotManifest['resources'];
-  config?: Partial<SnapshotManifest['config']>;
+  /** modelBinding 可选段（D4）——pin 类型补位（snapshot-model-binding.ts 同源） */
+  config?: Partial<SnapshotManifest['config']> & { modelBinding?: SnapshotModelBinding };
 }): SnapshotManifest {
   return {
     workspaceName: overrides?.workspaceName ?? 'prod-dev',
@@ -546,6 +553,87 @@ describe('applyMirrorSnapshot 入参闸与校验', () => {
 
 // ── 10. 契约测试：构建器真实产出 → 应用器直接消费 ─────────────────────────
 
+describe('applyMirrorSnapshot modelBinding 段（D4 / RM2-10）', () => {
+  it('段在场 → 写目标默认模型偏好（provider.defaultModel + defaultChatModel）+ 成员定义回写 modelProviderId（委派首跑病灶闭合）', async () => {
+    const p = await createProvider({
+      name: 'B 主供', baseUrl: 'https://api.b.example/v1',
+      apiKey: 'sk-b-key-000000', platform: 'anthropic',
+    }); // 目标态：provider 在场、无 defaultModel、全局未设默认模型
+    const manifest = baseManifest({
+      config: {
+        agentMembers: [{ name: '镜像甲', customDefinition: customYaml('镜像甲', 'mirror-mb') }],
+        modelBinding: { provider: 'anthropic', model: 'glm-5.3' },
+      },
+    });
+    const archive = await makeArchive(manifest);
+
+    const outcome = await applyMirrorSnapshot(applyPayload({}), makeDeps(archive));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.unresolvedRefs ?? []).not.toContain('modelBinding:anthropic');
+
+    expect(listProviders().find((x) => x.platform === 'anthropic')?.defaultModel).toBe('glm-5.3');
+    expect(getGlobalSettings().defaultChatModel).toEqual({ providerId: p.id, modelId: 'glm-5.3' });
+    // spawn 硬校验闭合：内嵌定义（发布链不携带模型绑定 → modelProviderId 空）被回写
+    const def = listAgentDefinitions().find((d) => d.slug === 'mirror-mb');
+    expect(def?.modelProviderId).toBe(p.id);
+    expect(def?.modelName).toBe('glm-5.3');
+  });
+
+  it('RM2-10：B 本机显式选择不覆盖（provider.defaultModel 与 defaultChatModel 均保留）', async () => {
+    const p = await createProvider({
+      name: 'B 自选', baseUrl: 'https://api.b.example/v1',
+      apiKey: 'sk-b-key-000001', platform: 'anthropic', defaultModel: 'my-own-model',
+    });
+    updateGlobalSettings({ defaultChatModel: { providerId: p.id, modelId: 'my-own-model' } });
+    const manifest = baseManifest({
+      config: {
+        agentMembers: [{ name: '镜像甲', customDefinition: customYaml('镜像甲', 'mirror-mb2') }],
+        modelBinding: { provider: 'anthropic', model: 'glm-5.3' },
+      },
+    });
+    const archive = await makeArchive(manifest);
+
+    const outcome = await applyMirrorSnapshot(applyPayload({ workspaceName: 'prod-dev-2' }), makeDeps(archive));
+    expect(outcome.ok).toBe(true);
+
+    expect(listProviders().find((x) => x.platform === 'anthropic')?.defaultModel).toBe('my-own-model');
+    expect(getGlobalSettings().defaultChatModel).toEqual({ providerId: p.id, modelId: 'my-own-model' });
+    // 定义本身无显式选择 → 回写兜底仍生效（不属「本机显式选择」）
+    expect(listAgentDefinitions().find((d) => d.slug === 'mirror-mb2')?.modelProviderId).toBe(p.id);
+  });
+
+  it('provider 不存在（platform 无匹配）→ 软失败入 unresolvedRefs，不阻断镜像', async () => {
+    await createProvider({
+      name: 'B 主供', baseUrl: 'https://api.b.example/v1',
+      apiKey: 'sk-b-key-000002', platform: 'openai',
+    });
+    const manifest = baseManifest({
+      config: { modelBinding: { provider: 'anthropic', model: 'claude-x' } },
+    });
+    const archive = await makeArchive(manifest);
+
+    const outcome = await applyMirrorSnapshot(applyPayload({ workspaceName: 'prod-dev-3' }), makeDeps(archive));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.unresolvedRefs).toContain('modelBinding:anthropic');
+    expect(getGlobalSettings().defaultChatModel).toBeUndefined();
+  });
+
+  it('旧快照无段（1.2.0 兼容）→ 应用照常，默认模型偏好零触碰', async () => {
+    await createProvider({
+      name: 'B 主供', baseUrl: 'https://api.b.example/v1',
+      apiKey: 'sk-b-key-000003', platform: 'anthropic',
+    });
+    const archive = await makeArchive(baseManifest({ workspaceName: 'prod-dev-4' }));
+
+    const outcome = await applyMirrorSnapshot(applyPayload({ workspaceName: 'prod-dev-4' }), makeDeps(archive));
+    expect(outcome.ok).toBe(true);
+    expect(listProviders().find((x) => x.platform === 'anthropic')?.defaultModel).toBeNull();
+    expect(getGlobalSettings().defaultChatModel).toBeUndefined();
+  });
+});
+
 describe('契约：buildWorkspaceSnapshot 产出 → applyMirrorSnapshot 消费', () => {
   it('真实归档（manifest.json 在根 + custom skill 内嵌）→ 目标侧整体复刻', async () => {
     // 源工作空间：custom 成员 + hub 记账引用成员 + 团队 + custom skill + prefs
@@ -561,10 +649,17 @@ describe('契约：buildWorkspaceSnapshot 产出 → applyMirrorSnapshot 消费'
     );
     fs.writeFileSync(path.join(skillDir, '.sha256'), 'deadbeef');
     updateGlobalSettings({ maxToolCalls: 77 });
+    // D4 全链：源设全局默认模型 → 段入快照 → 目标侧回写（定义 modelProviderId 兜底）
+    const srcProvider = await createProvider({
+      name: '契约供', baseUrl: 'https://api.pact.example/v1',
+      apiKey: 'sk-pact-key-000000', platform: 'anthropic',
+    });
+    updateGlobalSettings({ defaultChatModel: { providerId: srcProvider.id, modelId: 'glm-5.3' } });
 
     const built = await buildWorkspaceSnapshot(srcId);
     expect(built.manifest.workspaceName).toBe('契约空间');
     expect(built.manifest.config.agentMembers).toHaveLength(2);
+    expect(built.manifest.config.modelBinding).toEqual({ provider: 'anthropic', model: 'glm-5.3' });
 
     // 目标 = 同库同名空间整体替换（源空间即「同名已存在」的冲突面）
     const deps: MirrorApplierDeps = {
@@ -589,6 +684,9 @@ describe('契约：buildWorkspaceSnapshot 产出 → applyMirrorSnapshot 消费'
     expect(teams.map((t) => t.name)).toEqual(['契约组']);
     expect(getGlobalSettings().maxToolCalls).toBe(77);
     expect(listInstalled().some((s) => s.slug === 'pact-skill')).toBe(true);
+    // 段经真实 tar 归档存续 → 目标侧定义回写（spawn 硬校验闭合）
+    expect(getGlobalSettings().defaultChatModel).toEqual({ providerId: srcProvider.id, modelId: 'glm-5.3' });
+    expect(getAgentDefinition('def-pact-a')?.modelProviderId).toBe(srcProvider.id);
 
     fs.rmSync(built.archivePath, { force: true });
   });

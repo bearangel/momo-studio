@@ -151,6 +151,12 @@ export function wireDelegationRunnerPorts(opts: WireDelegationPortsOpts): Delega
       }).id;
     },
     startTurn: async (input) => {
+      // D6 boot 竞态守卫：RouterService lazy 启动前 sendUserMessage 会「路由目标已解析
+      // 但 RouterService 未就绪，消息跳过派发」——消息落库但永无回合（幽灵 running）。
+      // 此处显式拒绝，把等待/重试责任交还 delegation-runner（退避重试）。
+      if (!getRouterService()) {
+        throw new Error('RouterService 未就绪（boot 竞态），回合未注入');
+      }
       await sendUserMessage({
         sessionId: input.sessionId,
         body: input.body,

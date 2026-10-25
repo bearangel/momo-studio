@@ -50,7 +50,7 @@ import { getWorkspace } from '../workspace/crud';
 import { listMembers, getAgentDefinition } from '../agent/agent-queries';
 import type { AgentDefinition } from '../agent/types';
 import { listTeams } from '../agent/team';
-import { listProviders } from '../agent/provider-crud';
+import { listProviders, getProvider } from '../agent/provider-crud';
 import { parseAgentManifest } from '../agent/manifest-parser';
 import { listRegistered } from '../mcp/host-manager';
 import { listInstalled, getSkillsDir } from '../skill/zip-uploader';
@@ -68,10 +68,12 @@ import {
   type SnapshotResourceRef,
   type SnapshotTeam,
 } from './protocol';
+import type { SnapshotConfigWithModelBinding, SnapshotModelBinding } from './snapshot-model-binding';
 
 /** 构建产物：manifest（自检已过 validateSnapshotManifest）+ tar.gz 归档 + sha256。 */
 export interface WorkspaceSnapshotResult {
-  manifest: SnapshotManifest;
+  /** config 为 pin 七子段 + modelBinding 可选段（D4——段结构与 hub 仓逐字对齐） */
+  manifest: SnapshotManifest & { config: SnapshotConfigWithModelBinding };
   /** 临时归档路径（resolveTmpDir 下），归调用方管理——上传后清理（对齐 publish 纪律） */
   archivePath: string;
   /** 归档文件 sha256（hex）——上传流的信息性回执对照（hub 端以自算值为权威，C6） */
@@ -348,6 +350,24 @@ function collectProviderRefs(): SnapshotProviderRef[] {
   return out;
 }
 
+/**
+ * 默认模型绑定段（D4 可选段）：读设置域全局默认对话模型（defaultChatModel），
+ * 经 provider 行解析为 platform 口径（providerId 是本机 DB 行 id，跨节点无意义）。
+ * 无绑定 / 引用悬空（provider 行已删）→ undefined 缺省不发段（1.2.0 兼容）。
+ */
+function collectModelBinding(): SnapshotModelBinding | undefined {
+  const ref = getGlobalSettings().defaultChatModel;
+  if (!ref) return undefined;
+  const provider = getProvider(ref.providerId);
+  if (!provider) {
+    logger.warn('defaultChatModel 引用的 provider 不存在，快照不发模型绑定段', {
+      providerId: ref.providerId,
+    });
+    return undefined;
+  }
+  return { provider: provider.platform, model: ref.modelId };
+}
+
 /** 工具上限等偏好：全局设置标量子集（七子段外的第 8 配置面，协议 prefs 段）。 */
 function collectPrefs(): Record<string, string | number | boolean> {
   const g = getGlobalSettings();
@@ -442,8 +462,10 @@ export async function buildWorkspaceSnapshot(workspaceId: string): Promise<Works
     resources.push(r);
   }
 
-  // 7. prefs + manifest 定型 + 结构自检（validateSnapshotManifest——hub 端同一校验的前置）
-  const manifest: SnapshotManifest = {
+  // 7. prefs + modelBinding（可选段——无默认模型缺省不发）+ manifest 定型 + 结构自检
+  // （validateSnapshotManifest——hub 端同一校验的前置；pin 版对 modelBinding 未知容忍剥除）
+  const modelBinding = collectModelBinding();
+  const manifest: SnapshotManifest & { config: SnapshotConfigWithModelBinding } = {
     workspaceName: ws.name,
     version: snapshotVersion(),
     resources,
@@ -455,6 +477,7 @@ export async function buildWorkspaceSnapshot(workspaceId: string): Promise<Works
       pluginsEnabled: plugins.pluginsEnabled,
       providerRefs,
       prefs: collectPrefs(),
+      ...(modelBinding !== undefined ? { modelBinding } : {}),
     },
   };
   if (validateSnapshotManifest(manifest) === null) {

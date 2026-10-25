@@ -349,6 +349,44 @@ describe('buildWorkspaceSnapshot 清单全量', () => {
 
 // ── 1b. MCP 无记账告警（T8a 交接补丁——上批评审 Important）──────────────────
 
+describe('modelBinding 可选段（D4）', () => {
+  it('defaultChatModel 已设且 provider 在场 → 段入 manifest（platform 口径）+ 归档 + pin 校验兼容', async () => {
+    const wsId = await mkWorkspace('绑定空间');
+    const p = await createProvider({
+      name: 'Anthropic 直连', baseUrl: 'https://api.anthropic.com',
+      apiKey: 'sk-src-key-value-abcdef', platform: 'anthropic',
+    });
+    updateGlobalSettings({ defaultChatModel: { providerId: p.id, modelId: 'glm-5.3' } });
+
+    const built = await buildWorkspaceSnapshot(wsId);
+
+    expect(built.manifest.config.modelBinding).toEqual({ provider: 'anthropic', model: 'glm-5.3' });
+    // 归档内 manifest.json 原样含段（hub 中转不经 pin 剥除）
+    const manifestText = tarRead(built.archivePath, 'manifest.json');
+    expect(manifestText).toContain('"modelBinding"');
+    // pin 版 validateSnapshotManifest 对未知段容忍（剥除不拒）——1.2.0 兼容前提的行为锁
+    expect(validateSnapshotManifest(built.manifest)).not.toBeNull();
+  });
+
+  it('未设 defaultChatModel → 段缺省不发（旧形态不变）', async () => {
+    const wsId = await mkWorkspace('无绑定空间');
+    const built = await buildWorkspaceSnapshot(wsId);
+    expect(built.manifest.config).not.toHaveProperty('modelBinding');
+    expect(validateSnapshotManifest(built.manifest)).not.toBeNull();
+  });
+
+  it('defaultChatModel 引用悬空 provider（行已删）→ 缺省不发 + warn 留痕', async () => {
+    const wsId = await mkWorkspace('悬空空间');
+    updateGlobalSettings({ defaultChatModel: { providerId: 'ghost-provider-id', modelId: 'glm-5.3' } });
+    const built = await buildWorkspaceSnapshot(wsId);
+    expect(built.manifest.config).not.toHaveProperty('modelBinding');
+    expect(logger.warn).toHaveBeenCalledWith(
+      'defaultChatModel 引用的 provider 不存在，快照不发模型绑定段',
+      expect.objectContaining({ providerId: 'ghost-provider-id' }),
+    );
+  });
+});
+
 describe('MCP 无 hub 记账告警', () => {
   it('marketplace MCP 无记账 → logger.warn 且名字仍入清单（不占 resources 位）；custom 来源无记账不 warn', async () => {
     const wsId = await mkWorkspace('MCP 无记账空间');

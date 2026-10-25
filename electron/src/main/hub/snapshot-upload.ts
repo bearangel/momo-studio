@@ -38,6 +38,8 @@ export interface SnapshotSummary {
   skills: number;
   plugins: number;
   providers: number;
+  /** 默认模型绑定段是否在场（D4——向导 S1 摘要「有/无」行） */
+  modelBinding: boolean;
   /** hub 补装位资源总数（resources） */
   resources: number;
 }
@@ -141,6 +143,7 @@ export async function buildAndUploadWorkspaceSnapshot(
         skills: built.manifest.config.skills.length,
         plugins: built.manifest.config.pluginsEnabled.length,
         providers: built.manifest.config.providerRefs.length,
+        modelBinding: built.manifest.config.modelBinding !== undefined,
         resources: built.manifest.resources.length,
       },
     };

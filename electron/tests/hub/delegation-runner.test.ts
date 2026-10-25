@@ -40,6 +40,7 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
   setInterrupted: (tasks: Array<{ taskId: string; title: string; workspaceName: string }>) => void;
   setWorkspace: (name: string, id: string) => void;
   setAgent: (slug: string | undefined, instanceId: string) => void;
+  setStartTurnFailures: (attemptsWithin: number) => void;
 } {
   const db = new Database(':memory:');
   db.exec('CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT)');
@@ -58,6 +59,8 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
   const watchers = new Map<string, (t: TurnTerminal) => void>();
   let reportOnline = true;
   let interrupted: Array<{ taskId: string; title: string; workspaceName: string }> = [];
+  // D6：前 N 次 startTurn 尝试模拟「RouterService 未就绪」显式拒绝（含已成功的尝试计数）
+  let startTurnFailWithin = 0;
 
   const ports: DelegationRunPorts = {
     settings: () => settings.read(),
@@ -78,6 +81,9 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
     startTurn: async (input) => {
       log.startedTurns.push(input);
       log.order.push(`startTurn:${input.sessionId}`);
+      if (log.startedTurns.length <= startTurnFailWithin) {
+        throw new Error('RouterService 未就绪（boot 竞态），回合未注入');
+      }
     },
     stopSession: (sessionId) => {
       log.stoppedSessions.push(sessionId);
@@ -117,6 +123,7 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
     setInterrupted: (tasks) => { interrupted = tasks; },
     setWorkspace: (name, id) => { workspaces.set(name, id); },
     setAgent: (slug, instanceId) => { agents.set(slug ?? '__default__', instanceId); },
+    setStartTurnFailures: (within) => { startTurnFailWithin = within; },
   };
 }
 
@@ -426,6 +433,58 @@ describe('重连续传', () => {
     const r = h.log.reports.find((x) => x.taskId === 'ghost');
     expect(r?.payload.status).toBe('failed');
     expect(r?.payload.reason).toBe('local_session_lost');
+  });
+
+  // ── D6 续传 boot 竞态（重连早于 RouterService lazy 启动）───────────────────
+
+  it('D6：startTurn 前两次未就绪拒绝 → 1s 退避重试第三次成功续传（不误报失败）', async () => {
+    const h = makeHarness();
+    await admitOne(h, 't1');
+    // 本地闲置（重启后账本 running、无活跃 watcher）——复用「闲置续跑」测试构造
+    h.fireTerminal('sess-1', { status: 'failed', error: '进程中断' });
+    await vi.advanceTimersByTimeAsync(0);
+    h.store.updateState('t1', 'running');
+    const priorTurns = h.log.startedTurns.length;
+
+    h.setStartTurnFailures(priorTurns + 2); // 接下来 2 次尝试未就绪，第 3 次成功
+    h.setInterrupted([{ taskId: 't1', title: '修复登录超时', workspaceName: 'ws-a' }]);
+    const online = h.runner.handleOnline();
+    await vi.advanceTimersByTimeAsync(0); // 第 1 次尝试拒绝 → 进入 1s 退避
+    await vi.advanceTimersByTimeAsync(1000); // 第 2 次尝试拒绝 → 再退避
+    await vi.advanceTimersByTimeAsync(1000); // 第 3 次尝试成功
+    await online;
+
+    const cont = h.log.startedTurns[h.log.startedTurns.length - 1]!;
+    expect(cont.sessionId).toBe('sess-1');
+    expect(cont.body).toContain('续传');
+    // 3 次尝试全部发生（2 拒绝 + 1 成功）
+    expect(h.log.startedTurns.length).toBe(priorTurns + 3);
+    // 未误报 resume_boot_timeout；账本保持 running（回合在跑，等终态）
+    const timeout = h.log.reports.find(
+      (r) => r.taskId === 't1' && r.payload.reason?.includes('resume_boot_timeout'),
+    );
+    expect(timeout).toBeUndefined();
+    expect(h.store.get('t1')?.state).toBe('running');
+  });
+
+  it('D6：startTurn 三连败 → report failed 附 resume_boot_timeout 人话（不留永卡 running）', async () => {
+    const h = makeHarness();
+    await admitOne(h, 't1');
+    h.fireTerminal('sess-1', { status: 'failed', error: '进程中断' });
+    await vi.advanceTimersByTimeAsync(0);
+    h.store.updateState('t1', 'running');
+    const priorTurns = h.log.startedTurns.length;
+
+    h.setStartTurnFailures(priorTurns + 3); // 3 次尝试全部未就绪
+    h.setInterrupted([{ taskId: 't1', title: '修复登录超时', workspaceName: 'ws-a' }]);
+    const online = h.runner.handleOnline();
+    await vi.advanceTimersByTimeAsync(3000); // 3 尝试 + 2×1s 退避全覆盖
+    await online;
+
+    const r = h.log.reports.find((x) => x.taskId === 't1' && x.payload.reason?.includes('resume_boot_timeout'));
+    expect(r?.payload.status).toBe('failed');
+    expect(r?.payload.reason).toContain('运行时');
+    expect(h.store.get('t1')?.state).toBe('failed');
   });
 
   it('续传复报 running 后本地已终态 → 随即补终态拍（interrupted→running→done 合法链）', async () => {
