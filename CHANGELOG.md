@@ -6,6 +6,22 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 节点互联 M2：工作组 / 镜像 / 委派 / 远程查看
+
+hub 侧（独立仓 momo-hub `v0.1.2`，协议 1.2.0）交付工作组内核、快照存档 + 镜像两段式、委派账本 + 续传、查看转发 + consent、快照模型绑定可选段（hub 侧账目见该仓 CHANGELOG）；studio 侧四域全链接通 + protocol pin 升级 `github:bearangel/momo-hub#v0.1.2`（M2 私有 wire 段随 tag 发布，本地镜像模块补单源指针注释 @ v0.1.2 后保留——hub 无 `MirrorApplyOutcome`/`extractModelBinding` 本地类型导出，切换 import 得不偿失）。设计见 momo-hub 仓 `docs/specs/2026-10-24-momo-hub-m2-distributed-workgroups.md`。
+
+- **前置小票（M2a）**：keychain 实例作用域（D2——多实例并行凭证互不踩踏）；资源库角标锚定已装版本（D7）；凭证作用域改全路径派生——根除同名隔离目录互撞（验收 profile 形态）
+- **工作组管理**：组面板（创建/邀请码加入/退出/成员列表）+ 组 RPC 关联器 + presence 融合（组内在线状态并入节点互联面板）
+- **快照构建器**：manifest 清单全量（agent 成员/团队/MCP/skill/插件/provider 引用/偏好 + 默认模型绑定可选段）；红线零渗漏（无 provider key/无 url 凭证头/无聊天历史，构建侧单测锁）；资源引用分流（slug 引用 vs 内嵌 custom 定义）；MCP 无记账告警补丁
+- **镜像应用器 + 向导**：先装后落（M1 资源仓补装缺失 slug → 配置整体替换）；conflict 差异摘要两步确认（新增/移除/变更计数）；并发对账（mirrorId 对账键，伪造回执忽略/重复回执单次结算）；unresolvedRefs 软失败分列；向导四步流（预览获批稿）
+- **委派执行器 + 面板**：委派会话独立执行（MC1——与本地会话隔离，首次 running 上报建会话）；前置检查（拒派 declined）；500ms 合并节流进度批（excerpt 恒非空）；断线 interrupted + 重连续传（running 恢复窗口）+ 取消；面板六态列表 + 会话式进度流 + 取消两步确认 + 新建向导；回合观测界定与端口回归锁
+- **远程查看服务端 + 四视图面板**：workspace / files / messages / 会话流四组装器；尾部订阅（view.tail → view.appended 定向）；consent 上报链（默认 true / 断线清除 / 变更重报）；面板页签 + 回放分页（含头窗口——修单会话稠密 rowid 丢尾事件）+ 实时追加 + 只读红线断言
+- **真机验收修复**：镜像模型绑定段透传（D4）；续传就绪等待（D6——前两次拒绝第三次成功语义）；回放刷新自愈
+- **测试**：M2 三段集成测试（镜像/委派/查看全链 + consent 语义）；`tests/hub` 17 文件 210+ 用例全绿
+- **已知限制**：UI 单组形态（一节点一组，多组 UI M3 议）；委派为单任务粒度（无编排/依赖图）；委派结果以会话消息流形态在查看面消费（拉取结果文件 M3+ 议）；文件树远程浏览不在版（M2 后跟进项——M2.1 票，spec §9）；镜像只做整体替换 + 差异摘要确认（无增量合并）；跨组路由/组间可见性不做
+
+版本 `2.1.0-alpha.30`。
+
 ## [未发布] — 节点互联 M1：hub 私有 marketplace（资源分发）
 
 hub 侧（独立仓 momo-hub `v0.1.1`，协议 1.1.0）交付资源仓三端点（发布 multipart 流式收包 / 目录 HubCatalog / 下载 blob 流）+ 发布事件广播（`resource.published`）；studio 侧四类资源（agent / skill / mcp / plugin）发布与安装全链接通。设计见 momo-hub 仓 `docs/specs/2026-10-24-momo-hub-m1-resource-distribution.md`。

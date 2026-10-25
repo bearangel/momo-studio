@@ -3,14 +3,12 @@
 // 镜像私有 wire 契约（momo-hub M2 spec §3.1 两段式 + §5.2 目标端语义）——
 // studio 侧单点定义。
 //
-// Pin 缺口说明：momo-hub 仓 src/groups.ts 自 142930a 起导出 MIRROR_WIRE /
-// MirrorApplyPayload / MirrorReceiptOk / MirrorResultPayload，但 studio 的
-// protocol pin（github:bearangel/momo-hub#35035ce）早于该批——私有 wire 段
-// 尚未随 tag 发布（M2f 定版 v0.1.2 时 pin 升级收敛）。在此之前，本文件按
-// 「协议引用经 hub/protocol 入口」的纪律补位：信封结构（RequestEnvelope /
-// ResponseEnvelope / RpcErrorPayload）仍来自 protocol pin，仅方法名与载荷
-// 类型在此镜像定义，值与 momo-hub src/groups.ts 的 MIRROR_WIRE 逐字对齐
-// （两仓同步义务：hub 侧改值必须同步此处，hub 侧有测试锁）。
+// 单源指针：momo-hub src/groups.ts 的 MIRROR_WIRE / MirrorApplyPayload /
+// MirrorReceiptOk @ v0.1.2（tag，commit 70ec124）——值逐字一致，hub 侧有测试锁。
+// pin v0.1.2 dist 已含上述导出；本模块保留镜像（M2f T17 裁定）：MirrorApplyOutcome
+// 为 studio 本地类型（hub 无导出），切换 import 需动 12 文件且镜像文件仍不能删，
+// 收益低于维护成本。pin 后续升级时按本指针核对 hub 侧值漂移。
+// 信封结构（RequestEnvelope / ResponseEnvelope / RpcErrorPayload）始终来自 protocol pin。
 import type { MirrorStrategy, MirrorDiffSummary } from './protocol';
 
 /** 镜像链路私有方法名（信封 method 字段值——与 momo-hub MIRROR_WIRE 对齐）。 */

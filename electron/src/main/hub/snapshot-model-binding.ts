@@ -1,10 +1,11 @@
 // electron/src/main/hub/snapshot-model-binding.ts
 //
-// 快照「默认模型绑定」可选段（D4/T16b）——pin 补位纪律（同 mirror-wire.ts 先例）：
-// 协议 pin（github:bearangel/momo-hub#35035ce）的 WorkspaceSnapshotConfig 尚无
-// modelBinding 可选段（hub 仓 feat/m2-workgroups 已扩展、待 M2f 定版随 pin 升级收敛）。
-// 在此之前，本模块按「协议引用经 hub/protocol 入口」的纪律补位：段结构与校验规则
-// 与 momo-hub src/groups.ts 逐字对齐（两仓同步义务：hub 侧改规则必须同步此处）。
+// 快照「默认模型绑定」可选段（D4/T16b）——studio 侧本地镜像 + 提取逻辑。
+// 单源指针：momo-hub src/groups.ts 的 SnapshotModelBinding 与校验限
+// （PROVIDER_NAME_MAX=64 / MODEL_NAME_MAX=200）@ v0.1.2（tag，commit 70ec124）
+// ——值逐字一致。pin v0.1.2 dist 已含该段导出；本模块保留（M2f T17 裁定）：
+// extractModelBinding / SnapshotConfigWithModelBinding 为 studio 本地逻辑与类型
+// （builder/applier 共用），不随 pin 收敛。
 //
 // 语义：源节点「设置 → 默认模型」的全局默认对话模型（defaultChatModel）跨节点镜像。
 // provider 为 platform 形态（与 providerRefs 同口径——providerId 是本机 DB 行 id，

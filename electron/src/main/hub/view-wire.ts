@@ -1,11 +1,9 @@
 // 查看私有 wire 契约（M2e T13/T14）——studio 侧本地镜像。
 //
-// Pin 缺口说明：hub 仓 src/remote-view.ts 自 e237d0f 起导出 VIEW_WIRE /
-// ViewConsentPayload / ViewTailPayload，但 studio 的 protocol pin
-// （github:bearangel/momo-hub#35035ce）早于该批——私有 wire 段尚未随 tag 发布
-// （M2f 定版 v0.1.2 pin 升级时收敛）。在此之前按 MIRROR_WIRE / TASK_WIRE 同款
-// 纪律本地镜像：值与 hub src/remote-view.ts 的 VIEW_WIRE 逐字对齐
-// （两仓同步义务：hub 侧改值必须同步此处，hub 侧有测试锁）。
+// 单源指针：momo-hub src/remote-view.ts 的 VIEW_WIRE / ViewConsentPayload /
+// ViewTailPayload @ v0.1.2（tag，commit 70ec124）——值逐字一致，hub 侧有测试锁。
+// pin v0.1.2 dist 已含上述导出；本模块保留镜像（M2f T17 裁定，同 mirror-wire.ts
+// 先例：切换 import 影响多文件收益低）。
 import type { ViewMessage } from './protocol';
 
 /** 查看链路私有方法名（信封 method 字段值）——与 hub VIEW_WIRE 对齐。 */
