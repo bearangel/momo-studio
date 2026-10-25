@@ -22,17 +22,26 @@ const TURN_POLL_MS = 1000;
 
 type Row = { id: string; sender: string; status: string; stream_session_id: string | null };
 
-/** 会话内最新 agent 流行（sender 非 owner 的顶层流行）——回合终态判定对象 */
-function latestAgentStreamRow(sessionId: string): Row | null {
+/** 会话 attach 基线：当前最大 messages.rowid（attach 之后新落的行才属本回合观测面） */
+function sessionMaxRowId(sessionId: string): number {
+  const r = getDb()
+    .prepare('SELECT COALESCE(MAX(rowid), 0) AS max_rowid FROM messages WHERE session_id = ?')
+    .get(sessionId) as { max_rowid: number };
+  return r.max_rowid;
+}
+
+/** 会话内最新 agent 流行（sender 非 owner 的顶层流行）——回合终态判定对象。
+ *  sinceRowIdExclusive：F1 回合界定下界——只观测 attach 基线之后新落的行。 */
+function latestAgentStreamRow(sessionId: string, sinceRowIdExclusive: number): Row | null {
   const row = getDb()
     .prepare(
       `SELECT id, sender, status, stream_session_id FROM messages
-       WHERE session_id = ? AND stream_session_id IS NOT NULL
+       WHERE session_id = ? AND rowid > ? AND stream_session_id IS NOT NULL
          AND parent_stream_session_id IS NULL AND segment_of IS NULL
          AND sender != 'owner'
        ORDER BY created_at DESC, rowid DESC LIMIT 1`,
     )
-    .get(sessionId) as Row | undefined;
+    .get(sessionId, sinceRowIdExclusive) as Row | undefined;
   return row ?? null;
 }
 
@@ -41,12 +50,19 @@ function latestAgentStreamRow(sessionId: string): Row | null {
  * 'streaming'=在跑（继续等）；终态行（done/failed/aborted）回调一次；
  * 无流行（用户消息已落、agent 尚未开始）继续等——路由失败时 sendUserMessage
  * 链路已写启动失败气泡（writeStreamStartFailure，failed 行），轮询可捕获。
+ *
+ * F1 回合界定（T10/T11 评审 Important）：attach 时刻记录 rowid 基线，查询加
+ * `rowid >` 下界。idle 续传路径（handleOnline 复用同一会话注入续跑回合）上，
+ * 上一回合的陈旧终态行仍是 ORDER BY 首位——无下界时新回合首个流行落库前它就
+ * 胜出 → 假 failed 立即回调。基线在 watchTurn 调用（= runner attachWatcher）
+ * 时捕获，先于 startTurn 注入，新回合全部行必在基线之后。
  */
-function watchTurnProduct(sessionId: string, onTerminal: (t: TurnTerminal) => void): () => void {
+export function watchTurnProduct(sessionId: string, onTerminal: (t: TurnTerminal) => void): () => void {
   let settled = false;
+  const baseline = sessionMaxRowId(sessionId);
   const timer = setInterval(() => {
     if (settled) return;
-    const row = latestAgentStreamRow(sessionId);
+    const row = latestAgentStreamRow(sessionId, baseline);
     if (!row || row.status === 'streaming') return;
     settled = true;
     clearInterval(timer);
@@ -67,8 +83,9 @@ type EventRow = { rid: number; event_type: string; payload_json: string };
  * 会话尾部增量（进度拍原料）：message_events 按 rowid 单调游标（RF#5 lastSeq——
  * rowid 是插入序全序键，天然单调不丢）。excerpt 取批内末条可读文本
  * （text_delta / final.body / tool_call_start 工具名），恒非空兜底占位。
+ * 导出供真 DB 回归锁直测（delegation-ports.test）。
  */
-function sessionTailProduct(sessionId: string, afterRowId: number): DelegationTail | null {
+export function sessionTailProduct(sessionId: string, afterRowId: number): DelegationTail | null {
   const rows = getDb()
     .prepare(
       `SELECT e.rowid AS rid, e.event_type, e.payload_json FROM message_events e
@@ -103,6 +120,21 @@ export interface WireDelegationPortsOpts {
   settings: () => HubDelegationSettings;
 }
 
+/**
+ * agent 实例解析：agentSlug 匹配工作空间成员（按定义 slug）；缺省 → 工作空间默认
+ * agent（须仍是在册成员——跨空间脏默认值拒绝）；均无 → null。
+ * 导出供真 DB 回归锁直测（delegation-ports.test）。
+ */
+export function resolveAgentInstanceProduct(workspaceId: string, agentSlug: string | undefined): string | null {
+  const members = listMembers(workspaceId);
+  if (agentSlug !== undefined) {
+    const hit = members.find((m) => getAgentDefinition(m.agentDefinitionId)?.slug === agentSlug);
+    return hit?.instanceId ?? null;
+  }
+  const fallback = getWorkspace(workspaceId)?.defaultAgentInstanceId ?? null;
+  return fallback && members.some((m) => m.instanceId === fallback) ? fallback : null;
+}
+
 export function wireDelegationRunnerPorts(opts: WireDelegationPortsOpts): DelegationRunPorts {
   const { clientGetter, selfNodeId, settings } = opts;
   return {
@@ -110,15 +142,7 @@ export function wireDelegationRunnerPorts(opts: WireDelegationPortsOpts): Delega
     findWorkspaceByName(name) {
       return listWorkspaces().find((w) => w.name === name) ?? null;
     },
-    resolveAgentInstance(workspaceId, agentSlug) {
-      const members = listMembers(workspaceId);
-      if (agentSlug !== undefined) {
-        const hit = members.find((m) => getAgentDefinition(m.agentDefinitionId)?.slug === agentSlug);
-        return hit?.instanceId ?? null;
-      }
-      const fallback = getWorkspace(workspaceId)?.defaultAgentInstanceId ?? null;
-      return fallback && members.some((m) => m.instanceId === fallback) ? fallback : null;
-    },
+    resolveAgentInstance: resolveAgentInstanceProduct,
     createDelegatedSession(input) {
       // MC1：普通 collab 会话（单 agent 目标 is_leader=1）+ 标题=任务书摘要
       return createCollabSession(input.workspaceId, input.title, {
