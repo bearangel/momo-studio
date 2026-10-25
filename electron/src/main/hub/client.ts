@@ -1,9 +1,12 @@
 // hub 连接层：状态机 + 指数退避重连 + 心跳判死 + enroll HTTP 客户端 + RPC 关联器。
 // ws 经工厂注入（测试 fake / 生产 'ws'）；信封语义全部走 protocol 包（不自制 wire 格式）。
+// M2c 起 node 侧兼作**被动应答方**：收 hub 定向投递的 req 信封（mirror.apply 等）
+// → onRequest 处理器 → 回同 id res 信封（mirror.receipt）；hub 主动下发的 res
+// 信封（mirror.result 两段式第二段）经 onUnsolicitedRes 透出（不入 pending 关联器）。
 import WebSocket from 'ws';
 import {
   PROTOCOL_VERSION, RPC, encodeEnvelope, makeRequest, parseEnvelope,
-  type EventEnvelope, type ResponseEnvelope, type RpcErrorPayload,
+  type EventEnvelope, type RequestEnvelope, type ResponseEnvelope, type RpcErrorPayload,
 } from './protocol';
 
 export type HubConnectionState = 'disconnected' | 'connecting' | 'online';
@@ -21,6 +24,15 @@ export type WsFactory = (url: string, headers: Record<string, string>) => WebSoc
 
 const defaultWsFactory: WsFactory = (url, headers) => new WebSocket(url, { headers }) as unknown as WebSocketLike;
 
+/** 被动应答结果形态：ok=false 时 payload 必须是 RpcErrorPayload（hub 人话透传纪律）。 */
+export type HubResponderResult = { ok: true; payload: unknown } | { ok: false; payload: RpcErrorPayload };
+
+/**
+ * hub 定向 req 信封处理器（node 侧被动应答——M2 mirror.apply 链）。
+ * 处理器抛错 → 回 internal 错误 res（不留 hub 侧悬挂按 id 等待的 pending）。
+ */
+export type HubRequestHandler = (req: RequestEnvelope) => Promise<HubResponderResult>;
+
 export interface HubClientOpts {
   url: string;
   nodeName: string;
@@ -32,6 +44,12 @@ export interface HubClientOpts {
    * 下发 onlineNodes；缺失/非数组时回调空数组（恒为数组，消费面无需判空）。
    */
   onHelloSnapshot?: (nodes: Array<{ nodeId: string; nodeName: string }>) => void;
+  /** 被动应答器：收 hub 定向 req（mirror.apply）→ 处理 → 回同 id res（mirror.receipt）。
+   *  未配置时收 req 静默丢弃（hub 侧上层超时/断连兜底结算）。 */
+  onRequest?: HubRequestHandler;
+  /** 非本端发起的 res 信封回调（hub 主动定向下发——mirror.result 两段式第二段）。
+   *  不入 pending 关联器（id 对不上本端请求），未配置时静默忽略。 */
+  onUnsolicitedRes?: (res: ResponseEnvelope) => void;
   ws?: WsFactory;
   helloTimeoutMs?: number; // 默认 5000
   heartbeatMs?: number;    // 默认 25000（发 ping；下一拍无 res 即判死重连）
@@ -94,6 +112,28 @@ export function createHubClient(opts: HubClientOpts): HubClient {
     pending.clear();
   };
 
+  /**
+   * 被动应答分发（req 信封 → onRequest 处理器 → 同 id res 信封）。
+   * 身份守卫：连接被取代/停机后不回执（stale socket 的回执对 hub 无意义，
+   * hub 侧断连清理按 pending 结算——T6 语义）。
+   */
+  const dispatchRequest = (req: RequestEnvelope, s: WebSocketLike): void => {
+    const handler = opts.onRequest;
+    if (!handler) return; // 无应答器——静默丢弃（hub 上层超时兜底）
+    void handler(req)
+      .then((r) => {
+        if (stopped || sock !== s) return;
+        s.send(encodeEnvelope({ v: 1, kind: 'res', id: req.id, method: req.method, ok: r.ok, payload: r.payload }));
+      })
+      .catch((err) => {
+        if (stopped || sock !== s) return;
+        s.send(encodeEnvelope({
+          v: 1, kind: 'res', id: req.id, method: req.method, ok: false,
+          payload: { code: 'internal', message: `节点处理失败: ${err instanceof Error ? err.message : String(err)}` } satisfies RpcErrorPayload,
+        }));
+      });
+  };
+
   const setState = (s: HubConnectionState, err?: string): void => {
     state = s;
     opts.onStateChange(s, err);
@@ -137,6 +177,7 @@ export function createHubClient(opts: HubClientOpts): HubClient {
       const env = parseEnvelope(typeof raw === 'string' ? raw : String(raw));
       if (!env) return;
       if (env.kind === 'evt') { opts.onEvent(env); return; }
+      if (env.kind === 'req') { dispatchRequest(env, s); return; }
       if (env.kind !== 'res') return;
       const res = env as ResponseEnvelope;
       // RPC 关联器优先按 id 清偿（hello/ping 的 id 从不入表，落到下方方法匹配）
@@ -176,7 +217,9 @@ export function createHubClient(opts: HubClientOpts): HubClient {
         scheduleReconnect();
         return;
       }
-      if (res.method === RPC.ping && res.ok) pongSincePing = true;
+      if (res.method === RPC.ping && res.ok) { pongSincePing = true; return; }
+      // 非本端发起的 res（mirror.result 两段式第二段，id=mirrorId）——透出给消费面
+      opts.onUnsolicitedRes?.(res);
     });
     s.on('close', () => {
       // 身份守卫：过期连接（已被新连接取代）的 close 不清计时器、不改状态、不调度重连

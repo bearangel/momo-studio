@@ -16,8 +16,11 @@ import {
   registerTrustedDownloadOrigin,
   unregisterTrustedDownloadOrigin,
 } from '../marketplace/installer';
-import { EVT, type EventEnvelope } from './protocol';
+import { EVT, type EventEnvelope, type RequestEnvelope, type ResponseEnvelope, type RpcErrorPayload } from './protocol';
+import { MIRROR_WIRE, type MirrorApplyPayload, type MirrorApplyOutcome } from './mirror-wire';
+import { applyMirrorSnapshot } from './mirror-applier';
 import { bridgeGroupChanged } from './groups';
+import type { HubResponderResult } from './client';
 
 export interface HubStatus {
   configured: boolean;
@@ -63,6 +66,65 @@ export function hubRequest<T>(method: string, payload: unknown, timeoutMs?: numb
   return client.request<T>(method, payload, timeoutMs);
 }
 
+/**
+ * mirror.apply 被动应答器（目标节点侧）：应用器 outcome → mirror.receipt res 信封
+ * （id=对账键透传；conflict 附 diffSummary 超集——RpcErrorPayload + diffSummary）。
+ * 未知 req 方法回 unknown_method（诚实应答优于静默——hub 侧按 id 结算不悬挂）。
+ */
+async function handleHubRequest(req: RequestEnvelope): Promise<HubResponderResult> {
+  if (req.method === MIRROR_WIRE.apply) {
+    const outcome: MirrorApplyOutcome = await applyMirrorSnapshot(req.payload as MirrorApplyPayload);
+    if (outcome.ok) {
+      return {
+        ok: true,
+        payload: {
+          appliedResources: outcome.appliedResources,
+          ...('unresolvedRefs' in outcome ? { unresolvedRefs: outcome.unresolvedRefs } : {}),
+        },
+      };
+    }
+    return {
+      ok: false,
+      payload: {
+        code: outcome.code,
+        message: outcome.message,
+        ...('diffSummary' in outcome && outcome.diffSummary ? { diffSummary: outcome.diffSummary } : {}),
+      } satisfies RpcErrorPayload,
+    };
+  }
+  return { ok: false, payload: { code: 'unknown_method', message: `节点不支持的方法: ${req.method}` } satisfies RpcErrorPayload };
+}
+
+/**
+ * mirror.result（两段式第二段，res 信封定向→本机 leader）→ hub:mirrorResult 推送。
+ * 载荷挑字段（ok 成功 {appliedResources, unresolvedRefs?} / 失败 {code, message,
+ * diffSummary?}），不透传整个信封防杂字段渗入 renderer 契约——与 presence 桥同款纪律。
+ */
+function bridgeMirrorResult(res: ResponseEnvelope, broadcast: (channel: string, payload: unknown) => void): void {
+  if (res.method !== MIRROR_WIRE.result) return;
+  const p = res.payload as {
+    mirrorId?: unknown; appliedResources?: unknown; unresolvedRefs?: unknown;
+    code?: unknown; message?: unknown; diffSummary?: unknown;
+  } | null;
+  if (typeof p?.mirrorId !== 'string') return; // 异形结果丢弃（hub 侧契约保证必带）
+  if (res.ok) {
+    broadcast('hub:mirrorResult', {
+      mirrorId: p.mirrorId,
+      ok: true,
+      appliedResources: Array.isArray(p.appliedResources) ? p.appliedResources : [],
+      ...(Array.isArray(p.unresolvedRefs) ? { unresolvedRefs: p.unresolvedRefs } : {}),
+    });
+    return;
+  }
+  broadcast('hub:mirrorResult', {
+    mirrorId: p.mirrorId,
+    ok: false,
+    code: typeof p.code === 'string' ? p.code : 'internal',
+    message: typeof p.message === 'string' ? p.message : '镜像失败',
+    ...(p.diffSummary && typeof p.diffSummary === 'object' ? { diffSummary: p.diffSummary } : {}),
+  });
+}
+
 function startClient(
   hubUrl: string,
   nodeName: string,
@@ -104,6 +166,20 @@ function startClient(
         broadcast('hub:resourcePublished', {
           slug: p.slug, type: p.type, name: p.name, version: p.version, author: p.author, at: p.at,
         });
+      } else if (evt.method === EVT.workspaceMirrored) {
+        // 镜像完成组内广播（spec §3.2——组内皆可见谁被镜像到什么版本）
+        const p = evt.payload as {
+          groupId: string; targetNodeId: string; workspaceName: string;
+          snapshotId: string; appliedResources: string[]; unresolvedRefs?: string[];
+        };
+        broadcast('hub:workspaceMirrored', {
+          groupId: p.groupId,
+          targetNodeId: p.targetNodeId,
+          workspaceName: p.workspaceName,
+          snapshotId: p.snapshotId,
+          appliedResources: Array.isArray(p.appliedResources) ? p.appliedResources : [],
+          ...(Array.isArray(p.unresolvedRefs) ? { unresolvedRefs: p.unresolvedRefs } : {}),
+        });
       }
       // 工作组事件桥（M2b）：group.changed → hub:groupChanged（载荷挑字段，见桥内注释）
       bridgeGroupChanged(evt, broadcast);
@@ -113,6 +189,12 @@ function startClient(
     onHelloSnapshot(nodes) {
       presenceSeed = nodes.filter((n) => n.nodeId !== nodeId);
       broadcastPresenceSeed(presenceSeed);
+    },
+    // 目标节点侧被动应答（M2c 镜像链）：mirror.apply → 应用器 → mirror.receipt
+    onRequest: handleHubRequest,
+    // leader 侧两段式第二段：mirror.result res 信封 → hub:mirrorResult 推送
+    onUnsolicitedRes(res) {
+      bridgeMirrorResult(res, broadcast);
     },
   });
   client.start();
