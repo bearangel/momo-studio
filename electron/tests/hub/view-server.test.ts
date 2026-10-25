@@ -239,6 +239,40 @@ describe('四组装器', () => {
     server.destroy();
   });
 
+  it('view.messages 稠密 rowid 契约（fix round 1）：单会话连续 51 条——含头窗口尾条在页、hasMore 正确；旧开窗丢尾（故障模式锁定）', async () => {
+    const wsId = await seedWorkspace('prod-dev');
+    const s = insertSession({ workspaceId: wsId, title: 'dense' });
+    const m = insertMessage(s.id, 'owner');
+    const seqs: number[] = [];
+    for (let i = 0; i < 51; i++) seqs.push(insertEvent(m, 'text_delta', { delta: `e${i}` }));
+    // 稠密前提自证（单会话独占连续插入——M2 委派拓扑常态；前提破则本锁失效）
+    expect(seqs[50]! - seqs[0]!).toBe(50);
+    const lastSeq = seqs[50]!;
+
+    const server = viewServerOf(null);
+    // 含头窗口（修复后客户端公式 fromSeq = lastSeq - 50 + 1）：恰 50 条含头含尾
+    const rFix = await server.handleViewRequest(req(VIEW_RPC.messages, {
+      workspaceName: 'prod-dev', sessionId: s.id, fromSeq: lastSeq - 50 + 1, limit: 50,
+    }));
+    const fixPage = rFix.payload as { messages: Array<{ seq: number }>; hasMore: boolean };
+    expect(fixPage.messages).toHaveLength(50);
+    expect(fixPage.messages[0]!.seq).toBe(seqs[1]!);
+    expect(fixPage.messages[49]!.seq).toBe(lastSeq); // 尾事件 seq=lastSeq 不丢
+    expect(fixPage.hasMore).toBe(true); // seqs[0] 更早事件在望
+
+    // 旧开窗（修复前客户端公式 fromSeq = lastSeq - 50）：窗口含 51 值，ASC LIMIT 50
+    // 保留最低 50 条 → seq=lastSeq 被截——off-by-one 丢尾故障模式（服务端语义不变，
+    // 客户端必须含头开窗，见 hub-view.store.test 回归锁 a）
+    const rOld = await server.handleViewRequest(req(VIEW_RPC.messages, {
+      workspaceName: 'prod-dev', sessionId: s.id, fromSeq: lastSeq - 50, limit: 50,
+    }));
+    const oldPage = rOld.payload as { messages: Array<{ seq: number }> };
+    expect(oldPage.messages).toHaveLength(50);
+    expect(oldPage.messages[49]!.seq).toBe(seqs[49]!);
+    expect(oldPage.messages.some((e) => e.seq === lastSeq)).toBe(false);
+    server.destroy();
+  });
+
   it('view.tasks：目标本地任务最新在前（taskId/title/status/updatedAt）', async () => {
     const wsId = await seedWorkspace('prod-dev');
     // 同毫秒创建时 created_at_desc 排序不稳定——错开时间戳

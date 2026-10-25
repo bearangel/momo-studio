@@ -3,8 +3,9 @@
 // 远程查看面板数据源（momo-hub M2e T14 leader 侧，spec §5.4 四视图 + MC3）：
 // - 打开面板 = view.workspace + view.sessions + view.tasks 三发（页签切换不重复拉
 //   概览数据——缓存；刷新 iconbtn 手动重拉当前页签）
-// - 回放视图：进入 = view.messages（尾部一页 fromSeq=max(0,lastSeq-limit)）+
-//   view.subscribe（恰好一次）；「加载更早」= fromSeq 递减再拉一页（锚顶语义）
+// - 回放视图：进入 = view.messages（含头尾部一页 fromSeq=max(1,lastSeq-limit+1)）+
+//   view.subscribe（恰好一次）；「加载更早」= fromSeq 递减再拉一页（锚顶语义）；
+//   回放态「刷新」= refreshReplay（退订→重订锚点重置→已知尾后补拉，间隙自愈）
 // - 实时增量只经 hub:viewAppended 事件驱动（MC3 无轮询）——按 seq 去重淡入追加
 // - 订阅生命周期：离开回放（返回/切页签/关面板/断开按钮）四路径都恰好一次
 //   view.unsubscribe（组件卸载语义，不留悬挂订阅）
@@ -65,6 +66,13 @@ interface HubViewState {
   refresh(): Promise<void>;
   enterReplay(session: HubViewSessionSummary): Promise<void>;
   loadEarlier(): Promise<void>;
+  /**
+   * 回放态「刷新」自愈路径（fix round 1）：重订语义 = 先退订清 watcher、再重订
+   * （subscribe 对已存在 watcher 幂等不重锚，必须先 unsubscribe 锚点才重置到当前
+   * 尾），随后从已知最后一条之后补拉一页——覆盖「messages 应答与订阅锚定间」
+   * 到达的间隙事件（低于锚点永不经 tail，两不沾），与并发 tail 扇出按 seq 去重。
+   */
+  refreshReplay(): Promise<void>;
   leaveReplay(): void;
   /** 回放视图头「断开订阅」：显式 unsubscribe，按钮转 disabled */
   disconnectLive(): Promise<void>;
@@ -200,14 +208,20 @@ export const useHubViewStore = create<HubViewState>((set, get) => {
     },
 
     async refresh() {
-      if (get().replay) return; // 回放视图内不重拉概览（刷新只作用于页签面）
+      if (get().replay) {
+        await get().refreshReplay(); // 回放态刷新 = 重订 + 尾后补拉（不自愈路径外的概览面）
+        return;
+      }
       await loadAll();
     },
 
     async enterReplay(session) {
       const st = get();
       if (!st.targetNodeId || !st.workspaceName || st.replay) return;
-      const fromSeq = Math.max(0, session.lastSeq - VIEW_PAGE_SIZE);
+      // 含头窗口：恰 50 条含头含尾（服务端 rowid>=fromSeq ASC LIMIT 50 保留最低
+      // 50 条——旧式 lastSeq-50 开窗含 51 值会在稠密 rowid 下丢 seq=lastSeq 尾事件，
+      // 且该事件低于订阅锚点永不经 tail 到达；下限 1 防负越界到全量页）
+      const fromSeq = Math.max(1, session.lastSeq - VIEW_PAGE_SIZE + 1);
       set({ loading: true });
       try {
         const page = await ipc.hub.viewMessages({
@@ -279,6 +293,63 @@ export const useHubViewStore = create<HubViewState>((set, get) => {
 
     leaveReplay() {
       teardownReplay();
+    },
+
+    async refreshReplay() {
+      const st = get();
+      if (!st.replay || !st.targetNodeId || !st.workspaceName) return;
+      if (st.loading) return;
+      const { targetNodeId, workspaceName } = st;
+      const sessionId = st.replay.sessionId;
+      const knownLast = st.replay.messages.length > 0
+        ? st.replay.messages[st.replay.messages.length - 1]!.seq
+        : 0;
+      set({ loading: true });
+      // 重订：先退订（幂等豁免路径静默）——旧 watcher 不清则重订不重锚
+      await ipc.hub
+        .viewUnsubscribe({ targetNodeId, sessionId })
+        .then(() => undefined, () => undefined);
+      try {
+        await ipc.hub.viewSubscribe({ targetNodeId, sessionId });
+      } catch (err) {
+        // 旧订阅已随退订移除：降级「已断开」人话（可再刷新/重进重试）
+        const cur = get().replay;
+        set(
+          cur && cur.sessionId === sessionId
+            ? { loading: false, replay: { ...cur, live: false, liveError: humanizeViewError(err) } }
+            : { loading: false },
+        );
+        return;
+      }
+      try {
+        const page = await ipc.hub.viewMessages({
+          targetNodeId,
+          sessionId,
+          workspaceName,
+          fromSeq: knownLast + 1,
+          limit: VIEW_PAGE_SIZE,
+        });
+        const cur = get().replay;
+        if (!cur || cur.sessionId !== sessionId) {
+          set({ loading: false });
+          return;
+        }
+        // 已知集取补拉应答后的现值：await 期间 view.appended 并发追加了同 seq
+        // 事件也在此去重（hasMore 属顶侧分页状态，尾部追加不动它）
+        const known = new Set(cur.messages.map((m) => m.seq));
+        const fresh = page.messages.filter((m) => !known.has(m.seq));
+        set({
+          loading: false,
+          replay: { ...cur, messages: [...cur.messages, ...fresh], live: true, liveError: null },
+        });
+      } catch (err) {
+        const cur = get().replay;
+        set(
+          cur && cur.sessionId === sessionId
+            ? { loading: false, error: humanizeViewError(err), replay: { ...cur, live: true, liveError: null } }
+            : { loading: false, error: humanizeViewError(err) },
+        );
+      }
     },
 
     async disconnectLive() {

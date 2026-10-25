@@ -156,7 +156,7 @@ describe('只读红线（notes §4 断言点 1/2/6/7）', () => {
     await waitFor(() => expect(screen.getByText('断开订阅')).toBeDefined());
 
     const labels = [...screen.getAllByRole('button')].map((b) => b.getAttribute('aria-label') ?? b.textContent ?? '');
-    const whitelist = ['刷新当前页签', '关闭查看面板', '返回会话列表', '断开订阅', '加载更早'];
+    const whitelist = ['刷新当前页签', '刷新回放', '关闭查看面板', '返回会话列表', '断开订阅', '加载更早'];
     for (const l of labels) {
       const hit = whitelist.some((w) => l.includes(w));
       expect(hit, `白名单外按钮: ${l}`).toBe(true);
@@ -191,7 +191,7 @@ describe('只读红线（notes §4 断言点 1/2/6/7）', () => {
 });
 
 describe('回放视图与订阅生命周期（notes §4 断言点 3/4）', () => {
-  it('断言 3a 进入回放：尾部一页（fromSeq=lastSeq-页尺寸）+ 恰好一次 subscribe', async () => {
+  it('断言 3a 进入回放：尾部一页（fromSeq=lastSeq-页尺寸+1 含头恰 50——fix round 1）+ 恰好一次 subscribe', async () => {
     openPanel();
     render(<ViewPanel />);
     await waitFor(() => expect(screen.getByRole('tab', { name: '会话 2' })).toBeDefined());
@@ -200,9 +200,35 @@ describe('回放视图与订阅生命周期（notes §4 断言点 3/4）', () =>
     await waitFor(() => expect(api.hub.viewSubscribe).toHaveBeenCalledTimes(1));
     expect(api.hub.viewMessages).toHaveBeenCalledWith({
       targetNodeId: 'node-b', sessionId: 'sess-1', workspaceName: 'product-dev',
-      fromSeq: 120 - VIEW_PAGE_SIZE, limit: VIEW_PAGE_SIZE,
+      fromSeq: 120 - VIEW_PAGE_SIZE + 1, limit: VIEW_PAGE_SIZE,
     });
     expect(screen.getByText('实时')).toBeDefined();
+  });
+
+  it('断言 3a-fix（F2）回放态刷新可用：间隙事件经「刷新回放」重订+尾后补拉自愈', async () => {
+    // 忠实时序：首次 messages 应答 [118..120]；subscribe 锚定前插入 121（锚点=121，
+    // tail 只投 >121）→ 121 两不沾；点「刷新回放」→ 退订-重订 + fromSeq=121 补拉可见
+    api.hub.viewMessages.mockImplementation(async (p: { fromSeq: number }) => {
+      if (p.fromSeq >= 121) return { messages: [message(121, '间隙事件-121')], hasMore: false };
+      return { messages: [message(118, '已有'), message(119, '已有2'), message(120, '尾条')], hasMore: true };
+    });
+    openPanel();
+    render(<ViewPanel />);
+    await waitFor(() => expect(screen.getByRole('tab', { name: '会话 2' })).toBeDefined());
+    fireEvent.click(screen.getByRole('tab', { name: /会话/ }));
+    fireEvent.click(screen.getByLabelText('回放会话 会话-sess-1'));
+    await waitFor(() => expect(screen.getByText('尾条')).toBeDefined());
+
+    const refresh = screen.getByRole('button', { name: '刷新回放' });
+    expect((refresh as HTMLButtonElement).disabled).toBe(false); // 回放态放开（fix round 1 前恒 disabled）
+    fireEvent.click(refresh);
+    await waitFor(() => expect(screen.getByText('间隙事件-121')).toBeDefined());
+    expect(api.hub.viewUnsubscribe).toHaveBeenCalledTimes(1);
+    expect(api.hub.viewSubscribe).toHaveBeenCalledTimes(2);
+    expect(api.hub.viewMessages).toHaveBeenLastCalledWith({
+      targetNodeId: 'node-b', sessionId: 'sess-1', workspaceName: 'product-dev',
+      fromSeq: 121, limit: VIEW_PAGE_SIZE,
+    });
   });
 
   it('断言 3b 四路径离开各恰好一次 unsubscribe：返回 / 切页签 / 关面板 / 断开按钮', async () => {

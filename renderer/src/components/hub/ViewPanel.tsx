@@ -169,7 +169,14 @@ export function ViewPanel() {
             远程只读视图 · 数据经 hub 定向拉取（<span className="font-mono">{st.targetNodeId?.slice(0, 8) ?? ''}</span>）
           </div>
         </div>
-        <Button variant="ghost" size="sm" className="h-7 w-7 px-0" aria-label="刷新当前页签" disabled={st.loading || st.replay !== null} onClick={() => void st.refresh()}>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 w-7 px-0"
+          aria-label={st.replay !== null ? '刷新回放' : '刷新当前页签'}
+          disabled={st.loading}
+          onClick={() => void st.refresh()}
+        >
           <RefreshCw size={14} strokeWidth={1.75} aria-hidden />
         </Button>
         <Button variant="ghost" size="sm" className="h-7 w-7 px-0" aria-label="关闭查看面板" onClick={st.close}>
