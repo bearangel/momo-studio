@@ -34,6 +34,7 @@ import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { SidebarRestoreButton } from '../layout/SidebarRestoreButton';
 import { CreateTaskDialog } from '../im/CreateTaskDialog';
+import { DelegationBoardProvider } from '../workgroup/DelegatedTaskCard';
 import { BoardToolbar, type BoardConcurrency } from './BoardToolbar';
 import { BoardCanvas } from './BoardCanvas';
 import { ArchivedBoardSection } from './ArchivedBoardSection';
@@ -275,14 +276,18 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
           </div>
         )
       ) : (
-        <BoardCanvas
-          tasks={visibleTasks}
-          groups={visibleGroups}
-          laneMode={laneMode}
-          selectedId={selectedTaskId}
-          onSelect={setSelectedTaskId}
-          workspaceId={workspaceId}
-        />
+        // M2.1 T9：外派投影数据 Provider（delegationBoard/taskList/groupList 引导 +
+        // progress/终态推送；终态即时刷新任务行）——BoardCanvas 内 DelegatedTaskCard 消费
+        <DelegationBoardProvider refreshTasks={() => void load(workspaceId)}>
+          <BoardCanvas
+            tasks={visibleTasks}
+            groups={visibleGroups}
+            laneMode={laneMode}
+            selectedId={selectedTaskId}
+            onSelect={setSelectedTaskId}
+            workspaceId={workspaceId}
+          />
+        </DelegationBoardProvider>
       )}
       {/* 详情抽屉叠加层：画板常驻，selectedTaskId 驱动滑入 */}
       {selectedTaskId !== null && (

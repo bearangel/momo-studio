@@ -44,6 +44,7 @@ import { groupChipColor, splitLanes, type BoardLane } from '../../lib/board';
 import type { GroupRow, TaskRow } from '../../ipc/types';
 import { useTaskStore } from '../../stores/task.store';
 import { BoardCard, type BoardGroupChip } from './BoardCard';
+import { DelegatedTaskCard } from '../workgroup/DelegatedTaskCard';
 import { Lane } from './Lane';
 import { useBoardDrop, dropConfirmContent } from './useBoardDrop';
 import { AssignTargetDialog } from './AssignTargetDialog';
@@ -256,17 +257,32 @@ export function BoardCanvas({ tasks, groups, laneMode, selectedId, onSelect, wor
   }, [setDragging]);
 
   const renderCard = useCallback(
-    (task: TaskRow): ReactNode => (
-      <SortableBoardCard
-        key={task.id}
-        task={task}
-        selected={task.id === selectedId}
-        onSelect={onSelect}
-        groupChip={
-          laneMode === 'flat' && task.groupId !== null ? (chipByGroup.get(task.groupId) ?? null) : null
-        }
-      />
-    ),
+    (task: TaskRow): ReactNode => {
+      // M2.1 T9 外派卡分发：routing≠local → DelegatedTaskCard（静态渲染不接
+      // sortable——行状态由 hub 账本驱动，本地拖拽 move 会与远端真相打架）；
+      // local 卡零改动走原 SortableBoardCard 路径
+      if (task.routing.mode !== 'local') {
+        return (
+          <DelegatedTaskCard
+            key={task.id}
+            task={task}
+            selected={task.id === selectedId}
+            onSelect={() => onSelect(task.id)}
+          />
+        );
+      }
+      return (
+        <SortableBoardCard
+          key={task.id}
+          task={task}
+          selected={task.id === selectedId}
+          onSelect={onSelect}
+          groupChip={
+            laneMode === 'flat' && task.groupId !== null ? (chipByGroup.get(task.groupId) ?? null) : null
+          }
+        />
+      );
+    },
     [selectedId, onSelect, laneMode, chipByGroup],
   );
 

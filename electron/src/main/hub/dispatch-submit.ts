@@ -153,8 +153,9 @@ export async function submitRoutedTask(
 /**
  * 外派目标解析：node 模式锁定直发（成员身份校验）；group 模式组装 T7 DispatchInput
  * 走 pickWorker（无候选返回 null → 调用方落待处理）。
+ * 导出供 delegation-sync.retryDispatch 复用（T9 重派单点——调度逻辑单源）。
  */
-async function resolveRemoteTarget(
+export async function resolveRemoteTarget(
   routing: Exclude<TaskRouting, { mode: 'local' }>,
   workspaceName: string,
   ports: DispatchSubmitPorts,

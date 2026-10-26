@@ -2875,6 +2875,41 @@ export interface HubTaskTerminalEvent {
   reason?: string;
 }
 
+// ── 看板外派投影（M2.1 T9 delegation-sync 消费面）────────────────────────────
+
+/** 进度摘要条目（delegationId 键——主进程 hub 域 kv 'hub_delegation_progress' 镜像） */
+export interface HubDelegationProgressEntry {
+  excerpt: string;
+  lastSeq: number;
+  at: number;
+}
+
+/** worker 侧本地委派记录（delegation-store DelegationRecord 镜像——byNode=派单来源节点） */
+export interface HubReceivedDelegation {
+  taskId: string;
+  sessionId: string;
+  workspaceId: string;
+  workspaceName: string;
+  title: string;
+  byNode: string;
+  state: 'running' | 'done' | 'failed' | 'cancelled';
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** hub:delegationBoard 结果——外派卡引导读（进度摘要 + worker 收委派记录） */
+export interface DelegationBoardResult {
+  progress: Record<string, HubDelegationProgressEntry>;
+  received: HubReceivedDelegation[];
+}
+
+/** hub:retryDispatch 结果——dispatched=false 行留待处理（无候选/瞬断，RM-M21-5） */
+export interface RetryDispatchResult {
+  dispatched: boolean;
+  nodeId: string | null;
+  delegationId: string | null;
+}
+
 /**
  * hub 查看同意设置（M2e T14/T15）：「允许本组查看」开关。
  * 主进程 kv 存储；默认 true；set 即时上报 hub（离线由重连重报兜底）。
@@ -3009,6 +3044,16 @@ export interface HubApiSurface {
   submitRoutedTask(input: SubmitRoutedTaskInput): Promise<SubmitRoutedTaskResult>;
   /** 路由预检概要（M2.1 T8 弹窗「执行位置」区数据源；hub 不可达降级空组清单不抛） */
   routingPrecheck(input: { workspaceName: string }): Promise<RoutingPrecheckResult>;
+  /**
+   * 看板外派投影引导读（M2.1 T9）：progress=进度摘要 kv 全量（重启后进度行不丢）；
+   * received=worker 侧本地委派记录（byNode=来源，「来自 {node}」徽标数据源）
+   */
+  delegationBoard(): Promise<DelegationBoardResult>;
+  /**
+   * 外派行重派单点（M2.1 T9）：待派发重试（RM-M21-5 手动驱动）/ 失败重派（换
+   * delegation_id）；无候选/瞬断 → dispatched=false 行留待处理
+   */
+  retryDispatch(input: { taskId: string }): Promise<RetryDispatchResult>;
   /** 连接状态变化推送订阅（解订阅函数） */
   onStateChanged(callback: (payload: HubStateChangedEvent) => void): () => void;
   /** 节点上下线推送订阅（解订阅函数） */

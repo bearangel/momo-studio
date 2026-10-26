@@ -24,6 +24,7 @@ import { Input } from '../ui/Input';
 import { Select } from '../ui/Select';
 import { Segmented } from '../ui/Segmented';
 import { RunRoutingField } from '../workgroup/RunRoutingField';
+import { showToast } from '../ui/Toast';
 
 interface CreateTaskDialogProps {
   open: boolean;
@@ -77,6 +78,7 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
   const [sessions, setSessions] = useState<Array<{ id: string; title: string }>>([]);
   const [groupId, setGroupId] = useState('');
   const [batchText, setBatchText] = useState('');
+  const [batchError, setBatchError] = useState<string | null>(null);
   const [routing, setRouting] = useState<TaskRouting>({ mode: 'local' });
   const [precheck, setPrecheck] = useState<RoutingPrecheckResult | null>(null);
   const groups = useGroupStore((s) => s.groups);
@@ -106,6 +108,7 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
     setWeekday('1');
     setGroupId(defaultGroupId ?? '');
     setBatchText('');
+    setBatchError(null);
     setRouting({ mode: 'local' });
     setPrecheck(null);
     // 预检失败降级仅本机（守门在 RunRoutingField；提交不受阻）
@@ -178,23 +181,43 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
   };
 
   const submitBatch = async (): Promise<void> => {
-    // 顺序提交：group 路由每次重跑 least-busy（依次派给空闲节点，S2 批量 hint）
+    // 顺序提交：group 路由每次重跑 least-busy（依次派给空闲节点，S2 批量 hint）。
+    // per-line catch（T8 Low-1 顺修）：单行失败不中断余行——批量里一行炸全弹窗
+    // 报错会让已成功的行「看似没建」；失败行摘要 toast，全失败时弹窗内错误行
+    // 呈现（不关窗，用户可改后重试）
     let lastId = '';
+    let successCount = 0;
+    const failures: Array<{ line: string; message: string }> = [];
     for (const line of batchLines) {
-      if (routing.mode === 'local' || !workspaceName) {
-        const created = await ipc.task.create({ workspaceId, title: line });
-        lastId = created.id;
-      } else {
-        const result = await ipc.hub.submitRoutedTask({
-          workspaceId,
-          workspaceName,
-          title: line,
-          routing,
-        });
-        lastId = result.task.id;
+      try {
+        if (routing.mode === 'local' || !workspaceName) {
+          const created = await ipc.task.create({ workspaceId, title: line });
+          lastId = created.id;
+        } else {
+          const result = await ipc.hub.submitRoutedTask({
+            workspaceId,
+            workspaceName,
+            title: line,
+            routing,
+          });
+          lastId = result.task.id;
+        }
+        successCount += 1;
+      } catch (err) {
+        failures.push({ line, message: (err as Error).message });
       }
     }
-    // 批量只回调一次（末任务），不逐任务开详情抽屉
+    if (failures.length > 0) {
+      const summary = `${failures.length} 个任务创建失败：${failures
+        .map((f) => `「${f.line}」${f.message}`)
+        .join('；')}`;
+      if (successCount === 0) {
+        setBatchError(summary);
+        return; // 全失败：不关窗不回调，错误行在场供修改后重试
+      }
+      showToast(summary);
+    }
+    // 批量只回调一次（末次成功任务），不逐任务开详情抽屉；全失败不回调
     onCreated(lastId);
     onClose();
   };
@@ -273,6 +296,11 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
                 className="mt-1 min-h-[104px] w-full rounded border border-subtle bg-surface-2 px-3 py-2 text-[12px] leading-[1.75] text-primary focus:border-focus focus:outline-none"
               />
             </div>
+            {batchError !== null && (
+              <p role="alert" className="break-words text-xs leading-relaxed text-status-error">
+                {batchError}
+              </p>
+            )}
             {routingAvailable && (
               <RunRoutingField
                 precheck={precheck}

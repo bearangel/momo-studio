@@ -25,7 +25,7 @@ import type { GroupRow, RoutingPrecheckResult } from '../../ipc/types';
 // 同时能在每个 test 内通过 mockResolvedValueOnce 精确控制返回值。
 const {
   mockTaskCreate, mockListAssignments, mockTeamList, mockSessionList, mockTaskGroupList,
-  mockRoutingPrecheck, mockSubmitRoutedTask,
+  mockRoutingPrecheck, mockSubmitRoutedTask, showToastMock,
 } = vi.hoisted(() => ({
   mockTaskCreate: vi.fn(),
   mockListAssignments: vi.fn(),
@@ -34,6 +34,7 @@ const {
   mockTaskGroupList: vi.fn(),
   mockRoutingPrecheck: vi.fn(),
   mockSubmitRoutedTask: vi.fn(),
+  showToastMock: vi.fn(),
 }));
 
 vi.mock('../../ipc/client', () => ({
@@ -46,6 +47,8 @@ vi.mock('../../ipc/client', () => ({
     hub: { routingPrecheck: mockRoutingPrecheck, submitRoutedTask: mockSubmitRoutedTask },
   },
 }));
+
+vi.mock('../ui/Toast', () => ({ showToast: showToastMock }));
 
 /** T8 预检夹具：已镜像 + 单组 g1（node-a/node-b 在线已镜像） */
 function precheckFixture(overrides: Partial<RoutingPrecheckResult> = {}): RoutingPrecheckResult {
@@ -541,5 +544,47 @@ describe('CreateTaskDialog — 单/批量与执行位置（M2.1 T8）', () => {
     fireEvent.change(screen.getByLabelText(/标题/), { target: { value: '降级本机' } });
     fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
     await waitFor(() => expect(mockTaskCreate).toHaveBeenCalled());
+  });
+
+  // M2.1 T9（T8 Low-1 顺修）：批量提交 per-line catch——单行失败不中断余行
+  it('T9-1. 批量 2 行第 1 行拒 → 第 2 行仍提交成功；失败摘要 toast；onCreated 收成功行', async () => {
+    const onCreated = vi.fn();
+    const onClose = vi.fn();
+    mockSubmitRoutedTask
+      .mockRejectedValueOnce(new Error('工作组不存在或已退出，无法外派任务'))
+      .mockResolvedValueOnce({ task: { id: 'T-ok' }, dispatched: true, nodeId: 'node-a' });
+    render(
+      <CreateTaskDialog open onClose={onClose} onCreated={onCreated} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    await screen.findByRole('radio', { name: '批量' });
+    fireEvent.click(screen.getByRole('radio', { name: '批量' }));
+    await screen.findByRole('radio', { name: '组内调度' });
+    fireEvent.click(screen.getByRole('radio', { name: '组内调度' }));
+    fireEvent.change(screen.getByLabelText(/批量任务书/), {
+      target: { value: '会失败的一行\n正常的一行' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '创建 2 个任务' }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith('T-ok'));
+    expect(mockSubmitRoutedTask).toHaveBeenCalledTimes(2);
+    expect(onClose).toHaveBeenCalled();
+    expect(showToastMock).toHaveBeenCalledWith(expect.stringContaining('1 个任务创建失败'));
+    expect(showToastMock).toHaveBeenCalledWith(expect.stringContaining('会失败的一行'));
+  });
+
+  it('T9-2. 批量全失败 → 不关窗 + 弹窗内错误行呈现失败摘要（可改后重试）', async () => {
+    const onCreated = vi.fn();
+    const onClose = vi.fn();
+    mockTaskCreate.mockReset().mockRejectedValue(new Error('数据库已锁'));
+    render(<CreateTaskDialog open onClose={onClose} onCreated={onCreated} workspaceId="ws1" />);
+    fireEvent.click(screen.getByRole('radio', { name: '批量' }));
+    fireEvent.change(screen.getByLabelText(/批量任务书/), {
+      target: { value: '甲行\n乙行' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '创建 2 个任务' }));
+    await waitFor(() => expect(mockTaskCreate).toHaveBeenCalledTimes(2));
+    expect(onCreated).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(await screen.findByText(/2 个任务创建失败/)).toBeInTheDocument();
+    expect(screen.getByText(/数据库已锁/)).toBeInTheDocument();
   });
 });

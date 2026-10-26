@@ -21,6 +21,8 @@ vi.mock('../../src/main/hub/index', () => ({
   hubSetDelegationSettings: vi.fn(async (input: { acceptTasks: boolean; maxConcurrent: number }) => input),
   hubGetViewSettings: vi.fn(() => ({ allowGroupView: true })),
   hubSetViewSettings: vi.fn(async (input: { allowGroupView: boolean }) => input),
+  hubDelegationBoard: vi.fn(() => ({ progress: {}, received: [] })),
+  hubMarkDelegationCancelled: vi.fn(),
 }));
 
 // publishToHub 只锁接线（透传入参）——打包/上传矩阵在 publish.test.ts
@@ -37,6 +39,7 @@ const MIRROR_CHANNELS = ['hub:snapshotBuildUpload', 'hub:mirrorWorkspace', 'hub:
 const DELEGATION_CHANNELS = ['hub:getDelegationSettings', 'hub:setDelegationSettings'];
 const TASK_CHANNELS = ['hub:taskList', 'hub:taskDelegate', 'hub:taskCancel'];
 const ROUTING_CHANNELS = ['hub:submitRoutedTask', 'hub:routingPrecheck'];
+const BOARD_CHANNELS = ['hub:delegationBoard', 'hub:retryDispatch'];
 const VIEW_CHANNELS = [
   'hub:getViewSettings', 'hub:setViewSettings',
   'hub:viewWorkspace', 'hub:viewSessions', 'hub:viewMessages', 'hub:viewTasks',
@@ -46,7 +49,7 @@ const VIEW_CHANNELS = [
 beforeEach(() => { handlers.clear(); vi.clearAllMocks(); });
 
 describe('hub IPC 接线', () => {
-  it('注册二十九通道（M2.1 T6 增镜像登记查询、T8 增路由提交两通道）；getStatus 透传 manager', async () => {
+  it('注册三十一通道（M2.1 T6 增镜像登记查询、T8 增路由提交两通道、T9 增看板投影两通道）；getStatus 透传 manager', async () => {
     registerHubIpc();
     expect([...handlers.keys()].sort()).toEqual([
       ...GROUP_CHANNELS,
@@ -54,6 +57,7 @@ describe('hub IPC 接线', () => {
       ...DELEGATION_CHANNELS,
       ...TASK_CHANNELS,
       ...ROUTING_CHANNELS,
+      ...BOARD_CHANNELS,
       ...VIEW_CHANNELS,
       'hub:configure', 'hub:enroll', 'hub:forget', 'hub:getStatus', 'hub:publishResource',
     ].sort());
@@ -175,16 +179,20 @@ describe('hub IPC 委派 leader 侧三通道（M2e T12）', () => {
     }, undefined);
   });
 
-  it('taskCancel → task.cancel 原样透传；rejection 人话不吞', async () => {
+  it('taskCancel → task.cancel 原样透传 + 取消回执触发外派行同步（T9）；rejection 人话不吞', async () => {
     registerHubIpc();
     vi.mocked(manager.hubRequest).mockResolvedValueOnce({ ok: true });
     const out = await handlers.get('hub:taskCancel')!(null, { taskId: 'tk-1' });
     expect(manager.hubRequest).toHaveBeenLastCalledWith('task.cancel', { taskId: 'tk-1' }, undefined);
     expect(out).toEqual({ ok: true });
+    // 取消链收口（T9）：hub 账本权威 → delegation-sync 行状态同步
+    expect(manager.hubMarkDelegationCancelled).toHaveBeenCalledWith('tk-1');
 
     vi.mocked(manager.hubRequest).mockRejectedValueOnce(new Error('任务已处于终态 done，不可取消'));
     await expect(handlers.get('hub:taskCancel')!(null, { taskId: 'tk-2' }))
       .rejects.toThrow('任务已处于终态 done，不可取消');
+    // rejection 路径不触发行同步（hub 账本未迁移）
+    expect(manager.hubMarkDelegationCancelled).toHaveBeenCalledTimes(1);
   });
 });
 

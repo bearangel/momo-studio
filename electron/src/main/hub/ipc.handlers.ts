@@ -1,21 +1,25 @@
 // hub 命名空间 IPC——通道名与 types.d.ts / preload 逐一对齐（momo-boundary-rules）。
 import { ipcMain } from 'electron';
 import {
-  hubConfigure, hubEnroll, hubForget, hubGetDelegationSettings, hubGetStatus, hubGetViewSettings,
-  hubListMirrorRegistry, hubRequest, hubSetDelegationSettings, hubSetViewSettings, replayPresenceSeed,
+  hubConfigure, hubDelegationBoard, hubEnroll, hubForget, hubGetDelegationSettings, hubGetStatus,
+  hubGetViewSettings, hubListMirrorRegistry, hubMarkDelegationCancelled, hubRequest,
+  hubSetDelegationSettings, hubSetViewSettings, replayPresenceSeed,
 } from './index';
 import { createGroupClient } from './groups';
 import { publishToHub, type PublishInput } from './publish';
 import { buildAndUploadWorkspaceSnapshot } from './snapshot-upload';
 import { RPC, TASK_RPC, VIEW_RPC } from './protocol';
 import {
+  resolveRemoteTarget,
   routingPrecheck,
   submitRoutedTask,
   type DispatchSubmitPorts,
   type SubmitRoutedTaskInput,
 } from './dispatch-submit';
+import { retryDispatch, type RedispatchPorts } from './delegation-sync';
 import { assertBoardGroupValid, createTaskFromForm } from '../task/ipc.handlers';
-import { insertTask, updateTask } from '../storage/tasks/repo';
+import { insertTask, updateTask, getTask } from '../storage/tasks/repo';
+import { listWorkspaces } from '../workspace/crud';
 
 // 组管理客户端单点：绑定 hubRequest（IPC 面复用同一实例；纯函数集，无状态）
 const groups = createGroupClient((method, payload, timeoutMs) => hubRequest(method, payload, timeoutMs));
@@ -72,7 +76,13 @@ export function registerHubIpc(): void {
       ...(input.agentSlug !== undefined && input.agentSlug !== '' ? { agentSlug: input.agentSlug } : {}),
     },
   }, undefined));
-  ipcMain.handle('hub:taskCancel', (_evt, input: { taskId: string }) => hubRequest(TASK_RPC.cancel, input, undefined));
+  // 协议无 cancelled leader 推送——取消回执即回写本地行（T9 取消链收口：
+  // 外派卡取消 → hub 账本权威 → delegation-sync 行状态同步）
+  ipcMain.handle('hub:taskCancel', (_evt, input: { taskId: string }) =>
+    hubRequest(TASK_RPC.cancel, input, undefined).then((res) => {
+      hubMarkDelegationCancelled(input.taskId);
+      return res;
+    }));
   // 查看同意设置两通道（M2e T14/T15：允许本组查看开关——set 内即时上报 hub）
   ipcMain.handle('hub:getViewSettings', () => hubGetViewSettings());
   ipcMain.handle('hub:setViewSettings', (_evt, input: { allowGroupView: boolean }) => hubSetViewSettings(input));
@@ -137,4 +147,20 @@ export function registerHubIpc(): void {
     submitRoutedTask(input, dispatchSubmitPorts));
   ipcMain.handle('hub:routingPrecheck', (_evt, input: { workspaceName: string }) =>
     routingPrecheck(input.workspaceName, dispatchSubmitPorts));
+  // 看板外派投影两通道（M2.1 T9）：引导读（进度摘要 kv + worker 收委派记录）+
+  // 重派单点（待派发重试 RM-M21-5 / 失败重派换 delegation_id——目标解析复用
+  // dispatch-submit 调度单源，委派走既有管道）
+  ipcMain.handle('hub:delegationBoard', () => hubDelegationBoard());
+  const redispatchPorts: RedispatchPorts = {
+    getTask: (taskId) => getTask(taskId),
+    workspaceNameOf: (workspaceId) => listWorkspaces().find((w) => w.id === workspaceId)?.name ?? null,
+    resolveTarget: (routing, workspaceName) => resolveRemoteTarget(routing, workspaceName, dispatchSubmitPorts),
+    delegate: (brief) => hubRequest(TASK_RPC.delegate, brief, undefined),
+    updateTask: (taskId, patch) => {
+      updateTask(taskId, patch);
+    },
+    now: () => Date.now(),
+  };
+  ipcMain.handle('hub:retryDispatch', (_evt, input: { taskId: string }) =>
+    retryDispatch(input.taskId, redispatchPorts));
 }

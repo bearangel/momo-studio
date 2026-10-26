@@ -36,6 +36,20 @@ const mockApi = {
     rollbackFileBefore: vi.fn(),
     preview: vi.fn(),
   },
+  // M2.1 T9：TaskBoardView 挂 DelegationBoardProvider——hub 面降级桩
+  // （空账本/空进度/未接入；订阅通道返回 noop 解订阅——外派卡退化为行状态反推）
+  hub: {
+    delegationBoard: vi.fn().mockResolvedValue({ progress: {}, received: [] }),
+    taskList: vi.fn().mockResolvedValue({ tasks: [] }),
+    getStatus: vi.fn().mockResolvedValue({
+      configured: false, state: 'disconnected', hubUrl: null, nodeName: null, nodeId: null, lastError: null,
+    }),
+    groupList: vi.fn().mockResolvedValue({ groups: [] }),
+    onTaskProgress: vi.fn().mockReturnValue(() => {}),
+    onTaskCompleted: vi.fn().mockReturnValue(() => {}),
+    onTaskFailed: vi.fn().mockReturnValue(() => {}),
+    onTaskInterrupted: vi.fn().mockReturnValue(() => {}),
+  },
 };
 
 function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title' | 'status' | 'priority'>): TaskRow {

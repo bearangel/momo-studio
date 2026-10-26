@@ -1,0 +1,361 @@
+// renderer/src/components/workgroup/DelegatedTaskCard.test.tsx
+//
+// 外派看板卡（M2.1 T9，视觉合同 S1/S6——.omo/previews/hub-ia-fullapp.html）：
+//   - leader 侧：节点徽标（Bot+节点名）/ 待派发徽标（组内调度 · 待派发，S1）/
+//     六态徽标（spinner 执行中 / CircleCheck 已完成 / CircleX 失败 / CircleHelp
+//     等待节点确认）+ 进度行（surface-2 圆角摘要；waiting 态 warning tint）
+//   - worker 侧：来源徽标（Zap+「来自 {node}」，S6）+ mono #T-id + 等你确认引导
+//   - 左 3px 状态色边：默认 violet / waiting warning（.routed / .routed-w）
+//   - 操作菜单门控：取消（可取消态）/ 重试派发（仅待派发 RM-M21-5）/ 失败重派（仅 failed）
+//   - waiting 占位（T11/T12 接通前无生产者）：waitingSummary=null → 等待态零渲染
+// 纯组件测试：board context 直注入（IPC 边界由 provider/BoardCanvas 层承接）。
+import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import {
+  DelegatedTaskCard,
+  DelegationBoardProvider,
+  type DelegationBoardContextValue,
+} from './DelegatedTaskCard';
+import { showToast } from '../ui/Toast';
+import type { TaskRow } from '../../ipc/types';
+import { ipc } from '../../ipc/client';
+
+vi.mock('../../ipc/client', () => ({
+  ipc: {
+    hub: {
+      taskCancel: vi.fn().mockResolvedValue({ ok: true }),
+      retryDispatch: vi.fn().mockResolvedValue({ dispatched: true, nodeId: 'node-b', delegationId: 'hub-new' }),
+    },
+    task: { transition: vi.fn().mockResolvedValue({}) },
+  },
+}));
+vi.mock('../ui/Toast', () => ({ showToast: vi.fn() }));
+
+function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title' | 'status'>): TaskRow {
+  return {
+    workspaceId: 'ws-1',
+    description: '',
+    sourceSessionId: null,
+    sourceMessageId: null,
+    creatorUserId: 'user-1',
+    executionSessionId: null,
+    assigneeAgentId: null,
+    targetTeamId: null,
+    targetSessionId: null,
+    recurrenceParentId: null,
+    priority: 0,
+    scheduledAt: null,
+    recurrenceRule: null,
+    deadlineAt: null,
+    queuePosition: null,
+    runtimeInstanceId: null,
+    estimatedTokens: null,
+    actualTokens: null,
+    toolCallsUsed: 0,
+    errorMessage: null,
+    sourceNodeId: null,
+    createdAt: 1000,
+    updatedAt: 1000,
+    startedAt: null,
+    completedAt: null,
+    groupId: null,
+    pinnedAt: null,
+    archivedAt: null,
+    routing: { mode: 'group', groupId: 'g1' },
+    delegationId: 'T-8f21abcd',
+    ...partial,
+  };
+}
+
+const EMPTY_BOARD: DelegationBoardContextValue = {
+  selfNodeId: null,
+  nodeNames: {},
+  ledger: {},
+  progress: {},
+  received: {},
+  refreshTasks: () => {},
+};
+
+function boardCtx(overrides: Partial<DelegationBoardContextValue> = {}): DelegationBoardContextValue {
+  return { ...EMPTY_BOARD, ...overrides };
+}
+
+function renderCard(task: TaskRow, board: DelegationBoardContextValue = EMPTY_BOARD, waitingSummary?: string | null) {
+  return render(
+    <DelegationBoardProvider value={board}>
+      <DelegatedTaskCard task={task} onSelect={() => {}} waitingSummary={waitingSummary ?? null} />
+    </DelegationBoardProvider>,
+  );
+}
+
+function openMenu(): void {
+  fireEvent.contextMenu(screen.getByRole('button', { name: /批量重命名|为支付回调|排查生产/ }));
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+// ── leader 侧六态徽标 ────────────────────────────────────────────────────────
+
+describe('DelegatedTaskCard — leader 侧六态', () => {
+  it('L-1. running：violet 执行中徽标 + spinner + 节点徽标 + violet 左边 + 进度行', () => {
+    renderCard(
+      mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'in_progress' }),
+      boardCtx({
+        nodeNames: { 'node-b': 'office-mac' },
+        ledger: { 'T-8f21abcd': { taskId: 'T-8f21abcd', workspaceName: 'dev-ws', targetNodeId: 'node-b', status: 'running', title: '批量重命名', createdAt: 1, updatedAt: 2 } },
+        progress: { 'T-8f21abcd': { excerpt: 'src/api/v2/user.ts · 第 3/5 文件', lastSeq: 9, at: 3 } },
+      }),
+    );
+    expect(screen.getByText('执行中')).toBeInTheDocument();
+    expect(screen.getByText('office-mac')).toBeInTheDocument();
+    expect(screen.getByText('src/api/v2/user.ts · 第 3/5 文件')).toBeInTheDocument();
+    const card = screen.getByRole('button', { name: /批量重命名/ });
+    expect(card.className).toContain('border-l-status-violet');
+    expect(card.querySelector('.animate-spin')).not.toBeNull();
+  });
+
+  it('L-2. 无 ledger/progress 时从行状态反推徽标（重启/离线对账兜底）', () => {
+    renderCard(mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'in_progress' }));
+    expect(screen.getByText('执行中')).toBeInTheDocument();
+  });
+
+  it('L-3. done：success 已完成徽标 + 终态降不透明 + 摘要行「已完成」', () => {
+    renderCard(
+      mkTask({ id: 'T-100', title: '升级依赖并修复类型错误', status: 'completed' }),
+      boardCtx({
+        ledger: { 'T-8f21abcd': { taskId: 'T-8f21abcd', workspaceName: 'dev-ws', targetNodeId: 'node-c', status: 'done', title: '升级依赖', createdAt: 1, updatedAt: 2 } },
+        progress: { 'T-8f21abcd': { excerpt: '已完成', lastSeq: 0, at: 4 } },
+      }),
+    );
+    const card = screen.getByRole('button', { name: /升级依赖/ });
+    expect(card.className).toContain('opacity-80');
+    // 徽标 + 进度摘要行两处「已完成」（摘要行 data-progress-line 标记）
+    const matches = screen.getAllByText('已完成');
+    expect(matches).toHaveLength(2);
+    expect(matches.some((el) => el.closest('[data-progress-line]') !== null)).toBe(true);
+  });
+
+  it('L-4. failed：error 失败徽标 + errorMessage 进度行', () => {
+    renderCard(mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'failed', errorMessage: '执行失败:测试炸了' }));
+    expect(screen.getByText('失败')).toBeInTheDocument();
+    expect(screen.getByText('执行失败:测试炸了')).toBeInTheDocument();
+  });
+
+  it('L-5. cancelled：neutral 已取消徽标', () => {
+    renderCard(mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'cancelled' }));
+    expect(screen.getByText('已取消')).toBeInTheDocument();
+  });
+
+  it('L-6. interrupted（ledger 权威）：warning 已中断徽标 + 中断摘要行', () => {
+    renderCard(
+      mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'pending' }),
+      boardCtx({
+        ledger: { 'T-8f21abcd': { taskId: 'T-8f21abcd', workspaceName: 'dev-ws', targetNodeId: 'node-b', status: 'interrupted', title: '批量重命名', createdAt: 1, updatedAt: 2 } },
+        progress: { 'T-8f21abcd': { excerpt: '目标节点连接中断，等待重连续传', lastSeq: 0, at: 5 } },
+      }),
+    );
+    expect(screen.getByText('已中断')).toBeInTheDocument();
+    expect(screen.getByText('目标节点连接中断，等待重连续传')).toBeInTheDocument();
+  });
+
+  it('L-7. hub pending（已派发待执行）：warning 待执行徽标', () => {
+    renderCard(
+      mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'pending' }),
+      boardCtx({
+        ledger: { 'T-8f21abcd': { taskId: 'T-8f21abcd', workspaceName: 'dev-ws', targetNodeId: 'node-b', status: 'pending', title: '批量重命名', createdAt: 1, updatedAt: 2 } },
+      }),
+    );
+    expect(screen.getByText('待执行')).toBeInTheDocument();
+  });
+});
+
+// ── 待派发卡（RM-M21-5）─────────────────────────────────────────────────────
+
+describe('DelegatedTaskCard — 待派发', () => {
+  it('P-1. 组内调度待派发：「组内调度 · 待派发」徽标、无状态徽标、无进度行', () => {
+    renderCard(mkTask({ id: 'T-100', title: '排查生产环境 WebSocket 断连', status: 'pending', delegationId: null }));
+    expect(screen.getByText('组内调度 · 待派发')).toBeInTheDocument();
+    expect(screen.queryByText('执行中')).not.toBeInTheDocument();
+    expect(screen.queryByText('待执行')).not.toBeInTheDocument();
+    expect(screen.queryByText(/第 3\/5 文件/)).not.toBeInTheDocument();
+  });
+
+  it('P-2. 指定节点待派发：节点名 + 待派发徽标', () => {
+    renderCard(
+      mkTask({
+        id: 'T-100',
+        title: '排查生产环境 WebSocket 断连',
+        status: 'pending',
+        delegationId: null,
+        routing: { mode: 'node', groupId: 'g1', targetNodeId: 'node-b' },
+      }),
+      boardCtx({ nodeNames: { 'node-b': 'office-mac' } }),
+    );
+    expect(screen.getByText('office-mac · 待派发')).toBeInTheDocument();
+  });
+});
+
+// ── worker 侧（S6：来源徽标 + mono #T-id）───────────────────────────────────
+
+describe('DelegatedTaskCard — worker 侧', () => {
+  function workerBoard(): DelegationBoardContextValue {
+    return boardCtx({
+      selfNodeId: 'node-self',
+      nodeNames: { 'node-leader': 'mac-main' },
+      received: {
+        'T-8f21abcd': {
+          taskId: 'T-8f21abcd', sessionId: 'sess-1', workspaceId: 'ws-1', workspaceName: 'dev-ws',
+          title: '批量重命名 legacy API 端点', byNode: 'node-leader', state: 'running', createdAt: 1, updatedAt: 2,
+        },
+      },
+    });
+  }
+
+  it('W-1. routing.targetNodeId=本机 → worker 视角：「来自 mac-main」徽标 + mono #T-id', () => {
+    renderCard(
+      mkTask({
+        id: 'T-900',
+        title: '批量重命名 legacy API 端点',
+        status: 'in_progress',
+        routing: { mode: 'node', groupId: '', targetNodeId: 'node-self' },
+      }),
+      workerBoard(),
+    );
+    expect(screen.getByText('来自 mac-main')).toBeInTheDocument();
+    expect(screen.getByText('#T-8f21ab')).toBeInTheDocument();
+  });
+
+  it('W-2. 来源名缺失 → nodeId 短码兜底（离线节点名不可解析）', () => {
+    renderCard(
+      mkTask({
+        id: 'T-900',
+        title: '批量重命名 legacy API 端点',
+        status: 'in_progress',
+        routing: { mode: 'node', groupId: '', targetNodeId: 'node-self' },
+      }),
+      boardCtx({ selfNodeId: 'node-self', received: { 'T-8f21abcd': {
+        taskId: 'T-8f21abcd', sessionId: 'sess-1', workspaceId: 'ws-1', workspaceName: 'dev-ws',
+        title: '批量重命名', byNode: 'node-leader', state: 'running', createdAt: 1, updatedAt: 2,
+      } } }),
+    );
+    expect(screen.getByText(/来自 node…ader/)).toBeInTheDocument();
+  });
+});
+
+// ── waiting 占位（T11/T12 接通前的占位禁用）─────────────────────────────────
+
+describe('DelegatedTaskCard — waiting 态（占位）', () => {
+  it('Q-1. waitingSummary=null（T9 缺省）→ 等待态零渲染（无生产者不点亮）', () => {
+    renderCard(mkTask({ id: 'T-100', title: '为支付回调写集成测试', status: 'in_progress' }));
+    expect(screen.queryByText('等待节点确认')).not.toBeInTheDocument();
+    expect(screen.queryByText('等你确认')).not.toBeInTheDocument();
+    expect(screen.getByText('执行中')).toBeInTheDocument();
+  });
+
+  it('Q-2. leader waitingSummary → warning 左边 + 等待节点确认徽标 + warning tint 摘要行', () => {
+    renderCard(
+      mkTask({ id: 'T-100', title: '为支付回调写集成测试', status: 'in_progress' }),
+      EMPTY_BOARD,
+      'agent 请求 shell 命令 · 超出权限策略',
+    );
+    expect(screen.getByText('等待节点确认')).toBeInTheDocument();
+    expect(screen.queryByText('执行中')).not.toBeInTheDocument();
+    const card = screen.getByRole('button', { name: /为支付回调/ });
+    expect(card.className).toContain('border-l-status-warning');
+    const line = screen.getByText('agent 请求 shell 命令 · 超出权限策略').closest('[data-progress-line]');
+    expect(line?.className).toContain('bg-status-warning-tint');
+  });
+
+  it('Q-3. worker waitingSummary → 等你确认徽标 + 加粗「打开会话批准/拒绝」引导', () => {
+    renderCard(
+      mkTask({
+        id: 'T-900',
+        title: '为支付回调写集成测试',
+        status: 'in_progress',
+        routing: { mode: 'node', groupId: '', targetNodeId: 'node-self' },
+      }),
+      boardCtx({ selfNodeId: 'node-self' }),
+      'agent 请求 shell 命令（rm -rf node_modules）',
+    );
+    expect(screen.getByText('等你确认')).toBeInTheDocument();
+    expect(screen.getByText(/打开会话批准\/拒绝/)).toBeInTheDocument();
+  });
+});
+
+// ── 操作菜单门控与动作 ───────────────────────────────────────────────────────
+
+describe('DelegatedTaskCard — 操作菜单', () => {
+  it('M-1. running：取消在场；重试派发/失败重派不在场', () => {
+    renderCard(mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'in_progress' }));
+    openMenu();
+    expect(screen.getByRole('button', { name: /取消任务/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /重试派发/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /失败重派/ })).not.toBeInTheDocument();
+  });
+
+  it('M-2. 待派发：重试派发在场；取消走本地行取消', async () => {
+    renderCard(mkTask({ id: 'T-100', title: '排查生产环境 WebSocket 断连', status: 'pending', delegationId: null }));
+    openMenu();
+    expect(screen.getByRole('button', { name: /重试派发/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /取消任务/ }));
+    await waitFor(() => expect(ipc.task.transition).toHaveBeenCalledWith('T-100', 'cancelled'));
+    expect(ipc.hub.taskCancel).not.toHaveBeenCalled();
+  });
+
+  it('M-3. 已派发取消 → hub.taskCancel（既有 cancel 链，hub 账本权威）', async () => {
+    const refreshTasks = vi.fn();
+    renderCard(
+      mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'in_progress' }),
+      boardCtx({ refreshTasks }),
+    );
+    openMenu();
+    fireEvent.click(screen.getByRole('button', { name: /取消任务/ }));
+    await waitFor(() => expect(ipc.hub.taskCancel).toHaveBeenCalledWith({ taskId: 'T-8f21abcd' }));
+    await waitFor(() => expect(refreshTasks).toHaveBeenCalled());
+  });
+
+  it('M-4. failed：失败重派在场；取消不在场（终态）', () => {
+    renderCard(mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'failed' }));
+    openMenu();
+    expect(screen.getByRole('button', { name: /失败重派/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /取消任务/ })).not.toBeInTheDocument();
+  });
+
+  it('M-5. done：菜单三项全不在场（终态零操作）', () => {
+    renderCard(mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'completed' }));
+    openMenu();
+    expect(screen.queryByRole('button', { name: /取消任务/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /重试派发/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /失败重派/ })).not.toBeInTheDocument();
+  });
+
+  it('M-6. 重试派发 → hub.retryDispatch + 成功 toast + refreshTasks', async () => {
+    const refreshTasks = vi.fn();
+    renderCard(
+      mkTask({ id: 'T-100', title: '排查生产环境 WebSocket 断连', status: 'pending', delegationId: null }),
+      boardCtx({ refreshTasks, nodeNames: { 'node-b': 'office-mac' } }),
+    );
+    openMenu();
+    fireEvent.click(screen.getByRole('button', { name: /重试派发/ }));
+    await waitFor(() => expect(ipc.hub.retryDispatch).toHaveBeenCalledWith({ taskId: 'T-100' }));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('已派发给 office-mac'));
+    expect(refreshTasks).toHaveBeenCalled();
+  });
+
+  it('M-7. 重试无候选 → dispatched=false 留待处理 toast（RM-M21-5）', async () => {
+    vi.mocked(ipc.hub.retryDispatch).mockResolvedValueOnce({ dispatched: false, nodeId: null, delegationId: null });
+    renderCard(mkTask({ id: 'T-100', title: '排查生产环境 WebSocket 断连', status: 'pending', delegationId: null }));
+    openMenu();
+    fireEvent.click(screen.getByRole('button', { name: /重试派发/ }));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('暂无可用节点，任务保留待派发'));
+  });
+
+  it('M-8. 失败重派 → 同一 retryDispatch 通道（主进程换 delegation_id）', async () => {
+    renderCard(mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'failed', delegationId: 'hub-old' }));
+    openMenu();
+    fireEvent.click(screen.getByRole('button', { name: /失败重派/ }));
+    await waitFor(() => expect(ipc.hub.retryDispatch).toHaveBeenCalledWith({ taskId: 'T-100' }));
+  });
+});

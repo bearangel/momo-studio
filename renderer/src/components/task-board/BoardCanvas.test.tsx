@@ -302,6 +302,47 @@ describe('BoardCanvas 渲染结构', () => {
   });
 });
 
+// ── M2.1 T9:外派卡分发(routing≠local → DelegatedTaskCard;local 卡零回归)─────
+describe('BoardCanvas 外派卡分发(M2.1 T9)', () => {
+  const groups = [mkGroup({ id: 'G-1', name: '前端组', position: 1 })];
+  const mixed = [
+    mkTask({ id: 'T1', title: '本地甲', status: 'draft', groupId: 'G-1' }),
+    mkTask({
+      id: 'T9', title: '外派排查', status: 'pending', groupId: 'G-1', delegationId: null,
+      routing: { mode: 'group', groupId: 'hub-g1' },
+    }),
+  ];
+
+  beforeEach(() => {
+    (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
+    useTaskStore.setState({ tasks: [], dragging: false, pendingMoveCount: 0 });
+  });
+
+  it('D-1. routing≠local 行渲染外派卡(待派发徽标);local 卡走原路径零回归', () => {
+    render(<BoardCanvas tasks={mixed} groups={groups} laneMode="lanes" selectedId={null} onSelect={() => {}} workspaceId="ws1" />);
+    // 外派卡:DelegatedTaskCard 的待派发徽标(无 Provider 降级渲染)
+    expect(screen.getByText('组内调度 · 待派发')).toBeInTheDocument();
+    // local 卡:BoardCard 原路径(#短 id 前缀标题)
+    expect(screen.getByText(/#T1 · 本地甲/)).toBeInTheDocument();
+  });
+
+  it('D-2. 外派卡不接拖拽:无 sortable 包装(touch-none),local 卡保持可拖', () => {
+    const { container } = render(
+      <BoardCanvas tasks={mixed} groups={groups} laneMode="lanes" selectedId={null} onSelect={() => {}} workspaceId="ws1" />,
+    );
+    const sortables = container.querySelectorAll('.touch-none');
+    // 仅 local 卡(T1)注册 sortable;外派卡(T9)静态渲染(hub 账本驱动,本地 move 会打架)
+    expect(sortables.length).toBe(1);
+  });
+
+  it('D-3. 外派卡点击选中走 onSelect(详情抽屉入口不因分发丢失)', () => {
+    const onSelect = vi.fn();
+    render(<BoardCanvas tasks={mixed} groups={groups} laneMode="lanes" selectedId={null} onSelect={onSelect} workspaceId="ws1" />);
+    fireEvent.click(screen.getByRole('button', { name: '外派排查' }));
+    expect(onSelect).toHaveBeenCalledWith('T9');
+  });
+});
+
 // ── requireConfirm:in_progress → done/closed 二次确认(纯函数,Task 13)────────
 describe('resolveDrop requireConfirm(运行中任务移终态列需确认)', () => {
   const tasks = [

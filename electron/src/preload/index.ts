@@ -75,6 +75,8 @@ import type {
   HubViewMessagePage,
   HubViewLocalTask,
   HubViewAppendedEvent,
+  DelegationBoardResult,
+  RetryDispatchResult,
 } from '../../../renderer/src/ipc/types';
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -658,6 +660,10 @@ const api: ApiSurface = {
       invoke<SubmitRoutedTaskResult>('hub:submitRoutedTask', input),
     routingPrecheck: (input: { workspaceName: string }) =>
       invoke<RoutingPrecheckResult>('hub:routingPrecheck', input),
+    // 看板外派投影两通道（M2.1 T9）：引导读（进度摘要 + worker 收委派记录）+ 重派单点
+    delegationBoard: () => invoke<DelegationBoardResult>('hub:delegationBoard'),
+    retryDispatch: (input: { taskId: string }) =>
+      invoke<RetryDispatchResult>('hub:retryDispatch', input),
     onViewAppended: (callback) => {
       const handler = (_e: IpcRendererEvent, payload: HubViewAppendedEvent): void => callback(payload);
       ipcRenderer.on('hub:viewAppended', handler);

@@ -24,7 +24,15 @@ import type { HubResponderResult } from './client';
 import { createDelegationRunner, type DelegationRunner } from './delegation-runner';
 import { wireDelegationRunnerPorts } from './delegation-ports';
 import { createHubDelegationSettingsStore, type HubDelegationSettings } from './delegation-settings';
-import { createHubDelegationStore } from './delegation-store';
+import { createHubDelegationStore, type DelegationRecord } from './delegation-store';
+import {
+  createDelegationProgressStore,
+  createDelegationSync,
+  type DelegationProgressEntry,
+  type DelegationSync,
+} from './delegation-sync';
+import { listWorkspaces } from '../workspace/crud';
+import { insertTask, updateTask, getTask } from '../storage/tasks/repo';
 import { createMirrorRegistry, type MirrorRegistryRow } from './mirror-registry';
 import { ViewServer } from './view-server';
 import { createHubViewSettingsStore, type HubViewSettings } from './view-settings';
@@ -91,6 +99,85 @@ export function hubSetViewSettings(input: HubViewSettings): HubViewSettings {
 // 连接重建（换址/重接入）不改 runner（本地委派账本跨连接存续，重连对账续传）。
 let delegationRunner: DelegationRunner | null = null;
 
+// 外派投影状态回写（M2.1 T9 delegation-sync）模块级单例：leader 侧四推送 +
+// task.cancel 回执 → tasks 行六态映射；worker 侧 delegation store 装饰（收委派
+// 建行）。与 runner 同生命周期（DB/kv 边界，连接重建不换实例）。
+let delegationSync: DelegationSync | null = null;
+
+function ensureDelegationSync(): DelegationSync {
+  if (delegationSync) return delegationSync;
+  const raw = createDelegationSync({
+    findTaskByDelegation: (delegationId) => {
+      const db = getDb();
+      const row = db
+        .prepare('SELECT id FROM tasks WHERE delegation_id = ?')
+        .get(delegationId) as { id: string } | undefined;
+      return row ? (getTask(row.id) ?? null) : null;
+    },
+    updateTask: (id, patch) => {
+      updateTask(id, patch);
+    },
+    saveProgress: (delegationId, entry) => {
+      createDelegationProgressStore(getDb()).save(delegationId, entry);
+    },
+    insertWorkerTaskRow: (input) =>
+      insertTask({
+        workspaceId: input.workspaceId,
+        title: input.title,
+        creatorUserId: 'owner',
+        status: input.status,
+        routing: input.routing,
+        delegationId: input.delegationId,
+        startedAt: input.startedAt,
+      }).id,
+    findWorkspaceByName: (name) => {
+      const ws = listWorkspaces().find((w) => w.name === name);
+      return ws ? { id: ws.id } : null;
+    },
+    selfNodeId: () => configStore().read()?.nodeId ?? null,
+    now: () => Date.now(),
+  });
+  // 投影回写是辅助面：DB 异常不得断掉事件桥（renderer 广播与 hub 账本主链
+  // 不受影响；warn 留痕——非吞状态，行对账由下一次事件/轮询兜底）
+  const guard = (label: string, fn: () => void): void => {
+    try {
+      fn();
+    } catch (err) {
+      logger.warn(`外派投影回写失败（${label}）`, {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+  delegationSync = {
+    handleProgress: (evt) => guard('progress', () => raw.handleProgress(evt)),
+    handleTerminal: (status, taskId, reason) => guard('terminal', () => raw.handleTerminal(status, taskId, reason)),
+    markCancelled: (taskId) => guard('cancelled', () => raw.markCancelled(taskId)),
+    wrapWorkerStore: (store) => raw.wrapWorkerStore(store),
+  };
+  return delegationSync;
+}
+
+/**
+ * 看板外派投影引导读（IPC hub:delegationBoard 消费）：
+ *   - progress：进度摘要 kv 全量（delegationId → excerpt——重启后进度行不丢）
+ *   - received：worker 侧本地委派记录（byNode=来源——「来自 {node}」徽标数据源）
+ * kv/store 皆按需新开实例读同一份数据（无内存态，幂等安全）。
+ */
+export function hubDelegationBoard(): {
+  progress: Record<string, DelegationProgressEntry>;
+  received: DelegationRecord[];
+} {
+  return {
+    progress: createDelegationProgressStore(getDb()).list(),
+    received: createHubDelegationStore(getDb()).list(),
+  };
+}
+
+/** task.cancel 回执 → 外派行 cancelled 同步（IPC hub:taskCancel 成功路径消费） */
+export function hubMarkDelegationCancelled(taskId: string): void {
+  ensureDelegationSync().markCancelled(taskId);
+}
+
 // 远程查看服务端模块级单例（同款模式）：连接经 clientGetter 惰性取用，
 // 连接重建不换实例（订阅登记跨连接存续，hub 侧订阅在目标断开时已注销——
 // leader 重订阅走全新 view.subscribe 转发，无陈旧登记复活面）。
@@ -130,7 +217,8 @@ function ensureDelegationRunner(nodeId: string | null): DelegationRunner {
       selfNodeId: () => configStore().read()?.nodeId ?? nodeId,
       settings: () => delegationSettingsStore().read(),
     }),
-    store: createHubDelegationStore(getDb()),
+    // T9 外派投影：装饰 store 观察收委派建行 / 本地四态同步（runner 本体零改）
+    store: ensureDelegationSync().wrapWorkerStore(createHubDelegationStore(getDb())),
   });
   return delegationRunner;
 }
@@ -294,6 +382,8 @@ function startClient(
       if (evt.method === EVT.taskProgress) {
         const p = evt.payload as { taskId?: unknown; sessionId?: unknown; lastSeq?: unknown; excerpt?: unknown };
         if (typeof p.taskId === 'string' && typeof p.sessionId === 'string' && typeof p.lastSeq === 'number' && typeof p.excerpt === 'string') {
+          // T9 外派投影：进度拍先回写本地行（摘要 + running 映射），再桥 renderer
+          ensureDelegationSync().handleProgress({ taskId: p.taskId, lastSeq: p.lastSeq, excerpt: p.excerpt });
           broadcast('hub:taskProgress', { taskId: p.taskId, sessionId: p.sessionId, lastSeq: p.lastSeq, excerpt: p.excerpt });
         }
         return;
@@ -304,6 +394,12 @@ function startClient(
         const channel =
           evt.method === EVT.taskCompleted ? 'hub:taskCompleted' : evt.method === EVT.taskFailed ? 'hub:taskFailed' : 'hub:taskInterrupted';
         // reason 语义只在 failed（协议注释：done 不携带）——completed/interrupted 不透传
+        // T9 外派投影：终态先回写本地行（六态映射），再桥 renderer
+        ensureDelegationSync().handleTerminal(
+          evt.method === EVT.taskCompleted ? 'done' : evt.method === EVT.taskFailed ? 'failed' : 'interrupted',
+          p.taskId,
+          typeof p.reason === 'string' ? p.reason : undefined,
+        );
         broadcast(channel, {
           taskId: p.taskId,
           ...(channel === 'hub:taskFailed' && typeof p.reason === 'string' ? { reason: p.reason } : {}),
