@@ -6,6 +6,18 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 节点互联 M2.1：工作组 IA 重分配 / 统一任务模型 / HITL
+
+hub 侧两个 payload 透传补丁（`v0.1.3` permissionTier / `v0.1.4` progress.kind，均向后兼容可选字段——hub 侧账目见该仓 CHANGELOG）；studio 侧 protocol pin `#v0.1.4`。设计见 momo-hub 仓 `docs/specs/2026-10-26-momo-hub-m2.1-workgroup-ia-unified-tasks.md`，视觉合同 `.omo/previews/hub-ia-fullapp.html`（6+1 屏）。
+
+- **工作组一等视图（IA 迁移）**：活动栏第 6 项「工作组」——监控台（组/成员 presence+负载/节点卡/在跑任务行/组操作菜单：邀请码重生成·转移组长·退组）+ 未接入空态就地接入（D2 空态困死治愈；0 工作空间可达——验收 D1）；查看全宽化（空间选择器 + 四页签主区整体替换，替代设置页内嵌 640px）+ 侧栏「查看中」态
+- **设置瘦身**：节点互联仅剩迁移说明卡 + 连接 + 隐私与受控；GroupPanel/DelegationPanel/DelegationWizard/旧 ViewPanel 退役（retirement 零引用锁）；全部操作面 13 行消费矩阵归宿无丢失
+- **统一任务模型**：执行位置=任务路由属性（本机/组内调度/指定节点），看板唯一创建入口——本地+外派任务同列混排（外派卡六态徽标+节点/来源徽标+进度行+取消两步/重试派发/失败重派）；批量模式（多行任务书统一路由+预检）；未镜像空间守门降级仅本机
+- **least-busy 调度器**：leader 端纯函数（在线 ∧ 已镜像 ∧ running 最少，字典序破平局）；无候选留待处理不轮询；镜像登记表（workspace.mirrored 广播累积持久化——四消费方同源）
+- **HITL 三层最小核**：L0 权限档位（readonly=会话级零授权+只读约束前置段 / sandbox=预授予工作空间写授权 / confirm 默认执行端确认）；L1 超时自动拒（默认 15min 可配 1-120——denied+steer 注入，双倍超时 failed 兜底不永卡）；L1b waiting-input 进度信号（write-blocked 单漏斗信号源；恢复自动去态全链防粘滞）；leader「等待节点确认」/worker「等你确认+来自节点」双侧卡 + 监控台徽标
+- **真机验收修复（D1-D6）**：0-ws 主壳化（工作组零前置可达）；镜像携 defaultAgent 段（新 worker 默认实例在位，首派不再必拒）；workspace:listChanged 广播（镜像空间 UI 即时可见）；模型绑定 ghost 自愈；targetNodeId 回执回写（未知节点徽标）；取消两步确认
+- **测试**：`tests/hub` 326 用例；renderer 2805；electron 全量 4858；真机 33/39→修复后冷启动全链 pass
+
 ## [未发布] — 节点互联 M2：工作组 / 镜像 / 委派 / 远程查看
 
 hub 侧（独立仓 momo-hub `v0.1.2`，协议 1.2.0）交付工作组内核、快照存档 + 镜像两段式、委派账本 + 续传、查看转发 + consent、快照模型绑定可选段（hub 侧账目见该仓 CHANGELOG）；studio 侧四域全链接通 + protocol pin 升级 `github:bearangel/momo-hub#v0.1.2`（M2 私有 wire 段随 tag 发布，本地镜像模块补单源指针注释 @ v0.1.2 后保留——hub 无 `MirrorApplyOutcome`/`extractModelBinding` 本地类型导出，切换 import 得不偿失）。设计见 momo-hub 仓 `docs/specs/2026-10-24-momo-hub-m2-distributed-workgroups.md`。
@@ -20,7 +32,7 @@ hub 侧（独立仓 momo-hub `v0.1.2`，协议 1.2.0）交付工作组内核、�
 - **测试**：M2 三段集成测试（镜像/委派/查看全链 + consent 语义）；`tests/hub` 17 文件 210+ 用例全绿
 - **已知限制**：UI 单组形态（一节点一组，多组 UI M3 议）；委派为单任务粒度（无编排/依赖图）；委派结果以会话消息流形态在查看面消费（拉取结果文件 M3+ 议）；文件树远程浏览不在版（M2 后跟进项——M2.1 票，spec §9）；镜像只做整体替换 + 差异摘要确认（无增量合并）；跨组路由/组间可见性不做
 
-版本 `2.1.0-alpha.30`。
+版本 `2.1.0-alpha.31`。
 
 ## [未发布] — 节点互联 M1：hub 私有 marketplace（资源分发）
 
