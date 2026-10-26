@@ -58,6 +58,9 @@ import type {
   HubMirrorAcceptResult,
   HubMirrorResultEvent,
   HubMirrorRegistryRow,
+  SubmitRoutedTaskInput,
+  SubmitRoutedTaskResult,
+  RoutingPrecheckResult,
   HubSnapshotBuildUploadResult,
   HubWorkspaceMirroredEvent,
   HubDelegationSettings,
@@ -650,6 +653,11 @@ const api: ApiSurface = {
     // 镜像登记表查询（M2.1 T6 / RM-M21-7）：workspaceName 可选过滤
     mirrorRegistry: (input?: { workspaceName?: string }) =>
       invoke<{ mirrors: HubMirrorRegistryRow[] }>('hub:mirrorRegistry', input ?? {}),
+    // 路由提交链两通道（M2.1 T8）：三模式统一落点 + 预检概要
+    submitRoutedTask: (input: SubmitRoutedTaskInput) =>
+      invoke<SubmitRoutedTaskResult>('hub:submitRoutedTask', input),
+    routingPrecheck: (input: { workspaceName: string }) =>
+      invoke<RoutingPrecheckResult>('hub:routingPrecheck', input),
     onViewAppended: (callback) => {
       const handler = (_e: IpcRendererEvent, payload: HubViewAppendedEvent): void => callback(payload);
       ipcRenderer.on('hub:viewAppended', handler);

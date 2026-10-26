@@ -51,7 +51,7 @@ import { executeMove, type MoveTarget } from './move';
 import { validateTaskRoutingInput, type TaskRouting } from '../hub/task-routing';
 
 /** renderer task:create 入参（不含 creatorUserId，由 main 注入） */
-interface CreateInput {
+export interface CreateInput {
   workspaceId: string;
   title: string;
   description?: string;
@@ -93,52 +93,64 @@ interface ListOpts {
  * （abortTaskExecution）——transition 的 paused/cancelled 分支同源消费。
  */
 
-export function registerTaskHandlers(): void {
-  ipcMain.handle('task:create', async (_evt, input: CreateInput): Promise<TaskRow> => {
-    // K1（2026-09-30 泳道语义重构 §4.1）：表单路径一律 draft——「创建即入队」
-    // 退役，启动是唯一入队动作（拖拽/详情按钮，均走 executeMove 单点）；
-    // 决策单源 create-status.ts（agent 工具路径见 task-tools.createTask）
-    const status = resolveCreateStatus(
-      { hasDelegationTarget: hasDelegationTarget(input), scheduledAt: input.scheduledAt ?? null },
-      'form',
-    );
-    // 分组三重校验（与 agent 工具 createTask 同款单源语义）：存在 / 同 ws / 未归档
-    if (input.groupId != null) {
-      const group = getGroup(input.groupId);
-      if (!group) {
-        throw new Error(`任务分组 ${input.groupId} 不存在`);
-      }
-      if (group.workspaceId !== input.workspaceId) {
-        throw new Error(`任务分组 ${input.groupId} 不属于当前工作空间，拒绝跨工作空间落组`);
-      }
-      if (group.archivedAt != null) {
-        throw new Error(`任务分组 ${input.groupId} 已归档，不可作为新建任务的目标分组`);
-      }
-    }
-    // M2.1 T6：routing 三选校验（异形人话抛错——IPC 边界契约违反要响亮）；
-    // undefined = 未指定 → 落列 NULL → 读侧 parseTaskRouting 兜底 local
-    const routing = validateTaskRoutingInput(input.routing);
-    const created = insertTask({
-      workspaceId: input.workspaceId,
-      title: input.title,
-      creatorUserId: 'owner',
-      status,
-      description: input.description,
-      priority: input.priority,
-      sourceSessionId: input.sourceSessionId,
-      sourceMessageId: input.sourceMessageId,
-      assigneeAgentId: input.assigneeAgentId,
-      targetTeamId: input.targetTeamId,
-      targetSessionId: input.targetSessionId,
-      recurrenceRule: input.recurrenceRule,
-      scheduledAt: input.scheduledAt,
-      deadlineAt: input.deadlineAt,
-      groupId: input.groupId,
-      ...(routing !== undefined ? { routing } : {}),
-    });
-    notifyExecutor();
-    return created;
+/** 分组三重校验（存在 / 同 ws / 未归档）——task.create 与 hub:submitRoutedTask 外派落库同源 */
+export function assertBoardGroupValid(workspaceId: string, groupId: string): void {
+  const group = getGroup(groupId);
+  if (!group) {
+    throw new Error(`任务分组 ${groupId} 不存在`);
+  }
+  if (group.workspaceId !== workspaceId) {
+    throw new Error(`任务分组 ${groupId} 不属于当前工作空间，拒绝跨工作空间落组`);
+  }
+  if (group.archivedAt != null) {
+    throw new Error(`任务分组 ${groupId} 已归档，不可作为新建任务的目标分组`);
+  }
+}
+
+/**
+ * 表单路径创建单源（M2.1 T8 抽取）：task:create IPC 与 hub:submitRoutedTask 的
+ * local 分支共用——draft 语义 / 分组校验 / routing 校验零漂移。
+ * K1（2026-09-30 泳道语义重构 §4.1）：表单路径一律 draft——「创建即入队」退役，
+ * 启动是唯一入队动作（拖拽/详情按钮，均走 executeMove 单点）；
+ * 决策单源 create-status.ts（agent 工具路径见 task-tools.createTask）
+ */
+export function createTaskFromForm(input: CreateInput): TaskRow {
+  const status = resolveCreateStatus(
+    { hasDelegationTarget: hasDelegationTarget(input), scheduledAt: input.scheduledAt ?? null },
+    'form',
+  );
+  if (input.groupId != null) {
+    assertBoardGroupValid(input.workspaceId, input.groupId);
+  }
+  // M2.1 T6：routing 三选校验（异形人话抛错——IPC 边界契约违反要响亮）；
+  // undefined = 未指定 → 落列 NULL → 读侧 parseTaskRouting 兜底 local
+  const routing = validateTaskRoutingInput(input.routing);
+  const created = insertTask({
+    workspaceId: input.workspaceId,
+    title: input.title,
+    creatorUserId: 'owner',
+    status,
+    description: input.description,
+    priority: input.priority,
+    sourceSessionId: input.sourceSessionId,
+    sourceMessageId: input.sourceMessageId,
+    assigneeAgentId: input.assigneeAgentId,
+    targetTeamId: input.targetTeamId,
+    targetSessionId: input.targetSessionId,
+    recurrenceRule: input.recurrenceRule,
+    scheduledAt: input.scheduledAt,
+    deadlineAt: input.deadlineAt,
+    groupId: input.groupId,
+    ...(routing !== undefined ? { routing } : {}),
   });
+  notifyExecutor();
+  return created;
+}
+
+export function registerTaskHandlers(): void {
+  ipcMain.handle('task:create', async (_evt, input: CreateInput): Promise<TaskRow> =>
+    createTaskFromForm(input),
+  );
 
   ipcMain.handle('task:list', async (_evt, opts: ListOpts): Promise<TaskRow[]> => {
     return listTasks(opts);

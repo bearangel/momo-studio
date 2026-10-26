@@ -8,6 +8,14 @@ import { createGroupClient } from './groups';
 import { publishToHub, type PublishInput } from './publish';
 import { buildAndUploadWorkspaceSnapshot } from './snapshot-upload';
 import { RPC, TASK_RPC, VIEW_RPC } from './protocol';
+import {
+  routingPrecheck,
+  submitRoutedTask,
+  type DispatchSubmitPorts,
+  type SubmitRoutedTaskInput,
+} from './dispatch-submit';
+import { assertBoardGroupValid, createTaskFromForm } from '../task/ipc.handlers';
+import { insertTask, updateTask } from '../storage/tasks/repo';
 
 // 组管理客户端单点：绑定 hubRequest（IPC 面复用同一实例；纯函数集，无状态）
 const groups = createGroupClient((method, payload, timeoutMs) => hubRequest(method, payload, timeoutMs));
@@ -88,4 +96,45 @@ export function registerHubIpc(): void {
   // 失忆限制与 M3 票见 hub/index.ts hubListMirrorRegistry 注释。
   ipcMain.handle('hub:mirrorRegistry', (_evt, input?: { workspaceName?: string }) =>
     hubListMirrorRegistry(input?.workspaceName));
+  // 路由提交链两通道（M2.1 T8）：三模式统一落点 submitRoutedTask（local 委托
+  // createTaskFromForm；group 走 pickWorker+既有委派管道+delegation_id 回写；
+  // node 直发）+ 预检概要（弹窗「执行位置」区数据源）。编排见 dispatch-submit.ts。
+  const dispatchSubmitPorts: DispatchSubmitPorts = {
+    listGroups: async () => (await groups.list()).groups,
+    listDelegations: async (groupId) =>
+      (await hubRequest<{ tasks: Array<{ taskId: string; targetNodeId: string; status: string }> }>(
+        TASK_RPC.list,
+        { groupId },
+        undefined,
+      )).tasks,
+    listMirrorRegistry: (workspaceName) => hubListMirrorRegistry(workspaceName),
+    delegate: (brief) => hubRequest(TASK_RPC.delegate, brief, undefined),
+    createLocalTask: (input) =>
+      createTaskFromForm({
+        workspaceId: input.workspaceId,
+        title: input.title,
+        description: input.description,
+        groupId: input.groupId,
+        routing: input.routing,
+      }),
+    createRemoteTask: (input) => {
+      if (input.groupId !== undefined) assertBoardGroupValid(input.workspaceId, input.groupId);
+      return insertTask({
+        workspaceId: input.workspaceId,
+        title: input.title,
+        creatorUserId: 'owner',
+        status: input.status,
+        description: input.description,
+        groupId: input.groupId,
+        routing: input.routing,
+      });
+    },
+    updateDelegationLink: (taskId, delegationId) => {
+      updateTask(taskId, { delegationId });
+    },
+  };
+  ipcMain.handle('hub:submitRoutedTask', (_evt, input: SubmitRoutedTaskInput) =>
+    submitRoutedTask(input, dispatchSubmitPorts));
+  ipcMain.handle('hub:routingPrecheck', (_evt, input: { workspaceName: string }) =>
+    routingPrecheck(input.workspaceName, dispatchSubmitPorts));
 }

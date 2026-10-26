@@ -1,6 +1,6 @@
 // renderer/src/components/im/CreateTaskDialog.test.tsx
 //
-// CreateTaskDialog 行为测试（B 子系统 B7 + v29 目标三选/循环预设）：
+// CreateTaskDialog 行为测试（B 子系统 B7 + v29 目标三选/循环预设 + M2.1 T8 单/批量与执行位置）：
 //   1. open=false 时不渲染任何 DOM
 //   2. open=true 时渲染表单核心字段（标题 / 描述 / 优先级）
 //   3. preset 字段预填到表单（标题 / 描述）
@@ -9,26 +9,32 @@
 //   6. 选团队目标 → create 携带 targetTeamId（v29）
 //   7. 选循环每天 09:00 → create 携带 recurrenceRule=daily@09:00（v29）
 //   8. 团队目标未选时禁用创建按钮，选中后恢复（v29 校验路径）
+//   9. M2.1 T8：单/批量 seg；批量 N 行→N 任务（空行跳过）统一路由；local 走既有
+//      task.create；group/node 走 hub.submitRoutedTask；routing≠local 隐藏本地委派字段
 //
 // Mock 策略：mock ../../ipc/client（IPC 进程边界，业务逻辑 serializeRecurrence
-// 走真实实现），agent.listMembers / team.list / session.list / task.create
-// 均为 vi.fn()，返回形状与 types.d.ts 契约对齐。
+// 走真实实现），agent.listMembers / team.list / session.list / task.create /
+// hub.routingPrecheck / hub.submitRoutedTask 均为 vi.fn()，返回形状与 types.d.ts 契约对齐。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CreateTaskDialog } from './CreateTaskDialog';
 import { useGroupStore } from '../../stores/group.store';
-import type { GroupRow } from '../../ipc/types';
+import type { GroupRow, RoutingPrecheckResult } from '../../ipc/types';
 
 // vi.hoisted 保证 mock fn 在 vi.mock 工厂（会被提升到文件顶部）执行时已存在，
 // 同时能在每个 test 内通过 mockResolvedValueOnce 精确控制返回值。
-const { mockTaskCreate, mockListAssignments, mockTeamList, mockSessionList, mockTaskGroupList } =
-  vi.hoisted(() => ({
-    mockTaskCreate: vi.fn(),
-    mockListAssignments: vi.fn(),
-    mockTeamList: vi.fn(),
-    mockSessionList: vi.fn(),
-    mockTaskGroupList: vi.fn(),
-  }));
+const {
+  mockTaskCreate, mockListAssignments, mockTeamList, mockSessionList, mockTaskGroupList,
+  mockRoutingPrecheck, mockSubmitRoutedTask,
+} = vi.hoisted(() => ({
+  mockTaskCreate: vi.fn(),
+  mockListAssignments: vi.fn(),
+  mockTeamList: vi.fn(),
+  mockSessionList: vi.fn(),
+  mockTaskGroupList: vi.fn(),
+  mockRoutingPrecheck: vi.fn(),
+  mockSubmitRoutedTask: vi.fn(),
+}));
 
 vi.mock('../../ipc/client', () => ({
   ipc: {
@@ -37,8 +43,29 @@ vi.mock('../../ipc/client', () => ({
     team: { list: mockTeamList },
     session: { list: mockSessionList },
     taskGroup: { list: mockTaskGroupList },
+    hub: { routingPrecheck: mockRoutingPrecheck, submitRoutedTask: mockSubmitRoutedTask },
   },
 }));
+
+/** T8 预检夹具：已镜像 + 单组 g1（node-a/node-b 在线已镜像） */
+function precheckFixture(overrides: Partial<RoutingPrecheckResult> = {}): RoutingPrecheckResult {
+  return {
+    mirrored: true,
+    groups: [
+      {
+        groupId: 'g1',
+        groupName: 'dev-team',
+        onlineCount: 2,
+        mirroredCount: 2,
+        members: [
+          { nodeId: 'node-a', name: 'office-mac', online: true, mirrored: true },
+          { nodeId: 'node-b', name: 'lab-node', online: true, mirrored: true },
+        ],
+      },
+    ],
+    ...overrides,
+  };
+}
 
 describe('CreateTaskDialog 截止时间退役（2026-09-30 §4.4）', () => {
   beforeEach(() => {
@@ -48,13 +75,15 @@ describe('CreateTaskDialog 截止时间退役（2026-09-30 §4.4）', () => {
     mockSessionList.mockReset().mockResolvedValue([]);
     mockTaskGroupList.mockReset().mockResolvedValue([]);
     useGroupStore.setState({ groups: [], loading: false, error: null, currentWorkspaceId: 'ws1', selectedGroupId: null });
+    mockRoutingPrecheck.mockReset().mockResolvedValue(precheckFixture());
+    mockSubmitRoutedTask.mockReset().mockResolvedValue({ task: { id: 'T-rem' }, dispatched: true, nodeId: 'node-a' });
   });
 
   it('不含截止时间字段；提交 payload 无 deadlineAt', async () => {
     render(<CreateTaskDialog open={true} onClose={() => {}} onCreated={() => {}} workspaceId="ws1" />);
     expect(screen.queryByLabelText('截止时间')).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(/标题/), { target: { value: '无截止任务' } });
-    fireEvent.click(screen.getByRole('button', { name: '创建' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
     await waitFor(() => expect(mockTaskCreate).toHaveBeenCalled());
     const call = mockTaskCreate.mock.calls[0]?.[0] as Record<string, unknown>;
     expect('deadlineAt' in call).toBe(false);
@@ -76,6 +105,8 @@ describe('CreateTaskDialog 分组默认值（看板选中分组透传，2026-09-
     // currentWorkspaceId 对齐 ws1：防 effect 里 loadGroups 因 ws 切换判定同步清空
     // groups（受控 select 无匹配 option → value 显示 ''，同步断言误判）
     useGroupStore.setState({ groups, loading: false, error: null, currentWorkspaceId: 'ws1', selectedGroupId: null });
+    mockRoutingPrecheck.mockReset().mockResolvedValue(precheckFixture());
+    mockSubmitRoutedTask.mockReset().mockResolvedValue({ task: { id: 'T-rem' }, dispatched: true, nodeId: 'node-a' });
   });
 
   it('defaultGroupId 传入 → 打开即默认选中该分组', () => {
@@ -111,7 +142,7 @@ describe('CreateTaskDialog 分组默认值（看板选中分组透传，2026-09-
       />,
     );
     fireEvent.change(screen.getByLabelText(/标题/), { target: { value: '组内新任务' } });
-    fireEvent.click(screen.getByRole('button', { name: '创建' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
     await waitFor(() => {
       expect(mockTaskCreate).toHaveBeenCalledWith(
         expect.objectContaining({ title: '组内新任务', groupId: 'G-001' }),
@@ -141,6 +172,8 @@ describe('CreateTaskDialog', () => {
       currentWorkspaceId: null,
       selectedGroupId: null,
     });
+    mockRoutingPrecheck.mockReset().mockResolvedValue(precheckFixture());
+    mockSubmitRoutedTask.mockReset().mockResolvedValue({ task: { id: 'T-rem' }, dispatched: true, nodeId: 'node-a' });
   });
 
   it('open=false 时不渲染', () => {
@@ -189,7 +222,7 @@ describe('CreateTaskDialog', () => {
     const targetSelect = (await screen.findByLabelText('委派目标')) as HTMLSelectElement;
     await waitFor(() => expect(targetSelect.value).toBe('inst-1'));
     fireEvent.change(screen.getByLabelText('标题*'), { target: { value: '预填活' } });
-    fireEvent.click(screen.getByRole('button', { name: '创建' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
     await waitFor(() => expect(onCreated).toHaveBeenCalled());
     // 互斥三列：agent 目标透传 assigneeAgentId，team/session 保持 null
     expect(mockTaskCreate).toHaveBeenCalledWith(
@@ -230,7 +263,7 @@ describe('CreateTaskDialog', () => {
     fireEvent.change(screen.getByLabelText('委派目标类型'), { target: { value: 'team' } });
     // 团队列表经 effect 异步加载，findBy 等待选项就绪后再选
     fireEvent.change(await screen.findByLabelText('委派目标'), { target: { value: 'team1' } });
-    fireEvent.click(screen.getByRole('button', { name: '创建' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith('T-001'));
     // 断言生产消费的字段：targetTeamId 透传 + 三列互斥（session 为 null）
     expect(mockTaskCreate).toHaveBeenCalledWith(
@@ -244,7 +277,7 @@ describe('CreateTaskDialog', () => {
     fireEvent.change(screen.getByLabelText('标题*'), { target: { value: '日报' } });
     fireEvent.change(screen.getByLabelText('循环规则'), { target: { value: 'daily' } });
     fireEvent.change(screen.getByLabelText('运行时间'), { target: { value: '09:00' } });
-    fireEvent.click(screen.getByRole('button', { name: '创建' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
     await waitFor(() => expect(onCreated).toHaveBeenCalled());
     expect(mockTaskCreate).toHaveBeenCalledWith(
       expect.objectContaining({ recurrenceRule: 'daily@09:00' }),
@@ -277,7 +310,7 @@ describe('CreateTaskDialog', () => {
     fireEvent.change(screen.getByLabelText('标题*'), { target: { value: '轮询' } });
     fireEvent.change(screen.getByLabelText('循环规则'), { target: { value: 'every' } });
     fireEvent.change(screen.getByLabelText('间隔数值'), { target: { value: '30' } });
-    fireEvent.click(screen.getByRole('button', { name: '创建' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
     await waitFor(() => expect(onCreated).toHaveBeenCalled());
     expect(mockTaskCreate).toHaveBeenCalledWith(
       expect.objectContaining({ recurrenceRule: 'every:30m' }),
@@ -288,13 +321,13 @@ describe('CreateTaskDialog', () => {
     render(<CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" />);
     fireEvent.change(screen.getByLabelText('标题*'), { target: { value: '等团队' } });
     // none 默认路径：标题已填 → 按钮可用
-    expect(screen.getByRole('button', { name: '创建' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '创建任务' })).toBeEnabled();
     // 切到团队但未选具体团队 → 禁用
     fireEvent.change(screen.getByLabelText('委派目标类型'), { target: { value: 'team' } });
-    expect(screen.getByRole('button', { name: '创建' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '创建任务' })).toBeDisabled();
     // 选中团队后恢复可用
     fireEvent.change(await screen.findByLabelText('委派目标'), { target: { value: 'team1' } });
-    expect(screen.getByRole('button', { name: '创建' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '创建任务' })).toBeEnabled();
   });
 
   // UX 修复：新建任务可选分组落组——选项=不分组(默认)+活跃组（group.store），
@@ -322,7 +355,7 @@ describe('CreateTaskDialog', () => {
       expect(screen.getByRole('option', { name: '需求组' })).toBeInTheDocument();
 
       fireEvent.change(screen.getByLabelText('标题*'), { target: { value: '无组' } });
-      fireEvent.click(screen.getByRole('button', { name: '创建' }));
+      fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
       await waitFor(() => expect(mockTaskCreate).toHaveBeenCalled());
       const input = mockTaskCreate.mock.calls[0]![0] as { groupId?: string };
       expect(input.groupId).toBeUndefined();
@@ -335,11 +368,178 @@ describe('CreateTaskDialog', () => {
 
       fireEvent.change(screen.getByLabelText('标题*'), { target: { value: '落组' } });
       fireEvent.change(await screen.findByLabelText('分组'), { target: { value: 'g-1' } });
-      fireEvent.click(screen.getByRole('button', { name: '创建' }));
+      fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
       await waitFor(() => expect(onCreated).toHaveBeenCalled());
       expect(mockTaskCreate).toHaveBeenCalledWith(
         expect.objectContaining({ groupId: 'g-1' }),
       );
     });
+  });
+});
+
+// M2.1 T8：单/批量模式切换 + 执行位置三选提交链。
+// 提交分流契约：local → 既有 ipc.task.create（零变化回归）；group/node →
+// ipc.hub.submitRoutedTask（三模式统一落点在主进程，renderer 不重复调度）。
+describe('CreateTaskDialog — 单/批量与执行位置（M2.1 T8）', () => {
+  beforeEach(() => {
+    mockTaskCreate.mockReset().mockResolvedValue({ id: 'T-100' });
+    mockListAssignments.mockReset().mockResolvedValue([]);
+    mockTeamList.mockReset().mockResolvedValue([]);
+    mockSessionList.mockReset().mockResolvedValue([]);
+    mockTaskGroupList.mockReset().mockResolvedValue([]);
+    mockRoutingPrecheck.mockReset().mockResolvedValue(precheckFixture());
+    mockSubmitRoutedTask.mockReset().mockResolvedValue({ task: { id: 'T-rem' }, dispatched: true, nodeId: 'node-a' });
+    useGroupStore.setState({ groups: [], loading: false, error: null, currentWorkspaceId: null, selectedGroupId: null });
+  });
+
+  it('T8-1. 默认单任务：seg 在场且单任务选中；标题/描述在场，无批量 textarea', () => {
+    render(<CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" />);
+    expect(screen.getByRole('radio', { name: '单任务' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: '批量' })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByLabelText(/标题/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/描述/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/批量任务书/)).not.toBeInTheDocument();
+    // 未传 workspaceName → 不渲染执行位置区（弹窗行为与 T8 前完全一致）
+    expect(screen.queryByText('执行位置')).not.toBeInTheDocument();
+    expect(mockRoutingPrecheck).not.toHaveBeenCalled();
+  });
+
+  it('T8-2. 切批量 → 标题/描述退场，批量任务书 textarea 在场；提交钮文案随行数', () => {
+    render(<CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" />);
+    fireEvent.click(screen.getByRole('radio', { name: '批量' }));
+    expect(screen.queryByLabelText(/标题/)).not.toBeInTheDocument();
+    const area = screen.getByLabelText(/批量任务书/) as HTMLTextAreaElement;
+    expect(area).toBeInTheDocument();
+    // 空内容 → 按钮禁用
+    expect(screen.getByRole('button', { name: '创建任务' })).toBeDisabled();
+    fireEvent.change(area, { target: { value: '任务一\n\n任务二\n任务三' } });
+    expect(screen.getByRole('button', { name: '创建 3 个任务' })).toBeEnabled();
+  });
+
+  it('T8-3. 批量 local（未传 workspaceName）：N 行→N 次 task.create，空行跳过', async () => {
+    const onCreated = vi.fn();
+    const onClose = vi.fn();
+    render(<CreateTaskDialog open onClose={onClose} onCreated={onCreated} workspaceId="ws1" />);
+    fireEvent.click(screen.getByRole('radio', { name: '批量' }));
+    fireEvent.change(screen.getByLabelText(/批量任务书/), {
+      target: { value: '升级 electron 到 44.x\n\n修复暗黑对比度\n补齐单测' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '创建 3 个任务' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(mockTaskCreate).toHaveBeenCalledTimes(3);
+    expect(mockTaskCreate).toHaveBeenNthCalledWith(1, expect.objectContaining({ title: '升级 electron 到 44.x' }));
+    expect(mockTaskCreate).toHaveBeenNthCalledWith(2, expect.objectContaining({ title: '修复暗黑对比度' }));
+    expect(mockTaskCreate).toHaveBeenNthCalledWith(3, expect.objectContaining({ title: '补齐单测' }));
+    expect(mockSubmitRoutedTask).not.toHaveBeenCalled();
+    // onCreated 只回调一次（末任务 id），不逐任务开详情抽屉
+    expect(onCreated).toHaveBeenCalledTimes(1);
+    expect(onCreated).toHaveBeenCalledWith('T-100');
+  });
+
+  it('T8-4. 传 workspaceName → 预检拉取 + 执行位置区渲染；local 提交仍走 task.create（routing 不透传）', async () => {
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    expect(mockRoutingPrecheck).toHaveBeenCalledWith({ workspaceName: 'dev-ws' });
+    const localRadio = await screen.findByRole('radio', { name: '本机执行' });
+    expect(localRadio).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/标题/), { target: { value: '本机活' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
+    await waitFor(() => expect(mockTaskCreate).toHaveBeenCalled());
+    const call = mockTaskCreate.mock.calls[0]![0] as Record<string, unknown>;
+    expect('routing' in call).toBe(false);
+    expect(mockSubmitRoutedTask).not.toHaveBeenCalled();
+  });
+
+  it('T8-5. 选组内调度 → 提交走 hub.submitRoutedTask（title/description/routing 透传）；本地委派字段退场', async () => {
+    const onCreated = vi.fn();
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={onCreated} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    await screen.findByRole('radio', { name: '组内调度' });
+    // 外派模式：本地委派目标/优先级/循环/计划开始退场（S2 单任务合同只留 标题/任务书/执行位置）
+    fireEvent.click(screen.getByRole('radio', { name: '组内调度' }));
+    expect(screen.queryByLabelText('委派目标类型')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('优先级')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('循环规则')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('计划开始')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/标题/), { target: { value: '排查断连' } });
+    fireEvent.change(screen.getByLabelText(/描述/), { target: { value: '分析 gateway 日志' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
+    await waitFor(() => expect(mockSubmitRoutedTask).toHaveBeenCalled());
+    expect(mockSubmitRoutedTask).toHaveBeenCalledWith({
+      workspaceId: 'ws1',
+      workspaceName: 'dev-ws',
+      title: '排查断连',
+      description: '分析 gateway 日志',
+      routing: { mode: 'group', groupId: 'g1' },
+    });
+    expect(mockTaskCreate).not.toHaveBeenCalled();
+    expect(onCreated).toHaveBeenCalledWith('T-rem');
+  });
+
+  it('T8-6. 批量 + 组内调度：N 行统一路由依次提交（每次重跑调度），onCreated 单次回调', async () => {
+    const onCreated = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <CreateTaskDialog open onClose={onClose} onCreated={onCreated} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    await screen.findByRole('radio', { name: '批量' });
+    fireEvent.click(screen.getByRole('radio', { name: '批量' }));
+    await screen.findByRole('radio', { name: '组内调度' });
+    fireEvent.click(screen.getByRole('radio', { name: '组内调度' }));
+    fireEvent.change(screen.getByLabelText(/批量任务书/), {
+      target: { value: '任务A\n任务B\n\n任务C' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '创建 3 个任务' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(mockSubmitRoutedTask).toHaveBeenCalledTimes(3);
+    for (const [i, title] of ['任务A', '任务B', '任务C'].entries()) {
+      expect(mockSubmitRoutedTask).toHaveBeenNthCalledWith(i + 1, {
+        workspaceId: 'ws1',
+        workspaceName: 'dev-ws',
+        title,
+        routing: { mode: 'group', groupId: 'g1' },
+      });
+    }
+    expect(mockTaskCreate).not.toHaveBeenCalled();
+    expect(onCreated).toHaveBeenCalledTimes(1);
+  });
+
+  it('T8-7. 批量指定节点：统一锁定目标成员提交', async () => {
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    await screen.findByRole('radio', { name: '批量' });
+    fireEvent.click(screen.getByRole('radio', { name: '批量' }));
+    await screen.findByRole('radio', { name: '指定节点' });
+    fireEvent.click(screen.getByRole('radio', { name: '指定节点' }));
+    const member = await screen.findByLabelText('目标成员');
+    fireEvent.change(member, { target: { value: 'node-b' } });
+    fireEvent.change(screen.getByLabelText(/批量任务书/), { target: { value: '只发一条' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建 1 个任务' }));
+    await waitFor(() => expect(mockSubmitRoutedTask).toHaveBeenCalled());
+    expect(mockSubmitRoutedTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: '只发一条',
+        routing: { mode: 'node', groupId: 'g1', targetNodeId: 'node-b' },
+      }),
+    );
+  });
+
+  it('T8-8. 预检失败（IPC rejection）→ 守门仅本机，提交不受阻', async () => {
+    mockRoutingPrecheck.mockRejectedValue(new Error('ipc broken'));
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('radio', { name: '本机执行' })).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole('radio', { name: '组内调度' })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/标题/), { target: { value: '降级本机' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
+    await waitFor(() => expect(mockTaskCreate).toHaveBeenCalled());
   });
 });

@@ -145,6 +145,53 @@ export type TaskRouting =
   | { mode: 'node'; groupId: string; targetNodeId: string };
 
 /**
+ * HITL 权限档位（M2.1 契约区——与 electron/src/main/hub/dispatch-submit.ts 逐字对齐；
+ * T10 run-policy 消费，随委派载荷向后兼容透传，缺省 'confirm'）。
+ */
+export type PermissionTier = 'readonly' | 'sandbox' | 'confirm';
+
+/** hub:submitRoutedTask 入参（三模式统一落点；与 dispatch-submit.ts SubmitRoutedTaskInput 对齐） */
+export interface SubmitRoutedTaskInput {
+  workspaceId: string;
+  workspaceName: string;
+  title: string;
+  description?: string;
+  groupId?: string;
+  routing: TaskRouting;
+  permissionTier?: PermissionTier;
+}
+
+/** hub:submitRoutedTask 返回（dispatched=false = 留待处理：无候选或发送瞬断） */
+export interface SubmitRoutedTaskResult {
+  task: TaskRow;
+  dispatched: boolean;
+  nodeId: string | null;
+}
+
+/** 路由预检成员概要（hub:routingPrecheck；mirrored=登记表本空间口径） */
+export interface RoutingMemberSummary {
+  nodeId: string;
+  name: string;
+  online: boolean;
+  mirrored: boolean;
+}
+
+/** 路由预检组概要（预检行「N 节点在线 · M 已镜像」数据源） */
+export interface RoutingGroupSummary {
+  groupId: string;
+  groupName: string;
+  onlineCount: number;
+  mirroredCount: number;
+  members: RoutingMemberSummary[];
+}
+
+/** 路由预检结果（mirrored=false → 弹窗执行位置仅「本机」——Review Focus #1 守门） */
+export interface RoutingPrecheckResult {
+  mirrored: boolean;
+  groups: RoutingGroupSummary[];
+}
+
+/**
  * 任务行（renderer 视图，与 electron 端 storage/tasks/repo.ts 的 TaskRow 完整对齐）。
  *
  * B7 之前是 { id, title, status } 三字段子集；B7 task.store 需要 update/transition
@@ -2954,6 +3001,14 @@ export interface HubApiSurface {
    * 广播累积登记（T3 徽标/T4 选择器/T7 调度/T8 守门四消费方同源数据）
    */
   mirrorRegistry(input?: { workspaceName?: string }): Promise<{ mirrors: HubMirrorRegistryRow[] }>;
+  /**
+   * 路由提交链（M2.1 T8）：三模式统一落点——local 委托既有创建；group 走 least-busy
+   * 调度+既有委派管道+delegation_id 回写（无候选/瞬断 → 行留待处理 dispatched=false）；
+   * node 直发指定成员。permissionTier 缺省 'confirm' 随载荷。
+   */
+  submitRoutedTask(input: SubmitRoutedTaskInput): Promise<SubmitRoutedTaskResult>;
+  /** 路由预检概要（M2.1 T8 弹窗「执行位置」区数据源；hub 不可达降级空组清单不抛） */
+  routingPrecheck(input: { workspaceName: string }): Promise<RoutingPrecheckResult>;
   /** 连接状态变化推送订阅（解订阅函数） */
   onStateChanged(callback: (payload: HubStateChangedEvent) => void): () => void;
   /** 节点上下线推送订阅（解订阅函数） */

@@ -18,9 +18,11 @@ interface Props {
   ariaLabel?: string;
   /** 标题前置图标（16px lucide 语义位；缺省不渲染——存量调用方零变化） */
   icon?: ReactNode;
+  /** 标题行右侧扩展位（ml-auto——如新建任务弹窗的单/批量 seg + 关闭钮） */
+  headerExtra?: ReactNode;
 }
 
-export function Dialog({ open, onClose, title, children, footer, width = 480, ariaLabel, icon }: Props) {
+export function Dialog({ open, onClose, title, children, footer, width = 480, ariaLabel, icon, headerExtra }: Props) {
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -59,6 +61,9 @@ export function Dialog({ open, onClose, title, children, footer, width = 480, ar
         <header className="flex items-center gap-2 px-5 pb-3 pt-4">
           {icon}
           <h2 className="text-sm font-semibold text-primary">{title}</h2>
+          {headerExtra !== undefined && (
+            <div className="ml-auto flex items-center gap-1.5">{headerExtra}</div>
+          )}
         </header>
         <div className="flex-1 overflow-auto px-5 pb-2 text-[13px] text-secondary">{children}</div>
         {footer ? <footer className="flex justify-end gap-2 px-5 py-4">{footer}</footer> : null}

@@ -31,6 +31,7 @@ import { filterBoardTasks } from '../../lib/board';
 import { useTaskStore } from '../../stores/task.store';
 import { useGroupStore } from '../../stores/group.store';
 import { useAgentStore } from '../../stores/agent.store';
+import { useWorkspaceStore } from '../../stores/workspace.store';
 import { SidebarRestoreButton } from '../layout/SidebarRestoreButton';
 import { CreateTaskDialog } from '../im/CreateTaskDialog';
 import { BoardToolbar, type BoardConcurrency } from './BoardToolbar';
@@ -84,6 +85,8 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
   const selectedArchivedGroupId = useGroupStore((s) => s.selectedArchivedGroupId);
   const loadGroups = useGroupStore((s) => s.load);
   const members = useAgentStore((s) => s.members);
+  // M2.1 T8：执行位置守门 + 外派载荷需要工作空间名（镜像按名对账）
+  const workspaceName = useWorkspaceStore((s) => s.workspaces.find((w) => w.id === workspaceId)?.name);
 
   const [maxConcurrency, setMaxConcurrency] = useState<number>(MAX_CONCURRENCY_FALLBACK);
   const [text, setText] = useState('');
@@ -296,6 +299,7 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
         onClose={() => setCreateOpen(false)}
         onCreated={(taskId) => setSelectedTaskId(taskId)}
         workspaceId={workspaceId}
+        workspaceName={workspaceName}
         defaultGroupId={activeGroupId}
       />
     </div>

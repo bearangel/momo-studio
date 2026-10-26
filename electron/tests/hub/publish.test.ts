@@ -452,13 +452,13 @@ describe('C3 范围守卫与人话错误', () => {
 
 // ── 4. IPC 接线 + resourcePublished 推送链 ─────────────────────────────────
 describe('IPC 接线与推送链', () => {
-  it('registerHubIpc 注册二十七通道（M1 发布 + M2b 工作组 + M2c 镜像 + M2.1 登记查询 + M2e 委派设置/task.*/查看八通道）', () => {
+  it('registerHubIpc 注册二十九通道（M1 发布 + M2b 工作组 + M2c 镜像 + M2.1 登记查询/路由提交 + M2e 委派设置/task.*/查看八通道）', () => {
     registerHubIpc();
     expect([...m.handlers.keys()].sort()).toEqual([
       'hub:configure', 'hub:enroll', 'hub:forget', 'hub:getDelegationSettings', 'hub:getStatus',
       'hub:getViewSettings', 'hub:groupCreate', 'hub:groupInvite', 'hub:groupJoin', 'hub:groupLeave', 'hub:groupList',
-      'hub:groupTransfer', 'hub:mirrorRegistry', 'hub:mirrorWorkspace', 'hub:publishResource', 'hub:setDelegationSettings', 'hub:setViewSettings',
-      'hub:snapshotBuildUpload', 'hub:taskCancel', 'hub:taskDelegate', 'hub:taskList',
+      'hub:groupTransfer', 'hub:mirrorRegistry', 'hub:mirrorWorkspace', 'hub:publishResource', 'hub:routingPrecheck', 'hub:setDelegationSettings', 'hub:setViewSettings',
+      'hub:snapshotBuildUpload', 'hub:submitRoutedTask', 'hub:taskCancel', 'hub:taskDelegate', 'hub:taskList',
       'hub:viewMessages', 'hub:viewSessions', 'hub:viewSubscribe', 'hub:viewTasks', 'hub:viewUnsubscribe', 'hub:viewWorkspace',
     ]);
   });
