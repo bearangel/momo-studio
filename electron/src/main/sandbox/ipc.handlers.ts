@@ -16,6 +16,7 @@ import {
 import { getSandboxSettings, type NetworkPolicy } from './settings';
 import { detectPackageManager } from './windows';
 import { grantWriteDirs, revokeWriteDir, listWorkspaceGrants } from './write-grant';
+import { clearPendingOnDeny, clearPendingOnGrant } from './write-blocked-emit';
 import { broadcastWriteGrantDenied } from '../agent/runtime-registry';
 import type { SandboxMode } from './types';
 
@@ -136,6 +137,7 @@ export function registerSandboxIpc(): void {
     if (typeof a.key !== 'string' || a.key === '') throw new Error('key 缺失');
     if (!Array.isArray(a.dirs) || a.dirs.some((d) => typeof d !== 'string')) throw new Error('dirs 非法');
     grantWriteDirs(a.scope, a.key, a.dirs);
+    clearPendingOnGrant(a.scope, a.key, a.dirs as string[]);
     logger.info('写授权已授予', { scope: a.scope, key: a.key, count: a.dirs.length });
   });
 
@@ -145,6 +147,12 @@ export function registerSandboxIpc(): void {
    */
   ipcMain.handle('sandbox:denyWrite', (_e, arg: unknown) => {
     handleDenyWrite(arg, broadcastWriteGrantDenied);
+    // M2.1 T11：未决登记同步清除（sessionWaiting 信号恢复 false）
+    const a = arg as { sessionId?: unknown; dirs?: unknown };
+    if (Array.isArray(a.dirs) && a.dirs.every((d) => typeof d === 'string')) {
+      const sid = typeof a.sessionId === 'string' ? a.sessionId : null;
+      clearPendingOnDeny(sid, a.dirs as string[]);
+    }
   });
 
   /** 设置页「已授权目录」列表（spec §8） */

@@ -24,6 +24,9 @@ afterAll(() => {
 import {
   inspectEventBatch,
   writeBlockedFromChildMsg,
+  listPendingWriteBlocked,
+  clearPendingOnGrant,
+  clearPendingOnDeny,
   __resetInspectStateForTest,
 } from '../../src/main/sandbox/write-blocked-emit';
 import type { MessageEventRow } from '../../src/main/storage/messages/events-repo';
@@ -265,5 +268,106 @@ describe('writeBlockedFromChildMsg 子链行归属解析（P1-1）', () => {
     })));
     expect(sig?.sessionId).toBe('s-p11');
     expect(sig?.sourceAgentName).toBe('general-assistant');
+  });
+});
+
+// === M2.1 T11 L1b：未决写授权登记（主进程真源——委派执行器 sessionWaiting 消费）。
+// 两条上报链（childMsg 等待即报 / inspectEventBatch 迟到兜底）都登记；
+// grantWrite / denyWrite 处置清除（dirs 相交匹配）；15min TTL 惰性过期
+// （renderer write-grant.store F3 同款语义——covered 轮询路径主进程不可观测，TTL 兜底）。
+describe('未决写授权登记（T11 sessionWaiting 真源）', () => {
+  function seedWaitingSession(sessionId: string, streamId: string, messageId = 'm-t11'): void {
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO workspaces (id, name, directory_path, owner_id)
+       VALUES ('ws-t11', 't11', '/ws/t11', 'u-test')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO sessions (id, workspace_id, title, title_auto, kind, created_at, updated_at)
+       VALUES (?, 'ws-t11', '委派任务会话', 0, 'chat', 1, 1)`,
+    ).run(sessionId);
+    db.prepare(
+      `INSERT INTO messages (id, session_id, sender, event_type, body, stream_session_id, status, source, created_at, updated_at)
+       VALUES (?, ?, 'agent-coder-66XMEw', 'm.room.message', '', ?, 'streaming', 'local', 1, 1)`,
+    ).run(messageId, sessionId, streamId);
+  }
+
+  it('childMsg 上报即登记：listPendingWriteBlocked(sessionId) 命中（command/dirs/来源完整）', () => {
+    seedWaitingSession('s-w1', 'ss-w1');
+    writeBlockedFromChildMsg({
+      type: 'write-blocked-report',
+      streamSessionId: 'ss-w1',
+      workspaceId: 'ws-t11',
+      dirs: ['/ws/t11/out'],
+      command: 'mkdir -p out',
+    });
+    const pending = listPendingWriteBlocked('s-w1');
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({ command: 'mkdir -p out', dirs: ['/ws/t11/out'], sourceAgentName: 'coder' });
+    // 归属不到会话的查询不命中（跨会话隔离）
+    expect(listPendingWriteBlocked('s-other')).toHaveLength(0);
+  });
+
+  it('inspectEventBatch 迟到兜底链同样登记', () => {
+    seedWaitingSession('s-w2', 'ss-w2', 'm-t11-w2');
+    const start = mkStart('c-w2', 'cargo build');
+    const result = mkResult('c-w2', CARGO_FAIL);
+    inspectEventBatch([start, result].map((e) => ({ ...e, messageId: 'm-t11-w2' })));
+    const pending = listPendingWriteBlocked('s-w2');
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.command).toBe('cargo build');
+  });
+
+  it('grantWrite 处置清除：session scope + dirs 相交命中；scope/键不符或目录不相交不清', () => {
+    seedWaitingSession('s-w3', 'ss-w3');
+    writeBlockedFromChildMsg({
+      type: 'write-blocked-report', streamSessionId: 'ss-w3', workspaceId: 'ws-t11',
+      dirs: ['/ws/t11/a', '/ws/t11/b'], command: 'x',
+    });
+    // scope 键不符（别的会话）→ 不清
+    clearPendingOnGrant('session', 's-other', ['/ws/t11/a']);
+    expect(listPendingWriteBlocked('s-w3')).toHaveLength(1);
+    // 目录不相交 → 不清（同会话另一张卡的场景）
+    clearPendingOnGrant('session', 's-w3', ['/ws/t11/c']);
+    expect(listPendingWriteBlocked('s-w3')).toHaveLength(1);
+    // workspace scope 命中 + 目录相交 → 清
+    clearPendingOnGrant('workspace', 'ws-t11', ['/ws/t11/b']);
+    expect(listPendingWriteBlocked('s-w3')).toHaveLength(0);
+  });
+
+  it('denyWrite 处置清除：sessionId 匹配 + dirs 相交；sessionId null 时按目录全局匹配', () => {
+    seedWaitingSession('s-w4', 'ss-w4');
+    writeBlockedFromChildMsg({
+      type: 'write-blocked-report', streamSessionId: 'ss-w4', workspaceId: 'ws-t11',
+      dirs: ['/ws/t11/d'], command: 'y',
+    });
+    clearPendingOnDeny('s-w4', ['/unrelated']);
+    expect(listPendingWriteBlocked('s-w4')).toHaveLength(1);
+    clearPendingOnDeny('s-w4', ['/ws/t11/d']);
+    expect(listPendingWriteBlocked('s-w4')).toHaveLength(0);
+
+    // sessionId null（未归属卡拒绝）→ 目录相交即清
+    writeBlockedFromChildMsg({
+      type: 'write-blocked-report', streamSessionId: 'ss-w5', workspaceId: 'ws-t11',
+      dirs: ['/ws/t11/e'], command: 'z',
+    });
+    clearPendingOnDeny(null, ['/ws/t11/e']);
+    expect(listPendingWriteBlocked('s-w4')).toHaveLength(0);
+  });
+
+  it('15min TTL 惰性过期（查询时清扫超期条目）', () => {
+    vi.useFakeTimers();
+    try {
+      seedWaitingSession('s-w6', 'ss-w6');
+      writeBlockedFromChildMsg({
+        type: 'write-blocked-report', streamSessionId: 'ss-w6', workspaceId: 'ws-t11',
+        dirs: ['/ws/t11/f'], command: 'w',
+      });
+      expect(listPendingWriteBlocked('s-w6')).toHaveLength(1);
+      vi.advanceTimersByTime(15 * 60 * 1000 + 1);
+      expect(listPendingWriteBlocked('s-w6')).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -57,8 +57,11 @@ export function registerHubIpc(): void {
   }));
   // 委派子节点设置两通道（M2e T10）：接受开关 + 并发上限（set 返回归一化值）
   ipcMain.handle('hub:getDelegationSettings', () => hubGetDelegationSettings());
-  ipcMain.handle('hub:setDelegationSettings', (_evt, input: { acceptTasks: boolean; maxConcurrent: number }) =>
-    hubSetDelegationSettings(input));
+  ipcMain.handle('hub:setDelegationSettings', (_evt, input: {
+    acceptTasks: boolean;
+    maxConcurrent: number;
+    hitlTimeoutMinutes: number;
+  }) => hubSetDelegationSettings(input));
   // 委派 leader 侧三通道（M2e T12，spec §3.1 task.*）：list（组过滤）/ delegate
   // （账本先行 pending）/ cancel（可取消态单点校验在 hub）；载荷采用 renderer 契约形状
   ipcMain.handle('hub:taskList', (_evt, input?: { groupId?: string }) =>

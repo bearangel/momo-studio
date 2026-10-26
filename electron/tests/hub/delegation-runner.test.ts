@@ -29,8 +29,13 @@ interface CallLog {
   resolvedAgents: Array<{ workspaceId: string; agentSlug: string | undefined }>;
   /** T10 权限档位预配调用记录（调用序锁：createSession → applyRunPolicy → startTurn） */
   appliedPolicies: Array<{ sessionId: string; tier: string }>;
+  /** T11 超时 steer 注入记录（调用序锁：applyRunPolicy(readonly) → injectSteer） */
+  injectedSteers: Array<{ sessionId: string; body: string }>;
   continuations: number;
 }
+
+/** T11 sessionWaiting 端口返回形状（与生产端口契约一致） */
+type WaitingState = { waiting: boolean; summary: string } | null;
 
 function makeHarness(overrides?: Partial<DelegationRunPorts>): {
   runner: ReturnType<typeof createDelegationRunner>;
@@ -40,6 +45,7 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
   fireTerminal: (sessionId: string, t: TurnTerminal) => void;
   pushTail: (sessionId: string, tail: DelegationTail) => void;
   setReportOnline: (online: boolean) => void;
+  setWaiting: (sessionId: string, state: WaitingState) => void;
   setInterrupted: (tasks: Array<{ taskId: string; title: string; workspaceName: string }>) => void;
   setWorkspace: (name: string, id: string) => void;
   setAgent: (slug: string | undefined, instanceId: string) => void;
@@ -52,7 +58,7 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
 
   const log: CallLog = {
     order: [], createdSessions: [], startedTurns: [], stoppedSessions: [],
-    reports: [], resolvedAgents: [], appliedPolicies: [], continuations: 0,
+    reports: [], resolvedAgents: [], appliedPolicies: [], injectedSteers: [], continuations: 0,
   };
 
   // 可变测试台状态
@@ -60,6 +66,7 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
   const agents = new Map<string, string>();               // slug|'__default__' → instanceId
   const tailQueue = new Map<string, DelegationTail[]>();  // sessionId → 待消费尾部增量
   const watchers = new Map<string, (t: TurnTerminal) => void>();
+  const waitingStates = new Map<string, WaitingState>();  // sessionId → sessionWaiting 返回（缺省 null=不支持）
   let reportOnline = true;
   let interrupted: Array<{ taskId: string; title: string; workspaceName: string }> = [];
   // D6：前 N 次 startTurn 尝试模拟「RouterService 未就绪」显式拒绝（含已成功的尝试计数）
@@ -85,6 +92,11 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
       log.appliedPolicies.push({ sessionId, tier });
       log.order.push(`applyRunPolicy:${sessionId}:${tier}`);
     },
+    injectSteer: (sessionId, body) => {
+      log.injectedSteers.push({ sessionId, body });
+      log.order.push(`injectSteer:${sessionId}`);
+    },
+    sessionWaiting: (sessionId) => waitingStates.get(sessionId) ?? null,
     startTurn: async (input) => {
       log.startedTurns.push(input);
       log.order.push(`startTurn:${input.sessionId}`);
@@ -127,6 +139,7 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
       tailQueue.set(sessionId, q);
     },
     setReportOnline: (online) => { reportOnline = online; },
+    setWaiting: (sessionId, state) => { waitingStates.set(sessionId, state); },
     setInterrupted: (tasks) => { interrupted = tasks; },
     setWorkspace: (name, id) => { workspaces.set(name, id); },
     setAgent: (slug, instanceId) => { agents.set(slug ?? '__default__', instanceId); },
@@ -162,7 +175,7 @@ afterEach(() => {
 describe('前置三拒', () => {
   it('接受开关关闭 → declined 附因，不建会不落账', async () => {
     const h = makeHarness();
-    h.settings.write({ acceptTasks: false, maxConcurrent: 2 });
+    h.settings.write({ acceptTasks: false, maxConcurrent: 2, hitlTimeoutMinutes: 15 });
     h.setWorkspace('ws-a', 'ws-id-1');
     h.setAgent(undefined, 'inst-default');
 
@@ -383,7 +396,7 @@ describe('开关即时生效', () => {
   it('运行中关闭接受开关 → 新委派被拒，既有运行不受影响', async () => {
     const h = makeHarness();
     await admitOne(h, 't1');
-    h.settings.write({ acceptTasks: false, maxConcurrent: 2 });
+    h.settings.write({ acceptTasks: false, maxConcurrent: 2, hitlTimeoutMinutes: 15 });
     await h.runner.handleAssigned(assignedEvt('t2'));
     expect(h.log.reports.find((r) => r.taskId === 't2')?.payload.reason).toMatch(/^declined:/);
     // 既有 t1 不停跑
@@ -627,5 +640,167 @@ describe('权限档位预配（T10）', () => {
     const h = makeHarness();
     await h.runner.handleAssigned(assignedEvt('t1'));
     expect(h.log.appliedPolicies).toHaveLength(0);
+  });
+});
+
+// ── L1b waiting-input 进度信号（M2.1 T11，RF#3 粘滞红线） ─────────────────────
+
+describe('waiting-input 进度信号（L1b）', () => {
+  it('sessionWaiting→waiting=true：进度拍带 kind=waiting-input、excerpt=summary（无尾部增量也打拍——等待态必须可见）；lastSeq 不回退', async () => {
+    const h = makeHarness();
+    await admitOne(h, 't1');
+    h.log.reports.length = 0;
+
+    h.setWaiting('sess-1', { waiting: true, summary: '等待批准写入 /tmp/fix.patch' });
+    await vi.advanceTimersByTimeAsync(500);
+
+    const beats = h.log.reports.filter((r) => r.payload.status === 'running');
+    expect(beats.length).toBeGreaterThan(0);
+    for (const b of beats) {
+      expect(b.payload.progress?.kind).toBe('waiting-input');
+      expect(b.payload.progress?.excerpt).toBe('等待批准写入 /tmp/fix.patch');
+      expect((b.payload.progress?.lastSeq ?? -1)).toBeGreaterThanOrEqual(0);
+    }
+
+    // 等待期间出现尾部增量：lastSeq 取批尾（单调不回退），kind 仍为 waiting-input
+    h.pushTail('sess-1', { lastSeq: 42, excerpt: '工具调用等待中' });
+    await vi.advanceTimersByTimeAsync(500);
+    const withTail = h.log.reports.find((r) => r.payload.progress?.lastSeq === 42);
+    expect(withTail?.payload.progress?.kind).toBe('waiting-input');
+    expect(withTail?.payload.progress?.excerpt).toBe('等待批准写入 /tmp/fix.patch');
+  });
+
+  it('恢复（waiting=false）→ 下一拍 kind 消失（RF#3 粘滞钉死）：正常 excerpt 覆盖', async () => {
+    const h = makeHarness();
+    await admitOne(h, 't1');
+    h.setWaiting('sess-1', { waiting: true, summary: '等待批准写入' });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.log.reports.some((r) => r.payload.progress?.kind === 'waiting-input')).toBe(true);
+
+    h.setWaiting('sess-1', { waiting: false, summary: '' });
+    h.pushTail('sess-1', { lastSeq: 30, excerpt: '已恢复执行，正在收尾' });
+    await vi.advanceTimersByTimeAsync(500);
+
+    const afterRecovery = h.log.reports.filter((r) => r.payload.progress?.lastSeq === 30);
+    expect(afterRecovery).toHaveLength(1);
+    expect(afterRecovery[0]!.payload.progress?.kind).toBeUndefined(); // RF#3：kind 必须消失
+    expect(afterRecovery[0]!.payload.progress?.excerpt).toBe('已恢复执行，正在收尾');
+    // 后续等待拍再翻回 waiting 仍可带 kind（信号可重复翻转）
+    h.setWaiting('sess-1', { waiting: true, summary: '再次等待确认' });
+    h.pushTail('sess-1', { lastSeq: 31, excerpt: '新工具调用' });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.log.reports.some((r) => r.payload.progress?.kind === 'waiting-input' && r.payload.progress?.excerpt === '再次等待确认')).toBe(true);
+  });
+
+  it('断线缓冲：waiting 拍离线合并为最新 summary（kind 保留），重连后补传；恢复后未发的 waiting 拍去 kind 再传', async () => {
+    const h = makeHarness();
+    await admitOne(h, 't1');
+    h.log.reports.length = 0;
+
+    h.setReportOnline(false);
+    h.setWaiting('sess-1', { waiting: true, summary: '第一次摘要' });
+    await vi.advanceTimersByTimeAsync(500);
+    h.setWaiting('sess-1', { waiting: true, summary: '最新等待摘要' });
+    await vi.advanceTimersByTimeAsync(500);
+    // 离线期间有尝试（report 记录含失败尝试——离线尝试带 kind 合法），全部返回 false
+    const offlineAttempts = h.log.reports.filter((r) => r.payload.status === 'running');
+    expect(offlineAttempts.length).toBeGreaterThan(0);
+    expect(offlineAttempts[offlineAttempts.length - 1]!.payload.progress?.excerpt).toBe('最新等待摘要');
+
+    // 恢复在线 + 恢复等待 → 下一拍补传：缓冲拍去 kind（RF#3），excerpt 为合并后的最新摘要
+    const beforeFlush = h.log.reports.length;
+    h.setReportOnline(true);
+    h.setWaiting('sess-1', { waiting: false, summary: '' });
+    await vi.advanceTimersByTimeAsync(500);
+    const flushed = h.log.reports.slice(beforeFlush).filter((r) => r.payload.status === 'running');
+    expect(flushed).toHaveLength(1);
+    expect(flushed[0]!.payload.progress?.excerpt).toBe('最新等待摘要');
+    expect(flushed[0]!.payload.progress?.kind).toBeUndefined();
+
+    // 再翻转 waiting：重连后新等待拍恢复带 kind
+    h.setWaiting('sess-1', { waiting: true, summary: '重连后等待' });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.log.reports.some((r) => r.payload.progress?.kind === 'waiting-input' && r.payload.progress?.excerpt === '重连后等待')).toBe(true);
+  });
+
+  it('端口返回 null（信号源不支持）→ 降级不检测：零 kind 拍、超时链零触发', async () => {
+    const h = makeHarness();
+    await admitOne(h, 't1');
+    h.log.reports.length = 0;
+    // 不设 waitingStates → sessionWaiting 返回 null（缺省不支持）
+    h.pushTail('sess-1', { lastSeq: 5, excerpt: '正常增量' });
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000 + 1000);
+    expect(h.log.reports.some((r) => r.payload.progress?.kind === 'waiting-input')).toBe(false);
+    expect(h.log.appliedPolicies).toHaveLength(1); // 仅 T10 首配那一次
+    expect(h.log.injectedSteers).toHaveLength(0);
+    expect(h.store.get('t1')?.state).toBe('running'); // 无双倍超时误杀
+  });
+});
+
+// ── L1 无人确认超时自动拒（M2.1 T11，RF#4 永卡红线） ─────────────────────────
+
+describe('HITL 无人确认超时自动拒（L1）', () => {
+  it('持续等待超 hitlTimeoutMinutes → applyRunPolicy(readonly) 先于 injectSteer（调用序锁）+ steer 文案；注入后仍等终态（done 正常上报——不永卡）', async () => {
+    const h = makeHarness();
+    await admitOne(h, 't1');
+    h.log.reports.length = 0;
+    h.log.order.length = 0;
+
+    h.setWaiting('sess-1', { waiting: true, summary: '等待批准写入' });
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000 + 1000); // 默认 15 分钟超时
+
+    // 注入序：applyRunPolicy(readonly)（denied 授权面）→ injectSteer（保守指令）
+    expect(h.log.appliedPolicies).toHaveLength(2); // T10 首配 + 超时注入
+    expect(h.log.appliedPolicies[1]).toEqual({ sessionId: 'sess-1', tier: 'readonly' });
+    expect(h.log.injectedSteers).toHaveLength(1);
+    expect(h.log.injectedSteers[0]!.sessionId).toBe('sess-1');
+    expect(h.log.injectedSteers[0]!.body).toContain('用户不在场');
+    const denyIdx = h.log.order.indexOf('applyRunPolicy:sess-1:readonly');
+    const steerIdx = h.log.order.indexOf('injectSteer:sess-1');
+    expect(denyIdx).toBeGreaterThan(-1);
+    expect(steerIdx).toBeGreaterThan(denyIdx);
+    // 注入幂等：再过一个超时周期（未到双倍）不重复注入
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.log.injectedSteers).toHaveLength(1);
+
+    // 注入后 agent 保守收尾 → 终态正常上报（不永卡 running）
+    h.fireTerminal('sess-1', { status: 'done' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.log.reports.some((r) => r.taskId === 't1' && r.payload.status === 'done')).toBe(true);
+    expect(h.store.get('t1')?.state).toBe('done');
+  });
+
+  it('注入后双倍超时仍在等待 → settleRun failed 附 hitl_timeout 人话 + 停跑（RF#4：账本 failed 不滞留 running）', async () => {
+    const h = makeHarness();
+    await admitOne(h, 't1');
+
+    h.setWaiting('sess-1', { waiting: true, summary: '等待批准写入' });
+    await vi.advanceTimersByTimeAsync(2 * 15 * 60 * 1000 + 2000); // 双倍超时
+
+    const failed = h.log.reports.find((r) => r.taskId === 't1' && r.payload.status === 'failed');
+    expect(failed).toBeDefined();
+    expect(failed!.payload.reason).toContain('hitl_timeout');
+    expect(failed!.payload.reason).toContain('15'); // 人话含超时分钟数
+    expect(h.store.get('t1')?.state).toBe('failed');
+    expect(h.log.stoppedSessions).toContain('sess-1'); // 停跑兜底（不留幽灵回合）
+    // 清算后不再打拍
+    h.log.reports.length = 0;
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(h.log.reports).toHaveLength(0);
+  });
+
+  it('等待恢复清零时钟：再等待从零计时（不因历史等待段误触发注入）', async () => {
+    const h = makeHarness();
+    await admitOne(h, 't1');
+
+    h.setWaiting('sess-1', { waiting: true, summary: '第一次等待' });
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000); // 10 分钟（< 15）
+    h.setWaiting('sess-1', { waiting: false, summary: '' });
+    await vi.advanceTimersByTimeAsync(500);
+    h.setWaiting('sess-1', { waiting: true, summary: '第二次等待' });
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 500); // 又 10 分钟——累计 20 但连续段仅 10
+
+    expect(h.log.injectedSteers).toHaveLength(0); // 未到 15 分钟连续等待：零注入
+    expect(h.store.get('t1')?.state).toBe('running');
   });
 });

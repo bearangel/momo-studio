@@ -2688,14 +2688,17 @@ export interface HubEnrollInput {
 }
 
 /**
- * hub 委派子节点设置（M2e T10）：接受开关 + 并发上限。
- * 主进程 kv 存储；set 返回归一化值（maxConcurrent 夹取 [1,8]）。
+ * hub 委派子节点设置（M2e T10 + M2.1 T11）：接受开关 + 并发上限 + HITL 超时。
+ * 主进程 kv 存储；set 返回归一化值（maxConcurrent 夹取 [1,8]；
+ * hitlTimeoutMinutes 夹取 [1,120]，RM-M21-4 默认 15 分钟）。
  */
 export interface HubDelegationSettings {
   /** 是否接受其他节点派来的委派任务（关闭 = 一律 declined） */
   acceptTasks: boolean;
   /** 同时执行的委派任务上限 */
   maxConcurrent: number;
+  /** HITL 无人确认超时（分钟）：委派会话持续等待用户确认超此值 → 自动拒 */
+  hitlTimeoutMinutes: number;
 }
 
 /** hub:groupChanged 推送载荷（协议 GroupChangedEvent 镜像——组成员变动/组长转移的组内广播） */

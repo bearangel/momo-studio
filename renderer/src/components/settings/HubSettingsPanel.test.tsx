@@ -43,8 +43,8 @@ const api = {
     groupTransfer: vi.fn(),
     onGroupChanged: vi.fn(() => () => undefined),
     // 委派子节点区段（M2e T10）——默认接受开/并发 2；set 回显归一化值
-    getDelegationSettings: vi.fn(async () => ({ acceptTasks: true, maxConcurrent: 2 })),
-    setDelegationSettings: vi.fn(async (input: { acceptTasks: boolean; maxConcurrent: number }) => input),
+    getDelegationSettings: vi.fn(async () => ({ acceptTasks: true, maxConcurrent: 2, hitlTimeoutMinutes: 15 })),
+    setDelegationSettings: vi.fn(async (input: { acceptTasks: boolean; maxConcurrent: number; hitlTimeoutMinutes: number }) => input),
     onMirrorResult: vi.fn(() => () => undefined),
     onWorkspaceMirrored: vi.fn(() => () => undefined),
     // 委派面板区段（M2e T12）挂载在 GroupPanel 内——mock 面补齐 task.* 通道（默认空账本）
@@ -403,15 +403,15 @@ describe('HubSettingsPanel', () => {
 
   it('委派子节点区段：开关即时保存；并发上限失焦保存且回显主进程归一化值', async () => {
     api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
-    api.hub.setDelegationSettings.mockResolvedValueOnce({ acceptTasks: false, maxConcurrent: 2 })
-      .mockResolvedValueOnce({ acceptTasks: false, maxConcurrent: 8 });
+    api.hub.setDelegationSettings.mockResolvedValueOnce({ acceptTasks: false, maxConcurrent: 2, hitlTimeoutMinutes: 15 })
+      .mockResolvedValueOnce({ acceptTasks: false, maxConcurrent: 8, hitlTimeoutMinutes: 15 });
     render(<HubSettingsPanel />);
 
     expect(await screen.findByText('任务委派（子节点）')).toBeInTheDocument();
     // 开关：点击即保存（Switch role=switch）
     fireEvent.click(screen.getByRole('switch', { name: '接受任务委派' }));
     await waitFor(() =>
-      expect(api.hub.setDelegationSettings).toHaveBeenCalledWith({ acceptTasks: false, maxConcurrent: 2 }),
+      expect(api.hub.setDelegationSettings).toHaveBeenCalledWith({ acceptTasks: false, maxConcurrent: 2, hitlTimeoutMinutes: 15 }),
     );
     expect((screen.getByRole('switch', { name: '接受任务委派' }) as HTMLButtonElement).getAttribute('aria-checked')).toBe('false');
 
@@ -420,9 +420,25 @@ describe('HubSettingsPanel', () => {
     fireEvent.change(input, { target: { value: '99' } });
     fireEvent.blur(input);
     await waitFor(() =>
-      expect(api.hub.setDelegationSettings).toHaveBeenLastCalledWith({ acceptTasks: false, maxConcurrent: 99 }),
+      expect(api.hub.setDelegationSettings).toHaveBeenLastCalledWith({ acceptTasks: false, maxConcurrent: 99, hitlTimeoutMinutes: 15 }),
     );
     await waitFor(() => expect((screen.getByLabelText('并发上限') as HTMLInputElement).value).toBe('8'));
+  });
+
+  it('无人确认超时输入：默认 15 分钟回显；失焦保存（主进程夹取 1-120 后回显归一化值）', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
+    api.hub.setDelegationSettings.mockResolvedValueOnce({ acceptTasks: true, maxConcurrent: 2, hitlTimeoutMinutes: 120 });
+    render(<HubSettingsPanel />);
+
+    const input = await screen.findByLabelText('无人确认超时自动拒绝') as HTMLInputElement;
+    expect(input.value).toBe('15'); // RM-M21-4 默认 15 分钟
+
+    fireEvent.change(input, { target: { value: '999' } });
+    fireEvent.blur(input);
+    await waitFor(() =>
+      expect(api.hub.setDelegationSettings).toHaveBeenLastCalledWith({ acceptTasks: true, maxConcurrent: 2, hitlTimeoutMinutes: 999 }),
+    );
+    await waitFor(() => expect((screen.getByLabelText('无人确认超时自动拒绝') as HTMLInputElement).value).toBe('120'));
   });
 });
 

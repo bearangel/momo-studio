@@ -28,12 +28,14 @@ import { Switch } from '../ui/Switch';
 
 /**
  * 委派子节点区段（M2e T10，RM2-3 复用表单豁免——Switch/Input 既有原子）：
- * 接受开关（即时保存）+ 并发上限（失焦/回车保存，主进程夹取 [1,8] 后回显）。
+ * 接受开关（即时保存）+ 并发上限（失焦/回车保存，主进程夹取 [1,8] 后回显）+
+ * 无人确认超时（M2.1 T11/RM-M21-4，分钟，主进程夹取 [1,120] 后回显）。
  */
 function DelegationSection() {
   const [settings, setSettings] = useState<HubDelegationSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [concurrencyDraft, setConcurrencyDraft] = useState('');
+  const [hitlTimeoutDraft, setHitlTimeoutDraft] = useState('');
 
   useEffect(() => {
     void ipc.hub
@@ -41,6 +43,7 @@ function DelegationSection() {
       .then((s) => {
         setSettings(s);
         setConcurrencyDraft(String(s.maxConcurrent));
+        setHitlTimeoutDraft(String(s.hitlTimeoutMinutes));
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   }, []);
@@ -64,6 +67,7 @@ function DelegationSection() {
       const normalized = await ipc.hub.setDelegationSettings(next);
       setSettings(normalized);
       setConcurrencyDraft(String(normalized.maxConcurrent));
+      setHitlTimeoutDraft(String(normalized.hitlTimeoutMinutes));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -103,6 +107,27 @@ function DelegationSection() {
               }
             }}
             aria-label="并发上限"
+          />
+        </div>
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <div className="text-[13px] text-primary">无人确认超时自动拒绝</div>
+            <p className="text-xs text-tertiary">委派任务等待你确认写操作的时长（分钟，1-120）——超时自动拒绝并让节点保守收尾</p>
+          </div>
+          <Input
+            type="number"
+            min={1}
+            max={120}
+            className="w-20"
+            value={hitlTimeoutDraft}
+            onChange={(e) => setHitlTimeoutDraft(e.target.value)}
+            onBlur={() => {
+              const n = Number(hitlTimeoutDraft);
+              if (Number.isFinite(n) && n !== settings.hitlTimeoutMinutes) {
+                void save({ ...settings, hitlTimeoutMinutes: n });
+              }
+            }}
+            aria-label="无人确认超时自动拒绝"
           />
         </div>
         {error !== null && <p className="text-xs text-status-error" role="alert">{error}</p>}

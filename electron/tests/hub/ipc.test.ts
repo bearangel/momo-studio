@@ -17,8 +17,8 @@ vi.mock('../../src/main/hub/index', () => ({
   hubForget: vi.fn(async () => undefined),
   replayPresenceSeed: vi.fn(),
   hubRequest: vi.fn(async () => ({})),
-  hubGetDelegationSettings: vi.fn(() => ({ acceptTasks: true, maxConcurrent: 2 })),
-  hubSetDelegationSettings: vi.fn(async (input: { acceptTasks: boolean; maxConcurrent: number }) => input),
+  hubGetDelegationSettings: vi.fn(() => ({ acceptTasks: true, maxConcurrent: 2, hitlTimeoutMinutes: 15 })),
+  hubSetDelegationSettings: vi.fn(async (input: { acceptTasks: boolean; maxConcurrent: number; hitlTimeoutMinutes: number }) => input),
   hubGetViewSettings: vi.fn(() => ({ allowGroupView: true })),
   hubSetViewSettings: vi.fn(async (input: { allowGroupView: boolean }) => input),
   hubDelegationBoard: vi.fn(() => ({ progress: {}, received: [] })),
@@ -94,11 +94,12 @@ describe('hub IPC 接线', () => {
   it('委派设置两通道：get 透传 hubGetDelegationSettings；set 透传入参并回传归一化值', async () => {
     registerHubIpc();
     const got = await handlers.get('hub:getDelegationSettings')!();
-    expect(got).toEqual({ acceptTasks: true, maxConcurrent: 2 });
+    expect(got).toEqual({ acceptTasks: true, maxConcurrent: 2, hitlTimeoutMinutes: 15 });
     expect(manager.hubGetDelegationSettings).toHaveBeenCalledTimes(1);
-    const set = await handlers.get('hub:setDelegationSettings')!(null, { acceptTasks: false, maxConcurrent: 4 });
-    expect(set).toEqual({ acceptTasks: false, maxConcurrent: 4 });
-    expect(manager.hubSetDelegationSettings).toHaveBeenCalledWith({ acceptTasks: false, maxConcurrent: 4 });
+    const set = await handlers.get('hub:setDelegationSettings')!(
+      null, { acceptTasks: false, maxConcurrent: 4, hitlTimeoutMinutes: 20 });
+    expect(set).toEqual({ acceptTasks: false, maxConcurrent: 4, hitlTimeoutMinutes: 20 });
+    expect(manager.hubSetDelegationSettings).toHaveBeenCalledWith({ acceptTasks: false, maxConcurrent: 4, hitlTimeoutMinutes: 20 });
   });
 });
 

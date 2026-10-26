@@ -40,7 +40,7 @@ export interface DelegationTail {
 
 /** 委派执行边界端口（生产实现在 wireDelegationRunnerPorts；测试注入 fake） */
 export interface DelegationRunPorts {
-  /** 设置实时读取（开关/并发上限即时生效） */
+  /** 设置实时读取（开关/并发上限/超时分钟即时生效） */
   settings(): HubDelegationSettings;
   findWorkspaceByName(name: string): { id: string; name: string } | null;
   /** agentSlug 匹配工作空间成员；缺省→工作空间默认 agent；均无 → null */
@@ -54,6 +54,13 @@ export interface DelegationRunPorts {
    * 由 runner 侧 composeTurnBody 前置，本端口只做授权面动作。
    */
   applyRunPolicy(sessionId: string, tier: PermissionTier): void;
+  /**
+   * L1b 等待信号查询（T11 契约签名）：回合是否正在等待用户输入（写授权卡等）。
+   * null = 信号源不支持（降级不检测——零 kind 拍、超时链不触发）。
+   */
+  sessionWaiting(sessionId: string): { waiting: boolean; summary: string } | null;
+  /** L1 超时保守指令注入（T11）：活跃流期间注入当前回合（steer 分流语义） */
+  injectSteer(sessionId: string, body: string): void;
   /** 执行一个回合（首拍后注入任务书 prompt；续传时注入续跑指令） */
   startTurn(input: { sessionId: string; body: string }): Promise<void>;
   /** 会话级急停（既有取消入口 RouterService.stopAll） */
@@ -73,16 +80,23 @@ interface ActiveRun {
   sessionId: string;
   /** 进度游标：仅在上报成功后推进（断线不丢增量） */
   cursor: number;
-  /** 待发进度拍（合并语义：始终覆盖为最新批尾） */
-  pendingBeat: { lastSeq: number; excerpt: string } | null;
+  /** 待发进度拍（合并语义：始终覆盖为最新批尾；waiting 态带 kind 标注） */
+  pendingBeat: { lastSeq: number; excerpt: string; kind?: 'waiting-input' } | null;
   /** 首拍 running 之后的回合 prompt 摘要（无文本增量时的 excerpt 兜底） */
   promptExcerpt: string;
+  /** L1b：本次持续等待的起点（首次 waiting=true 的拍时刻；恢复清 null——时钟按连续段计时） */
+  waitingSince: number | null;
+  /** L1：超时注入时刻（denied+steer 已下发；双倍超时兜底判据。恢复清 null 允许再等待周期） */
+  hitlInjectedAt: number | null;
   unwatch: () => void;
   terminal: TurnTerminal | null;
 }
 
 /** excerpt 截断上限（hub EXCERPT_MAX=512 之内留裕量） */
 const EXCERPT_MAX = 200;
+
+/** L1 超时注入的保守指令（plan Task 11 定文） */
+const HITL_TIMEOUT_STEER = '用户不在场，请保守处理或结束任务';
 
 /** D6 续传 boot 竞态：startTurn 退避重试次数（重连可早于 RouterService lazy 启动） */
 const RESUME_START_ATTEMPTS = 3;
@@ -169,20 +183,80 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
     });
   };
 
-  /** 进度拍：合并窗口到期 → 对每个活跃 run 读尾部增量、缓冲合并、上报成功才推进游标 */
+  /**
+   * L1 超时注入（连续等待超 hitlTimeoutMinutes）：denied 授权面（applyRunPolicy
+   * readonly → clearSessionGrants）先于 steer 保守指令；之后正常等 turn 终态
+   * （不永卡——RF#4）。注入幂等（每连续等待段至多一次）。
+   */
+  const injectHitlTimeout = (taskId: string, run: ActiveRun, timeoutMinutes: number): void => {
+    logger.info('HITL 无人确认超时，自动拒并注入保守指令', {
+      taskId,
+      sessionId: run.sessionId,
+      waitedMinutes: timeoutMinutes,
+    });
+    ports.applyRunPolicy(run.sessionId, 'readonly');
+    ports.injectSteer(run.sessionId, HITL_TIMEOUT_STEER);
+    run.hitlInjectedAt = Date.now();
+  };
+
+  /**
+   * 进度拍：合并窗口到期 → 对每个活跃 run 读尾部增量、缓冲合并、上报成功才推进游标。
+   * L1b（T11）：sessionWaiting→waiting=true 时 pendingBeat 带 kind:'waiting-input'
+   * （excerpt=summary——等待态必须可见，无尾部增量也打拍）；恢复 → 清 waitingSince
+   * + 缓冲拍去 kind（RF#3：恢复后 kind 必须消失）；持续等待超时 → 注入链/兜底清算。
+   */
   const tick = (): void => {
+    const now = Date.now();
     for (const [taskId, run] of active) {
       if (run.terminal) continue;
       const tail = ports.sessionTail(run.sessionId, run.cursor);
       if (tail && tail.lastSeq > run.cursor) {
         run.pendingBeat = { lastSeq: tail.lastSeq, excerpt: excerptOfText(tail.excerpt) };
       }
+      // L1b 等待信号（null=不支持 → 降级不检测，既有行为不变）
+      const waiting = (() => {
+        try {
+          return ports.sessionWaiting(run.sessionId);
+        } catch (err) {
+          logger.warn('等待信号查询异常（本拍降级跳过）', {
+            sessionId: run.sessionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return null;
+        }
+      })();
+      const timeoutMinutes = ports.settings().hitlTimeoutMinutes;
+      const timeoutMs = timeoutMinutes * 60 * 1000;
+      if (waiting !== null && waiting.waiting) {
+        if (run.waitingSince === null) run.waitingSince = now;
+        // 等待拍覆盖 excerpt/kind；lastSeq 取已知最大（单调不回退）
+        const lastSeq = Math.max(run.cursor, run.pendingBeat?.lastSeq ?? 0);
+        run.pendingBeat = { lastSeq, excerpt: excerptOfText(waiting.summary), kind: 'waiting-input' };
+        if (run.hitlInjectedAt === null && now - run.waitingSince > timeoutMs) {
+          injectHitlTimeout(taskId, run, timeoutMinutes);
+        } else if (run.hitlInjectedAt !== null && now - run.waitingSince > timeoutMs * 2) {
+          // RF#4 终态兜底：注入后双倍超时仍在等待——停跑 + failed 人话，不留永卡 running
+          ports.stopSession(run.sessionId);
+          settleRun(taskId, run, {
+            status: 'failed',
+            error: `hitl_timeout:等待用户确认超时（${timeoutMinutes} 分钟无人响应，已自动拒绝并注入保守指令后仍无收尾），任务终止`,
+          });
+          continue;
+        }
+      } else if (run.waitingSince !== null) {
+        // 恢复：时钟清零（再等待从零计时）；未发的等待拍去 kind（RF#3）
+        run.waitingSince = null;
+        run.hitlInjectedAt = null;
+        if (run.pendingBeat?.kind === 'waiting-input') {
+          run.pendingBeat = { lastSeq: run.pendingBeat.lastSeq, excerpt: run.pendingBeat.excerpt };
+        }
+      }
       const beat = run.pendingBeat;
-      if (!beat) continue; // 无增量不打空拍
+      if (!beat) continue; // 无增量不打空拍（等待态除外——上方已置等待拍）
       void sendReport(taskId, {
         status: 'running',
         sessionId: run.sessionId,
-        progress: { lastSeq: beat.lastSeq, excerpt: beat.excerpt },
+        progress: { lastSeq: beat.lastSeq, excerpt: beat.excerpt, ...(beat.kind !== undefined ? { kind: beat.kind } : {}) },
       }).then((ok) => {
         if (!ok) return; // 断线：pendingBeat 保留，游标不推进（重连后按最新批尾续传）
         if (beat.lastSeq > run.cursor) run.cursor = beat.lastSeq;
@@ -199,6 +273,8 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
       cursor: 0,
       pendingBeat: null,
       promptExcerpt: excerptOfPrompt(evt.task.prompt),
+      waitingSince: null,
+      hitlInjectedAt: null,
       unwatch: () => undefined,
       terminal: null,
     };
@@ -374,6 +450,8 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
           cursor: 0,
           pendingBeat: null,
           promptExcerpt: excerptOfPrompt(record.title),
+          waitingSince: null,
+          hitlInjectedAt: null,
           unwatch: () => undefined,
           terminal: null,
         };

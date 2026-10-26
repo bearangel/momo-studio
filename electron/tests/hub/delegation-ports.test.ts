@@ -43,8 +43,14 @@ import {
   applyRunPolicyProduct,
   resolveAgentInstanceProduct,
   sessionTailProduct,
+  sessionWaitingProduct,
   watchTurnProduct,
 } from '../../src/main/hub/delegation-ports';
+import {
+  clearPendingOnDeny,
+  listPendingWriteBlocked,
+  writeBlockedFromChildMsg,
+} from '../../src/main/sandbox/write-blocked-emit';
 
 // ── 环境脚手架（mirror-applier.test 同款） ──────────────────────────────────
 
@@ -388,5 +394,83 @@ describe('applyRunPolicyProduct 权限档位接线', () => {
     expect(() => applyRunPolicyProduct('sess-ghost', 'sandbox')).not.toThrow();
     expect(() => applyRunPolicyProduct('sess-ghost', 'readonly')).not.toThrow();
     expect(() => applyRunPolicyProduct('sess-ghost', 'confirm')).not.toThrow();
+  });
+});
+
+// ── sessionWaitingProduct：L1b 等待信号生产接线（M2.1 T11） ──────────────────
+// 真源=write-blocked-emit 未决写授权登记（主进程镜像）；门控=回合在跑
+// （latestAgentStreamRow status='streaming'——回合已终态的陈旧登记不误报）。
+
+describe('sessionWaitingProduct 等待信号接线', () => {
+  interface WaitingSeed {
+    sessionId: string;
+    streamId: string;
+    messageId: string;
+    agentStatus: string;
+  }
+
+  function seedWaiting(seed: WaitingSeed): void {
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO workspaces (id, name, directory_path, owner_id)
+       VALUES ('ws-wait', 'wait', '/ws/wait', 'u-test')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO sessions (id, workspace_id, title, title_auto, kind, created_at, updated_at)
+       VALUES (?, 'ws-wait', '委派会话', 0, 'chat', 1, 1)`,
+    ).run(seed.sessionId);
+    db.prepare(
+      `INSERT INTO messages (id, session_id, sender, event_type, body, stream_session_id, status, source, created_at, updated_at)
+       VALUES (?, ?, 'agent-coder-66XMEw', 'm.room.message', '', ?, ?, 'local', 1, 1)`,
+    ).run(seed.messageId, seed.sessionId, seed.streamId, seed.agentStatus);
+  }
+
+  function reportWaiting(streamId: string, command: string): void {
+    // writeBlockedFromChildMsg 在 electron mock 下无窗口静默跳过推送，登记面照常落
+    writeBlockedFromChildMsg({
+      type: 'write-blocked-report',
+      streamSessionId: streamId,
+      workspaceId: 'ws-wait',
+      dirs: ['/ws/wait/out'],
+      command,
+    });
+  }
+
+  it('未决授权卡 + 回合 streaming → waiting=true，summary 含来源 agent 与命令', () => {
+    seedWaiting({ sessionId: 's-h1', streamId: 'ss-h1', messageId: 'm-h1', agentStatus: 'streaming' });
+    reportWaiting('ss-h1', 'mkdir -p out');
+    const w = sessionWaitingProduct('s-h1');
+    expect(w).not.toBeNull();
+    expect(w!.waiting).toBe(true);
+    expect(w!.summary).toContain('mkdir -p out');
+    expect(w!.summary).toContain('coder');
+  });
+
+  it('无未决登记 → waiting=false（summary 空串）', () => {
+    seedWaiting({ sessionId: 's-h2', streamId: 'ss-h2', messageId: 'm-h2', agentStatus: 'streaming' });
+    const w = sessionWaitingProduct('s-h2');
+    expect(w).toEqual({ waiting: false, summary: '' });
+  });
+
+  it('回合已终态（done）+ 残留登记 → waiting=false（陈旧登记不误报）', () => {
+    seedWaiting({ sessionId: 's-h3', streamId: 'ss-h3', messageId: 'm-h3', agentStatus: 'streaming' });
+    reportWaiting('ss-h3', 'cargo build');
+    getDb().prepare('UPDATE messages SET status = ? WHERE id = ?').run('done', 'm-h3');
+    expect(listPendingWriteBlocked('s-h3')).toHaveLength(1); // 前置自证：登记仍在
+    const w = sessionWaitingProduct('s-h3');
+    expect(w!.waiting).toBe(false);
+  });
+
+  it('denyWrite 处置后 → waiting 恢复 false（重连/处置链路联动）', () => {
+    seedWaiting({ sessionId: 's-h4', streamId: 'ss-h4', messageId: 'm-h4', agentStatus: 'streaming' });
+    reportWaiting('ss-h4', 'rm -rf build');
+    expect(sessionWaitingProduct('s-h4')!.waiting).toBe(true);
+    clearPendingOnDeny('s-h4', ['/ws/wait/out']);
+    expect(sessionWaitingProduct('s-h4')!.waiting).toBe(false);
+  });
+
+  it('防御：会话不存在 → 不炸，waiting=false', () => {
+    expect(() => sessionWaitingProduct('sess-ghost')).not.toThrow();
+    expect(sessionWaitingProduct('sess-ghost')!.waiting).toBe(false);
   });
 });

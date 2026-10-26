@@ -27,8 +27,19 @@ export interface TaskReportPayload {
   progress?: TaskReportProgress;
 }
 
-/** 进度拍：委派会话 message_events 尾部摘要（excerpt 为截断文本）。 */
+/** 进度拍：委派会话 message_events 尾部摘要（excerpt 为截断文本）。
+ *  kind 可选标注（M2.1 T11）：'waiting-input' = worker 侧 agent 正等待用户
+ *  确认（写授权卡等）——leader 看板卡据此切「等待节点确认」态（T12 消费）。
+ *
+ *  ⚠️ hub 侧透传现状（2026-10-26 实测，momo-hub @ 0.1.3 pin）：hub
+ *  packages/hub/src/delegations.ts parseReportPayload 白名单重建
+ *  out.progress = { lastSeq, excerpt }——kind 字段被剥离（同 T10b
+ *  permissionTier 先例），task.progress 转发形状 TaskProgressEvent 亦为扁平
+ *  四字段。leader 侧要消费 kind 需 hub 升级（parse 白名单 + TaskProgressEvent
+ *  扩展 + 协议 pin 提升），已报裁定勿自行跨仓；本端按契约先行，hub 升级后
+ *  直接生效零改动（permissionTier 同款路径）。 */
 export interface TaskReportProgress {
   lastSeq: number;
   excerpt: string;
+  kind?: 'waiting-input';
 }

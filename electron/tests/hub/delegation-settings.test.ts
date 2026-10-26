@@ -12,29 +12,51 @@ function freshDb(): Database.Database {
 }
 
 describe('hub 委派设置存储', () => {
-  it('空库 read → 缺省（接受开 / 并发 2）；write → 回读', () => {
+  it('空库 read → 缺省（接受开 / 并发 2 / 超时 15 分钟）；write → 回读', () => {
     const db = freshDb();
     const store = createHubDelegationSettingsStore(db);
-    expect(store.read()).toEqual({ acceptTasks: true, maxConcurrent: 2 });
-    store.write({ acceptTasks: false, maxConcurrent: 4 });
-    expect(store.read()).toEqual({ acceptTasks: false, maxConcurrent: 4 });
+    expect(store.read()).toEqual({ acceptTasks: true, maxConcurrent: 2, hitlTimeoutMinutes: 15 });
+    store.write({ acceptTasks: false, maxConcurrent: 4, hitlTimeoutMinutes: 30 });
+    expect(store.read()).toEqual({ acceptTasks: false, maxConcurrent: 4, hitlTimeoutMinutes: 30 });
     db.close();
   });
 
   it('maxConcurrent 夹取到 [1,8]；acceptTasks 恒归一 boolean', () => {
     const db = freshDb();
     const store = createHubDelegationSettingsStore(db);
-    expect(store.write({ acceptTasks: true, maxConcurrent: 0 }).maxConcurrent).toBe(1);
-    expect(store.write({ acceptTasks: true, maxConcurrent: 99 }).maxConcurrent).toBe(8);
-    expect(store.write({ acceptTasks: true, maxConcurrent: 3 }).maxConcurrent).toBe(3);
+    expect(store.write({ acceptTasks: true, maxConcurrent: 0, hitlTimeoutMinutes: 15 }).maxConcurrent).toBe(1);
+    expect(store.write({ acceptTasks: true, maxConcurrent: 99, hitlTimeoutMinutes: 15 }).maxConcurrent).toBe(8);
+    expect(store.write({ acceptTasks: true, maxConcurrent: 3, hitlTimeoutMinutes: 15 }).maxConcurrent).toBe(3);
     db.close();
   });
 
-  it('脏 JSON / 异形值 → 缺省（不炸读取方）', () => {
+  it('hitlTimeoutMinutes 夹取到 [1,120]、四舍五入、非有限数回缺省 15（T11/RM-M21-4）', () => {
+    const db = freshDb();
+    const store = createHubDelegationSettingsStore(db);
+    expect(store.write({ acceptTasks: true, maxConcurrent: 2, hitlTimeoutMinutes: 0 }).hitlTimeoutMinutes).toBe(1);
+    expect(store.write({ acceptTasks: true, maxConcurrent: 2, hitlTimeoutMinutes: 999 }).hitlTimeoutMinutes).toBe(120);
+    expect(store.write({ acceptTasks: true, maxConcurrent: 2, hitlTimeoutMinutes: 20.4 }).hitlTimeoutMinutes).toBe(20);
+    expect(store.write({ acceptTasks: true, maxConcurrent: 2, hitlTimeoutMinutes: Number.NaN }).hitlTimeoutMinutes).toBe(15);
+    expect(store.write({ acceptTasks: true, maxConcurrent: 2, hitlTimeoutMinutes: Number.POSITIVE_INFINITY }).hitlTimeoutMinutes).toBe(15);
+    db.close();
+  });
+
+  it('脏 JSON / 异形值 → 缺省（不炸读取方）；旧两字段 JSON（历史库）→ 超时补缺省 15', () => {
     const db = freshDb();
     const store = createHubDelegationSettingsStore(db);
     db.prepare("INSERT INTO kv_store (key, value) VALUES ('hub_delegation_settings', '{bad json')").run();
-    expect(store.read()).toEqual({ acceptTasks: true, maxConcurrent: 2 });
+    expect(store.read()).toEqual({ acceptTasks: true, maxConcurrent: 2, hitlTimeoutMinutes: 15 });
+    // T10 时期落库的两字段形状（hitlTimeoutMinutes 引入前）——读侧补缺省不丢老值
+    db.prepare("UPDATE kv_store SET value = ? WHERE key = 'hub_delegation_settings'")
+      .run(JSON.stringify({ acceptTasks: false, maxConcurrent: 3 }));
+    expect(store.read()).toEqual({ acceptTasks: false, maxConcurrent: 3, hitlTimeoutMinutes: 15 });
+    // 异形超时值（字符串/负数）→ 夹取或缺省，不炸
+    db.prepare("UPDATE kv_store SET value = ? WHERE key = 'hub_delegation_settings'")
+      .run(JSON.stringify({ acceptTasks: true, maxConcurrent: 2, hitlTimeoutMinutes: '30' }));
+    expect(store.read().hitlTimeoutMinutes).toBe(15);
+    db.prepare("UPDATE kv_store SET value = ? WHERE key = 'hub_delegation_settings'")
+      .run(JSON.stringify({ acceptTasks: true, maxConcurrent: 2, hitlTimeoutMinutes: -5 }));
+    expect(store.read().hitlTimeoutMinutes).toBe(1);
     db.close();
   });
 });

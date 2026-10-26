@@ -12,6 +12,7 @@ import { sendUserMessage } from '../im/session-service';
 import { getRouterService } from '../agent/router-bootstrap';
 import { getSession } from '../storage/sessions/repo';
 import { clearSessionGrants, grantWriteDirs } from '../sandbox/write-grant';
+import { listPendingWriteBlocked } from '../sandbox/write-blocked-emit';
 import { planRunPolicy, type PermissionTier } from './run-policy';
 import type { DelegationRunPorts, DelegationTail, TurnTerminal } from './delegation-runner';
 import type { HubDelegationSettings } from './delegation-settings';
@@ -167,6 +168,33 @@ export function applyRunPolicyProduct(sessionId: string, tier: PermissionTier): 
   grantWriteDirs('session', sessionId, [wsDir]);
 }
 
+/**
+ * L1b 等待信号生产接线（M2.1 T11）：真源=write-blocked-emit 未决写授权登记
+ * （主进程镜像，grant/deny 处置清除 + 15min TTL）；门控=会话最新顶层 agent 流行
+ * status='streaming'——回合已终态的陈旧登记不误报（TTL 窗口内 covered 轮询路径
+ * 主进程不可观测，此门控消化其残留）。信号源探索结论详见 task-11-report.md：
+ * 写授权 pending 此前无主进程查询口（pending 态只在 renderer store 与子进程
+ * 等待循环），本接线即「最小真源」——不造新 IPC 面。导出供真 DB 回归锁直测。
+ */
+export function sessionWaitingProduct(sessionId: string): { waiting: boolean; summary: string } {
+  try {
+    const pending = listPendingWriteBlocked(sessionId);
+    if (pending.length === 0) return { waiting: false, summary: '' };
+    const row = latestAgentStreamRow(sessionId, 0);
+    if (!row || row.status !== 'streaming') return { waiting: false, summary: '' };
+    const s = pending[0]!;
+    const who = s.sourceAgentName !== null ? `${s.sourceAgentName} 等待写授权` : '等待写授权';
+    const what = s.command !== '' ? s.command : s.dirs.join('、');
+    return { waiting: true, summary: `${who}：${what}` };
+  } catch (err) {
+    logger.warn('等待信号查询失败（降级不检测）', {
+      sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { waiting: false, summary: '' };
+  }
+}
+
 export function wireDelegationRunnerPorts(opts: WireDelegationPortsOpts): DelegationRunPorts {
   const { clientGetter, selfNodeId, settings } = opts;
   return {
@@ -196,6 +224,19 @@ export function wireDelegationRunnerPorts(opts: WireDelegationPortsOpts): Delega
         systemKickoff: true,
       });
     },
+    injectSteer: (sessionId, body) => {
+      // T11 超时保守指令注入：复用 routeUserChat 的 steer 分流（活跃流期间
+      // !systemKickoff 用户消息注入当前流——systemKickoff:true 会开新回合反而
+      // 违背「注入当前等待中的回合」语义）。fire-and-forget，异常仅记日志
+      // （双倍超时兜底链不依赖本注入的成功送达）。
+      void sendUserMessage({ sessionId, body }).catch((err: unknown) => {
+        logger.warn('超时保守指令注入失败', {
+          sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    },
+    sessionWaiting: sessionWaitingProduct,
     stopSession(sessionId) {
       const stopped = getRouterService()?.stopAll(sessionId);
       logger.info('委派取消停跑', { sessionId, stopped });

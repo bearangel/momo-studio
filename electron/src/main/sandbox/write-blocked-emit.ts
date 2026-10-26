@@ -16,6 +16,56 @@ import { detectWriteBlocked, extractBlockedPaths, normalizeGrantDirs } from '../
 const commandByCallId = new Map<string, string>();
 const COMMAND_CACHE_MAX = 100;
 
+/**
+ * M2.1 T11 L1b：未决写授权登记（主进程真源——委派执行器 sessionWaiting 消费）。
+ * 两条上报链（writeBlockedFromChildMsg 等待即报 / inspectEventBatch 迟到兜底）
+ * 命中即登记；grantWrite / denyWrite 处置清除（dirs 相交匹配）；15min TTL 惰性
+ * 过期（renderer write-grant.store F3 同款语义——covered 轮询路径主进程不可观测，
+ * TTL 兜底；child 等待循环 10min 超时自弃，15min 覆盖其上）。
+ */
+const pendingWriteBlocked = new Map<string, { signal: WriteBlockedSignal; at: number }>();
+const PENDING_TTL_MS = 15 * 60 * 1000;
+
+/** 未决登记惰性清扫（查询路径顺带执行，不设独立计时器） */
+function sweepExpired(now: number): void {
+  for (const [key, entry] of pendingWriteBlocked) {
+    if (now - entry.at > PENDING_TTL_MS) pendingWriteBlocked.delete(key);
+  }
+}
+
+function registerPending(signal: WriteBlockedSignal): void {
+  if (signal.streamSessionId === null) return; // 无流键无法清除——不登记（TTL 语义由 renderer 卡自弃承载）
+  pendingWriteBlocked.set(signal.streamSessionId, { signal, at: Date.now() });
+}
+
+/** 按聊天会话查未决写授权卡（T11 sessionWaiting 真源查询口） */
+export function listPendingWriteBlocked(sessionId: string): WriteBlockedSignal[] {
+  sweepExpired(Date.now());
+  const out: WriteBlockedSignal[] = [];
+  for (const { signal } of pendingWriteBlocked.values()) {
+    if (signal.sessionId === sessionId) out.push(signal);
+  }
+  return out;
+}
+
+/** grantWrite 处置清除：scope 键匹配（session/ws）且授权目录与登记目录相交 */
+export function clearPendingOnGrant(scope: 'session' | 'workspace', key: string, dirs: string[]): void {
+  for (const [streamKey, entry] of pendingWriteBlocked) {
+    const { signal } = entry;
+    const scopeHit = scope === 'session' ? signal.sessionId === key : signal.workspaceId === key;
+    if (scopeHit && signal.dirs.some((d) => dirs.includes(d))) pendingWriteBlocked.delete(streamKey);
+  }
+}
+
+/** denyWrite 处置清除：sessionId 匹配（null = 未归属卡按目录全局匹配）且目录相交 */
+export function clearPendingOnDeny(sessionId: string | null, dirs: string[]): void {
+  for (const [streamKey, entry] of pendingWriteBlocked) {
+    const { signal } = entry;
+    const sessionHit = sessionId === null || signal.sessionId === sessionId;
+    if (sessionHit && signal.dirs.some((d) => dirs.includes(d))) pendingWriteBlocked.delete(streamKey);
+  }
+}
+
 /** result 文本中的沙箱 tag 行（子进程 shell-tools 拼入 `sandbox: ${plan.tag}`）——主进程侧的沙箱化判定（终审 I2） */
 const SANDBOX_TAG_LINE = /^sandbox: (seatbelt|bwrap)\//m;
 
@@ -70,6 +120,7 @@ function resolveStreamContext(streamSessionId: string | null): {
 
 export function __resetInspectStateForTest(): void {
   commandByCallId.clear();
+  pendingWriteBlocked.clear();
 }
 
 export function inspectEventBatch(events: MessageEventRow[]): WriteBlockedSignal | null {
@@ -109,7 +160,7 @@ export function inspectEventBatch(events: MessageEventRow[]): WriteBlockedSignal
       }
     })();
     const ctx = resolveStreamContext(streamSessionId);
-    return {
+    const signal: WriteBlockedSignal = {
       sessionId: ctx.sessionId,
       workspaceId: ctx.workspaceId,
       dirs,
@@ -118,6 +169,8 @@ export function inspectEventBatch(events: MessageEventRow[]): WriteBlockedSignal
       sourceAgentName: ctx.sourceAgentName,
       sessionTitle: ctx.sessionTitle,
     };
+    registerPending(signal);
+    return signal;
   }
   return null;
 }
@@ -143,18 +196,20 @@ export function writeBlockedFromChildMsg(msg: unknown): boolean {
   // 归属解析（resolveStreamContext 含子链行——2026-10-15 P1-1：旧 getLatest
   // 对子链流恒 null，会话允许禁用 + covered 查不到 session 授权）
   const ctx = resolveStreamContext(m.streamSessionId);
+  const signal: WriteBlockedSignal = {
+    sessionId: ctx.sessionId,
+    workspaceId: typeof m.workspaceId === 'string' ? m.workspaceId : ctx.workspaceId,
+    dirs: m.dirs,
+    command: m.command.length > 200 ? m.command.slice(0, 200) : m.command,
+    streamSessionId: m.streamSessionId,
+    sourceAgentName: ctx.sourceAgentName,
+    sessionTitle: ctx.sessionTitle,
+  };
+  registerPending(signal);
   const { BrowserWindow } = loadElectronApis();
   const win = BrowserWindow?.getAllWindows()[0];
   if (win && !win.isDestroyed()) {
-    win.webContents.send('sandbox:writeBlocked', {
-      sessionId: ctx.sessionId,
-      workspaceId: typeof m.workspaceId === 'string' ? m.workspaceId : ctx.workspaceId,
-      dirs: m.dirs,
-      command: m.command.length > 200 ? m.command.slice(0, 200) : m.command,
-      streamSessionId: m.streamSessionId,
-      sourceAgentName: ctx.sourceAgentName,
-      sessionTitle: ctx.sessionTitle,
-    });
+    win.webContents.send('sandbox:writeBlocked', signal);
   }
   return true;
 }
