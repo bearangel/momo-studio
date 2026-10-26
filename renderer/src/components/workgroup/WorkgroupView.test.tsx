@@ -5,7 +5,8 @@
 // - 未接入（!configured）：空态文案 + 「接入 hub」打开就地表单；提交走 ipc mock
 //   （window.api.hub.enroll，trim 后入参）；成功翻监控台（无组空态引导）
 // - enroll 失败：错误原文展示（ipc 代理剥包装前缀纪律）
-// - 已接入（configured）：直接监控台占位，无接入表单
+// - 已接入（configured）：直接监控台占位，无接入表单；configured&&!online 仍渲染
+//   空态但不 init 拉取（对齐 GroupPanel——离线拉取只产生 store.error 红行噪音）
 // - 「什么是工作组？」非死入口：点击切换帮助文案
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -47,6 +48,15 @@ const UNENROLLED: HubStatus = {
 const ENROLLED_ONLINE: HubStatus = {
   configured: true,
   state: 'online',
+  hubUrl: 'https://hub.example.com:8787',
+  nodeName: '办公室 MacBook',
+  nodeId: 'a3f9c2e1deadbeef',
+  lastError: null,
+};
+
+const ENROLLED_OFFLINE: HubStatus = {
+  configured: true,
+  state: 'disconnected',
   hubUrl: 'https://hub.example.com:8787',
   nodeName: '办公室 MacBook',
   nodeId: 'a3f9c2e1deadbeef',
@@ -150,6 +160,20 @@ describe('WorkgroupView', () => {
     render(<WorkgroupView />);
     expect(await screen.findByText('尚未加入任何工作组')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '接入 hub' })).not.toBeInTheDocument();
+  });
+
+  // T3 评审收口：init 门控对齐 GroupPanel 的 online 语义——configured&&!online
+  // 时仍渲染空态但不订阅不拉取（离线拉取只会把连接错误落进 store.error 红行噪音）
+  it('已接入但离线：渲染空态且不调用组列表拉取', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_OFFLINE);
+    render(<WorkgroupView />);
+    expect(await screen.findByText('尚未加入任何工作组')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(api.hub.getStatus).toHaveBeenCalled();
+    });
+    expect(api.hub.groupList).not.toHaveBeenCalled();
+    expect(api.hub.taskList).not.toHaveBeenCalled();
+    expect(api.hub.onGroupChanged).not.toHaveBeenCalled();
   });
 
   // T2 评审收口：getStatus 快照失败时 hub.store 置 loadError 且 status 保持 null

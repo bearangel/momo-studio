@@ -7,8 +7,6 @@
 //   空间名由该节点的委派任务史推导（任务能在该节点跑 = 空间已镜像过去），
 //   T4/后续接 mirror 事件源时可替换
 // - 「查看」是 T4 接口桩：禁用态 + title 提示，onOpenView 回调留给 T4 接线
-// - 「受控」为静态徽标：组成员数据（HubGroupMember）不含委派设置字段，远端
-//   读取通道缺失——以 title 注明数据源限制（本机开关见设置 → 节点互联 → 任务委派）
 // - 在跑行：running → violet spinner +「执行中」；pending → 警示图标 +「等待节点确认」
 //   （「在跑」语义同侧栏负载计数：两态同计）；终态任务不进行
 import { CircleHelp, Eye, Monitor } from 'lucide-react';
@@ -16,9 +14,6 @@ import type { HubGroupMember, HubTaskRecord } from '../../ipc/types';
 import { cn } from '../../lib/cn';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
-
-const CONTROLLED_HINT =
-  '数据源限制：组成员列表不含各节点的委派设置；本机受控开关见「设置 → 节点互联 → 任务委派」';
 
 interface NodeCardProps {
   node: HubGroupMember;
@@ -83,12 +78,6 @@ export function NodeCard({ node, isLeader, isSelf, tasks, onOpenView }: NodeCard
             <Eye size={12} strokeWidth={1.75} aria-hidden />
             查看
           </Button>
-          <Badge
-            className="h-auto px-1.5 py-0.5 text-[10px] leading-none"
-            title={CONTROLLED_HINT}
-          >
-            受控
-          </Badge>
         </span>
       </div>
       {runningTasks.map((t) => (

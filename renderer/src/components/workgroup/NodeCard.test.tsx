@@ -2,7 +2,6 @@
 //
 // 节点卡单元测试（momo-hub M2.1 Task 3）：
 // - 「查看」是 T4 接口桩：禁用态 + title 提示，点击不触发 onOpenView
-// - 「受控」为静态徽标（组成员数据不含委派设置——数据源限制以 title 注明）
 // - 在跑行两态：running → spinner 行 + violet「执行中」；pending → 警示行 +
 //   warning「等待节点确认」；终态任务（done/failed/…）不进行
 // - 空闲态：无在跑 + 在线 → success「空闲」；离线 → neutral「离线」；有在跑行时不渲染状态徽标
@@ -39,12 +38,6 @@ describe('NodeCard', () => {
     expect(btn).toHaveAttribute('title', 'T4 接入');
     fireEvent.click(btn);
     expect(onOpenView).not.toHaveBeenCalled();
-  });
-
-  it('「受控」静态徽标：title 注明数据源限制（组成员不含委派设置）', () => {
-    render(<NodeCard node={OFFICE} tasks={[]} isLeader={false} isSelf={false} onOpenView={onOpenView} />);
-    const badge = screen.getByText('受控');
-    expect(badge.closest('[title]')).toHaveAttribute('title', expect.stringContaining('数据源限制'));
   });
 
   it('在跑行两态：running→执行中、pending→等待节点确认；终态任务不进行', () => {
