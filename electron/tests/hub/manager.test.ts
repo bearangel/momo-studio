@@ -47,6 +47,13 @@ const m = vi.hoisted(() => ({
   viewSettings: { allowGroupView: true },
 }));
 
+// delegation-sync 替身（T12 桥级契约）：task.progress 桥有两路消费——delegation-sync
+// 摘要 kv 路 + renderer 广播路。capture handleProgress 入参即可断言「delegation-sync
+// 路」的 kind 透传/剥除（广播路落在 m.sent 断言上；真实映射语义由 delegation-sync.test.ts 锁）。
+const ds = vi.hoisted(() => ({
+  progress: [] as Array<{ taskId: string; lastSeq: number; excerpt: string; kind?: 'waiting-input' }>,
+}));
+
 vi.mock('electron', () => ({
   BrowserWindow: {
     getAllWindows: () => [
@@ -117,6 +124,24 @@ vi.mock('../../src/main/logger', () => ({
 // db 仅被 config-store 消费，而 config-store 已被替身接管——mock 掉避免加载 native 绑定。
 vi.mock('../../src/main/storage/db', () => ({ getDb: () => ({}) }));
 
+// delegation-sync 替身：生产里 handleProgress 会落 kv/行（DB 已被替身接管为空壳），
+// 桥级契约只需观察入参形状——kind 是否原样透传/剥除。
+vi.mock('../../src/main/hub/delegation-sync', () => ({
+  createDelegationSync: () => ({
+    handleProgress: (evt: { taskId: string; lastSeq: number; excerpt: string; kind?: 'waiting-input' }): void => {
+      ds.progress.push(evt);
+    },
+    handleTerminal: (): void => {},
+    markCancelled: (): void => {},
+    wrapWorkerStore: <T>(store: T): T => store,
+  }),
+  createDelegationProgressStore: () => ({
+    get: (): null => null,
+    save: (): void => {},
+    list: (): Record<string, never> => ({}),
+  }),
+}));
+
 import * as manager from '../../src/main/hub/index';
 
 beforeEach(async () => {
@@ -128,6 +153,7 @@ beforeEach(async () => {
   m.enrollCalls.length = 0;
   m.reqs.length = 0;
   m.viewSettings = { allowGroupView: true };
+  ds.progress.length = 0;
   __resetTrustedDownloadOriginsForTest();
 });
 
@@ -190,26 +216,48 @@ describe('hub manager 推送面', () => {
     });
   });
 
-  it('task.progress 事件 → 广播 hub:taskProgress（M2e T12 桥：四字段全须，异形丢弃）', async () => {
+  it('task.progress 事件 → delegation-sync + hub:taskProgress 双路透传（kind 契约：合法保留、异形剥除四字段完好）', async () => {
     await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
     m.sent.length = 0;
+
+    // 合法 kind：'waiting-input' 两路透传（delegation-sync 摘要路 + renderer 广播路），杂字段不透传
     m.clients[0]!.opts.onEvent({
       v: 1, kind: 'evt', method: 'task.progress',
-      payload: { taskId: 'tk-1', sessionId: 'sess-1', lastSeq: 42, excerpt: '正在重构登录模块', extra: '不透传' },
+      payload: { taskId: 'tk-1', sessionId: 'sess-1', lastSeq: 42, excerpt: '正在重构登录模块', kind: 'waiting-input', extra: '不透传' },
     });
+    expect(ds.progress).toEqual([
+      { taskId: 'tk-1', lastSeq: 42, excerpt: '正在重构登录模块', kind: 'waiting-input' },
+    ]);
     expect(m.sent).toEqual([
       {
         channel: 'hub:taskProgress',
-        payload: { taskId: 'tk-1', sessionId: 'sess-1', lastSeq: 42, excerpt: '正在重构登录模块' },
+        payload: { taskId: 'tk-1', sessionId: 'sess-1', lastSeq: 42, excerpt: '正在重构登录模块', kind: 'waiting-input' },
       },
     ]);
 
+    // 异形 kind（'foo'/42）：剥除不透传，其余四字段完好、两路照发（等待卡不因脏数据误亮）
+    for (const badKind of ['foo', 42] as unknown[]) {
+      ds.progress.length = 0;
+      m.sent.length = 0;
+      m.clients[0]!.opts.onEvent({
+        v: 1, kind: 'evt', method: 'task.progress',
+        payload: { taskId: 'tk-1', sessionId: 'sess-1', lastSeq: 43, excerpt: '续跑产出', kind: badKind },
+      });
+      expect(ds.progress).toEqual([{ taskId: 'tk-1', lastSeq: 43, excerpt: '续跑产出' }]);
+      expect(m.sent).toEqual([
+        { channel: 'hub:taskProgress', payload: { taskId: 'tk-1', sessionId: 'sess-1', lastSeq: 43, excerpt: '续跑产出' } },
+      ]);
+    }
+
+    // 异形 lastSeq → 整拍丢弃（原契约保留：四字段全须）
+    ds.progress.length = 0;
     m.sent.length = 0;
     m.clients[0]!.opts.onEvent({
       v: 1, kind: 'evt', method: 'task.progress',
       payload: { taskId: 'tk-1', sessionId: 'sess-1', lastSeq: '异形', excerpt: 'x' },
     });
     expect(m.sent).toEqual([]);
+    expect(ds.progress).toEqual([]);
   });
 
   it('task.completed/failed/interrupted → 各自通道；failed 携 reason、interrupted 无 reason、异形 taskId 丢弃', async () => {

@@ -72,6 +72,9 @@ export const INTERRUPTED_SUMMARY = '目标节点连接中断，等待重连续�
 /** done 终态的进度摘要兜底（协议 done 不带 reason） */
 const DONE_SUMMARY = '已完成';
 
+/** cancelled 终态的进度摘要兜底（task.cancel 回执不带 reason） */
+const CANCELLED_SUMMARY = '已取消';
+
 // ── 进度摘要 kv（hub 域自有 kv，delegation-store 同款纪律）───────────────────
 
 /** 进度摘要条目（delegationId 键；excerpt 恒非空——wire 契约） */
@@ -239,6 +242,9 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
 
     markCancelled(taskId) {
       applyMapped(taskId, 'cancelled', {});
+      // 终态清等待（T12 修复轮）：取消拍与 done/failed 同样整条覆盖摘要——
+      // 等待中取消若无此步，kv waiting 残留会让等待卡对已取消任务误亮
+      saveProgress(taskId, CANCELLED_SUMMARY, 0);
     },
 
     wrapWorkerStore(store) {

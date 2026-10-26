@@ -292,6 +292,27 @@ describe('delegation-sync — leader 侧状态回写（六态映射矩阵）', (
     expect(writes).toBe(1);
     expect(w.rows.get('T-100')!.completedAt).toBe(NOW);
   });
+
+  // ── T12 修复轮：终态拍清 waiting 残留（done/cancelled 无恢复拍路径）────────
+
+  it('A-13. 等待中授权后直接 done（无恢复拍）→ 终态摘要整条覆盖，kv 无 waiting 残留', () => {
+    const w = makeWorld([delegatedRow({ status: 'in_progress', startedAt: 111 })]);
+    const sync = createDelegationSync(w.ports);
+    sync.handleProgress({ taskId: 'hub-task-1', lastSeq: 15, excerpt: '等待写授权', kind: 'waiting-input' });
+    expect(w.progress.get('hub-task-1')?.waiting).toBe(true);
+    // 授权放行 → 下一拍即 done（running 恢复拍缺席）——终态 saveProgress 覆盖整条目
+    sync.handleTerminal('done', 'hub-task-1');
+    expect(w.progress.get('hub-task-1')).toEqual({ excerpt: '已完成', lastSeq: 0, at: NOW });
+  });
+
+  it('A-14. 等待中取消 → markCancelled 同步清 waiting（否则等待卡对已取消任务误亮）', () => {
+    const w = makeWorld([delegatedRow({ status: 'in_progress', startedAt: 111 })]);
+    const sync = createDelegationSync(w.ports);
+    sync.handleProgress({ taskId: 'hub-task-1', lastSeq: 15, excerpt: '等待写授权', kind: 'waiting-input' });
+    sync.markCancelled('hub-task-1');
+    expect(w.rows.get('T-100')!.status).toBe('cancelled');
+    expect(w.progress.get('hub-task-1')).toEqual({ excerpt: '已取消', lastSeq: 0, at: NOW });
+  });
 });
 
 // ── Part B：worker 侧 delegation store 包装（收委派建行 + 四态同步）────────
