@@ -21,6 +21,7 @@ import { SettingsView } from '../settings/SettingsView';
 import { ResourceLibraryView } from '../resource-library/ResourceLibraryView';
 import { TaskBoardView } from '../task-board/TaskBoardView';
 import { WorkgroupView } from '../workgroup/WorkgroupView';
+import { CreateWorkspaceDialog } from '../workspace/CreateWorkspaceDialog';
 import { EmptyState } from '../ui/EmptyState';
 import { SidebarRestoreButton } from './SidebarRestoreButton';
 // v2.7 Task 8：浏览器侧栏 chrome（占位区由主进程 WebContentsView 叠加渲染）
@@ -50,15 +51,22 @@ export function MiddlePanel() {
     return <WorkgroupView />;
   }
 
-  // 无 workspace 时显示引导
+  // 0-ws 主区引导（D1：首启创建表单随主壳迁移至此——workgroups 视图已在
+  // 上方分支分发，其余视图统一落到本引导；工作组提示引导 0-ws 设备先接入）
   if (!workspace) {
     return (
-      <div className="flex flex-1 items-center justify-center bg-canvas">
-        <EmptyState
-          icon={Folder}
-          title="创建或选择一个工作空间开始"
-          description="工作空间是 agent 协作与文件沙箱的根目录"
-        />
+      <div className="flex flex-1 items-center justify-center bg-canvas p-6">
+        <div className="flex w-full max-w-md flex-col items-center gap-5">
+          <EmptyState
+            icon={Folder}
+            title="创建或选择一个工作空间开始"
+            description="工作空间是 agent 协作与文件沙箱的根目录；也可先在左侧活动栏进入「工作组」接入节点网络"
+          />
+          <CreateWorkspaceDialog
+            onClose={() => void useWorkspaceStore.getState().load()}
+            embedded
+          />
+        </div>
       </div>
     );
   }

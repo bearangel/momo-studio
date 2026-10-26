@@ -59,6 +59,21 @@ describe('parseTaskRouting：routing_json 列 → TaskRouting（永不抛）', (
       groupId: 'g-1',
     });
   });
+
+  // M2.1 D5：group 变体可选 targetNodeId（派发回执回写的已解析目标）
+  it('group + targetNodeId → 保形保留（外派卡节点徽标持久源）；非字符串 → local 兜底', () => {
+    expect(parseTaskRouting('{"mode":"group","groupId":"g-1","targetNodeId":"n-9"}')).toEqual({
+      mode: 'group',
+      groupId: 'g-1',
+      targetNodeId: 'n-9',
+    });
+    expect(parseTaskRouting('{"mode":"group","groupId":"g-1","targetNodeId":42}')).toEqual({
+      mode: 'local',
+    });
+    expect(parseTaskRouting('{"mode":"group","groupId":"g-1","targetNodeId":null}')).toEqual({
+      mode: 'local',
+    });
+  });
 });
 
 describe('serializeTaskRouting：TaskRouting → routing_json（往返一致）', () => {
@@ -67,6 +82,7 @@ describe('serializeTaskRouting：TaskRouting → routing_json（往返一致）'
       { mode: 'local' },
       { mode: 'group', groupId: 'g-1' },
       { mode: 'node', groupId: 'g-1', targetNodeId: 'n-2' },
+      { mode: 'group', groupId: 'g-1', targetNodeId: 'n-9' },
     ] as const;
     for (const s of shapes) {
       expect(parseTaskRouting(serializeTaskRouting(s))).toEqual(s);
@@ -79,6 +95,7 @@ describe('isTaskRouting：类型守卫', () => {
     expect(isTaskRouting({ mode: 'local' })).toBe(true);
     expect(isTaskRouting({ mode: 'group', groupId: 'g' })).toBe(true);
     expect(isTaskRouting({ mode: 'node', groupId: 'g', targetNodeId: 'n' })).toBe(true);
+    expect(isTaskRouting({ mode: 'group', groupId: 'g', targetNodeId: 'n' })).toBe(true);
     expect(isTaskRouting(null)).toBe(false);
     expect(isTaskRouting(undefined)).toBe(false);
     expect(isTaskRouting('local')).toBe(false);
@@ -86,6 +103,7 @@ describe('isTaskRouting：类型守卫', () => {
     expect(isTaskRouting({ mode: 'group' })).toBe(false);
     expect(isTaskRouting({ mode: 'node', groupId: 'g' })).toBe(false);
     expect(isTaskRouting({ mode: 'group', groupId: 1 })).toBe(false);
+    expect(isTaskRouting({ mode: 'group', groupId: 'g', targetNodeId: 9 })).toBe(false);
   });
 });
 

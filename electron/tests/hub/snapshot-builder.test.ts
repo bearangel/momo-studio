@@ -33,7 +33,7 @@ import { createProvider } from '../../src/main/agent/provider-crud';
 import { parseAgentManifest } from '../../src/main/agent/manifest-parser';
 import { registerMcpDefinition, setMcpEnabledDefinition } from '../../src/main/mcp/host-manager';
 import { upsertPlugin, setPluginEnabled } from '../../src/main/plugin/registry';
-import { createWorkspace } from '../../src/main/workspace/crud';
+import { createWorkspace, setDefaultAgent } from '../../src/main/workspace/crud';
 import { updateGlobalSettings } from '../../src/main/settings/crud';
 
 // ── 进程边界替身（publish.test.ts 同款——snapshot-builder → publish → hub/index 链）──
@@ -384,6 +384,28 @@ describe('modelBinding 可选段（D4）', () => {
       'defaultChatModel 引用的 provider 不存在，快照不发模型绑定段',
       expect.objectContaining({ providerId: 'ghost-provider-id' }),
     );
+  });
+});
+
+describe('defaultAgent 可选段（D2）', () => {
+  it('源默认会话 agent 在册 → 段入 manifest（成员名口径）+ 归档原样含段', async () => {
+    const wsId = await mkWorkspace('默认甲空间');
+    const inst = await seedMember(wsId, 'def-default-a', '默认甲');
+
+    setDefaultAgent(wsId, inst);
+    const built = await buildWorkspaceSnapshot(wsId);
+
+    expect(built.manifest.config.defaultAgent).toBe('默认甲');
+    const manifestText = tarRead(built.archivePath, 'manifest.json');
+    expect(manifestText).toContain('"defaultAgent"');
+    expect(validateSnapshotManifest(built.manifest)).not.toBeNull();
+  });
+
+  it('未设默认 agent → 段缺省不发（悬空位由 FK 约束排除，无需分支）', async () => {
+    const wsId = await mkWorkspace('无默认空间');
+    const built = await buildWorkspaceSnapshot(wsId);
+    expect(built.manifest.config).not.toHaveProperty('defaultAgent');
+    expect(validateSnapshotManifest(built.manifest)).not.toBeNull();
   });
 });
 

@@ -106,6 +106,12 @@ const api: ApiSurface = {
     setDefaultAgent: (id, instanceId) => invoke('workspace:setDefaultAgent', id, instanceId),
     // v2.7 T10：切换激活 workspace 通知（main 侧收口浏览器子系统 workspace 钩子）
     switch: (id) => invoke('workspace:switch', id),
+    // M2.1 D3：主进程侧工作空间变更（镜像应用等）→ renderer 重拉列表
+    onListChanged: (callback) => {
+      const handler = (_e: IpcRendererEvent, payload: { reason: string; workspaceName?: string }): void => callback(payload);
+      ipcRenderer.on('workspace:listChanged', handler);
+      return () => { ipcRenderer.off('workspace:listChanged', handler); };
+    },
   },
   file: {
     read: (wsId, path) => invoke('file:read', wsId, path),

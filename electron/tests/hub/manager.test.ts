@@ -23,6 +23,7 @@ interface CapturedOpts {
   onStateChange(state: string, err?: string): void;
   onEvent(evt: EventEnvelope): void;
   onHelloSnapshot?: (nodes: Array<{ nodeId: string; nodeName: string }>) => void;
+  onRequest?: (req: { id: string; method: string; payload: unknown }) => Promise<unknown>;
 }
 
 interface CapturedClient {
@@ -52,6 +53,13 @@ const m = vi.hoisted(() => ({
 // 路」的 kind 透传/剥除（广播路落在 m.sent 断言上；真实映射语义由 delegation-sync.test.ts 锁）。
 const ds = vi.hoisted(() => ({
   progress: [] as Array<{ taskId: string; lastSeq: number; excerpt: string; kind?: 'waiting-input' }>,
+}));
+
+// mirror-applier 替身（D3 桥级契约）：DB 边界（真实语义由 mirror-applier.test 锁），
+// 此处只观察 outcome → workspace:listChanged 广播的条件触发
+const applier = vi.hoisted(() => ({
+  lastPayload: null as unknown,
+  ok: true as boolean,
 }));
 
 vi.mock('electron', () => ({
@@ -140,6 +148,15 @@ vi.mock('../../src/main/hub/delegation-sync', () => ({
     save: (): void => {},
     list: (): Record<string, never> => ({}),
   }),
+}));
+
+vi.mock('../../src/main/hub/mirror-applier', () => ({
+  applyMirrorSnapshot: async (payload: unknown) => {
+    applier.lastPayload = payload;
+    return applier.ok
+      ? { ok: true, appliedResources: [] }
+      : { ok: false, code: 'internal', message: '应用失败（替身）' };
+  },
 }));
 
 import * as manager from '../../src/main/hub/index';
@@ -410,6 +427,38 @@ describe('hub manager 推送面', () => {
     m.sent.length = 0;
     manager.replayPresenceSeed();
     expect(m.sent).toEqual([]);
+  });
+});
+
+describe('mirror.apply 应答器 → workspace:listChanged 广播（M2.1 D3）', () => {
+  it('应用成功 → 广播 workspace:listChanged（reason + workspaceName）；应用失败不广播', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    const onRequest = m.clients[0]!.opts.onRequest!;
+    expect(onRequest).toBeTruthy();
+    m.sent.length = 0;
+
+    applier.ok = true;
+    const okRes = (await onRequest({
+      id: 'r-1',
+      method: 'mirror.apply',
+      payload: { mirrorId: 'm-1', snapshotId: 's-1', workspaceName: 'dev-ws', strategy: 'replace' },
+    })) as { ok: boolean };
+    expect(okRes.ok).toBe(true);
+    expect(m.sent).toContainEqual({
+      channel: 'workspace:listChanged',
+      payload: { reason: 'mirror-applied', workspaceName: 'dev-ws' },
+    });
+
+    // 失败路径：无 workspace:listChanged 广播（列表未变）
+    m.sent.length = 0;
+    applier.ok = false;
+    const failRes = (await onRequest({
+      id: 'r-2',
+      method: 'mirror.apply',
+      payload: { mirrorId: 'm-2', snapshotId: 's-2', workspaceName: 'dev-ws', strategy: 'replace' },
+    })) as { ok: boolean; payload: { code: string } };
+    expect(failRes.ok).toBe(false);
+    expect(m.sent.filter((s) => s.channel === 'workspace:listChanged')).toHaveLength(0);
   });
 });
 

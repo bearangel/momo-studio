@@ -26,12 +26,12 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeDb, getDb, runMigrations } from '../../src/main/storage/db';
 import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keychain';
-import { saveAgentDefinition, addMember } from '../../src/main/agent/crud';
+import { saveAgentDefinition, addMember, updateAgentDefinition } from '../../src/main/agent/crud';
 import { createTeam } from '../../src/main/agent/team';
 import { createProvider, listProviders, providerApiKeyRef } from '../../src/main/agent/provider-crud';
 import { registerMcpDefinition, setMcpEnabledDefinition, listRegistered } from '../../src/main/mcp/host-manager';
 import { upsertPlugin, setPluginEnabled, isPluginEnabled } from '../../src/main/plugin/registry';
-import { createWorkspace, listWorkspaces } from '../../src/main/workspace/crud';
+import { createWorkspace, listWorkspaces, getWorkspace, setDefaultAgent } from '../../src/main/workspace/crud';
 import { getGlobalSettings, updateGlobalSettings } from '../../src/main/settings/crud';
 import { listInstalled } from '../../src/main/skill/zip-uploader';
 import { listMembers, getAgentDefinition, listAgentDefinitions } from '../../src/main/agent/agent-queries';
@@ -87,13 +87,14 @@ afterEach(() => {
 interface ArchiveFixture { bytes: Buffer; checksum: string; manifest: SnapshotManifest }
 
 /** manifest + 可选附加文件（relPath → content）→ tar.gz 字节 + sha256。
- *  入参放宽：可携带 modelBinding 可选段（pin 类型尚未含段——补位纪律同源）。 */
-type ManifestWithModelBinding = Omit<SnapshotManifest, 'config'> & {
-  config: SnapshotManifest['config'] & { modelBinding?: SnapshotModelBinding };
+ *  入参放宽：可携带 modelBinding / defaultAgent 可选段（pin 类型尚未含段——
+ *  补位纪律同源）。 */
+type ManifestWithOptionalSegments = Omit<SnapshotManifest, 'config'> & {
+  config: SnapshotManifest['config'] & { modelBinding?: SnapshotModelBinding; defaultAgent?: string };
 };
 
 async function makeArchive(
-  manifest: SnapshotManifest | ManifestWithModelBinding,
+  manifest: SnapshotManifest | ManifestWithOptionalSegments,
   extraFiles: Record<string, string> = {},
 ): Promise<ArchiveFixture> {
   const stage = fs.mkdtempSync(path.join(tmpRoot, 'fixture-'));
@@ -118,8 +119,11 @@ async function makeArchive(
 function baseManifest(overrides?: {
   workspaceName?: string;
   resources?: SnapshotManifest['resources'];
-  /** modelBinding 可选段（D4）——pin 类型补位（snapshot-model-binding.ts 同源） */
-  config?: Partial<SnapshotManifest['config']> & { modelBinding?: SnapshotModelBinding };
+  /** modelBinding / defaultAgent 可选段——pin 类型补位（snapshot-model-binding.ts 同源） */
+  config?: Partial<SnapshotManifest['config']> & {
+    modelBinding?: SnapshotModelBinding;
+    defaultAgent?: string;
+  };
 }): SnapshotManifest {
   return {
     workspaceName: overrides?.workspaceName ?? 'prod-dev',
@@ -634,6 +638,155 @@ describe('applyMirrorSnapshot modelBinding 段（D4 / RM2-10）', () => {
   });
 });
 
+describe('applyMirrorSnapshot defaultAgent 段（D2）', () => {
+  it('空目标应用后默认实例在位——resolveAgentInstance 兜底链的两输入（默认位 + 在册成员）闭合', async () => {
+    const manifest = baseManifest({
+      workspaceName: 'prod-d2a',
+      config: {
+        agentMembers: [
+          { name: '甲', customDefinition: customYaml('甲', 'd2-a') },
+          { name: '乙', customDefinition: customYaml('乙', 'd2-b') },
+        ],
+        defaultAgent: '乙',
+      },
+    });
+    const archive = await makeArchive(manifest);
+
+    const outcome = await applyMirrorSnapshot(applyPayload({ workspaceName: 'prod-d2a' }), makeDeps(archive));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.unresolvedRefs ?? []).not.toContain('defaultAgent:乙');
+
+    const ws = getWorkspace(listWorkspaces().find((w) => w.name === 'prod-d2a')!.id);
+    const defaultInstanceId = ws?.defaultAgentInstanceId;
+    expect(defaultInstanceId).toBeTruthy();
+    // resolveAgentInstanceProduct 消费面逐层断言：默认位指向在册成员，且该成员
+    // 的定义正是快照默认 agent（按名对齐——'乙' → def d2-b）
+    const member = listMembers(ws!.id).find((m) => m.instanceId === defaultInstanceId);
+    expect(member).toBeTruthy();
+    expect(member?.agentName).toBe('乙');
+    expect(getAgentDefinition(member!.agentDefinitionId)?.slug).toBe('d2-b');
+  });
+
+  it('段在场但成员未重建 → unresolvedRefs 记录，默认位不写', async () => {
+    const manifest = baseManifest({
+      workspaceName: 'prod-d2b',
+      config: { agentMembers: [], defaultAgent: '幽灵成员' },
+    });
+    const archive = await makeArchive(manifest);
+
+    const outcome = await applyMirrorSnapshot(applyPayload({ workspaceName: 'prod-d2b' }), makeDeps(archive));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.unresolvedRefs).toContain('defaultAgent:幽灵成员');
+    const ws = listWorkspaces().find((w) => w.name === 'prod-d2b');
+    expect(ws && getWorkspace(ws.id)?.defaultAgentInstanceId == null).toBe(true);
+  });
+
+  it('旧快照无段 → 默认位零触碰（1.2.0 兼容）', async () => {
+    const manifest = baseManifest({
+      workspaceName: 'prod-d2c',
+      config: { agentMembers: [{ name: '甲', customDefinition: customYaml('甲', 'd2-c') }] },
+    });
+    const archive = await makeArchive(manifest);
+
+    const outcome = await applyMirrorSnapshot(applyPayload({ workspaceName: 'prod-d2c' }), makeDeps(archive));
+    expect(outcome.ok).toBe(true);
+    const ws = listWorkspaces().find((w) => w.name === 'prod-d2c');
+    expect(ws && getWorkspace(ws.id)?.defaultAgentInstanceId == null).toBe(true);
+  });
+});
+
+describe('applyMirrorSnapshot modelBinding 自愈（D4 验收：重镜像修复）', () => {
+  const buildMbArchive = (wsName: string, slug: string): Promise<ArchiveFixture> =>
+    makeArchive(
+      baseManifest({
+        workspaceName: wsName,
+        config: {
+          agentMembers: [{ name: '甲', customDefinition: customYaml('甲', slug) }],
+          modelBinding: { provider: 'anthropic', model: 'glm-5.3' },
+        },
+      }),
+    );
+
+  it('首镜 provider 缺席 → 注册 provider 后重镜像 → 既有定义空缺绑定回填', async () => {
+    const archive = await buildMbArchive('prod-d4a', 'd4-a');
+    const first = await applyMirrorSnapshot(applyPayload({ workspaceName: 'prod-d4a' }), makeDeps(archive));
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.unresolvedRefs).toContain('modelBinding:anthropic');
+    expect(listAgentDefinitions().find((d) => d.slug === 'd4-a')?.modelProviderId).toBeFalsy();
+
+    const p = await createProvider({
+      name: 'B 后注册', baseUrl: 'https://api.b.example/v1',
+      apiKey: 'sk-d4-key-000000', platform: 'anthropic',
+    });
+    const second = await applyMirrorSnapshot(
+      applyPayload({ workspaceName: 'prod-d4a', confirm: true }),
+      makeDeps(await buildMbArchive('prod-d4a', 'd4-a')),
+    );
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.unresolvedRefs ?? []).not.toContain('modelBinding:anthropic');
+    expect(listAgentDefinitions().find((d) => d.slug === 'd4-a')?.modelProviderId).toBe(p.id);
+  });
+
+  it('worker 手设绑定在重镜像后保留（不被整体替换清回 NULL）', async () => {
+    const bindingP = await createProvider({
+      name: '绑定供', baseUrl: 'https://api.b.example/v1',
+      apiKey: 'sk-d4-key-000001', platform: 'anthropic',
+    });
+    const manualP = await createProvider({
+      name: '手设供', baseUrl: 'https://api.b.example/v1',
+      apiKey: 'sk-d4-key-000002', platform: 'openai',
+    });
+    const first = await applyMirrorSnapshot(
+      applyPayload({ workspaceName: 'prod-d4b' }),
+      makeDeps(await buildMbArchive('prod-d4b', 'd4-b')),
+    );
+    expect(first.ok).toBe(true);
+
+    // worker 手设显式绑定（「编辑成员 → 模型供应商」UI 的 DB 等价路径）
+    const defId = listAgentDefinitions().find((d) => d.slug === 'd4-b')!.id;
+    updateAgentDefinition({ id: defId, modelProviderId: manualP.id, modelName: 'manual-model' });
+
+    const second = await applyMirrorSnapshot(
+      applyPayload({ workspaceName: 'prod-d4b', confirm: true }),
+      makeDeps(await buildMbArchive('prod-d4b', 'd4-b')),
+    );
+    expect(second.ok).toBe(true);
+    const def = listAgentDefinitions().find((d) => d.slug === 'd4-b');
+    expect(def?.modelProviderId).toBe(manualP.id); // 有效绑定不动（RM2-10 显式选择语义）
+    expect(def?.modelProviderId).not.toBe(bindingP.id);
+    expect(def?.modelName).toBe('manual-model');
+  });
+
+  it('绑定指向已删 provider（ghost）→ 重镜像修复为 modelBinding 的本机 provider', async () => {
+    const survivor = await createProvider({
+      name: '存活供', baseUrl: 'https://api.b.example/v1',
+      apiKey: 'sk-d4-key-000004', platform: 'anthropic',
+    });
+    const first = await applyMirrorSnapshot(
+      applyPayload({ workspaceName: 'prod-d4c' }),
+      makeDeps(await buildMbArchive('prod-d4c', 'd4-c')),
+    );
+    expect(first.ok).toBe(true);
+    // ghost 态直造（绕过 deleteProvider 引用守卫——备份恢复/异常态等真实可达）：
+    // def.model_provider_id 指向已不存在的行（getProvider 判 null → spawn 链同败）
+    const defId = listAgentDefinitions().find((d) => d.slug === 'd4-c')!.id;
+    getDb()
+      .prepare('UPDATE agent_definitions SET model_provider_id = ? WHERE id = ?')
+      .run('ghost-provider-id', defId);
+
+    const second = await applyMirrorSnapshot(
+      applyPayload({ workspaceName: 'prod-d4c', confirm: true }),
+      makeDeps(await buildMbArchive('prod-d4c', 'd4-c')),
+    );
+    expect(second.ok).toBe(true);
+    expect(listAgentDefinitions().find((d) => d.slug === 'd4-c')?.modelProviderId).toBe(survivor.id);
+  });
+});
+
 describe('契约：buildWorkspaceSnapshot 产出 → applyMirrorSnapshot 消费', () => {
   it('真实归档（manifest.json 在根 + custom skill 内嵌）→ 目标侧整体复刻', async () => {
     // 源工作空间：custom 成员 + hub 记账引用成员 + 团队 + custom skill + prefs
@@ -655,11 +808,14 @@ describe('契约：buildWorkspaceSnapshot 产出 → applyMirrorSnapshot 消费'
       apiKey: 'sk-pact-key-000000', platform: 'anthropic',
     });
     updateGlobalSettings({ defaultChatModel: { providerId: srcProvider.id, modelId: 'glm-5.3' } });
+    // D2 全链：源设默认会话 agent → 段入快照 → 目标默认位回写
+    setDefaultAgent(srcId, customInst);
 
     const built = await buildWorkspaceSnapshot(srcId);
     expect(built.manifest.workspaceName).toBe('契约空间');
     expect(built.manifest.config.agentMembers).toHaveLength(2);
     expect(built.manifest.config.modelBinding).toEqual({ provider: 'anthropic', model: 'glm-5.3' });
+    expect(built.manifest.config.defaultAgent).toBe('契约甲');
 
     // 目标 = 同库同名空间整体替换（源空间即「同名已存在」的冲突面）
     const deps: MirrorApplierDeps = {
@@ -687,6 +843,12 @@ describe('契约：buildWorkspaceSnapshot 产出 → applyMirrorSnapshot 消费'
     // 段经真实 tar 归档存续 → 目标侧定义回写（spawn 硬校验闭合）
     expect(getGlobalSettings().defaultChatModel).toEqual({ providerId: srcProvider.id, modelId: 'glm-5.3' });
     expect(getAgentDefinition('def-pact-a')?.modelProviderId).toBe(srcProvider.id);
+    // D2 全链断言：默认位经真实归档回写，指向重建后的契约甲实例（resolveAgent
+    // 兜底链闭合——组内调度不指派 agentSlug 的首派不再必拒）
+    const targetDefault = getWorkspace(srcId)?.defaultAgentInstanceId;
+    const rebuiltMember = listMembers(srcId).find((m) => m.instanceId === targetDefault);
+    expect(rebuiltMember?.agentName).toBe('契约甲');
+    expect(getAgentDefinition(rebuiltMember!.agentDefinitionId)?.slug).toBe('pact-a');
 
     fs.rmSync(built.archivePath, { force: true });
   });

@@ -145,6 +145,55 @@ describe('DelegatedTaskCard — leader 侧六态', () => {
     expect(screen.getByText('执行中')).toBeInTheDocument();
   });
 
+  it('L-2b. D5：group 行内已解析目标（routing.targetNodeId）→ 无 ledger 也显节点名（派发回执即写，不待账本）', () => {
+    renderCard(
+      mkTask({
+        id: 'T-100',
+        title: '批量重命名 legacy API 端点',
+        status: 'in_progress',
+        routing: { mode: 'group', groupId: 'g1', targetNodeId: 'node-b' },
+      }),
+      boardCtx({ nodeNames: { 'node-b': 'office-mac' } }),
+    );
+    expect(screen.getByText('执行中')).toBeInTheDocument();
+    expect(screen.getByText('office-mac')).toBeInTheDocument();
+    expect(screen.queryByText('未知节点')).not.toBeInTheDocument();
+  });
+
+  it('L-2c. D5：行内已解析目标优先于 ledger（账本滞后/换目标不覆盖行内权威）', () => {
+    renderCard(
+      mkTask({
+        id: 'T-100',
+        title: '批量重命名 legacy API 端点',
+        status: 'in_progress',
+        routing: { mode: 'group', groupId: 'g1', targetNodeId: 'node-b' },
+      }),
+      boardCtx({
+        nodeNames: { 'node-b': 'office-mac', 'node-c': 'lab-node' },
+        // 账本快照仍是旧目标（挂载时点滞后）——不得回退显示 lab-node
+        ledger: { 'T-8f21abcd': { taskId: 'T-8f21abcd', workspaceName: 'dev-ws', targetNodeId: 'node-c', status: 'running', title: '批量重命名', createdAt: 1, updatedAt: 2 } },
+      }),
+    );
+    expect(screen.getByText('office-mac')).toBeInTheDocument();
+    expect(screen.queryByText('lab-node')).not.toBeInTheDocument();
+  });
+
+  it('L-2d. D5：failed 卡经行内已解析目标显节点名（declined 场景不再「未知节点」）', () => {
+    renderCard(
+      mkTask({
+        id: 'T-100',
+        title: '批量重命名 legacy API 端点',
+        status: 'failed',
+        errorMessage: 'declined:并发已达上限（2）',
+        routing: { mode: 'group', groupId: 'g1', targetNodeId: 'node-b' },
+      }),
+      boardCtx({ nodeNames: { 'node-b': 'office-mac' } }),
+    );
+    expect(screen.getByText('失败')).toBeInTheDocument();
+    expect(screen.getByText('office-mac')).toBeInTheDocument();
+    expect(screen.queryByText('未知节点')).not.toBeInTheDocument();
+  });
+
   it('L-3. done：success 已完成徽标 + 终态降不透明 + 摘要行「已完成」', () => {
     renderCard(
       mkTask({ id: 'T-100', title: '升级依赖并修复类型错误', status: 'completed' }),
@@ -446,11 +495,12 @@ describe('DelegatedTaskCard — 操作菜单', () => {
     expect(screen.queryByRole('button', { name: /失败重派/ })).not.toBeInTheDocument();
   });
 
-  it('M-2. 待派发：重试派发在场；取消走本地行取消', async () => {
+  it('M-2. 待派发：重试派发在场；取消走本地行取消（两步确认后触发）', async () => {
     renderCard(mkTask({ id: 'T-100', title: '排查生产环境 WebSocket 断连', status: 'pending', delegationId: null }));
     openMenu();
     expect(screen.getByRole('button', { name: /重试派发/ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /取消任务/ }));
+    fireEvent.click(screen.getByTestId('cancel-arm'));
+    fireEvent.click(screen.getByTestId('cancel-confirm'));
     await waitFor(() => expect(ipc.task.transition).toHaveBeenCalledWith('T-100', 'cancelled'));
     expect(ipc.hub.taskCancel).not.toHaveBeenCalled();
   });
@@ -462,9 +512,41 @@ describe('DelegatedTaskCard — 操作菜单', () => {
       boardCtx({ refreshTasks }),
     );
     openMenu();
-    fireEvent.click(screen.getByRole('button', { name: /取消任务/ }));
+    fireEvent.click(screen.getByTestId('cancel-arm'));
+    fireEvent.click(screen.getByTestId('cancel-confirm'));
     await waitFor(() => expect(ipc.hub.taskCancel).toHaveBeenCalledWith({ taskId: 'T-8f21abcd' }));
     await waitFor(() => expect(refreshTasks).toHaveBeenCalled());
+  });
+
+  it('M-9. D6 两步确认：首击只 arm 不触发 IPC（cancel 臂态文案翻转）', async () => {
+    renderCard(mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'in_progress' }));
+    openMenu();
+    fireEvent.click(screen.getByTestId('cancel-arm'));
+    // 臂态：菜单项文案翻确认；两路取消 IPC 均未触发
+    expect(screen.getByText('再次点击确认取消')).toBeInTheDocument();
+    expect(ipc.hub.taskCancel).not.toHaveBeenCalled();
+    expect(ipc.task.transition).not.toHaveBeenCalled();
+    // 次击才真正取消
+    fireEvent.click(screen.getByTestId('cancel-confirm'));
+    await waitFor(() => expect(ipc.hub.taskCancel).toHaveBeenCalledWith({ taskId: 'T-8f21abcd' }));
+  });
+
+  it('M-10. D6 两步确认：armed 态 3s 无操作回落（防呆臂态不粘滞）', () => {
+    vi.useFakeTimers();
+    try {
+      renderCard(mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'in_progress' }));
+      openMenu();
+      fireEvent.click(screen.getByTestId('cancel-arm'));
+      expect(screen.getByText('再次点击确认取消')).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(3100);
+      });
+      expect(screen.getByText('取消任务')).toBeInTheDocument();
+      expect(screen.queryByTestId('cancel-confirm')).not.toBeInTheDocument();
+      expect(ipc.hub.taskCancel).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('M-4. failed：失败重派在场；取消不在场（终态）', () => {

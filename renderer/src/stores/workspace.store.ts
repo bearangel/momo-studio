@@ -183,3 +183,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
   },
 }));
+
+/**
+ * 订阅主进程 workspace:listChanged（M2.1 D3：镜像应用等 renderer 无感知的落库
+ * 路径）→ 重拉列表。App 顶层挂载一次（subscribeSessionChannels 同款纪律）。
+ * load 按持久键恢复激活——镜像落地的新空间不夺当前激活；0-ws 态收到镜像即
+ * 翻转入主壳（冷启动链）。
+ */
+export function subscribeWorkspaceListChanged(): () => void {
+  return ipc.workspace.onListChanged(() => {
+    void useWorkspaceStore.getState().load();
+  });
+}

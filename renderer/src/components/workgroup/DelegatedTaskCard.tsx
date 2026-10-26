@@ -129,6 +129,25 @@ function useDelegationBoardData(refreshTasks?: () => void): DelegationBoardConte
     }
   }, []);
 
+  // hub 账本重拉（D5：挂载后新派发的委派不在初始快照——终态推送与动作后
+  // 对账刷新，配合行内 routing.targetNodeId 消解「未知节点」）
+  const refreshLedger = useCallback((): void => {
+    void ipc.hub
+      .taskList()
+      .then((r) => {
+        const map: Record<string, HubTaskRecord> = {};
+        for (const t of r.tasks) map[t.taskId] = t;
+        setLedger(map);
+      })
+      .catch(() => {});
+  }, []);
+
+  // 任务行刷新 + 账本对账合并面（终态推送与卡片动作共用）
+  const refreshAll = useCallback((): void => {
+    refreshRef.current?.();
+    refreshLedger();
+  }, [refreshLedger]);
+
   useEffect(() => {
     const disposers = [
       ipc.hub.onTaskProgress((evt) => {
@@ -142,10 +161,10 @@ function useDelegationBoardData(refreshTasks?: () => void): DelegationBoardConte
           },
         }));
       }),
-      // 终态：即时刷新任务行（主进程 delegation-sync 已回写，拉取对账）
-      ipc.hub.onTaskCompleted(() => refreshRef.current?.()),
-      ipc.hub.onTaskFailed(() => refreshRef.current?.()),
-      ipc.hub.onTaskInterrupted(() => refreshRef.current?.()),
+      // 终态：即时刷新任务行（主进程 delegation-sync 已回写）+ 账本对账
+      ipc.hub.onTaskCompleted(refreshAll),
+      ipc.hub.onTaskFailed(refreshAll),
+      ipc.hub.onTaskInterrupted(refreshAll),
       // writeBlocked 推送（T12）：新等待登记即时上卡（不等轮询窗）
       ipc.sandbox.onWriteBlocked(() => void fetchLocalWaiting()),
     ];
@@ -177,7 +196,7 @@ function useDelegationBoardData(refreshTasks?: () => void): DelegationBoardConte
       window.clearInterval(pollTimer);
     };
     // 数据拉取只在挂载时做一次（ipc 调用非响应式依赖）；refreshTasks 经 ref 实时取（订阅不重建）
-  }, [fetchLocalWaiting]);
+  }, [fetchLocalWaiting, refreshAll]);
 
   return useMemo(
     () => ({
@@ -187,9 +206,9 @@ function useDelegationBoardData(refreshTasks?: () => void): DelegationBoardConte
       progress: { ...(board?.progress ?? {}), ...liveProgress },
       received: Object.fromEntries((board?.received ?? []).map((r) => [r.taskId, r])),
       localWaiting,
-      refreshTasks: refreshTasks ?? (() => {}),
+      refreshTasks: refreshTasks ?? refreshAll,
     }),
-    [board, ledger, nodeNames, selfNodeId, liveProgress, localWaiting, refreshTasks],
+    [board, ledger, nodeNames, selfNodeId, liveProgress, localWaiting, refreshTasks, refreshAll],
   );
 }
 
@@ -235,6 +254,18 @@ interface DelegatedTaskCardProps {
 export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSummary = null }: DelegatedTaskCardProps): ReactNode {
   const board = useContext(DelegationBoardContext);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  // D6 取消两步确认：armed 态菜单项变「再次点击确认取消」，3s 无操作回落
+  //（组头「退出工作组」同款范式）；菜单关闭即复位
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
+  useEffect(() => {
+    if (menu === null) {
+      setConfirmingCancel(false);
+      return;
+    }
+    if (!confirmingCancel) return;
+    const timer = window.setTimeout(() => setConfirmingCancel(false), 3000);
+    return () => window.clearTimeout(timer);
+  }, [menu, confirmingCancel]);
 
   const isWorkerView =
     task.routing.mode === 'node' && board.selfNodeId != null && task.routing.targetNodeId === board.selfNodeId;
@@ -265,13 +296,14 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
     nodeId == null ? '未知节点' : (board.nodeNames[nodeId] ?? shortNodeId(nodeId));
 
   // leader 节点徽标：待派发=「组内调度 · 待派发」/「{node} · 待派发」（S1）；
-  // 已派发=目标节点名（group 路由经 ledger 解析实际目标）
+  // 已派发=目标节点名。解析序（D5）：行内已解析目标（group 派发回执回写的
+  // routing.targetNodeId——持久、无时序依赖）→ hub 账本（行内缺失时兜底：
+  // 旧行/他路径派发）→ null（「未知节点」，正常不可达）
+  const routingTargetNodeId =
+    task.routing.mode === 'local' ? null : task.routing.targetNodeId ?? null;
   const leaderTargetNodeId =
-    task.routing.mode === 'node'
-      ? task.routing.targetNodeId
-      : delegationId != null
-        ? (board.ledger[delegationId]?.targetNodeId ?? null)
-        : null;
+    routingTargetNodeId ??
+    (delegationId != null ? (board.ledger[delegationId]?.targetNodeId ?? null) : null);
   const leaderBadge =
     delegationId == null
       ? task.routing.mode === 'group'
@@ -403,17 +435,30 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
           >
             {canCancel && (
               <li>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMenu(null);
-                    void handleCancel();
-                  }}
-                  className="flex w-full items-center gap-1.5 px-3 py-1 text-left hover:bg-surface-3"
-                >
-                  <X size={12} strokeWidth={1.75} aria-hidden />
-                  取消任务
-                </button>
+                {confirmingCancel ? (
+                  <button
+                    type="button"
+                    data-testid="cancel-confirm"
+                    onClick={() => {
+                      setMenu(null);
+                      void handleCancel();
+                    }}
+                    className="flex w-full items-center gap-1.5 px-3 py-1 text-left text-status-error hover:bg-surface-3"
+                  >
+                    <X size={12} strokeWidth={1.75} aria-hidden />
+                    再次点击确认取消
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    data-testid="cancel-arm"
+                    onClick={() => setConfirmingCancel(true)}
+                    className="flex w-full items-center gap-1.5 px-3 py-1 text-left hover:bg-surface-3"
+                  >
+                    <X size={12} strokeWidth={1.75} aria-hidden />
+                    取消任务
+                  </button>
+                )}
               </li>
             )}
             {canRetry && (

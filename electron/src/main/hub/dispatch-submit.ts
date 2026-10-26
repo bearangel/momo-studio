@@ -95,8 +95,9 @@ export interface DispatchSubmitPorts {
   createLocalTask(input: SubmitRoutedTaskInput): TaskRow;
   /** group/node 模式：外派行落库（pending + routing 保留） */
   createRemoteTask(input: RemoteCreateInput): TaskRow;
-  /** 委派成功后回写 tasks 行 delegation_id */
-  updateDelegationLink(taskId: string, delegationId: string): void;
+  /** 委派成功后回写 tasks 行 delegation_id + 已解析目标 routing（D5：group
+   *  变体带上调度解析的 targetNodeId——外派卡节点徽标持久源） */
+  updateDelegationLink(taskId: string, delegationId: string, routing: TaskRouting): void;
 }
 
 /** 活跃委派口径：pending|running|interrupted（未终态且未取消——interrupted 会重连续跑，占负载） */
@@ -145,7 +146,11 @@ export async function submitRoutedTask(
         permissionTier: input.permissionTier ?? 'confirm',
       },
     });
-    ports.updateDelegationLink(task.id, delegationId);
+    // D5：已解析目标随 delegation_id 一并回写行（group 变体补 targetNodeId；
+    // node 变体本就携带——幂等同值）
+    const resolvedRouting: TaskRouting =
+      input.routing.mode === 'group' ? { ...input.routing, targetNodeId } : input.routing;
+    ports.updateDelegationLink(task.id, delegationId, resolvedRouting);
     return { task: { ...task, delegationId }, dispatched: true, nodeId: targetNodeId };
   } catch {
     // 瞬断（node_offline / 网络抖动）：行保留待处理，不向上抛——弹窗提交不该

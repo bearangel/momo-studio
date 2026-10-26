@@ -295,11 +295,18 @@ export function hubRequest<T>(method: string, payload: unknown, timeoutMs?: numb
  * mirror.apply 被动应答器（目标节点侧）：应用器 outcome → mirror.receipt res 信封
  * （id=对账键透传；conflict 附 diffSummary 超集——RpcErrorPayload + diffSummary）。
  * 未知 req 方法回 unknown_method（诚实应答优于静默——hub 侧按 id 结算不悬挂）。
+ * 应用成功同时广播 workspace:listChanged（D3：镜像落地的空间对 renderer 可见——
+ * workspace.store 重拉列表；session:listChanged 同款推送纪律）。
  */
 async function handleHubRequest(req: RequestEnvelope): Promise<HubResponderResult> {
   if (req.method === MIRROR_WIRE.apply) {
-    const outcome: MirrorApplyOutcome = await applyMirrorSnapshot(req.payload as MirrorApplyPayload);
+    const payload = req.payload as MirrorApplyPayload;
+    const outcome: MirrorApplyOutcome = await applyMirrorSnapshot(payload);
     if (outcome.ok) {
+      broadcast('workspace:listChanged', {
+        reason: 'mirror-applied',
+        workspaceName: payload.workspaceName,
+      });
       return {
         ok: true,
         payload: {

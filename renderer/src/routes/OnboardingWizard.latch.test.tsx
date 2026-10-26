@@ -34,6 +34,8 @@ const mockApi = {
     create: vi.fn(),
     // 真 store.create 的 notifySwitch 会调 workspace.switch（缺 mock 即抛错）
     switch: vi.fn().mockResolvedValue(undefined),
+    // M2.1 D3：App 顶层订阅 workspace:listChanged（推送面 no-op 桩）
+    onListChanged: vi.fn().mockReturnValue(() => {}),
   },
   dialog: { pickDirectory: vi.fn().mockResolvedValue(null) },
   session: {
@@ -54,7 +56,25 @@ const mockApi = {
     onMaximizedChanged: vi.fn().mockReturnValue(() => {}),
   },
   sandbox: {
-    getState: vi.fn(),
+    // D1 后 0-ws 也渲染 NoticeStack——SandboxNotice 挂载即拉聚合信息；
+    // linux 已可用形状使提示卡返回 null（App.test mkSandboxInfo 同款）
+    getState: vi.fn().mockResolvedValue({
+      state: {
+        platform: 'linux',
+        sandboxTool: 'bwrap',
+        toolVersion: '0.8.0',
+        available: true,
+        unavailableReason: null,
+        windowsShell: null,
+        executionPolicy: null,
+        probedAt: 1757500000000,
+      },
+      settings: { mode: 'strict' as const, networkPolicy: 'allow' as const },
+      installCommand: null,
+      bwrapPromptDismissed: false,
+      winPolicyPromptDismissed: false,
+      netPromptDismissed: false,
+    }),
     reprobe: vi.fn(),
     installBwrap: vi.fn(),
     dismissPrompt: vi.fn(),
@@ -110,7 +130,7 @@ describe('C1 回归：向导闩锁（spec 2026-10-10 §3——向导进行期不
     expect(screen.queryByTestId('main-shell')).not.toBeInTheDocument();
   });
 
-  it('跳过收尾：markDone(skipped) 后闩锁释放 → 落回原空态（不回向导）', async () => {
+  it('跳过收尾：markDone(skipped) 后闩锁释放 → 落回 0-ws 主壳（不回向导；D1：主壳取代原空态）', async () => {
     render(<App />);
     fireEvent.click(await screen.findByRole('button', { name: '跳过引导' }));
     // 完成回调触发 obCheck 重拉：getStatus 此时回 skipped（第二次调用起）
@@ -118,7 +138,7 @@ describe('C1 回归：向导闩锁（spec 2026-10-10 §3——向导进行期不
     mockApi.workspace.list.mockResolvedValue([]);
     await waitFor(
       () => {
-        expect(screen.getByRole('heading', { name: '新建工作空间' })).toBeInTheDocument();
+        expect(screen.getByTestId('main-shell')).toBeInTheDocument();
       },
       { timeout: 3000 },
     );

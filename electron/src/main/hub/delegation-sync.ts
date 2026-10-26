@@ -358,7 +358,10 @@ export async function retryDispatch(
         permissionTier,
       },
     });
-    ports.updateTask(taskId, { delegationId });
+    // D5：重派同样回写已解析目标（group 变体换新 targetNodeId）
+    const resolvedRouting: TaskRouting =
+      row.routing.mode === 'group' ? { ...row.routing, targetNodeId } : row.routing;
+    ports.updateTask(taskId, { delegationId, routing: resolvedRouting });
     return { dispatched: true, nodeId: targetNodeId, delegationId };
   } catch {
     // 瞬断（node_offline / 网络抖动）：行保留待处理（RM-M21-5，与 dispatch-submit 同哲学）

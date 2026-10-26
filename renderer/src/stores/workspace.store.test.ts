@@ -1,6 +1,6 @@
 // renderer/src/stores/workspace.store.test.ts
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { useWorkspaceStore } from './workspace.store';
+import { useWorkspaceStore, subscribeWorkspaceListChanged } from './workspace.store';
 import type { Workspace } from '../ipc/types';
 
 const MOCK_WS: Workspace = {
@@ -20,6 +20,12 @@ const MOCK_WS_AFTER_SET: Workspace = { ...MOCK_WS, defaultAgentInstanceId: 'inst
 
 const MOCK_WS_2: Workspace = { ...MOCK_WS, id: 'ws-2', name: '第二个工作区' };
 
+// 镜像落地的新空间（M2.1 D3 推送对账用例——主进程侧落库、renderer 无感知）
+const MOCK_WS_MIRRORED: Workspace = { ...MOCK_WS, id: 'ws-mirror', name: 'dev-ws' };
+
+// D3：listChanged 推送捕获面（subscribeWorkspaceListChanged 契约）
+let listChangedCb: ((e: { reason: string; workspaceName?: string }) => void) | null = null;
+
 const mockApi = {
   workspace: {
     list: vi.fn().mockResolvedValue([MOCK_WS]),
@@ -28,6 +34,12 @@ const mockApi = {
     delete: vi.fn().mockResolvedValue(undefined),
     rename: vi.fn().mockResolvedValue({ ok: true }),
     switch: vi.fn().mockResolvedValue({ ok: true }),
+    onListChanged: vi.fn((cb: (e: { reason: string; workspaceName?: string }) => void) => {
+      listChangedCb = cb;
+      return () => {
+        listChangedCb = null;
+      };
+    }),
   },
 };
 
@@ -53,6 +65,8 @@ beforeEach(() => {
   mockApi.workspace.rename.mockClear();
   mockApi.workspace.switch.mockResolvedValue({ ok: true });
   mockApi.workspace.switch.mockClear();
+  listChangedCb = null;
+  mockApi.workspace.onListChanged.mockClear();
 });
 
 describe('workspace.store', () => {
@@ -324,5 +338,47 @@ describe('workspace.store 上次活跃持久化（重启恢复回归锁）', () 
 
     expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-2');
     expect(localStorage.getItem('momo.activeWorkspace')).toBe('ws-2');
+  });
+});
+
+describe('workspace.store subscribeWorkspaceListChanged（M2.1 D3：镜像落地对账）', () => {
+  it('推送到达 → load 重拉，镜像新空间入列表并成为激活（0-ws 冷启动翻转）', async () => {
+    mockApi.workspace.list.mockResolvedValueOnce([]); // 初始 0-ws
+    await useWorkspaceStore.getState().load();
+    expect(useWorkspaceStore.getState().workspaces).toHaveLength(0);
+
+    // 主进程侧镜像落地 dev-ws（renderer 无感知）——推送后下一次 list 可见
+    mockApi.workspace.list.mockResolvedValue([MOCK_WS_MIRRORED]);
+    const dispose = subscribeWorkspaceListChanged();
+    listChangedCb!({ reason: 'mirror-applied', workspaceName: 'dev-ws' });
+
+    await vi.waitFor(() => {
+      expect(useWorkspaceStore.getState().workspaces.map((w) => w.name)).toEqual(['dev-ws']);
+    });
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-mirror');
+    dispose();
+  });
+
+  it('已有激活空间时推送不夺激活（持久键恢复语义）', async () => {
+    mockApi.workspace.list.mockResolvedValueOnce([MOCK_WS]);
+    await useWorkspaceStore.getState().load();
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-1');
+
+    mockApi.workspace.list.mockResolvedValue([MOCK_WS_MIRRORED, MOCK_WS]);
+    const dispose = subscribeWorkspaceListChanged();
+    listChangedCb!({ reason: 'mirror-applied', workspaceName: 'dev-ws' });
+
+    await vi.waitFor(() => {
+      expect(useWorkspaceStore.getState().workspaces).toHaveLength(2);
+    });
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-1');
+    dispose();
+  });
+
+  it('退订后回调清空——推送面断开', async () => {
+    const dispose = subscribeWorkspaceListChanged();
+    expect(listChangedCb).not.toBeNull();
+    dispose();
+    expect(listChangedCb).toBeNull();
   });
 });

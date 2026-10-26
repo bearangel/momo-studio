@@ -69,11 +69,14 @@ import {
   type SnapshotTeam,
 } from './protocol';
 import type { SnapshotConfigWithModelBinding, SnapshotModelBinding } from './snapshot-model-binding';
+import type { SnapshotConfigWithDefaultAgent } from './snapshot-default-agent';
 
 /** 构建产物：manifest（自检已过 validateSnapshotManifest）+ tar.gz 归档 + sha256。 */
 export interface WorkspaceSnapshotResult {
-  /** config 为 pin 七子段 + modelBinding 可选段（D4——段结构与 hub 仓逐字对齐） */
-  manifest: SnapshotManifest & { config: SnapshotConfigWithModelBinding };
+  /** config 为 pin 七子段 + modelBinding/defaultAgent 可选段（D4/D2——段结构
+   *  与 hub 存档字节一致；pin 校验器对两段未知容忍剥除，应用侧从原始
+   *  manifest.json 提取） */
+  manifest: SnapshotManifest & { config: SnapshotConfigWithModelBinding & SnapshotConfigWithDefaultAgent };
   /** 临时归档路径（resolveTmpDir 下），归调用方管理——上传后清理（对齐 publish 纪律） */
   archivePath: string;
   /** 归档文件 sha256（hex）——上传流的信息性回执对照（hub 端以自算值为权威，C6） */
@@ -462,10 +465,18 @@ export async function buildWorkspaceSnapshot(workspaceId: string): Promise<Works
     resources.push(r);
   }
 
-  // 7. prefs + modelBinding（可选段——无默认模型缺省不发）+ manifest 定型 + 结构自检
-  // （validateSnapshotManifest——hub 端同一校验的前置；pin 版对 modelBinding 未知容忍剥除）
+  // 7. prefs + modelBinding/defaultAgent（可选段——缺省不发）+ manifest 定型 +
+  //    结构自检（validateSnapshotManifest——hub 端同一校验的前置；pin 版对
+  //    两可选段未知容忍剥除，应用侧从原始 manifest.json 提取）
   const modelBinding = collectModelBinding();
-  const manifest: SnapshotManifest & { config: SnapshotConfigWithModelBinding } = {
+  // D2：源默认会话 agent 按成员名携带（instanceId 跨节点无意义）；默认位悬空
+  //（指向非在册成员/未设）→ 不发段，目标默认位不动
+  const defaultAgentName = ws.defaultAgentInstanceId
+    ? (nameByInstance.get(ws.defaultAgentInstanceId) ?? null)
+    : null;
+  const manifest: SnapshotManifest & {
+    config: SnapshotConfigWithModelBinding & SnapshotConfigWithDefaultAgent;
+  } = {
     workspaceName: ws.name,
     version: snapshotVersion(),
     resources,
@@ -478,6 +489,7 @@ export async function buildWorkspaceSnapshot(workspaceId: string): Promise<Works
       providerRefs,
       prefs: collectPrefs(),
       ...(modelBinding !== undefined ? { modelBinding } : {}),
+      ...(defaultAgentName !== null ? { defaultAgent: defaultAgentName } : {}),
     },
   };
   if (validateSnapshotManifest(manifest) === null) {

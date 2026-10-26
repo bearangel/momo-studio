@@ -2,11 +2,14 @@
 //
 // v2.0 P1 Task 11：App 启动分支测试（无登录概念，SQLite 是唯一状态源）。
 //   - 已有 workspace → 直接渲染 MainShell
-//   - 无 workspace → 全屏首启创建工作空间对话框（复用 CreateWorkspaceDialog）
-//   - 首启创建成功 → 进入 MainShell
+//   - M2.1 D1：无 workspace → 同样渲染 MainShell 主壳（0-ws 不再整壳替换——
+//     活动栏/工作组视图可达；创建表单随主区引导迁至 MiddlePanel，
+//     表单流程回归锁见 MiddlePanel.test.tsx）
+//   - 首启向导 pending → 向导接管（闩锁优先于主壳）
 //
 // P5 Task 2：升级首启提示集成
 //   - getUpgradeNotice 命中 + workspace 存在 → MainShell + UpgradeNotice 同屏
+//   - D1 后 0-ws 也走 MainShell 分支：命中标记同样渲染（不再被空态吞掉）
 //   - 用户点「知道了」→ 调 dismissUpgradeNotice + 提示消失
 //   - getUpgradeNotice 返回 null → 无提示（既有分支不变）
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -39,6 +42,8 @@ const mockApi = {
   workspace: {
     list: vi.fn(),
     create: vi.fn(),
+    // M2.1 D3：App 顶层订阅 workspace:listChanged（推送面 no-op 桩）
+    onListChanged: vi.fn().mockReturnValue(() => {}),
   },
   dialog: {
     pickDirectory: vi.fn().mockResolvedValue('/tmp/picked'),
@@ -151,11 +156,10 @@ describe('App 启动分支（v2.0 P1 Task 11）', () => {
     expect(screen.queryByRole('heading', { name: '新建工作空间' })).not.toBeInTheDocument();
   });
 
-  it('无 workspace → 显示首启创建工作空间对话框（不渲染 MainShell）', async () => {
+  it('无 workspace → 渲染 MainShell 主壳（D1：0-ws 不整壳替换，工作组视图可达）', async () => {
     mockApi.workspace.list.mockResolvedValue([]);
     render(<App />);
-    expect(await screen.findByRole('heading', { name: '新建工作空间' })).toBeInTheDocument();
-    expect(screen.queryByTestId('main-shell')).not.toBeInTheDocument();
+    expect(await screen.findByTestId('main-shell')).toBeInTheDocument();
   });
 
   it('无 workspace 且引导 pending → 向导接管空态（spec 2026-10-10 §3.1）', async () => {
@@ -163,45 +167,15 @@ describe('App 启动分支（v2.0 P1 Task 11）', () => {
     mockApi.onboarding.getStatus.mockResolvedValueOnce({ status: 'pending' });
     render(<App />);
     expect(await screen.findByRole('button', { name: /AI 引导/ })).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: '新建工作空间' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('main-shell')).not.toBeInTheDocument();
   });
 
-  it('首启空态也渲染 TitleBar（frameless 下可拖拽/关闭，P2 Task 3）', async () => {
+  it('向导跳过（status=skipped）→ 0-ws 落回主壳而非向导重现', async () => {
     mockApi.workspace.list.mockResolvedValue([]);
+    mockApi.onboarding.getStatus.mockResolvedValue({ status: 'skipped' });
     render(<App />);
-    await screen.findByRole('heading', { name: '新建工作空间' });
-    // TitleBar 真实渲染：窗口关闭控件可见（TitleBar 未被 fixed 遮罩盖住）
-    expect(screen.getByRole('button', { name: '关闭' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '最小化' })).toBeInTheDocument();
-    // 零 workspace 时 tabs 仅剩 ＋（引导创建第一个 workspace）
-    expect(screen.getByRole('button', { name: '新建工作空间' })).toBeInTheDocument();
-  });
-
-  it('首启对话框创建成功后进入 MainShell', async () => {
-    // 有状态 list mock：创建成功后 list 返回新 workspace（模拟真实后端，
-    // 同时覆盖 onClose → load() 的刷新路径不回退空态）
-    let listResult: Workspace[] = [];
-    mockApi.workspace.list.mockImplementation(() => Promise.resolve(listResult));
-    mockApi.workspace.create.mockImplementation(() => {
-      const ws = mkWs('w-new');
-      listResult = [ws];
-      return Promise.resolve(ws);
-    });
-    render(<App />);
-
-    await screen.findByRole('heading', { name: '新建工作空间' });
-    const inputs = document.querySelectorAll('input');
-    fireEvent.change(inputs[0]!, { target: { value: '我的项目' } });
-    fireEvent.change(inputs[1]!, { target: { value: '/tmp/project' } });
-    fireEvent.click(screen.getByRole('button', { name: '创建' }));
-
-    await waitFor(() => {
-      expect(mockApi.workspace.create).toHaveBeenCalledWith({
-        name: '我的项目',
-        directoryPath: '/tmp/project',
-      });
-    });
     expect(await screen.findByTestId('main-shell')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /AI 引导/ })).not.toBeInTheDocument();
   });
 });
 
@@ -263,15 +237,14 @@ describe('App 升级提示集成（P5 Task 2）', () => {
     ).toBeInTheDocument();
   });
 
-  it('getUpgradeNotice 命中但无 workspace → 首启空态（UpgradeNotice 不渲染——首次启动分支不受影响）', async () => {
+  it('getUpgradeNotice 命中且无 workspace → 0-ws 主壳同屏 UpgradeNotice（D1：不再被空态吞掉）', async () => {
     mockApi.workspace.list.mockResolvedValue([]);
     mockApi.system.getUpgradeNotice.mockResolvedValue({
       exportDir: '/tmp/upgrade-export-x',
     });
     render(<App />);
-    // 首启空态分支不应展示升级提示——新装用户无标记场景的反向边界
-    expect(await screen.findByRole('heading', { name: '新建工作空间' })).toBeInTheDocument();
-    expect(screen.queryByTestId('upgrade-notice')).not.toBeInTheDocument();
+    expect(await screen.findByTestId('main-shell')).toBeInTheDocument();
+    expect(await screen.findByTestId('upgrade-notice')).toBeInTheDocument();
   });
 
   it('getUpgradeNotice 返回 null → 不渲染 UpgradeNotice（既有分支不变）', async () => {

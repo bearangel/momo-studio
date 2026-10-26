@@ -138,10 +138,11 @@ export type TaskStatus =
 /**
  * 任务执行路由三选（M2.1 契约区——与 electron/src/main/hub/task-routing.ts 逐字对齐）。
  * 落本地 tasks 表 routing_json 列（RM-M21-2，非 hub 协议）；NULL/异形读侧兜底 local。
+ * group 变体 targetNodeId 为可选「已解析目标」（D5：派发回执回写，外派卡节点徽标源）。
  */
 export type TaskRouting =
   | { mode: 'local' }
-  | { mode: 'group'; groupId: string }
+  | { mode: 'group'; groupId: string; targetNodeId?: string }
   | { mode: 'node'; groupId: string; targetNodeId: string };
 
 /**
@@ -2054,6 +2055,11 @@ export interface ApiSurface {
     rename(id: string, name: string): Promise<{ ok: boolean }>;
     /** P2 Task 2：在系统文件管理器中打开 workspace 目录 */
     openDirectory(id: string): Promise<{ ok: boolean }>;
+    /**
+     * M2.1 D3：主进程侧工作空间列表变更推送（镜像应用等 renderer 无感知的
+     * 落库路径）。返回退订函数。
+     */
+    onListChanged(callback: (e: { reason: string; workspaceName?: string }) => void): () => void;
   };
   file: {
     read(workspaceId: string, filePath: string): Promise<string>;

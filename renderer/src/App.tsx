@@ -2,19 +2,21 @@
 //
 // v2.0 P1 Task 11：无登录概念——启动分支由 workspace 判定（SQLite 是唯一状态源）。
 //   - 已有 workspace → 直接进入 MainShell
-//   - 无 workspace → 首启空态：TitleBar + 内嵌 CreateWorkspaceDialog
-//     （P2 Task 3 空态也包 TitleBar——frameless 下保留拖拽/关闭；tabs 只剩 ＋，
-//     正好引导创建第一个 workspace）
+//
+// M2.1 D1（2026-10-26 真机验收）：0 工作空间不再是整壳替换态——统一渲染
+// MainShell（TitleBar + 活动栏 + 主区），主区由 MiddlePanel 的 !workspace
+// 分支承载「创建或选择工作空间」引导（含内嵌创建表单）。工作组是节点级能力
+// （UC8：新设备零前置接入），活动栏必须在 0-ws 状态即可达；首启创建表单
+// 原语义随主区引导保留（表单本体见 MiddlePanel）。
 //
 // P5 Task 2：升级首启提示——bootstrapped 后 invoke getUpgradeNotice，
-// 有标记 → 在 MainShell 同屏渲染 UpgradeNotice；首启空态分支不受影响
-// （新装用户无标记；仅 MainShell 分支承载升级提示）。
+// 有标记 → 在 MainShell 同屏渲染 UpgradeNotice（D1 后 0-ws 也走 MainShell
+// 分支，升级标记不再被空态吞掉——2.0 升级用户删光空间也能看到导出位置）。
 import { useEffect, useState, useCallback } from 'react';
-import { useWorkspaceStore } from './stores/workspace.store';
+import { useWorkspaceStore, subscribeWorkspaceListChanged } from './stores/workspace.store';
 import { useEditorStore } from './stores/editor.store';
 import { subscribeSessionChannels, useSessionStore } from './stores/session.store';
 import { useWriteGrantStore } from './stores/write-grant.store';
-import { CreateWorkspaceDialog } from './components/workspace/CreateWorkspaceDialog';
 import { MainShell } from './routes/MainShell';
 import { OnboardingWizard } from './routes/OnboardingWizard';
 import { TitleBar } from './components/layout/TitleBar';
@@ -54,6 +56,10 @@ export function App() {
   // stream.store.streams（UI 实时渲染用）。
   // 放在 App 顶层保证整个生命周期只订阅一次，避免视图切换重复注册。
   useEffect(() => subscribeSessionChannels(), []);
+
+  // 主进程侧工作空间变更（M2.1 D3：镜像应用落地）→ 重拉列表——renderer 无感知
+  // 的落库路径经推送对账（冷启动链：0-ws 态收到镜像即翻转入主壳）
+  useEffect(() => subscribeWorkspaceListChanged(), []);
 
   // 通用写拦截信号（spec 2026-10-03 §5.3）：主进程检测命中即推，直弹授权卡
   //（取代旧的批次子串扫描链——见 write-grant.store）
@@ -101,8 +107,8 @@ export function App() {
       });
   }, [bootstrapped, obCheck]);
 
-  // 向导收尾（完成或跳过）：乐观收闩 + 重拉 status + workspaces——完成→ws 非空进
-  // MainShell；跳过→status=skipped 落回原空态表单
+  // 向导收尾（完成或跳过）：乐观收闩 + 重拉 status + workspaces——完成→ws 非空；
+  // 跳过→status=skipped 落回 0-ws 主壳（主区创建引导表单）
   const onWizardFinished = useCallback(() => {
     setWizardOpen(false);
     setObCheck((n) => n + 1);
@@ -136,25 +142,11 @@ export function App() {
     return <OnboardingWizard onFinished={onWizardFinished} />;
   }
 
-  if (workspaces.length === 0) {
-    // 首启空态（spec 2026-10-10 §3.1）：skipped/completed → 原空态（TitleBar +
-    // 内嵌创建表单）。创建成功后 store 写入 workspace → 分支翻转进 MainShell。
-    // onClose 重新拉取列表兜底（仍为空则表单保持）。
-    // 注：升级提示不在首启空态渲染——新装用户无标记；纯 2.0 新装命中此分支无需告知。
-    return (
-      <div className="flex flex-col h-screen w-screen overflow-hidden bg-canvas">
-        <TitleBar />
-        <div className="flex-1 min-h-0 flex items-center justify-center p-6">
-          <CreateWorkspaceDialog onClose={() => void load()} embedded />
-        </div>
-      </div>
-    );
-  }
-
   // D6（关标签 ≠ 删除）：workspaces 非空但可见标签全部关闭 → 重开面板
-  //（TitleBar 下方占满内容区，与首启空态同构；判定只看可见标签，不影响上方
-  // 首启空态的 workspaces 总数判定）。重开 / 新建后自动回到 MainShell。
-  if (workspaces.every((ws) => closedIds.includes(ws.id))) {
+  //（TitleBar 下方占满内容区；判定只看可见标签）。重开 / 新建后自动回到
+  // MainShell。0-ws 不入此分支（every 对空数组恒 true——D1 后 0-ws 走
+  // MainShell 主壳，不渲染重开面板）。
+  if (workspaces.length > 0 && workspaces.every((ws) => closedIds.includes(ws.id))) {
     return (
       <div className="flex flex-col h-screen w-screen overflow-hidden bg-canvas">
         <TitleBar />

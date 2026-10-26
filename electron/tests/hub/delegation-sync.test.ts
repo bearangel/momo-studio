@@ -419,12 +419,14 @@ describe('delegation-sync — retryDispatch', () => {
     const w = makeRedispatchWorld(row);
     const result = await retryDispatch('T-100', w.ports);
     expect(result).toEqual({ dispatched: true, nodeId: 'node-b', delegationId: 'hub-new-id' });
-    // 复位先于派发（updates 序列锁中间态：delegationId 先清再回写新值）
+    // 复位先于派发（updates 序列锁中间态：delegationId 先清再回写新值）；
+    // 成功回写带已解析目标 routing（D5——group 变体补 targetNodeId）
     expect(w.updates.map((u) => u.patch)).toEqual([
       { status: 'pending', errorMessage: null, delegationId: null },
-      { delegationId: 'hub-new-id' },
+      { delegationId: 'hub-new-id', routing: { mode: 'group', groupId: 'g1', targetNodeId: 'node-b' } },
     ]);
     expect(w.rows.get('T-100')!.delegationId).toBe('hub-new-id');
+    expect(w.rows.get('T-100')!.routing).toEqual({ mode: 'group', groupId: 'g1', targetNodeId: 'node-b' });
     expect(w.delegateCalls).toEqual([{ targetNodeId: 'node-b' }]);
   });
 

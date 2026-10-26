@@ -10,10 +10,15 @@
 //   - 写侧 IPC 校验要响亮：静默降级会把「想外派」错发本机，错误更晚更贵
 // 纯函数零依赖（storage/tasks/repo 反向引用本模块——叶子模块无环）。
 
-/** 任务执行路由三选（契约区逐字；RM-M21-2：落本地 tasks 表，非 hub 协议） */
+/**
+ * 任务执行路由三选（契约区逐字；RM-M21-2：落本地 tasks 表，非 hub 协议）。
+ * group 变体的 targetNodeId 为可选「已解析目标」（M2.1 D5：group 派发回执时由
+ * 调度单源回写——外派卡节点徽标的持久数据源，重启/账本滞后不失真；用户语义
+ * 仍是组内调度，worker 视角判定只认 node 变体不受其影响）。
+ */
 export type TaskRouting =
   | { mode: 'local' }
-  | { mode: 'group'; groupId: string }
+  | { mode: 'group'; groupId: string; targetNodeId?: string }
   | { mode: 'node'; groupId: string; targetNodeId: string };
 
 const LOCAL: TaskRouting = { mode: 'local' };
@@ -26,7 +31,7 @@ export function isTaskRouting(v: unknown): v is TaskRouting {
     case 'local':
       return true;
     case 'group':
-      return typeof r.groupId === 'string';
+      return typeof r.groupId === 'string' && (r.targetNodeId === undefined || typeof r.targetNodeId === 'string');
     case 'node':
       return typeof r.groupId === 'string' && typeof r.targetNodeId === 'string';
     default:
@@ -40,7 +45,9 @@ function normalizeTaskRouting(r: TaskRouting): TaskRouting {
     case 'local':
       return LOCAL;
     case 'group':
-      return { mode: 'group', groupId: r.groupId };
+      return r.targetNodeId === undefined
+        ? { mode: 'group', groupId: r.groupId }
+        : { mode: 'group', groupId: r.groupId, targetNodeId: r.targetNodeId };
     case 'node':
       return { mode: 'node', groupId: r.groupId, targetNodeId: r.targetNodeId };
   }

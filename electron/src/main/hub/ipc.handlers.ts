@@ -142,8 +142,8 @@ export function registerHubIpc(): void {
         routing: input.routing,
       });
     },
-    updateDelegationLink: (taskId, delegationId) => {
-      updateTask(taskId, { delegationId });
+    updateDelegationLink: (taskId, delegationId, routing) => {
+      updateTask(taskId, { delegationId, routing });
     },
   };
   ipcMain.handle('hub:submitRoutedTask', (_evt, input: SubmitRoutedTaskInput) =>
