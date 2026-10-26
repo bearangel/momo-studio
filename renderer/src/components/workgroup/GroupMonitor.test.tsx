@@ -1,8 +1,9 @@
 // renderer/src/components/workgroup/GroupMonitor.test.tsx
 //
 // 编队监控台主区测试（momo-hub M2.1 Task 3）——真 store + window.api.hub.* mock：
-// - 组头：组名 + 邀请码 Badge + CopyButton（本机已生成码时）；无码 →「生成邀请码」
-//   走 groupInvite；镜像工作空间入口仅 leader 可见，点击挂既有 MirrorWizard（portal 弹层）
+// - 组头：组名 + 邀请码 Badge + CopyButton（本机已生成码时）；无码不设独立按钮——
+//   组菜单「重新生成邀请码」是唯一入口（成员级语义，M2.1 T5 收口）；镜像工作空间入口仅 leader 可见，
+//   点击挂既有 MirrorWizard（portal 弹层）
 // - 节点卡：选中组全部成员渲染（本机节点也在场，leader/本机徽标）；在跑行按
 //   targetNodeId 过滤（running+pending 两态）；底部 callout 引导回看板
 // - 无组空态：0 组 → 引导去侧栏创建/加入
@@ -110,11 +111,13 @@ describe('GroupMonitor', () => {
     expect(screen.getByRole('button', { name: '复制邀请码' })).toBeInTheDocument();
   });
 
-  it('无码时组头呈现「生成邀请码」按钮，点击走 groupInvite', async () => {
+  it('无码时组头不设独立按钮——组菜单「重新生成邀请码」是唯一入口，点击走 groupInvite', async () => {
     useHubGroupStore.setState({ groups: [GROUP_DEV] });
     api.hub.groupInvite.mockResolvedValue({ inviteCode: 'D3VX-824F' });
     render(<GroupMonitor onOpenView={onOpenView} />);
-    fireEvent.click(screen.getByRole('button', { name: '生成邀请码' }));
+    expect(screen.queryByRole('button', { name: '生成邀请码' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '组操作菜单 dev-team' }));
+    fireEvent.click(screen.getByRole('button', { name: '重新生成邀请码' }));
     await waitFor(() => {
       expect(api.hub.groupInvite).toHaveBeenCalledWith({ groupId: 'g-dev' });
     });
@@ -128,11 +131,12 @@ describe('GroupMonitor', () => {
     expect(await screen.findByRole('dialog', { name: '镜像工作空间向导' })).toBeInTheDocument();
   });
 
-  it('非 leader（本机是普通成员）：无镜像入口（邀请码入口不设限，与 GroupPanel 迁移语义一致）', () => {
+  it('非 leader（本机是普通成员）：无镜像入口（邀请码为成员级能力，菜单入口不设限）', () => {
     useHubGroupStore.setState({ groups: [GROUP_OTHER_LEADER] });
     render(<GroupMonitor onOpenView={onOpenView} />);
     expect(screen.queryByRole('button', { name: '镜像工作空间…' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '生成邀请码' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '组操作菜单 other-team' }));
+    expect(screen.getByRole('button', { name: '重新生成邀请码' })).toBeInTheDocument();
   });
 
   it('节点卡列表：本机节点也在场；在跑行按 targetNodeId 过滤（running+pending 两态）；空闲卡无行', () => {
@@ -244,13 +248,18 @@ describe('GroupMonitor 组操作菜单（M2.1 Task 5 自 settings/GroupPanel 收
     );
   });
 
-  it('非 leader：菜单仅剩 退出工作组（重新生成/转移 leader-only）', () => {
+  it('非 leader：重新生成邀请码可见且可触发（成员级语义）+ 退出工作组；转移组长仍 leader-only', async () => {
     useHubGroupStore.setState({ groups: [GROUP_OTHER_LEADER] });
+    api.hub.groupInvite.mockResolvedValue({ inviteCode: 'OTH5-11BC' });
     render(<GroupMonitor onOpenView={onOpenView} />);
 
     fireEvent.click(screen.getByRole('button', { name: '组操作菜单 other-team' }));
-    expect(screen.queryByRole('button', { name: '重新生成邀请码' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '转移组长' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '退出工作组' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '重新生成邀请码' }));
+    await waitFor(() =>
+      expect(api.hub.groupInvite).toHaveBeenCalledWith({ groupId: 'g-other' }),
+    );
+    expect(await screen.findByText('邀请码 OTH5-11BC')).toBeInTheDocument();
   });
 });

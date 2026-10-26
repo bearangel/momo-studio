@@ -3,11 +3,12 @@
 // 编队监控台主区（momo-hub M2.1 Task 3，视觉合同 S3 屏 + Task 4 查看入口接线
 // + Task 5 组操作菜单收口 RM-M21-8）：
 // - 组头：组名 16px + 邀请码 Badge + CopyButton（本机最近生成的码——hub-group-store
-//   inviteCodes；无码时「生成邀请码」入口，与 GroupPanel 迁移语义一致：不设 leader 门槛）
+//   inviteCodes）；无码不设独立按钮——组菜单「重新生成邀请码」是唯一入口（成员级语义：
+//   hub invite 为成员级 RPC，不设 leader 门槛；M2.1 T5 评审收口）
 // - 「镜像工作空间…」仅 leader 可见（GroupPanel 同语义），点击挂既有 MirrorWizard 原样
 // - 组操作菜单（MoreHorizontal 下拉，自 settings/GroupPanel 收口迁移——删面板前逐
-//   操作面核对归宿，缺失三项补齐）：重新生成邀请码〔仅 leader〕/ 转移组长〔仅 leader，
-//   展开可选成员子列表〕/ 退出工作组〔菜单内两步确认——「再次点击确认」3s 回落范式〕
+//   操作面核对归宿，缺失三项补齐）：重新生成邀请码〔成员级，全员可见可点〕/
+//   转移组长〔仅 leader，展开可选成员子列表〕/ 退出工作组〔菜单内两步确认——「再次点击确认」3s 回落范式〕
 // - 节点卡：选中组全部成员（本机节点也在场）；在跑行按 targetNodeId 过滤；
 //   「查看」门控 = 组长 × 在线 × 非本机（M2 GroupPanel 迁移语义——hub view.*
 //   leader-only 的 UI 前置门控），通过 NodeCard canView 下传；回调 onOpenView
@@ -39,11 +40,9 @@ export function GroupMonitor({ onOpenView }: GroupMonitorProps) {
   const groups = useHubGroupStore((s) => s.groups);
   const selectedGroupId = useHubGroupStore((s) => s.selectedGroupId);
   const inviteCodes = useHubGroupStore((s) => s.inviteCodes);
-  const invite = useHubGroupStore((s) => s.invite);
   const openMirrorWizard = useHubMirrorStore((s) => s.openWizard);
   const tasks = useHubDelegationStore((s) => s.tasks);
   const selfNodeId = useHubStore((s) => s.status?.nodeId ?? null);
-  const [inviteBusy, setInviteBusy] = useState(false);
 
   const group = effectiveSelectedGroup(groups, selectedGroupId);
 
@@ -63,37 +62,15 @@ export function GroupMonitor({ onOpenView }: GroupMonitorProps) {
   const isLeader = selfNodeId === group.leaderNodeId;
   const code = inviteCodes[group.groupId];
 
-  const onInvite = async (): Promise<void> => {
-    if (inviteBusy) return;
-    setInviteBusy(true);
-    try {
-      await invite(group.groupId);
-    } catch {
-      // 生成失败（离线竞态等）人话已落 store.error——侧栏顶部错误行呈现
-    } finally {
-      setInviteBusy(false);
-    }
-  };
-
   return (
     <div className="flex min-w-0 flex-1 flex-col bg-canvas">
       <div className="flex items-center gap-2.5 border-b border-subtle px-4 py-3">
         <h2 className="text-base font-medium text-primary">{group.groupName}</h2>
-        {code !== undefined ? (
+        {code !== undefined && (
           <span className="flex min-w-0 items-center gap-1.5">
             <Badge className="font-mono">邀请码 {code}</Badge>
             <CopyButton text={code} label="复制邀请码" />
           </span>
-        ) : (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 px-2 text-xs"
-            disabled={inviteBusy}
-            onClick={() => void onInvite()}
-          >
-            {inviteBusy ? '生成中…' : '生成邀请码'}
-          </Button>
         )}
         {isLeader && (
           <Button
@@ -220,13 +197,13 @@ function GroupActionsMenu({ group, isLeader, selfNodeId, className }: GroupActio
               style={{ left: pos.left, top: pos.top }}
               className="fixed z-50 w-44 -translate-x-full rounded-md border border-subtle bg-canvas py-1 text-xs shadow-lg"
             >
+              <MenuItem
+                label="重新生成邀请码"
+                disabled={busy}
+                onClick={() => run(() => invite(group.groupId))}
+              />
               {isLeader && (
                 <>
-                  <MenuItem
-                    label="重新生成邀请码"
-                    disabled={busy}
-                    onClick={() => run(() => invite(group.groupId))}
-                  />
                   <MenuItem
                     label="转移组长"
                     disabled={busy}
