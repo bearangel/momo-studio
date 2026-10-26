@@ -13,10 +13,11 @@
 // - 数据源：组/委派 store 的订阅与拉取由 WorkgroupView 统一 init（视图级生命周期），
 //   本组件只消费——侧栏与主区共享同一份组列表与选中态
 import { useState, type FormEvent } from 'react';
-import { ExternalLink, Plus, Users } from 'lucide-react';
+import { ExternalLink, Eye, Plus, Users } from 'lucide-react';
 import { effectiveSelectedGroup, useHubGroupStore } from '../../stores/hub-group.store';
 import { useHubDelegationStore } from '../../stores/hub-delegation.store';
 import { useHubStore } from '../../stores/hub.store';
+import { useHubViewStore } from '../../stores/hub-view.store';
 import type { HubGroupInfo, HubGroupMember, HubTaskRecord } from '../../ipc/types';
 import { cn } from '../../lib/cn';
 import { Badge } from '../ui/Badge';
@@ -39,6 +40,8 @@ export function WorkgroupSidebar() {
   const selectGroup = useHubGroupStore((s) => s.selectGroup);
   const error = useHubGroupStore((s) => s.error);
   const tasks = useHubDelegationStore((s) => s.tasks);
+  // S4 侧栏「查看中」态：查看态（open 且非 picking 前置步）定向的目标成员行
+  const viewingNodeId = useHubViewStore((s) => (s.open && !s.picking ? s.targetNodeId : null));
   const [openForm, setOpenForm] = useState<'create' | 'join' | null>(null);
 
   const group = effectiveSelectedGroup(groups, selectedGroupId);
@@ -103,6 +106,7 @@ export function WorkgroupSidebar() {
                     isSelf={m.nodeId === selfNodeId}
                     isLeader={m.nodeId === group.leaderNodeId}
                     runningCount={runningCountOf(tasks, m.nodeId)}
+                    viewing={m.nodeId === viewingNodeId}
                   />
                 ))}
               </div>
@@ -151,12 +155,29 @@ function MemberRow({
   isSelf,
   isLeader,
   runningCount,
+  viewing,
 }: {
   member: HubGroupMember;
   isSelf: boolean;
   isLeader: boolean;
   runningCount: number;
+  /** S4 查看中态：该成员正被本机远程查看（Eye 图标 + violet 徽标取代 presence/负载） */
+  viewing: boolean;
 }) {
+  if (viewing) {
+    return (
+      <div
+        data-member={member.nodeId}
+        className="flex items-center gap-2 rounded-[7px] bg-surface-active px-2.5 py-1 text-[12.5px] font-medium text-accent-600 dark:text-accent-300"
+      >
+        <Eye size={12} strokeWidth={1.75} className="shrink-0" aria-hidden />
+        <span className="min-w-0 flex-1 truncate">{member.name}</span>
+        <Badge tone="violet" className="h-auto shrink-0 px-1.5 py-0.5 text-[10px] leading-none">
+          查看中
+        </Badge>
+      </div>
+    );
+  }
   return (
     <div data-member={member.nodeId} className="flex items-center gap-2 px-2.5 py-1 text-[12.5px] text-secondary">
       <span

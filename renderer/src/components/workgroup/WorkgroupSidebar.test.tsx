@@ -17,6 +17,7 @@ import { WorkgroupSidebar } from './WorkgroupSidebar';
 import { useHubStore } from '../../stores/hub.store';
 import { useHubGroupStore } from '../../stores/hub-group.store';
 import { useHubDelegationStore } from '../../stores/hub-delegation.store';
+import { useHubViewStore } from '../../stores/hub-view.store';
 import type { HubGroupInfo, HubStatus, HubTaskRecord } from '../../ipc/types';
 
 const api = {
@@ -198,5 +199,41 @@ describe('WorkgroupSidebar', () => {
     expect(screen.getByLabelText('邀请码')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '创建工作组' })).not.toBeInTheDocument();
     expect(screen.queryByText('成员')).not.toBeInTheDocument();
+  });
+
+  it('查看中态（S4 侧栏）：hub-view store 定向成员行 Eye 图标 + violet「查看中」徽标取代负载徽标', () => {
+    useHubGroupStore.setState({ groups: [GROUP_DEV] });
+    useHubDelegationStore.setState({
+      tasks: [task({ taskId: 't1', targetNodeId: '8f3a00000000c21e', status: 'running' })],
+    });
+    useHubViewStore.setState({
+      open: true, picking: false, targetNodeId: '8f3a00000000c21e', targetName: 'office-mac',
+    });
+    render(<WorkgroupSidebar />);
+    const officeRow = screen.getByText('office-mac').closest('[data-member]') as HTMLElement;
+    expect(within(officeRow).getByText('查看中')).toBeInTheDocument();
+    expect(within(officeRow).queryByText('在跑 1')).not.toBeInTheDocument(); // 负载徽标让位
+    expect(officeRow.className).toContain('bg-surface-active'); // 行高亮（S4 srow.on）
+    // 其他成员不受影响（负载照常）
+    const labRow = screen.getByText('lab-node').closest('[data-member]') as HTMLElement;
+    expect(within(labRow).queryByText('查看中')).not.toBeInTheDocument();
+  });
+
+  it('picking 阶段不算查看中（open 但 picking=true → 成员行常态）', () => {
+    useHubGroupStore.setState({ groups: [GROUP_DEV] });
+    useHubViewStore.setState({
+      open: true, picking: true, targetNodeId: '8f3a00000000c21e', targetName: 'office-mac',
+    });
+    render(<WorkgroupSidebar />);
+    expect(screen.queryByText('查看中')).not.toBeInTheDocument();
+  });
+
+  it('退出查看（open=false）后成员行回到常态', () => {
+    useHubGroupStore.setState({ groups: [GROUP_DEV] });
+    useHubViewStore.setState({
+      open: false, picking: false, targetNodeId: '8f3a00000000c21e', targetName: 'office-mac',
+    });
+    render(<WorkgroupSidebar />);
+    expect(screen.queryByText('查看中')).not.toBeInTheDocument();
   });
 });

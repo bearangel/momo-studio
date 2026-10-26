@@ -15,6 +15,8 @@ import { useHubDelegationStore } from '../../stores/hub-delegation.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import type { HubGroupInfo, HubStatus, HubTaskRecord } from '../../ipc/types';
 
+const onOpenView = vi.fn();
+
 const api = {
   hub: {
     groupList: vi.fn(),
@@ -102,7 +104,7 @@ beforeEach(() => {
 describe('GroupMonitor', () => {
   it('组头：组名 + 已生成邀请码 Badge 与 CopyButton', () => {
     useHubGroupStore.setState({ groups: [GROUP_DEV], inviteCodes: { 'g-dev': 'D3VX-824F' } });
-    render(<GroupMonitor />);
+    render(<GroupMonitor onOpenView={onOpenView} />);
     expect(screen.getByRole('heading', { name: 'dev-team' })).toBeInTheDocument();
     expect(screen.getByText('邀请码 D3VX-824F')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '复制邀请码' })).toBeInTheDocument();
@@ -111,7 +113,7 @@ describe('GroupMonitor', () => {
   it('无码时组头呈现「生成邀请码」按钮，点击走 groupInvite', async () => {
     useHubGroupStore.setState({ groups: [GROUP_DEV] });
     api.hub.groupInvite.mockResolvedValue({ inviteCode: 'D3VX-824F' });
-    render(<GroupMonitor />);
+    render(<GroupMonitor onOpenView={onOpenView} />);
     fireEvent.click(screen.getByRole('button', { name: '生成邀请码' }));
     await waitFor(() => {
       expect(api.hub.groupInvite).toHaveBeenCalledWith({ groupId: 'g-dev' });
@@ -121,14 +123,14 @@ describe('GroupMonitor', () => {
 
   it('镜像入口仅 leader：本机 leader 点击挂起既有 MirrorWizard 弹层', async () => {
     useHubGroupStore.setState({ groups: [GROUP_DEV] });
-    render(<GroupMonitor />);
+    render(<GroupMonitor onOpenView={onOpenView} />);
     fireEvent.click(screen.getByRole('button', { name: '镜像工作空间…' }));
     expect(await screen.findByRole('dialog', { name: '镜像工作空间向导' })).toBeInTheDocument();
   });
 
   it('非 leader（本机是普通成员）：无镜像入口（邀请码入口不设限，与 GroupPanel 迁移语义一致）', () => {
     useHubGroupStore.setState({ groups: [GROUP_OTHER_LEADER] });
-    render(<GroupMonitor />);
+    render(<GroupMonitor onOpenView={onOpenView} />);
     expect(screen.queryByRole('button', { name: '镜像工作空间…' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '生成邀请码' })).toBeInTheDocument();
   });
@@ -142,7 +144,7 @@ describe('GroupMonitor', () => {
         task({ taskId: 't3', targetNodeId: '2b77000000009af0', status: 'done', title: '已完成的任务' }),
       ],
     });
-    render(<GroupMonitor />);
+    render(<GroupMonitor onOpenView={onOpenView} />);
     // 本机节点卡 + leader/本机徽标
     const selfCard = screen.getByLabelText('节点 mac-main');
     expect(within(selfCard).getByText('leader')).toBeInTheDocument();
@@ -162,13 +164,36 @@ describe('GroupMonitor', () => {
 
   it('底部 callout 引导回看板（无创建任务入口的话术锚点）', () => {
     useHubGroupStore.setState({ groups: [GROUP_DEV] });
-    render(<GroupMonitor />);
+    render(<GroupMonitor onOpenView={onOpenView} />);
     expect(screen.getByText(/执行位置选「组内调度」即自动派发/)).toBeInTheDocument();
     expect(screen.getByText(/进入成员工作空间只读视图/)).toBeInTheDocument();
   });
 
+  it('查看入口门控（M2 迁移语义——仅组长×在线×非本机）+ 点击回调 onOpenView(nodeId, nodeName)', () => {
+    useHubGroupStore.setState({ groups: [GROUP_DEV] });
+    const { rerender } = render(<GroupMonitor onOpenView={onOpenView} />);
+    // 本机节点卡：查看禁用（本机空间无需远程查看）
+    expect(within(screen.getByLabelText('节点 mac-main')).getByRole('button', { name: '查看' })).toBeDisabled();
+    // 在线成员：可点，回调携带 (nodeId, nodeName)
+    fireEvent.click(within(screen.getByLabelText('节点 office-mac')).getByRole('button', { name: '查看' }));
+    expect(onOpenView).toHaveBeenCalledWith('8f3a00000000c21e', 'office-mac');
+    // 成员离线：禁用
+    useHubGroupStore.setState({
+      groups: [{ ...GROUP_DEV, members: GROUP_DEV.members.map((m) => ({ ...m, online: false })) }],
+    });
+    rerender(<GroupMonitor onOpenView={onOpenView} />);
+    expect(within(screen.getByLabelText('节点 office-mac')).getByRole('button', { name: '查看' })).toBeDisabled();
+  });
+
+  it('非组长（本机普通成员）：全部节点卡查看禁用（hub view.* leader-only 的 UI 前置门控）', () => {
+    useHubGroupStore.setState({ groups: [GROUP_OTHER_LEADER] });
+    render(<GroupMonitor onOpenView={onOpenView} />);
+    expect(within(screen.getByLabelText('节点 office-mac')).getByRole('button', { name: '查看' })).toBeDisabled();
+    expect(within(screen.getByLabelText('节点 lab-node')).getByRole('button', { name: '查看' })).toBeDisabled();
+  });
+
   it('无组空态：引导去侧栏创建/加入', () => {
-    render(<GroupMonitor />);
+    render(<GroupMonitor onOpenView={onOpenView} />);
     expect(screen.getByText('尚未加入任何工作组')).toBeInTheDocument();
     expect(screen.getByText(/在左侧创建工作组，或凭邀请码加入/)).toBeInTheDocument();
   });

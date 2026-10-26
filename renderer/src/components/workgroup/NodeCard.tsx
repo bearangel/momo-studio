@@ -1,12 +1,15 @@
 // renderer/src/components/workgroup/NodeCard.tsx
 //
-// 编队监控台节点卡（momo-hub M2.1 Task 3，视觉合同 .omo/previews/hub-ia-fullapp.html S3）：
+// 编队监控台节点卡（momo-hub M2.1 Task 3，视觉合同 .omo/previews/hub-ia-fullapp.html S3
+// + Task 4「查看」解禁）：
 // - 30px 圆角 icon 槽（surface-active 底 + accent 前景）+ 名称 13px/600 + leader/本机徽标
 // - mono 行 node:前4…后4 + 已镜像空间名——镜像状态无按节点暴露的数据源
 //   （hub-mirror-store 只管向导态、onWorkspaceMirrored 无 renderer 消费方），
 //   空间名由该节点的委派任务史推导（任务能在该节点跑 = 空间已镜像过去），
 //   T4/后续接 mirror 事件源时可替换
-// - 「查看」是 T4 接口桩：禁用态 + title 提示，onOpenView 回调留给 T4 接线
+// - 「查看」（T4 接线）：canView 由 GroupMonitor 计算（组长 × 在线 × 非本机——
+//   M2 GroupPanel 迁移语义），禁用态 title 提示门控原因；点击回调
+//   onOpenView(nodeId, nodeName) → WorkgroupView 接 S3b 选择器
 // - 在跑行：running → violet spinner +「执行中」；pending → 警示图标 +「等待节点确认」
 //   （「在跑」语义同侧栏负载计数：两态同计）；终态任务不进行
 import { CircleHelp, Eye, Monitor } from 'lucide-react';
@@ -21,7 +24,9 @@ interface NodeCardProps {
   isSelf: boolean;
   /** 该节点的全部委派任务（已按 targetNodeId 过滤；在跑行/镜像推导均在此消费） */
   tasks: HubTaskRecord[];
-  /** T4 接入：进入成员工作空间只读视图（本任务为禁用桩） */
+  /** T4：查看入口可用性（组长 × 在线 × 非本机——由 GroupMonitor 统一计算） */
+  canView: boolean;
+  /** T4 接入：进入成员工作空间只读视图 */
   onOpenView: (nodeId: string, nodeName: string) => void;
 }
 
@@ -29,10 +34,11 @@ function shortNodeId(nodeId: string): string {
   return nodeId.length > 8 ? `${nodeId.slice(0, 4)}…${nodeId.slice(-4)}` : nodeId;
 }
 
-export function NodeCard({ node, isLeader, isSelf, tasks, onOpenView }: NodeCardProps) {
+export function NodeCard({ node, isLeader, isSelf, tasks, canView, onOpenView }: NodeCardProps) {
   const runningTasks = tasks.filter((t) => t.status === 'running' || t.status === 'pending');
   const mirroredNames = [...new Set(tasks.map((t) => t.workspaceName))];
   const idle = runningTasks.length === 0;
+  const viewDisabledReason = !node.online ? '目标节点离线' : isSelf ? '本机工作空间无需远程查看' : '仅组长可查看';
 
   return (
     <div
@@ -71,8 +77,8 @@ export function NodeCard({ node, isLeader, isSelf, tasks, onOpenView }: NodeCard
             variant="ghost"
             size="sm"
             className="h-6 px-2 text-xs"
-            disabled
-            title="T4 接入"
+            disabled={!canView}
+            title={canView ? undefined : viewDisabledReason}
             onClick={() => onOpenView(node.nodeId, node.name)}
           >
             <Eye size={12} strokeWidth={1.75} aria-hidden />

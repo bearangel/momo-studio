@@ -1,10 +1,13 @@
 // renderer/src/components/workgroup/GroupMonitor.tsx
 //
-// 编队监控台主区（momo-hub M2.1 Task 3，视觉合同 S3 屏）：
+// 编队监控台主区（momo-hub M2.1 Task 3，视觉合同 S3 屏 + Task 4 查看入口接线）：
 // - 组头：组名 16px + 邀请码 Badge + CopyButton（本机最近生成的码——hub-group-store
 //   inviteCodes；无码时「生成邀请码」入口，与 GroupPanel 迁移语义一致：不设 leader 门槛）
 // - 「镜像工作空间…」仅 leader 可见（GroupPanel 同语义），点击挂既有 MirrorWizard 原样
-// - 节点卡：选中组全部成员（本机节点也在场）；在跑行按 targetNodeId 过滤
+// - 节点卡：选中组全部成员（本机节点也在场）；在跑行按 targetNodeId 过滤；
+//   「查看」门控 = 组长 × 在线 × 非本机（M2 GroupPanel 迁移语义——hub view.*
+//   leader-only 的 UI 前置门控），通过 NodeCard canView 下传；回调 onOpenView
+//   由 WorkgroupView 接 S3b 选择器（hub-view.store openPanel）
 // - 底部 callout：监控台无创建任务入口——引导回看板（执行位置「组内调度」自动派发）
 // - 组选择与侧栏共用 effectiveSelectedGroup 推导（手选组在场 → 手选；否则第一组）
 // - 无组空态：引导去侧栏创建/加入（表单在 WorkgroupSidebar）
@@ -21,7 +24,12 @@ import { EmptyState } from '../ui/EmptyState';
 import { MirrorWizard } from '../hub/MirrorWizard';
 import { NodeCard } from './NodeCard';
 
-export function GroupMonitor() {
+interface GroupMonitorProps {
+  /** T4 接线：进入成员工作空间只读视图（WorkgroupView → S3b 选择器） */
+  onOpenView: (nodeId: string, nodeName: string) => void;
+}
+
+export function GroupMonitor({ onOpenView }: GroupMonitorProps) {
   const groups = useHubGroupStore((s) => s.groups);
   const selectedGroupId = useHubGroupStore((s) => s.selectedGroupId);
   const inviteCodes = useHubGroupStore((s) => s.inviteCodes);
@@ -102,7 +110,8 @@ export function GroupMonitor() {
             tasks={tasks.filter((t) => t.targetNodeId === m.nodeId)}
             isLeader={m.nodeId === group.leaderNodeId}
             isSelf={m.nodeId === selfNodeId}
-            onOpenView={handleOpenViewStub}
+            canView={isLeader && m.nodeId !== selfNodeId && m.online}
+            onOpenView={onOpenView}
           />
         ))}
         <div className="flex items-start gap-2 rounded-lg bg-surface-2 px-2.5 py-2 text-[11.5px] leading-relaxed text-secondary">
@@ -120,9 +129,4 @@ export function GroupMonitor() {
       <MirrorWizard />
     </div>
   );
-}
-
-// T4 接线前的占位回调：NodeCard「查看」按钮为禁用桩，不会被触发
-function handleOpenViewStub(): void {
-  // 有意留空——Task 4 接工作空间选择器（S3b）后替换
 }

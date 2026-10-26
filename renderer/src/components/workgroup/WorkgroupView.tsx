@@ -1,8 +1,12 @@
 // renderer/src/components/workgroup/WorkgroupView.tsx
 //
-// 工作组视图主区容器（momo-hub M2.1 Task 2 骨架 + Task 3 监控台）——三态分发：
+// 工作组视图主区容器（momo-hub M2.1 Task 2 骨架 + Task 3 监控台 + Task 4 查看态）
+// ——状态分发：
 //   快照未落地（status === null）→ 加载行；未接入（!configured）→ WorkgroupEmptyState
-//   （D2 治愈：不依赖工作空间存在）；已接入（configured）→ GroupMonitor 编队监控台。
+//   （D2 治愈：不依赖工作空间存在）；已接入（configured）→ GroupMonitor 编队监控台；
+//   查看态（hub-view store open 且非 picking）→ 主区整体替换为 RemoteViewPane
+//   （S4 全宽四页签），ViewPickerDialog（S3b）在 picking 前置步弹窗在场——
+//   退出查看（store.close）即回监控态。
 // 本视图是组/委派 store 的生命周期拥有者：在线挂载期统一 init（订阅 + 拉取），
 // 卸载即退订——侧栏（ViewSidebar 渲染的 WorkgroupSidebar）与主区共享同一份数据。
 // hub.store 自身仍在此 init（订阅先于快照，与 HubSettingsPanel 同款）——本视图是
@@ -14,13 +18,17 @@
 // +「重试」（走 store.refresh：清 loadError 复用订阅重拉）——不修复则「加载中…」死端。
 // 渲染分支键用 configured 而非 state==='online'：enroll 成功即翻监控台，不会因
 // connecting 短暂回弹空态表单（连接态细节由侧栏/监控台离线注记呈现）。
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 import { useHubStore } from '../../stores/hub.store';
 import { useHubGroupStore } from '../../stores/hub-group.store';
 import { useHubDelegationStore } from '../../stores/hub-delegation.store';
+import { useHubViewStore } from '../../stores/hub-view.store';
+import { useWorkspaceStore } from '../../stores/workspace.store';
 import { Button } from '../ui/Button';
 import { WorkgroupEmptyState } from './WorkgroupEmptyState';
 import { GroupMonitor } from './GroupMonitor';
+import { RemoteViewPane } from './RemoteViewPane';
+import { ViewPickerDialog } from './ViewPickerDialog';
 
 export function WorkgroupView() {
   const status = useHubStore((s) => s.status);
@@ -29,6 +37,9 @@ export function WorkgroupView() {
   const refresh = useHubStore((s) => s.refresh);
   const initGroups = useHubGroupStore((s) => s.init);
   const initDelegations = useHubDelegationStore((s) => s.init);
+  const viewOpen = useHubViewStore((s) => s.open);
+  const viewPicking = useHubViewStore((s) => s.picking);
+  const openViewPanel = useHubViewStore((s) => s.openPanel);
 
   useEffect(() => init(), [init]);
 
@@ -45,6 +56,25 @@ export function WorkgroupView() {
       disposeDelegations();
     };
   }, [online, initGroups, initDelegations]);
+
+  // T4 查看链路入口：NodeCard「查看」→ S3b 选择器（store picking 前置步）。
+  // workspaces 取本机清单（M2 迁移语义——协议无远端空间清单通道）；工作组
+  // 视图上下文里 workspace store 可能尚未加载（首进视图未过工作空间页），
+  // 空清单先补拉再 openPanel——否则 ≤1 自动选中判定拿空数组误报「本机无工作空间」
+  const handleOpenView = useCallback(
+    (nodeId: string, nodeName: string): void => {
+      const toEntries = (): Array<{ id: string; name: string }> =>
+        useWorkspaceStore.getState().workspaces.map((w) => ({ id: w.id, name: w.name }));
+      if (useWorkspaceStore.getState().workspaces.length > 0) {
+        openViewPanel({ targetNodeId: nodeId, targetName: nodeName, workspaces: toEntries() });
+        return;
+      }
+      void useWorkspaceStore.getState().load().then(() => {
+        openViewPanel({ targetNodeId: nodeId, targetName: nodeName, workspaces: toEntries() });
+      });
+    },
+    [openViewPanel],
+  );
 
   if (status === null) {
     if (loadError !== null) {
@@ -72,5 +102,10 @@ export function WorkgroupView() {
     return <WorkgroupEmptyState />;
   }
 
-  return <GroupMonitor />;
+  return (
+    <>
+      {viewOpen && !viewPicking ? <RemoteViewPane /> : <GroupMonitor onOpenView={handleOpenView} />}
+      <ViewPickerDialog />
+    </>
+  );
 }
