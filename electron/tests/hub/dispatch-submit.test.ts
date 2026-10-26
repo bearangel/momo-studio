@@ -262,6 +262,21 @@ describe('submitRoutedTask — group 模式', () => {
     const brief = ports.delegate.mock.calls[0]?.[0] as DelegationTaskBrief;
     expect(brief.task.permissionTier).toBe('readonly');
   });
+
+  // T10b（pin v0.1.3）：studio 测试不引 hub 运行时，本用例锁载荷构造侧——task 恰为
+  // 协议 DelegationTask 白名单三键（title/prompt/permissionTier），零杂散字段；hub 侧
+  // parse 透传与非法值剥除由 momo-hub delegations.test.ts「permissionTier 合法三值
+  // （readonly/sandbox/confirm）均透传」与「permissionTier 非法值丢弃不抛」两用例锁死
+  it('7b. 委派载荷 task 形状锁：恰为协议白名单三键（readonly 档在场，无杂散字段）', async () => {
+    const ports = makePorts({ groups: standardGroup(), registry: standardRegistry() });
+    await submitRoutedTask(
+      { ...baseInput({ mode: 'group', groupId: 'g1' }), permissionTier: 'readonly' },
+      ports,
+    );
+    const brief = ports.delegate.mock.calls[0]?.[0] as DelegationTaskBrief;
+    expect(Object.keys(brief.task).sort()).toEqual(['permissionTier', 'prompt', 'title']);
+    expect(brief.task.permissionTier).toBe('readonly');
+  });
 });
 
 describe('submitRoutedTask — node 模式', () => {

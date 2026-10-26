@@ -79,7 +79,8 @@ function RadioRow({ checked, title, hint, name, badge, onSelect, children }: Rad
 
 /** T10 档位说明文案（S2「权限策略：只读+白名单」hint 语境；与主进程 run-policy 语义对齐） */
 const TIER_HINTS: Record<PermissionTier, string> = {
-  readonly: '仅可读操作 · 任务书前置只读约束，违反将被拒绝',
+  // readonly 边界注记（T10b 评审 Minor）：零授权只作用于本次委派会话，工作空间级既有授权不受影响
+  readonly: '仅可读操作 · 任务书前置只读约束，违反将被拒绝 · 会话级零授权（工作空间级既有授权不受影响）',
   sandbox: '预授予镜像工作空间目录写授权 · 目录内自由写入',
   confirm: '越界写入需执行端用户确认（默认）',
 };
