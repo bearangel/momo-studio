@@ -121,13 +121,11 @@ beforeEach(() => {
     tasks: [],
     loading: false,
     error: null,
-    expandedTaskId: null,
     streams: {},
     prompts: {},
     agentSlugs: {},
     sessionIds: {},
     reasons: {},
-    wizardOpen: false,
   });
   useHubViewStore.setState({
     open: false, picking: false, targetNodeId: null, targetName: null,

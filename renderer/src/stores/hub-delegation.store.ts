@@ -1,19 +1,21 @@
 // renderer/src/stores/hub-delegation.store.ts
 //
-// 委派面板数据源（momo-hub M2e T12，leader 侧，spec §5.3）：
+// 委派任务数据源（momo-hub M2e T12 建立；M2.1 Task 5 随 DelegationPanel/Wizard
+// 退役收敛为纯状态层，spec §5.3）：
 // - 列表：taskList 权威拉取 + hub:task* 四推送驱动状态迁移（progress/completed/
 //   failed/interrupted；cancelled 无 leader 推送——由 taskCancel 回执本地落，下次
 //   load 对账），事件只迁移本机已知行、未知行等 load 兜底（不凭空造行）
 // - 进度流：task.progress 500ms 批合并（同窗多拍并为一条增量——count/excerpt 取末拍、
-//   lastSeq 取最大，预览批次语义）；终态到达即冲刷在途批，末条增量不丢
+//   lastSeq 取最大）；终态到达即冲刷在途批，末条增量不丢
 // - 取消：taskCancel 成功 → 本机落 cancelled + 重拉对账（hub 无 cancelled 推送）
-// - 向导（三步，预览获批稿）：openWizard 绑定组 + 可选预填（重新委派同任务书新建）；
-//   受理即终态（accepted），进度在列表消费——向导无长驻执行态
+// - 消费方（T5 后）：工作组侧栏负载徽标 / 监控台节点卡在跑行；M2.1 T8/T9 起新建
+//   弹窗与看板融合接手「创建委派」入口与任务全生命周期展示（prompts/agentSlugs/
+//   streams 等展示态为其预留，本任务保留不删——最小退役裁定）
+// - 向导态已随 DelegationWizard 退役删除（openWizard 等仅向导消费，零存量引用）
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
 import type {
   HubDelegationStatus,
-  HubTaskDelegateInput,
   HubTaskProgressEvent,
   HubTaskRecord,
   HubTaskTerminalEvent,
@@ -28,21 +30,11 @@ export interface DelegationStreamEntry {
   at: number;
 }
 
-/** 领导侧新建委派预填（重新委派：以同任务书新建，新 taskId） */
-export interface DelegationWizardPrefill {
-  targetNodeId?: string;
-  workspaceName?: string;
-  title?: string;
-  prompt?: string;
-  agentSlug?: string;
-}
-
 interface HubDelegationState {
   tasks: HubTaskRecord[];
   loading: boolean;
   /** 最近一次拉取/动作失败的呈现文案；成功即清 */
   error: string | null;
-  expandedTaskId: string | null;
   /** 进度流（taskId → 已冲刷的合并条目，时间升序） */
   streams: Record<string, DelegationStreamEntry[]>;
   /** 本机创建时记录的任务书（taskId → prompt；owner 气泡与重新委派预填，未知则降级） */
@@ -54,40 +46,10 @@ interface HubDelegationState {
   /** failed 附因（taskId → reason 原文；人话解释在组件层渲染） */
   reasons: Record<string, string>;
 
-  /** 面板挂载时调用：订阅四推送 + 拉取；返回解订阅函数 */
+  /** 挂载时调用：订阅四推送 + 拉取；返回解订阅函数 */
   init(): () => void;
   load(): Promise<void>;
-  toggleExpand(taskId: string): void;
   cancel(taskId: string): Promise<void>;
-
-  // ── 向导态 ──
-  wizardOpen: boolean;
-  wizardStep: 1 | 2 | 3;
-  wizardGroupId: string | null;
-  wizardGroupName: string | null;
-  wizardTargetNodeId: string | null;
-  wizardWorkspaceId: string | null;
-  wizardWorkspaceName: string | null;
-  wizardAgentSlug: string;
-  wizardTitle: string;
-  wizardPrompt: string;
-  wizardSubmitting: boolean;
-  wizardSubmitError: string | null;
-  /** 受理回执（taskId）——非 null 即受理态，向导可安全关闭 */
-  wizardAcceptedTaskId: string | null;
-
-  openWizard(groupId: string, groupName: string, prefill?: DelegationWizardPrefill): void;
-  closeWizard(): void;
-  selectTarget(nodeId: string): void;
-  selectWorkspace(workspaceId: string, workspaceName: string): void;
-  setWizardAgentSlug(slug: string): void;
-  setWizardTitle(title: string): void;
-  setWizardPrompt(prompt: string): void;
-  gotoWizardStep2(): void;
-  backWizardStep1(): void;
-  submitWizard(): Promise<void>;
-  /** 受理态「查看任务进度」：关向导 + 展开该任务行 */
-  viewAccepted(): void;
 }
 
 /** 进度批合并窗口（与目标侧节流窗同值——展示侧再合并一次，覆盖直转连拍） */
@@ -144,7 +106,7 @@ function patchTask(taskId: string, patch: Partial<HubTaskRecord>): void {
   });
 }
 
-export const useHubDelegationStore = create<HubDelegationState>((set, get) => {
+export const useHubDelegationStore = create<HubDelegationState>((set) => {
   const refresh = async (): Promise<void> => {
     set({ loading: true });
     try {
@@ -159,7 +121,6 @@ export const useHubDelegationStore = create<HubDelegationState>((set, get) => {
     tasks: [],
     loading: false,
     error: null,
-    expandedTaskId: null,
     streams: {},
     prompts: {},
     agentSlugs: {},
@@ -193,13 +154,6 @@ export const useHubDelegationStore = create<HubDelegationState>((set, get) => {
 
     load: refresh,
 
-    toggleExpand(taskId) {
-      const cur = get().expandedTaskId;
-      // 展开新行前冲刷其在途批（进入详情即见最新增量）
-      if (cur !== taskId) flushBatch(taskId);
-      set({ expandedTaskId: cur === taskId ? null : taskId });
-    },
-
     async cancel(taskId) {
       try {
         await ipc.hub.taskCancel({ taskId });
@@ -211,109 +165,6 @@ export const useHubDelegationStore = create<HubDelegationState>((set, get) => {
         throw err;
       }
       await refresh();
-    },
-
-    wizardOpen: false,
-    wizardStep: 1,
-    wizardGroupId: null,
-    wizardGroupName: null,
-    wizardTargetNodeId: null,
-    wizardWorkspaceId: null,
-    wizardWorkspaceName: null,
-    wizardAgentSlug: '',
-    wizardTitle: '',
-    wizardPrompt: '',
-    wizardSubmitting: false,
-    wizardSubmitError: null,
-    wizardAcceptedTaskId: null,
-
-    openWizard(groupId, groupName, prefill) {
-      // 预填：目标节点按名重挂（重新委派来自既有任务行——targetNodeId 直接可用）
-      set({
-        wizardOpen: true,
-        wizardStep: 1,
-        wizardGroupId: groupId,
-        wizardGroupName: groupName,
-        wizardTargetNodeId: prefill?.targetNodeId ?? null,
-        // 工作空间按名回挂 id（S1 Select 以 id 为值；找不到则清空待重选）
-        wizardWorkspaceId: null,
-        wizardWorkspaceName: prefill?.workspaceName ?? null,
-        wizardAgentSlug: prefill?.agentSlug ?? '',
-        wizardTitle: prefill?.title ?? '',
-        wizardPrompt: prefill?.prompt ?? '',
-        wizardSubmitting: false,
-        wizardSubmitError: null,
-        wizardAcceptedTaskId: null,
-      });
-    },
-
-    closeWizard() {
-      if (get().wizardSubmitting) return; // 发送在途防误关（与镜像向导同款二道闸）
-      set({ wizardOpen: false });
-    },
-
-    selectTarget(nodeId) {
-      set({ wizardTargetNodeId: nodeId });
-    },
-
-    selectWorkspace(workspaceId, workspaceName) {
-      set({ wizardWorkspaceId: workspaceId, wizardWorkspaceName: workspaceName });
-    },
-
-    setWizardAgentSlug(slug) {
-      set({ wizardAgentSlug: slug });
-    },
-    setWizardTitle(title) {
-      set({ wizardTitle: title });
-    },
-    setWizardPrompt(prompt) {
-      set({ wizardPrompt: prompt });
-    },
-
-    gotoWizardStep2() {
-      const s = get();
-      if (!s.wizardTargetNodeId || !s.wizardWorkspaceId) return;
-      set({ wizardStep: 2 });
-    },
-    backWizardStep1() {
-      set({ wizardStep: 1 });
-    },
-
-    async submitWizard() {
-      const s = get();
-      if (s.wizardSubmitting || s.wizardAcceptedTaskId !== null) return;
-      if (!s.wizardGroupId || !s.wizardTargetNodeId || !s.wizardWorkspaceName) return;
-      if (s.wizardTitle.trim() === '' || s.wizardPrompt.trim() === '') return;
-      const input: HubTaskDelegateInput = {
-        groupId: s.wizardGroupId,
-        targetNodeId: s.wizardTargetNodeId,
-        workspaceName: s.wizardWorkspaceName,
-        title: s.wizardTitle.trim(),
-        prompt: s.wizardPrompt.trim(),
-        ...(s.wizardAgentSlug.trim() !== '' ? { agentSlug: s.wizardAgentSlug.trim() } : {}),
-      };
-      set({ wizardSubmitting: true, wizardSubmitError: null });
-      try {
-        const { taskId } = await ipc.hub.taskDelegate(input);
-        set((cur) => ({
-          wizardSubmitting: false,
-          wizardAcceptedTaskId: taskId,
-          prompts: { ...cur.prompts, [taskId]: input.prompt },
-          agentSlugs: { ...cur.agentSlugs, [taskId]: input.agentSlug ?? '' },
-        }));
-        await refresh();
-      } catch (err) {
-        set({
-          wizardSubmitting: false,
-          wizardSubmitError: err instanceof Error ? err.message : String(err),
-        });
-      }
-    },
-
-    viewAccepted() {
-      const id = get().wizardAcceptedTaskId;
-      if (id === null) return;
-      set({ wizardOpen: false, expandedTaskId: id });
     },
   };
 });

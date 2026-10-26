@@ -1,9 +1,13 @@
 // renderer/src/components/workgroup/GroupMonitor.tsx
 //
-// 编队监控台主区（momo-hub M2.1 Task 3，视觉合同 S3 屏 + Task 4 查看入口接线）：
+// 编队监控台主区（momo-hub M2.1 Task 3，视觉合同 S3 屏 + Task 4 查看入口接线
+// + Task 5 组操作菜单收口 RM-M21-8）：
 // - 组头：组名 16px + 邀请码 Badge + CopyButton（本机最近生成的码——hub-group-store
 //   inviteCodes；无码时「生成邀请码」入口，与 GroupPanel 迁移语义一致：不设 leader 门槛）
 // - 「镜像工作空间…」仅 leader 可见（GroupPanel 同语义），点击挂既有 MirrorWizard 原样
+// - 组操作菜单（MoreHorizontal 下拉，自 settings/GroupPanel 收口迁移——删面板前逐
+//   操作面核对归宿，缺失三项补齐）：重新生成邀请码〔仅 leader〕/ 转移组长〔仅 leader，
+//   展开可选成员子列表〕/ 退出工作组〔菜单内两步确认——「再次点击确认」3s 回落范式〕
 // - 节点卡：选中组全部成员（本机节点也在场）；在跑行按 targetNodeId 过滤；
 //   「查看」门控 = 组长 × 在线 × 非本机（M2 GroupPanel 迁移语义——hub view.*
 //   leader-only 的 UI 前置门控），通过 NodeCard canView 下传；回调 onOpenView
@@ -11,12 +15,14 @@
 // - 底部 callout：监控台无创建任务入口——引导回看板（执行位置「组内调度」自动派发）
 // - 组选择与侧栏共用 effectiveSelectedGroup 推导（手选组在场 → 手选；否则第一组）
 // - 无组空态：引导去侧栏创建/加入（表单在 WorkgroupSidebar）
-import { useState } from 'react';
-import { HardDriveDownload, Kanban, Users } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { HardDriveDownload, Kanban, MoreHorizontal, Users } from 'lucide-react';
 import { effectiveSelectedGroup, useHubGroupStore } from '../../stores/hub-group.store';
 import { useHubDelegationStore } from '../../stores/hub-delegation.store';
 import { useHubMirrorStore } from '../../stores/hub-mirror.store';
 import { useHubStore } from '../../stores/hub.store';
+import type { HubGroupInfo } from '../../ipc/types';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { CopyButton } from '../ui/CopyButton';
@@ -100,6 +106,12 @@ export function GroupMonitor({ onOpenView }: GroupMonitorProps) {
             镜像工作空间…
           </Button>
         )}
+        <GroupActionsMenu
+          group={group}
+          isLeader={isLeader}
+          selfNodeId={selfNodeId}
+          className={isLeader ? undefined : 'ml-auto'}
+        />
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3.5">
@@ -128,5 +140,155 @@ export function GroupMonitor({ onOpenView }: GroupMonitorProps) {
       </div>
       <MirrorWizard />
     </div>
+  );
+}
+
+interface GroupActionsMenuProps {
+  group: HubGroupInfo;
+  isLeader: boolean;
+  selfNodeId: string | null;
+  /** 非 leader 时镜像按钮缺席，菜单自身右对齐补位 */
+  className?: string;
+}
+
+/** 组操作菜单（MoreHorizontal 下拉；portal 到 body 防主区 overflow 裁切，GroupMenu 同纪律） */
+function GroupActionsMenu({ group, isLeader, selfNodeId, className }: GroupActionsMenuProps) {
+  const invite = useHubGroupStore((s) => s.invite);
+  const transfer = useHubGroupStore((s) => s.transfer);
+  const leave = useHubGroupStore((s) => s.leave);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const [pickingTransfer, setPickingTransfer] = useState(false);
+  const [confirmingLeave, setConfirmingLeave] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [pos, setPos] = useState({ left: 0, top: 0 });
+
+  // 打开时按触发按钮右下角定位（右对齐弹出）；jsdom 无布局回退原点（测试不断言坐标）
+  useEffect(() => {
+    if (!open) return;
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (rect) setPos({ left: rect.right, top: rect.bottom + 4 });
+  }, [open]);
+
+  // 退组臂确认 3s 自动回落（GroupPanel/ProviderModelPicker 同款防 armed 滞留）
+  useEffect(() => {
+    if (!confirmingLeave) return;
+    const timer = setTimeout(() => setConfirmingLeave(false), 3000);
+    return () => clearTimeout(timer);
+  }, [confirmingLeave]);
+
+  const close = (): void => {
+    setOpen(false);
+    setPickingTransfer(false);
+    setConfirmingLeave(false);
+  };
+
+  const run = (action: () => Promise<unknown>): void => {
+    if (busy) return;
+    setBusy(true);
+    void action()
+      .catch(() => {
+        // 人话错误已落 hub-group-store.error——侧栏错误行呈现（GroupPanel 同语义）
+      })
+      .finally(() => {
+        setBusy(false);
+        close();
+      });
+  };
+
+  const transferCandidates = group.members.filter(
+    (m) => m.nodeId !== selfNodeId && m.nodeId !== group.leaderNodeId,
+  );
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label={`组操作菜单 ${group.groupName}`}
+        aria-expanded={open}
+        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-tertiary hover:bg-surface-3 hover:text-primary ${className ?? ''}`}
+        onClick={() => (open ? close() : setOpen(true))}
+      >
+        <MoreHorizontal size={14} strokeWidth={1.75} aria-hidden />
+      </button>
+      {open &&
+        createPortal(
+          <>
+            <div aria-hidden className="fixed inset-0 z-40" onClick={close} />
+            <div
+              style={{ left: pos.left, top: pos.top }}
+              className="fixed z-50 w-44 -translate-x-full rounded-md border border-subtle bg-canvas py-1 text-xs shadow-lg"
+            >
+              {isLeader && (
+                <>
+                  <MenuItem
+                    label="重新生成邀请码"
+                    disabled={busy}
+                    onClick={() => run(() => invite(group.groupId))}
+                  />
+                  <MenuItem
+                    label="转移组长"
+                    disabled={busy}
+                    onClick={() => setPickingTransfer((v) => !v)}
+                  />
+                  {pickingTransfer && (
+                    <div className="border-t border-subtle py-1">
+                      {transferCandidates.map((m) => (
+                        <MenuItem
+                          key={m.nodeId}
+                          label={`转移给 ${m.name}`}
+                          disabled={busy}
+                          onClick={() => run(() => transfer(group.groupId, m.nodeId))}
+                        />
+                      ))}
+                      {transferCandidates.length === 0 && (
+                        <p className="px-3 py-1.5 text-tertiary">暂无可转移的成员</p>
+                      )}
+                    </div>
+                  )}
+                  <div className="my-1 border-t border-subtle" />
+                </>
+              )}
+              {confirmingLeave ? (
+                <MenuItem
+                  label="再次点击确认退出"
+                  danger
+                  disabled={busy}
+                  onClick={() => run(() => leave(group.groupId))}
+                />
+              ) : (
+                <MenuItem label="退出工作组" danger disabled={busy} onClick={() => setConfirmingLeave(true)} />
+              )}
+            </div>
+          </>,
+          document.body,
+        )}
+    </>
+  );
+}
+
+function MenuItem({
+  label,
+  onClick,
+  disabled,
+  danger = false,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled: boolean;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={`block w-full px-3 py-1.5 text-left transition-colors hover:bg-surface-2 disabled:opacity-50 ${
+        danger ? 'text-status-error' : 'text-secondary'
+      }`}
+    >
+      {label}
+    </button>
   );
 }

@@ -212,9 +212,7 @@ describe('只读红线（notes §4 断言点 1/2/6/7）', () => {
     const src = fs.readFileSync(path.resolve(__dirname, 'RemoteViewPane.tsx'), 'utf-8');
     expect(src).toContain("from '../im/MessageFrame'");
     expect(src).toContain("from '../im/ToolCallChip'");
-    const delegationSrc = fs.readFileSync(path.resolve(__dirname, '../hub/DelegationPanel.tsx'), 'utf-8');
-    expect(delegationSrc).toContain("from '../im/MessageFrame'");
-    expect(delegationSrc).toContain("from '../im/ToolCallChip'");
+    // M2.1 T5：委派面板已退役（ DelegationPanel.tsx 删除）——同源断言随迁出失效，不再读取
   });
 });
 

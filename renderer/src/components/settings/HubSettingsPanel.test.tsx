@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { HubSettingsPanel } from './HubSettingsPanel';
 import { useHubStore } from '../../stores/hub.store';
+import { useUiStore } from '../../stores/ui.store';
 import type { HubNodePresenceEvent, HubStateChangedEvent, HubStatus } from '../../ipc/types';
 
 // 推送回调捕获——mock 订阅时截下回调供测试手动派发（仿真主进程 webContents.send）
@@ -103,6 +104,7 @@ beforeEach(() => {
   presenceCb = undefined;
   (globalThis as unknown as { window: { api: typeof api } }).window.api = api;
   useHubStore.setState({ status: null, nodes: [], loadError: null });
+  useUiStore.setState({ activeView: 'settings' });
 });
 
 describe('HubSettingsPanel', () => {
@@ -445,5 +447,36 @@ describe('HubSettingsPanel 远程查看同意区段（M2e T14/T15）', () => {
     api.hub.getViewSettings.mockRejectedValueOnce(new Error('kv 读取失败'));
     render(<HubSettingsPanel />);
     expect(await screen.findByText('kv 读取失败')).toBeDefined();
+  });
+});
+
+describe('HubSettingsPanel M2.1 T5 瘦身（S5 视觉合同：迁移卡+连接+隐私受控 三块）', () => {
+  it('已接入视图：迁移说明卡在「前往 →」；工作组/镜像块迁出（零残留）；隐私受控两开关在场', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
+    render(<HubSettingsPanel />);
+
+    // 迁移卡文案（S5 定值）+「前往 →」入口
+    expect(await screen.findByText(/工作组日常操作（组 \/ 镜像 \/ 委派 \/ 查看）已移至主界面/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /前往/ })).toBeInTheDocument();
+
+    // 三块结构：GroupPanel 工作组区与静态镜像信息行全部退役（零残留死块）
+    expect(screen.queryByLabelText('工作组')).not.toBeInTheDocument();
+    expect(screen.queryByText(/资源镜像/)).not.toBeInTheDocument();
+
+    // 隐私与受控：两开关（既有受控逻辑原样保留）
+    expect(screen.getByRole('switch', { name: '接受任务委派' })).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: '允许本组查看' })).toBeInTheDocument();
+
+    // 连接/身份区保留
+    expect(screen.getByText('hub 地址')).toBeInTheDocument();
+    expect(screen.getByText('本机节点')).toBeInTheDocument();
+  });
+
+  it('「前往 →」点击 → ui.store setActiveView 切到 workgroups 一等视图', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
+    render(<HubSettingsPanel />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /前往/ }));
+    expect(useUiStore.getState().activeView).toBe('workgroups');
   });
 });

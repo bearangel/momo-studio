@@ -96,13 +96,11 @@ beforeEach(() => {
     tasks: [],
     loading: false,
     error: null,
-    expandedTaskId: null,
     streams: {},
     prompts: {},
     agentSlugs: {},
     sessionIds: {},
     reasons: {},
-    wizardOpen: false,
   });
 });
 

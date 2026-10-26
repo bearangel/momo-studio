@@ -1,18 +1,23 @@
 // renderer/src/components/settings/HubSettingsPanel.tsx
 //
-// 设置「节点互联」面板（momo-hub M0 Task 11）——实现对照已批预览
-// .superpowers/sdd/2026-10-23-momo-hub-m0-connection-foundation/task-11-preview.html 三态：
-// - 态 1 未接入：接入表单（hub 地址 / 节点名〔helper〕/ 加入凭证〔password + helper〕）+ 主按钮「接入」
+// 设置「节点互联」面板（momo-hub M0 Task 11 三态底座 + M2.1 Task 5 瘦身，视觉合同
+// .omo/previews/hub-ia-fullapp.html S5「瘦身为纯配置」）：
+// - 迁移说明卡（已接入态首块）：工作组日常操作（组/镜像/委派/查看）已移至主界面
+//   「工作组」，「前往 →」setActiveView('workgroups')——GroupPanel 及其挂载的
+//   MirrorWizard/DelegationWizard/DelegationPanel/ViewPanel 全部随 T5 退役
+// - 态 1 未接入：接入表单（hub 地址 / 节点名〔helper〕/ 加入凭证〔password + helper〕）+
+//   主按钮「接入」（表单逻辑收敛复用 useHubEnroll hook——T2 自本组件抽出）
 // - 态 2 已接入·已连接：绿点徽章 + 信息行（hub 地址 / 本机节点名 + nodeId 8 位短码）+
-//   在线节点列表（绿点 + 名称 +「本机」Badge + 右对齐短码）+ M1/M2 禁用说明行 +
-//   危险区「断开并忘记」两步确认（首击描边→danger 填充「再次点击确认」——ProviderModelPicker 范式）
+//   在线节点列表 + 隐私与受控（委派接受/远程查看同意两开关）+ 危险区「断开并忘记」两步确认
 // - 态 3 已接入·连接中断：黄点「连接中」徽章 + lastError 原文行 + 自动重连提示 + 列表降级灰点占位
 // - 换址重接（configured && nodeId === null，主进程换址清凭证归零）：提示行 + 预填表单
 // - 换址入口（D1，已接入态）：身份区次级按钮「修改 hub 地址」→ 确认弹窗（改地址 + 断开告警）
 //   → 调 configure → 落到换址引导态
-import { useEffect, useState, type FormEvent } from 'react';
-import { Files, Network, RefreshCw, Trash2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Network, RefreshCw, Trash2, Users } from 'lucide-react';
+import { useHubEnroll } from '../../hooks/use-hub-enroll';
 import { useHubStore } from '../../stores/hub.store';
+import { useUiStore } from '../../stores/ui.store';
 import { ipc } from '../../ipc/client';
 import type { HubConnectionState, HubDelegationSettings, HubStatus, HubViewSettings } from '../../ipc/types';
 import { Badge } from '../ui/Badge';
@@ -20,7 +25,6 @@ import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { Input } from '../ui/Input';
 import { Switch } from '../ui/Switch';
-import { GroupPanel } from './GroupPanel';
 
 /**
  * 委派子节点区段（M2e T10，RM2-3 复用表单豁免——Switch/Input 既有原子）：
@@ -227,39 +231,15 @@ export function HubSettingsPanel() {
 
   const needsReenroll = status.configured && status.nodeId === null;
   return needsReenroll || !status.configured ? (
-    <EnrollForm status={status} needsReenroll={needsReenroll} />
+    <EnrollForm needsReenroll={needsReenroll} />
   ) : (
     <EnrolledView status={status} />
   );
 }
 
-function EnrollForm({ status, needsReenroll }: { status: HubStatus; needsReenroll: boolean }) {
-  const enroll = useHubStore((s) => s.enroll);
-  // 换址重接场景预填当前 hubUrl/节点名；未接入初始为空（分支只在快照落地后渲染，初值即定值）
-  const [hubUrl, setHubUrl] = useState(status.hubUrl ?? '');
-  const [nodeName, setNodeName] = useState(status.nodeName ?? '');
-  const [enrollmentToken, setEnrollmentToken] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const onSubmit = async (e: FormEvent<HTMLFormElement>): Promise<void> => {
-    e.preventDefault();
-    if (submitting) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      await enroll({
-        hubUrl: hubUrl.trim(),
-        enrollmentToken: enrollmentToken.trim(),
-        nodeName: nodeName.trim(),
-      });
-      // 成功后 store 已覆盖 status → 面板切已接入视图，本组件随分支卸载
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSubmitting(false);
-    }
-  };
+function EnrollForm({ needsReenroll }: { needsReenroll: boolean }) {
+  // 表单逻辑收敛复用 useHubEnroll（T2 抽出，供工作组空态与设置页双消费——单源）
+  const form = useHubEnroll();
 
   return (
     <section className="flex max-w-[560px] flex-col gap-6" aria-label="节点互联设置">
@@ -275,20 +255,20 @@ function EnrollForm({ status, needsReenroll }: { status: HubStatus; needsReenrol
         <p className="text-xs text-status-warning">地址已变更，需重新接入</p>
       )}
 
-      <form className="flex max-w-[460px] flex-col gap-4" onSubmit={(e) => void onSubmit(e)}>
+      <form className="flex max-w-[460px] flex-col gap-4" onSubmit={form.submit}>
         <Input
           label="hub 地址"
           className="w-full font-mono text-[12.5px]"
-          value={hubUrl}
-          onChange={(e) => setHubUrl(e.target.value)}
+          value={form.hubUrl}
+          onChange={(e) => form.setHubUrl(e.target.value)}
           placeholder="https://hub.example.com:8787"
         />
         <div className="flex flex-col gap-1">
           <Input
             label="节点名"
             className="w-full"
-            value={nodeName}
-            onChange={(e) => setNodeName(e.target.value)}
+            value={form.nodeName}
+            onChange={(e) => form.setNodeName(e.target.value)}
             placeholder="办公室 MacBook"
           />
           <p className="text-xs text-tertiary">本机识别名，将展示给其他节点</p>
@@ -298,24 +278,53 @@ function EnrollForm({ status, needsReenroll }: { status: HubStatus; needsReenrol
             label="加入凭证"
             type="password"
             className="w-full font-mono text-[12.5px]"
-            value={enrollmentToken}
-            onChange={(e) => setEnrollmentToken(e.target.value)}
+            value={form.enrollmentToken}
+            onChange={(e) => form.setEnrollmentToken(e.target.value)}
             placeholder="join-xxxx-xxxx"
           />
           <p className="text-xs text-tertiary">在 hub 启动横幅中获取</p>
         </div>
         <div>
-          <Button type="submit" disabled={submitting}>
+          <Button type="submit" disabled={form.submitting}>
             接入
           </Button>
         </div>
-        {error !== null && (
+        {form.error !== null && (
           <p className="text-xs text-status-error" role="alert">
-            {error}
+            {form.error}
           </p>
         )}
       </form>
     </section>
+  );
+}
+
+/** 迁移说明卡（S5 首块，surface-active callout）：工作组日常操作迁出指引，「前往 →」切一等视图 */
+function MigrationCard() {
+  const setActiveView = useUiStore((s) => s.setActiveView);
+  return (
+    <div
+      className="flex items-start gap-2.5 rounded-lg bg-surface-active px-3 py-2.5 text-[13px] text-secondary"
+      aria-label="迁移说明"
+    >
+      <Users
+        size={16}
+        strokeWidth={1.75}
+        aria-hidden
+        className="mt-0.5 shrink-0 text-accent-600 dark:text-accent-300"
+      />
+      <span>
+        工作组日常操作（组 / 镜像 / 委派 / 查看）已移至主界面「工作组」。
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ml-1 h-auto px-0.5 align-baseline text-accent-600 dark:text-accent-300"
+          onClick={() => setActiveView('workgroups')}
+        >
+          前往 →
+        </Button>
+      </span>
+    </div>
   );
 }
 
@@ -389,6 +398,8 @@ function EnrolledView({ status }: { status: HubStatus }) {
 
   return (
     <section className="flex max-w-[560px] flex-col gap-6" aria-label="节点互联设置">
+      <MigrationCard />
+
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="mb-1 flex items-center gap-2 text-base font-medium text-primary">
@@ -475,16 +486,6 @@ function EnrolledView({ status }: { status: HubStatus }) {
       <DelegationSection />
 
       <ViewConsentSection />
-
-      <div className="flex flex-col gap-2 rounded-lg border border-subtle bg-surface-1 p-3">
-        <div className="flex items-center gap-2 text-[13px] text-disabled">
-          <Files size={16} strokeWidth={1.75} aria-hidden className="shrink-0" />
-          资源镜像——跨节点同步资源库
-          <Badge className="ml-auto">已上线（镜像向导）</Badge>
-        </div>
-      </div>
-
-      <GroupPanel />
 
       <div className="flex flex-col gap-2 rounded-lg border border-subtle bg-surface-2 p-3">
         <div className="text-sm">

@@ -60,12 +60,8 @@ afterEach(() => {
 async function freshInit(fakeTimers = false): Promise<void> {
   const { useHubDelegationStore } = await import('./hub-delegation.store');
   useHubDelegationStore.setState({
-    tasks: [], loading: false, error: null, expandedTaskId: null,
+    tasks: [], loading: false, error: null,
     streams: {}, prompts: {}, agentSlugs: {}, sessionIds: {}, reasons: {},
-    wizardOpen: false, wizardStep: 1, wizardGroupId: null, wizardGroupName: null,
-    wizardTargetNodeId: null, wizardWorkspaceId: null, wizardWorkspaceName: null,
-    wizardAgentSlug: '', wizardTitle: '', wizardPrompt: '',
-    wizardSubmitting: false, wizardSubmitError: null, wizardAcceptedTaskId: null,
   });
   useHubDelegationStore.getState().init();
   if (fakeTimers) {
@@ -162,18 +158,6 @@ describe('进度 500ms 批合并', () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ count: 1, lastSeq: 30, excerpt: '收尾总结' });
   });
-
-  it('展开行冲刷在途批（进详情即见最新增量）', async () => {
-    vi.useFakeTimers();
-    await freshInit(true);
-    const { useHubDelegationStore } = await import('./hub-delegation.store');
-    progressCb!({ taskId: 'tk-1', sessionId: 'sess-1', lastSeq: 7, excerpt: 'x' });
-    useHubDelegationStore.getState().toggleExpand('tk-1');
-    expect(useHubDelegationStore.getState().streams['tk-1']).toHaveLength(1);
-    expect(useHubDelegationStore.getState().expandedTaskId).toBe('tk-1');
-    useHubDelegationStore.getState().toggleExpand('tk-1');
-    expect(useHubDelegationStore.getState().expandedTaskId).toBeNull();
-  });
 });
 
 describe('取消（无 cancelled 推送——回执本地落 + 重拉对账）', () => {
@@ -195,84 +179,6 @@ describe('取消（无 cancelled 推送——回执本地落 + 重拉对账）',
     await expect(useHubDelegationStore.getState().cancel('tk-1')).rejects.toThrow('任务已处于终态 done，不可取消');
     expect(useHubDelegationStore.getState().tasks[0]!.status).toBe('done');
     expect(useHubDelegationStore.getState().error).toBe('任务已处于终态 done，不可取消');
-  });
-});
-
-describe('新建向导受理链', () => {
-  async function openAndFill(mod: typeof import('./hub-delegation.store')): Promise<void> {
-    const st = mod.useHubDelegationStore.getState();
-    st.openWizard('g1', 'TeamA');
-    st.selectTarget('node-b');
-    st.selectWorkspace('ws-1', 'product-dev');
-    st.setWizardTitle('重构登录模块的错误处理');
-    st.setWizardPrompt('请重构登录模块并跑绿测试。');
-    st.setWizardAgentSlug('coder');
-    mod.useHubDelegationStore.setState({ wizardStep: 3 });
-  }
-
-  it('submit → taskDelegate（trim + agentSlug 附带）→ accepted + prompts/agentSlugs 记录 + 重拉', async () => {
-    await freshInit();
-    const mod = await import('./hub-delegation.store');
-    await openAndFill(mod);
-    mockApi.hub.taskDelegate.mockResolvedValueOnce({ taskId: 'tk-new' });
-    mockApi.hub.taskList.mockResolvedValueOnce({ tasks: [task(), task({ taskId: 'tk-new', status: 'pending' })] });
-
-    await mod.useHubDelegationStore.getState().submitWizard();
-
-    expect(mockApi.hub.taskDelegate).toHaveBeenCalledWith({
-      groupId: 'g1',
-      targetNodeId: 'node-b',
-      workspaceName: 'product-dev',
-      title: '重构登录模块的错误处理',
-      prompt: '请重构登录模块并跑绿测试。',
-      agentSlug: 'coder',
-    });
-    const st = mod.useHubDelegationStore.getState();
-    expect(st.wizardAcceptedTaskId).toBe('tk-new');
-    expect(st.prompts['tk-new']).toBe('请重构登录模块并跑绿测试。');
-    expect(st.agentSlugs['tk-new']).toBe('coder');
-    expect(st.tasks).toHaveLength(2);
-
-    st.viewAccepted();
-    expect(mod.useHubDelegationStore.getState().wizardOpen).toBe(false);
-    expect(mod.useHubDelegationStore.getState().expandedTaskId).toBe('tk-new');
-  });
-
-  it('agentSlug 空串不附带（=默认 agent）；失败 → submitError 呈现不抛', async () => {
-    await freshInit();
-    const mod = await import('./hub-delegation.store');
-    await openAndFill(mod);
-    mod.useHubDelegationStore.getState().setWizardAgentSlug('  ');
-    mockApi.hub.taskDelegate.mockResolvedValueOnce({ taskId: 'tk-2' });
-    await mod.useHubDelegationStore.getState().submitWizard();
-    const call = mockApi.hub.taskDelegate.mock.calls[0]![0] as { agentSlug?: string };
-    expect(call.agentSlug).toBeUndefined();
-    expect(mod.useHubDelegationStore.getState().agentSlugs['tk-2']).toBe('');
-
-    // 受理后再发（新任务）——复位受理态后 rejection 呈现
-    mod.useHubDelegationStore.setState({ wizardAcceptedTaskId: null });
-    mockApi.hub.taskDelegate.mockRejectedValueOnce(new Error('目标节点不在线，委派被拒（离线拒派）'));
-    await mod.useHubDelegationStore.getState().submitWizard();
-    expect(mod.useHubDelegationStore.getState().wizardSubmitError).toBe('目标节点不在线，委派被拒（离线拒派）');
-    expect(mod.useHubDelegationStore.getState().wizardAcceptedTaskId).toBeNull();
-  });
-
-  it('重新委派预填：openWizard(prefill) 保留任务书与目标', async () => {
-    await freshInit();
-    const mod = await import('./hub-delegation.store');
-    mod.useHubDelegationStore.getState().openWizard('g1', 'TeamA', {
-      targetNodeId: 'node-b',
-      workspaceName: 'product-dev',
-      title: '旧任务',
-      prompt: '旧任务书',
-      agentSlug: 'coder',
-    });
-    const st = mod.useHubDelegationStore.getState();
-    expect(st.wizardTargetNodeId).toBe('node-b');
-    expect(st.wizardWorkspaceName).toBe('product-dev');
-    expect(st.wizardTitle).toBe('旧任务');
-    expect(st.wizardPrompt).toBe('旧任务书');
-    expect(st.wizardAgentSlug).toBe('coder');
   });
 });
 

@@ -21,6 +21,8 @@ const api = {
   hub: {
     groupList: vi.fn(),
     groupInvite: vi.fn(),
+    groupTransfer: vi.fn(),
+    groupLeave: vi.fn(),
     onGroupChanged: vi.fn(() => () => undefined),
     taskList: vi.fn(),
     onTaskProgress: vi.fn(() => () => undefined),
@@ -90,13 +92,11 @@ beforeEach(() => {
     tasks: [],
     loading: false,
     error: null,
-    expandedTaskId: null,
     streams: {},
     prompts: {},
     agentSlugs: {},
     sessionIds: {},
     reasons: {},
-    wizardOpen: false,
   });
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null, loading: false, error: null });
 });
@@ -196,5 +196,61 @@ describe('GroupMonitor', () => {
     render(<GroupMonitor onOpenView={onOpenView} />);
     expect(screen.getByText('尚未加入任何工作组')).toBeInTheDocument();
     expect(screen.getByText(/在左侧创建工作组，或凭邀请码加入/)).toBeInTheDocument();
+  });
+});
+
+describe('GroupMonitor 组操作菜单（M2.1 Task 5 自 settings/GroupPanel 收口——RM-M21-8）', () => {
+  it('leader：菜单含 重新生成邀请码/转移组长/退出工作组；重新生成走 groupInvite 且组头徽标更新', async () => {
+    useHubGroupStore.setState({ groups: [GROUP_DEV], inviteCodes: { 'g-dev': 'D3VX-824F' } });
+    api.hub.groupInvite.mockResolvedValue({ inviteCode: 'N3W9-77QA' });
+    render(<GroupMonitor onOpenView={onOpenView} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '组操作菜单 dev-team' }));
+    fireEvent.click(screen.getByRole('button', { name: '重新生成邀请码' }));
+    await waitFor(() =>
+      expect(api.hub.groupInvite).toHaveBeenCalledWith({ groupId: 'g-dev' }),
+    );
+    // store.inviteCodes 覆盖 → 组头 Badge 更新为新码
+    expect(await screen.findByText('邀请码 N3W9-77QA')).toBeInTheDocument();
+  });
+
+  it('转移组长：展开可选成员子列表（排除本机），点击成员调 groupTransfer', async () => {
+    useHubGroupStore.setState({ groups: [GROUP_DEV] });
+    render(<GroupMonitor onOpenView={onOpenView} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '组操作菜单 dev-team' }));
+    fireEvent.click(screen.getByRole('button', { name: '转移组长' }));
+    // 本机自身不在可转移列表（现任组长即本机）
+    expect(screen.queryByRole('button', { name: '转移给 mac-main' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '转移给 office-mac' }));
+    await waitFor(() =>
+      expect(api.hub.groupTransfer).toHaveBeenCalledWith({
+        groupId: 'g-dev',
+        toNodeId: '8f3a00000000c21e',
+      }),
+    );
+  });
+
+  it('退组两步确认（GroupPanel「再次点击确认」范式迁移）：首击臂确认不调 leave；再击才调', async () => {
+    useHubGroupStore.setState({ groups: [GROUP_DEV] });
+    render(<GroupMonitor onOpenView={onOpenView} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '组操作菜单 dev-team' }));
+    fireEvent.click(screen.getByRole('button', { name: '退出工作组' }));
+    expect(api.hub.groupLeave).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '再次点击确认退出' }));
+    await waitFor(() =>
+      expect(api.hub.groupLeave).toHaveBeenCalledWith({ groupId: 'g-dev' }),
+    );
+  });
+
+  it('非 leader：菜单仅剩 退出工作组（重新生成/转移 leader-only）', () => {
+    useHubGroupStore.setState({ groups: [GROUP_OTHER_LEADER] });
+    render(<GroupMonitor onOpenView={onOpenView} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '组操作菜单 other-team' }));
+    expect(screen.queryByRole('button', { name: '重新生成邀请码' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '转移组长' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '退出工作组' })).toBeInTheDocument();
   });
 });
