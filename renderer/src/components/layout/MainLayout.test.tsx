@@ -101,7 +101,7 @@ describe('MainLayout', () => {
     // 重置 store，保证测试间状态确定
     useUiStore.setState({
       activeView: 'im',
-      sidebarCollapsed: { im: false, files: false, tasks: false },
+      sidebarCollapsed: { im: false, files: false, tasks: false, workgroups: false },
     });
     useWorkspaceStore.setState({
       workspaces: [],
@@ -144,6 +144,7 @@ describe('MainLayout', () => {
       im: true,
       files: false,
       tasks: false,
+      workgroups: false,
     });
     // Cmd+B（mac）——切回
     fireEvent.keyDown(window, { key: 'b', metaKey: true });
@@ -158,6 +159,7 @@ describe('MainLayout', () => {
       im: false,
       files: false,
       tasks: false,
+      workgroups: false,
     });
   });
 

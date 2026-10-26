@@ -36,8 +36,8 @@ describe('ViewSidebar', () => {
   beforeEach(() => {
     useUiStore.setState({
       activeView: 'im',
-      sidebarCollapsed: { im: false, files: false, tasks: false },
-      sidebarWidths: { im: 260, files: 260, tasks: 260 },
+      sidebarCollapsed: { im: false, files: false, tasks: false, workgroups: false },
+      sidebarWidths: { im: 260, files: 260, tasks: 260, workgroups: 260 },
     });
   });
 
@@ -65,6 +65,14 @@ describe('ViewSidebar', () => {
     expect(screen.getByTestId('task-sidebar-stub')).toBeInTheDocument();
   });
 
+  // M2.1 T2：workgroups 成为第四侧边栏视图——标题「工作组」+ 本任务占位体
+  it('workgroups 视图渲染占位侧栏（标题「工作组」+ Task 3 填充占位）', () => {
+    useUiStore.setState({ activeView: 'workgroups' });
+    render(<ViewSidebar />);
+    expect(screen.getByText('工作组')).toBeInTheDocument();
+    expect(screen.getByTestId('workgroup-sidebar-stub')).toBeInTheDocument();
+  });
+
   it.each(['agents', 'marketplace', 'settings'] as const)(
     '%s 视图无侧边栏（渲染 null）',
     (view) => {
@@ -75,14 +83,14 @@ describe('ViewSidebar', () => {
   );
 
   it('收起时完全消失（不再渲染 48px 图标轨），内容不渲染', () => {
-    useUiStore.setState({ sidebarCollapsed: { im: true, files: false, tasks: false } });
+    useUiStore.setState({ sidebarCollapsed: { im: true, files: false, tasks: false, workgroups: false } });
     const { container } = render(<ViewSidebar />);
     expect(container.firstChild).toBeNull();
     expect(screen.queryByTestId('room-list-stub')).not.toBeInTheDocument();
   });
 
   it('收起状态按视图独立：im 收起时 files 视图仍展开', () => {
-    useUiStore.setState({ sidebarCollapsed: { im: true, files: false, tasks: false } });
+    useUiStore.setState({ sidebarCollapsed: { im: true, files: false, tasks: false, workgroups: false } });
     const im = render(<ViewSidebar />);
     expect(im.container.firstChild).toBeNull();
 
@@ -93,7 +101,7 @@ describe('ViewSidebar', () => {
   });
 
   it('宽度从 store 透传到 Sidebar（视图独立宽度）', () => {
-    useUiStore.setState({ sidebarWidths: { im: 320, files: 260, tasks: 260 } });
+    useUiStore.setState({ sidebarWidths: { im: 320, files: 260, tasks: 260, workgroups: 260 } });
     render(<ViewSidebar />);
     expect(screen.getByTestId('view-sidebar').style.width).toBe('320px');
 
@@ -131,8 +139,8 @@ describe('ViewSidebar handleSelectFile（readForEditor 分流，功能优化 202
     fileApi.openWithDefaultApp.mockResolvedValue({ ok: true });
     useUiStore.setState({
       activeView: 'files',
-      sidebarCollapsed: { im: false, files: false, tasks: false },
-      sidebarWidths: { im: 260, files: 260, tasks: 260 },
+      sidebarCollapsed: { im: false, files: false, tasks: false, workgroups: false },
+      sidebarWidths: { im: 260, files: 260, tasks: 260, workgroups: 260 },
     });
     useWorkspaceStore.setState({
       workspaces: [buildWorkspace('ws-1')],

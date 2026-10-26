@@ -7,14 +7,19 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { SidebarRestoreButton } from './SidebarRestoreButton';
 import { useUiStore } from '../../stores/ui.store';
 
-type SidebarView = 'im' | 'files' | 'tasks';
+type SidebarView = 'im' | 'files' | 'tasks' | 'workgroups';
 
 /** 仅指定视图收起的状态片段（其余视图保持展开，验证独立性） */
 const collapsedFor = (v: SidebarView): { sidebarCollapsed: Record<SidebarView, boolean> } => ({
-  sidebarCollapsed: { im: v === 'im', files: v === 'files', tasks: v === 'tasks' },
+  sidebarCollapsed: {
+    im: v === 'im',
+    files: v === 'files',
+    tasks: v === 'tasks',
+    workgroups: v === 'workgroups',
+  },
 });
 
-const ALL_FALSE = { im: false, files: false, tasks: false };
+const ALL_FALSE = { im: false, files: false, tasks: false, workgroups: false };
 
 describe('SidebarRestoreButton', () => {
   beforeEach(() => {

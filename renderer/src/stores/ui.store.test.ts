@@ -23,48 +23,68 @@ const seed = (widths: unknown, collapsed?: unknown): void => {
   );
 };
 
-const ALL_FALSE = { im: false, files: false, tasks: false };
+const ALL_FALSE = { im: false, files: false, tasks: false, workgroups: false };
 
 describe('ui.store 侧边栏宽度与收起持久化', () => {
   beforeEach(() => {
     localStorage.clear();
   });
 
-  it('无持久化时：三视图默认 260px，均未收起', async () => {
+  // M2.1 T2：workgroups 成为第四个带侧边栏的视图（工作组一等视图，D2 治愈）
+  it('ViewKey / SIDEBAR_VIEWS 含 workgroups（第四侧边栏视图）', async () => {
+    const { SIDEBAR_VIEWS } = await loadStore();
+    expect(SIDEBAR_VIEWS).toContain('workgroups');
+    expect(SIDEBAR_VIEWS).toEqual(['im', 'files', 'tasks', 'workgroups']);
+  });
+
+  it('无持久化时：四视图默认 260px，均未收起', async () => {
     const { useUiStore, SIDEBAR_WIDTH_DEFAULT } = await loadStore();
     expect(useUiStore.getState().sidebarWidths).toEqual({
       im: SIDEBAR_WIDTH_DEFAULT,
       files: SIDEBAR_WIDTH_DEFAULT,
       tasks: SIDEBAR_WIDTH_DEFAULT,
+      workgroups: SIDEBAR_WIDTH_DEFAULT,
     });
     expect(useUiStore.getState().sidebarCollapsed).toEqual(ALL_FALSE);
   });
 
-  it('持久化的合法宽度与新对象形态收起状态在启动时恢复', async () => {
+  it('持久化的合法宽度与新对象形态收起状态在启动时恢复（缺失项回默认）', async () => {
     seed({ im: 320, files: 200, tasks: 480 }, { im: true, files: false, tasks: true });
     const { useUiStore } = await loadStore();
-    expect(useUiStore.getState().sidebarWidths).toEqual({ im: 320, files: 200, tasks: 480 });
+    expect(useUiStore.getState().sidebarWidths).toEqual({
+      im: 320,
+      files: 200,
+      tasks: 480,
+      workgroups: 260,
+    });
     expect(useUiStore.getState().sidebarCollapsed).toEqual({
       im: true,
       files: false,
       tasks: true,
+      workgroups: false,
     });
   });
 
-  it('旧版共享 boolean 收起态按同值迁移到三视图', async () => {
+  it('旧版共享 boolean 收起态按同值迁移到四视图', async () => {
     seed({ im: 300, files: 260, tasks: 260 }, true);
     const { useUiStore } = await loadStore();
     expect(useUiStore.getState().sidebarCollapsed).toEqual({
       im: true,
       files: true,
       tasks: true,
+      workgroups: true,
     });
   });
 
   it('收起对象单项非法/缺失 → 该项回 false，合法项保留', async () => {
     seed(undefined, { im: 'yes', files: true });
     const { useUiStore } = await loadStore();
-    expect(useUiStore.getState().sidebarCollapsed).toEqual({ im: false, files: true, tasks: false });
+    expect(useUiStore.getState().sidebarCollapsed).toEqual({
+      im: false,
+      files: true,
+      tasks: false,
+      workgroups: false,
+    });
   });
 
   it('超范围/类型错的持久化项回默认 260，合法项保留', async () => {
@@ -74,6 +94,7 @@ describe('ui.store 侧边栏宽度与收起持久化', () => {
       im: SIDEBAR_WIDTH_DEFAULT,
       files: SIDEBAR_WIDTH_DEFAULT,
       tasks: SIDEBAR_WIDTH_DEFAULT,
+      workgroups: SIDEBAR_WIDTH_DEFAULT,
     });
   });
 
@@ -94,26 +115,37 @@ describe('ui.store 侧边栏宽度与收起持久化', () => {
     useUiStore.getState().setSidebarWidth('tasks', 300.6);
 
     const s = useUiStore.getState().sidebarWidths;
-    expect(s).toEqual({ im: 480, files: 200, tasks: 301 });
+    expect(s).toEqual({ im: 480, files: 200, tasks: 301, workgroups: 260 });
 
     const persisted = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}');
-    expect(persisted.sidebarWidths).toEqual({ im: 480, files: 200, tasks: 301 });
+    expect(persisted.sidebarWidths).toEqual({ im: 480, files: 200, tasks: 301, workgroups: 260 });
   });
 
   it('toggleSidebar 按视图独立翻转并持久化', async () => {
     const { useUiStore } = await loadStore();
     useUiStore.getState().toggleSidebar('im');
     // 仅 im 翻转，其余视图不受影响
-    expect(useUiStore.getState().sidebarCollapsed).toEqual({ im: true, files: false, tasks: false });
+    expect(useUiStore.getState().sidebarCollapsed).toEqual({
+      im: true,
+      files: false,
+      tasks: false,
+      workgroups: false,
+    });
     expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').sidebarCollapsed).toEqual({
       im: true,
       files: false,
       tasks: false,
+      workgroups: false,
     });
 
     // files 独立翻转，im 收起态保持
     useUiStore.getState().toggleSidebar('files');
-    expect(useUiStore.getState().sidebarCollapsed).toEqual({ im: true, files: true, tasks: false });
+    expect(useUiStore.getState().sidebarCollapsed).toEqual({
+      im: true,
+      files: true,
+      tasks: false,
+      workgroups: false,
+    });
   });
 
   it('localStorage 写失败静默，内存状态照常更新', async () => {

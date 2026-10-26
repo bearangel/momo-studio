@@ -1,7 +1,7 @@
 // renderer/src/components/layout/ActivityBar.test.tsx
 //
 // 活动栏测试（P2 Task 3）：
-// - 渲染 5 个主项（会话/文件/看板/Agent/资源库）+ 底部设置项
+// - 渲染 6 个主项（会话/文件/看板/Agent/资源库/工作组）+ 底部设置项
 // - 点击切换 activeView；激活项带 aria-current 与左侧 3px 蓝色指示条
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
@@ -12,18 +12,38 @@ describe('ActivityBar', () => {
   beforeEach(() => {
     useUiStore.setState({
       activeView: 'im',
-      sidebarCollapsed: { im: false, files: false, tasks: false },
+      sidebarCollapsed: { im: false, files: false, tasks: false, workgroups: false },
     });
   });
 
-  it('渲染 5 个主项 + 底部设置项', () => {
+  it('渲染 6 个主项 + 底部设置项', () => {
     render(<ActivityBar />);
     expect(screen.getByLabelText('会话')).toBeInTheDocument();
     expect(screen.getByLabelText('文件')).toBeInTheDocument();
     expect(screen.getByLabelText('看板')).toBeInTheDocument();
     expect(screen.getByLabelText('智能体')).toBeInTheDocument();
     expect(screen.getByLabelText('资源库')).toBeInTheDocument();
+    expect(screen.getByLabelText('工作组')).toBeInTheDocument();
     expect(screen.getByLabelText('设置')).toBeInTheDocument();
+  });
+
+  // M2.1 T2：工作组第 6 项（资源库与设置之间，预览 §活动栏 定值）
+  it('工作组为第 6 个主项：序次在资源库之后、插件分隔区与设置之前', () => {
+    render(<ActivityBar />);
+    const nav = screen.getByLabelText('活动栏');
+    const buttons = Array.from(nav.querySelectorAll('button'));
+    const labels = buttons.map((b) => b.getAttribute('aria-label'));
+    const marketplaceIdx = labels.indexOf('资源库');
+    const workgroupIdx = labels.indexOf('工作组');
+    const settingsIdx = labels.indexOf('设置');
+    expect(workgroupIdx).toBeGreaterThan(marketplaceIdx);
+    expect(workgroupIdx).toBeLessThan(settingsIdx);
+  });
+
+  it('点击工作组切换 activeView 到 workgroups', () => {
+    render(<ActivityBar />);
+    fireEvent.click(screen.getByLabelText('工作组'));
+    expect(useUiStore.getState().activeView).toBe('workgroups');
   });
 
   it('点击活动项切换 activeView', () => {
@@ -65,7 +85,7 @@ describe('ActivityBar', () => {
   it('收起时点击当前侧边栏视图图标 → 仅恢复该视图侧边栏（视图不变）', () => {
     useUiStore.setState({
       activeView: 'im',
-      sidebarCollapsed: { im: true, files: true, tasks: false },
+      sidebarCollapsed: { im: true, files: true, tasks: false, workgroups: false },
     });
     render(<ActivityBar />);
     fireEvent.click(screen.getByLabelText('会话'));
@@ -73,6 +93,7 @@ describe('ActivityBar', () => {
       im: false,
       files: true,
       tasks: false,
+      workgroups: false,
     });
     expect(useUiStore.getState().activeView).toBe('im');
   });
@@ -80,7 +101,7 @@ describe('ActivityBar', () => {
   it('收起时点击其它侧边栏视图 → 正常切换视图，收起状态互不影响', () => {
     useUiStore.setState({
       activeView: 'im',
-      sidebarCollapsed: { im: true, files: false, tasks: false },
+      sidebarCollapsed: { im: true, files: false, tasks: false, workgroups: false },
     });
     render(<ActivityBar />);
     fireEvent.click(screen.getByLabelText('文件'));
@@ -89,13 +110,14 @@ describe('ActivityBar', () => {
       im: true,
       files: false,
       tasks: false,
+      workgroups: false,
     });
   });
 
   it('未收起时点击当前视图 → no-op（不切换不恢复）', () => {
     useUiStore.setState({
       activeView: 'im',
-      sidebarCollapsed: { im: false, files: false, tasks: false },
+      sidebarCollapsed: { im: false, files: false, tasks: false, workgroups: false },
     });
     render(<ActivityBar />);
     fireEvent.click(screen.getByLabelText('会话'));
@@ -104,13 +126,14 @@ describe('ActivityBar', () => {
       im: false,
       files: false,
       tasks: false,
+      workgroups: false,
     });
   });
 
   it('收起时点击无侧边栏视图（设置）→ 正常切换，不触碰任何视图收起状态', () => {
     useUiStore.setState({
       activeView: 'im',
-      sidebarCollapsed: { im: true, files: false, tasks: false },
+      sidebarCollapsed: { im: true, files: false, tasks: false, workgroups: false },
     });
     render(<ActivityBar />);
     fireEvent.click(screen.getByLabelText('设置'));
@@ -119,6 +142,7 @@ describe('ActivityBar', () => {
       im: true,
       files: false,
       tasks: false,
+      workgroups: false,
     });
   });
 });
@@ -128,7 +152,7 @@ import { usePluginPanelsStore } from '../../stores/plugin-panels.store';
 
 describe('面板放置分流（工作空间维度 v1.1）', () => {
   beforeEach(() => {
-    useUiStore.setState({ activeView: 'im', sidebarCollapsed: { im: false, files: false, tasks: false } });
+    useUiStore.setState({ activeView: 'im', sidebarCollapsed: { im: false, files: false, tasks: false, workgroups: false } });
     usePluginPanelsStore.setState({
       panels: [
         {

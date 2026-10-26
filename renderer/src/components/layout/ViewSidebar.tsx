@@ -10,7 +10,6 @@ import { useUiStore, SIDEBAR_VIEWS, SIDEBAR_WIDTH_DEFAULT, type SidebarViewKey }
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useEditorStore } from '../../stores/editor.store';
 import { ipc } from '../../ipc/client';
-import { ipcErrorMessage } from '../../lib/ipc-error';
 import { RoomList } from '../im/RoomList';
 import { SessionSidebarHeader } from '../im/SessionSidebarHeader';
 import { FileTree } from '../files/FileTree';
@@ -19,11 +18,12 @@ import { Sidebar } from './Sidebar';
 import { PanelHost } from '../plugins/PanelHost';
 import { usePluginPanelsStore, panelKeyOf } from '../../stores/plugin-panels.store';
 
-/** 有侧边栏的三个视图的文案（VIEW_META 同时承担「哪些视图有侧边栏」判定） */
+/** 有侧边栏的四个视图的文案（VIEW_META 同时承担「哪些视图有侧边栏」判定） */
 const VIEW_LABELS: Partial<Record<string, string>> = {
   im: '会话',
   files: '文件',
   tasks: '看板',
+  workgroups: '工作组',
 };
 
 export function ViewSidebar() {
@@ -106,6 +106,14 @@ export function ViewSidebar() {
       )}
       {activeView === 'files' && <FileTree onSelectFile={handleSelectFile} />}
       {activeView === 'tasks' && <TaskSidebarPanel />}
+      {activeView === 'workgroups' && (
+        // M2.1 T2 占位骨架：组列表/成员 presence 由 Task 3 的 WorkgroupSidebar 填充
+        <div className="flex flex-1 items-center justify-center p-4 text-center">
+          <p className="text-xs text-tertiary" data-testid="workgroup-sidebar-stub">
+            工作组侧栏占位（Task 3 填充）
+          </p>
+        </div>
+      )}
     </Sidebar>
   );
 }

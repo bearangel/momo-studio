@@ -5,7 +5,7 @@
 // v2.1 P1：emoji 图标全部 lucide 化，样式全 token 化。
 import { useEffect } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { MessageSquare, Folder, SquareKanban, Bot, Library, Settings } from 'lucide-react';
+import { MessageSquare, Folder, SquareKanban, Bot, Library, Users, Settings } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { useUiStore, SIDEBAR_VIEWS, type SidebarViewKey, type ViewKey } from '../../stores/ui.store';
 import { usePluginPanelsStore, panelKeyOf } from '../../stores/plugin-panels.store';
@@ -25,6 +25,8 @@ const MAIN_ITEMS: ActivityItem[] = [
   { key: 'tasks', icon: SquareKanban, label: '看板' },
   { key: 'agents', icon: Bot, label: '智能体' },
   { key: 'marketplace', icon: Library, label: '资源库' },
+  // M2.1 T2：工作组第 6 主项（资源库与设置之间，预览 §活动栏 定值）
+  { key: 'workgroups', icon: Users, label: '工作组' },
 ];
 
 const SETTINGS_ITEM: ActivityItem = { key: 'settings', icon: Settings, label: '设置' };

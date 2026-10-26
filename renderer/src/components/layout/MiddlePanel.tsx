@@ -20,6 +20,7 @@ import { AgentsView } from '../agent/AgentsView';
 import { SettingsView } from '../settings/SettingsView';
 import { ResourceLibraryView } from '../resource-library/ResourceLibraryView';
 import { TaskBoardView } from '../task-board/TaskBoardView';
+import { WorkgroupView } from '../workgroup/WorkgroupView';
 import { EmptyState } from '../ui/EmptyState';
 import { SidebarRestoreButton } from './SidebarRestoreButton';
 // v2.7 Task 8：浏览器侧栏 chrome（占位区由主进程 WebContentsView 叠加渲染）
@@ -41,6 +42,12 @@ export function MiddlePanel() {
   // 资源库视图（v1.7：原 marketplace 视图统一为资源库，三源合并）：浏览/搜索/安装 agent/mcp/skill，不需要 workspace 上下文
   if (activeView === 'marketplace') {
     return <ResourceLibraryView />;
+  }
+
+  // workgroups 视图（M2.1 T2）：工作组是节点级能力，不依赖工作空间——
+  // 必须在 workspace 守卫之前分发（D2 治愈：新设备未建工作空间也能接入 hub）
+  if (activeView === 'workgroups') {
+    return <WorkgroupView />;
   }
 
   // 无 workspace 时显示引导

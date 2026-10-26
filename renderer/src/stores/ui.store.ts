@@ -2,11 +2,20 @@
 import { create } from 'zustand';
 
 // 工作空间维度 v1.1：'plugin' = 插件主区页面态（具体面板由 plugin-panels.store.activeKey 决定）
-export type ViewKey = 'im' | 'files' | 'agents' | 'marketplace' | 'settings' | 'tasks' | 'plugin';
+// M2.1 T2：'workgroups' = 工作组一等视图（节点级能力，不依赖工作空间）
+export type ViewKey =
+  | 'im'
+  | 'files'
+  | 'agents'
+  | 'marketplace'
+  | 'settings'
+  | 'tasks'
+  | 'workgroups'
+  | 'plugin';
 
 /** 有侧边栏的视图（单一真相源：ViewSidebar / SidebarRestoreButton / ActivityBar 共用） */
-export type SidebarViewKey = 'im' | 'files' | 'tasks';
-export const SIDEBAR_VIEWS: readonly SidebarViewKey[] = ['im', 'files', 'tasks'];
+export type SidebarViewKey = 'im' | 'files' | 'tasks' | 'workgroups';
+export const SIDEBAR_VIEWS: readonly SidebarViewKey[] = ['im', 'files', 'tasks', 'workgroups'];
 
 /** 侧边栏宽度边界（px）：拖拽钳制与持久化值校验共用（spec §5.1） */
 export const SIDEBAR_WIDTH_MIN = 200;
@@ -39,12 +48,14 @@ const defaultWidths = (): Record<SidebarViewKey, number> => ({
   im: SIDEBAR_WIDTH_DEFAULT,
   files: SIDEBAR_WIDTH_DEFAULT,
   tasks: SIDEBAR_WIDTH_DEFAULT,
+  workgroups: SIDEBAR_WIDTH_DEFAULT,
 });
 
 const defaultCollapsed = (): Record<SidebarViewKey, boolean> => ({
   im: false,
   files: false,
   tasks: false,
+  workgroups: false,
 });
 
 // 收起状态解析：v2.2 优化前为共享 boolean（按同值迁移到三视图，旧数据兼容）；
