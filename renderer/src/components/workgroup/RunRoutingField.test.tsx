@@ -36,7 +36,7 @@ function makePrecheck(overrides: Partial<RoutingPrecheckResult> = {}): RoutingPr
 describe('RunRoutingField — 三选态', () => {
   it('1. 渲染三行 radio；value=local → 本机选中', () => {
     render(
-      <RunRoutingField precheck={makePrecheck()} value={{ mode: 'local' }} onChange={() => {}} />,
+      <RunRoutingField permissionTier="confirm" onPermissionTierChange={() => {}} precheck={makePrecheck()} value={{ mode: 'local' }} onChange={() => {}} />,
     );
     const local = screen.getByRole('radio', { name: '本机执行' });
     const group = screen.getByRole('radio', { name: '组内调度' });
@@ -50,7 +50,7 @@ describe('RunRoutingField — 三选态', () => {
 
   it('2. 点组内调度 → onChange({mode:"group", groupId})（单组免选组）', () => {
     const onChange = vi.fn();
-    render(<RunRoutingField precheck={makePrecheck()} value={{ mode: 'local' }} onChange={onChange} />);
+    render(<RunRoutingField permissionTier="confirm" onPermissionTierChange={() => {}} precheck={makePrecheck()} value={{ mode: 'local' }} onChange={onChange} />);
     fireEvent.click(screen.getByRole('radio', { name: '组内调度' }));
     expect(onChange).toHaveBeenCalledWith({ mode: 'group', groupId: 'g1' });
   });
@@ -58,7 +58,7 @@ describe('RunRoutingField — 三选态', () => {
   it('3. 点指定节点 → onChange 锁定首组成员；切成员下拉 → 换 targetNodeId', () => {
     const onChange = vi.fn();
     const { rerender } = render(
-      <RunRoutingField
+      <RunRoutingField permissionTier="confirm" onPermissionTierChange={() => {}}
         precheck={makePrecheck()}
         value={{ mode: 'group', groupId: 'g1' }}
         onChange={onChange}
@@ -70,7 +70,7 @@ describe('RunRoutingField — 三选态', () => {
 
     // 选中指定节点后出现成员下拉；切换 → 新 targetNodeId
     rerender(
-      <RunRoutingField
+      <RunRoutingField permissionTier="confirm" onPermissionTierChange={() => {}}
         precheck={makePrecheck()}
         value={{ mode: 'node', groupId: 'g1', targetNodeId: 'node-a' }}
         onChange={onChange}
@@ -95,13 +95,13 @@ describe('RunRoutingField — 三选态', () => {
       ],
     });
     const { rerender } = render(
-      <RunRoutingField precheck={precheck} value={{ mode: 'local' }} onChange={onChange} />,
+      <RunRoutingField permissionTier="confirm" onPermissionTierChange={() => {}} precheck={precheck} value={{ mode: 'local' }} onChange={onChange} />,
     );
     fireEvent.click(screen.getByRole('radio', { name: '组内调度' }));
     expect(onChange).toHaveBeenCalledWith({ mode: 'group', groupId: 'g1' });
 
     rerender(
-      <RunRoutingField precheck={precheck} value={{ mode: 'group', groupId: 'g1' }} onChange={onChange} />,
+      <RunRoutingField permissionTier="confirm" onPermissionTierChange={() => {}} precheck={precheck} value={{ mode: 'group', groupId: 'g1' }} onChange={onChange} />,
     );
     fireEvent.change(screen.getByLabelText('工作组'), { target: { value: 'g2' } });
     expect(onChange).toHaveBeenCalledWith({ mode: 'group', groupId: 'g2' });
@@ -109,7 +109,7 @@ describe('RunRoutingField — 三选态', () => {
 
   it('5. 数据失配防御：value 引用的组已不在预检清单 → 回退本机选中，不崩溃', () => {
     render(
-      <RunRoutingField
+      <RunRoutingField permissionTier="confirm" onPermissionTierChange={() => {}}
         precheck={makePrecheck()}
         value={{ mode: 'group', groupId: 'g-gone' }}
         onChange={() => {}}
@@ -123,7 +123,7 @@ describe('RunRoutingField — 三选态', () => {
 describe('RunRoutingField — 守门降级（Review Focus #1）', () => {
   it('6. 未镜像空间：仅「本机」+ hint；组内调度/指定节点不出场（无灰选项、无报错文案）', () => {
     render(
-      <RunRoutingField
+      <RunRoutingField permissionTier="confirm" onPermissionTierChange={() => {}}
         precheck={makePrecheck({ mirrored: false, groups: [{ ...makePrecheck().groups[0]!, mirroredCount: 0, members: makePrecheck().groups[0]!.members.map((m) => ({ ...m, mirrored: false })) }] })}
         value={{ mode: 'local' }}
         onChange={() => {}}
@@ -137,14 +137,14 @@ describe('RunRoutingField — 守门降级（Review Focus #1）', () => {
 
   it('7. hub 不可达（mirrored 但组清单空）：仅本机 + 不可达 hint（与未镜像区分）', () => {
     render(
-      <RunRoutingField precheck={makePrecheck({ groups: [] })} value={{ mode: 'local' }} onChange={() => {}} />,
+      <RunRoutingField permissionTier="confirm" onPermissionTierChange={() => {}} precheck={makePrecheck({ groups: [] })} value={{ mode: 'local' }} onChange={() => {}} />,
     );
     expect(screen.queryByRole('radio', { name: '组内调度' })).not.toBeInTheDocument();
     expect(screen.getByText(/工作组不可达/)).toBeInTheDocument();
   });
 
   it('8. 预检加载中（null）：仅本机 + 检查中 hint，不闪现组行', () => {
-    render(<RunRoutingField precheck={null} value={{ mode: 'local' }} onChange={() => {}} />);
+    render(<RunRoutingField permissionTier="confirm" onPermissionTierChange={() => {}} precheck={null} value={{ mode: 'local' }} onChange={() => {}} />);
     expect(screen.queryByRole('radio', { name: '组内调度' })).not.toBeInTheDocument();
     expect(screen.getByText(/正在检查/)).toBeInTheDocument();
   });
@@ -153,7 +153,7 @@ describe('RunRoutingField — 守门降级（Review Focus #1）', () => {
 describe('RunRoutingField — 批量模式', () => {
   it('9. taskCount=4 → label「执行位置（4 个任务统一定）」；组内调度 hint 含预检行与排队文案', () => {
     render(
-      <RunRoutingField
+      <RunRoutingField permissionTier="confirm" onPermissionTierChange={() => {}}
         precheck={makePrecheck()}
         value={{ mode: 'group', groupId: 'g1' }}
         onChange={() => {}}
@@ -168,11 +168,108 @@ describe('RunRoutingField — 批量模式', () => {
 
   it('10. 单任务（缺省）→ label 无统一定后缀；组内调度 hint 为自动选择文案（不预演节点名）', () => {
     render(
-      <RunRoutingField precheck={makePrecheck()} value={{ mode: 'local' }} onChange={() => {}} />,
+      <RunRoutingField permissionTier="confirm" onPermissionTierChange={() => {}} precheck={makePrecheck()} value={{ mode: 'local' }} onChange={() => {}} />,
     );
     expect(screen.queryByText(/统一定/)).not.toBeInTheDocument();
     expect(screen.getByText(/自动选择空闲节点/)).toBeInTheDocument();
     // 简化裁定：不显示具体节点名预演（office-mac 只能作为成员下拉选项出现）
     expect(screen.queryByText(/当前空闲 office-mac/)).not.toBeInTheDocument();
+  });
+});
+
+describe('RunRoutingField — 权限档位三选（M2.1 T10）', () => {
+  it('11. 外派模式（group）→ 档位行渲染：三 chip 在场，默认 confirm 选中 + hint', () => {
+    render(
+      <RunRoutingField
+        precheck={makePrecheck()}
+        value={{ mode: 'group', groupId: 'g1' }}
+        onChange={() => {}}
+        permissionTier="confirm"
+        onPermissionTierChange={() => {}}
+      />,
+    );
+    expect(screen.getByRole('radiogroup', { name: '权限策略' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: '只读' })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByRole('radio', { name: '沙箱全权' })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByRole('radio', { name: '执行端确认' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByText(/越界写入需执行端用户确认/)).toBeInTheDocument();
+  });
+
+  it('12. 点「只读」/「沙箱全权」→ onPermissionTierChange 透传档位值', () => {
+    const onTier = vi.fn();
+    render(
+      <RunRoutingField
+        precheck={makePrecheck()}
+        value={{ mode: 'group', groupId: 'g1' }}
+        onChange={() => {}}
+        permissionTier="confirm"
+        onPermissionTierChange={onTier}
+      />,
+    );
+    fireEvent.click(screen.getByRole('radio', { name: '只读' }));
+    expect(onTier).toHaveBeenCalledWith('readonly');
+    fireEvent.click(screen.getByRole('radio', { name: '沙箱全权' }));
+    expect(onTier).toHaveBeenCalledWith('sandbox');
+  });
+
+  it('13. 档位切换 hint 跟随：readonly → 只读约束文案；sandbox → 预授予文案', () => {
+    const { rerender } = render(
+      <RunRoutingField
+        precheck={makePrecheck()}
+        value={{ mode: 'node', groupId: 'g1', targetNodeId: 'node-a' }}
+        onChange={() => {}}
+        permissionTier="readonly"
+        onPermissionTierChange={() => {}}
+      />,
+    );
+    expect(screen.getByText(/仅可读操作/)).toBeInTheDocument();
+    rerender(
+      <RunRoutingField
+        precheck={makePrecheck()}
+        value={{ mode: 'node', groupId: 'g1', targetNodeId: 'node-a' }}
+        onChange={() => {}}
+        permissionTier="sandbox"
+        onPermissionTierChange={() => {}}
+      />,
+    );
+    expect(screen.getByText(/预授予镜像工作空间目录写授权/)).toBeInTheDocument();
+  });
+
+  it('14. 本机模式 → 档位行退场（权限策略只对外派有意义）；守门降级同样退场', () => {
+    render(
+      <RunRoutingField
+        precheck={makePrecheck()}
+        value={{ mode: 'local' }}
+        onChange={() => {}}
+        permissionTier="confirm"
+        onPermissionTierChange={() => {}}
+      />,
+    );
+    expect(screen.queryByRole('radiogroup', { name: '权限策略' })).not.toBeInTheDocument();
+
+    // 守门（未镜像）：外派行不存在，档位行同样不出场
+    render(
+      <RunRoutingField
+        precheck={makePrecheck({ mirrored: false })}
+        value={{ mode: 'local' }}
+        onChange={() => {}}
+        permissionTier="confirm"
+        onPermissionTierChange={() => {}}
+      />,
+    );
+    expect(screen.queryByRole('radiogroup', { name: '权限策略' })).not.toBeInTheDocument();
+  });
+
+  it('15. 数据失配防御回退本机展示时 → 档位行同样退场（回退即本机语义）', () => {
+    render(
+      <RunRoutingField
+        precheck={makePrecheck()}
+        value={{ mode: 'group', groupId: 'g-gone' }}
+        onChange={() => {}}
+        permissionTier="confirm"
+        onPermissionTierChange={() => {}}
+      />,
+    );
+    expect(screen.queryByRole('radiogroup', { name: '权限策略' })).not.toBeInTheDocument();
   });
 });

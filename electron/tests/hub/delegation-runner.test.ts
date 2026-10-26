@@ -5,14 +5,15 @@
 // 开关即时生效 / 重连续传（active 复报 / idle 复用会话续跑 / 本地丢失上报）/ 取消三态。
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { TaskAssignedEvent } from '../../src/main/hub/protocol';
 import type { TaskReportPayload } from '../../src/main/hub/delegation-wire';
 import {
   createDelegationRunner,
+  type AssignedTaskEvent,
   type DelegationRunPorts,
   type DelegationTail,
   type TurnTerminal,
 } from '../../src/main/hub/delegation-runner';
+import { READONLY_PROMPT_PREFIX } from '../../src/main/hub/run-policy';
 import { createHubDelegationSettingsStore } from '../../src/main/hub/delegation-settings';
 import { createHubDelegationStore } from '../../src/main/hub/delegation-store';
 
@@ -26,6 +27,8 @@ interface CallLog {
   stoppedSessions: string[];
   reports: Array<{ taskId: string; payload: TaskReportPayload }>;
   resolvedAgents: Array<{ workspaceId: string; agentSlug: string | undefined }>;
+  /** T10 权限档位预配调用记录（调用序锁：createSession → applyRunPolicy → startTurn） */
+  appliedPolicies: Array<{ sessionId: string; tier: string }>;
   continuations: number;
 }
 
@@ -49,7 +52,7 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
 
   const log: CallLog = {
     order: [], createdSessions: [], startedTurns: [], stoppedSessions: [],
-    reports: [], resolvedAgents: [], continuations: 0,
+    reports: [], resolvedAgents: [], appliedPolicies: [], continuations: 0,
   };
 
   // 可变测试台状态
@@ -77,6 +80,10 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
       log.createdSessions.push(input);
       log.order.push(`createSession:${input.title}`);
       return `sess-${log.createdSessions.length}`;
+    },
+    applyRunPolicy: (sessionId, tier) => {
+      log.appliedPolicies.push({ sessionId, tier });
+      log.order.push(`applyRunPolicy:${sessionId}:${tier}`);
     },
     startTurn: async (input) => {
       log.startedTurns.push(input);
@@ -127,7 +134,7 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
   };
 }
 
-function assignedEvt(taskId: string, overrides?: Partial<TaskAssignedEvent>): TaskAssignedEvent {
+function assignedEvt(taskId: string, overrides?: Partial<AssignedTaskEvent>): AssignedTaskEvent {
   return {
     taskId,
     workspaceName: 'ws-a',
@@ -540,5 +547,85 @@ describe('取消三态', () => {
     h.runner.handleCancelled({ taskId: 't1' });
     expect(h.log.stoppedSessions).toHaveLength(0);
     expect(h.store.get('t1')?.state).toBe('cancelled');
+  });
+});
+
+// ── L0 权限档位（M2.1 T10：applyRunPolicy 预配 + readonly prompt 前置） ───────
+
+describe('权限档位预配（T10）', () => {
+  it('调用序锁：createSession → applyRunPolicy → startTurn（档位预配先于回合注入）', async () => {
+    const h = makeHarness();
+    h.setWorkspace('ws-a', 'ws-id-1');
+    h.setAgent(undefined, 'inst-default');
+
+    await h.runner.handleAssigned(assignedEvt('t1'));
+
+    const createIdx = h.log.order.findIndex((e) => e.startsWith('createSession:'));
+    const policyIdx = h.log.order.findIndex((e) => e.startsWith('applyRunPolicy:'));
+    const startIdx = h.log.order.findIndex((e) => e.startsWith('startTurn:'));
+    expect(createIdx).toBeGreaterThanOrEqual(0);
+    expect(policyIdx).toBeGreaterThan(createIdx);
+    expect(startIdx).toBeGreaterThan(policyIdx);
+  });
+
+  it('readonly 档：applyRunPolicy(sessionId,"readonly") + startTurn body 前置只读约束段', async () => {
+    const h = makeHarness();
+    h.setWorkspace('ws-a', 'ws-id-1');
+    h.setAgent(undefined, 'inst-default');
+    const prompt = '请排查并修复登录超时问题，输出修复说明。';
+
+    await h.runner.handleAssigned(assignedEvt('t1', {
+      task: { title: '修复登录超时', prompt, permissionTier: 'readonly' },
+    }));
+
+    expect(h.log.appliedPolicies).toEqual([{ sessionId: 'sess-1', tier: 'readonly' }]);
+    // 任务书前置只读约束段（任务书原文在后，不被吞并）
+    expect(h.log.startedTurns).toHaveLength(1);
+    expect(h.log.startedTurns[0]!.body.startsWith(READONLY_PROMPT_PREFIX)).toBe(true);
+    expect(h.log.startedTurns[0]!.body.endsWith(prompt)).toBe(true);
+  });
+
+  it('sandbox 档：applyRunPolicy(sessionId,"sandbox") + 任务书原文直返（零前缀）', async () => {
+    const h = makeHarness();
+    h.setWorkspace('ws-a', 'ws-id-1');
+    h.setAgent(undefined, 'inst-default');
+    const prompt = '重构鉴权中间件并补测试。';
+
+    await h.runner.handleAssigned(assignedEvt('t1', {
+      task: { title: '重构', prompt, permissionTier: 'sandbox' },
+    }));
+
+    expect(h.log.appliedPolicies).toEqual([{ sessionId: 'sess-1', tier: 'sandbox' }]);
+    expect(h.log.startedTurns[0]!.body).toBe(prompt);
+  });
+
+  it('协议未知容忍：permissionTier 缺省 → confirm（hub 1.2.0 剥离字段，现状默认）', async () => {
+    const h = makeHarness();
+    h.setWorkspace('ws-a', 'ws-id-1');
+    h.setAgent(undefined, 'inst-default');
+
+    await h.runner.handleAssigned(assignedEvt('t1'));
+
+    expect(h.log.appliedPolicies).toEqual([{ sessionId: 'sess-1', tier: 'confirm' }]);
+  });
+
+  it('协议未知容忍：permissionTier 非法值（"root"）→ 收敛 confirm 不抛', async () => {
+    const h = makeHarness();
+    h.setWorkspace('ws-a', 'ws-id-1');
+    h.setAgent(undefined, 'inst-default');
+
+    // 异形协议载荷直仿：wire 上来的未知字段不 guarantee 类型（parse 侧白名单前）
+    const evt = assignedEvt('t1', { task: { title: 'x', prompt: 'p' } });
+    (evt.task as { permissionTier?: unknown }).permissionTier = 'root';
+    await h.runner.handleAssigned(evt);
+
+    expect(h.log.appliedPolicies).toEqual([{ sessionId: 'sess-1', tier: 'confirm' }]);
+    expect(h.store.get('t1')?.state).toBe('running');
+  });
+
+  it('declined 路径不预配：工作空间不存在 → applyRunPolicy 零调用', async () => {
+    const h = makeHarness();
+    await h.runner.handleAssigned(assignedEvt('t1'));
+    expect(h.log.appliedPolicies).toHaveLength(0);
   });
 });

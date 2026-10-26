@@ -10,6 +10,9 @@ import { listMembers, getAgentDefinition } from '../agent/agent-queries';
 import { createCollabSession } from '../im/session-ops';
 import { sendUserMessage } from '../im/session-service';
 import { getRouterService } from '../agent/router-bootstrap';
+import { getSession } from '../storage/sessions/repo';
+import { clearSessionGrants, grantWriteDirs } from '../sandbox/write-grant';
+import { planRunPolicy, type PermissionTier } from './run-policy';
 import type { DelegationRunPorts, DelegationTail, TurnTerminal } from './delegation-runner';
 import type { HubDelegationSettings } from './delegation-settings';
 import { TASK_WIRE, type TaskReportPayload } from './delegation-wire';
@@ -135,6 +138,35 @@ export function resolveAgentInstanceProduct(workspaceId: string, agentSlug: stri
   return fallback && members.some((m) => m.instanceId === fallback) ? fallback : null;
 }
 
+/**
+ * L0 权限档位生产接线（T10）：接既有写授权管理器（sandbox/write-grant.ts——授权卡
+ * sandbox:grantWrite / sandbox:denyWrite 同一 API 面，不新造权限子系统）。三档映射
+ * 单源 run-policy.planRunPolicy：
+ *   readonly → clearSessionGrants（零会话级写授权显式化；行为约束在 runner 侧
+ *              prompt 前缀——任务书降级裁定，见 run-policy.ts 头注）
+ *   sandbox  → grantWriteDirs('session', sid, [镜像工作空间目录])——会话级预授予，
+ *              随 deleteSession 清理；经 handleNetTrustOp 两层合成（session ∪
+ *              workspace，含 dispatch 子链流）流进运行时 extraDirs
+ *   confirm  → 不动授权面（不自动拒，现状默认）
+ * 悬挂 sessionId / 工作空间缺失 → 静默跳过（预配不阻断委派链，越界写自然回落
+ * 既有授权卡等待语义）。导出供真 DB 回归锁直测（delegation-ports.test）。
+ */
+export function applyRunPolicyProduct(sessionId: string, tier: PermissionTier): void {
+  const plan = planRunPolicy(tier);
+  if (plan.grant === 'none') return;
+  if (plan.grant === 'clear-session') {
+    clearSessionGrants(sessionId);
+    return;
+  }
+  const session = getSession(sessionId);
+  const wsDir = session ? (getWorkspace(session.workspaceId)?.directoryPath ?? null) : null;
+  if (wsDir === null) {
+    logger.warn('权限档位预授予跳过（会话或工作空间目录缺失）', { sessionId, tier });
+    return;
+  }
+  grantWriteDirs('session', sessionId, [wsDir]);
+}
+
 export function wireDelegationRunnerPorts(opts: WireDelegationPortsOpts): DelegationRunPorts {
   const { clientGetter, selfNodeId, settings } = opts;
   return {
@@ -143,6 +175,7 @@ export function wireDelegationRunnerPorts(opts: WireDelegationPortsOpts): Delega
       return listWorkspaces().find((w) => w.name === name) ?? null;
     },
     resolveAgentInstance: resolveAgentInstanceProduct,
+    applyRunPolicy: applyRunPolicyProduct,
     createDelegatedSession(input) {
       // MC1：普通 collab 会话（单 agent 目标 is_leader=1）+ 标题=任务书摘要
       return createCollabSession(input.workspaceId, input.title, {

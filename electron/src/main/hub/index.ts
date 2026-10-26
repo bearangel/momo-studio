@@ -21,7 +21,7 @@ import { MIRROR_WIRE, type MirrorApplyPayload, type MirrorApplyOutcome } from '.
 import { applyMirrorSnapshot } from './mirror-applier';
 import { bridgeGroupChanged } from './groups';
 import type { HubResponderResult } from './client';
-import { createDelegationRunner, type DelegationRunner } from './delegation-runner';
+import { createDelegationRunner, type AssignedTaskEvent, type DelegationRunner } from './delegation-runner';
 import { wireDelegationRunnerPorts } from './delegation-ports';
 import { createHubDelegationSettingsStore, type HubDelegationSettings } from './delegation-settings';
 import { createHubDelegationStore, type DelegationRecord } from './delegation-store';
@@ -37,7 +37,8 @@ import { createMirrorRegistry, type MirrorRegistryRow } from './mirror-registry'
 import { ViewServer } from './view-server';
 import { createHubViewSettingsStore, type HubViewSettings } from './view-settings';
 import { VIEW_WIRE } from './view-wire';
-import { VIEW_RPC, type TaskAssignedEvent } from './protocol';
+import { VIEW_RPC } from './protocol';
+import { isPermissionTier } from './run-policy';
 
 export interface HubStatus {
   configured: boolean;
@@ -224,12 +225,14 @@ function ensureDelegationRunner(nodeId: string | null): DelegationRunner {
 }
 
 /** 派单载荷挑字段（协议 TaskAssignedEvent 形状，异形键丢弃——与 presence 桥同款纪律） */
-function parseTaskAssigned(payload: unknown): TaskAssignedEvent | null {
+function parseTaskAssigned(payload: unknown): AssignedTaskEvent | null {
   if (typeof payload !== 'object' || payload === null) return null;
   const p = payload as {
     taskId?: unknown; workspaceName?: unknown; byNode?: unknown; task?: unknown;
   };
-  const t = p.task as { title?: unknown; prompt?: unknown; agentSlug?: unknown } | undefined;
+  const t = p.task as
+    | { title?: unknown; prompt?: unknown; agentSlug?: unknown; permissionTier?: unknown }
+    | undefined;
   if (typeof p.taskId !== 'string' || typeof p.workspaceName !== 'string' || typeof p.byNode !== 'string') return null;
   if (!t || typeof t.title !== 'string' || typeof t.prompt !== 'string') return null;
   return {
@@ -240,6 +243,9 @@ function parseTaskAssigned(payload: unknown): TaskAssignedEvent | null {
       title: t.title,
       prompt: t.prompt,
       ...(typeof t.agentSlug === 'string' ? { agentSlug: t.agentSlug } : {}),
+      // T10 协议未知容忍：hub 1.2.0 剥离 permissionTier（白名单重建），合法值才拾取
+      // （normalizeTier 兜底收敛 confirm）；hub 升级透传后直接消费
+      ...(isPermissionTier(t.permissionTier) ? { permissionTier: t.permissionTier } : {}),
     },
   };
 }

@@ -478,6 +478,7 @@ describe('CreateTaskDialog — 单/批量与执行位置（M2.1 T8）', () => {
       title: '排查断连',
       description: '分析 gateway 日志',
       routing: { mode: 'group', groupId: 'g1' },
+      permissionTier: 'confirm',
     });
     expect(mockTaskCreate).not.toHaveBeenCalled();
     expect(onCreated).toHaveBeenCalledWith('T-rem');
@@ -505,6 +506,7 @@ describe('CreateTaskDialog — 单/批量与执行位置（M2.1 T8）', () => {
         workspaceName: 'dev-ws',
         title,
         routing: { mode: 'group', groupId: 'g1' },
+        permissionTier: 'confirm',
       });
     }
     expect(mockTaskCreate).not.toHaveBeenCalled();
@@ -586,5 +588,62 @@ describe('CreateTaskDialog — 单/批量与执行位置（M2.1 T8）', () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(await screen.findByText(/2 个任务创建失败/)).toBeInTheDocument();
     expect(screen.getByText(/数据库已锁/)).toBeInTheDocument();
+  });
+
+  // M2.1 T10：权限档位三选——外派模式档位行 + 提交链随载荷
+  it('T10-1. 选组内调度 + 档位「只读」→ submitRoutedTask 载荷带 permissionTier:"readonly"', async () => {
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    await screen.findByRole('radio', { name: '组内调度' });
+    fireEvent.click(screen.getByRole('radio', { name: '组内调度' }));
+    // 外派模式 → 档位行在场（默认执行端确认）；切「只读」
+    fireEvent.click(screen.getByRole('radio', { name: '只读' }));
+    fireEvent.change(screen.getByLabelText(/标题/), { target: { value: '只读巡检' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
+    await waitFor(() => expect(mockSubmitRoutedTask).toHaveBeenCalled());
+    expect(mockSubmitRoutedTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: '只读巡检',
+        routing: { mode: 'group', groupId: 'g1' },
+        permissionTier: 'readonly',
+      }),
+    );
+  });
+
+  it('T10-2. 批量 + 档位「沙箱全权」→ 逐行载荷统一带 permissionTier:"sandbox"', async () => {
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    await screen.findByRole('radio', { name: '批量' });
+    fireEvent.click(screen.getByRole('radio', { name: '批量' }));
+    await screen.findByRole('radio', { name: '组内调度' });
+    fireEvent.click(screen.getByRole('radio', { name: '组内调度' }));
+    fireEvent.click(screen.getByRole('radio', { name: '沙箱全权' }));
+    fireEvent.change(screen.getByLabelText(/批量任务书/), { target: { value: '行甲\n行乙' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建 2 个任务' }));
+    await waitFor(() => expect(mockSubmitRoutedTask).toHaveBeenCalledTimes(2));
+    expect(mockSubmitRoutedTask).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ title: '行甲', permissionTier: 'sandbox' }),
+    );
+    expect(mockSubmitRoutedTask).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ title: '行乙', permissionTier: 'sandbox' }),
+    );
+  });
+
+  it('T10-3. 本机模式无档位行（local 提交不涉权限档位）；local→外派切换档位行进场', async () => {
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    await screen.findByRole('radio', { name: '本机执行' });
+    expect(screen.queryByRole('radiogroup', { name: '权限策略' })).not.toBeInTheDocument();
+    // 切外派 → 档位行进场且默认 confirm
+    fireEvent.click(screen.getByRole('radio', { name: '组内调度' }));
+    expect(screen.getByRole('radio', { name: '执行端确认' })).toHaveAttribute('aria-checked', 'true');
+    // 回本机 → 档位行退场（值保留但不随 local 提交透传）
+    fireEvent.click(screen.getByRole('radio', { name: '本机执行' }));
+    expect(screen.queryByRole('radiogroup', { name: '权限策略' })).not.toBeInTheDocument();
   });
 });

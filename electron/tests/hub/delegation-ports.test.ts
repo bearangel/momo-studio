@@ -37,7 +37,10 @@ import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keych
 import { createWorkspace } from '../../src/main/workspace/crud';
 import { addMember, saveAgentDefinition } from '../../src/main/agent/crud';
 import type { AgentDefinition } from '../../src/main/agent/types';
+import { insertSession } from '../../src/main/storage/sessions/repo';
+import { getGrantedDirs, grantWriteDirs } from '../../src/main/sandbox/write-grant';
 import {
+  applyRunPolicyProduct,
   resolveAgentInstanceProduct,
   sessionTailProduct,
   watchTurnProduct,
@@ -325,6 +328,65 @@ describe('resolveAgentInstanceProduct agent 解析', () => {
   it('指定 slug 但成员定义已被删（悬挂引用）→ null', async () => {
     const { wsId } = await seedWorkspaceWithMember('ws-e', 'temp-agent');
     getDb().prepare('DELETE FROM agent_definitions WHERE slug = ?').run('temp-agent');
-    expect(resolveAgentInstanceProduct(wsId, 'temp-agent')).toBeNull();
+    expect(resolveAgentInstanceProduct(wsId, undefined)).toBeNull();
+  });
+});
+
+// ── applyRunPolicyProduct：L0 权限档位生产接线（M2.1 T10） ───────────────────
+// 接既有写授权管理器（sandbox/write-grant.ts，授权卡 sandbox:grantWrite 同一 API）：
+//   readonly = clearSessionGrants（零会话级写授权——降级面，行为约束在 prompt 前缀）
+//   sandbox  = grantWriteDirs('session', sid, [镜像工作空间目录])（会话级预授予，
+//              随 deleteSession 清理；经 handleNetTrustOp 两层合成流进 extraDirs）
+//   confirm  = 不动授权面（不自动拒，现状默认）
+
+describe('applyRunPolicyProduct 权限档位接线', () => {
+  async function seedSession(tierSeed?: { dirs: string[] }): Promise<{
+    sessionId: string;
+    wsDir: string;
+  }> {
+    const ws = await createWorkspace(
+      { name: 'ws-tier', directoryPath: path.join(tmpRoot, `wsdir-${randomUUID().slice(0, 8)}`) },
+      'owner',
+    );
+    const sessionId = insertSession({ workspaceId: ws.id, title: '委派会话' }).id;
+    if (tierSeed) grantWriteDirs('session', sessionId, tierSeed.dirs);
+    return { sessionId, wsDir: ws.directoryPath };
+  }
+
+  it('readonly：清空会话级写授权（零授权面显式化）——预存授权被清', async () => {
+    const seedDir = path.join(tmpRoot, 'outside-seed');
+    fs.mkdirSync(seedDir, { recursive: true });
+    const { sessionId } = await seedSession({ dirs: [seedDir] });
+    expect(getGrantedDirs(sessionId, null)).toHaveLength(1); // 前置自证：授权确已落 kv
+
+    applyRunPolicyProduct(sessionId, 'readonly');
+
+    expect(getGrantedDirs(sessionId, null)).toEqual([]);
+  });
+
+  it('sandbox：预授予镜像工作空间目录写授权（realpath 归一形态，会话级键）', async () => {
+    const { sessionId, wsDir } = await seedSession();
+
+    applyRunPolicyProduct(sessionId, 'sandbox');
+
+    // grantWriteDirs 经 expandToolchainDirs realpath 归一（macOS /var → /private/var）
+    expect(getGrantedDirs(sessionId, null)).toEqual([fs.realpathSync(wsDir)]);
+  });
+
+  it('confirm：授权面不动——预存授权保留、无新增', async () => {
+    const seedDir = path.join(tmpRoot, 'confirm-keep');
+    fs.mkdirSync(seedDir, { recursive: true });
+    const { sessionId, wsDir } = await seedSession({ dirs: [seedDir] });
+
+    applyRunPolicyProduct(sessionId, 'confirm');
+
+    expect(getGrantedDirs(sessionId, null)).toEqual([fs.realpathSync(seedDir)]);
+    expect(getGrantedDirs(sessionId, null)).not.toContain(wsDir);
+  });
+
+  it('防御：会话不存在（悬挂 sessionId）→ 三档均不炸（sandbox 静默跳过授予）', () => {
+    expect(() => applyRunPolicyProduct('sess-ghost', 'sandbox')).not.toThrow();
+    expect(() => applyRunPolicyProduct('sess-ghost', 'readonly')).not.toThrow();
+    expect(() => applyRunPolicyProduct('sess-ghost', 'confirm')).not.toThrow();
   });
 });

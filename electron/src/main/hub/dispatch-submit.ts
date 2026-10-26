@@ -16,10 +16,14 @@
 // mirroredBy 口径 = 登记表按工作空间名过滤（镜像真相在节点级，跨组——RM-M21-7）。
 import { pickWorker } from './dispatch-scheduler';
 import { isTaskRouting, type TaskRouting } from './task-routing';
+import type { PermissionTier } from './run-policy';
 import type { TaskRow } from '../storage/tasks/repo';
 
-/** HITL 权限档位（plan 契约区；T10 run-policy 消费，本任务先随委派载荷落） */
-export type PermissionTier = 'readonly' | 'sandbox' | 'confirm';
+/**
+ * HITL 权限档位（T10 起单源迁移至 run-policy.ts——三档运行时语义在该模块；
+ * 此处 re-export 维持 dispatch-submit / delegation-sync 既有导入路径）
+ */
+export type { PermissionTier } from './run-policy';
 
 /** hub:submitRoutedTask 入参（group/node 路径的外派任务书 + 本地落库字段） */
 export interface SubmitRoutedTaskInput {

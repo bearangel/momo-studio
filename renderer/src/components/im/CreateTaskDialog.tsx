@@ -15,7 +15,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { X } from 'lucide-react';
 import { ipc } from '../../ipc/client';
-import type { RoutingPrecheckResult, TaskRouting, WorkspaceAgentMember } from '../../ipc/types';
+import type { PermissionTier, RoutingPrecheckResult, TaskRouting, WorkspaceAgentMember } from '../../ipc/types';
 import { serializeRecurrence, type RecurrencePreset } from '../../lib/recurrence';
 import { useGroupStore } from '../../stores/group.store';
 import { Dialog } from '../ui/Dialog';
@@ -80,6 +80,7 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
   const [batchText, setBatchText] = useState('');
   const [batchError, setBatchError] = useState<string | null>(null);
   const [routing, setRouting] = useState<TaskRouting>({ mode: 'local' });
+  const [permissionTier, setPermissionTier] = useState<PermissionTier>('confirm');
   const [precheck, setPrecheck] = useState<RoutingPrecheckResult | null>(null);
   const groups = useGroupStore((s) => s.groups);
   const loadGroups = useGroupStore((s) => s.load);
@@ -110,6 +111,7 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
     setBatchText('');
     setBatchError(null);
     setRouting({ mode: 'local' });
+    setPermissionTier('confirm');
     setPrecheck(null);
     // 预检失败降级仅本机（守门在 RunRoutingField；提交不受阻）
     if (routingAvailable && workspaceName) {
@@ -144,6 +146,7 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
       title: title.trim(),
       ...(description.trim() !== '' ? { description: description.trim() } : {}),
       routing,
+      permissionTier,
     });
     onCreated(result.task.id);
     onClose();
@@ -199,6 +202,7 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
             workspaceName,
             title: line,
             routing,
+            permissionTier,
           });
           lastId = result.task.id;
         }
@@ -307,6 +311,8 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
                 value={routing}
                 onChange={setRouting}
                 taskCount={batchCount > 0 ? batchCount : undefined}
+                permissionTier={permissionTier}
+                onPermissionTierChange={setPermissionTier}
               />
             )}
           </>
@@ -330,7 +336,13 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
               />
             </div>
             {routingAvailable && (
-              <RunRoutingField precheck={precheck} value={routing} onChange={setRouting} />
+              <RunRoutingField
+                precheck={precheck}
+                value={routing}
+                onChange={setRouting}
+                permissionTier={permissionTier}
+                onPermissionTierChange={setPermissionTier}
+              />
             )}
             {!remoteRouting && (
               <>

@@ -6,11 +6,15 @@
 // 无灰选项无报错。组内调度不预演具体节点名（简化裁定：「自动选择空闲节点」，
 // 真实调度在 dispatch-submit IPC 内 pickWorker 单点执行，renderer 不重复调度逻辑）。
 // 数据失配防御：value 引用的组已不在预检清单 → 展示回退本机，不崩溃（提交侧另有校验）。
+//
+// M2.1 T10：外派模式（group/node）下追加「权限策略」档位三选 chip（默认 confirm）——
+// 只读 / 沙箱全权 / 执行端确认；本机模式与守门降级退场（权限档位只随委派载荷有意义）。
 import { useId } from 'react';
 import { cn } from '../../lib/cn';
 import { Badge } from '../ui/Badge';
 import { Select } from '../ui/Select';
-import type { RoutingPrecheckResult, TaskRouting } from '../../ipc/types';
+import { Segmented } from '../ui/Segmented';
+import type { PermissionTier, RoutingPrecheckResult, TaskRouting } from '../../ipc/types';
 
 interface RunRoutingFieldProps {
   /** 预检概要（hub:routingPrecheck）；null=加载中（仅本机 + 检查中 hint） */
@@ -19,6 +23,9 @@ interface RunRoutingFieldProps {
   onChange: (routing: TaskRouting) => void;
   /** 批量模式任务数（>1 时 label「执行位置（N 个任务统一定）」+ 预检行文案） */
   taskCount?: number;
+  /** 权限档位（T10）：外派模式下渲染三选 chip，提交链随委派载荷 */
+  permissionTier: PermissionTier;
+  onPermissionTierChange: (tier: PermissionTier) => void;
 }
 
 interface RadioRowProps {
@@ -70,7 +77,27 @@ function RadioRow({ checked, title, hint, name, badge, onSelect, children }: Rad
   );
 }
 
-export function RunRoutingField({ precheck, value, onChange, taskCount }: RunRoutingFieldProps) {
+/** T10 档位说明文案（S2「权限策略：只读+白名单」hint 语境；与主进程 run-policy 语义对齐） */
+const TIER_HINTS: Record<PermissionTier, string> = {
+  readonly: '仅可读操作 · 任务书前置只读约束，违反将被拒绝',
+  sandbox: '预授予镜像工作空间目录写授权 · 目录内自由写入',
+  confirm: '越界写入需执行端用户确认（默认）',
+};
+
+const TIER_OPTIONS: Array<{ value: PermissionTier; label: string }> = [
+  { value: 'readonly', label: '只读' },
+  { value: 'sandbox', label: '沙箱全权' },
+  { value: 'confirm', label: '执行端确认' },
+];
+
+export function RunRoutingField({
+  precheck,
+  value,
+  onChange,
+  taskCount,
+  permissionTier,
+  onPermissionTierChange,
+}: RunRoutingFieldProps) {
   const nameBase = useId();
   const batch = (taskCount ?? 1) > 1;
   const groups = precheck?.groups ?? [];
@@ -96,7 +123,7 @@ export function RunRoutingField({ precheck, value, onChange, taskCount }: RunRou
   const groupHint = currentGroup
     ? batch
       ? `预检：${currentGroup.onlineCount} 节点在线 · ${currentGroup.mirroredCount} 已镜像 · 依次派给空闲节点`
-      : '按负载自动选择空闲节点 · 权限策略：执行端确认'
+      : '按负载自动选择空闲节点'
     : '';
   const nodeHint = '高级 · 手动选组成员执行（忽略自动调度）';
 
@@ -204,6 +231,18 @@ export function RunRoutingField({ precheck, value, onChange, taskCount }: RunRou
           </RadioRow>
         )}
       </div>
+      {effectiveMode !== 'local' && (
+        <div className="flex items-center gap-2.5 pl-1 pt-0.5">
+          <span className="text-xs text-tertiary">权限策略</span>
+          <Segmented
+            aria-label="权限策略"
+            options={TIER_OPTIONS}
+            value={permissionTier}
+            onChange={onPermissionTierChange}
+          />
+          <span className="text-xs text-tertiary">{TIER_HINTS[permissionTier]}</span>
+        </div>
+      )}
     </div>
   );
 }

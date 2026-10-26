@@ -15,6 +15,16 @@ import type { TaskAssignedEvent } from './protocol';
 import type { TaskReportPayload } from './delegation-wire';
 import type { DelegationRecord, HubDelegationStore } from './delegation-store';
 import type { HubDelegationSettings } from './delegation-settings';
+import { composeTurnBody, normalizeTier, type PermissionTier } from './run-policy';
+
+/**
+ * task.assigned 载荷的 studio 侧容错扩展（T10）：协议 1.2.0 的 DelegationTask 无
+ * permissionTier（hub parseDelegationTask 白名单重建剥离），本端按可选字段容错
+ * 消费（normalizeTier 缺省/非法收敛 confirm），hub 升级透传后直接生效零改动。
+ */
+export type AssignedTaskEvent = Omit<TaskAssignedEvent, 'task'> & {
+  task: TaskAssignedEvent['task'] & { permissionTier?: PermissionTier };
+};
 
 /** 回合终态（watchTurn 回调载荷——映射 messages.status 终态语义） */
 export interface TurnTerminal {
@@ -37,6 +47,13 @@ export interface DelegationRunPorts {
   resolveAgentInstance(workspaceId: string, agentSlug: string | undefined): string | null;
   /** 建委派会话（MC1：普通 collab 会话 + 标题=任务书摘要）→ 返回 sessionId */
   createDelegatedSession(input: { workspaceId: string; title: string; memberInstanceId: string }): string;
+  /**
+   * L0 权限档位预配（T10 契约签名）：createDelegatedSession 后、startTurn 前调用。
+   * 三档语义单源在 run-policy.ts（readonly=零写授权+prompt 只读约束段 /
+   * sandbox=预授予镜像工作空间目录 / confirm=不动授权面）。readonly 的行为约束
+   * 由 runner 侧 composeTurnBody 前置，本端口只做授权面动作。
+   */
+  applyRunPolicy(sessionId: string, tier: PermissionTier): void;
   /** 执行一个回合（首拍后注入任务书 prompt；续传时注入续跑指令） */
   startTurn(input: { sessionId: string; body: string }): Promise<void>;
   /** 会话级急停（既有取消入口 RouterService.stopAll） */
@@ -95,7 +112,7 @@ export interface DelegationRunnerOpts {
 }
 
 export interface DelegationRunner {
-  handleAssigned(evt: TaskAssignedEvent): Promise<void>;
+  handleAssigned(evt: AssignedTaskEvent): Promise<void>;
   handleCancelled(payload: { taskId: string }): void;
   /** 重连恢复（onStateChange→online）：中断对账 + 立即冲一拍 */
   handleOnline(): Promise<void>;
@@ -174,7 +191,8 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
     }
   };
 
-  const startRun = async (evt: TaskAssignedEvent, sessionId: string, record: DelegationRecord): Promise<void> => {
+  const startRun = async (evt: AssignedTaskEvent, sessionId: string, record: DelegationRecord): Promise<void> => {
+    const tier = normalizeTier(evt.task.permissionTier);
     const run: ActiveRun = {
       taskId: evt.taskId,
       sessionId,
@@ -195,7 +213,8 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
     });
     if (!firstOk) run.pendingBeat = { lastSeq: 0, excerpt: run.promptExcerpt };
     try {
-      await ports.startTurn({ sessionId, body: evt.task.prompt });
+      // T10：readonly 档任务书前只读约束段（composeTurnBody 单源）；sandbox/confirm 原文
+      await ports.startTurn({ sessionId, body: composeTurnBody(tier, evt.task.prompt) });
     } catch (err) {
       logger.warn('委派回合启动失败', {
         taskId: evt.taskId,
@@ -274,6 +293,8 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
         title: evt.task.title,
         memberInstanceId: instanceId,
       });
+      // T10 档位预配：createSession 后、startTurn（startRun 内）前——授权面先于回合注入
+      ports.applyRunPolicy(sessionId, normalizeTier(evt.task.permissionTier));
       const now = Date.now();
       await startRun(evt, sessionId, {
         taskId: evt.taskId,
