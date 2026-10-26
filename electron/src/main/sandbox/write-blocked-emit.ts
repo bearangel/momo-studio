@@ -57,12 +57,16 @@ export function clearPendingOnGrant(scope: 'session' | 'workspace', key: string,
   }
 }
 
-/** denyWrite 处置清除：sessionId 匹配（null = 未归属卡按目录全局匹配）且目录相交 */
+/** denyWrite 处置清除：sessionId 匹配（null = 未归属卡按目录全局匹配）且目录相交。
+ *  dirs 空数组 = 全清意图（P2-2：拒绝未携带目录信息——按会话整体拒绝；旧实现
+ *  相交匹配对空 dirs 恒 false，pending 滞留致 sessionWaiting 假阳）；dirs 非数组
+ *  防御同全清（IPC 边界已校验，此处兜底直接调用/畸形载荷）。 */
 export function clearPendingOnDeny(sessionId: string | null, dirs: string[]): void {
+  const denyAll = !Array.isArray(dirs) || dirs.length === 0;
   for (const [streamKey, entry] of pendingWriteBlocked) {
     const { signal } = entry;
     const sessionHit = sessionId === null || signal.sessionId === sessionId;
-    if (sessionHit && signal.dirs.some((d) => dirs.includes(d))) pendingWriteBlocked.delete(streamKey);
+    if (sessionHit && (denyAll || signal.dirs.some((d) => dirs.includes(d)))) pendingWriteBlocked.delete(streamKey);
   }
 }
 

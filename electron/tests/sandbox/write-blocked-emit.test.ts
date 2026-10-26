@@ -355,6 +355,45 @@ describe('未决写授权登记（T11 sessionWaiting 真源）', () => {
     expect(listPendingWriteBlocked('s-w4')).toHaveLength(0);
   });
 
+  // P2-2（T11 评审）：deny 无目录信息（dirs=[]）= 全清意图——旧实现的相交匹配
+  // 对空 dirs 恒 false，拒绝后 pending 滞留 → sessionWaiting 永假阳。
+  it('P2-2：denyWrite dirs=[]（空=全清意图）→ 清该会话全部 pending；他会话残留不误清', () => {
+    seedWaitingSession('s-w7', 'ss-w7');
+    // 同会话第二张卡 + 邻会话一张卡（多行流归属——seedWaitingSession 每会话一行）
+    getDb()
+      .prepare(
+        `INSERT INTO messages (id, session_id, sender, event_type, body, stream_session_id, status, source, created_at, updated_at)
+         VALUES ('m-w7b', 's-w7', 'agent-coder-66XMEw', 'm.room.message', '', 'ss-w7b', 'streaming', 'local', 1, 1)`,
+      )
+      .run();
+    getDb()
+      .prepare(
+        `INSERT INTO messages (id, session_id, sender, event_type, body, stream_session_id, status, source, created_at, updated_at)
+         VALUES ('m-w8', 's-w8', 'agent-coder-66XMEw', 'm.room.message', '', 'ss-w8', 'streaming', 'local', 1, 1)`,
+      )
+      .run();
+    writeBlockedFromChildMsg({ type: 'write-blocked-report', streamSessionId: 'ss-w7', workspaceId: 'ws-t11', dirs: ['/ws/t11/a'], command: 'a' });
+    writeBlockedFromChildMsg({ type: 'write-blocked-report', streamSessionId: 'ss-w7b', workspaceId: 'ws-t11', dirs: ['/ws/t11/b'], command: 'b' });
+    writeBlockedFromChildMsg({ type: 'write-blocked-report', streamSessionId: 'ss-w8', workspaceId: 'ws-t11', dirs: ['/ws/t11/c'], command: 'c' });
+    expect(listPendingWriteBlocked('s-w7')).toHaveLength(2);
+    expect(listPendingWriteBlocked('s-w8')).toHaveLength(1);
+
+    clearPendingOnDeny('s-w7', []); // 空 dirs：整会话拒绝（无目录信息可用）
+    expect(listPendingWriteBlocked('s-w7')).toHaveLength(0);
+    expect(listPendingWriteBlocked('s-w8')).toHaveLength(1); // 邻会话不误清
+  });
+
+  it('P2-2：dirs 非数组（防御——未经 IPC 校验的直接调用/畸形载荷）→ 同全清', () => {
+    seedWaitingSession('s-w9', 'ss-w9');
+    writeBlockedFromChildMsg({
+      type: 'write-blocked-report', streamSessionId: 'ss-w9', workspaceId: 'ws-t11',
+      dirs: ['/ws/t11/f'], command: 'w',
+    });
+    expect(listPendingWriteBlocked('s-w9')).toHaveLength(1);
+    clearPendingOnDeny('s-w9', undefined as unknown as string[]);
+    expect(listPendingWriteBlocked('s-w9')).toHaveLength(0);
+  });
+
   it('15min TTL 惰性过期（查询时清扫超期条目）', () => {
     vi.useFakeTimers();
     try {

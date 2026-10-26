@@ -735,6 +735,19 @@ describe('waiting-input 进度信号（L1b）', () => {
     expect(h.log.injectedSteers).toHaveLength(0);
     expect(h.store.get('t1')?.state).toBe('running'); // 无双倍超时误杀
   });
+
+  it('kind 全链：report 载荷 progress={lastSeq, excerpt, kind} 原样上行（hub v0.1.4 白名单透传——momo-hub delegations.test.ts「task.report kind 透传（T11b）」两用例锁 leader 侧形状）', async () => {
+    const h = makeHarness();
+    await admitOne(h, 't1');
+    h.log.reports.length = 0;
+    h.setWaiting('sess-1', { waiting: true, summary: '等待批准写入 /tmp/fix.patch' });
+    await vi.advanceTimersByTimeAsync(500);
+    const beat = h.log.reports.find((r) => r.payload.status === 'running');
+    // 精确形状锁：本端上行 = hub parseReportPayload 白名单受理 = leader 推送面所见
+    expect(beat?.payload.progress).toEqual({
+      lastSeq: 0, excerpt: '等待批准写入 /tmp/fix.patch', kind: 'waiting-input',
+    });
+  });
 });
 
 // ── L1 无人确认超时自动拒（M2.1 T11，RF#4 永卡红线） ─────────────────────────
@@ -802,5 +815,46 @@ describe('HITL 无人确认超时自动拒（L1）', () => {
 
     expect(h.log.injectedSteers).toHaveLength(0); // 未到 15 分钟连续等待：零注入
     expect(h.store.get('t1')?.state).toBe('running');
+  });
+});
+
+// ── P2-1（T11 评审）：sessionWaiting 异常/null ≠ 恢复——降级拍保留等待时钟 ────
+
+describe('降级拍不重置等待时钟（P2-1）', () => {
+  it('null 一拍后恢复 waiting → 时钟连续：降级窗口计入连续等待段（不在降级拍清零重计时）', async () => {
+    const h = makeHarness();
+    await admitOne(h, 't1');
+
+    h.setWaiting('sess-1', { waiting: true, summary: '第一次等待' });
+    await vi.advanceTimersByTimeAsync(8 * 60 * 1000); // 连续等待 8 分钟（< 15）
+    h.setWaiting('sess-1', null); // 信号源降级（查询异常同走 null）——≠ 恢复
+    await vi.advanceTimersByTimeAsync(8 * 60 * 1000 + 1000); // 降级窗口 8 分钟：不注入（跳过检测）
+    expect(h.log.injectedSteers).toHaveLength(0);
+
+    h.setWaiting('sess-1', { waiting: true, summary: '降级后仍等待' });
+    await vi.advanceTimersByTimeAsync(1000); // 下一拍：连续段 ≈16.5 分钟 > 15 → 注入
+    // 修复前：降级拍走「恢复」分支清零 waitingSince → 连续段从恢复拍重计（0 分钟）→ 永不注入
+    expect(h.log.injectedSteers).toHaveLength(1);
+  });
+
+  it('注入后降级拍不清注入标记 → 同等待段不二次注入（越双倍线走 RF#4 清算而非再注入）', async () => {
+    const h = makeHarness();
+    await admitOne(h, 't1');
+
+    h.setWaiting('sess-1', { waiting: true, summary: '持续等待' });
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000 + 1000); // 首次注入
+    expect(h.log.injectedSteers).toHaveLength(1);
+
+    h.setWaiting('sess-1', null); // 注入后信号源降级一拍
+    await vi.advanceTimersByTimeAsync(500);
+    h.setWaiting('sess-1', { waiting: true, summary: '降级后继续等待' });
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000 + 1000); // 累计连续 ≈30.5 分钟 ≥ 2×15
+
+    // 修复前：降级拍清 hitlInjectedAt → 15 分钟后二次注入（steers=2 且仍 running）
+    expect(h.log.injectedSteers).toHaveLength(1); // 注入幂等跨降级拍保持
+    const failed = h.log.reports.find((r) => r.taskId === 't1' && r.payload.status === 'failed');
+    expect(failed?.payload.reason).toContain('hitl_timeout'); // 越双倍线 → RF#4 清算
+    expect(h.log.stoppedSessions).toContain('sess-1');
+    expect(h.store.get('t1')?.state).toBe('failed');
   });
 });

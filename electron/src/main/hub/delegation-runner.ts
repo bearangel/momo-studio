@@ -243,14 +243,17 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
           });
           continue;
         }
-      } else if (run.waitingSince !== null) {
-        // 恢复：时钟清零（再等待从零计时）；未发的等待拍去 kind（RF#3）
+      } else if (waiting !== null && run.waitingSince !== null) {
+        // 恢复（仅显式 waiting===false）：时钟清零（再等待从零计时）；未发的等待拍去 kind（RF#3）
         run.waitingSince = null;
         run.hitlInjectedAt = null;
         if (run.pendingBeat?.kind === 'waiting-input') {
           run.pendingBeat = { lastSeq: run.pendingBeat.lastSeq, excerpt: run.pendingBeat.excerpt };
         }
       }
+      // waiting===null（信号源不支持/查询异常，P2-1）：本拍降级——≠ 恢复，
+      // waitingSince/hitlInjectedAt 原样保留（时钟按连续段续计、注入幂等跨降级拍
+      // 保持），仅跳过本拍等待检测。
       const beat = run.pendingBeat;
       if (!beat) continue; // 无增量不打空拍（等待态除外——上方已置等待拍）
       void sendReport(taskId, {
