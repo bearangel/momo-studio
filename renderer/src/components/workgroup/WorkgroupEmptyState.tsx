@@ -71,7 +71,7 @@ export function WorkgroupEmptyState() {
       <div className="flex flex-col items-center gap-3 text-center">
         <Users size={30} strokeWidth={1.75} aria-hidden className="text-tertiary" />
         <div className="text-sm font-semibold text-primary">尚未接入工作组网络</div>
-        <p className="max-w-[340px] text-xs leading-relaxed text-tertiary">
+        <p className="max-w-[340px] text-[11px] leading-relaxed text-tertiary">
           接入 hub 后，这里显示你的工作组、成员在线态与跨节点任务调度。新设备可直接接入，无需先创建工作空间。
         </p>
         {helpOpen && (

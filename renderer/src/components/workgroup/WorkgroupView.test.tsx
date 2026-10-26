@@ -117,6 +117,20 @@ describe('WorkgroupView', () => {
     expect(screen.queryByRole('button', { name: '接入 hub' })).not.toBeInTheDocument();
   });
 
+  // T2 评审收口：getStatus 快照失败时 hub.store 置 loadError 且 status 保持 null
+  // ——此前视图停在「加载中…」死端。回归锁：错误行（role=alert）+「重试」可点，
+  // 点击走 store.refresh()（清 loadError + 复用订阅重拉快照）。
+  it('getStatus 失败：渲染错误行（role=alert）+ 重试可点并重拉快照', async () => {
+    api.hub.getStatus.mockRejectedValue(new Error('ipc failed'));
+    render(<WorkgroupView />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('状态读取失败');
+    expect(screen.queryByText('尚未接入工作组网络')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
+    await waitFor(() => {
+      expect(api.hub.getStatus).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it('「什么是工作组？」非死入口：点击切换帮助文案', async () => {
     api.hub.getStatus.mockResolvedValue(UNENROLLED);
     render(<WorkgroupView />);

@@ -59,6 +59,23 @@ const mockApi = {
     onPanelEvent: vi.fn().mockReturnValue(() => {}),
     callService: vi.fn().mockResolvedValue(null),
   },
+  // M2.1 T2：workgroups 视图挂载 WorkgroupView → useHubStore.init() 拉快照 + 订阅
+  // 两推送——缺桩会在守卫顺序回归锁用例里以 unhandled rejection 污染测试运行
+  hub: {
+    getStatus: vi.fn().mockResolvedValue({
+      configured: false,
+      state: 'disconnected',
+      hubUrl: null,
+      nodeName: null,
+      nodeId: null,
+      lastError: null,
+    }),
+    enroll: vi.fn().mockResolvedValue(undefined),
+    configure: vi.fn().mockResolvedValue(undefined),
+    forget: vi.fn().mockResolvedValue(undefined),
+    onStateChanged: vi.fn().mockReturnValue(() => {}),
+    onNodePresence: vi.fn().mockReturnValue(() => {}),
+  },
   // 设置视图默认挂 ProviderSettings（mount 即调 provider.list）——
   // 缺桩会以 unhandled rejection 污染测试运行（vitest 判 exit 1）
   provider: {
@@ -181,6 +198,18 @@ describe('MainLayout', () => {
     expect(
       screen.getByText(/创建或选择一个工作空间开始/i),
     ).toBeInTheDocument();
+  });
+
+  // M2.1 T2 守卫顺序回归锁（D2 治愈）：工作组是节点级能力，MiddlePanel 的
+  // workgroups 分发必须在 workspace 守卫之前——若守卫顺序回归（workgroups
+  // 落到 EmptyState 拦截），本用例红：新设备未建工作空间也能接入 hub。
+  it('无 workspace + activeView=workgroups：渲染工作组空态而非工作空间引导', async () => {
+    useUiStore.setState({ activeView: 'workgroups' });
+    render(<MainLayout />);
+    expect(await screen.findByText('尚未接入工作组网络')).toBeInTheDocument();
+    expect(
+      screen.queryByText(/创建或选择一个工作空间开始/i),
+    ).not.toBeInTheDocument();
   });
 
   it('shows IM room list when IM view is active with a workspace', () => {
