@@ -48,6 +48,7 @@ import { executeConflictResolution } from './conflict-executor';
 import { startTaskAndKickoff, resumePausedTask, cancelTask, abortTaskExecution } from './lifecycle';
 import { detectInterrupted, resumeTask, type InterruptedTaskInfo } from './resume';
 import { executeMove, type MoveTarget } from './move';
+import { validateTaskRoutingInput, type TaskRouting } from '../hub/task-routing';
 
 /** renderer task:create 入参（不含 creatorUserId，由 main 注入） */
 interface CreateInput {
@@ -68,6 +69,8 @@ interface CreateInput {
   deadlineAt?: number | null;
   /** 看板分组（UX 修复）：落组 id，落库前三重校验（存在/同 ws/未归档） */
   groupId?: string;
+  /** M2.1 T6：执行路由三选；异形人话拒绝（不静默降级本机），undefined 落列 NULL=local */
+  routing?: TaskRouting;
 }
 
 /** renderer task:list 入参，与 listTasks opts 对齐 */
@@ -112,6 +115,9 @@ export function registerTaskHandlers(): void {
         throw new Error(`任务分组 ${input.groupId} 已归档，不可作为新建任务的目标分组`);
       }
     }
+    // M2.1 T6：routing 三选校验（异形人话抛错——IPC 边界契约违反要响亮）；
+    // undefined = 未指定 → 落列 NULL → 读侧 parseTaskRouting 兜底 local
+    const routing = validateTaskRoutingInput(input.routing);
     const created = insertTask({
       workspaceId: input.workspaceId,
       title: input.title,
@@ -128,6 +134,7 @@ export function registerTaskHandlers(): void {
       scheduledAt: input.scheduledAt,
       deadlineAt: input.deadlineAt,
       groupId: input.groupId,
+      ...(routing !== undefined ? { routing } : {}),
     });
     notifyExecutor();
     return created;

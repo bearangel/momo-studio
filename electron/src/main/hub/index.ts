@@ -25,6 +25,7 @@ import { createDelegationRunner, type DelegationRunner } from './delegation-runn
 import { wireDelegationRunnerPorts } from './delegation-ports';
 import { createHubDelegationSettingsStore, type HubDelegationSettings } from './delegation-settings';
 import { createHubDelegationStore } from './delegation-store';
+import { createMirrorRegistry, type MirrorRegistryRow } from './mirror-registry';
 import { ViewServer } from './view-server';
 import { createHubViewSettingsStore, type HubViewSettings } from './view-settings';
 import { VIEW_WIRE } from './view-wire';
@@ -50,6 +51,19 @@ let presenceSeed: Array<{ nodeId: string; nodeName: string }> | null = null;
 const configStore = () => createHubConfigStore(getDb());
 const delegationSettingsStore = () => createHubDelegationSettingsStore(getDb());
 const viewSettingsStore = () => createHubViewSettingsStore(getDb());
+const mirrorRegistry = () => createMirrorRegistry(getDb());
+
+/**
+ * 镜像登记表查询面（IPC hub:mirrorRegistry 消费；RM-M21-7 四消费方同源：
+ * T3 节点卡徽标 / T4 查看选择器 / T7 调度器 mirroredBy / T8 新建弹窗守门）。
+ *
+ * 失忆限制（M2 协议无重放/无查询 RPC）：登记表只累积本机在线期间收到的
+ * workspace.mirrored 组内广播——晚入组 / 离线期间发生的镜像不可恢复，
+ * 重启前已镜像节点若无新事件不自动回表；M3 以 hub 查询式清单 RPC 补齐。
+ */
+export function hubListMirrorRegistry(workspaceName?: string): MirrorRegistryRow[] {
+  return mirrorRegistry().list(workspaceName);
+}
 
 /** 委派设置面（IPC 消费——开关/并发上限即时生效：runner 每次读取现值） */
 export function hubGetDelegationSettings(): HubDelegationSettings {
@@ -317,19 +331,34 @@ function startClient(
           slug: p.slug, type: p.type, name: p.name, version: p.version, author: p.author, at: p.at,
         });
       } else if (evt.method === EVT.workspaceMirrored) {
-        // 镜像完成组内广播（spec §3.2——组内皆可见谁被镜像到什么版本）
+        // 镜像完成组内广播（spec §3.2——组内皆可见谁被镜像到什么版本）。
+        // RM-M21-7：广播同时累积镜像登记表（同组×同节点×同空间覆盖 snapshot_id）——
+        // 载荷挑字段且先验形状（presence 桥同款纪律：登记表是持久化面，异形载荷
+        // 不得入库；此前本分支不校验直接透传，接线登记后收紧为异形丢弃）。
         const p = evt.payload as {
-          groupId: string; targetNodeId: string; workspaceName: string;
-          snapshotId: string; appliedResources: string[]; unresolvedRefs?: string[];
-        };
-        broadcast('hub:workspaceMirrored', {
-          groupId: p.groupId,
-          targetNodeId: p.targetNodeId,
-          workspaceName: p.workspaceName,
-          snapshotId: p.snapshotId,
-          appliedResources: Array.isArray(p.appliedResources) ? p.appliedResources : [],
-          ...(Array.isArray(p.unresolvedRefs) ? { unresolvedRefs: p.unresolvedRefs } : {}),
-        });
+          groupId?: unknown; targetNodeId?: unknown; workspaceName?: unknown;
+          snapshotId?: unknown; appliedResources?: unknown; unresolvedRefs?: unknown;
+        } | null;
+        if (
+          p !== null && typeof p === 'object' &&
+          typeof p.groupId === 'string' && typeof p.targetNodeId === 'string' &&
+          typeof p.workspaceName === 'string' && typeof p.snapshotId === 'string'
+        ) {
+          mirrorRegistry().record({
+            groupId: p.groupId,
+            targetNodeId: p.targetNodeId,
+            workspaceName: p.workspaceName,
+            snapshotId: p.snapshotId,
+          });
+          broadcast('hub:workspaceMirrored', {
+            groupId: p.groupId,
+            targetNodeId: p.targetNodeId,
+            workspaceName: p.workspaceName,
+            snapshotId: p.snapshotId,
+            appliedResources: Array.isArray(p.appliedResources) ? p.appliedResources : [],
+            ...(Array.isArray(p.unresolvedRefs) ? { unresolvedRefs: p.unresolvedRefs } : {}),
+          });
+        }
       }
       // 工作组事件桥（M2b）：group.changed → hub:groupChanged（载荷挑字段，见桥内注释）
       bridgeGroupChanged(evt, broadcast);

@@ -136,6 +136,15 @@ export type TaskStatus =
   | 'cancelled';
 
 /**
+ * 任务执行路由三选（M2.1 契约区——与 electron/src/main/hub/task-routing.ts 逐字对齐）。
+ * 落本地 tasks 表 routing_json 列（RM-M21-2，非 hub 协议）；NULL/异形读侧兜底 local。
+ */
+export type TaskRouting =
+  | { mode: 'local' }
+  | { mode: 'group'; groupId: string }
+  | { mode: 'node'; groupId: string; targetNodeId: string };
+
+/**
  * 任务行（renderer 视图，与 electron 端 storage/tasks/repo.ts 的 TaskRow 完整对齐）。
  *
  * B7 之前是 { id, title, status } 三字段子集；B7 task.store 需要 update/transition
@@ -179,6 +188,10 @@ export interface TaskRow {
   pinnedAt: number | null;
   /** 归档时间戳（ms），NULL=活跃；task.list 默认排除归档行 */
   archivedAt: number | null;
+  /** M2.1：执行路由三选（routing_json 解析形态；旧行 NULL 兜底 {mode:'local'}） */
+  routing: TaskRouting;
+  /** M2.1：hub 委派 id 关联（delegation-sync 回写；缺省 null） */
+  delegationId: string | null;
 }
 
 /**
@@ -240,6 +253,8 @@ export interface TaskApiSurface {
     deadlineAt?: number | null;
     /** 看板分组（UX 修复）：落组 id，缺省不分组；主进程三重校验（存在/同 ws/未归档） */
     groupId?: string;
+    /** M2.1：执行路由三选；缺省不传 = 本机（落列 NULL）；异形主进程人话拒绝 */
+    routing?: TaskRouting;
   }): Promise<TaskRow>;
   list(opts: {
     workspaceId?: string;
@@ -2751,6 +2766,20 @@ export interface HubWorkspaceMirroredEvent {
   unresolvedRefs?: string[];
 }
 
+/**
+ * 镜像登记行（M2.1 T6 / RM-M21-7——workspace_mirror_registry 表 camelCase 镜像）。
+ * 数据源 = workspace.mirrored 组内广播累积（同组×同节点×同空间覆盖 snapshot_id）；
+ * 失忆限制：M2 协议无重放，晚入组/离线期间的镜像不可恢复（M3 票：hub 查询式清单 RPC）。
+ */
+export interface HubMirrorRegistryRow {
+  id: number;
+  groupId: string;
+  targetNodeId: string;
+  workspaceName: string;
+  snapshotId: string;
+  mirroredAt: number;
+}
+
 // ── 委派 leader 侧（M2e T12，协议 delegation.ts 镜像） ──────────────────────
 
 /** 委派账本六态（协议 DelegationStatus 镜像） */
@@ -2920,6 +2949,11 @@ export interface HubApiSurface {
   viewSubscribe(input: { targetNodeId: string; sessionId: string }): Promise<{ ok: boolean }>;
   /** 远程查看：注销尾部订阅（幂等清理——hub 侧 consent 关闭不阻断退订） */
   viewUnsubscribe(input: { targetNodeId: string; sessionId: string }): Promise<{ ok: boolean }>;
+  /**
+   * 镜像登记表查询（M2.1 T6）：workspaceName 可选过滤；行=组内 workspace.mirrored
+   * 广播累积登记（T3 徽标/T4 选择器/T7 调度/T8 守门四消费方同源数据）
+   */
+  mirrorRegistry(input?: { workspaceName?: string }): Promise<{ mirrors: HubMirrorRegistryRow[] }>;
   /** 连接状态变化推送订阅（解订阅函数） */
   onStateChanged(callback: (payload: HubStateChangedEvent) => void): () => void;
   /** 节点上下线推送订阅（解订阅函数） */

@@ -2,7 +2,7 @@
 import { ipcMain } from 'electron';
 import {
   hubConfigure, hubEnroll, hubForget, hubGetDelegationSettings, hubGetStatus, hubGetViewSettings,
-  hubRequest, hubSetDelegationSettings, hubSetViewSettings, replayPresenceSeed,
+  hubListMirrorRegistry, hubRequest, hubSetDelegationSettings, hubSetViewSettings, replayPresenceSeed,
 } from './index';
 import { createGroupClient } from './groups';
 import { publishToHub, type PublishInput } from './publish';
@@ -83,4 +83,9 @@ export function registerHubIpc(): void {
     hubRequest(VIEW_RPC.subscribe, input));
   ipcMain.handle('hub:viewUnsubscribe', (_evt, input: { targetNodeId: string; sessionId: string }) =>
     hubRequest(VIEW_RPC.unsubscribe, input));
+  // 镜像登记表查询（M2.1 T6 / RM-M21-7）：workspace.mirrored 广播的累积持久登记，
+  // T3 徽标 / T4 选择器 / T7 调度 / T8 守门四消费方同源；workspaceName 可选过滤。
+  // 失忆限制与 M3 票见 hub/index.ts hubListMirrorRegistry 注释。
+  ipcMain.handle('hub:mirrorRegistry', (_evt, input?: { workspaceName?: string }) =>
+    hubListMirrorRegistry(input?.workspaceName));
 }

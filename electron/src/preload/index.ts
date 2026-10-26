@@ -57,6 +57,7 @@ import type {
   HubMirrorWorkspaceInput,
   HubMirrorAcceptResult,
   HubMirrorResultEvent,
+  HubMirrorRegistryRow,
   HubSnapshotBuildUploadResult,
   HubWorkspaceMirroredEvent,
   HubDelegationSettings,
@@ -646,6 +647,9 @@ const api: ApiSurface = {
       invoke<{ tasks: HubViewLocalTask[] }>('hub:viewTasks', input),
     viewSubscribe: (input: { targetNodeId: string; sessionId: string }) => invoke<{ ok: boolean }>('hub:viewSubscribe', input),
     viewUnsubscribe: (input: { targetNodeId: string; sessionId: string }) => invoke<{ ok: boolean }>('hub:viewUnsubscribe', input),
+    // 镜像登记表查询（M2.1 T6 / RM-M21-7）：workspaceName 可选过滤
+    mirrorRegistry: (input?: { workspaceName?: string }) =>
+      invoke<{ mirrors: HubMirrorRegistryRow[] }>('hub:mirrorRegistry', input ?? {}),
     onViewAppended: (callback) => {
       const handler = (_e: IpcRendererEvent, payload: HubViewAppendedEvent): void => callback(payload);
       ipcRenderer.on('hub:viewAppended', handler);

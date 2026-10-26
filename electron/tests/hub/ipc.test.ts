@@ -33,7 +33,7 @@ import * as manager from '../../src/main/hub/index';
 import { publishToHub } from '../../src/main/hub/publish';
 
 const GROUP_CHANNELS = ['hub:groupCreate', 'hub:groupInvite', 'hub:groupJoin', 'hub:groupLeave', 'hub:groupList', 'hub:groupTransfer'];
-const MIRROR_CHANNELS = ['hub:snapshotBuildUpload', 'hub:mirrorWorkspace'];
+const MIRROR_CHANNELS = ['hub:snapshotBuildUpload', 'hub:mirrorWorkspace', 'hub:mirrorRegistry'];
 const DELEGATION_CHANNELS = ['hub:getDelegationSettings', 'hub:setDelegationSettings'];
 const TASK_CHANNELS = ['hub:taskList', 'hub:taskDelegate', 'hub:taskCancel'];
 const VIEW_CHANNELS = [
@@ -45,7 +45,7 @@ const VIEW_CHANNELS = [
 beforeEach(() => { handlers.clear(); vi.clearAllMocks(); });
 
 describe('hub IPC 接线', () => {
-  it('注册二十六通道；getStatus 透传 manager', async () => {
+  it('注册二十七通道（M2.1 T6 增镜像登记查询）；getStatus 透传 manager', async () => {
     registerHubIpc();
     expect([...handlers.keys()].sort()).toEqual([
       ...GROUP_CHANNELS,

@@ -43,6 +43,7 @@ import { migration065 } from './065_plugin_mcp_backfill_allocations';
 import { migration066 } from './066_plugin_scoped_activation';
 import * as migration067 from './067_session_groups_pin_type';
 import * as migration068 from './068_session_group_color';
+import * as migration069 from './069_m21_task_routing_mirror_registry';
 
 export interface Migration {
   version: number;
@@ -1148,6 +1149,13 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 存量组按 (position, created_at, id) 序 6 色轮转回填。
     version: migration068.version,
     sql: migration068.up,
+  },
+  {
+    // M2.1 Task 6（RM-M21-2/7）：tasks + routing_json/delegation_id 两列
+    // （任务路由三选 + 委派 id 关联）+ workspace_mirror_registry 镜像登记表
+    // （workspace.mirrored 广播累积，UNIQUE 三键覆盖 snapshot_id）。
+    version: migration069.version,
+    sql: migration069.up,
   },
 ];
 

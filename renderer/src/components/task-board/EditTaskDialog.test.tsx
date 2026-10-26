@@ -63,6 +63,7 @@ function makeTask(overrides: Partial<TaskRow>): TaskRow {
     groupId: null,
     pinnedAt: null,
     archivedAt: null,
+    routing: { mode: 'local' }, delegationId: null,
     ...overrides,
   };
 }
