@@ -24,15 +24,33 @@ interface HubGroupState {
   error: string | null;
   /** 本机最近生成的邀请码（groupId → code；仅供展示复制） */
   inviteCodes: Record<string, string>;
+  /**
+   * 监控台选中的组（M2.1 T3）。null = 未选择（展示层回落第一组——见
+   * effectiveSelectedGroup）；store 不回写回落值：选中态是 UI 偏好，组列表
+   * 重拉后仍保持用户手选的组，仅在所选组已被移除时由展示层兜底
+   */
+  selectedGroupId: string | null;
   /** 面板挂载时调用：订阅 groupChanged + 拉取列表；返回解订阅函数 */
   init(): () => void;
   /** 权威拉取组列表（loading 门闸防并发重入） */
   load(): Promise<void>;
+  selectGroup(groupId: string): void;
   create(groupName: string): Promise<void>;
   invite(groupId: string): Promise<string>;
   join(inviteCode: string): Promise<void>;
   leave(groupId: string): Promise<void>;
   transfer(groupId: string, toNodeId: string): Promise<void>;
+}
+
+/**
+ * 展示层生效选中组：手选组在场 → 手选组；否则回落第一组；无组 → null。
+ * 侧栏与监控台共用同一推导，保证高亮与主区内容永不劈叉。
+ */
+export function effectiveSelectedGroup(
+  groups: HubGroupInfo[],
+  selectedGroupId: string | null,
+): HubGroupInfo | null {
+  return groups.find((g) => g.groupId === selectedGroupId) ?? groups[0] ?? null;
 }
 
 export const useHubGroupStore = create<HubGroupState>((set) => {
@@ -77,6 +95,7 @@ export const useHubGroupStore = create<HubGroupState>((set) => {
     loading: false,
     error: null,
     inviteCodes: {},
+    selectedGroupId: null,
 
     init() {
       const dispose = ipc.hub.onGroupChanged(() => {
@@ -87,6 +106,10 @@ export const useHubGroupStore = create<HubGroupState>((set) => {
     },
 
     load: refresh,
+
+    selectGroup(groupId) {
+      set({ selectedGroupId: groupId });
+    },
 
     async create(groupName) {
       await runAction(() => ipc.hub.groupCreate({ groupName }));

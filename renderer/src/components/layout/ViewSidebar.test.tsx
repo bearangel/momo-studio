@@ -31,6 +31,9 @@ vi.mock('../files/FileTree', () => ({
 vi.mock('../task-board/TaskSidebarPanel', () => ({
   TaskSidebarPanel: () => <div data-testid="task-sidebar-stub" />,
 }));
+vi.mock('../workgroup/WorkgroupSidebar', () => ({
+  WorkgroupSidebar: () => <div data-testid="workgroup-sidebar-stub" />,
+}));
 
 describe('ViewSidebar', () => {
   beforeEach(() => {
@@ -65,8 +68,8 @@ describe('ViewSidebar', () => {
     expect(screen.getByTestId('task-sidebar-stub')).toBeInTheDocument();
   });
 
-  // M2.1 T2：workgroups 成为第四侧边栏视图——标题「工作组」+ 本任务占位体
-  it('workgroups 视图渲染占位侧栏（标题「工作组」+ Task 3 填充占位）', () => {
+  // M2.1 T2→T3：workgroups 第四侧边栏视图分发 WorkgroupSidebar（组件行为由其测试覆盖）
+  it('workgroups 视图渲染工作组侧栏（标题「工作组」+ WorkgroupSidebar）', () => {
     useUiStore.setState({ activeView: 'workgroups' });
     render(<ViewSidebar />);
     expect(screen.getByText('工作组')).toBeInTheDocument();

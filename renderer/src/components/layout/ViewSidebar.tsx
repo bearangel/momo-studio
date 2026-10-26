@@ -14,6 +14,7 @@ import { RoomList } from '../im/RoomList';
 import { SessionSidebarHeader } from '../im/SessionSidebarHeader';
 import { FileTree } from '../files/FileTree';
 import { TaskSidebarPanel } from '../task-board/TaskSidebarPanel';
+import { WorkgroupSidebar } from '../workgroup/WorkgroupSidebar';
 import { Sidebar } from './Sidebar';
 import { PanelHost } from '../plugins/PanelHost';
 import { usePluginPanelsStore, panelKeyOf } from '../../stores/plugin-panels.store';
@@ -106,14 +107,7 @@ export function ViewSidebar() {
       )}
       {activeView === 'files' && <FileTree onSelectFile={handleSelectFile} />}
       {activeView === 'tasks' && <TaskSidebarPanel />}
-      {activeView === 'workgroups' && (
-        // M2.1 T2 占位骨架：组列表/成员 presence 由 Task 3 的 WorkgroupSidebar 填充
-        <div className="flex flex-1 items-center justify-center p-4 text-center">
-          <p className="text-xs text-tertiary" data-testid="workgroup-sidebar-stub">
-            工作组侧栏占位（Task 3 填充）
-          </p>
-        </div>
-      )}
+      {activeView === 'workgroups' && <WorkgroupSidebar />}
     </Sidebar>
   );
 }

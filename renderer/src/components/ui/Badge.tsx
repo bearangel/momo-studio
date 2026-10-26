@@ -18,11 +18,13 @@ interface Props {
   tone?: BadgeTone;
   className?: string;
   children: ReactNode;
+  title?: string;
 }
 
-export function Badge({ tone = 'neutral', className, children }: Props) {
+export function Badge({ tone = 'neutral', className, children, title }: Props) {
   return (
     <span
+      title={title}
       className={cn(
         'inline-flex h-5 items-center gap-1 rounded px-2 text-xs font-medium',
         BADGE_TONE_CLASSES[tone],

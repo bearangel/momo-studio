@@ -1,9 +1,9 @@
 // renderer/src/components/workgroup/WorkgroupView.test.tsx
 //
-// 工作组视图骨架测试（momo-hub M2.1 Task 2）：
+// 工作组视图测试（momo-hub M2.1 Task 2 骨架 + Task 3 监控台接线）：
 // - D2 治愈断言：无工作空间上下文也渲染未接入空态（工作组是节点级能力）
 // - 未接入（!configured）：空态文案 + 「接入 hub」打开就地表单；提交走 ipc mock
-//   （window.api.hub.enroll，trim 后入参）；成功翻「监控台建设中」占位
+//   （window.api.hub.enroll，trim 后入参）；成功翻监控台（无组空态引导）
 // - enroll 失败：错误原文展示（ipc 代理剥包装前缀纪律）
 // - 已接入（configured）：直接监控台占位，无接入表单
 // - 「什么是工作组？」非死入口：点击切换帮助文案
@@ -11,6 +11,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { WorkgroupView } from './WorkgroupView';
 import { useHubStore } from '../../stores/hub.store';
+import { useHubGroupStore } from '../../stores/hub-group.store';
+import { useHubDelegationStore } from '../../stores/hub-delegation.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import type { HubStatus } from '../../ipc/types';
 
@@ -22,6 +24,14 @@ const api = {
     forget: vi.fn(),
     onStateChanged: vi.fn(() => () => undefined),
     onNodePresence: vi.fn(() => () => undefined),
+    // T3 起已接入态渲染监控台：组/委派 store 由视图 init（真实现 + 空载 mock）
+    groupList: vi.fn(),
+    onGroupChanged: vi.fn(() => () => undefined),
+    taskList: vi.fn(),
+    onTaskProgress: vi.fn(() => () => undefined),
+    onTaskCompleted: vi.fn(() => () => undefined),
+    onTaskFailed: vi.fn(() => () => undefined),
+    onTaskInterrupted: vi.fn(() => () => undefined),
   },
 };
 
@@ -45,8 +55,29 @@ const ENROLLED_ONLINE: HubStatus = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  api.hub.groupList.mockResolvedValue({ groups: [] });
+  api.hub.taskList.mockResolvedValue({ tasks: [] });
   (globalThis as unknown as { window: { api: typeof api } }).window.api = api;
   useHubStore.setState({ status: null, nodes: [], loadError: null });
+  useHubGroupStore.setState({
+    groups: [],
+    loading: false,
+    error: null,
+    inviteCodes: {},
+    selectedGroupId: null,
+  });
+  useHubDelegationStore.setState({
+    tasks: [],
+    loading: false,
+    error: null,
+    expandedTaskId: null,
+    streams: {},
+    prompts: {},
+    agentSlugs: {},
+    sessionIds: {},
+    reasons: {},
+    wizardOpen: false,
+  });
   // D2 断言前提：不准备任何工作空间（getActive() 为空）
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null, loading: false, error: null });
 });
@@ -70,9 +101,11 @@ describe('WorkgroupView', () => {
     expect(screen.getByRole('button', { name: '接入' })).toBeInTheDocument();
   });
 
-  it('提交走 ipc mock（trim 后入参），成功后翻「监控台建设中」占位', async () => {
+  it('提交走 ipc mock（trim 后入参），成功后翻监控台（无组空态引导）', async () => {
     api.hub.getStatus.mockResolvedValue(UNENROLLED);
     api.hub.enroll.mockResolvedValue(ENROLLED_ONLINE);
+    api.hub.groupList.mockResolvedValue({ groups: [] });
+    api.hub.taskList.mockResolvedValue({ tasks: [] });
     render(<WorkgroupView />);
     fireEvent.click(await screen.findByRole('button', { name: '接入 hub' }));
 
@@ -90,7 +123,7 @@ describe('WorkgroupView', () => {
         nodeName: '办公室 MacBook',
       });
     });
-    expect(await screen.findByText('监控台建设中')).toBeInTheDocument();
+    expect(await screen.findByText('尚未加入任何工作组')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '接入 hub' })).not.toBeInTheDocument();
   });
 
@@ -110,10 +143,12 @@ describe('WorkgroupView', () => {
     expect(screen.queryByText('监控台建设中')).not.toBeInTheDocument();
   });
 
-  it('已接入（configured）：直接渲染监控台占位，无接入表单', async () => {
+  it('已接入（configured）：直接渲染监控台组合，无接入表单', async () => {
     api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
+    api.hub.groupList.mockResolvedValue({ groups: [] });
+    api.hub.taskList.mockResolvedValue({ tasks: [] });
     render(<WorkgroupView />);
-    expect(await screen.findByText('监控台建设中')).toBeInTheDocument();
+    expect(await screen.findByText('尚未加入任何工作组')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '接入 hub' })).not.toBeInTheDocument();
   });
 
