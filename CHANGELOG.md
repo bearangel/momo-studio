@@ -17,6 +17,7 @@ hub 侧两个 payload 透传补丁（`v0.1.3` permissionTier / `v0.1.4` progress
 - **HITL 三层最小核**：L0 权限档位（readonly=会话级零授权+只读约束前置段 / sandbox=预授予工作空间写授权 / confirm 默认执行端确认）；L1 超时自动拒（默认 15min 可配 1-120——denied+steer 注入，双倍超时 failed 兜底不永卡）；L1b waiting-input 进度信号（write-blocked 单漏斗信号源；恢复自动去态全链防粘滞）；leader「等待节点确认」/worker「等你确认+来自节点」双侧卡 + 监控台徽标
 - **真机验收修复（D1-D6）**：0-ws 主壳化（工作组零前置可达）；镜像携 defaultAgent 段（新 worker 默认实例在位，首派不再必拒）；workspace:listChanged 广播（镜像空间 UI 即时可见）；模型绑定 ghost 自愈；targetNodeId 回执回写（未知节点徽标）；取消两步确认
 - **测试**：`tests/hub` 326 用例；renderer 2805；electron 全量 4858；真机 33/39→修复后冷启动全链 pass
+- **已知限制**：调度无候选不自动轮询（待派发卡手动「重试派发」）；HITL 远程代答（leader 经 hub 回复确认）为 M3 议，本期确认仅在执行端就地处理+超时自动拒；任务源（插件/cron/外部 TODO）不在互联域——多元入口接入统一任务管道属插件生态，互联设置零占位；查看选择器 v1 列本机空间名（远端空间清单 RPC 为 M3 议，RM-M21-9）
 
 ## [未发布] — 节点互联 M2：工作组 / 镜像 / 委派 / 远程查看
 
