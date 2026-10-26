@@ -2,7 +2,7 @@
 import { ipcMain } from 'electron';
 import {
   hubConfigure, hubDelegationBoard, hubEnroll, hubForget, hubGetDelegationSettings, hubGetStatus,
-  hubGetViewSettings, hubListMirrorRegistry, hubMarkDelegationCancelled, hubRequest,
+  hubGetViewSettings, hubListMirrorRegistry, hubLocalWaiting, hubMarkDelegationCancelled, hubRequest,
   hubSetDelegationSettings, hubSetViewSettings, replayPresenceSeed,
 } from './index';
 import { createGroupClient } from './groups';
@@ -154,6 +154,8 @@ export function registerHubIpc(): void {
   // 重派单点（待派发重试 RM-M21-5 / 失败重派换 delegation_id——目标解析复用
   // dispatch-submit 调度单源，委派走既有管道）
   ipcMain.handle('hub:delegationBoard', () => hubDelegationBoard());
+  // 本机等待确认会话清单（M2.1 T12 worker 等待卡数据源）
+  ipcMain.handle('hub:localWaiting', () => hubLocalWaiting());
   const redispatchPorts: RedispatchPorts = {
     getTask: (taskId) => getTask(taskId),
     workspaceNameOf: (workspaceId) => listWorkspaces().find((w) => w.id === workspaceId)?.name ?? null,

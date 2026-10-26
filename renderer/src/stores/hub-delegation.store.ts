@@ -45,6 +45,8 @@ interface HubDelegationState {
   sessionIds: Record<string, string>;
   /** failed 附因（taskId → reason 原文；人话解释在组件层渲染） */
   reasons: Record<string, string>;
+  /** 等待确认标志（taskId → kind waiting-input 拍；恢复拍/终态清除——监控台在跑行 T12 徽标） */
+  waiting: Record<string, boolean>;
 
   /** 挂载时调用：订阅四推送 + 拉取；返回解订阅函数 */
   init(): () => void;
@@ -106,6 +108,11 @@ function patchTask(taskId: string, patch: Partial<HubTaskRecord>): void {
   });
 }
 
+/** 终态清等待标志（徽标不粘滞） */
+function clearWaiting(taskId: string): void {
+  useHubDelegationStore.setState((s) => ({ waiting: { ...s.waiting, [taskId]: false } }));
+}
+
 export const useHubDelegationStore = create<HubDelegationState>((set) => {
   const refresh = async (): Promise<void> => {
     set({ loading: true });
@@ -126,6 +133,7 @@ export const useHubDelegationStore = create<HubDelegationState>((set) => {
     agentSlugs: {},
     sessionIds: {},
     reasons: {},
+    waiting: {},
 
     init() {
       const disposers = [
@@ -133,19 +141,24 @@ export const useHubDelegationStore = create<HubDelegationState>((set) => {
           bufferProgress(evt);
           set((s) => ({ sessionIds: { ...s.sessionIds, [evt.taskId]: evt.sessionId } }));
           patchTask(evt.taskId, { status: 'running', updatedAt: Date.now() });
+          // T12：等待标志随 kind 翻转（恢复拍无 kind 自然清除）
+          set((s) => ({ waiting: { ...s.waiting, [evt.taskId]: evt.kind === 'waiting-input' } }));
         }),
         ipc.hub.onTaskCompleted((evt: HubTaskTerminalEvent) => {
           flushBatch(evt.taskId);
           patchTask(evt.taskId, { status: 'done', updatedAt: Date.now() });
+          clearWaiting(evt.taskId);
         }),
         ipc.hub.onTaskFailed((evt: HubTaskTerminalEvent) => {
           flushBatch(evt.taskId);
           set((s) => (evt.reason !== undefined ? { reasons: { ...s.reasons, [evt.taskId]: evt.reason } } : s));
           patchTask(evt.taskId, { status: 'failed', updatedAt: Date.now() });
+          clearWaiting(evt.taskId);
         }),
         ipc.hub.onTaskInterrupted((evt: HubTaskTerminalEvent) => {
           flushBatch(evt.taskId);
           patchTask(evt.taskId, { status: 'interrupted', updatedAt: Date.now() });
+          clearWaiting(evt.taskId);
         }),
       ];
       void refresh();

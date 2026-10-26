@@ -22,7 +22,7 @@ import { applyMirrorSnapshot } from './mirror-applier';
 import { bridgeGroupChanged } from './groups';
 import type { HubResponderResult } from './client';
 import { createDelegationRunner, type AssignedTaskEvent, type DelegationRunner } from './delegation-runner';
-import { wireDelegationRunnerPorts } from './delegation-ports';
+import { sessionWaitingProduct, wireDelegationRunnerPorts } from './delegation-ports';
 import { createHubDelegationSettingsStore, type HubDelegationSettings } from './delegation-settings';
 import { createHubDelegationStore, type DelegationRecord } from './delegation-store';
 import {
@@ -172,6 +172,22 @@ export function hubDelegationBoard(): {
     progress: createDelegationProgressStore(getDb()).list(),
     received: createHubDelegationStore(getDb()).list(),
   };
+}
+
+/**
+ * 本机等待确认的委派会话清单（IPC hub:localWaiting，M2.1 T12 worker 侧等待卡）：
+ * running 委派账本 × sessionWaitingProduct（T11 同一真源与门控——write-blocked
+ * 未决登记 + streaming 门控），等待中的会话 → { sessionId, summary }。恢复
+ * （grant/deny 处置）即从登记面清除，下次拉取自动去态。
+ */
+export function hubLocalWaiting(): Array<{ sessionId: string; summary: string }> {
+  const out: Array<{ sessionId: string; summary: string }> = [];
+  for (const record of createHubDelegationStore(getDb()).list()) {
+    if (record.state !== 'running') continue;
+    const waiting = sessionWaitingProduct(record.sessionId);
+    if (waiting.waiting) out.push({ sessionId: record.sessionId, summary: waiting.summary });
+  }
+  return out;
 }
 
 /** task.cancel 回执 → 外派行 cancelled 同步（IPC hub:taskCancel 成功路径消费） */
@@ -386,11 +402,18 @@ function startClient(
       // task.cancelled 无 leader 推送（hub 只定向→目标节点停跑；leader 的取消态
       // 由 task.cancel RPC 回执 + 下一次 task.list 拉取对账），不造无生产者的通道。
       if (evt.method === EVT.taskProgress) {
-        const p = evt.payload as { taskId?: unknown; sessionId?: unknown; lastSeq?: unknown; excerpt?: unknown };
+        // kind（M2.1 T11b 协议 v0.1.4）：'waiting-input' = worker 等用户确认——
+        // 单值枚举校验（异形剥除，permissionTier 先例），leader 摘要 kv 与
+        // renderer 推送两路透传（T12 看板等待卡消费）
+        const p = evt.payload as { taskId?: unknown; sessionId?: unknown; lastSeq?: unknown; excerpt?: unknown; kind?: unknown };
         if (typeof p.taskId === 'string' && typeof p.sessionId === 'string' && typeof p.lastSeq === 'number' && typeof p.excerpt === 'string') {
+          const kind = p.kind === 'waiting-input' ? 'waiting-input' : undefined;
           // T9 外派投影：进度拍先回写本地行（摘要 + running 映射），再桥 renderer
-          ensureDelegationSync().handleProgress({ taskId: p.taskId, lastSeq: p.lastSeq, excerpt: p.excerpt });
-          broadcast('hub:taskProgress', { taskId: p.taskId, sessionId: p.sessionId, lastSeq: p.lastSeq, excerpt: p.excerpt });
+          ensureDelegationSync().handleProgress({ taskId: p.taskId, lastSeq: p.lastSeq, excerpt: p.excerpt, kind });
+          broadcast('hub:taskProgress', {
+            taskId: p.taskId, sessionId: p.sessionId, lastSeq: p.lastSeq, excerpt: p.excerpt,
+            ...(kind !== undefined ? { kind } : {}),
+          });
         }
         return;
       }

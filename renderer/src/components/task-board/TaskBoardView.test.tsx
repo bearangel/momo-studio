@@ -37,7 +37,8 @@ const mockApi = {
     preview: vi.fn(),
   },
   // M2.1 T9：TaskBoardView 挂 DelegationBoardProvider——hub 面降级桩
-  // （空账本/空进度/未接入；订阅通道返回 noop 解订阅——外派卡退化为行状态反推）
+  // （空账本/空进度/未接入；订阅通道返回 noop 解订阅——外派卡退化为行状态反推）；
+  // T12 localWaiting 拉取 + sandbox.onWriteBlocked 订阅同走降级桩
   hub: {
     delegationBoard: vi.fn().mockResolvedValue({ progress: {}, received: [] }),
     taskList: vi.fn().mockResolvedValue({ tasks: [] }),
@@ -45,10 +46,14 @@ const mockApi = {
       configured: false, state: 'disconnected', hubUrl: null, nodeName: null, nodeId: null, lastError: null,
     }),
     groupList: vi.fn().mockResolvedValue({ groups: [] }),
+    localWaiting: vi.fn().mockResolvedValue([]),
     onTaskProgress: vi.fn().mockReturnValue(() => {}),
     onTaskCompleted: vi.fn().mockReturnValue(() => {}),
     onTaskFailed: vi.fn().mockReturnValue(() => {}),
     onTaskInterrupted: vi.fn().mockReturnValue(() => {}),
+  },
+  sandbox: {
+    onWriteBlocked: vi.fn().mockReturnValue(() => {}),
   },
 };
 

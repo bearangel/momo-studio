@@ -79,6 +79,9 @@ export interface DelegationProgressEntry {
   excerpt: string;
   lastSeq: number;
   at: number;
+  /** 等待确认标志（T12）：kind='waiting-input' 拍置 true；恢复拍（无 kind）清除。
+   *  可选——T11 前落库的旧条目无此字段（=== true 判定，不误报）。 */
+  waiting?: boolean;
 }
 
 const PROGRESS_KEY = 'hub_delegation_progress';
@@ -93,7 +96,8 @@ function parseProgress(raw: string | undefined): Record<string, DelegationProgre
       if (typeof v !== 'object' || v === null) continue;
       const e = v as Partial<DelegationProgressEntry>;
       if (typeof e.excerpt === 'string' && typeof e.lastSeq === 'number' && typeof e.at === 'number') {
-        out[k] = { excerpt: e.excerpt, lastSeq: e.lastSeq, at: e.at };
+        // waiting 仅 true 落形——旧条目/T12 前数据零改写（toEqual 形状锁不破）
+        out[k] = { excerpt: e.excerpt, lastSeq: e.lastSeq, at: e.at, ...(e.waiting === true ? { waiting: true } : {}) };
       }
     }
   } catch {
@@ -164,8 +168,8 @@ export interface DelegationSyncPorts {
 }
 
 export interface DelegationSync {
-  /** leader：task.progress 拍 → running 映射 + 进度摘要 */
-  handleProgress(evt: { taskId: string; lastSeq: number; excerpt: string }): void;
+  /** leader：task.progress 拍 → running 映射 + 进度摘要（kind=waiting-input → kv waiting 标志，T12） */
+  handleProgress(evt: { taskId: string; lastSeq: number; excerpt: string; kind?: 'waiting-input' }): void;
   /** leader：task.completed / task.failed / task.interrupted 终态 */
   handleTerminal(status: 'done' | 'failed' | 'interrupted', taskId: string, reason?: string): void;
   /** leader：task.cancel 回执（hub 账本权威 → 本地行同步） */
@@ -179,6 +183,8 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
    * 映射态写行（粘滞语义）：
    *   - 行不存在 → 静默（手工 task.delegate 等无看板行的委派）
    *   - 行已终态且目标态不同 → 丢弃（迟到事件不回退；重派走 retryDispatch 换行复位）
+   *   - 同态零写（T12 Low-1：终态同态重写会重盖章 completedAt/updatedAt 并丢
+   *     first-write 语义——重复 done 推送不改变 completedAt）
    *   - interrupted→pending 是唯一「非终态回落」，显式放行（等待续传语义）
    */
   const applyMapped = (
@@ -190,18 +196,24 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
     if (!row) return;
     const next = DELEGATION_STATUS_TO_TASK[hubStatus];
     if (isTerminal(row.status) && row.status !== next) return;
-    if (row.status === next && Object.keys(extra).length === 0) return;
+    if (row.status === next) return;
     ports.updateTask(row.id, { status: next, ...extra });
   };
 
-  const saveProgress = (delegationId: string, excerpt: string, lastSeq: number): void => {
-    ports.saveProgress(delegationId, { excerpt, lastSeq, at: ports.now() });
+  const saveProgress = (delegationId: string, excerpt: string, lastSeq: number, kind?: 'waiting-input'): void => {
+    ports.saveProgress(delegationId, {
+      excerpt,
+      lastSeq,
+      at: ports.now(),
+      ...(kind === 'waiting-input' ? { waiting: true } : {}),
+    });
   };
 
   return {
     handleProgress(evt) {
-      // 摘要与行状态同拍落（摘要先写——行不存在时摘要仍保留，重派后可续显）
-      saveProgress(evt.taskId, evt.excerpt, evt.lastSeq);
+      // 摘要与行状态同拍落（摘要先写——行不存在时摘要仍保留，重派后可续显）；
+      // waiting 标志随 kind 翻转：等待拍置 true，恢复拍（无 kind）自然清除
+      saveProgress(evt.taskId, evt.excerpt, evt.lastSeq, evt.kind);
       const row = ports.findTaskByDelegation(evt.taskId);
       if (row && !isTerminal(row.status)) {
         applyMapped(evt.taskId, 'running', { startedAt: row.startedAt ?? ports.now() });

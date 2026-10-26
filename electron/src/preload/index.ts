@@ -76,6 +76,7 @@ import type {
   HubViewLocalTask,
   HubViewAppendedEvent,
   DelegationBoardResult,
+  HubLocalWaitingEntry,
   RetryDispatchResult,
 } from '../../../renderer/src/ipc/types';
 
@@ -664,6 +665,8 @@ const api: ApiSurface = {
     delegationBoard: () => invoke<DelegationBoardResult>('hub:delegationBoard'),
     retryDispatch: (input: { taskId: string }) =>
       invoke<RetryDispatchResult>('hub:retryDispatch', input),
+    // 本机等待确认会话清单（M2.1 T12 worker 等待卡）
+    localWaiting: () => invoke<HubLocalWaitingEntry[]>('hub:localWaiting'),
     onViewAppended: (callback) => {
       const handler = (_e: IpcRendererEvent, payload: HubViewAppendedEvent): void => callback(payload);
       ipcRenderer.on('hub:viewAppended', handler);

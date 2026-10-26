@@ -39,7 +39,7 @@ const MIRROR_CHANNELS = ['hub:snapshotBuildUpload', 'hub:mirrorWorkspace', 'hub:
 const DELEGATION_CHANNELS = ['hub:getDelegationSettings', 'hub:setDelegationSettings'];
 const TASK_CHANNELS = ['hub:taskList', 'hub:taskDelegate', 'hub:taskCancel'];
 const ROUTING_CHANNELS = ['hub:submitRoutedTask', 'hub:routingPrecheck'];
-const BOARD_CHANNELS = ['hub:delegationBoard', 'hub:retryDispatch'];
+const BOARD_CHANNELS = ['hub:delegationBoard', 'hub:retryDispatch', 'hub:localWaiting'];
 const VIEW_CHANNELS = [
   'hub:getViewSettings', 'hub:setViewSettings',
   'hub:viewWorkspace', 'hub:viewSessions', 'hub:viewMessages', 'hub:viewTasks',
@@ -49,7 +49,7 @@ const VIEW_CHANNELS = [
 beforeEach(() => { handlers.clear(); vi.clearAllMocks(); });
 
 describe('hub IPC 接线', () => {
-  it('注册三十一通道（M2.1 T6 增镜像登记查询、T8 增路由提交两通道、T9 增看板投影两通道）；getStatus 透传 manager', async () => {
+  it('注册三十二通道（M2.1 T6 增镜像登记查询、T8 增路由提交两通道、T9 增看板投影两通道、T12 增本机等待清单）；getStatus 透传 manager', async () => {
     registerHubIpc();
     expect([...handlers.keys()].sort()).toEqual([
       ...GROUP_CHANNELS,

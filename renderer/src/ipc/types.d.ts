@@ -2870,6 +2870,9 @@ export interface HubTaskProgressEvent {
   sessionId: string;
   lastSeq: number;
   excerpt: string;
+  /** 等待确认标注（M2.1 T11b 协议 v0.1.4）：'waiting-input' = worker 等用户确认；
+   *  恢复拍无此字段（leader 摘要 kv waiting 标志随其清除，T12 等待卡消费） */
+  kind?: 'waiting-input';
 }
 
 /** 终态推送载荷（协议 TaskTerminalEvent 镜像——completed/failed{reason}/interrupted 共用） */
@@ -2885,6 +2888,14 @@ export interface HubDelegationProgressEntry {
   excerpt: string;
   lastSeq: number;
   at: number;
+  /** 等待确认标志（T12）：等待拍 true；恢复拍清除（字段缺席 = 非等待） */
+  waiting?: boolean;
+}
+
+/** 本机等待确认的委派会话（hub:localWaiting 条目——worker 等待卡数据源） */
+export interface HubLocalWaitingEntry {
+  sessionId: string;
+  summary: string;
 }
 
 /** worker 侧本地委派记录（delegation-store DelegationRecord 镜像——byNode=派单来源节点） */
@@ -3057,6 +3068,8 @@ export interface HubApiSurface {
    * delegation_id）；无候选/瞬断 → dispatched=false 行留待处理
    */
   retryDispatch(input: { taskId: string }): Promise<RetryDispatchResult>;
+  /** 本机等待确认的委派会话清单（M2.1 T12）：worker 等待卡数据源；恢复自动去态 */
+  localWaiting(): Promise<HubLocalWaitingEntry[]>;
   /** 连接状态变化推送订阅（解订阅函数） */
   onStateChanged(callback: (payload: HubStateChangedEvent) => void): () => void;
   /** 节点上下线推送订阅（解订阅函数） */

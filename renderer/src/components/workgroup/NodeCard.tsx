@@ -10,7 +10,8 @@
 // - 「查看」（T4 接线）：canView 由 GroupMonitor 计算（组长 × 在线 × 非本机——
 //   M2 GroupPanel 迁移语义），禁用态 title 提示门控原因；点击回调
 //   onOpenView(nodeId, nodeName) → WorkgroupView 接 S3b 选择器
-// - 在跑行：running → violet spinner +「执行中」；pending → 警示图标 +「等待节点确认」
+// - 在跑行：running → violet spinner +「执行中」；pending / running×waiting 集
+//   （T12 kind waiting-input 拍）→ 警示图标 +「等待节点确认」
 //   （「在跑」语义同侧栏负载计数：两态同计）；终态任务不进行
 import { CircleHelp, Eye, Monitor } from 'lucide-react';
 import type { HubGroupMember, HubTaskRecord } from '../../ipc/types';
@@ -24,6 +25,8 @@ interface NodeCardProps {
   isSelf: boolean;
   /** 该节点的全部委派任务（已按 targetNodeId 过滤；在跑行/镜像推导均在此消费） */
   tasks: HubTaskRecord[];
+  /** 等待确认集（taskId → kind waiting-input 拍——T12 徽标；恢复拍清除） */
+  waiting?: Record<string, boolean>;
   /** T4：查看入口可用性（组长 × 在线 × 非本机——由 GroupMonitor 统一计算） */
   canView: boolean;
   /** T4 接入：进入成员工作空间只读视图 */
@@ -34,7 +37,7 @@ function shortNodeId(nodeId: string): string {
   return nodeId.length > 8 ? `${nodeId.slice(0, 4)}…${nodeId.slice(-4)}` : nodeId;
 }
 
-export function NodeCard({ node, isLeader, isSelf, tasks, canView, onOpenView }: NodeCardProps) {
+export function NodeCard({ node, isLeader, isSelf, tasks, waiting = {}, canView, onOpenView }: NodeCardProps) {
   const runningTasks = tasks.filter((t) => t.status === 'running' || t.status === 'pending');
   const mirroredNames = [...new Set(tasks.map((t) => t.workspaceName))];
   const idle = runningTasks.length === 0;
@@ -87,17 +90,17 @@ export function NodeCard({ node, isLeader, isSelf, tasks, canView, onOpenView }:
         </span>
       </div>
       {runningTasks.map((t) => (
-        <RunningRow key={t.taskId} task={t} />
+        <RunningRow key={t.taskId} task={t} waiting={waiting[t.taskId] === true} />
       ))}
     </div>
   );
 }
 
-function RunningRow({ task }: { task: HubTaskRecord }) {
-  const running = task.status === 'running';
+function RunningRow({ task, waiting = false }: { task: HubTaskRecord; waiting?: boolean }) {
+  const waitingShown = waiting || task.status === 'pending';
   return (
     <div className="flex items-center gap-2 rounded-md bg-surface-2 px-[9px] py-1.5 text-xs">
-      {running ? (
+      {!waitingShown ? (
         <span
           role="img"
           aria-label="执行中"
@@ -108,10 +111,10 @@ function RunningRow({ task }: { task: HubTaskRecord }) {
       )}
       <span className="min-w-0 flex-1 truncate text-secondary">{task.title}</span>
       <Badge
-        tone={running ? 'violet' : 'warning'}
+        tone={waitingShown ? 'warning' : 'violet'}
         className={cn('h-auto px-1.5 py-0.5 text-[10px] leading-none')}
       >
-        {running ? '执行中' : '等待节点确认'}
+        {waitingShown ? '等待节点确认' : '执行中'}
       </Badge>
     </div>
   );

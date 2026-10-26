@@ -61,7 +61,7 @@ async function freshInit(fakeTimers = false): Promise<void> {
   const { useHubDelegationStore } = await import('./hub-delegation.store');
   useHubDelegationStore.setState({
     tasks: [], loading: false, error: null,
-    streams: {}, prompts: {}, agentSlugs: {}, sessionIds: {}, reasons: {},
+    streams: {}, prompts: {}, agentSlugs: {}, sessionIds: {}, reasons: {}, waiting: {},
   });
   useHubDelegationStore.getState().init();
   if (fakeTimers) {
@@ -103,6 +103,22 @@ describe('列表与事件驱动状态迁移', () => {
     const { useHubDelegationStore } = await import('./hub-delegation.store');
     completedCb!({ taskId: 'ghost' });
     expect(useHubDelegationStore.getState().tasks).toHaveLength(1);
+  });
+
+  it('T12 等待标志：kind=waiting-input → waiting 置 true；恢复拍/终态清除（监控台在跑行消费）', async () => {
+    await freshInit();
+    const { useHubDelegationStore } = await import('./hub-delegation.store');
+    expect(useHubDelegationStore.getState().waiting['tk-1']).toBeFalsy();
+
+    progressCb!({ taskId: 'tk-1', sessionId: 'sess-9', lastSeq: 1, excerpt: 'a', kind: 'waiting-input' });
+    expect(useHubDelegationStore.getState().waiting['tk-1']).toBe(true);
+
+    progressCb!({ taskId: 'tk-1', sessionId: 'sess-9', lastSeq: 2, excerpt: 'b' });
+    expect(useHubDelegationStore.getState().waiting['tk-1']).toBe(false);
+
+    progressCb!({ taskId: 'tk-1', sessionId: 'sess-9', lastSeq: 3, excerpt: 'c', kind: 'waiting-input' });
+    completedCb!({ taskId: 'tk-1' });
+    expect(useHubDelegationStore.getState().waiting['tk-1']).toBe(false);
   });
 
   it('load 失败 → error 呈现不吞', async () => {

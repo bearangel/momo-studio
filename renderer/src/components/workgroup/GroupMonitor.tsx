@@ -42,6 +42,7 @@ export function GroupMonitor({ onOpenView }: GroupMonitorProps) {
   const inviteCodes = useHubGroupStore((s) => s.inviteCodes);
   const openMirrorWizard = useHubMirrorStore((s) => s.openWizard);
   const tasks = useHubDelegationStore((s) => s.tasks);
+  const waiting = useHubDelegationStore((s) => s.waiting);
   const selfNodeId = useHubStore((s) => s.status?.nodeId ?? null);
 
   const group = effectiveSelectedGroup(groups, selectedGroupId);
@@ -97,6 +98,7 @@ export function GroupMonitor({ onOpenView }: GroupMonitorProps) {
             key={m.nodeId}
             node={m}
             tasks={tasks.filter((t) => t.targetNodeId === m.nodeId)}
+            waiting={waiting}
             isLeader={m.nodeId === group.leaderNodeId}
             isSelf={m.nodeId === selfNodeId}
             canView={isLeader && m.nodeId !== selfNodeId && m.online}

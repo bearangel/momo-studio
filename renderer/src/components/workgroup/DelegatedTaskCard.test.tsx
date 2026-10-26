@@ -10,7 +10,8 @@
 //   - waiting 占位（T11/T12 接通前无生产者）：waitingSummary=null → 等待态零渲染
 // 纯组件测试：board context 直注入（IPC 边界由 provider/BoardCanvas 层承接）。
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import type { ReactElement } from 'react';
 import {
   DelegatedTaskCard,
   DelegationBoardProvider,
@@ -20,13 +21,34 @@ import { showToast } from '../ui/Toast';
 import type { TaskRow } from '../../ipc/types';
 import { ipc } from '../../ipc/client';
 
+/** 推送订阅捕获（vi.hoisted——vi.mock 工厂与用例体共享） */
+const h = vi.hoisted(() => {
+  const subs: Record<string, Array<(p: unknown) => void>> = {};
+  return { subs };
+});
+function fire(channel: string, payload: unknown): void {
+  for (const cb of h.subs[channel] ?? []) cb(payload);
+}
+
 vi.mock('../../ipc/client', () => ({
   ipc: {
     hub: {
       taskCancel: vi.fn().mockResolvedValue({ ok: true }),
       retryDispatch: vi.fn().mockResolvedValue({ dispatched: true, nodeId: 'node-b', delegationId: 'hub-new' }),
+      delegationBoard: vi.fn().mockResolvedValue({ progress: {}, received: [] }),
+      taskList: vi.fn().mockResolvedValue({ tasks: [] }),
+      getStatus: vi.fn().mockResolvedValue({ nodeId: 'node-self', state: 'online' }),
+      groupList: vi.fn().mockResolvedValue({ groups: [] }),
+      localWaiting: vi.fn().mockResolvedValue([]),
+      onTaskProgress: vi.fn((cb: (p: unknown) => void) => { (h.subs.progress ??= []).push(cb); return () => {}; }),
+      onTaskCompleted: vi.fn((cb: (p: unknown) => void) => { (h.subs.completed ??= []).push(cb); return () => {}; }),
+      onTaskFailed: vi.fn((cb: (p: unknown) => void) => { (h.subs.failed ??= []).push(cb); return () => {}; }),
+      onTaskInterrupted: vi.fn((cb: (p: unknown) => void) => { (h.subs.interrupted ??= []).push(cb); return () => {}; }),
     },
     task: { transition: vi.fn().mockResolvedValue({}) },
+    sandbox: {
+      onWriteBlocked: vi.fn((cb: (p: unknown) => void) => { (h.subs.writeBlocked ??= []).push(cb); return () => {}; }),
+    },
   },
 }));
 vi.mock('../ui/Toast', () => ({ showToast: vi.fn() }));
@@ -73,6 +95,7 @@ const EMPTY_BOARD: DelegationBoardContextValue = {
   ledger: {},
   progress: {},
   received: {},
+  localWaiting: {},
   refreshTasks: () => {},
 };
 
@@ -94,6 +117,7 @@ function openMenu(): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  for (const key of Object.keys(h.subs)) delete h.subs[key];
 });
 
 // ── leader 侧六态徽标 ────────────────────────────────────────────────────────
@@ -281,6 +305,133 @@ describe('DelegatedTaskCard — waiting 态（占位）', () => {
     );
     expect(screen.getByText('等你确认')).toBeInTheDocument();
     expect(screen.getByText(/打开会话批准\/拒绝/)).toBeInTheDocument();
+  });
+});
+
+// ── waiting 点亮（T12）：等待摘要由 board 上下文派生（prop 占位保留）─────────
+
+describe('DelegatedTaskCard — waiting 派生（T12 点亮）', () => {
+  const leaderUi = (board: DelegationBoardContextValue): ReactElement => (
+    <DelegationBoardProvider value={board}>
+      <DelegatedTaskCard
+        task={mkTask({ id: 'T-100', title: '为支付回调写集成测试', status: 'in_progress' })}
+        onSelect={() => {}}
+      />
+    </DelegationBoardProvider>
+  );
+  const workerUi = (board: DelegationBoardContextValue): ReactElement => (
+    <DelegationBoardProvider value={board}>
+      <DelegatedTaskCard
+        task={mkTask({
+          id: 'T-900',
+          title: '为支付回调写集成测试',
+          status: 'in_progress',
+          routing: { mode: 'node', groupId: '', targetNodeId: 'node-self' },
+        })}
+        onSelect={() => {}}
+      />
+    </DelegationBoardProvider>
+  );
+
+  it('Q-4. leader 派生（progress.waiting=true，无 prop）→ 等待节点确认 + warning 左边 + tint 摘要行', () => {
+    render(
+      leaderUi(boardCtx({
+        progress: { 'T-8f21abcd': { excerpt: 'agent 等待写授权：rm -rf node_modules', lastSeq: 15, at: 9, waiting: true } },
+      })),
+    );
+    expect(screen.getByText('等待节点确认')).toBeInTheDocument();
+    const card = screen.getByRole('button', { name: /为支付回调/ });
+    expect(card.className).toContain('border-l-status-warning');
+    const line = screen.getByText('agent 等待写授权：rm -rf node_modules').closest('[data-progress-line]');
+    expect(line?.className).toContain('bg-status-warning-tint');
+  });
+
+  it('Q-5. leader 恢复（waiting 清除）→ 执行中回归（RF#3：卡不粘滞）', () => {
+    const lit = boardCtx({ progress: { 'T-8f21abcd': { excerpt: '等待中', lastSeq: 15, at: 9, waiting: true } } });
+    const resumed = boardCtx({ progress: { 'T-8f21abcd': { excerpt: '续跑产出', lastSeq: 16, at: 10 } } });
+    const { rerender } = render(leaderUi(lit));
+    expect(screen.getByText('等待节点确认')).toBeInTheDocument();
+    rerender(leaderUi(resumed));
+    expect(screen.queryByText('等待节点确认')).not.toBeInTheDocument();
+    expect(screen.getByText('执行中')).toBeInTheDocument();
+  });
+
+  it('Q-6. worker 派生（localWaiting 命中 received.sessionId）→ 等你确认 + 加粗引导 + tint 摘要', () => {
+    render(
+      workerUi(boardCtx({
+        selfNodeId: 'node-self',
+        nodeNames: { 'node-leader': 'mac-main' },
+        received: {
+          'T-8f21abcd': {
+            taskId: 'T-8f21abcd', sessionId: 'sess-1', workspaceId: 'ws-1', workspaceName: 'dev-ws',
+            title: '为支付回调写集成测试', byNode: 'node-leader', state: 'running', createdAt: 1, updatedAt: 2,
+          },
+        },
+        localWaiting: { 'sess-1': 'agent 等待写授权：rm -rf node_modules' },
+      })),
+    );
+    expect(screen.getByText('等你确认')).toBeInTheDocument();
+    expect(screen.getByText(/打开会话批准\/拒绝/)).toBeInTheDocument();
+    expect(screen.getByText('agent 等待写授权：rm -rf node_modules')).toBeInTheDocument();
+    const card = screen.getByRole('button', { name: /为支付回调/ });
+    expect(card.className).toContain('border-l-status-warning');
+  });
+
+  it('Q-7. worker 恢复（grant/deny 清登记 → localWaiting 清）→ 执行中回归', () => {
+    const received = {
+      'T-8f21abcd': {
+        taskId: 'T-8f21abcd', sessionId: 'sess-1', workspaceId: 'ws-1', workspaceName: 'dev-ws',
+        title: '为支付回调写集成测试', byNode: 'node-leader', state: 'running' as const, createdAt: 1, updatedAt: 2,
+      },
+    };
+    const lit = boardCtx({ selfNodeId: 'node-self', received, localWaiting: { 'sess-1': '等待写授权' } });
+    const resumed = boardCtx({ selfNodeId: 'node-self', received, localWaiting: {} });
+    const { rerender } = render(workerUi(lit));
+    expect(screen.getByText('等你确认')).toBeInTheDocument();
+    rerender(workerUi(resumed));
+    expect(screen.queryByText('等你确认')).not.toBeInTheDocument();
+    expect(screen.getByText('执行中')).toBeInTheDocument();
+  });
+});
+
+// ── 内置 Provider（无 value 直注入）：推送链 + Low-2 闭包修复 ────────────────
+
+describe('DelegationBoardProvider — 内置拉取（T12）', () => {
+  const mountedUi = (refreshTasks?: () => void): ReactElement => (
+    <DelegationBoardProvider refreshTasks={refreshTasks}>
+      <DelegatedTaskCard
+        task={mkTask({ id: 'T-100', title: '为支付回调写集成测试', status: 'in_progress' })}
+        onSelect={() => {}}
+      />
+    </DelegationBoardProvider>
+  );
+
+  it('PROV-1. Low-2：refreshTasks 换闭包（切 workspace）后终态推送刷新新闭包、不调旧闭包', async () => {
+    const oldWsRefresh = vi.fn();
+    const newWsRefresh = vi.fn();
+    const { rerender } = render(mountedUi(oldWsRefresh));
+    await waitFor(() => expect(h.subs.completed?.length).toBeGreaterThan(0));
+    rerender(mountedUi(newWsRefresh));
+    act(() => fire('completed', { taskId: 'T-8f21abcd' }));
+    expect(newWsRefresh).toHaveBeenCalled();
+    expect(oldWsRefresh).not.toHaveBeenCalled();
+  });
+
+  it('PROV-2. taskProgress kind=waiting-input → 等待点亮；恢复拍（无 kind）→ 回执行中', async () => {
+    render(mountedUi());
+    await waitFor(() => expect(h.subs.progress?.length).toBeGreaterThan(0));
+    act(() => {
+      fire('progress', {
+        taskId: 'T-8f21abcd', sessionId: 'sess-9', lastSeq: 15,
+        excerpt: 'agent 等待写授权：rm -rf node_modules', kind: 'waiting-input',
+      });
+    });
+    expect(await screen.findByText('等待节点确认')).toBeInTheDocument();
+    act(() => {
+      fire('progress', { taskId: 'T-8f21abcd', sessionId: 'sess-9', lastSeq: 16, excerpt: '续跑产出' });
+    });
+    expect(await screen.findByText('执行中')).toBeInTheDocument();
+    expect(screen.queryByText('等待节点确认')).not.toBeInTheDocument();
   });
 });
 

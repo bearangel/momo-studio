@@ -245,6 +245,53 @@ describe('delegation-sync — leader 侧状态回写（六态映射矩阵）', (
       sync.markCancelled('unknown');
     }).not.toThrow();
   });
+
+  // ── T12：leader 等待态（progress.kind='waiting-input' → 摘要 kv waiting 标志）──
+
+  it('A-10. waiting 拍（kind=waiting-input）→ 摘要 kv waiting:true + summary 进 excerpt', () => {
+    const w = makeWorld([delegatedRow({ status: 'in_progress', startedAt: 111 })]);
+    createDelegationSync(w.ports).handleProgress({
+      taskId: 'hub-task-1',
+      lastSeq: 15,
+      excerpt: 'agent 等待写授权：rm -rf node_modules',
+      kind: 'waiting-input',
+    });
+    expect(w.progress.get('hub-task-1')).toEqual({
+      excerpt: 'agent 等待写授权：rm -rf node_modules',
+      lastSeq: 15,
+      at: NOW,
+      waiting: true,
+    });
+    // 行状态不动（等待仍在 running 语义内）
+    expect(w.rows.get('T-100')!.status).toBe('in_progress');
+  });
+
+  it('A-11. 恢复拍（无 kind，与 runner 去 kind 同步）→ waiting 清除', () => {
+    const w = makeWorld([delegatedRow({ status: 'in_progress', startedAt: 111 })]);
+    const sync = createDelegationSync(w.ports);
+    sync.handleProgress({ taskId: 'hub-task-1', lastSeq: 15, excerpt: '等待中', kind: 'waiting-input' });
+    sync.handleProgress({ taskId: 'hub-task-1', lastSeq: 16, excerpt: '续跑产出' });
+    // waiting 标志清除（仅 true 落形纪律——undefined/false 均为「非等待」）
+    expect(w.progress.get('hub-task-1')?.waiting === true).toBe(false);
+    expect(w.progress.get('hub-task-1')?.excerpt).toBe('续跑产出');
+  });
+
+  it('A-12. Low-1：终态同态重写不重盖章——重复 done 推送 completedAt 不变、零行写', () => {
+    const w = makeWorld([delegatedRow({ status: 'in_progress', startedAt: 111 })]);
+    let writes = 0;
+    const baseUpdate = w.ports.updateTask;
+    w.ports.updateTask = (id, patch) => {
+      writes += 1;
+      baseUpdate(id, patch);
+    };
+    const sync = createDelegationSync(w.ports);
+    sync.handleTerminal('done', 'hub-task-1');
+    expect(w.rows.get('T-100')!.completedAt).toBe(NOW);
+    // 第二次 done（hub 账本对账重放/重复推送）——同态零写
+    sync.handleTerminal('done', 'hub-task-1');
+    expect(writes).toBe(1);
+    expect(w.rows.get('T-100')!.completedAt).toBe(NOW);
+  });
 });
 
 // ── Part B：worker 侧 delegation store 包装（收委派建行 + 四态同步）────────

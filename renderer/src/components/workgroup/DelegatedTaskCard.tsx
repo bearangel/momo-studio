@@ -10,13 +10,15 @@
 //   - 左 3px 状态色边：默认 status-violet（.routed）/ waiting status-warning（.routed-w）
 //   - 进度行：surface-2 圆角摘要（kv 持久 + hub:taskProgress 推送合并）；
 //     waiting 态 warning tint + worker 侧加粗「打开会话批准/拒绝」引导
-//   - waiting 占位（T11/T12 接通前无生产者）：waitingSummary=null → 等待态零渲染
+//   - waiting 点亮（T12）：摘要由上下文派生——leader=progress.waiting（kind
+//     waiting-input 拍）/ worker=localWaiting 命中 received.sessionId；prop
+//     waitingSummary 保留为直注入覆盖（测试）
 //   - 操作菜单：取消（可取消态；已派发走 hub cancel 既有链、待派发走本地行取消）/
 //     重试派发（仅待派发，RM-M21-5 手动驱动）/ 失败重派（仅 failed，主进程换
 //     delegation_id）
 // 外派卡不接拖拽（useSortable 零注册）：行状态由 hub 账本驱动，本地 move 会
 // 与远端真相打架——列间迁移只能经委派事件回写。
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Bot, CircleCheck, CircleHelp, CircleX, RefreshCw, RotateCcw, X, Zap } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import type {
@@ -44,10 +46,12 @@ export interface DelegationBoardContextValue {
   nodeNames: Record<string, string>;
   /** hub 委派账本（delegationId → 行——leader 侧六态/目标节点权威） */
   ledger: Record<string, HubTaskRecord>;
-  /** 进度摘要（delegationId → 最新条目；kv 持久 + 推送 live 合并） */
+  /** 进度摘要（delegationId → 最新条目；kv 持久 + 推送 live 合并；waiting=T12 等待标志） */
   progress: Record<string, HubDelegationProgressEntry>;
   /** worker 侧本地委派记录（delegationId → byNode 来源） */
   received: Record<string, HubReceivedDelegation>;
+  /** 本机等待确认会话（sessionId → 摘要——worker 等待卡数据源，T12） */
+  localWaiting: Record<string, string>;
   /** 动作后刷新看板任务行（5s 轮询之外的即时对账） */
   refreshTasks: () => void;
 }
@@ -58,15 +62,20 @@ const EMPTY_BOARD: DelegationBoardContextValue = {
   ledger: {},
   progress: {},
   received: {},
+  localWaiting: {},
   refreshTasks: () => {},
 };
 
 const DelegationBoardContext = createContext<DelegationBoardContextValue>(EMPTY_BOARD);
 
+/** localWaiting 拉取节拍：5s 轮询（grant/deny 处置无推送通道，轮询兜底去态） */
+const LOCAL_WAITING_POLL_MS = 5000;
+
 /**
  * 看板级外派数据 Provider：value 直注入（测试）；缺省内部拉取——delegationBoard
  * 引导读 + hub 账本 + 组成员名表 + 本机 nodeId，订阅 progress/终态推送（终态即
- * 时刷新任务行）。全部 IPC 失败降级空值（外派卡退化为行状态反推渲染）。
+ * 时刷新任务行）+ localWaiting 轮询（T12 worker 等待卡）。全部 IPC 失败降级空值
+ * （外派卡退化为行状态反推渲染）。
  */
 export function DelegationBoardProvider({
   value,
@@ -102,19 +111,43 @@ function useDelegationBoardData(refreshTasks?: () => void): DelegationBoardConte
   const [nodeNames, setNodeNames] = useState<Record<string, string>>({});
   const [selfNodeId, setSelfNodeId] = useState<string | null>(null);
   const [liveProgress, setLiveProgress] = useState<Record<string, HubDelegationProgressEntry>>({});
+  const [localWaiting, setLocalWaiting] = useState<Record<string, string>>({});
+
+  // T12 Low-2：终态推送回调用 refreshTasks 闭包——空依赖订阅若直捕会在切
+  // workspace 后仍调旧闭包（刷旧 ws 行、新 ws 不对账）。经 ref 实时取最新。
+  const refreshRef = useRef(refreshTasks);
+  useEffect(() => {
+    refreshRef.current = refreshTasks;
+  });
+
+  const fetchLocalWaiting = useCallback(async (): Promise<void> => {
+    try {
+      const rows = await ipc.hub.localWaiting();
+      setLocalWaiting(Object.fromEntries(rows.map((r) => [r.sessionId, r.summary])));
+    } catch {
+      setLocalWaiting({});
+    }
+  }, []);
 
   useEffect(() => {
     const disposers = [
       ipc.hub.onTaskProgress((evt) => {
         setLiveProgress((prev) => ({
           ...prev,
-          [evt.taskId]: { excerpt: evt.excerpt, lastSeq: evt.lastSeq, at: Date.now() },
+          [evt.taskId]: {
+            excerpt: evt.excerpt,
+            lastSeq: evt.lastSeq,
+            at: Date.now(),
+            waiting: evt.kind === 'waiting-input',
+          },
         }));
       }),
       // 终态：即时刷新任务行（主进程 delegation-sync 已回写，拉取对账）
-      ipc.hub.onTaskCompleted(() => refreshTasks?.()),
-      ipc.hub.onTaskFailed(() => refreshTasks?.()),
-      ipc.hub.onTaskInterrupted(() => refreshTasks?.()),
+      ipc.hub.onTaskCompleted(() => refreshRef.current?.()),
+      ipc.hub.onTaskFailed(() => refreshRef.current?.()),
+      ipc.hub.onTaskInterrupted(() => refreshRef.current?.()),
+      // writeBlocked 推送（T12）：新等待登记即时上卡（不等轮询窗）
+      ipc.sandbox.onWriteBlocked(() => void fetchLocalWaiting()),
     ];
     void ipc.hub.delegationBoard().then(setBoard).catch(() => {});
     void ipc.hub
@@ -137,10 +170,14 @@ function useDelegationBoardData(refreshTasks?: () => void): DelegationBoardConte
         setNodeNames(names);
       })
       .catch(() => {});
-    return () => disposers.forEach((d) => d());
-    // refreshTasks 由调用方按 workspace 闭包；数据拉取只在挂载时做一次
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    void fetchLocalWaiting();
+    const pollTimer = window.setInterval(() => void fetchLocalWaiting(), LOCAL_WAITING_POLL_MS);
+    return () => {
+      disposers.forEach((d) => d());
+      window.clearInterval(pollTimer);
+    };
+    // 数据拉取只在挂载时做一次（ipc 调用非响应式依赖）；refreshTasks 经 ref 实时取（订阅不重建）
+  }, [fetchLocalWaiting]);
 
   return useMemo(
     () => ({
@@ -149,9 +186,10 @@ function useDelegationBoardData(refreshTasks?: () => void): DelegationBoardConte
       ledger,
       progress: { ...(board?.progress ?? {}), ...liveProgress },
       received: Object.fromEntries((board?.received ?? []).map((r) => [r.taskId, r])),
+      localWaiting,
       refreshTasks: refreshTasks ?? (() => {}),
     }),
-    [board, ledger, nodeNames, selfNodeId, liveProgress, refreshTasks],
+    [board, ledger, nodeNames, selfNodeId, liveProgress, localWaiting, refreshTasks],
   );
 }
 
@@ -187,8 +225,9 @@ interface DelegatedTaskCardProps {
   onSelect: () => void;
   selected?: boolean;
   /**
-   * 等待确认摘要（leader「等待节点确认」/ worker「等你确认」）。
-   * T11/T12 接通前无生产者——null=等待态零渲染（占位禁用）。
+   * 等待确认摘要覆盖（leader「等待节点确认」/ worker「等你确认」）。
+   * 缺省时由上下文派生（T12 点亮）：leader=progress.waiting 条目 / worker=
+   * localWaiting 命中 received.sessionId；null=无覆盖（走派生）。
    */
   waitingSummary?: string | null;
 }
@@ -208,7 +247,18 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
     return inferHubStatus(task);
   }, [board.ledger, delegationId, isWorkerView, received, task]);
 
-  const waiting = waitingSummary != null && (hubStatus === 'running' || hubStatus === 'pending');
+  // 等待摘要派生（T12）：leader 消费 progress 等待拍（kind waiting-input → kv
+  // waiting 标志，恢复拍清除）；worker 消费本机 write-blocked 登记清单（grant/
+  // deny 处置即去态）。prop 直注入优先（测试直注入路径）。
+  const progressEntry = delegationId != null ? (board.progress[delegationId] ?? null) : null;
+  const derivedWaitingSummary =
+    progressEntry?.waiting === true
+      ? progressEntry.excerpt
+      : isWorkerView && received != null
+        ? (board.localWaiting[received.sessionId] ?? null)
+        : null;
+  const effectiveWaitingSummary = waitingSummary !== null ? waitingSummary : derivedWaitingSummary;
+  const waiting = effectiveWaitingSummary != null && (hubStatus === 'running' || hubStatus === 'pending');
   const terminal = task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled';
 
   const nodeName = (nodeId: string | null | undefined): string =>
@@ -328,7 +378,7 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
               />
             )}
             <span className="min-w-0 flex-1 truncate">
-              {waiting ? waitingSummary : progressExcerpt}
+              {waiting ? effectiveWaitingSummary : progressExcerpt}
               {waiting && isWorkerView && (
                 <b className="font-semibold"> · 打开会话批准/拒绝</b>
               )}

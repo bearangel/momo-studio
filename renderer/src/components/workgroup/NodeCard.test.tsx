@@ -80,6 +80,41 @@ describe('NodeCard', () => {
     expect(screen.getByText('离线')).toBeInTheDocument();
   });
 
+  it('T12 等待徽标：running 任务命中 waiting 集 → warning「等待节点确认」（替执行中）；未命中不误亮', () => {
+    const tasks = [
+      task({ taskId: 't-wait', title: '等待写授权的委派任务' }),
+      task({ taskId: 't-run', title: '正常执行中的委派任务' }),
+    ];
+    const { rerender } = render(
+      <NodeCard
+        node={OFFICE}
+        tasks={tasks}
+        waiting={{ 't-wait': true }}
+        isLeader={false}
+        isSelf={false}
+        canView
+        onOpenView={onOpenView}
+      />,
+    );
+    const card = screen.getByLabelText('节点 office-mac');
+    expect(within(card).getByText('等待写授权的委派任务')).toBeInTheDocument();
+    expect(within(card).getAllByText('等待节点确认').length).toBe(1);
+    // 恢复（waiting 清）→ 执行中回归
+    rerender(
+      <NodeCard
+        node={OFFICE}
+        tasks={tasks}
+        waiting={{}}
+        isLeader={false}
+        isSelf={false}
+        canView
+        onOpenView={onOpenView}
+      />,
+    );
+    expect(within(card).getAllByText('执行中').length).toBe(2);
+    expect(within(card).queryByText('等待节点确认')).not.toBeInTheDocument();
+  });
+
   it('mono 行：node id 前4…后4 截断 + 已镜像空间名（多空间 · 连接、无名则省略段）', () => {
     const tasks = [
       task({ taskId: 't1', workspaceName: 'dev-ws', status: 'done' }),
