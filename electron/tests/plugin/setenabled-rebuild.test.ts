@@ -14,6 +14,8 @@ import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 const registryFns = vi.hoisted(() => ({
   startAgentRuntime: vi.fn(async () => undefined),
   stopAgentRuntime: vi.fn(async () => undefined),
+  // M2.2 T3：write-blocked-emit 经 runtime-registry 广播即时拒——import 链要求该导出在 mock 在场
+  broadcastWriteGrantDenied: vi.fn(),
 }));
 vi.mock('../../src/main/agent/runtime-registry', () => registryFns);
 
