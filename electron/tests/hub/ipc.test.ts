@@ -19,6 +19,8 @@ vi.mock('../../src/main/hub/index', () => ({
   hubRequest: vi.fn(async () => ({})),
   hubGetDelegationSettings: vi.fn(() => ({ acceptTasks: true, maxConcurrent: 2, hitlTimeoutMinutes: 15 })),
   hubSetDelegationSettings: vi.fn(async (input: { acceptTasks: boolean; maxConcurrent: number; hitlTimeoutMinutes: number }) => input),
+  hubGetWorkspaceDirSettings: vi.fn(() => ({ rootDir: null, defaultRootDir: '/d/workspaces', effectiveRootDir: '/d/workspaces' })),
+  hubSetWorkspaceDirSettings: vi.fn(async (input: { rootDir: string | null }) => ({ rootDir: input.rootDir, defaultRootDir: '/d/workspaces', effectiveRootDir: input.rootDir ?? '/d/workspaces' })),
   hubGetViewSettings: vi.fn(() => ({ allowGroupView: true })),
   hubSetViewSettings: vi.fn(async (input: { allowGroupView: boolean }) => input),
   hubDelegationBoard: vi.fn(() => ({ progress: {}, received: [] })),
@@ -37,6 +39,7 @@ import { publishToHub } from '../../src/main/hub/publish';
 const GROUP_CHANNELS = ['hub:groupCreate', 'hub:groupInvite', 'hub:groupJoin', 'hub:groupLeave', 'hub:groupList', 'hub:groupTransfer'];
 const MIRROR_CHANNELS = ['hub:snapshotBuildUpload', 'hub:mirrorWorkspace', 'hub:mirrorRegistry'];
 const DELEGATION_CHANNELS = ['hub:getDelegationSettings', 'hub:setDelegationSettings'];
+const WS_DIR_CHANNELS = ['hub:getWorkspaceDirSettings', 'hub:setWorkspaceDirSettings'];
 const TASK_CHANNELS = ['hub:taskList', 'hub:taskDelegate', 'hub:taskCancel'];
 const ROUTING_CHANNELS = ['hub:submitRoutedTask', 'hub:routingPrecheck'];
 const BOARD_CHANNELS = ['hub:delegationBoard', 'hub:retryDispatch', 'hub:localWaiting'];
@@ -49,12 +52,13 @@ const VIEW_CHANNELS = [
 beforeEach(() => { handlers.clear(); vi.clearAllMocks(); });
 
 describe('hub IPC 接线', () => {
-  it('注册三十二通道（M2.1 T6 增镜像登记查询、T8 增路由提交两通道、T9 增看板投影两通道、T12 增本机等待清单）；getStatus 透传 manager', async () => {
+  it('注册三十四通道（M2.1 T6 增镜像登记查询、T8 增路由提交两通道、T9 增看板投影两通道、T12 增本机等待清单、工作目录两通道）；getStatus 透传 manager', async () => {
     registerHubIpc();
     expect([...handlers.keys()].sort()).toEqual([
       ...GROUP_CHANNELS,
       ...MIRROR_CHANNELS,
       ...DELEGATION_CHANNELS,
+      ...WS_DIR_CHANNELS,
       ...TASK_CHANNELS,
       ...ROUTING_CHANNELS,
       ...BOARD_CHANNELS,
@@ -100,6 +104,19 @@ describe('hub IPC 接线', () => {
       null, { acceptTasks: false, maxConcurrent: 4, hitlTimeoutMinutes: 20 });
     expect(set).toEqual({ acceptTasks: false, maxConcurrent: 4, hitlTimeoutMinutes: 20 });
     expect(manager.hubSetDelegationSettings).toHaveBeenCalledWith({ acceptTasks: false, maxConcurrent: 4, hitlTimeoutMinutes: 20 });
+  });
+
+  it('工作目录两通道：get 透传 hubGetWorkspaceDirSettings；set 透传入参（含 null 恢复默认）并回传 view', async () => {
+    registerHubIpc();
+    const got = await handlers.get('hub:getWorkspaceDirSettings')!();
+    expect(got).toEqual({ rootDir: null, defaultRootDir: '/d/workspaces', effectiveRootDir: '/d/workspaces' });
+    expect(manager.hubGetWorkspaceDirSettings).toHaveBeenCalledTimes(1);
+    const set = await handlers.get('hub:setWorkspaceDirSettings')!(null, { rootDir: '/custom' });
+    expect(set).toEqual({ rootDir: '/custom', defaultRootDir: '/d/workspaces', effectiveRootDir: '/custom' });
+    expect(manager.hubSetWorkspaceDirSettings).toHaveBeenCalledWith({ rootDir: '/custom' });
+    const reset = await handlers.get('hub:setWorkspaceDirSettings')!(null, { rootDir: null }) as { effectiveRootDir: string };
+    expect(manager.hubSetWorkspaceDirSettings).toHaveBeenLastCalledWith({ rootDir: null });
+    expect(reset.effectiveRootDir).toBe('/d/workspaces');
   });
 });
 

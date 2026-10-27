@@ -2,8 +2,9 @@
 import { ipcMain } from 'electron';
 import {
   hubConfigure, hubDelegationBoard, hubEnroll, hubForget, hubGetDelegationSettings, hubGetStatus,
-  hubGetViewSettings, hubListMirrorRegistry, hubLocalWaiting, hubMarkDelegationCancelled, hubRequest,
-  hubSetDelegationSettings, hubSetViewSettings, replayPresenceSeed,
+  hubGetViewSettings, hubGetWorkspaceDirSettings, hubListMirrorRegistry, hubLocalWaiting,
+  hubMarkDelegationCancelled, hubRequest,
+  hubSetDelegationSettings, hubSetViewSettings, hubSetWorkspaceDirSettings, replayPresenceSeed,
 } from './index';
 import { createGroupClient } from './groups';
 import { publishToHub, type PublishInput } from './publish';
@@ -62,6 +63,10 @@ export function registerHubIpc(): void {
     maxConcurrent: number;
     hitlTimeoutMinutes: number;
   }) => hubSetDelegationSettings(input));
+  // 工作目录两通道（2026-10-27）：get/set 均回 view（rootDir/defaultRootDir/effectiveRootDir）
+  ipcMain.handle('hub:getWorkspaceDirSettings', () => hubGetWorkspaceDirSettings());
+  ipcMain.handle('hub:setWorkspaceDirSettings', (_evt, input: { rootDir: string | null }) =>
+    hubSetWorkspaceDirSettings(input));
   // 委派 leader 侧三通道（M2e T12，spec §3.1 task.*）：list（组过滤）/ delegate
   // （账本先行 pending）/ cancel（可取消态单点校验在 hub）；载荷采用 renderer 契约形状
   ipcMain.handle('hub:taskList', (_evt, input?: { groupId?: string }) =>

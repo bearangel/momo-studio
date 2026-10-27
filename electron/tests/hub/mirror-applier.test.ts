@@ -853,3 +853,81 @@ describe('契约：buildWorkspaceSnapshot 产出 → applyMirrorSnapshot 消费'
     fs.rmSync(built.archivePath, { force: true });
   });
 });
+
+// ── 11. 工作目录（workspaceRootDir，2026-10-27）────────────────────────────
+// 消费面矩阵 .omo/feature-matrices/2026-10-27-hub-workspace-root-dir.md 行 1/5
+
+describe('applyMirrorSnapshot 工作目录', () => {
+  const noResDeps = (archive: ArchiveFixture): MirrorApplierDeps => ({
+    fetchSnapshotArchive: async () => ({ bytes: archive.bytes, checksum: archive.checksum }),
+    installResource: async () => undefined,
+  });
+
+  it('默认落位回归锁：无配置 → <userData>/workspaces/<清洗名>', async () => {
+    const archive = await makeArchive(baseManifest({ workspaceName: '默认根空间' }));
+    const outcome = await applyMirrorSnapshot(
+      applyPayload({ workspaceName: '默认根空间' }),
+      noResDeps(archive),
+    );
+    expect(outcome.ok).toBe(true);
+    const ws = listWorkspaces().find((w) => w.name === '默认根空间');
+    expect(ws?.directoryPath).toBe(path.join(tmpRoot, 'workspaces', '默认根空间'));
+  });
+
+  it('自定义根落位：配置后 → 自定义根/<清洗名>（-2 唯一化语义保留）', async () => {
+    const customRoot = path.join(tmpRoot, 'custom-root');
+    fs.mkdirSync(path.join(customRoot, '已占空间'), { recursive: true }); // 占位同名目录 → 触发 -2
+    const { createHubWorkspaceDirStore } = await import('../../src/main/hub/workspace-dir-settings');
+    createHubWorkspaceDirStore().write({ rootDir: customRoot });
+
+    const archive = await makeArchive(baseManifest({ workspaceName: '已占空间' }));
+    const outcome = await applyMirrorSnapshot(
+      applyPayload({ workspaceName: '已占空间' }),
+      noResDeps(archive),
+    );
+    expect(outcome.ok).toBe(true);
+    const ws = listWorkspaces().find((w) => w.name === '已占空间');
+    expect(ws?.directoryPath).toBe(path.join(customRoot, '已占空间-2'));
+  });
+
+  it('自定义根不可写 → 整体拒绝 + 人话错误，库内无该空间（不静默回退默认）', async () => {
+    const roRoot = path.join(tmpRoot, 'ro-root');
+    fs.mkdirSync(roRoot, { recursive: true });
+    fs.chmodSync(roRoot, 0o555);
+    const { createHubWorkspaceDirStore } = await import('../../src/main/hub/workspace-dir-settings');
+    createHubWorkspaceDirStore().write({ rootDir: roRoot });
+    try {
+      const archive = await makeArchive(baseManifest({ workspaceName: '只读根空间' }));
+      const outcome = await applyMirrorSnapshot(
+        applyPayload({ workspaceName: '只读根空间' }),
+        noResDeps(archive),
+      );
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) {
+        expect(outcome.code).toBe('internal');
+        expect(outcome.message).toMatch(/工作目录不可写/);
+      }
+      expect(listWorkspaces().some((w) => w.name === '只读根空间')).toBe(false);
+    } finally {
+      fs.chmodSync(roRoot, 0o755);
+    }
+  });
+
+  it('既有空间零迁移：换根后重镜像（confirm）→ directory_path 不动', async () => {
+    // 首次：默认根落位
+    const archive = await makeArchive(baseManifest({ workspaceName: '存量空间' }));
+    await applyMirrorSnapshot(applyPayload({ workspaceName: '存量空间' }), noResDeps(archive));
+    const before = listWorkspaces().find((w) => w.name === '存量空间')?.directoryPath;
+    expect(before).toBe(path.join(tmpRoot, 'workspaces', '存量空间'));
+
+    // 换根 → 同名重镜像（confirm=true 整体替换）
+    const { createHubWorkspaceDirStore } = await import('../../src/main/hub/workspace-dir-settings');
+    createHubWorkspaceDirStore().write({ rootDir: path.join(tmpRoot, 'new-root') });
+    const redo = await applyMirrorSnapshot(
+      applyPayload({ workspaceName: '存量空间', confirm: true }),
+      noResDeps(archive),
+    );
+    expect(redo.ok).toBe(true);
+    expect(listWorkspaces().find((w) => w.name === '存量空间')?.directoryPath).toBe(before);
+  });
+});

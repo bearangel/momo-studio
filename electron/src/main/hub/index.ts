@@ -24,6 +24,7 @@ import type { HubResponderResult } from './client';
 import { createDelegationRunner, type AssignedTaskEvent, type DelegationRunner } from './delegation-runner';
 import { sessionWaitingProduct, wireDelegationRunnerPorts } from './delegation-ports';
 import { createHubDelegationSettingsStore, type HubDelegationSettings } from './delegation-settings';
+import { createHubWorkspaceDirStore, type HubWorkspaceDirView } from './workspace-dir-settings';
 import { createHubDelegationStore, type DelegationRecord } from './delegation-store';
 import {
   createDelegationProgressStore,
@@ -60,6 +61,7 @@ let presenceSeed: Array<{ nodeId: string; nodeName: string }> | null = null;
 const configStore = () => createHubConfigStore(getDb());
 const delegationSettingsStore = () => createHubDelegationSettingsStore(getDb());
 const viewSettingsStore = () => createHubViewSettingsStore(getDb());
+const workspaceDirStore = () => createHubWorkspaceDirStore(getDb());
 const mirrorRegistry = () => createMirrorRegistry(getDb());
 
 /**
@@ -81,6 +83,15 @@ export function hubGetDelegationSettings(): HubDelegationSettings {
 
 export function hubSetDelegationSettings(input: HubDelegationSettings): HubDelegationSettings {
   return delegationSettingsStore().write(input);
+}
+
+/** 工作目录面（IPC 消费——节点互联「工作目录」；镜像落位与新建预填共用 effectiveRootDir）。 */
+export function hubGetWorkspaceDirSettings(): HubWorkspaceDirView {
+  return workspaceDirStore().view();
+}
+
+export function hubSetWorkspaceDirSettings(input: { rootDir: string | null }): HubWorkspaceDirView {
+  return workspaceDirStore().write(input);
 }
 
 /** 查看同意设置面（IPC 消费——「允许本组查看」开关，默认 true）。 */

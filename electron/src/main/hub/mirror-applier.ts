@@ -41,11 +41,12 @@ import { listInstalled, getSkillsDir } from '../skill/zip-uploader';
 import { listPlugins, getPlugin, isPluginEnabled, setPluginEnabled } from '../plugin/registry';
 import { updateGlobalSettings, getGlobalSettings } from '../settings/crud';
 import { assertSafeTarMembers } from '../plugin/installer';
-import { resolveUserDataDir, resolveTmpDir } from '../paths';
+import { resolveTmpDir } from '../paths';
 import { installHubPackage } from '../resource/hub-install';
 import type { ResourceType } from '../resource/types';
 import { agentManifestYaml } from './publish';
 import { createHubConfigStore } from './config-store';
+import { createHubWorkspaceDirStore } from './workspace-dir-settings';
 import { getDeviceToken } from './creds';
 import {
   validateSnapshotManifest,
@@ -331,11 +332,12 @@ function sanitizeDirName(name: string): string {
   return cleaned === '' ? 'mirrored' : cleaned.slice(0, 64);
 }
 
-/** 目标工作空间落位：不存在则创建（目录 userData/workspaces/<名> 唯一化）。 */
+/** 目标工作空间落位：不存在则创建（目录 = 工作目录设置生效根/<名> 唯一化；
+ *  默认根 <userData>/workspaces——既有空间零迁移，见 workspace-dir-settings）。 */
 async function ensureWorkspace(workspaceName: string): Promise<{ workspaceId: string; created: boolean }> {
   const existing = listWorkspaces().find((w) => w.name === workspaceName);
   if (existing) return { workspaceId: existing.id, created: false };
-  const root = path.join(resolveUserDataDir(), 'workspaces');
+  const root = createHubWorkspaceDirStore().view().effectiveRootDir;
   let dir = path.join(root, sanitizeDirName(workspaceName));
   let suffix = 2;
   while (fs.existsSync(dir)) {
@@ -345,7 +347,10 @@ async function ensureWorkspace(workspaceName: string): Promise<{ workspaceId: st
   const ws = await createWorkspace(
     { name: workspaceName, directoryPath: dir, description: 'momo-hub 镜像创建' },
     'owner',
-  );
+  ).catch((err: unknown) => {
+    // 不可写根整体拒绝 + 人话（不静默回退默认根——否则用户以为落在自定义位置实际没有）
+    throw new Error(`工作目录不可写（${root}）: ${(err as Error).message}`);
+  });
   return { workspaceId: ws.id, created: true };
 }
 

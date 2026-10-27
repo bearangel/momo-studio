@@ -53,6 +53,12 @@ const mockApi = {
   dialog: {
     pickDirectory: vi.fn().mockResolvedValue(null),
   },
+  // CreateWorkspaceDialog 挂载拉工作目录视图（预填源——2026-10-27）
+  hub: {
+    getWorkspaceDirSettings: vi.fn().mockResolvedValue({
+      rootDir: null, defaultRootDir: '/data/workspaces', effectiveRootDir: '/data/workspaces',
+    }),
+  },
 };
 
 describe('TitleBar', () => {

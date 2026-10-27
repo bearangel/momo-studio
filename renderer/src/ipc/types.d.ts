@@ -2707,6 +2707,19 @@ export interface HubDelegationSettings {
   hitlTimeoutMinutes: number;
 }
 
+/**
+ * 节点工作目录视图（2026-10-27 节点互联「工作目录」）：新建工作空间预填与
+ * 镜像落位共用生效根。主进程 kv 存储；既有工作空间零迁移。
+ */
+export interface HubWorkspaceDirView {
+  /** 用户配置的根（null = 默认） */
+  rootDir: string | null;
+  /** 默认根（<userData>/workspaces，随环境解析） */
+  defaultRootDir: string;
+  /** 生效根 = rootDir ?? defaultRootDir（消费方唯一读点） */
+  effectiveRootDir: string;
+}
+
 /** hub:groupChanged 推送载荷（协议 GroupChangedEvent 镜像——组成员变动/组长转移的组内广播） */
 export interface HubGroupChangedEvent {
   groupId: string;
@@ -3028,6 +3041,10 @@ export interface HubApiSurface {
   getViewSettings(): Promise<HubViewSettings>;
   /** 写入查看同意设置（set 即时上报 hub；离线由重连重报兜底） */
   setViewSettings(input: HubViewSettings): Promise<HubViewSettings>;
+  /** 读取节点工作目录视图（新建预填与镜像落位共用 effectiveRootDir） */
+  getWorkspaceDirSettings(): Promise<HubWorkspaceDirView>;
+  /** 写入节点工作目录（rootDir=null 恢复默认；回执为归一化 view） */
+  setWorkspaceDirSettings(input: { rootDir: string | null }): Promise<HubWorkspaceDirView>;
   /** 远程查看：目标工作空间概览+配置七子段（M2e T14 四视图数据源之一） */
   viewWorkspace(input: { targetNodeId: string; workspaceName: string }): Promise<HubViewOverview>;
   /** 远程查看：目标工作空间会话列表（lastSeq 降序分页） */

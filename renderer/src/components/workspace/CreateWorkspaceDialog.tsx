@@ -8,12 +8,20 @@
 // 条件不成立，无豁免项。
 // embedded 内嵌形态（P2 Task 3 首启空态）保留自绘卡片仅 token 化：
 // Dialog 只有 portal 遮罩形态，首启空态无上级界面、遮罩/Esc 关闭不适用。
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { ipc } from '../../ipc/client';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { Input } from '../ui/Input';
+
+/** 名称清洗 → 目录名片段。单源指针：electron/src/main/hub/mirror-applier.ts
+ *  的 sanitizeDirName（镜像落位同款规则——保留字母/数字/中文/._-，余者 -，
+ *  截 64；预填只取片段不负责 -2 唯一化，主进程 createWorkspace 容忍已存在目录）。 */
+function sanitizeDirSegment(name: string): string {
+  const cleaned = name.replace(/[^a-zA-Z0-9\u4e00-\u9fa5._-]+/g, '-').replace(/^-+|-+$/g, '');
+  return cleaned.slice(0, 64);
+}
 
 interface Props {
   onClose: () => void;
@@ -24,15 +32,28 @@ interface Props {
 export function CreateWorkspaceDialog({ onClose, embedded }: Props) {
   const { create } = useWorkspaceStore();
   const [name, setName] = useState('');
-  const [dir, setDir] = useState('');
+  const [manualDir, setManualDir] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [effectiveRoot, setEffectiveRoot] = useState<string | null>(null);
+
+  // 工作目录预填源（节点互联「工作目录」；读取失败静默缺席——不阻断手选路径）
+  useEffect(() => {
+    ipc.hub
+      .getWorkspaceDirSettings()
+      .then((view) => setEffectiveRoot(view.effectiveRootDir))
+      .catch(() => setEffectiveRoot(null));
+  }, []);
+
+  const segment = sanitizeDirSegment(name.trim());
+  const suggestedDir = effectiveRoot !== null && segment !== '' ? `${effectiveRoot}/${segment}` : '';
+  const dir = manualDir ?? suggestedDir;
 
   const handlePickDirectory = async (): Promise<void> => {
     const picked = await ipc.dialog.pickDirectory({
       title: '选择工作空间目录',
     });
-    if (picked) setDir(picked);
+    if (picked) setManualDir(picked);
   };
 
   const handleSubmit = async (e: FormEvent) => {
@@ -67,7 +88,7 @@ export function CreateWorkspaceDialog({ onClose, embedded }: Props) {
         <div className="flex gap-2">
           <Input
             value={dir}
-            onChange={(e) => setDir(e.target.value)}
+            onChange={(e) => setManualDir(e.target.value)}
             placeholder="选择或输入目录路径"
             className="flex-1"
           />

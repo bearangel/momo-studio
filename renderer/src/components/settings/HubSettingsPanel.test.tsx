@@ -59,7 +59,15 @@ const api = {
     getViewSettings: vi.fn(async () => ({ allowGroupView: true })),
     setViewSettings: vi.fn(async (input: { allowGroupView: boolean }) => input),
     onViewAppended: vi.fn(() => () => undefined),
+    // 工作目录区段（2026-10-27）——默认根视图；set 回显归一化 view
+    getWorkspaceDirSettings: vi.fn(async (): Promise<{ rootDir: string | null; defaultRootDir: string; effectiveRootDir: string }> => ({
+      rootDir: null, defaultRootDir: '/data/workspaces', effectiveRootDir: '/data/workspaces',
+    })),
+    setWorkspaceDirSettings: vi.fn(async (input: { rootDir: string | null }): Promise<{ rootDir: string | null; defaultRootDir: string; effectiveRootDir: string }> => ({
+      rootDir: input.rootDir, defaultRootDir: '/data/workspaces', effectiveRootDir: input.rootDir ?? '/data/workspaces',
+    })),
   },
+  dialog: { pickDirectory: vi.fn() },
 };
 
 const UNENROLLED: HubStatus = {
@@ -494,5 +502,67 @@ describe('HubSettingsPanel M2.1 T5 瘦身（S5 视觉合同：迁移卡+连接+�
 
     fireEvent.click(await screen.findByRole('button', { name: /前往/ }));
     expect(useUiStore.getState().activeView).toBe('workgroups');
+  });
+});
+
+describe('HubSettingsPanel 工作目录区段（2026-10-27 节点互联「工作目录」）', () => {
+  it('默认态：显示默认根 effective；无「恢复默认」按钮', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
+    render(<HubSettingsPanel />);
+    expect(await screen.findByText('工作目录')).toBeInTheDocument();
+    expect(screen.getByText('/data/workspaces')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '恢复默认' })).not.toBeInTheDocument();
+  });
+
+  it('自定义态：「更改…」经 pickDirectory 选目录 → setWorkspaceDirSettings(绝对路径)且回显新 effective + 「恢复默认」出现', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
+    api.hub.getWorkspaceDirSettings.mockResolvedValueOnce({
+      rootDir: '/data/workspaces', defaultRootDir: '/data/workspaces', effectiveRootDir: '/data/workspaces',
+    });
+    api.dialog.pickDirectory.mockResolvedValueOnce('/mnt/big');
+    api.hub.setWorkspaceDirSettings.mockResolvedValueOnce({
+      rootDir: '/mnt/big', defaultRootDir: '/data/workspaces', effectiveRootDir: '/mnt/big',
+    });
+    render(<HubSettingsPanel />);
+
+    await screen.findByText('工作目录');
+    fireEvent.click(screen.getByRole('button', { name: '更改…' }));
+    await waitFor(() => expect(api.hub.setWorkspaceDirSettings).toHaveBeenCalledWith({ rootDir: '/mnt/big' }));
+    await waitFor(() => expect(screen.getByText('/mnt/big')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: '恢复默认' })).toBeInTheDocument();
+  });
+
+  it('恢复默认 → setWorkspaceDirSettings({rootDir:null})，effective 回默认且按钮消失', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
+    api.hub.getWorkspaceDirSettings.mockResolvedValueOnce({
+      rootDir: '/mnt/big', defaultRootDir: '/data/workspaces', effectiveRootDir: '/mnt/big',
+    });
+    api.hub.setWorkspaceDirSettings.mockResolvedValueOnce({
+      rootDir: null, defaultRootDir: '/data/workspaces', effectiveRootDir: '/data/workspaces',
+    });
+    render(<HubSettingsPanel />);
+
+    await screen.findByText('/mnt/big');
+    fireEvent.click(screen.getByRole('button', { name: '恢复默认' }));
+    await waitFor(() => expect(api.hub.setWorkspaceDirSettings).toHaveBeenCalledWith({ rootDir: null }));
+    await waitFor(() => expect(screen.getByText('/data/workspaces')).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: '恢复默认' })).not.toBeInTheDocument();
+  });
+
+  it('选择器取消 → 不调 set；set 失败 → 错误文案呈现（不静默吞）', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
+    api.dialog.pickDirectory.mockResolvedValueOnce(null);
+    render(<HubSettingsPanel />);
+
+    await screen.findByText('工作目录');
+    fireEvent.click(screen.getByRole('button', { name: '更改…' }));
+    await waitFor(() => expect(api.dialog.pickDirectory).toHaveBeenCalled());
+    expect(api.hub.setWorkspaceDirSettings).not.toHaveBeenCalled();
+
+    api.dialog.pickDirectory.mockResolvedValueOnce('/mnt/x');
+    api.hub.setWorkspaceDirSettings.mockRejectedValueOnce(new Error('Error invoking remote method: 只读卷'));
+    fireEvent.click(screen.getByRole('button', { name: '更改…' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('只读卷');
   });
 });

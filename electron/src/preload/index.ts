@@ -64,6 +64,7 @@ import type {
   HubSnapshotBuildUploadResult,
   HubWorkspaceMirroredEvent,
   HubDelegationSettings,
+  HubWorkspaceDirView,
   HubTaskListResult,
   HubTaskDelegateInput,
   HubTaskDelegateResult,
@@ -635,6 +636,8 @@ const api: ApiSurface = {
     mirrorWorkspace: (input: HubMirrorWorkspaceInput) => invoke<HubMirrorAcceptResult>('hub:mirrorWorkspace', input),
     getDelegationSettings: () => invoke<HubDelegationSettings>('hub:getDelegationSettings'),
     setDelegationSettings: (input: HubDelegationSettings) => invoke<HubDelegationSettings>('hub:setDelegationSettings', input),
+    getWorkspaceDirSettings: () => invoke<HubWorkspaceDirView>('hub:getWorkspaceDirSettings'),
+    setWorkspaceDirSettings: (input: { rootDir: string | null }) => invoke<HubWorkspaceDirView>('hub:setWorkspaceDirSettings', input),
     onMirrorResult: (callback) => {
       const handler = (_e: IpcRendererEvent, payload: HubMirrorResultEvent): void => callback(payload);
       ipcRenderer.on('hub:mirrorResult', handler);

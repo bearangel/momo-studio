@@ -75,6 +75,10 @@ const mockApi = {
     forget: vi.fn().mockResolvedValue(undefined),
     onStateChanged: vi.fn().mockReturnValue(() => {}),
     onNodePresence: vi.fn().mockReturnValue(() => {}),
+    // 2026-10-27：CreateWorkspaceDialog 挂载拉工作目录视图（预填源）
+    getWorkspaceDirSettings: vi.fn().mockResolvedValue({
+      rootDir: null, defaultRootDir: '/data/workspaces', effectiveRootDir: '/data/workspaces',
+    }),
   },
   // 设置视图默认挂 ProviderSettings（mount 即调 provider.list）——
   // 缺桩会以 unhandled rejection 污染测试运行（vitest 判 exit 1）

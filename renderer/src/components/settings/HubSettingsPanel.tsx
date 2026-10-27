@@ -14,12 +14,14 @@
 // - 换址入口（D1，已接入态）：身份区次级按钮「修改 hub 地址」→ 确认弹窗（改地址 + 断开告警）
 //   → 调 configure → 落到换址引导态
 import { useEffect, useState } from 'react';
-import { Network, RefreshCw, Trash2, Users } from 'lucide-react';
+import { FolderOpen, Network, RefreshCw, Trash2, Users } from 'lucide-react';
 import { useHubEnroll } from '../../hooks/use-hub-enroll';
 import { useHubStore } from '../../stores/hub.store';
 import { useUiStore } from '../../stores/ui.store';
 import { ipc } from '../../ipc/client';
-import type { HubConnectionState, HubDelegationSettings, HubStatus, HubViewSettings } from '../../ipc/types';
+import type {
+  HubConnectionState, HubDelegationSettings, HubStatus, HubViewSettings, HubWorkspaceDirView,
+} from '../../ipc/types';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
@@ -188,6 +190,85 @@ function ViewConsentSection() {
             onChange={(next) => void save({ allowGroupView: next })}
             aria-label="允许本组查看"
           />
+        </div>
+        {error !== null && <p className="text-xs text-status-error" role="alert">{error}</p>}
+      </div>
+    </div>
+  );
+}
+
+
+/**
+ * 工作目录区段（2026-10-27 节点互联「工作目录」）：新建工作空间预填与镜像落位
+ * 共用的生效根。「更改…」目录选择器；自定义态显示「恢复默认」。既有空间零迁移。
+ */
+function WorkspaceDirSection() {
+  const [view, setView] = useState<HubWorkspaceDirView | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void ipc.hub
+      .getWorkspaceDirSettings()
+      .then(setView)
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+  }, []);
+
+  if (view === null) {
+    return (
+      <div className="flex flex-col gap-2">
+        <div className="text-sm font-medium text-primary">工作目录</div>
+        {error !== null ? (
+          <p className="text-xs text-status-error" role="alert">{error}</p>
+        ) : (
+          <p className="text-xs text-tertiary">加载中…</p>
+        )}
+      </div>
+    );
+  }
+
+  const save = async (rootDir: string | null): Promise<void> => {
+    setError(null);
+    try {
+      setView(await ipc.hub.setWorkspaceDirSettings({ rootDir }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const pickAndSave = async (): Promise<void> => {
+    const picked = await ipc.dialog.pickDirectory({ title: '选择工作目录' });
+    if (!picked) return;
+    await save(picked);
+  };
+
+  const custom = view.rootDir !== null;
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="text-sm font-medium text-primary">工作目录</div>
+      <div className="flex flex-col gap-3 rounded-lg border border-subtle bg-surface-1 p-3">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 text-[13px] text-primary">
+              <FolderOpen size={16} strokeWidth={1.75} aria-hidden className="shrink-0" />
+              <span className="truncate font-mono text-[12.5px]" title={view.effectiveRootDir}>
+                {view.effectiveRootDir}
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-tertiary">
+              新建工作空间与接收镜像的新空间默认落在此目录；既有工作空间位置不变
+              {custom ? '（当前为自定义目录）' : ''}
+            </p>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            {custom && (
+              <Button variant="ghost" size="sm" onClick={() => void save(null)}>
+                恢复默认
+              </Button>
+            )}
+            <Button variant="secondary" size="sm" onClick={() => void pickAndSave()}>
+              更改…
+            </Button>
+          </div>
         </div>
         {error !== null && <p className="text-xs text-status-error" role="alert">{error}</p>}
       </div>
@@ -507,6 +588,8 @@ function EnrolledView({ status }: { status: HubStatus }) {
           </p>
         )}
       </div>
+
+      <WorkspaceDirSection />
 
       <DelegationSection />
 
