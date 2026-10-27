@@ -204,23 +204,33 @@ async function buildAgentPackage(
 // skill：cachePath 目录整包
 // ──────────────────────────────────────────────────────────────────────────
 
+/** skill 定位结果：cachePath = 打包目录；slug = 发布/记账键口径的语义 slug */
+interface ResolvedSkillRef {
+  cachePath: string;
+  slug: string;
+}
+
 /** skill 定位三源：skill_definitions.cache_path（marketplace/hub 装面）→
- *  custom 上传目录（.sha256 标记面）→ builtin 目录。找不到返回 null。 */
-function resolveSkillCachePath(ref: string): string | null {
+ *  custom 上传目录（.sha256 标记面）→ builtin 目录。找不到返回 null。
+ *  marketplace 装面的 cache_path 是版本化路径（…/<slug>/<version>，basename 是
+ *  版本号——loader.ts parseSkillMd 的同款例外纪律），slug 语义来源是该行 slug 列
+ *  （= collectSkills 反查键 skill_definitions.slug，与 hub:{slug} 记账键同口径）；
+ *  custom/builtin 形态目录名即 slug。 */
+function resolveSkillCachePath(ref: string): ResolvedSkillRef | null {
   try {
     const row = getDb()
-      .prepare('SELECT cache_path FROM skill_definitions WHERE slug = ?')
-      .get(ref) as { cache_path?: string } | undefined;
+      .prepare('SELECT slug, cache_path FROM skill_definitions WHERE slug = ?')
+      .get(ref) as { slug: string; cache_path: string } | undefined;
     if (row?.cache_path && fs.existsSync(path.join(row.cache_path, 'SKILL.md'))) {
-      return row.cache_path;
+      return { cachePath: row.cache_path, slug: row.slug };
     }
   } catch {
     // DB 未就绪（表不存在等）——继续走 fs 面，不在这里拦死
   }
   const custom = path.join(getSkillsDir(), ref);
-  if (fs.existsSync(path.join(custom, 'SKILL.md'))) return custom;
+  if (fs.existsSync(path.join(custom, 'SKILL.md'))) return { cachePath: custom, slug: ref };
   const builtin = path.join(resolveBuiltinSkillsDir(), ref);
-  if (fs.existsSync(path.join(builtin, 'SKILL.md'))) return builtin;
+  if (fs.existsSync(path.join(builtin, 'SKILL.md'))) return { cachePath: builtin, slug: ref };
   return null;
 }
 
@@ -228,11 +238,14 @@ async function buildSkillPackage(
   ref: string,
   meta: PublishMeta,
 ): Promise<{ manifest: HubPublishManifest; archivePath: string }> {
-  const cachePath = resolveSkillCachePath(ref);
-  if (cachePath === null) throw new Error(`skill 不存在: ${ref}`);
-  const def = parseSkillMd(fs.readFileSync(path.join(cachePath, 'SKILL.md'), 'utf-8'), cachePath);
+  const resolved = resolveSkillCachePath(ref);
+  if (resolved === null) throw new Error(`skill 不存在: ${ref}`);
+  const def = parseSkillMd(fs.readFileSync(path.join(resolved.cachePath, 'SKILL.md'), 'utf-8'), resolved.cachePath);
   const manifest: HubPublishManifest = {
-    slug: def.slug,
+    // marketplace 装面 parseSkillMd 按 basename 推导会得到版本号（版本号可过
+    // isValidHubSlug → 静默上传错名条目 + 记账键错位），发布 slug 以 resolved.slug
+    // 为准；custom/builtin 形态 resolved.slug 与目录名一致，行为不变
+    slug: resolved.slug,
     type: 'skill',
     name: meta.name ?? def.name,
     version: meta.version ?? def.version,
@@ -246,7 +259,7 @@ async function buildSkillPackage(
   };
   assertManifestValid(manifest);
   // .installed/.sha256 是安装侧标记（custom 源标记 / marketplace 幂等标记），不入包
-  const archivePath = await tarDirectory(cachePath, ['.installed', '.sha256'], `skill-${manifest.slug}`);
+  const archivePath = await tarDirectory(resolved.cachePath, ['.installed', '.sha256'], `skill-${manifest.slug}`);
   return { manifest, archivePath };
 }
 

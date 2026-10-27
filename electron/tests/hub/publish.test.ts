@@ -20,7 +20,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { closeDb, runMigrations } from '../../src/main/storage/db';
+import { closeDb, getDb, runMigrations } from '../../src/main/storage/db';
 import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keychain';
 import { parseAgentManifest } from '../../src/main/agent/manifest-parser';
 import { saveAgentDefinition } from '../../src/main/agent/crud';
@@ -166,16 +166,37 @@ function seedAgent(id: string, slug: string, source: 'custom' | 'marketplace' | 
 }
 
 /** 落一个 custom skill 上传目录（.sha256 标记 + 资源文件） */
-function seedCustomSkill(slug: string): string {
+function seedCustomSkill(slug: string, version = '0.3.0'): string {
   const dir = path.join(tmpRoot, 'skills', slug);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, 'SKILL.md'),
-    `---\nname: ${slug} 名\ndescription: 自定义 skill\nversion: 0.3.0\n---\n\n正文内容。\n`,
+    `---\nname: ${slug} 名\ndescription: 自定义 skill\nversion: ${version}\n---\n\n正文内容。\n`,
   );
   fs.writeFileSync(path.join(dir, 'notes.txt'), '附加资源');
   fs.writeFileSync(path.join(dir, '.sha256'), 'deadbeef');
   return dir;
+}
+
+/** 落一个 marketplace 装面 skill（installer.registerInstalledPackage 同款形态）：
+ *  版本化 cache 目录 <userData>/cache/skills/<slug>/<version>（.installed 标记 +
+ *  SKILL.md）+ skill_definitions 行（cache_path 指向版本化目录——basename 是版本号）。 */
+function seedMarketplaceSkill(slug: string, version: string): string {
+  const cachePath = path.join(tmpRoot, 'cache', 'skills', slug, version);
+  fs.mkdirSync(cachePath, { recursive: true });
+  fs.writeFileSync(
+    path.join(cachePath, 'SKILL.md'),
+    `---\nname: ${slug} 名\ndescription: marketplace 装面 skill\nversion: ${version}\n---\n\n正文内容。\n`,
+  );
+  fs.writeFileSync(path.join(cachePath, '.installed'), new Date().toISOString());
+  getDb()
+    .prepare(
+      `INSERT OR REPLACE INTO skill_definitions
+       (id, name, slug, version, description, allowed_tools, cache_path, tags)
+       VALUES (?, ?, ?, ?, ?, '[]', ?, '[]')`,
+    )
+    .run(randomUUID(), `${slug} 名`, slug, version, 'marketplace 装面 skill', cachePath);
+  return cachePath;
 }
 
 /** 落一个 dev 插件目录并注册（publish-pack.test.ts 同款最小合法插件） */
@@ -285,6 +306,70 @@ describe('buildPublishPackage 四类打包', () => {
     });
     // 归档内 README.md 同步用 meta.readme（人读面与目录元数据一致）
     expect(tarRead(r.archivePath, 'README.md')).toBe('README 正文');
+  });
+});
+
+// ── 1b. marketplace 装面 skill 发布 slug 契约（M2.2 批1 Critical）──────────
+// skill_definitions.cache_path 恒为版本化路径（…/<slug>/<version>，basename=版本号）。
+// 发布 slug 若从 basename 推导会得到版本号：isValidHubSlug('1.4.0') 放行 → 静默
+// 上传错名条目 + hub:{slug} 记账键与 collectSkills 反查键（skill_definitions.slug）
+// 错位 → 镜像 resources 不携带。slug 语义来源必须是 skill_definitions 行的 slug 列。
+describe('marketplace 装面 skill 发布 slug 契约', () => {
+  it('marketplace 形态：manifest.slug = skill_definitions.slug（不是 cache_path 的 basename 版本号）', async () => {
+    seedMarketplaceSkill('superpowers-brainstorm', '1.4.0');
+    const r = await buildPublishPackage('skill', 'superpowers-brainstorm', {});
+
+    expect(r.manifest.slug).toBe('superpowers-brainstorm');
+    expect(r.manifest.version).toBe('1.4.0');
+    expect(tarList(r.archivePath)).toContain('SKILL.md');
+  });
+
+  it('同版本多 skill 不互撞：两个 marketplace skill 同 version 1.4.0 → manifest slug 各异（+ custom 形态同版不撞）', async () => {
+    seedMarketplaceSkill('superpowers-brainstorm', '1.4.0');
+    seedMarketplaceSkill('code-reviewer', '1.4.0');
+    seedCustomSkill('my-skill', '1.4.0');
+
+    const a = await buildPublishPackage('skill', 'superpowers-brainstorm', {});
+    const b = await buildPublishPackage('skill', 'code-reviewer', {});
+    const c = await buildPublishPackage('skill', 'my-skill', {});
+
+    expect(a.manifest.slug).toBe('superpowers-brainstorm');
+    expect(b.manifest.slug).toBe('code-reviewer');
+    expect(c.manifest.slug).toBe('my-skill');
+    expect(new Set([a.manifest.slug, b.manifest.slug, c.manifest.slug]).size).toBe(3);
+  });
+
+  it('端到端键一致性锁：发布回执 slug（hub:{slug} 记账键）== skill_definitions.slug（collectSkills 反查键）', async () => {
+    await goOnline();
+    seedMarketplaceSkill('superpowers-brainstorm', '1.4.0');
+    registerHubIpc();
+
+    // 仿真 hub T6 行为：解析 manifest part，201 回执按 manifest 权威回 echo slug
+    const fetchMock = vi.fn(async (_url: string, init: { body: FormData }) => {
+      const manifestPart = Array.from(init.body.entries()).find(([k]) => k === 'manifest')!;
+      const sent = JSON.parse(await (manifestPart[1] as Blob).text()) as { slug: string; version: string };
+      return res(201, { slug: sent.slug, version: sent.version, checksum: 'a'.repeat(64), sizeBytes: 1 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      // 走真实 IPC 编排：publishToHub → recordPublishAccountingSafe(result.slug, …)
+      const out = await m.handlers.get('hub:publishResource')!(null, {
+        type: 'skill', ref: 'superpowers-brainstorm',
+      });
+      expect(out).toMatchObject({ slug: 'superpowers-brainstorm', version: '1.4.0' });
+
+      const accRows = getDb()
+        .prepare("SELECT item_id FROM installed_packages WHERE item_type = 'skill'")
+        .all() as Array<{ item_id: string }>;
+      const defRow = getDb()
+        .prepare("SELECT slug FROM skill_definitions WHERE slug = 'superpowers-brainstorm'")
+        .get() as { slug: string };
+
+      // 记账键 hub:{slug} 必须命中 collectSkills 的反查键（skill_definitions.slug）
+      expect(accRows.map((r) => r.item_id)).toEqual([`hub:${defRow.slug}`]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
