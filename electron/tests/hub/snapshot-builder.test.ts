@@ -440,6 +440,34 @@ describe('MCP 无 hub 记账告警', () => {
   });
 });
 
+// ── 1c. 已发布 custom skill 分桶（M2.2 UC-P1-3 分发闭环）──────────────────
+
+describe('已发布 custom skill 走 hub 补装位（UC-P1-3）', () => {
+  it('custom skill + hub 记账 → 占 resources 补装位且不内嵌（hub 为已发布面的权威源）', async () => {
+    const wsId = await mkWorkspace('发布闭环空间');
+    seedCustomSkill('pub-skill', '已发布正文');
+    seedCustomSkill('keep-skill', '未发布正文');
+    seedHubAccounting('skill', 'pub-skill');
+
+    const r = await buildWorkspaceSnapshot(wsId);
+
+    // slug 仍全量入清单（目标节点解析口径不变）
+    expect(r.manifest.config.skills).toEqual(expect.arrayContaining(['pub-skill', 'keep-skill']));
+    // 已发布 → 占 resources 补装位（全新目标节点经 installResources 从 hub 落装并记账 hub:{slug}）
+    expect(r.manifest.resources).toContainEqual({ type: 'skill', slug: 'pub-skill' });
+    expect(r.manifest.resources).not.toContainEqual({ type: 'skill', slug: 'keep-skill' });
+    // 不内嵌：归档无 skills/pub-skill/（双通道并存会让目标节点同 slug 两份分叉）
+    const members = tarList(r.archivePath);
+    expect(members.some((m) => m.startsWith('skills/pub-skill/'))).toBe(false);
+    // 未发布 custom → 内嵌行为不变（回归锁）
+    expect(members).toContain('skills/keep-skill/SKILL.md');
+    // summary 分桶计数（P2-6 行数据源）：1 补装 + 1 内嵌
+    expect(r.manifest.resources.filter((x) => x.type === 'skill')).toHaveLength(1);
+    expect(r.skillEmbeddedCount).toBe(1);
+    expect(validateSnapshotManifest(r.manifest)).not.toBeNull();
+  });
+});
+
 // ── 2. 红线零渗漏（真实敏感材料在场）──────────────────────────────────────
 
 describe('红线零渗漏', () => {

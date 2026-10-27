@@ -5,7 +5,8 @@
 // payload 布局约定（T8 应用器消费契约——两文件头注释必须同步维护）：
 //   manifest.json            ——快照清单，唯一入口（hub 端 / T5 validateSnapshotManifest 消费）
 //   skills/<slug>/SKILL.md…  ——custom skill 内嵌包（.sha256/.installed 安装标记不入包）；
-//                               marketplace/hub 来源 skill 只引用 slug 不内嵌
+//                               marketplace/hub 来源 skill 只引用 slug 不内嵌；已发布
+//                               （hub 记账命中）custom skill 同样不内嵌、占 resources 位
 //
 // 清单七子段（spec §5.2.1 清单权威，全部来自既有域查询入口——无旁路 SQL）：
 //   agentMembers  ——listMembers + getAgentDefinition（agent-queries；引用/内嵌分流见
@@ -296,7 +297,10 @@ function collectMcpEnabled(acc: HubAccounting): {
 }
 
 /** skill 清单：全部已装 slug（builtin 目标同有 / marketplace 目录目标同有 / hub 记账占
- *  resources 补装位 / custom 目录内嵌 payload）。返回内嵌源目录清单供 staging 复制。 */
+ *  resources 补装位 / 未发布 custom 目录内嵌 payload）。返回内嵌源目录清单供 staging 复制。
+ *  UC-P1-3 分发闭环裁定（M2.2）：记账查询优先于 custom 内嵌——custom skill 发布到 hub 后
+ *  hub 即该 skill 的权威分发源，占 resources 补装位且不再内嵌（双通道并存会让目标节点
+ *  同 slug 两份分叉：installResources 落 marketplace 安装行 + 内嵌落 custom 目录）。 */
 function collectSkills(acc: HubAccounting): {
   skills: string[];
   resources: SnapshotResourceRef[];
@@ -307,10 +311,10 @@ function collectSkills(acc: HubAccounting): {
   const embeddedDirs: Array<{ slug: string; dir: string }> = [];
   for (const s of listInstalled()) {
     skills.push(s.slug);
-    if (s.source === 'custom') {
-      embeddedDirs.push({ slug: s.slug, dir: path.join(getSkillsDir(), s.slug) });
-    } else if (acc.has('skill', s.slug)) {
+    if (acc.has('skill', s.slug)) {
       resources.push({ type: 'skill', slug: s.slug });
+    } else if (s.source === 'custom') {
+      embeddedDirs.push({ slug: s.slug, dir: path.join(getSkillsDir(), s.slug) });
     }
   }
   return { skills, resources, embeddedDirs };
