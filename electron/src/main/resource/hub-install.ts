@@ -244,25 +244,57 @@ async function hubAuthHeaders(): Promise<Record<string, string> | undefined> {
 }
 
 /**
- * 发布成功回填 hub 记账（2026-10-27 path2 验收 P2 修复）：
- * plugin 发布到 hub 成功后本地 installed_packages 写 `hub:{slug}` plugin 行——
- * 镜像快照构建器 collectPlugins 以该记账反查（snapshot-builder §pluginsEnabled），
- * 缺行则已发布插件被排除出快照启用清单（目标节点每次需手动安装的分发断点）。
+ * 发布成功回填 hub 记账（M2.2 §2.1 四类泛化——plugin 专版先例 ba7cce8f 推广）：
+ * 任一类型资源发布到 hub 成功后本地 installed_packages 写 `hub:{slug}` 行。
+ * 两个消费面：镜像快照构建器 resources 段（记账反查携带）+ 目标节点
+ * installResources 已装判定①（loadHubAccountingSet）——缺行 = 全新目标先装后落
+ * 断链（M2.1 path2 实测：superpowers 类 skill 在全新 B 上 unresolved）。
  *
- * 与 installHubPackage 记账同构（DELETE+INSERT 幂等；只置换 plugin 行——
- * `hub:{slug}` 不是跨类型唯一键，同 slug 的 agent/skill/mcp 记账不得连带抹掉，
- * T15a-F1 语义）。cache_path 置空：发布场景包不在本地缓存（源是本地插件目录，
- * 与安装链的 installed 目录语义不同——卸载走插件级联不经 cache_path 删除）。
+ * 与 installHubPackage 记账同构（DELETE+INSERT 幂等；升版单行更新不叠行）。
+ * DELETE 带 item_type（T15a-F1）：`hub:{slug}` 不是跨类型唯一键，同 slug 的
+ * 异类记账不得连带抹掉。cache_path 置空：发布场景本机已装形态各异（agent=定义
+ * 表 / skill=缓存目录 / mcp=注册表 / plugin=installed 目录），与安装链的缓存
+ * 目录语义不同——卸载链对空串是 no-op（rm '' 无操作），marketplace 已装行的
+ * 缓存目录不被误伤。
  */
-export function recordPluginPublishAccounting(slug: string, version: string, checksum: string): void {
+export function recordPublishAccounting(
+  type: 'agent' | 'skill' | 'mcp' | 'plugin',
+  slug: string,
+  version: string,
+  checksum: string,
+): void {
   const db = getDb();
-  db.prepare(
-    "DELETE FROM installed_packages WHERE item_id = ? AND item_type = 'plugin'",
-  ).run(hubPackageItemId(slug));
+  db.prepare('DELETE FROM installed_packages WHERE item_id = ? AND item_type = ?').run(
+    hubPackageItemId(slug),
+    type,
+  );
   db.prepare(
     `INSERT INTO installed_packages (id, item_id, item_type, slug, version, cache_path, checksum)
-     VALUES (?, ?, 'plugin', ?, ?, '', ?)`,
-  ).run(randomUUID(), hubPackageItemId(slug), slug, version, checksum);
+     VALUES (?, ?, ?, ?, ?, '', ?)`,
+  ).run(randomUUID(), hubPackageItemId(slug), type, slug, version, checksum);
+}
+
+/**
+ * 发布侧安全壳（M2.2 §2.1 硬化——delta 终审 P3 并票）：记账失败不翻转发布回执。
+ * hub 上传已成功，回填缺行只影响下次镜像的携带面，升版发布可自愈——
+ * try/catch + warn，绝不把成功发布拖成失败。
+ */
+export function recordPublishAccountingSafe(
+  type: 'agent' | 'skill' | 'mcp' | 'plugin',
+  slug: string,
+  version: string,
+  checksum: string,
+): void {
+  try {
+    recordPublishAccounting(type, slug, version, checksum);
+  } catch (err) {
+    logger.warn('发布记账回填失败（发布回执不受影响，下次升版发布可自愈）', {
+      type,
+      slug,
+      version,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 export async function installHubPackage(

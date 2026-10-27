@@ -21,7 +21,7 @@ import { retryDispatch, type RedispatchPorts } from './delegation-sync';
 import { assertBoardGroupValid, createTaskFromForm } from '../task/ipc.handlers';
 import { insertTask, updateTask, getTask } from '../storage/tasks/repo';
 import { listWorkspaces } from '../workspace/crud';
-import { recordPluginPublishAccounting } from '../resource/hub-install';
+import { recordPublishAccountingSafe } from '../resource/hub-install';
 
 // 组管理客户端单点：绑定 hubRequest（IPC 面复用同一实例；纯函数集，无状态）
 const groups = createGroupClient((method, payload, timeoutMs) => hubRequest(method, payload, timeoutMs));
@@ -38,11 +38,10 @@ export function registerHubIpc(): void {
   ipcMain.handle('hub:forget', () => hubForget());
   ipcMain.handle('hub:publishResource', async (_evt, input: PublishInput) => {
     const result = await publishToHub(input);
-    // plugin 发布成功回填记账：镜像快照 pluginsEnabled 反查源（缺行 = 分发断点，
-    // 目标节点需手动安装）——agent/skill/mcp 类不回填（catalog 自愈链已覆盖）
-    if (input.type === 'plugin') {
-      recordPluginPublishAccounting(result.slug, result.version, result.checksum);
-    }
+    // 发布成功回填记账（M2.2 §2.1 四类统一）：镜像快照 resources 段与目标已装
+    // 判定①都以 `hub:{slug}` 记账为源——缺行即分发断链。Safe 壳：记账失败不
+    // 翻转发布回执（hub 上传已成功，缺行下次升版发布可自愈）
+    recordPublishAccountingSafe(input.type, result.slug, result.version, result.checksum);
     return result;
   });
   // 工作组六通道（M2b spec §3.1）——payload 直接采用 renderer 契约形状

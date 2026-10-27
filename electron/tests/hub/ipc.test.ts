@@ -32,15 +32,15 @@ vi.mock('../../src/main/hub/publish', () => ({
   publishToHub: vi.fn(async (input: { type: string; ref: string }) => ({ slug: input.ref, version: '1.0.0', checksum: 'c', sizeBytes: 1 })),
 }));
 
-// 发布回填记账只锁接线（plugin 类才调）——DB 行为矩阵在 publish-accounting.test.ts
+// 发布回填记账只锁接线（四类统一调 Safe 壳）——DB 行为矩阵在 publish-accounting.test.ts
 vi.mock('../../src/main/resource/hub-install', () => ({
-  recordPluginPublishAccounting: vi.fn(),
+  recordPublishAccountingSafe: vi.fn(),
 }));
 
 import { registerHubIpc } from '../../src/main/hub/ipc.handlers';
 import * as manager from '../../src/main/hub/index';
 import { publishToHub } from '../../src/main/hub/publish';
-import { recordPluginPublishAccounting } from '../../src/main/resource/hub-install';
+import { recordPublishAccountingSafe } from '../../src/main/resource/hub-install';
 
 const GROUP_CHANNELS = ['hub:groupCreate', 'hub:groupInvite', 'hub:groupJoin', 'hub:groupLeave', 'hub:groupList', 'hub:groupTransfer'];
 const MIRROR_CHANNELS = ['hub:snapshotBuildUpload', 'hub:mirrorWorkspace', 'hub:mirrorRegistry'];
@@ -101,14 +101,13 @@ describe('hub IPC 接线', () => {
     expect(out).toEqual({ slug: 's1', version: '1.0.0', checksum: 'c', sizeBytes: 1 });
   });
 
-  it('publishResource plugin 类成功后回填 hub 记账；非 plugin 类不回填', async () => {
+  it('publishResource 四类型发布各触发记账回填（Safe 壳透传 type/slug/version/checksum）', async () => {
     registerHubIpc();
-    await handlers.get('hub:publishResource')!(null, { type: 'plugin', ref: 'codegraph' });
-    expect(recordPluginPublishAccounting).toHaveBeenCalledWith('codegraph', '1.0.0', 'c');
-
-    vi.clearAllMocks();
-    await handlers.get('hub:publishResource')!(null, { type: 'agent', ref: 'a1' });
-    expect(recordPluginPublishAccounting).not.toHaveBeenCalled();
+    for (const type of ['agent', 'skill', 'mcp', 'plugin'] as const) {
+      await handlers.get('hub:publishResource')!(null, { type, ref: `${type}-1` });
+      expect(recordPublishAccountingSafe).toHaveBeenLastCalledWith(type, `${type}-1`, '1.0.0', 'c');
+    }
+    expect(recordPublishAccountingSafe).toHaveBeenCalledTimes(4);
   });
 
   it('委派设置两通道：get 透传 hubGetDelegationSettings；set 透传入参并回传归一化值', async () => {
