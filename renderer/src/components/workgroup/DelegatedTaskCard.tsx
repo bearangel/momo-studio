@@ -409,7 +409,11 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
                 className="h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-status-violet border-t-transparent"
               />
             )}
-            <span className="min-w-0 flex-1 truncate">
+            {/* P2-3：摘要/失败原因截断显示，title 悬浮全文（reason 链：hub failed 载荷 → errorMessage 列 → 此行） */}
+            <span
+              className="min-w-0 flex-1 truncate"
+              title={waiting ? (effectiveWaitingSummary ?? undefined) : (progressExcerpt ?? undefined)}
+            >
               {waiting ? effectiveWaitingSummary : progressExcerpt}
               {waiting && isWorkerView && (
                 <b className="font-semibold"> · 打开会话批准/拒绝</b>

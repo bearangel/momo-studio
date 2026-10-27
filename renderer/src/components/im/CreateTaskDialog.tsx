@@ -79,6 +79,9 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
   const [groupId, setGroupId] = useState('');
   const [batchText, setBatchText] = useState('');
   const [batchError, setBatchError] = useState<string | null>(null);
+  // M2.2 P2-2：目标并发上限预检口径（本机委派设置——各节点自管，leader 只能以
+  // 本机设置近似；拉取失败静默降级缺省 2，不阻塞弹窗）
+  const [maxConcurrent, setMaxConcurrent] = useState(2);
   const [routing, setRouting] = useState<TaskRouting>({ mode: 'local' });
   const [permissionTier, setPermissionTier] = useState<PermissionTier>('confirm');
   const [precheck, setPrecheck] = useState<RoutingPrecheckResult | null>(null);
@@ -119,6 +122,10 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
         .routingPrecheck({ workspaceName })
         .then(setPrecheck)
         .catch(() => setPrecheck({ mirrored: false, groups: [] }));
+      void ipc.hub
+        .getDelegationSettings()
+        .then((s) => setMaxConcurrent(s.maxConcurrent))
+        .catch(() => {});
     }
     // 分组选项与 taskGroup.list 'exclude' 口径一致（只列活跃组）；失败静默——
     // 下拉只剩「不分组」，不阻塞建任务
@@ -303,6 +310,15 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
             {batchError !== null && (
               <p role="alert" className="break-words text-xs leading-relaxed text-status-error">
                 {batchError}
+              </p>
+            )}
+            {mode === 'batch' && routingAvailable && remoteRouting && batchCount > maxConcurrent && (
+              <p
+                data-testid="batch-concurrency-hint"
+                className="break-words text-xs leading-relaxed text-status-warning"
+              >
+                批量 {batchCount} 行已超过目标并发上限（{maxConcurrent}）：超出部分可能被目标节点拒派
+               （declined，任务保留待处理可重试派发）。提交不会被拦截。
               </p>
             )}
             {routingAvailable && (

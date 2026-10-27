@@ -9,6 +9,11 @@ import path from 'node:path';
 // electron API 假件（照 stream-relay.test 形态——进程边界 DI）
 const mockSend = vi.fn();
 import { __setElectronApisForTest } from '../../src/main/electron-access';
+import { setWriteDeniedBroadcaster } from '../../src/main/sandbox/write-blocked-emit';
+
+// M2.2 P2-1：deny 广播链注入（生产接线在 delegation-runner 装载期；测试直注 spy）
+const { mockBroadcastDeny } = vi.hoisted(() => ({ mockBroadcastDeny: vi.fn((): boolean => false) }));
+setWriteDeniedBroadcaster(mockBroadcastDeny);
 
 beforeAll(() => {
   __setElectronApisForTest({
@@ -27,6 +32,9 @@ import {
   listPendingWriteBlocked,
   clearPendingOnGrant,
   clearPendingOnDeny,
+  markSessionReadonly,
+  isReadonlySession,
+  consumeReadonlyDenied,
   __resetInspectStateForTest,
 } from '../../src/main/sandbox/write-blocked-emit';
 import type { MessageEventRow } from '../../src/main/storage/messages/events-repo';
@@ -408,5 +416,117 @@ describe('未决写授权登记（T11 sessionWaiting 真源）', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ═══ M2.2 P2-1：readonly 档即时拒 ═══
+// 2026-10-26 降级裁定（readonly 行为约束仅由任务书约束段承载）的部分翻转：
+// readonly 会话的越界写工具调用不再走授权卡等待/HITL 超时链——两条上报链
+// （childMsg 等待即报 / inspectEventBatch 迟到兜底）命中即广播 denied 解除
+// 子进程等待 + 登记 denial 事件（delegation-runner 消费为 kind='denied' 拍）；
+// 未越界的 workspace 内写不受授权门控，仍由约束段承载。
+describe('readonly 即时拒（M2.2 P2-1）', () => {
+  beforeEach(() => {
+    mockBroadcastDeny.mockClear();
+    mockSend.mockClear();
+  });
+
+  /** readonly 用例的会话种子（T11 seedWaitingSession 同款——该 helper 作用域在别的 describe 内） */
+  function seedRoSession(sessionId: string, streamId: string): void {
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO workspaces (id, name, directory_path, owner_id)
+       VALUES ('ws-t11', 't11', '/ws/t11', 'u-test')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO sessions (id, workspace_id, title, title_auto, kind, created_at, updated_at)
+       VALUES (?, 'ws-t11', '只读委派会话', 0, 'chat', 1, 1)`,
+    ).run(sessionId);
+    db.prepare(
+      `INSERT INTO messages (id, session_id, sender, event_type, body, stream_session_id, status, source, created_at, updated_at)
+       VALUES (?, ?, 'agent-coder-66XMEw', 'm.room.message', '', ?, 'streaming', 'local', 1, 1)`,
+    ).run(`m-${sessionId}`, sessionId, streamId);
+  }
+
+  it('P2-1a. readonly 会话写工具上报 → 即时 deny：不弹卡/不登记 pending/broadcast 同 dirs/denial 事件可消费', () => {
+    seedRoSession('s-ro1', 'ss-ro1');
+    markSessionReadonly('s-ro1', true);
+    expect(isReadonlySession('s-ro1')).toBe(true);
+
+    const consumed = writeBlockedFromChildMsg({
+      type: 'write-blocked-report', streamSessionId: 'ss-ro1', workspaceId: 'ws-t11',
+      dirs: ['/ws/t11/out.txt'], command: 'bash git push origin main',
+    });
+
+    expect(consumed).toBe(true);
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(listPendingWriteBlocked('s-ro1')).toHaveLength(0);
+    expect(mockBroadcastDeny).toHaveBeenCalledWith(['/ws/t11/out.txt']);
+    const denials = consumeReadonlyDenied('s-ro1');
+    expect(denials).toHaveLength(1);
+    expect(denials[0]).toContain('只读档位即时拒绝');
+    expect(denials[0]).toContain('bash git push origin main');
+    expect(consumeReadonlyDenied('s-ro1')).toHaveLength(0);
+  });
+
+  it('P2-1b. readonly 会话读类工具照常：本漏斗只拦写（读事件零 deny/零卡/零登记）', () => {
+    seedRoSession('s-ro2', 'ss-ro2');
+    markSessionReadonly('s-ro2', true);
+
+    expect(inspectEventBatch([mkResult('c-ro', 'read 42 lines, done')])).toBeNull();
+    expect(writeBlockedFromChildMsg({ type: 'progress-report', streamSessionId: 'ss-ro2' })).toBe(false);
+
+    expect(mockBroadcastDeny).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(consumeReadonlyDenied('s-ro2')).toHaveLength(0);
+  });
+
+  it('P2-1c. 非 readonly 会话不受影响：写上报照常弹卡+登记 pending，零 broadcast', () => {
+    seedRoSession('s-ro3', 'ss-ro3');
+    expect(isReadonlySession('s-ro3')).toBe(false);
+
+    const consumed = writeBlockedFromChildMsg({
+      type: 'write-blocked-report', streamSessionId: 'ss-ro3', workspaceId: 'ws-t11',
+      dirs: ['/ws/t11/f'], command: 'cargo build',
+    });
+
+    expect(consumed).toBe(true);
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(listPendingWriteBlocked('s-ro3')).toHaveLength(1);
+    expect(mockBroadcastDeny).not.toHaveBeenCalled();
+    expect(consumeReadonlyDenied('s-ro3')).toHaveLength(0);
+  });
+
+  it('P2-1d. inspectEventBatch 迟到兜底链同款即时拒：返回 null（stream-relay 不推卡）+ broadcast + denial 事件', () => {
+    getDb()
+      .prepare(
+        'INSERT INTO messages (id, session_id, sender, event_type, body, stream_session_id, workspace_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run('m-1', 's-ro4', 'agent-x', 'message', '', 'ss-ro4', 'w-ro4', Date.now(), Date.now());
+    markSessionReadonly('s-ro4', true);
+
+    const sig = inspectEventBatch([mkStart('c-ro4', 'git push --force'), mkResult('c-ro4', CARGO_FAIL)]);
+
+    expect(sig).toBeNull();
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockBroadcastDeny).toHaveBeenCalled();
+    const denials = consumeReadonlyDenied('s-ro4');
+    expect(denials).toHaveLength(1);
+    expect(denials[0]).toContain('只读档位即时拒绝');
+    expect(denials[0]).toContain('git push --force');
+  });
+
+  it('P2-1e. 标记可翻转：markSessionReadonly(false) → 恢复弹卡等待语义', () => {
+    seedRoSession('s-ro5', 'ss-ro5');
+    markSessionReadonly('s-ro5', true);
+    markSessionReadonly('s-ro5', false);
+
+    writeBlockedFromChildMsg({
+      type: 'write-blocked-report', streamSessionId: 'ss-ro5', workspaceId: 'ws-t11',
+      dirs: ['/x'], command: 'w',
+    });
+
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(mockBroadcastDeny).not.toHaveBeenCalled();
   });
 });

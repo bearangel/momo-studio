@@ -216,6 +216,26 @@ describe('DelegatedTaskCard — leader 侧六态', () => {
     expect(screen.getByText('执行失败:测试炸了')).toBeInTheDocument();
   });
 
+  // ── M2.2 P2-3：failed reason 全文透传（truncate + title 全文）──
+
+  it('L-4b. failed reason 超长：进度行截断显示 + title 悬浮全文（hub reason 链已在——errorMessage 列）', () => {
+    const longReason =
+      '执行失败:目标节点 cargo build 崩溃：error: failed to open ~/.cargo/registry/cache/a.crate Caused by: Operation not permitted (os error 1)，重试三次后仍失败，请检查目标节点沙箱配置';
+    renderCard(mkTask({ id: 'T-100', title: '排查生产 500', status: 'failed', errorMessage: longReason }));
+    const line = screen.getByText(longReason);
+    expect(line).toBeInTheDocument();
+    expect(line.closest('[data-progress-line]')?.querySelector('.truncate')?.getAttribute('title')).toBe(longReason);
+    expect(line.className).toContain('truncate');
+  });
+
+  it('L-4c. failed reason 缺席（errorMessage null）→ 回退现状：无进度行、零 title 悬浮', () => {
+    renderCard(mkTask({ id: 'T-100', title: '排查生产 500', status: 'failed', errorMessage: null }));
+    expect(screen.getByText('失败')).toBeInTheDocument();
+    const card = screen.getByRole('button', { name: /排查生产 500/ });
+    expect(card.querySelector('[data-progress-line]')).toBeNull();
+    expect(card.querySelector('[title]')).toBeNull();
+  });
+
   it('L-5. cancelled：neutral 已取消徽标', () => {
     renderCard(mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'cancelled' }));
     expect(screen.getByText('已取消')).toBeInTheDocument();

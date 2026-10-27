@@ -171,8 +171,12 @@ export interface DelegationSyncPorts {
 }
 
 export interface DelegationSync {
-  /** leader：task.progress 拍 → running 映射 + 进度摘要（kind=waiting-input → kv waiting 标志，T12） */
-  handleProgress(evt: { taskId: string; lastSeq: number; excerpt: string; kind?: 'waiting-input' }): void;
+  /**
+   * leader：task.progress 拍 → running 映射 + 进度摘要。
+   * kind='waiting-input' → kv waiting 标志（T12）；kind='denied'（M2.2 P2-1
+   * 前向预留——hub v0.1.4 剥除该值不透传）→ 不置 waiting，文案由 excerpt 承载。
+   */
+  handleProgress(evt: { taskId: string; lastSeq: number; excerpt: string; kind?: 'waiting-input' | 'denied' }): void;
   /** leader：task.completed / task.failed / task.interrupted 终态 */
   handleTerminal(status: 'done' | 'failed' | 'interrupted', taskId: string, reason?: string): void;
   /** leader：task.cancel 回执（hub 账本权威 → 本地行同步） */
@@ -203,7 +207,12 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
     ports.updateTask(row.id, { status: next, ...extra });
   };
 
-  const saveProgress = (delegationId: string, excerpt: string, lastSeq: number, kind?: 'waiting-input'): void => {
+  const saveProgress = (
+    delegationId: string,
+    excerpt: string,
+    lastSeq: number,
+    kind?: 'waiting-input' | 'denied',
+  ): void => {
     ports.saveProgress(delegationId, {
       excerpt,
       lastSeq,

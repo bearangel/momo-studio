@@ -16,6 +16,12 @@ import type { TaskReportPayload } from './delegation-wire';
 import type { DelegationRecord, HubDelegationStore } from './delegation-store';
 import type { HubDelegationSettings } from './delegation-settings';
 import { composeTurnBody, normalizeTier, type PermissionTier } from './run-policy';
+import { consumeReadonlyDenied, markSessionReadonly, setWriteDeniedBroadcaster } from '../sandbox/write-blocked-emit';
+import { broadcastWriteGrantDenied } from '../agent/runtime-registry';
+
+// P2-1 即时拒的 deny 广播接线（注册反转——write-blocked-emit 为子进程可达模块，
+// 不可顶层依赖 runtime-registry；本模块仅主进程 hub/index 装载，恒先于委派回合）
+setWriteDeniedBroadcaster(broadcastWriteGrantDenied);
 
 /**
  * task.assigned 载荷的 studio 侧容错扩展（T10）：协议 1.2.0 的 DelegationTask 无
@@ -81,7 +87,7 @@ interface ActiveRun {
   /** 进度游标：仅在上报成功后推进（断线不丢增量） */
   cursor: number;
   /** 待发进度拍（合并语义：始终覆盖为最新批尾；waiting 态带 kind 标注） */
-  pendingBeat: { lastSeq: number; excerpt: string; kind?: 'waiting-input' } | null;
+  pendingBeat: { lastSeq: number; excerpt: string; kind?: 'waiting-input' | 'denied' } | null;
   /** 首拍 running 之后的回合 prompt 摘要（无文本增量时的 excerpt 兜底） */
   promptExcerpt: string;
   /** L1b：本次持续等待的起点（首次 waiting=true 的拍时刻；恢复清 null——时钟按连续段计时） */
@@ -195,6 +201,8 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
       waitedMinutes: timeoutMinutes,
     });
     ports.applyRunPolicy(run.sessionId, 'readonly');
+    // P2-1：翻转后续写调用为即时拒（当前在途等待卡仍走既有 TTL/处置清除语义）
+    markSessionReadonly(run.sessionId, true);
     ports.injectSteer(run.sessionId, HITL_TIMEOUT_STEER);
     run.hitlInjectedAt = Date.now();
   };
@@ -254,6 +262,25 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
       // waiting===null（信号源不支持/查询异常，P2-1）：本拍降级——≠ 恢复，
       // waitingSince/hitlInjectedAt 原样保留（时钟按连续段续计、注入幂等跨降级拍
       // 保持），仅跳过本拍等待检测。
+      // P2-1 readonly 即时拒事件：write-blocked 漏斗登记的 denial 摘要消费即清——
+      // 覆盖为 kind='denied' 拍（excerpt 含「只读档位」文案，leader 侧即时可见
+      // 而非挂起；readonly 会话无等待登记，与上方等待拍互斥不冲突）
+      const deniedExcerpts = (() => {
+        try {
+          return consumeReadonlyDenied(run.sessionId);
+        } catch (err) {
+          logger.warn('即时拒事件消费异常（本拍跳过）', {
+            sessionId: run.sessionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return [] as string[];
+        }
+      })();
+      if (deniedExcerpts.length > 0) {
+        const lastSeq = Math.max(run.cursor, run.pendingBeat?.lastSeq ?? 0);
+        const excerpt = deniedExcerpts[deniedExcerpts.length - 1]!;
+        run.pendingBeat = { lastSeq, excerpt: excerpt.slice(0, EXCERPT_MAX), kind: 'denied' };
+      }
       const beat = run.pendingBeat;
       if (!beat) continue; // 无增量不打空拍（等待态除外——上方已置等待拍）
       void sendReport(taskId, {
@@ -374,6 +401,8 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
       });
       // T10 档位预配：createSession 后、startTurn（startRun 内）前——授权面先于回合注入
       ports.applyRunPolicy(sessionId, normalizeTier(evt.task.permissionTier));
+      // P2-1：readonly 档位产物落地标记（write-blocked 漏斗即时拒判据）；sandbox/confirm 显式清标（幂等）
+      markSessionReadonly(sessionId, normalizeTier(evt.task.permissionTier) === 'readonly');
       const now = Date.now();
       await startRun(evt, sessionId, {
         taskId: evt.taskId,

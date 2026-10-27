@@ -30,6 +30,10 @@ export interface TaskReportPayload {
 /** 进度拍：委派会话 message_events 尾部摘要（excerpt 为截断文本）。
  *  kind 可选标注（M2.1 T11）：'waiting-input' = worker 侧 agent 正等待用户
  *  确认（写授权卡等）——leader 看板卡据此切「等待节点确认」态（T12 消费）。
+ *  'denied'（M2.2 P2-1）= readonly 档即时拒拍（excerpt 含「只读档位」文案）。
+ *  ⚠️ hub v0.1.4 parseReportPayload 单值枚举仅认 'waiting-input'——'denied' 被
+ *  剥除不透传（不抛），文案由 excerpt 承载；联合扩展为 hub 升级透传的前向预留
+ *  （本端上行侧先行，hub 零改动约束 RM-M22-1）。
  *
  *  ✅ hub 侧透传已落地（momo-hub v0.1.4，2026-10-26——T11b）：parseReportPayload
  *  白名单收 progress.kind + 单值枚举校验（非法剥除不抛，先例 permissionTier），
@@ -39,5 +43,5 @@ export interface TaskReportPayload {
 export interface TaskReportProgress {
   lastSeq: number;
   excerpt: string;
-  kind?: 'waiting-input';
+  kind?: 'waiting-input' | 'denied';
 }

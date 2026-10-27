@@ -276,6 +276,23 @@ describe('delegation-sync — leader 侧状态回写（六态映射矩阵）', (
     expect(w.progress.get('hub-task-1')?.excerpt).toBe('续跑产出');
   });
 
+  // ── M2.2 P2-1：denied 拍（kind='denied'）不点亮等待——文案由 excerpt 承载 ──
+
+  it('A-11b. denied 拍（kind=denied，hub 前向预留）→ 摘要落 excerpt、waiting 不置', () => {
+    const w = makeWorld([delegatedRow({ status: 'in_progress', startedAt: 111 })]);
+    createDelegationSync(w.ports).handleProgress({
+      taskId: 'hub-task-1',
+      lastSeq: 20,
+      excerpt: '只读档位即时拒绝：bash git push origin main',
+      kind: 'denied',
+    });
+    expect(w.progress.get('hub-task-1')).toEqual({
+      excerpt: '只读档位即时拒绝：bash git push origin main',
+      lastSeq: 20,
+      at: NOW,
+    });
+  });
+
   it('A-12. Low-1：终态同态重写不重盖章——重复 done 推送 completedAt 不变、零行写', () => {
     const w = makeWorld([delegatedRow({ status: 'in_progress', startedAt: 111 })]);
     let writes = 0;

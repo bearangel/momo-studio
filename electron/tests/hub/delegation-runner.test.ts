@@ -14,6 +14,12 @@ import {
   type TurnTerminal,
 } from '../../src/main/hub/delegation-runner';
 import { READONLY_PROMPT_PREFIX } from '../../src/main/hub/run-policy';
+import {
+  __pushReadonlyDeniedForTest,
+  __resetInspectStateForTest,
+  isReadonlySession,
+  markSessionReadonly,
+} from '../../src/main/sandbox/write-blocked-emit';
 import { createHubDelegationSettingsStore } from '../../src/main/hub/delegation-settings';
 import { createHubDelegationStore } from '../../src/main/hub/delegation-store';
 
@@ -856,5 +862,70 @@ describe('降级拍不重置等待时钟（P2-1）', () => {
     expect(failed?.payload.reason).toContain('hitl_timeout'); // 越双倍线 → RF#4 清算
     expect(h.log.stoppedSessions).toContain('sess-1');
     expect(h.store.get('t1')?.state).toBe('failed');
+  });
+});
+
+// ═══ M2.2 P2-1：readonly 即时拒（会话标记 + denied 进度拍）═══
+// 标记真源在 write-blocked-emit（进程内模块态）；runner 在 applyRunPolicy 产物
+// 落地后标记，denial 事件经 tick 消费为 kind='denied' 拍（worker 侧等待卡即时
+// 可见 denied 而非挂起——excerpt 承载「只读档位」文案，hub v0.1.4 对非
+// waiting-input kind 剥除不透传，前向预留）。
+describe('readonly 即时拒（M2.2 P2-1）', () => {
+  beforeEach(() => {
+    __resetInspectStateForTest();
+  });
+
+  it('P2-1a. readonly 档 handleAssigned → 会话标记 readonly（applyRunPolicy 产物消费）', async () => {
+    const h = makeHarness();
+    h.setWorkspace('ws-a', 'ws-id-1');
+    h.setAgent(undefined, 'inst-default');
+    await h.runner.handleAssigned(
+      assignedEvt('t1', { task: { title: '只读巡检', prompt: '巡检', permissionTier: 'readonly' } }),
+    );
+    expect(isReadonlySession('sess-1')).toBe(true);
+  });
+
+  it('P2-1b. confirm/sandbox 档不标记（非 readonly 会话不受影响）', async () => {
+    const h = makeHarness();
+    h.setWorkspace('ws-a', 'ws-id-1');
+    h.setAgent(undefined, 'inst-default');
+    await h.runner.handleAssigned(assignedEvt('t1'));
+    await h.runner.handleAssigned(
+      assignedEvt('t2', { task: { title: '沙箱活', prompt: 'p', permissionTier: 'sandbox' } }),
+    );
+    expect(isReadonlySession('sess-1')).toBe(false);
+    expect(isReadonlySession('sess-2')).toBe(false);
+  });
+
+  it('P2-1c. denial 事件 → 进度拍 kind=denied + excerpt 含「只读档位即时拒绝」；消费即清不重复打拍', async () => {
+    const h = makeHarness();
+    await admitOne(h, 't1');
+    h.log.reports.length = 0;
+
+    markSessionReadonly('sess-1', true);
+    __pushReadonlyDeniedForTest('sess-1', 'bash git push origin main');
+    await vi.advanceTimersByTimeAsync(500);
+
+    const deniedBeats = h.log.reports.filter(
+      (r) => r.payload.status === 'running' && r.payload.progress?.kind === 'denied',
+    );
+    expect(deniedBeats).toHaveLength(1);
+    expect(deniedBeats[0]!.payload.progress?.excerpt).toContain('只读档位即时拒绝');
+    expect(deniedBeats[0]!.payload.progress?.excerpt).toContain('bash git push origin main');
+
+    await vi.advanceTimersByTimeAsync(1500);
+    const again = h.log.reports.filter(
+      (r) => r.payload.status === 'running' && r.payload.progress?.kind === 'denied',
+    );
+    expect(again).toHaveLength(1);
+  });
+
+  it('P2-1d. HITL 超时注入翻转 readonly → 会话同步标记（后续写调用即时拒）', async () => {
+    const h = makeHarness();
+    await admitOne(h, 't1');
+    h.setWaiting('sess-1', { waiting: true, summary: '等待写授权' });
+    await vi.advanceTimersByTimeAsync(15 * 60_000 + 1_000);
+    expect(h.log.injectedSteers).toHaveLength(1);
+    expect(isReadonlySession('sess-1')).toBe(true);
   });
 });

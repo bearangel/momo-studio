@@ -25,7 +25,7 @@ import type { GroupRow, RoutingPrecheckResult } from '../../ipc/types';
 // 同时能在每个 test 内通过 mockResolvedValueOnce 精确控制返回值。
 const {
   mockTaskCreate, mockListAssignments, mockTeamList, mockSessionList, mockTaskGroupList,
-  mockRoutingPrecheck, mockSubmitRoutedTask, showToastMock,
+  mockRoutingPrecheck, mockSubmitRoutedTask, mockGetDelegationSettings, showToastMock,
 } = vi.hoisted(() => ({
   mockTaskCreate: vi.fn(),
   mockListAssignments: vi.fn(),
@@ -34,6 +34,7 @@ const {
   mockTaskGroupList: vi.fn(),
   mockRoutingPrecheck: vi.fn(),
   mockSubmitRoutedTask: vi.fn(),
+  mockGetDelegationSettings: vi.fn().mockResolvedValue({ acceptTasks: true, maxConcurrent: 2, hitlTimeoutMinutes: 15 }),
   showToastMock: vi.fn(),
 }));
 
@@ -44,7 +45,11 @@ vi.mock('../../ipc/client', () => ({
     team: { list: mockTeamList },
     session: { list: mockSessionList },
     taskGroup: { list: mockTaskGroupList },
-    hub: { routingPrecheck: mockRoutingPrecheck, submitRoutedTask: mockSubmitRoutedTask },
+    hub: {
+      routingPrecheck: mockRoutingPrecheck,
+      submitRoutedTask: mockSubmitRoutedTask,
+      getDelegationSettings: mockGetDelegationSettings,
+    },
   },
 }));
 
@@ -645,5 +650,69 @@ describe('CreateTaskDialog — 单/批量与执行位置（M2.1 T8）', () => {
     // 回本机 → 档位行退场（值保留但不随 local 提交透传）
     fireEvent.click(screen.getByRole('radio', { name: '本机执行' }));
     expect(screen.queryByRole('radiogroup', { name: '权限策略' })).not.toBeInTheDocument();
+  });
+});
+
+// ═══ M2.2 P2-2：批量超限预检提示行（不拦提交——declined 语义保持 UC4 口径）═══
+describe('CreateTaskDialog — 批量并发预检（M2.2 P2-2）', () => {
+  beforeEach(() => {
+    mockTaskCreate.mockReset().mockResolvedValue({ id: 'T-100' });
+    mockRoutingPrecheck.mockReset().mockResolvedValue(precheckFixture());
+    mockSubmitRoutedTask.mockReset().mockResolvedValue({ task: { id: 'T-rem' }, dispatched: true, nodeId: 'node-a' });
+    mockGetDelegationSettings.mockReset().mockResolvedValue({ acceptTasks: true, maxConcurrent: 2, hitlTimeoutMinutes: 15 });
+    useGroupStore.setState({ groups: [], loading: false, error: null, currentWorkspaceId: null, selectedGroupId: null });
+  });
+
+  it('P2-2a. 批量行数 > 目标并发上限（外派路由）→ 提示行在场且可提交（不拦提交）', async () => {
+    const onCreated = vi.fn();
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={onCreated} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '批量' }));
+    fireEvent.click(await screen.findByRole('radio', { name: '组内调度' }));
+    fireEvent.change(screen.getByLabelText(/批量任务书/), {
+      target: { value: '任务A\n任务B\n任务C' },
+    });
+
+    const hint = screen.getByTestId('batch-concurrency-hint');
+    expect(hint.textContent).toContain('3');
+    expect(hint.textContent).toContain('2');
+    expect(hint.textContent).toContain('declined');
+
+    const submit = screen.getByRole('button', { name: '创建 3 个任务' });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    await waitFor(() => expect(mockSubmitRoutedTask).toHaveBeenCalledTimes(3));
+    expect(onCreated).toHaveBeenCalledTimes(1);
+  });
+
+  it('P2-2b. 未超限（行数 ≤ 上限）→ 无提示行', async () => {
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '批量' }));
+    fireEvent.click(await screen.findByRole('radio', { name: '组内调度' }));
+    fireEvent.change(screen.getByLabelText(/批量任务书/), {
+      target: { value: '任务A\n任务B' },
+    });
+    expect(screen.queryByTestId('batch-concurrency-hint')).not.toBeInTheDocument();
+  });
+
+  it('P2-2c. 本机路由不预检并发（local 行落看板排队，无 declined 面）+ 设置拉取失败静默降级', async () => {
+    mockGetDelegationSettings.mockReset().mockRejectedValue(new Error('ipc down'));
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '批量' }));
+    fireEvent.change(screen.getByLabelText(/批量任务书/), {
+      target: { value: '任务A\n任务B\n任务C' },
+    });
+    // 本机执行（缺省路由）→ 即使行数超上限也无提示
+    expect(screen.queryByTestId('batch-concurrency-hint')).not.toBeInTheDocument();
+    // 设置读取失败不阻塞弹窗（缺省上限 2，切换外派路由后提示仍按缺省口径在场）
+    fireEvent.click(await screen.findByRole('radio', { name: '组内调度' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('batch-concurrency-hint').textContent).toContain('2'),
+    );
   });
 });

@@ -12,6 +12,7 @@ import { resolveStreamOwner } from '../storage/messages/repo';
 import { getSession } from '../storage/sessions/repo';
 import { loadElectronApis } from '../electron-access';
 import { detectWriteBlocked, extractBlockedPaths, normalizeGrantDirs } from '../agent/tools/sandbox-write-hint';
+import { readonlyDenyExcerpt } from '../hub/run-policy';
 
 const commandByCallId = new Map<string, string>();
 const COMMAND_CACHE_MAX = 100;
@@ -30,6 +31,11 @@ const PENDING_TTL_MS = 15 * 60 * 1000;
 function sweepExpired(now: number): void {
   for (const [key, entry] of pendingWriteBlocked) {
     if (now - entry.at > PENDING_TTL_MS) pendingWriteBlocked.delete(key);
+  }
+  for (const [key, q] of readonlyDeniedBySession) {
+    const alive = q.filter((e) => now - e.at <= PENDING_TTL_MS);
+    if (alive.length === 0) readonlyDeniedBySession.delete(key);
+    else if (alive.length !== q.length) readonlyDeniedBySession.set(key, alive);
   }
 }
 
@@ -68,6 +74,74 @@ export function clearPendingOnDeny(sessionId: string | null, dirs: string[]): vo
     const sessionHit = sessionId === null || signal.sessionId === sessionId;
     if (sessionHit && (denyAll || signal.dirs.some((d) => dirs.includes(d)))) pendingWriteBlocked.delete(streamKey);
   }
+}
+
+// ─── M2.2 P2-1：readonly 档即时拒 ────────────────────────────────────────────
+// readonly 会话（applyRunPolicy 产物——delegation-runner 在档位预配后标记）的
+// 越界写工具调用不再走授权卡等待/HITL 超时链：两条上报链命中即广播 denied 解除
+// 子进程等待 + 登记 denial 事件（runner tick 消费为 kind='denied' 拍）。裁定演进
+// 注见 run-policy.ts（2026-10-26 降级裁定的部分翻转）。
+
+/** readonly 会话标记（进程内模块态——delegation-runner 消费 applyRunPolicy 产物写入。
+ *  不落 kv：delegation-ports 不可侵入（T3 边界），且 getDb 惰性开真实库会污染
+ *  runner 单测的隔离 DB——进程重启后回落约束段承载语义（降级可接受，事件面见
+ *  task-3-report）。会话 id 唯一且量级=进程内委派数，无 TTL 必要。 */
+const readonlySessions = new Set<string>();
+
+export function markSessionReadonly(sessionId: string, on: boolean): void {
+  if (on) readonlySessions.add(sessionId);
+  else readonlySessions.delete(sessionId);
+}
+
+export function isReadonlySession(sessionId: string): boolean {
+  return readonlySessions.has(sessionId);
+}
+
+/** 即时拒事件（sessionId → 待消费摘要队列——runner 消费即清，不重复打拍） */
+const readonlyDeniedBySession = new Map<string, Array<{ excerpt: string; at: number }>>();
+
+/** 测试注入端（模拟 writeBlockedFromChildMsg 即时拒路径的 denial 登记——真实语义同形） */
+export function __pushReadonlyDeniedForTest(sessionId: string, command: string): void {
+  recordReadonlyDenied(sessionId, command);
+}
+
+function recordReadonlyDenied(sessionId: string, command: string): void {
+  const q = readonlyDeniedBySession.get(sessionId) ?? [];
+  q.push({ excerpt: readonlyDenyExcerpt(command), at: Date.now() });
+  readonlyDeniedBySession.set(sessionId, q);
+}
+
+/** 消费某会话的全部即时拒摘要（消费即清；TTL 同 pending 惰性清扫） */
+export function consumeReadonlyDenied(sessionId: string): string[] {
+  sweepExpired(Date.now());
+  const q = readonlyDeniedBySession.get(sessionId);
+  if (!q || q.length === 0) return [];
+  readonlyDeniedBySession.delete(sessionId);
+  return q.map((e) => e.excerpt);
+}
+
+/**
+ * 两条上报链共用的即时拒判定与处置：readonly 命中 → 登记 denial 事件 + 广播
+ * denied 解除子进程等待（dirs 原样回传——与子进程等待登记同源，denialMatches
+ * 必命中）。调用方据此跳过 pending 登记与授权卡推送。
+ *
+ * deny 广播经注册反转注入（setAbortResolver 先例）：本模块经 stream-relay 为
+ * runtime 子进程可达（electron-access 隔离约束），顶层 import runtime-registry
+ * 会把 agent 运行时全图（含 electron 顶层引用）拉进子进程——隔离回归锁
+ * runtime-child-electron-isolation 会红。生产接线在 delegation-runner 模块
+ * 装载时（hub/index 主进程侧，恒先于任何委派回合）。
+ */
+let deniedBroadcaster: ((dirs: string[]) => void) | null = null;
+
+export function setWriteDeniedBroadcaster(broadcast: (dirs: string[]) => void): void {
+  deniedBroadcaster = broadcast;
+}
+
+function handleReadonlyDeny(signal: WriteBlockedSignal): boolean {
+  if (signal.sessionId === null || !isReadonlySession(signal.sessionId)) return false;
+  recordReadonlyDenied(signal.sessionId, signal.command);
+  deniedBroadcaster?.(signal.dirs);
+  return true;
 }
 
 /** result 文本中的沙箱 tag 行（子进程 shell-tools 拼入 `sandbox: ${plan.tag}`）——主进程侧的沙箱化判定（终审 I2） */
@@ -125,6 +199,8 @@ function resolveStreamContext(streamSessionId: string | null): {
 export function __resetInspectStateForTest(): void {
   commandByCallId.clear();
   pendingWriteBlocked.clear();
+  readonlySessions.clear();
+  readonlyDeniedBySession.clear();
 }
 
 export function inspectEventBatch(events: MessageEventRow[]): WriteBlockedSignal | null {
@@ -173,6 +249,8 @@ export function inspectEventBatch(events: MessageEventRow[]): WriteBlockedSignal
       sourceAgentName: ctx.sourceAgentName,
       sessionTitle: ctx.sessionTitle,
     };
+    // P2-1 readonly 即时拒：不登记 pending、不推卡（等待卡即时 denied 而非挂起）
+    if (handleReadonlyDeny(signal)) return null;
     registerPending(signal);
     return signal;
   }
@@ -209,6 +287,8 @@ export function writeBlockedFromChildMsg(msg: unknown): boolean {
     sourceAgentName: ctx.sourceAgentName,
     sessionTitle: ctx.sessionTitle,
   };
+  // P2-1 readonly 即时拒：不登记 pending、不推授权卡（deny 广播已解除子进程等待）
+  if (handleReadonlyDeny(signal)) return true;
   registerPending(signal);
   const { BrowserWindow } = loadElectronApis();
   const win = BrowserWindow?.getAllWindows()[0];

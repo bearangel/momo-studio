@@ -9,12 +9,19 @@
 //   sandbox  = 预授予镜像工作空间目录写授权（既有写授权管理器 session 键）
 //   confirm  = 不自动拒（现状默认——越界写走既有授权卡等待链）
 //
-// readonly 降级裁定（2026-10-26，任务书明示选此实用降级）：运行时无「只读工具集」
-// 现成开关（工具集为 agent 定义 YAML 的 defaultTools，无会话级只读投影面），
-// 不造新权限子系统——readonly 的行为约束由 startTurn body 前置只读约束段承载
-// （越界写在授权硬门控上仍会等待/拒绝），授权面用 clearSessionGrants 显式清零
-// （防同键历史授权残留越权）。预广播 denied（runtime-registry
-// broadcastWriteGrantDenied）不采用：它只唤醒在途等待者，对未来工具调用 no-op。
+// readonly 降级裁定（2026-10-26，任务书明示选此实用降级）→ **M2.2 P2-1 部分翻转
+// （2026-10-27）**：原裁定「readonly 行为约束仅由任务书前置只读约束段承载」在
+// **越界写工具调用**面上被翻转——该面（写授权硬门控等待链）现由主进程
+// write-blocked 漏斗即时拒（sandbox/write-blocked-emit.ts：deny 广播解除子进程
+// 等待 + denial 事件进 denied 进度拍，reason 文案见 READONLY_DENY_PREFIX）。
+// 未翻转面：运行时无「只读工具集」开关（工具集为 agent 定义 YAML 的 defaultTools，
+// 无会话级只读投影面），**workspace 内写不受授权门控**——仍由约束段承载（越界写
+// 之外的落盘变更依赖 agent 行为契约 + 变更账本）。授权面 clearSessionGrants 显式
+// 清零语义不变（防同键历史授权残留越权）。台账：M2.2 Rulings「2026-10-26 readonly
+// 降级裁定被 P2-1 部分翻转」。预广播 denied（runtime-registry
+// broadcastWriteGrantDenied）在 P2-1 起被采纳为即时拒的解除信号（原裁定中「只唤醒
+// 在途等待者，对未来工具调用 no-op」的批评不适用于本面——即时拒恰是「等待已发生
+// 即解除」语义）。
 //
 // 协议未知容忍：hub 1.2.0 parseDelegationTask 白名单重建 {title,prompt,agentSlug?}，
 // permissionTier 在 hub 侧被剥离（2026-10-26 验证）——本端按可选字段容错消费
@@ -39,6 +46,18 @@ export interface RunPolicyPlan {
 /** readonly 档任务书前置只读约束段（明示违反后果——worker agent 的行为契约） */
 export const READONLY_PROMPT_PREFIX =
   '【只读约束】本任务以只读模式委派：仅可执行读取、检索、分析类操作，禁止创建、修改或删除任何文件，禁止 git 写操作与其他形式的落盘变更。违反将被拒绝。';
+
+/**
+ * P2-1 即时拒文案前缀（deny reason 必含「只读档位」——spec §3 验收点）。
+ * 消费方：write-blocked-emit 的 denial 事件（→ delegation-runner kind='denied'
+ * 拍 excerpt → leader 看板进度行）。
+ */
+export const READONLY_DENY_PREFIX = '只读档位即时拒绝';
+
+/** 即时拒 denial 摘要（command=写工具调用预览，截断由消费方按其上限处理） */
+export function readonlyDenyExcerpt(command: string): string {
+  return command !== '' ? `${READONLY_DENY_PREFIX}：${command}` : READONLY_DENY_PREFIX;
+}
 
 export function planRunPolicy(tier: PermissionTier): RunPolicyPlan {
   switch (tier) {
