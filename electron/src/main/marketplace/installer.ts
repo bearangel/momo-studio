@@ -261,10 +261,17 @@ function registerInstalledPackage(item: MarketplaceItem, cachePath: string): voi
     const def = parseAgentManifest(yamlContent);
     def.source = 'marketplace';
     clampImportedDefaultTools(def.defaultTools, item.slug);
-    const existing = listAgentDefinitions().find((d) => d.slug === def.slug);
+    // P2-4（M2.2 Task 4 / M2 D3）：def id 复用限定安装链血缘（marketplace 目录 /
+    // hub 记账 / catalog 自愈同落 source='marketplace'，互为更新语义）。不得按裸
+    // slug 匹配——同 slug 异源行（builtin / custom / plugin）会被第三方包覆写
+    // （M2 验收 D3：hub 安装同 slug 静默替换用户 custom 定义并级联清成员）。
+    // 异源行在场时安装另起新行，异源行与其成员引用原样保留。
+    const existing = listAgentDefinitions().find(
+      (d) => d.slug === def.slug && d.source === 'marketplace',
+    );
     if (existing) def.id = existing.id;
     saveAgentDefinition(def);
-    logger.info('Marketplace agent 已注册到定义表', { slug: item.slug, id: def.id });
+    logger.info('Marketplace agent 已注册到定义表', { slug: item.slug, id: def.id, reused: Boolean(existing) });
   } else if (item.type === 'skill') {
     const id = crypto.randomUUID();
     const db = getDb();

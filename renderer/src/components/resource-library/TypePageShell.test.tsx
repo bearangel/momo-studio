@@ -136,7 +136,7 @@ describe('TypePageShell（已安装单态，P2.3 Task 1）', () => {
     expect(within(select).getByRole('option', { name: '自定义 1' })).toBeTruthy();
   });
 
-  it('来源下拉切换 = 前端过滤（不触发 load；列表按来源收窄）', () => {
+  it('来源下拉切换 = 前端过滤 + 立即重拉（P2-5 / M2 D7——切换即见远程增量）', async () => {
     listMock.mockClear();
     useResourceStore.setState({ items: [itemA, builtinItem] });
     render(
@@ -144,8 +144,8 @@ describe('TypePageShell（已安装单态，P2.3 Task 1）', () => {
     );
     fireEvent.change(screen.getByLabelText('来源筛选'), { target: { value: 'builtin' } });
     expect(useResourceStore.getState().sourceFilter).toBe('builtin');
-    // 前端过滤语义：无 IPC
-    expect(listMock).not.toHaveBeenCalled();
+    // P2-5：切换即重拉；IPC filter 仍只下发 type 维度（来源过滤在前端做）
+    await vi.waitFor(() => expect(listMock).toHaveBeenCalledWith({ type: 'mcp' }));
     // 列表收窄到 builtin 项
     expect(document.querySelectorAll('[data-testid^="resource-card-"]')).toHaveLength(1);
   });

@@ -168,17 +168,43 @@ export function createCustomDef(workspaceId: string | null, input: CreateCustomD
  *  listAgentDefinitions / getAgentDefinition / listMembers）已下沉 agent-queries.ts
  *  （Task 3 断环），本文件顶部 re-export 保持既有符号稳定 */
 
-/** 新增或覆盖写入一条 agent 定义（以 id 为唯一键）。
- *  v25 定义全局化：workspace_id 列已退役，不再写入（修复前写死列必炸）。 */
+/**
+ * 新增或覆盖写入一条 agent 定义（以 id 为唯一键）。
+ *  v25 定义全局化：workspace_id 列已退役，不再写入（修复前写死列必炸）。
+ *
+ *  P2-4（M2.2 Task 4 / M2 D3）：覆盖写入必须用 ON CONFLICT(id) DO UPDATE 真 upsert，
+ *  禁止 INSERT OR REPLACE——REPLACE 的冲突消解 = 先 DELETE 旧行再 INSERT，而
+ *  workspace_agent_members.agent_definition_id 带 FK ON DELETE CASCADE（migration
+ *  v25），DELETE 侧会把引用该 def 的全部成员行静默级联清空（session_members /
+ *  leader 团队随 FK 连坐）。M2 验收 D3「同 slug 重装后成员清零」即此根因。
+ *  附带修正：真 upsert 不重写 created_at（REPLACE 的 DELETE+INSERT 会重置默认值）。
+ */
 export function saveAgentDefinition(def: AgentDefinition): void {
   const db = getDb();
   db.prepare(
-    `INSERT OR REPLACE INTO agent_definitions
+    `INSERT INTO agent_definitions
       (id, name, slug, version, runtime, system_prompt, default_tools, default_mcps, default_skills,
        source, description, icon_emoji, model_provider_id, model_name, task_driven, thinking_json, denied_tools)
      VALUES
       (@id, @name, @slug, @version, @runtime, @system_prompt, @default_tools, @default_mcps, @default_skills,
-       @source, @description, @icon_emoji, @model_provider_id, @model_name, @task_driven, @thinking_json, @denied_tools)`,
+       @source, @description, @icon_emoji, @model_provider_id, @model_name, @task_driven, @thinking_json, @denied_tools)
+     ON CONFLICT(id) DO UPDATE SET
+       name = excluded.name,
+       slug = excluded.slug,
+       version = excluded.version,
+       runtime = excluded.runtime,
+       system_prompt = excluded.system_prompt,
+       default_tools = excluded.default_tools,
+       default_mcps = excluded.default_mcps,
+       default_skills = excluded.default_skills,
+       source = excluded.source,
+       description = excluded.description,
+       icon_emoji = excluded.icon_emoji,
+       model_provider_id = excluded.model_provider_id,
+       model_name = excluded.model_name,
+       task_driven = excluded.task_driven,
+       thinking_json = excluded.thinking_json,
+       denied_tools = excluded.denied_tools`,
   ).run({
     id: def.id,
     name: def.name,

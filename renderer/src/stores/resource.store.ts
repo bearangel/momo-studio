@@ -9,8 +9,11 @@
 //     来源筛选 2026-10-09 组③起改为前端过滤（工具栏来源下拉需对各来源计数——
 //     服务端过滤拿不到全量，同搜索 query 一样在 View 层内存过滤）
 //   - setTypeFilter：set 新值后立即触发 load（后端按 type 过滤）
-//   - setSourceFilter / setQuery：纯前端筛选状态（无 IPC）；变化时清掉
-//     installNotice（防止下一次切换仍显示陈旧的成功提示）
+//   - setSourceFilter：P2-5（M2 D7）起切换即重拉列表——纯前端过滤会让 hub 目录
+//     等远程源的增量（新发布/下架）不可见，需手动刷新；重拉后来源筛选仍在
+//     前端做（IPC filter 只下发 type 维度，计数需全量）。setQuery 维持纯前端
+//     （本地关键词匹配无远程增量问题）；两者变化时均清掉 installNotice
+//     （防止下一次切换仍显示陈旧的成功提示）
 //   - deleteResource / installResource：调对应 IPC 后立即 load 刷新
 //   - installResource：包 try/catch——安装失败必须落到 error 字段，
 //     避免 unhandled rejection；成功后 set installNotice 给 View 渲染一次性成功横幅；
@@ -143,7 +146,12 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
     void get().load();
   },
 
-  setSourceFilter: (f) => set({ sourceFilter: f, installNotice: null }),
+  setSourceFilter: (f) => {
+    set({ sourceFilter: f, installNotice: null });
+    // P2-5（M2 D7）：切换即重拉——hub 目录等远程源的增量不经重拉不可见。
+    // load 仍只下发 type 维度，来源过滤照旧在前端做（计数需全量）。
+    void get().load();
+  },
 
   setQuery: (q) => set({ query: q, installNotice: null }),
 

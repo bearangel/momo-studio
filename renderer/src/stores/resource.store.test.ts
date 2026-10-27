@@ -203,11 +203,19 @@ describe('resource.store 资源库重设计（activeType 单态）', () => {
     expect(resourceList).toHaveBeenLastCalledWith({ type: 'mcp' });
   });
 
-  it('setSourceFilter 纯前端状态：不触发 load（组③——来源下拉计数需全量 items）', () => {
+  it('setSourceFilter 切换即重拉（P2-5 / M2 D7）：触发 load 且 IPC filter 仍只下发 type 维度', async () => {
     resourceList.mockClear();
     useResourceStore.getState().setSourceFilter('smithery');
     expect(useResourceStore.getState().sourceFilter).toBe('smithery');
-    expect(resourceList).not.toHaveBeenCalled();
+    // 状态先落，再异步重拉（与 setTypeFilter 同款调用序）
+    await vi.waitFor(() => expect(resourceList).toHaveBeenCalled());
+    // 来源过滤仍在前端做（计数需全量）——IPC 只下发 type 维度
+    expect(resourceList).toHaveBeenLastCalledWith({});
+    resourceList.mockClear();
+
+    useResourceStore.getState().setSourceFilter('hub');
+    await vi.waitFor(() => expect(resourceList).toHaveBeenCalled());
+    expect(useResourceStore.getState().sourceFilter).toBe('hub');
   });
 
   it('load 只按 type 过滤——即使 sourceFilter 非 all 也不下发 source（组③ 前端化）', async () => {
