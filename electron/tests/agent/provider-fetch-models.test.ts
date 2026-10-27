@@ -46,8 +46,8 @@ describe('fetchRemoteModels 成功路径', () => {
     });
     const models = await fetchRemoteModels(p.id);
     expect(models).toEqual(['glm-5.3', 'glm-5.2']);
-    expect(fetchMock.mock.calls[0][0]).toBe('https://api.example.com/v1/models');
-    const opts = fetchMock.mock.calls[0][1] as { headers: Record<string, string> };
+    expect(fetchMock.mock.calls[0]![0]).toBe('https://api.example.com/v1/models');
+    const opts = fetchMock.mock.calls[0]![1] as { headers: Record<string, string> };
     expect(opts.headers.Authorization).toBe('Bearer sk-test');
   });
 
@@ -55,7 +55,7 @@ describe('fetchRemoteModels 成功路径', () => {
     const p = await createProvider({ name: 'A', baseUrl: 'https://x.example.com/custom/', apiKey: 'k' });
     fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ data: [] }) });
     await fetchRemoteModels(p.id);
-    expect(fetchMock.mock.calls[0][0]).toBe('https://x.example.com/custom/models');
+    expect(fetchMock.mock.calls[0]![0]).toBe('https://x.example.com/custom/models');
   });
 
   it('本机回环 http 放行（本地 Ollama 等无 https 场景）', async () => {
@@ -66,7 +66,7 @@ describe('fetchRemoteModels 成功路径', () => {
     });
     const models = await fetchRemoteModels(p.id);
     expect(models).toEqual(['llama3']);
-    expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:11434/v1/models');
+    expect(fetchMock.mock.calls[0]![0]).toBe('http://localhost:11434/v1/models');
   });
 });
 

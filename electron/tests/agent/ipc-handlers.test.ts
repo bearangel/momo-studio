@@ -38,8 +38,8 @@ const {
     ipcHandlers,
     crudMocks: {
       saveAgentDefinition: vi.fn(),
-      listAgentDefinitions: vi.fn<[], unknown[]>(() => []),
-      getAgentDefinition: vi.fn<[], unknown>(() => null),
+      listAgentDefinitions: vi.fn<() => unknown[]>(() => []),
+      getAgentDefinition: vi.fn<() => unknown>(() => null),
       addMember: vi.fn(async () => ({
         instanceId: nextId('inst'),
         workspaceId: 'ws-1',
@@ -50,16 +50,16 @@ const {
         createdAt: '2026-09-01T00:00:00.000Z',
       })),
       generateAgentUserId: vi.fn((slug: string) => `@${slug}-${nextId('u')}:local`),
-      listMembers: vi.fn<[], unknown[]>(() => []),
-      removeMember: vi.fn<[], unknown>(() => ({ ok: true })),
+      listMembers: vi.fn<() => unknown[]>(() => []),
+      removeMember: vi.fn<() => unknown>(() => ({ ok: true })),
       updateAssignmentApiKey: vi.fn(async () => undefined),
       deleteDefinition: vi.fn(async () => ({ stoppedInstanceIds: [] })),
-      updateAgentDefinition: vi.fn<[], unknown>(() => ({})),
-      createCustomDef: vi.fn<[], unknown>(() => ({})),
+      updateAgentDefinition: vi.fn<() => unknown>(() => ({})),
+      createCustomDef: vi.fn<() => unknown>(() => ({})),
       stopRunningInstancesByDefinition: vi.fn(async () => []),
     },
     teamMocks: {
-      listTeams: vi.fn<[], unknown[]>(() => []),
+      listTeams: vi.fn<() => unknown[]>(() => []),
       createTeam: vi.fn(() => ({
         id: 'team-1',
         workspaceId: 'ws-1',
@@ -76,7 +76,7 @@ const {
       deleteTeam: vi.fn(),
     },
     workspaceCrudMocks: {
-      getWorkspace: vi.fn<[], unknown>(() => null),
+      getWorkspace: vi.fn<() => unknown>(() => null),
     },
     keychainMocks: {
       deleteSecret: vi.fn(async () => undefined),

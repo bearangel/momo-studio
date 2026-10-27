@@ -169,7 +169,7 @@ describe('变更账本生产形态回归锁（task-config 注入路径，终审 
   let tmpDir: string;
   let bootCtx: RuntimeContext;
   let store: JournalStore;
-  let exitSpy: MockInstance<Parameters<typeof process.exit>, ReturnType<typeof process.exit>>;
+  let exitSpy: MockInstance<typeof process.exit>;
 
   beforeEach(() => {
     // 真实迁移建库 + 真实账本 store（journal-wiring.test.ts 同款，不手搓表）

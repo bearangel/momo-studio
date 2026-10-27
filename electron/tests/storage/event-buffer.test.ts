@@ -66,7 +66,7 @@ describe('MessageEventBuffer', () => {
     buf.append({ messageId: msgId, eventType: 'text_delta', payload: { delta: 't' } });
     buf.flush();
     expect(flushed).toHaveBeenCalledOnce();
-    const events = flushed.mock.calls[0][0];
+    const events = flushed.mock.calls[0]![0];
     expect(events.length).toBe(2);
     expect(events[0].eventType).toBe('thinking_delta');
     buf.destroy();

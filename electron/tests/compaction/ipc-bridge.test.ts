@@ -173,7 +173,7 @@ describe('spawner compaction:request 分支（主→子回写）', () => {
       { type: 'compaction:request', streamSessionId: 'ss-5', sessionId: 's', conversation: 'x', coveredUntil: 'not-a-number' },
       respond,
     );
-    const covered = upsertMock.mock.calls[0][2] as number;
+    const covered = upsertMock.mock.calls[0]![2] as number;
     expect(covered).toBeGreaterThanOrEqual(before);
     expect(Number.isFinite(covered)).toBe(true);
   });

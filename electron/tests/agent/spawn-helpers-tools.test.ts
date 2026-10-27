@@ -251,7 +251,7 @@ describe('spawn 装配授权翻转（spec 2026-10-21 §6）', () => {
     expect(granted.pluginTools).toHaveLength(1);
     expect(granted.pluginTools![0]!.modulePaths.some((m) => m.endsWith('main.js'))).toBe(true);
     // 授权面不含插件 skill → skills 无插件 cachePath
-    expect(granted.skills.some((s) => s.slug === 'psk1')).toBe(false);
+    expect((granted.skills ?? []).some((s) => s.slug === 'psk1')).toBe(false);
 
     // 换 ws（无授权行）→ 空装配（插件在 ws1 启用，ws2 无行停用 → 双重空）
     const bare = await buildSpawnOpts({
@@ -269,7 +269,7 @@ describe('spawn 装配授权翻转（spec 2026-10-21 §6）', () => {
       instanceId: 'inst1', agentUserId: 'agent-t-ab12cd', workspaceId: 'ws1',
       workspaceDir: '/tmp', def: makeDef('def1', []), role: 'standalone', llmApiKey: 'k',
     });
-    expect(opts.skills.some((s) => s.slug === 'psk1')).toBe(true);
+    expect((opts.skills ?? []).some((s) => s.slug === 'psk1')).toBe(true);
     // 工具无授权 → 不装配
     expect(opts.pluginTools ?? []).toHaveLength(0);
   });

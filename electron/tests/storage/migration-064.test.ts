@@ -121,16 +121,16 @@ describe('migration 065：插件 MCP 存量回填', () => {
     ).run();
     const m = (await import('../../src/main/storage/migrations/065_plugin_mcp_backfill_allocations')).migration065;
     db.exec(m.up);
-    let rows = db
+    const rows = db
       .prepare(`SELECT workspace_id FROM workspace_allocations WHERE capability_type='mcp' AND capability_ref='cg-server' ORDER BY workspace_id`)
       .all() as Array<{ workspace_id: string }>;
     expect(rows.map((r) => r.workspace_id)).toEqual(['w']);
     // 幂等重放
     db.exec(m.up);
-    rows = db
+    const countRows = db
       .prepare(`SELECT COUNT(*) AS c FROM workspace_allocations WHERE capability_ref='cg-server'`)
       .all() as Array<{ c: number }>;
-    expect(rows[0]!.c).toBe(1); // INSERT OR IGNORE 幂等：重放不翻倍
+    expect(countRows[0]!.c).toBe(1); // INSERT OR IGNORE 幂等：重放不翻倍
     // down 清 plugin 来源行
     db.prepare(
       `INSERT INTO workspace_allocations (workspace_id, capability_type, capability_ref, added_at) VALUES ('w', 'mcp', 'my-custom', datetime('now'))`,

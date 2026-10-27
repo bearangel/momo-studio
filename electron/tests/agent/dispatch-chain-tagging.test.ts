@@ -300,7 +300,7 @@ function makeTaskConfig(overrides: Partial<TaskConfig> = {}): TaskConfig {
 }
 
 describe('runtime-entry：start chunk 携带 taskId（接线锁）', () => {
-  let exitSpy: MockInstance<Parameters<typeof process.exit>, ReturnType<typeof process.exit>>;
+  let exitSpy: MockInstance<typeof process.exit>;
   const originalSend = process.send;
 
   beforeEach(() => {

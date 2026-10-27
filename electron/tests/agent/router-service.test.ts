@@ -96,7 +96,7 @@ describe('RouterService', () => {
       });
 
       expect(mockRunner.executeTask).toHaveBeenCalledTimes(1);
-      const calledWith = mockRunner.executeTask.mock.calls[0][0];
+      const calledWith = mockRunner.executeTask.mock.calls[0]![0];
       expect(calledWith.taskId).toBeNull();
       expect(calledWith.executionSessionId).toBe('!room:home');
       expect(calledWith.body).toBe('你好');

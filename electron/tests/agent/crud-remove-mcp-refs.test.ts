@@ -37,6 +37,8 @@ vi.mock('../../src/main/agent/runtime-status', () => ({
 }));
 vi.mock('../../src/main/agent/runtime-registry', () => ({
   stopAgentRuntime: vi.fn(),
+  // delegation-runner 消费（T3 P2-1 注册反转）：无 runner 广播恒 false，贴真实签名
+  broadcastWriteGrantDenied: vi.fn((): boolean => false),
 }));
 
 const tmpRoot = path.join(os.tmpdir(), `ap-crud-rm-mcp-refs-${Date.now()}`);

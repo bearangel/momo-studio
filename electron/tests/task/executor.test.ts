@@ -102,7 +102,7 @@ describe('TaskExecutor.admitOnce', () => {
     expect(getTask('T-002')!.status).toBe('in_progress'); // 高优先级先放行
     expect(getTask('T-001')!.status).toBe('assigned');
     expect(kickoff).toHaveBeenCalledTimes(1);
-    const call = kickoff.mock.calls[0][0];
+    const call = kickoff.mock.calls[0]![0];
     expect(call.mentionedInstanceIds).toEqual(['inst1']);
     expect(call.body).toContain('【任务启动】#T-002 · high');
     expect(getTask('T-002')!.executionSessionId).toBe(call.sessionId);
@@ -132,8 +132,8 @@ describe('TaskExecutor.admitOnce', () => {
     const t = getTask('T-001')!;
     expect(t.status).toBe('in_progress');
     expect(t.executionSessionId).toBe(sess.id);
-    expect(kickoff.mock.calls[0][0].sessionId).toBe(sess.id);
-    expect(kickoff.mock.calls[0][0].mentionedInstanceIds).toBeUndefined(); // 会话目标不 mention → 接待路由
+    expect(kickoff.mock.calls[0]![0].sessionId).toBe(sess.id);
+    expect(kickoff.mock.calls[0]![0].mentionedInstanceIds).toBeUndefined(); // 会话目标不 mention → 接待路由
   });
 
   it('kickoff 抛错 → 任务转 failed 带错误信息', async () => {
@@ -197,7 +197,7 @@ describe('TaskExecutor.admitOnce', () => {
     const low = getTask('T-002')!;
     expect(low.status).toBe('in_progress');
     expect(kickoff).toHaveBeenCalledTimes(1);
-    expect(kickoff.mock.calls[0][0].sessionId).toBe(low.executionSessionId);
+    expect(kickoff.mock.calls[0]![0].sessionId).toBe(low.executionSessionId);
   });
 });
 

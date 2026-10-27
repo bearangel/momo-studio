@@ -99,6 +99,8 @@ vi.mock('../src/main/logger', () => ({
 }));
 vi.mock('../src/main/agent/runtime-registry', () => ({
   destroyAllTaskDrivenRuntimes: b.destroyAllTaskDrivenRuntimes,
+  // delegation-runner 消费（T3 P2-1 注册反转）：无 runner 广播恒 false，贴真实签名
+  broadcastWriteGrantDenied: vi.fn((): boolean => false),
 }));
 vi.mock('../src/main/agent/init-runtime', () => ({
   initTaskDrivenRuntime: b.initTaskDrivenRuntime,

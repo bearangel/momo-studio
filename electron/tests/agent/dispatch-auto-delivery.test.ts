@@ -21,8 +21,8 @@ import os from 'node:os';
 // mock electron：stream-relay 的 BrowserWindow 推送在测试环境静默降级（同款模式）。
 // vi.mock 工厂提升到 import 之前——send spy 经 vi.hoisted 声明，供 §6.4 推送回归锁断言。
 const { mockSend } = vi.hoisted(() => ({
-  // vitest 1.6 泛型为参数元组形态（2.x 才是函数类型）；与 WebContentsLike.send 结构兼容
-  mockSend: vi.fn<[string, unknown?], void>(),
+  // vitest 3 泛型为函数类型形态（1.x 才是参数元组）；与 WebContentsLike.send 结构兼容
+  mockSend: vi.fn<(channel: string, payload?: unknown) => void>(),
 }));
 
 vi.mock('electron', () => ({

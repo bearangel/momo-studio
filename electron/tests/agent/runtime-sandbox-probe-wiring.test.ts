@@ -120,7 +120,7 @@ function mockSingleTextRound(): void {
 describe('runtime 子进程沙箱探测接线锁（主机验收 P0 修复）', () => {
   const udRoot = path.join(os.tmpdir(), `momo-sbprobe-ud-${Date.now()}`);
   let tmpDir: string;
-  let exitSpy: MockInstance<Parameters<typeof process.exit>, ReturnType<typeof process.exit>>;
+  let exitSpy: MockInstance<typeof process.exit>;
   const originalSend = process.send;
   const sentChunks: unknown[] = [];
 

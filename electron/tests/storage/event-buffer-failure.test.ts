@@ -64,7 +64,7 @@ describe('MessageEventBuffer 落库失败保留 pending（minor-2）', () => {
 
     expect(buf.pendingCount()).toBe(0);
     expect(onFlush).toHaveBeenCalledOnce();
-    const flushed = onFlush.mock.calls[0][0] as Array<{ eventType: string }>;
+    const flushed = onFlush.mock.calls[0]![0] as Array<{ eventType: string }>;
     expect(flushed).toHaveLength(2); // 失败批次 + 新增的一条都在
     expect(insertEventBatch).toHaveBeenCalledTimes(2);
     buf.destroy();

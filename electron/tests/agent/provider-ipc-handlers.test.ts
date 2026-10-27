@@ -149,21 +149,21 @@ describe('provider-ipc testConnection 成功与 URL 构造', () => {
   it('baseUrl 以 /v1 结尾 → 直接拼 /chat/completions', async () => {
     fetchMock.mockResolvedValue({ ok: true, status: 200 });
     await testProviderConnection({ baseUrl: 'https://x/v1', apiKey: 'k', model: 'm' });
-    const calledUrl = fetchMock.mock.calls[0][0] as string;
+    const calledUrl = fetchMock.mock.calls[0]![0] as string;
     expect(calledUrl).toBe('https://x/v1/chat/completions');
   });
 
   it('baseUrl 不以 /v1 结尾且带尾斜杠 → 裁掉尾斜杠后拼 /chat/completions（不自动补 /v1）', async () => {
     fetchMock.mockResolvedValue({ ok: true, status: 200 });
     await testProviderConnection({ baseUrl: 'https://x/custom/', apiKey: 'k', model: 'm' });
-    const calledUrl = fetchMock.mock.calls[0][0] as string;
+    const calledUrl = fetchMock.mock.calls[0]![0] as string;
     expect(calledUrl).toBe('https://x/custom/chat/completions');
   });
 
   it('请求携带 Authorization: Bearer <apiKey>', async () => {
     fetchMock.mockResolvedValue({ ok: true, status: 200 });
     await testProviderConnection({ baseUrl: 'https://x/v1', apiKey: 'sk-token', model: 'm' });
-    const opts = fetchMock.mock.calls[0][1] as { headers: Record<string, string> };
+    const opts = fetchMock.mock.calls[0]![1] as { headers: Record<string, string> };
     expect(opts.headers.Authorization).toBe('Bearer sk-token');
   });
 });

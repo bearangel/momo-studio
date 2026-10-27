@@ -98,6 +98,8 @@ function mkDef(overrides?: Partial<AgentDefinition>): AgentDefinition {
     systemPrompt: '',
     defaultTools: [],
     source: 'custom',
+    description: '',
+    iconEmoji: '🤖',
     defaultMcps: [],
     defaultSkills: [],
     modelProviderId: 'prov-1',

@@ -15,7 +15,7 @@
 //   - mock 返回的 body 用 Readable.toWeb 包装 Buffer，模拟 Node Web ReadableStream，
 //     走 readBodyWithCap 真实代码路径。
 //   - fetchMock.mockReset() 在 beforeEach 重置，确保用例间调用历史不串。
-//   - fetchMock.mock.calls[0][0] 取第一次调用第一个参数（URL），验证协议升级。
+//   - fetchMock.mock.calls[0]![0] 取第一次调用第一个参数（URL），验证协议升级。
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Readable } from 'node:stream';
@@ -132,7 +132,7 @@ describe('webfetch', () => {
     });
     const tools = new WebTools();
     await tools.execute('webfetch', { url: 'http://example.com' }, ctx);
-    expect(fetchMock.mock.calls[0][0]).toBe('https://example.com/');
+    expect(fetchMock.mock.calls[0]![0]).toBe('https://example.com/');
   });
 
   it('不允许 file:// 协议', async () => {

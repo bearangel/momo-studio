@@ -243,7 +243,7 @@ describe('P0-1 分段重组：终态 finalText 含全部段全文', () => {
 // ══════════════════════════════════════════════════════════════════════════
 
 describe('P0-2 超长回执落盘 + 摘要引用', () => {
-  let exitSpy: MockInstance<Parameters<typeof process.exit>, ReturnType<typeof process.exit>>;
+  let exitSpy: MockInstance<typeof process.exit>;
 
   beforeEach(() => {
     sentChunks.length = 0;

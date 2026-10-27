@@ -36,7 +36,7 @@ const cfg: McpServerConfig = {
   headers: { Authorization: 'Bearer tk' }, command: '', args: [],
 };
 
-let fetchSpy: MockInstance<Parameters<typeof fetch>, ReturnType<typeof fetch>>;
+let fetchSpy: MockInstance<typeof fetch>;
 
 beforeEach(() => {
   fetchSpy = vi.spyOn(globalThis, 'fetch');

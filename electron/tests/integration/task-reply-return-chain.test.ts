@@ -269,7 +269,7 @@ runMigrations();
 }
 
 describe('task_reply 回传全链路（PM dispatch → SUB 执行 → 回执 → PM resolve）', () => {
-  let exitSpy: MockInstance<Parameters<typeof process.exit>, ReturnType<typeof process.exit>>;
+  let exitSpy: MockInstance<typeof process.exit>;
   const originalSend = process.send;
   let pmChildRef: TestChild | null = null;
 

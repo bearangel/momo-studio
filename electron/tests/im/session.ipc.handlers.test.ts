@@ -38,46 +38,46 @@ const {
   return {
     ipcHandlers,
     sessionOpsMocks: {
-      getSessionsForWorkspace: vi.fn<[], unknown[]>(() => []),
-      createQuickSession: vi.fn<[], unknown>(() => ({ ...newSessionRow })),
-      createCollabSession: vi.fn<[], unknown>(() => ({ ...newSessionRow })),
-      renameSession: vi.fn<[], void>(() => undefined),
-      deleteSessionOp: vi.fn<[], void>(() => undefined),
-      getSessionMembersInfo: vi.fn<[], unknown[]>(() => []),
+      getSessionsForWorkspace: vi.fn<() => unknown[]>(() => []),
+      createQuickSession: vi.fn<() => unknown>(() => ({ ...newSessionRow })),
+      createCollabSession: vi.fn<() => unknown>(() => ({ ...newSessionRow })),
+      renameSession: vi.fn<() => void>(() => undefined),
+      deleteSessionOp: vi.fn<() => void>(() => undefined),
+      getSessionMembersInfo: vi.fn<() => unknown[]>(() => []),
     },
     sessionServiceMocks: {
       sendUserMessage: vi.fn(),
     },
     sessionsRepoMocks: {
-      getSession: vi.fn<[], unknown>(() => null),
+      getSession: vi.fn<() => unknown>(() => null),
     },
     messagesRepoMocks: {
-      listMessagesBySession: vi.fn<[], unknown[]>(() => []),
-      listRecentMessagesBySession: vi.fn<[], unknown[]>(() => []),
-      listOlderMessages: vi.fn<[], unknown[]>(() => []),
-      listMessagesByStreamSessionId: vi.fn<[], unknown[]>(() => []),
+      listMessagesBySession: vi.fn<() => unknown[]>(() => []),
+      listRecentMessagesBySession: vi.fn<() => unknown[]>(() => []),
+      listOlderMessages: vi.fn<() => unknown[]>(() => []),
+      listMessagesByStreamSessionId: vi.fn<() => unknown[]>(() => []),
     },
     eventsRepoMocks: {
-      listEventsByMessage: vi.fn<[], unknown[]>(() => []),
+      listEventsByMessage: vi.fn<() => unknown[]>(() => []),
       // 事件裁剪（2026-09-25 C 方案）：getMessages/loadOlder 经 buildEventsByMessage
       // 走批量全量查询 + 压缩快照回填（mock 边界；投影/裁剪/压缩规则由
       // events-pruning.test.ts + event-compaction.test.ts 对真实 DB 锁定）
-      listEventsForMessages: vi.fn<[], unknown>(() => new Map()),
-      countEventsByMessage: vi.fn<[], unknown>(() => new Map()),
+      listEventsForMessages: vi.fn<() => unknown>(() => new Map()),
+      countEventsByMessage: vi.fn<() => unknown>(() => new Map()),
     },
     compactionMocks: {
-      backfillCompactSnapshots: vi.fn<[], unknown>(() => new Map()),
+      backfillCompactSnapshots: vi.fn<() => unknown>(() => new Map()),
     },
     exporterMocks: {
-      formatRoomToMarkdown: vi.fn<unknown[], string>(() => '# 导出内容'),
-      renderSubMessage: vi.fn<unknown[], string>(() => '**子消息**'),
+      formatRoomToMarkdown: vi.fn<(...args: unknown[]) => string>(() => '# 导出内容'),
+      renderSubMessage: vi.fn<(...args: unknown[]) => string>(() => '**子消息**'),
     },
     agentCrudMocks: {
-      listMembers: vi.fn<[], unknown[]>(() => []),
-      getAgentDefinition: vi.fn<[], unknown>(() => null),
+      listMembers: vi.fn<() => unknown[]>(() => []),
+      getAgentDefinition: vi.fn<() => unknown>(() => null),
     },
     workspaceCrudMocks: {
-      listWorkspaces: vi.fn<[], unknown[]>(() => []),
+      listWorkspaces: vi.fn<() => unknown[]>(() => []),
     },
   };
 });

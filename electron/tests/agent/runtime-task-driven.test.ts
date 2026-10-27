@@ -196,7 +196,7 @@ function streamChunks(): StreamChunk[] {
 }
 
 describe('runTaskChatLoop（task-driven 模式入口）', () => {
-  let exitSpy: MockInstance<Parameters<typeof process.exit>, ReturnType<typeof process.exit>>;
+  let exitSpy: MockInstance<typeof process.exit>;
   const originalSend = process.send;
 
   beforeEach(() => {
@@ -724,7 +724,7 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
 
 describe('runTaskChatLoop dispatch 回执（Task 13 A 线）', () => {
   const originalSend = process.send;
-  let exitSpy: MockInstance<Parameters<typeof process.exit>, ReturnType<typeof process.exit>>;
+  let exitSpy: MockInstance<typeof process.exit>;
 
   beforeEach(() => {
     sentChunks.length = 0;
@@ -937,7 +937,7 @@ describe('handleTaskReplyIpc（PM 侧 task-reply IPC 消费，Task 13 A 线）',
 
 describe('runTaskChatLoop 工具预算优先级（v2.2 会话预算接线）', () => {
   const originalSend = process.send;
-  let exitSpy: MockInstance<Parameters<typeof process.exit>, ReturnType<typeof process.exit>>;
+  let exitSpy: MockInstance<typeof process.exit>;
 
   beforeEach(() => {
     sentChunks.length = 0;
@@ -1096,7 +1096,7 @@ describe('parseConfig taskDriven 字段', () => {
 // （用户消息行由主进程在派发前落库，runtime 侧无从回流——断言出站面无泄漏）。
 describe('runTaskChatLoop 图片输入（vision 注入 / 非 vision 降级 / leader 提示）', () => {
   const originalSend = process.send;
-  let exitSpy: MockInstance<Parameters<typeof process.exit>, ReturnType<typeof process.exit>>;
+  let exitSpy: MockInstance<typeof process.exit>;
 
   beforeEach(() => {
     sentChunks.length = 0;

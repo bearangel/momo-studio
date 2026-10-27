@@ -195,7 +195,7 @@ describe('RouterService lazy init 集成测试 (Task 5)', () => {
     expect(setBridgeRouterMock).toHaveBeenCalledTimes(1);
 
     // 断言 3：传入的是带 routeEvent 方法的对象（RouterService duck-type）
-    const svc = setBridgeRouterMock.mock.calls[0][0];
+    const svc = setBridgeRouterMock.mock.calls[0]![0];
     expect(svc).toBeDefined();
     expect(typeof svc.routeEvent).toBe('function');
   });
@@ -241,7 +241,7 @@ describe('RouterService lazy init 集成测试 (Task 5)', () => {
     expect(setBridgeRouterMock).toHaveBeenCalledTimes(1);
 
     // 断言 3：传入 RouterService 实例（duck-type routeEvent）
-    const svc = setBridgeRouterMock.mock.calls[0][0];
+    const svc = setBridgeRouterMock.mock.calls[0]![0];
     expect(typeof svc.routeEvent).toBe('function');
   });
 
@@ -274,7 +274,7 @@ describe('RouterService lazy init 集成测试 (Task 5)', () => {
     expect(setBridgeRouterMock).toHaveBeenCalledTimes(1);
 
     // 断言 3：首次调用传入的 runnerCount=2（dispatcher 持有 Map 引用，后续新增可见）
-    const svc = setBridgeRouterMock.mock.calls[0][0];
+    const svc = setBridgeRouterMock.mock.calls[0]![0];
     expect(typeof svc.routeEvent).toBe('function');
   });
 });

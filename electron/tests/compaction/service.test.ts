@@ -123,7 +123,7 @@ describe('generateCompaction', () => {
     expect(r.summary).toBe('结构化摘要内容');
     // prompt 纯函数产出作为唯一 user 消息送入 LLM（形状锁：不混入 system/多消息）
     expect(chatMock).toHaveBeenCalledTimes(1);
-    const messages = chatMock.mock.calls[0][0] as Array<{ role: string; content: string }>;
+    const messages = chatMock.mock.calls[0]![0] as Array<{ role: string; content: string }>;
     expect(messages).toHaveLength(1);
     expect(messages[0]!.role).toBe('user');
     expect(messages[0]!.content).toContain('PROMPT[conversation=[用户]: 你好;prior=无]');
@@ -151,7 +151,7 @@ describe('generateCompaction', () => {
       previousSummary: '旧版结构化摘要',
     });
     // prompt 文本里 prior 已并入（服务未直接拼旧摘要绕过纯函数）
-    const messages = chatMock.mock.calls[0][0] as Array<{ content: string }>;
+    const messages = chatMock.mock.calls[0]![0] as Array<{ content: string }>;
     expect(messages[0]!.content).toContain('prior=旧版结构化摘要');
   });
 
