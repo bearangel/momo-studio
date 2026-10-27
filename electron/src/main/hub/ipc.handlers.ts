@@ -21,6 +21,7 @@ import { retryDispatch, type RedispatchPorts } from './delegation-sync';
 import { assertBoardGroupValid, createTaskFromForm } from '../task/ipc.handlers';
 import { insertTask, updateTask, getTask } from '../storage/tasks/repo';
 import { listWorkspaces } from '../workspace/crud';
+import { recordPluginPublishAccounting } from '../resource/hub-install';
 
 // 组管理客户端单点：绑定 hubRequest（IPC 面复用同一实例；纯函数集，无状态）
 const groups = createGroupClient((method, payload, timeoutMs) => hubRequest(method, payload, timeoutMs));
@@ -35,7 +36,15 @@ export function registerHubIpc(): void {
   ipcMain.handle('hub:configure', (_evt, input: { hubUrl: string; nodeName: string }) => hubConfigure(input));
   ipcMain.handle('hub:enroll', (_evt, input: { hubUrl: string; enrollmentToken: string; nodeName: string }) => hubEnroll(input));
   ipcMain.handle('hub:forget', () => hubForget());
-  ipcMain.handle('hub:publishResource', (_evt, input: PublishInput) => publishToHub(input));
+  ipcMain.handle('hub:publishResource', async (_evt, input: PublishInput) => {
+    const result = await publishToHub(input);
+    // plugin 发布成功回填记账：镜像快照 pluginsEnabled 反查源（缺行 = 分发断点，
+    // 目标节点需手动安装）——agent/skill/mcp 类不回填（catalog 自愈链已覆盖）
+    if (input.type === 'plugin') {
+      recordPluginPublishAccounting(result.slug, result.version, result.checksum);
+    }
+    return result;
+  });
   // 工作组六通道（M2b spec §3.1）——payload 直接采用 renderer 契约形状
   ipcMain.handle('hub:groupList', () => groups.list());
   ipcMain.handle('hub:groupCreate', (_evt, input: { groupName: string }) => groups.create(input.groupName));

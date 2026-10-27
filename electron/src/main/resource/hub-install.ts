@@ -243,6 +243,28 @@ async function hubAuthHeaders(): Promise<Record<string, string> | undefined> {
   return ctx?.deviceToken ? { Authorization: `Bearer ${ctx.deviceToken}` } : undefined;
 }
 
+/**
+ * 发布成功回填 hub 记账（2026-10-27 path2 验收 P2 修复）：
+ * plugin 发布到 hub 成功后本地 installed_packages 写 `hub:{slug}` plugin 行——
+ * 镜像快照构建器 collectPlugins 以该记账反查（snapshot-builder §pluginsEnabled），
+ * 缺行则已发布插件被排除出快照启用清单（目标节点每次需手动安装的分发断点）。
+ *
+ * 与 installHubPackage 记账同构（DELETE+INSERT 幂等；只置换 plugin 行——
+ * `hub:{slug}` 不是跨类型唯一键，同 slug 的 agent/skill/mcp 记账不得连带抹掉，
+ * T15a-F1 语义）。cache_path 置空：发布场景包不在本地缓存（源是本地插件目录，
+ * 与安装链的 installed 目录语义不同——卸载走插件级联不经 cache_path 删除）。
+ */
+export function recordPluginPublishAccounting(slug: string, version: string, checksum: string): void {
+  const db = getDb();
+  db.prepare(
+    "DELETE FROM installed_packages WHERE item_id = ? AND item_type = 'plugin'",
+  ).run(hubPackageItemId(slug));
+  db.prepare(
+    `INSERT INTO installed_packages (id, item_id, item_type, slug, version, cache_path, checksum)
+     VALUES (?, ?, 'plugin', ?, ?, '', ?)`,
+  ).run(randomUUID(), hubPackageItemId(slug), slug, version, checksum);
+}
+
 export async function installHubPackage(
   type: ResourceType,
   slug: string,
