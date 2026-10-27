@@ -33,6 +33,7 @@ import type {
 } from '../../ipc/types';
 import { Badge } from '../ui/Badge';
 import { showToast } from '../ui/Toast';
+import { useArmedConfirm } from './useArmedConfirm';
 
 /** nodeId 短码（NodeCard 同款——名称不可解析时的兜底呈现） */
 function shortNodeId(nodeId: string): string {
@@ -254,18 +255,13 @@ interface DelegatedTaskCardProps {
 export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSummary = null }: DelegatedTaskCardProps): ReactNode {
   const board = useContext(DelegationBoardContext);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  // D6 取消两步确认：armed 态菜单项变「再次点击确认取消」，3s 无操作回落
-  //（组头「退出工作组」同款范式）；菜单关闭即复位
-  const [confirmingCancel, setConfirmingCancel] = useState(false);
+  // D6 取消两步确认（P2-10 公共臂态 hook）：armed 态菜单项变「再次点击确认取消 · Ns」，
+  // 3s 无操作回落 + 剩余秒倒计时明示；菜单关闭即复位
+  const cancelConfirm = useArmedConfirm();
+  const disarmCancel = cancelConfirm.disarm;
   useEffect(() => {
-    if (menu === null) {
-      setConfirmingCancel(false);
-      return;
-    }
-    if (!confirmingCancel) return;
-    const timer = window.setTimeout(() => setConfirmingCancel(false), 3000);
-    return () => window.clearTimeout(timer);
-  }, [menu, confirmingCancel]);
+    if (menu === null) disarmCancel();
+  }, [menu, disarmCancel]);
 
   const isWorkerView =
     task.routing.mode === 'node' && board.selfNodeId != null && task.routing.targetNodeId === board.selfNodeId;
@@ -439,7 +435,7 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
           >
             {canCancel && (
               <li>
-                {confirmingCancel ? (
+                {cancelConfirm.armed ? (
                   <button
                     type="button"
                     data-testid="cancel-confirm"
@@ -450,13 +446,13 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
                     className="flex w-full items-center gap-1.5 px-3 py-1 text-left text-status-error hover:bg-surface-3"
                   >
                     <X size={12} strokeWidth={1.75} aria-hidden />
-                    再次点击确认取消
+                    再次点击确认取消 · {cancelConfirm.remainingSec}s
                   </button>
                 ) : (
                   <button
                     type="button"
                     data-testid="cancel-arm"
-                    onClick={() => setConfirmingCancel(true)}
+                    onClick={() => cancelConfirm.arm()}
                     className="flex w-full items-center gap-1.5 px-3 py-1 text-left hover:bg-surface-3"
                   >
                     <X size={12} strokeWidth={1.75} aria-hidden />

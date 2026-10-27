@@ -36,9 +36,12 @@ import { SAFE_MINIMUM_TOOLS } from '../../src/main/agent/tools/catalog';
 import { listRegistered, registerMcpDefinition } from '../../src/main/mcp/host-manager';
 import { listResources } from '../../src/main/resource/library';
 import {
+  __clearHubInstallProgressListenersForTest,
   installHubPackage,
   listHubCatalogResources,
+  onHubInstallProgress,
   uninstallHubPackage,
+  type HubInstallProgressEvent,
 } from '../../src/main/resource/hub-install';
 import {
   __setHubContextResolverForTest,
@@ -617,5 +620,150 @@ describe('T10 e2e：resource:list 并入 hub 已装项 + 五源并列', () => {
       .prepare('SELECT id FROM installed_packages WHERE item_id = ?')
       .get(hubPackageItemId('hub-e2e-skill'));
     expect(row).toBeUndefined();
+  });
+});
+
+// ── P2-7 补装进度事件（M2.2 T5）──────────────────────────────────────────────
+//
+// 契约（hub:installProgress，preload/types.d.ts 有镜像）：
+//   { stage: 'downloading'|'extracting'|'done'|'failed', type, slug,
+//     receivedBytes?(downloading 字节拍), totalBytes?(Content-Length 可得时),
+//     message?(failed 人话) }
+// 事件桥：installHubPackage → 进程内订阅面（onHubInstallProgress）+ 全窗口
+// webContents.send 广播（vitest 下广播面 no-op——panel-sync 同款懒加载语义，
+// 订阅面即生产发射路径的测试缝）。
+
+describe('P2-7 补装进度事件：三阶段序 / 失败终止 / 字节节流', () => {
+  /** 订阅并收集事件；返回 [事件数组, 解订阅] */
+  function collect(): [HubInstallProgressEvent[], () => void] {
+    const events: HubInstallProgressEvent[] = [];
+    const dispose = onHubInstallProgress((e) => events.push(e));
+    return [events, dispose];
+  }
+
+  beforeEach(() => {
+    __clearHubInstallProgressListenersForTest();
+  });
+
+  it('三阶段事件序：downloading（字节拍含 Content-Length 总量）→ extracting → done', async () => {
+    const [events, dispose] = collect();
+    // 退订语义锁：已退订的监听不再收事件（第二把收集器装好即拆）
+    const [disposedEvents, disposeB] = collect();
+    disposeB();
+    try {
+      await installHubPackage('agent', 'hub-e2e-agent');
+    } finally {
+      dispose();
+    }
+
+    expect(disposedEvents).toEqual([]);
+
+    // 阶段序：下载起拍（无字节）→ 字节拍（≥1）→ 解压 → done 收尾
+    const stages = events.map((e) => e.stage);
+    expect(stages[0]).toBe('downloading');
+    expect(stages[stages.length - 1]).toBe('done');
+    expect(stages).toEqual(expect.arrayContaining(['downloading', 'extracting', 'done']));
+    // extracting 只在全部 downloading 之后、done 之前（阶段不回跳）
+    const lastDownloadIdx = stages.lastIndexOf('downloading');
+    const extractIdx = stages.indexOf('extracting');
+    expect(extractIdx).toBeGreaterThan(lastDownloadIdx);
+    expect(stages.indexOf('done')).toBeGreaterThan(extractIdx);
+    expect(stages).not.toContain('failed');
+
+    // 每拍携带身份字段（消费面键）
+    for (const e of events) {
+      expect(e.slug).toBe('hub-e2e-agent');
+      expect(e.type).toBe('agent');
+    }
+
+    // 字节拍：receivedBytes 数字且单调不减；totalBytes = 归档真实大小（mock hub
+    // 设 Content-Length——契约锁「Content-Length 可得时携带总量」）
+    const byteEvents = events.filter((e) => typeof e.receivedBytes === 'number');
+    expect(byteEvents.length).toBeGreaterThanOrEqual(1);
+    for (let i = 1; i < byteEvents.length; i++) {
+      expect(byteEvents[i]!.receivedBytes!).toBeGreaterThanOrEqual(byteEvents[i - 1]!.receivedBytes!);
+    }
+    const archive = fixtures.get('hub-e2e-agent')!.archive;
+    expect(byteEvents.some((e) => e.totalBytes === archive.length)).toBe(true);
+    // done 拍不带字节字段（终态语义干净）
+    expect(events[events.length - 1]!.receivedBytes).toBeUndefined();
+  });
+
+  it('字节节流：1.5MB 不可压缩包 → downloading 字节拍收敛在少数几拍（512KB 增量闸）', async () => {
+    // 随机字节不可压缩——线上字节≈归档字节≈1.5MB；不节流时 undici 64KB 分片
+    // 会产出 ~24 拍，节流后应为个位数（典型 3-4）。区间放宽防分片尺寸漂移。
+    // packTarGz 只收文本条目——blob.bin 单独走 tar 打包多文件归档。
+    const blob = crypto.randomBytes(1536 * 1024);
+    const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ap-hub-big-'));
+    fs.writeFileSync(path.join(stageDir, 'SKILL.md'), '---\nname: big-skill\ndescription: d\nversion: 1.0.0\n---\n\n正文。\n');
+    fs.writeFileSync(path.join(stageDir, 'blob.bin'), blob);
+    const outPath = path.join(stageDir, 'pkg.tar.gz');
+    execFileSync('tar', ['-czf', outPath, '-C', stageDir, 'SKILL.md', 'blob.bin']);
+    const bigArchive = fs.readFileSync(outPath);
+    fs.rmSync(stageDir, { recursive: true, force: true });
+    expect(bigArchive.length).toBeGreaterThan(1024 * 1024); // 不可压缩前提自检
+
+    fixtures.set('hub-e2e-big', {
+      slug: 'hub-e2e-big',
+      type: 'skill',
+      name: '大包技能',
+      version: '1.0.0',
+      archive: bigArchive,
+      checksum: sha256(bigArchive),
+    });
+
+    const [events, dispose] = collect();
+    try {
+      await installHubPackage('skill', 'hub-e2e-big');
+    } finally {
+      dispose();
+    }
+
+    const byteEvents = events.filter((e) => typeof e.receivedBytes === 'number');
+    expect(byteEvents.length).toBeGreaterThanOrEqual(2); // 进度可见性下界
+    expect(byteEvents.length).toBeLessThanOrEqual(8); // 节流上界（不节流 ~24）
+    expect(events[events.length - 1]!.stage).toBe('done');
+  });
+
+  it('失败终止：checksum 不匹配 → 事件序止于 failed（人话 message），无 done', async () => {
+    const bad = agentPackage('hub-e2e-bad');
+    fixtures.set('hub-e2e-bad', {
+      slug: 'hub-e2e-bad',
+      type: 'agent',
+      name: '坏包 Agent',
+      version: '1.0.0',
+      archive: bad,
+      checksum: 'f'.repeat(64),
+    });
+
+    const [events, dispose] = collect();
+    try {
+      await expect(installHubPackage('agent', 'hub-e2e-bad')).rejects.toThrow(/Checksum 不匹配/);
+    } finally {
+      dispose();
+    }
+
+    expect(events[events.length - 1]!.stage).toBe('failed');
+    expect(events[events.length - 1]!.message).toMatch(/Checksum 不匹配/);
+    expect(events.map((e) => e.stage)).not.toContain('done');
+    expect(events.map((e) => e.stage)).not.toContain('extracting');
+  });
+
+  it('下载 401（凭证失效）→ failed + 鉴权人话 message', async () => {
+    await listHubCatalogResources('agent'); // 暖目录缓存（TTL 内零网络）
+    hub!.setExpectedAuth('tok-rotated');
+
+    const [events, dispose] = collect();
+    try {
+      await expect(installHubPackage('agent', 'hub-e2e-agent')).rejects.toThrow(
+        /下载失败: HTTP 401（鉴权失败/,
+      );
+    } finally {
+      dispose();
+    }
+
+    expect(events[events.length - 1]!.stage).toBe('failed');
+    expect(events[events.length - 1]!.message).toMatch(/HTTP 401/);
+    expect(events.map((e) => e.stage)).not.toContain('done');
   });
 });

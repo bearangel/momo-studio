@@ -538,12 +538,12 @@ describe('DelegatedTaskCard — 操作菜单', () => {
     await waitFor(() => expect(refreshTasks).toHaveBeenCalled());
   });
 
-  it('M-9. D6 两步确认：首击只 arm 不触发 IPC（cancel 臂态文案翻转）', async () => {
+  it('M-9. D6 两步确认：首击只 arm 不触发 IPC（P2-10：臂态文案带剩余秒明示）', async () => {
     renderCard(mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'in_progress' }));
     openMenu();
     fireEvent.click(screen.getByTestId('cancel-arm'));
-    // 臂态：菜单项文案翻确认；两路取消 IPC 均未触发
-    expect(screen.getByText('再次点击确认取消')).toBeInTheDocument();
+    // 臂态：菜单项文案翻确认 + 剩余秒倒计时（path2 痛点：3s 窗口内需明示「再点一次」）；两路取消 IPC 均未触发
+    expect(screen.getByText(/再次点击确认取消 · \ds/)).toBeInTheDocument();
     expect(ipc.hub.taskCancel).not.toHaveBeenCalled();
     expect(ipc.task.transition).not.toHaveBeenCalled();
     // 次击才真正取消
@@ -551,15 +551,19 @@ describe('DelegatedTaskCard — 操作菜单', () => {
     await waitFor(() => expect(ipc.hub.taskCancel).toHaveBeenCalledWith({ taskId: 'T-8f21abcd' }));
   });
 
-  it('M-10. D6 两步确认：armed 态 3s 无操作回落（防呆臂态不粘滞）', () => {
+  it('M-10. D6 两步确认：armed 态剩余秒递减 + 3s 无操作回落（防呆臂态不粘滞）', () => {
     vi.useFakeTimers();
     try {
       renderCard(mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'in_progress' }));
       openMenu();
       fireEvent.click(screen.getByTestId('cancel-arm'));
-      expect(screen.getByText('再次点击确认取消')).toBeInTheDocument();
+      expect(screen.getByText(/再次点击确认取消 · 3s/)).toBeInTheDocument();
       act(() => {
-        vi.advanceTimersByTime(3100);
+        vi.advanceTimersByTime(1000);
+      });
+      expect(screen.getByText(/再次点击确认取消 · 2s/)).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(2100);
       });
       expect(screen.getByText('取消任务')).toBeInTheDocument();
       expect(screen.queryByTestId('cancel-confirm')).not.toBeInTheDocument();

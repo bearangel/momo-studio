@@ -1,8 +1,9 @@
 // renderer/src/routes/MainShell.test.tsx
 //
 // D1b 挂载点锁：ProviderMissingBanner 挂在 TitleBar 与 MainLayout 之间；
-// 显隐跟随供应商状态。TitleBar / MainLayout / ConflictDialogMount 用轻量桩——
-// 本文件聚焦挂载位置，子组件行为由各自测试覆盖（ViewSidebar.test 同模式）。
+// 显隐跟随供应商状态。TitleBar / MainLayout / ConflictDialogMount /
+// HubInstallNotice（P2-7 补装通知）用轻量桩——本文件聚焦挂载位置，子组件
+// 行为由各自测试覆盖（ViewSidebar.test 同模式）。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MainShell } from './MainShell';
@@ -17,6 +18,9 @@ vi.mock('../components/layout/MainLayout', () => ({
 }));
 vi.mock('../components/im/ConflictDialogMount', () => ({
   ConflictDialogMount: () => <div data-testid="conflict-stub" />,
+}));
+vi.mock('../components/hub/HubInstallNotice', () => ({
+  HubInstallNotice: () => <div data-testid="hub-install-notice-stub" />,
 }));
 
 const providerList = vi.fn();
@@ -50,5 +54,10 @@ describe('MainShell — ProviderMissingBanner 挂载（D1b）', () => {
     expect(screen.getByTestId('titlebar-stub')).toBeInTheDocument();
     expect(screen.getByTestId('mainlayout-stub')).toBeInTheDocument();
     expect(screen.getByTestId('conflict-stub')).toBeInTheDocument();
+    // P2-7：补装通知挂主壳末位（全局挂载点——ConflictDialogMount 同层纪律）
+    expect(screen.getByTestId('hub-install-notice-stub')).toBeInTheDocument();
+    expect(screen.getByTestId('conflict-stub').nextElementSibling).toBe(
+      screen.getByTestId('hub-install-notice-stub'),
+    );
   });
 });

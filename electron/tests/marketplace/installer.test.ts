@@ -157,14 +157,20 @@ describe('marketplace/installer installPackage（远程 checksum）', () => {
       downloadUrl: 'https://example.test/pkg.tar.gz',
       checksum: 'deadbeef-wrong',
     });
-    // mock fetch 返回固定字节流
+    // mock fetch 返回固定字节流（headers 恒在场——真实 Response 形状，downloadFile 读 Content-Length）
+    const payload = new TextEncoder().encode('hello-world-payload');
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(new TextEncoder().encode('hello-world-payload'));
+        controller.enqueue(payload);
         controller.close();
       },
     });
-    fetchSpy.mockResolvedValue({ ok: true, status: 200, body } as Response);
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body,
+      headers: new Headers({ 'content-length': String(payload.length) }),
+    } as Response);
 
     await expect(installPackage(item)).rejects.toThrow(/Checksum 不匹配/);
 
@@ -177,7 +183,7 @@ describe('marketplace/installer installPackage（远程 checksum）', () => {
 
   it('下载 HTTP 错误时抛错', async () => {
     const item = makeItem({ downloadUrl: 'https://example.test/pkg.tar.gz' });
-    fetchSpy.mockResolvedValue({ ok: false, status: 404, body: null } as Response);
+    fetchSpy.mockResolvedValue({ ok: false, status: 404, body: null, headers: new Headers() } as Response);
 
     await expect(installPackage(item)).rejects.toThrow(/下载失败: HTTP 404/);
   });

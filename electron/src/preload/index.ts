@@ -57,6 +57,7 @@ import type {
   HubMirrorWorkspaceInput,
   HubMirrorAcceptResult,
   HubMirrorResultEvent,
+  HubInstallProgressEvent,
   HubMirrorRegistryRow,
   SubmitRoutedTaskInput,
   SubmitRoutedTaskResult,
@@ -642,6 +643,12 @@ const api: ApiSurface = {
       const handler = (_e: IpcRendererEvent, payload: HubMirrorResultEvent): void => callback(payload);
       ipcRenderer.on('hub:mirrorResult', handler);
       return () => { ipcRenderer.off('hub:mirrorResult', handler); };
+    },
+    // M2.2 P2-7：hub 资源补装进度（通道名与主进程 HUB_INSTALL_PROGRESS_CHANNEL 单点对齐）
+    onInstallProgress: (callback) => {
+      const handler = (_e: IpcRendererEvent, payload: HubInstallProgressEvent): void => callback(payload);
+      ipcRenderer.on('hub:installProgress', handler);
+      return () => { ipcRenderer.off('hub:installProgress', handler); };
     },
     onWorkspaceMirrored: (callback) => {
       const handler = (_e: IpcRendererEvent, payload: HubWorkspaceMirroredEvent): void => callback(payload);

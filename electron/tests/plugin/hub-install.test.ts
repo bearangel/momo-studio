@@ -44,9 +44,12 @@ import { assertRegularEntries } from '../../src/main/plugin/hub-install';
 import { listRegistered } from '../../src/main/mcp/host-manager';
 import { listResources } from '../../src/main/resource/library';
 import {
+  __clearHubInstallProgressListenersForTest,
   installHubPackage,
   listHubCatalogResources,
+  onHubInstallProgress,
   uninstallHubPackage,
+  type HubInstallProgressEvent,
 } from '../../src/main/resource/hub-install';
 import {
   __setHubContextResolverForTest,
@@ -602,5 +605,64 @@ describe('T15a-F2：tar 解压炸弹守卫（assertRegularEntries）', () => {
   it('上限内常规包 → 放行（生产默认上限不误伤）', () => {
     const dir = makeDir('bomb-ok', 3);
     expect(() => assertRegularEntries(dir)).not.toThrow();
+  });
+});
+
+// ── P2-7 补装进度事件：plugin 分支同契约（downloading→extracting→done/failed）──
+
+describe('P2-7 补装进度事件（plugin 分支——大包主场景，如 56MB codegraph）', () => {
+  /** 订阅并收集事件；返回 [事件数组, 解订阅] */
+  function collect(): [HubInstallProgressEvent[], () => void] {
+    const events: HubInstallProgressEvent[] = [];
+    const dispose = onHubInstallProgress((e) => events.push(e));
+    return [events, dispose];
+  }
+
+  beforeEach(() => {
+    __clearHubInstallProgressListenersForTest();
+  });
+
+  it('插件安装三阶段序：downloading → extracting → done（done 在记账落库后）', async () => {
+    const [events, dispose] = collect();
+    try {
+      await installHubPackage('plugin', 'hub-plug-a', {
+        appVersion: '2.1.0',
+        workspaceId: TEST_WS,
+      });
+    } finally {
+      dispose();
+    }
+
+    const stages = events.map((e) => e.stage);
+    expect(stages[0]).toBe('downloading');
+    expect(stages[stages.length - 1]).toBe('done');
+    // extracting 在全部 downloading 之后（阶段不回跳），done 前
+    expect(stages.indexOf('extracting')).toBeGreaterThan(stages.lastIndexOf('downloading'));
+    expect(stages).not.toContain('failed');
+    for (const e of events) {
+      expect(e.slug).toBe('hub-plug-a');
+      expect(e.type).toBe('plugin');
+    }
+    // 字节拍在场且携带 Content-Length 总量
+    const byteEvents = events.filter((e) => typeof e.receivedBytes === 'number');
+    expect(byteEvents.length).toBeGreaterThanOrEqual(1);
+    expect(byteEvents.some((e) => e.totalBytes === fixtures.get('hub-plug-a')!.archive.length)).toBe(true);
+  });
+
+  it('坏 checksum → 事件序止于 failed（人话 message），无 extracting / done', async () => {
+    addPluginFixture('hub-plug-bad-prog', undefined, 'f'.repeat(64));
+    const [events, dispose] = collect();
+    try {
+      await expect(
+        installHubPackage('plugin', 'hub-plug-bad-prog', { appVersion: '2.1.0', workspaceId: TEST_WS }),
+      ).rejects.toThrow(/校验/);
+    } finally {
+      dispose();
+    }
+
+    expect(events[events.length - 1]!.stage).toBe('failed');
+    expect(events[events.length - 1]!.message).toMatch(/校验/);
+    expect(events.map((e) => e.stage)).not.toContain('extracting');
+    expect(events.map((e) => e.stage)).not.toContain('done');
   });
 });

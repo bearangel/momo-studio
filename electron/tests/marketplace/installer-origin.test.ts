@@ -78,11 +78,17 @@ function buildArchive(files: Record<string, string>): string {
   return archivePath;
 }
 
-/** mock fetch：把本地文件包装成下载响应（web ReadableStream） */
+/** mock fetch：把本地文件包装成下载响应（web ReadableStream + 真实 Content-Length——
+ *  Response.headers 恒为 Headers 实例，downloadFile 读头不可缺） */
 function mockFetchFile(archivePath: string): void {
   const buf = fs.readFileSync(archivePath);
   const body = Readable.toWeb(Readable.from([buf])) as ReadableStream<Uint8Array>;
-  fetchSpy.mockResolvedValue({ ok: true, status: 200, body } as Response);
+  fetchSpy.mockResolvedValue({
+    ok: true,
+    status: 200,
+    body,
+    headers: new Headers({ 'content-length': String(buf.length) }),
+  } as Response);
 }
 
 beforeEach(() => {

@@ -29,7 +29,7 @@ import { removeMcpRefsFromAgents } from '../agent/crud';
 import type { McpConfigSchema } from '../mcp/types';
 import { buildResourceId, type ResourceItem, type ResourceType } from './types';
 import { fromCatalogItem } from './catalog-adapter';
-import { installPackage, listInstalled, uninstallPackage } from '../marketplace/installer';
+import { installPackage, listInstalled, uninstallPackage, type InstallPhaseListener } from '../marketplace/installer';
 import { installPluginHubArchive } from '../plugin/hub-install';
 import { uninstallPlugin } from '../plugin/installer';
 import { getPlugin, listPlugins } from '../plugin/registry';
@@ -297,6 +297,82 @@ export function recordPublishAccountingSafe(
   }
 }
 
+/**
+ * hub 补装进度事件（M2.2 P2-7 契约——renderer types.d.ts / preload 有镜像）。
+ * 消费面：worker 侧镜像补装可见性（大包如 56MB codegraph 下载期间 UI 有感知）；
+ * 手动从资源库装 hub 包同样过此链（installHubPackage 单点发射）。
+ */
+export interface HubInstallProgressEvent {
+  /** downloading（可多拍）→ extracting → done；失败终止拍 failed */
+  stage: 'downloading' | 'extracting' | 'done' | 'failed';
+  type: ResourceType;
+  slug: string;
+  /** stage='downloading' 字节拍在场：累计已收字节（512KB 增量节流） */
+  receivedBytes?: number;
+  /** stage='downloading' 在场：总量（Content-Length 可得时；可伪造头缺失/非法为 null） */
+  totalBytes?: number | null;
+  /** stage='failed' 在场：人话错误（消费面直接展示） */
+  message?: string;
+}
+
+/** 进度事件通道名（preload onInstallProgress 同名——一义一名，改则两端同 commit） */
+export const HUB_INSTALL_PROGRESS_CHANNEL = 'hub:installProgress';
+
+/** 字节拍节流增量（512KB——56MB 包约 110 拍，IPC 不刷屏；下载起拍/阶段拍不受限） */
+const PROGRESS_BYTE_DELTA = 512 * 1024;
+
+const progressListeners = new Set<(e: HubInstallProgressEvent) => void>();
+
+/** 订阅补装进度（进程内消费面/测试缝；广播路径不受影响）。返回解订阅函数。 */
+export function onHubInstallProgress(listener: (e: HubInstallProgressEvent) => void): () => void {
+  progressListeners.add(listener);
+  return () => {
+    progressListeners.delete(listener);
+  };
+}
+
+/** 测试隔离：清空进程内订阅（防用例间监听泄漏；窗口广播路径不受影响） */
+export function __clearHubInstallProgressListenersForTest(): void {
+  progressListeners.clear();
+}
+
+/** 生产广播：全部窗口 webContents.send（panel-sync defaultBroadcast 同款懒加载——
+ *  vitest 里 require('electron') 返回路径字符串，无窗口可推静默跳过） */
+function broadcastProgressToWindows(e: HubInstallProgressEvent): void {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const electron = require('electron') as typeof import('electron') | string;
+  if (typeof electron === 'string') return;
+  for (const win of electron.BrowserWindow.getAllWindows()) {
+    win.webContents.send(HUB_INSTALL_PROGRESS_CHANNEL, e);
+  }
+}
+
+function emitProgress(e: HubInstallProgressEvent): void {
+  for (const listener of progressListeners) listener(e);
+  broadcastProgressToWindows(e);
+}
+
+/**
+ * installHubPackage 专用阶段拍包装：downloading 字节拍按 512KB 增量节流
+ * （起拍无字节信息时不节流）；extracting 恒直通。
+ */
+function makePhaseEmitter(type: ResourceType, slug: string): InstallPhaseListener {
+  let lastEmittedBytes = -1;
+  return (stage, info) => {
+    if (stage === 'downloading' && typeof info?.receivedBytes === 'number') {
+      if (lastEmittedBytes >= 0 && info.receivedBytes - lastEmittedBytes < PROGRESS_BYTE_DELTA) return;
+      lastEmittedBytes = info.receivedBytes;
+    }
+    emitProgress({
+      stage,
+      type,
+      slug,
+      ...(typeof info?.receivedBytes === 'number' ? { receivedBytes: info.receivedBytes } : {}),
+      ...(info && 'totalBytes' in info ? { totalBytes: info.totalBytes } : {}),
+    });
+  };
+}
+
 export async function installHubPackage(
   type: ResourceType,
   slug: string,
@@ -309,35 +385,52 @@ export async function installHubPackage(
     );
   }
   const headers = await hubAuthHeaders();
-  if (item.type === 'plugin') {
-    const rec = await installPluginHubArchive(
-      item,
-      opts?.appVersion ?? '999.0.0',
-      opts?.workspaceId ?? '',
-      headers,
-    );
-    // 记账：cache_path 指向真实 installed 目录（信息性——卸载走 plugin 级联，
-    // 不经 marketplace 缓存链的 cache_path 删除语义）。置换旧账只清 plugin 行
-    //（T15a-F1：`hub:{slug}` 不是跨类型唯一键，同 slug 的 agent/skill/mcp
-    // 记账不得被重装连带抹掉）
-    const db = getDb();
-    db.prepare(
-      "DELETE FROM installed_packages WHERE item_id = ? AND item_type = 'plugin'",
-    ).run(hubPackageItemId(slug));
-    db.prepare(
-      `INSERT INTO installed_packages (id, item_id, item_type, slug, version, cache_path, checksum)
-       VALUES (?, ?, 'plugin', ?, ?, ?, ?)`,
-    ).run(
-      randomUUID(),
-      hubPackageItemId(slug),
+  const onProgress = makePhaseEmitter(type, slug);
+  try {
+    if (item.type === 'plugin') {
+      const rec = await installPluginHubArchive(
+        item,
+        opts?.appVersion ?? '999.0.0',
+        opts?.workspaceId ?? '',
+        headers,
+        onProgress,
+      );
+      // 记账：cache_path 指向真实 installed 目录（信息性——卸载走 plugin 级联，
+      // 不经 marketplace 缓存链的 cache_path 删除语义）。置换旧账只清 plugin 行
+      //（T15a-F1：`hub:{slug}` 不是跨类型唯一键，同 slug 的 agent/skill/mcp
+      // 记账不得被重装连带抹掉）
+      const db = getDb();
+      db.prepare(
+        "DELETE FROM installed_packages WHERE item_id = ? AND item_type = 'plugin'",
+      ).run(hubPackageItemId(slug));
+      db.prepare(
+        `INSERT INTO installed_packages (id, item_id, item_type, slug, version, cache_path, checksum)
+         VALUES (?, ?, 'plugin', ?, ?, ?, ?)`,
+      ).run(
+        randomUUID(),
+        hubPackageItemId(slug),
+        slug,
+        rec.version,
+        resolvePluginInstalledDir(rec.id, rec.version),
+        item.checksum,
+      );
+      // done 拍在记账落库后（契约：done = 安装+记账全部完成）
+      emitProgress({ stage: 'done', type, slug });
+      return { cachePath: resolvePluginInstalledDir(rec.id, rec.version) };
+    }
+    const result = await installPackage(item, undefined, headers, onProgress);
+    emitProgress({ stage: 'done', type, slug });
+    return result;
+  } catch (err) {
+    // 失败终止拍：人话 message 随事件透传（worker 侧 UI 直接展示）；错误原样上抛
+    emitProgress({
+      stage: 'failed',
+      type,
       slug,
-      rec.version,
-      resolvePluginInstalledDir(rec.id, rec.version),
-      item.checksum,
-    );
-    return { cachePath: resolvePluginInstalledDir(rec.id, rec.version) };
+      message: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
   }
-  return installPackage(item, undefined, headers);
 }
 
 /**

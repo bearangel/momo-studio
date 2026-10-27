@@ -30,6 +30,7 @@ import { CopyButton } from '../ui/CopyButton';
 import { EmptyState } from '../ui/EmptyState';
 import { MirrorWizard } from '../hub/MirrorWizard';
 import { NodeCard } from './NodeCard';
+import { useArmedConfirm } from './useArmedConfirm';
 
 interface GroupMonitorProps {
   /** T4 接线：进入成员工作空间只读视图（WorkgroupView → S3b 选择器） */
@@ -138,7 +139,8 @@ function GroupActionsMenu({ group, isLeader, selfNodeId, className }: GroupActio
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [pickingTransfer, setPickingTransfer] = useState(false);
-  const [confirmingLeave, setConfirmingLeave] = useState(false);
+  // 退组臂确认（P2-10 公共臂态 hook）：3s 回落 + 剩余秒倒计时明示
+  const leaveConfirm = useArmedConfirm();
   const [busy, setBusy] = useState(false);
   const [pos, setPos] = useState({ left: 0, top: 0 });
 
@@ -149,17 +151,10 @@ function GroupActionsMenu({ group, isLeader, selfNodeId, className }: GroupActio
     if (rect) setPos({ left: rect.right, top: rect.bottom + 4 });
   }, [open]);
 
-  // 退组臂确认 3s 自动回落（GroupPanel/ProviderModelPicker 同款防 armed 滞留）
-  useEffect(() => {
-    if (!confirmingLeave) return;
-    const timer = setTimeout(() => setConfirmingLeave(false), 3000);
-    return () => clearTimeout(timer);
-  }, [confirmingLeave]);
-
   const close = (): void => {
     setOpen(false);
     setPickingTransfer(false);
-    setConfirmingLeave(false);
+    leaveConfirm.disarm();
   };
 
   const run = (action: () => Promise<unknown>): void => {
@@ -229,15 +224,15 @@ function GroupActionsMenu({ group, isLeader, selfNodeId, className }: GroupActio
                   <div className="my-1 border-t border-subtle" />
                 </>
               )}
-              {confirmingLeave ? (
+              {leaveConfirm.armed ? (
                 <MenuItem
-                  label="再次点击确认退出"
+                  label={`再次点击确认退出 · ${leaveConfirm.remainingSec}s`}
                   danger
                   disabled={busy}
                   onClick={() => run(() => leave(group.groupId))}
                 />
               ) : (
-                <MenuItem label="退出工作组" danger disabled={busy} onClick={() => setConfirmingLeave(true)} />
+                <MenuItem label="退出工作组" danger disabled={busy} onClick={() => leaveConfirm.arm()} />
               )}
             </div>
           </>,

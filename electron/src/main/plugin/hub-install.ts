@@ -25,7 +25,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { downloadFile } from '../marketplace/installer';
+import { downloadFile, type InstallPhaseListener } from '../marketplace/installer';
 import { isValidSha256Hex, type MarketplaceItem } from '../marketplace/types';
 import { resolvePluginsDir } from '../paths';
 import { parseManifest } from './manifest';
@@ -101,6 +101,7 @@ export async function installPluginHubArchive(
   currentAppVersion: string,
   originWorkspaceId: string,
   headers?: Record<string, string>,
+  onProgress?: InstallPhaseListener,
 ): Promise<PluginRecord> {
   if (item.type !== 'plugin') {
     throw new Error(`installPluginHubArchive 仅接受 plugin 条目（收到 ${item.type}）`);
@@ -120,13 +121,24 @@ export async function installPluginHubArchive(
   );
   const archivePath = `${staging}.tar.gz`;
   try {
-    // headers 透传 Bearer 凭证（hub spec §3.1 下载端点鉴权——resource/hub-install 注入）
-    await downloadFile(item.downloadUrl, archivePath, undefined, headers);
+    // headers 透传 Bearer 凭证（hub spec §3.1 下载端点鉴权——resource/hub-install 注入）；
+    // 阶段拍经 onProgress 上报（P2-7——plugin 是大包主场景，56MB 级下载需进度可见）
+    onProgress?.('downloading');
+    await downloadFile(
+      item.downloadUrl,
+      archivePath,
+      undefined,
+      headers,
+      onProgress
+        ? (receivedBytes, totalBytes) => onProgress('downloading', { receivedBytes, totalBytes })
+        : undefined,
+    );
     const actual = crypto.createHash('sha256').update(fs.readFileSync(archivePath)).digest('hex');
     if (actual !== item.checksum.toLowerCase()) {
       throw new Error(`hub 插件包校验失败（sha256 不符）: ${item.slug}`);
     }
 
+    onProgress?.('extracting');
     assertSafeTarMembers(listTarMembers(archivePath));
     fs.mkdirSync(staging, { recursive: true });
     await execFileAsync('tar', ['-xzf', archivePath, '-C', staging]);

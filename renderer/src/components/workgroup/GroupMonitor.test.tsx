@@ -8,7 +8,7 @@
 //   targetNodeId 过滤（running+pending 两态）；底部 callout 引导回看板
 // - 无组空态：0 组 → 引导去侧栏创建/加入
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { GroupMonitor } from './GroupMonitor';
 import { useHubStore } from '../../stores/hub.store';
 import { useHubGroupStore } from '../../stores/hub-group.store';
@@ -242,10 +242,39 @@ describe('GroupMonitor 组操作菜单（M2.1 Task 5 自 settings/GroupPanel 收
     fireEvent.click(screen.getByRole('button', { name: '组操作菜单 dev-team' }));
     fireEvent.click(screen.getByRole('button', { name: '退出工作组' }));
     expect(api.hub.groupLeave).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: '再次点击确认退出' }));
+    // P2-10：臂态明示「再次点击确认」+ 剩余秒倒计时
+    expect(screen.getByRole('button', { name: /再次点击确认退出 · \ds/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /再次点击确认退出/ }));
     await waitFor(() =>
       expect(api.hub.groupLeave).toHaveBeenCalledWith({ groupId: 'g-dev' }),
     );
+  });
+
+  it('P2-10 退组臂态：3s 到期回落回普通项；菜单关闭即复位（不残留臂态）', async () => {
+    vi.useFakeTimers();
+    try {
+      useHubGroupStore.setState({ groups: [GROUP_DEV] });
+      render(<GroupMonitor onOpenView={onOpenView} />);
+
+      fireEvent.click(screen.getByRole('button', { name: '组操作菜单 dev-team' }));
+      fireEvent.click(screen.getByRole('button', { name: '退出工作组' }));
+      expect(screen.getByRole('button', { name: /再次点击确认退出 · 3s/ })).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(3100);
+      });
+      // 回落：菜单项回普通「退出工作组」，且全程未调 leave
+      expect(screen.getByRole('button', { name: '退出工作组' })).toBeInTheDocument();
+      expect(api.hub.groupLeave).not.toHaveBeenCalled();
+
+      // 菜单关闭复位：再 arm → 关菜单 → 重开 → 非臂态
+      fireEvent.click(screen.getByRole('button', { name: '退出工作组' }));
+      fireEvent.click(screen.getByRole('button', { name: '组操作菜单 dev-team' })); // open 时再点 = close
+      fireEvent.click(screen.getByRole('button', { name: '组操作菜单 dev-team' })); // 重开
+      expect(screen.getByRole('button', { name: '退出工作组' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /再次点击确认退出/ })).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('非 leader：重新生成邀请码可见且可触发（成员级语义）+ 退出工作组；转移组长仍 leader-only', async () => {

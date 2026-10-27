@@ -103,11 +103,17 @@ function buildArchive(
   return archivePath;
 }
 
-/** mock fetch：把本地文件包装成下载响应（web ReadableStream） */
+/** mock fetch：把本地文件包装成下载响应（web ReadableStream + 真实 Content-Length——
+ *  Response.headers 恒为 Headers 实例，downloadFile 读头不可缺） */
 function mockFetchFile(archivePath: string): void {
   const buf = fs.readFileSync(archivePath);
   const body = Readable.toWeb(Readable.from([buf])) as ReadableStream<Uint8Array>;
-  fetchSpy.mockResolvedValue({ ok: true, status: 200, body } as Response);
+  fetchSpy.mockResolvedValue({
+    ok: true,
+    status: 200,
+    body,
+    headers: new Headers({ 'content-length': String(buf.length) }),
+  } as Response);
 }
 
 beforeEach(() => {
@@ -234,7 +240,12 @@ describe('S1: 安装链命令注入防护', () => {
   it('downloadFile 超过大小上限 → 中断下载并删除半成品文件', async () => {
     const big = Buffer.alloc(1024 * 1024);
     const body = Readable.toWeb(Readable.from([big])) as ReadableStream<Uint8Array>;
-    fetchSpy.mockResolvedValue({ ok: true, status: 200, body } as Response);
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body,
+      headers: new Headers({ 'content-length': String(big.length) }),
+    } as Response);
 
     const dest = path.join(tmpRoot, 'cap-test.bin');
     await expect(downloadFile('https://example.test/big.bin', dest, 1024)).rejects.toThrow(

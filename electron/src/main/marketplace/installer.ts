@@ -124,11 +124,24 @@ export interface InstalledPackage {
   installedAt: string;
 }
 
+/**
+ * 安装阶段进度监听（M2.2 P2-7——hub 补装链消费，worker 侧大包可见性）。
+ *   - 'downloading'：下载起拍一次（无字节）；随后每个流分片一拍（info 携带
+ *     receivedBytes 累计值 + totalBytes=Content-Length，响应头缺失时 null）
+ *   - 'extracting'：校验通过、解压开始前一次
+ * 市场直装链不传此参——行为零变化（可选缝，非新下载链）。
+ */
+export type InstallPhaseListener = (
+  stage: 'downloading' | 'extracting',
+  info?: { receivedBytes?: number; totalBytes?: number | null },
+) => void;
+
 /** 安装一个 marketplace 包（headers 经 downloadFile 透传——hub 链注入 Bearer 凭证） */
 export async function installPackage(
   item: MarketplaceItem,
   _workspaceId?: string,
   headers?: Record<string, string>,
+  onProgress?: InstallPhaseListener,
 ): Promise<{ cachePath: string }> {
   // S1 注入防线：slug/version 会被拼进路径与子进程参数，任何 shell 元字符
   // 都必须在首次使用前被拒绝（checksum 校验不缓解路径注入）。
@@ -165,9 +178,18 @@ export async function installPackage(
   fs.mkdirSync(cachePath, { recursive: true });
 
   if (item.downloadUrl) {
-    // 远程包：下载 → 校验 → 解压
+    // 远程包：下载 → 校验 → 解压（阶段拍经 onProgress 上报——P2-7 hub 链消费）
     const archivePath = path.join(cachePath, 'package.tar.gz');
-    await downloadFile(item.downloadUrl, archivePath, undefined, headers);
+    onProgress?.('downloading');
+    await downloadFile(
+      item.downloadUrl,
+      archivePath,
+      undefined,
+      headers,
+      onProgress
+        ? (receivedBytes, totalBytes) => onProgress('downloading', { receivedBytes, totalBytes })
+        : undefined,
+    );
 
     if (item.checksum) {
       const actualChecksum = await computeChecksum(archivePath);
@@ -177,10 +199,11 @@ export async function installPackage(
       }
     }
 
+    onProgress?.('extracting');
     await extractTarGz(archivePath, cachePath);
     fs.unlinkSync(archivePath);
   } else {
-    // builtin 内联项：无下载，就地生成
+    // builtin 内联项无下载/解压物理阶段——不拍进度（hub 目录项恒有 downloadUrl）
     createInlinePackage(item, cachePath);
   }
 
@@ -321,12 +344,16 @@ function registerInstalledPackage(item: MarketplaceItem, cachePath: string): voi
  * headers（可选）：请求头透传通道——hub 下载端点要求 Bearer 鉴权（hub spec
  * §3.1 三个资源端点全部鉴权），hub 安装链经此注入 `Authorization: Bearer
  * <deviceToken>`；marketplace 公网下载不传，行为不变。
+ *
+ * onBytes（可选，P2-7）：每个流分片一拍（receivedBytes 为累计落盘字节；
+ * totalBytes 取 Content-Length——可伪造故仅供参考展示，缺失时 null）。
  */
 export async function downloadFile(
   url: string,
   dest: string,
   maxBytes: number = MAX_DOWNLOAD_BYTES,
   headers?: Record<string, string>,
+  onBytes?: (receivedBytes: number, totalBytes: number | null) => void,
 ): Promise<void> {
   if (!isTrustedDownloadUrl(url)) {
     throw new Error(`下载地址必须是 https 或已注册的可信源: ${url}`);
@@ -337,6 +364,9 @@ export async function downloadFile(
     const hint = response.status === 401 ? '（鉴权失败：hub 凭证缺失或已失效，请检查 hub 接入配置）' : '';
     throw new Error(`下载失败: HTTP ${response.status}${hint}`);
   }
+  // Content-Length 可得则透传（展示用总量）；缺失/非数字（可伪造头）按 null
+  const contentLength = response.headers.get('content-length');
+  const totalBytes = contentLength !== null && /^\d+$/.test(contentLength) ? Number(contentLength) : null;
   // Readable.fromWeb 将 web ReadableStream 转 Node Readable，类型干净无需 as
   const source = Readable.fromWeb(response.body);
   const writeStream = fs.createWriteStream(dest);
@@ -351,6 +381,7 @@ export async function downloadFile(
       if (!writeStream.write(buf)) {
         await once(writeStream, 'drain');
       }
+      onBytes?.(total, totalBytes);
     }
     await new Promise<void>((resolve, reject) => {
       writeStream.end((err?: Error | null) => (err ? reject(err) : resolve()));

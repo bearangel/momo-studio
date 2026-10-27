@@ -2841,6 +2841,24 @@ export interface HubWorkspaceMirroredEvent {
 }
 
 /**
+ * hub:installProgress 推送载荷（M2.2 P2-7——与 electron 端
+ * resource/hub-install.ts HubInstallProgressEvent 对齐）。installHubPackage
+ * 补装全程逐拍推送：downloading（可多拍，字节进度）→ extracting → done；
+ * 失败终止拍 failed。
+ */
+export interface HubInstallProgressEvent {
+  stage: 'downloading' | 'extracting' | 'done' | 'failed';
+  type: 'agent' | 'skill' | 'mcp' | 'plugin';
+  slug: string;
+  /** stage='downloading' 字节拍在场：累计已收字节（512KB 增量节流） */
+  receivedBytes?: number;
+  /** stage='downloading' 在场：总量（Content-Length 可得时；缺失/非法为 null） */
+  totalBytes?: number | null;
+  /** stage='failed' 在场：人话错误 */
+  message?: string;
+}
+
+/**
  * 镜像登记行（M2.1 T6 / RM-M21-7——workspace_mirror_registry 表 camelCase 镜像）。
  * 数据源 = workspace.mirrored 组内广播累积（同组×同节点×同空间覆盖 snapshot_id）；
  * 失忆限制：M2 协议无重放，晚入组/离线期间的镜像不可恢复（M3 票：hub 查询式清单 RPC）。
@@ -3108,6 +3126,8 @@ export interface HubApiSurface {
   onGroupChanged(callback: (payload: HubGroupChangedEvent) => void): () => void;
   /** 镜像两段式第二段推送订阅（解订阅函数）——成功/失败/conflict 差异摘要（定向→本机 leader） */
   onMirrorResult(callback: (payload: HubMirrorResultEvent) => void): () => void;
+  /** hub 资源补装进度推送订阅（解订阅函数）——downloading/extracting/done/failed 逐拍（M2.2 P2-7） */
+  onInstallProgress(callback: (payload: HubInstallProgressEvent) => void): () => void;
   /** 镜像完成组内广播订阅（解订阅函数）——组内皆可见谁被镜像到什么版本 */
   onWorkspaceMirrored(callback: (payload: HubWorkspaceMirroredEvent) => void): () => void;
   /** 委派进度拍推送订阅（定向→本机 leader；目标侧 500ms 合并批的直转） */
