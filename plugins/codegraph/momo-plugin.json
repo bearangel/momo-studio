@@ -16,8 +16,8 @@
   "vendor": {
     "archives": [
       {
-        "file": "vendor/codegraph-TARGET.tar.gz",
-        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "file": "vendor/codegraph-darwin-arm64.tar.gz",
+        "sha256": "3308c7c7a452b513fdca1124ec5957fe8347dafd4c9c56343d2e560b298929ac",
         "maxEntries": 20000
       }
     ],

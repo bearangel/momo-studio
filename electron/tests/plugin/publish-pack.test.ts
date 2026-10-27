@@ -275,3 +275,112 @@ describe('packPluginForPublish', () => {
     await expect(packPluginForPublish('pp-nomanifest')).rejects.toThrow(/momo-plugin\.json/);
   });
 });
+
+// ── vendor 声明插件（2026-10-27：codegraph 234MB 超限修复）──────────────────
+// 语义：vendor.archives 声明者的 engine/ 是安装侧 extractVendorArchives 的
+// 重建目标（发布包携带 vendor/*.tar.gz，安装时 sha256 校验→解压→探针）——
+// dev 目录里已解压的 engine/ 是派生态，不入包；vendor 归档必须在场且校验吻合。
+
+function sha256File(p: string): string {
+  return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+}
+
+/** 造 vendor 归档 tar.gz（内容任意小文件）并返回其 sha256 */
+function mkVendorArchive(dir: string, relFile: string): string {
+  const abs = path.join(dir, relFile);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  const stage = fs.mkdtempSync(path.join(tmpRoot, 'vstage-'));
+  fs.mkdirSync(path.join(stage, 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(stage, 'bin', 'engine-bin'), '#!/bin/sh\n');
+  execFileSync('tar', ['-czf', abs, '-C', stage, '.']);
+  fs.rmSync(stage, { recursive: true, force: true });
+  return sha256File(abs);
+}
+
+describe('packPluginForPublish vendor 声明插件', () => {
+  function mkVendorPlugin(dir: string, id: string, opts: {
+    withEngine?: boolean;
+    withArchive?: boolean;
+    sha256Override?: string;
+    fileDecl?: string;
+  } = {}): void {
+    const relFile = opts.fileDecl ?? 'vendor/codegraph-darwin-arm64.tar.gz';
+    let sha = '0'.repeat(64);
+    if (opts.withArchive === true) sha = mkVendorArchive(dir, relFile);
+    if (opts.sha256Override !== undefined) sha = opts.sha256Override;
+    fs.mkdirSync(path.join(dir, 'tools'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'momo-plugin.json'),
+      JSON.stringify({
+        id,
+        name: 'V',
+        version: '0.2.0',
+        description: 'vendor 打包测试',
+        components: { tools: './tools' },
+        vendor: { archives: [{ file: relFile, sha256: sha }], probe: 'engine/bin/engine-bin' },
+      }),
+    );
+    fs.writeFileSync(path.join(dir, 'tools', 'main.js'), 'module.exports.createTools = () => ({});');
+    if (opts.withEngine !== false) {
+      // dev 目录里已解压的引擎（重建态——打包必须排除）
+      fs.mkdirSync(path.join(dir, 'engine', 'bin'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'engine', 'bin', 'engine-bin'), 'x'.repeat(1024));
+      fs.writeFileSync(path.join(dir, 'engine', 'big-runtime.dat'), 'y'.repeat(4096));
+    }
+  }
+
+  it('engine/ 重建态不入包；vendor 归档在场且校验吻合 → 打包成功且包含 vendor 文件', async () => {
+    const dir = path.join(tmpRoot, 'vendor-ok');
+    mkVendorPlugin(dir, 'pp-vendor-ok', { withArchive: true });
+    registerDev(dir, 'pp-vendor-ok');
+
+    const res = await packPluginForPublish('pp-vendor-ok');
+    const list = tarList(res.archivePath);
+    expect(list).toContain('momo-plugin.json');
+    expect(list).toContain('tools/main.js');
+    expect(list).toContain('vendor/codegraph-darwin-arm64.tar.gz');
+    expect(list.some((m) => m === 'engine' || m.startsWith('engine/'))).toBe(false);
+    expect(res.sizeBytes).toBeLessThan(50 * 1024); // 引擎重建态未混入（否则 MB 级）
+  });
+
+  it('vendor 归档缺失 → 人话拒绝（需先构建 vendor 包并回填 sha256）', async () => {
+    const dir = path.join(tmpRoot, 'vendor-missing');
+    mkVendorPlugin(dir, 'pp-vendor-missing', { withArchive: false, sha256Override: 'a'.repeat(64) });
+    registerDev(dir, 'pp-vendor-missing');
+
+    await expect(packPluginForPublish('pp-vendor-missing')).rejects.toThrow(/vendor 包缺失.*需先构建/);
+    expect(publishArtifacts()).toEqual([]); // 失败不留半成品
+  });
+
+  it('vendor 归档 sha256 与 manifest 不符 → 拒绝（防发布陈旧/损坏引擎包）', async () => {
+    const dir = path.join(tmpRoot, 'vendor-hash');
+    mkVendorPlugin(dir, 'pp-vendor-hash', { withArchive: true, sha256Override: 'b'.repeat(64) });
+    registerDev(dir, 'pp-vendor-hash');
+
+    await expect(packPluginForPublish('pp-vendor-hash')).rejects.toThrow(/sha256 与 manifest 不符/);
+    expect(publishArtifacts()).toEqual([]);
+  });
+
+  it('vendor 归档声明路径越界（../）→ 拒绝', async () => {
+    const dir = path.join(tmpRoot, 'vendor-escape');
+    mkVendorPlugin(dir, 'pp-vendor-escape', {
+      withArchive: false, sha256Override: 'c'.repeat(64),
+      fileDecl: 'vendor/../../escape.tar.gz',
+    });
+    registerDev(dir, 'pp-vendor-escape');
+
+    await expect(packPluginForPublish('pp-vendor-escape')).rejects.toThrow(/vendor 包路径越界/);
+  });
+
+  it('非 vendor 插件含 engine/ 目录 → 照常入包（排除仅对 vendor 声明者生效）', async () => {
+    const dir = path.join(tmpRoot, 'plain-engine');
+    mkPlugin(dir, 'pp-plain-engine', (d) => {
+      fs.mkdirSync(path.join(d, 'engine'), { recursive: true });
+      fs.writeFileSync(path.join(d, 'engine', 'data.txt'), 'engine-payload');
+    });
+    registerDev(dir, 'pp-plain-engine');
+
+    const res = await packPluginForPublish('pp-plain-engine');
+    expect(tarList(res.archivePath)).toContain('engine/data.txt');
+  });
+});

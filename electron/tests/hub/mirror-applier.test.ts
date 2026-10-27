@@ -931,3 +931,92 @@ describe('applyMirrorSnapshot 工作目录', () => {
     expect(listWorkspaces().find((w) => w.name === '存量空间')?.directoryPath).toBe(before);
   });
 });
+
+// ── 12. catalog 自愈（2026-10-27：builtin catalog-install 类引用的按需落装）──
+// 背景：builtin agent/skill 自 v1.1 走 marketplace 按需安装——「目标同有」假设
+// 对 catalog-install 类不成立（双端同 catalog 但装态独立）。修复：目标未装且
+// 本地内置 catalog 有该 slug → 按需落装（零网络，inline 包）→ 解析命中；
+// catalog 也没有的仍软失败（superpowers 类私有 skill）。
+
+describe('applyMirrorSnapshot catalog 自愈', () => {
+  const noResDeps2 = (archive: ArchiveFixture): MirrorApplierDeps => ({
+    fetchSnapshotArchive: async () => ({ bytes: archive.bytes, checksum: archive.checksum }),
+    installResource: async () => undefined,
+  });
+
+  it('agent slug 引用目标未装、本地 catalog 有 → 自动落装并解析（无 agent unresolved）', async () => {
+    const archive = await makeArchive(baseManifest({
+      workspaceName: 'cat-agent',
+      config: {
+        agentMembers: [{ name: '办公助手', slug: 'office-assistant' }],
+        teams: [], mcpEnabled: [], skills: [], pluginsEnabled: [], providerRefs: [], prefs: {},
+      },
+    }));
+    const outcome = await applyMirrorSnapshot(
+      applyPayload({ workspaceName: 'cat-agent' }),
+      noResDeps2(archive),
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.unresolvedRefs ?? []).toEqual([]); // catalog 补装生效——不再 agent:office-assistant
+    const members = listMembers(listWorkspaces().find((w) => w.name === 'cat-agent')!.id);
+    // 身份契约=slug（成员显示名随目标侧定义——catalog 项名与源端可不同）
+    expect(members).toHaveLength(1);
+    expect(getAgentDefinition(members[0]!.agentDefinitionId)?.slug).toBe('office-assistant');
+  });
+
+  it('skill slug 未装未内嵌、本地 catalog 有 → 自动落装（无 skill unresolved）', async () => {
+    const archive = await makeArchive(baseManifest({
+      workspaceName: 'cat-skill',
+      config: {
+        agentMembers: [], teams: [], mcpEnabled: [],
+        skills: ['code-review'], pluginsEnabled: [], providerRefs: [], prefs: {},
+      },
+    }));
+    const outcome = await applyMirrorSnapshot(
+      applyPayload({ workspaceName: 'cat-skill' }),
+      noResDeps2(archive),
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.unresolvedRefs ?? []).toEqual([]);
+    expect(listInstalled().some((s) => s.slug === 'code-review')).toBe(true);
+  });
+
+  it('catalog 没有的 slug（私有 skill）→ 仍软失败入 unresolved（语义不变）', async () => {
+    const archive = await makeArchive(baseManifest({
+      workspaceName: 'cat-ghost',
+      config: {
+        agentMembers: [], teams: [], mcpEnabled: [],
+        skills: ['brainstorming'], pluginsEnabled: [], providerRefs: [], prefs: {},
+      },
+    }));
+    const outcome = await applyMirrorSnapshot(
+      applyPayload({ workspaceName: 'cat-ghost' }),
+      noResDeps2(archive),
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.unresolvedRefs).toEqual(['skill:brainstorming']);
+  });
+
+  it('补装幂等：confirm 重放不重复装包不炸（.installed 跳过路径）', async () => {
+    const manifest = baseManifest({
+      workspaceName: 'cat-idem',
+      config: {
+        agentMembers: [{ name: '研究员', slug: 'researcher' }], teams: [],
+        mcpEnabled: [], skills: ['debug-reproduce'], pluginsEnabled: [], providerRefs: [], prefs: {},
+      },
+    });
+    const archive = await makeArchive(manifest);
+    const first = await applyMirrorSnapshot(applyPayload({ workspaceName: 'cat-idem' }), noResDeps2(archive));
+    expect(first.ok).toBe(true);
+    const second = await applyMirrorSnapshot(
+      applyPayload({ workspaceName: 'cat-idem', confirm: true }),
+      noResDeps2(archive),
+    );
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.unresolvedRefs ?? []).toEqual([]);
+  });
+});

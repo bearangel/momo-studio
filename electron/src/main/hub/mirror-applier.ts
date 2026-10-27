@@ -43,6 +43,9 @@ import { updateGlobalSettings, getGlobalSettings } from '../settings/crud';
 import { assertSafeTarMembers } from '../plugin/installer';
 import { resolveTmpDir } from '../paths';
 import { installHubPackage } from '../resource/hub-install';
+import { installPackage } from '../marketplace/installer';
+import { readBundledCatalog } from '../marketplace/client';
+import type { MarketplaceItem } from '../marketplace/types';
 import type { ResourceType } from '../resource/types';
 import { agentManifestYaml } from './publish';
 import { createHubConfigStore } from './config-store';
@@ -206,6 +209,41 @@ function isLocallyPresent(type: string, slug: string): boolean {
   if (type === 'mcp') return listRegistered().some((m) => m.name === slug);
   if (type === 'plugin') return getPlugin(slug) !== null;
   return false;
+}
+
+/** 内置 catalog agent/skill 项（纯本地读——镜像补装不吃网络；进程序内单读复用）。 */
+let bundledCatalogItems: MarketplaceItem[] | null = null;
+function localCatalogItems(): MarketplaceItem[] {
+  if (bundledCatalogItems === null) {
+    try {
+      bundledCatalogItems = readBundledCatalog().items;
+    } catch (err) {
+      logger.warn('内置 catalog 读取失败，catalog 自愈降级为纯软失败', {
+        error: (err as Error).message,
+      });
+      bundledCatalogItems = [];
+    }
+  }
+  return bundledCatalogItems;
+}
+
+/**
+ * catalog 自愈（2026-10-27）：目标未装的 agent/skill slug 引用，若内置 catalog
+ * 有同名项则按需落装（inline 包、零网络），再由调用方复查解析。修复「builtin
+ * 目标同有」假设的裂缝——builtin/catalog-install 类自 v1.1 走 marketplace
+ * 按需安装，两端装态独立（验收实况：A 装 5 个 catalog agent、B 全缺 → 20 条
+ * unresolved）。catalog 无此 slug 或落装失败 → 回落软失败（语义不变）。
+ */
+async function installFromLocalCatalog(type: 'agent' | 'skill', slug: string): Promise<boolean> {
+  const item = localCatalogItems().find((c) => c.type === type && c.slug === slug);
+  if (!item) return false;
+  try {
+    await installPackage(item);
+    return true;
+  } catch (err) {
+    logger.warn('catalog 自愈落装失败，回落软失败', { type, slug, error: (err as Error).message });
+    return false;
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -425,9 +463,15 @@ async function applyConfig(
       saveAgentDefinition(def);
       defId = def.id;
     } else if (m.slug !== undefined) {
-      const existing = listAgentDefinitions().find((d) => d.slug === m.slug);
+      let existing = listAgentDefinitions().find((d) => d.slug === m.slug);
       if (!existing) {
-        // 本机已装 → 内置市场目录（isLocallyPresent 同款判定面）→ 失败提示（软失败）
+        // catalog 自愈：catalog-install 类引用目标未装 → 内置目录按需落装后复查
+        if (await installFromLocalCatalog('agent', m.slug)) {
+          existing = listAgentDefinitions().find((d) => d.slug === m.slug);
+        }
+      }
+      if (!existing) {
+        // 本机已装 → 内置市场目录 → catalog 自愈 → 失败提示（软失败）
         unresolved.push(`agent:${m.slug}`);
         continue;
       }
@@ -504,6 +548,14 @@ async function applyConfig(
       fs.writeFileSync(path.join(dest, '.sha256'), crypto.createHash('sha256').update(skillMd).digest('hex'));
       installed.add(slug);
       continue;
+    }
+    // catalog 自愈：catalog-install 类引用目标未装 → 内置目录按需落装后复查
+    if (await installFromLocalCatalog('skill', slug)) {
+      const recheck = listInstalled().find((s) => s.slug === slug);
+      if (recheck) {
+        installed.add(slug);
+        continue;
+      }
     }
     unresolved.push(`skill:${slug}`);
   }

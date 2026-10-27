@@ -44,11 +44,16 @@ export interface PublishPackResult {
 
 /**
  * 白名单 walk：收集 root 下待打包的常规文件相对路径（posix 风格，供 tar 参数用）。
- * 排除 node_modules 与 dataDir；symlink / 非常规条目（FIFO/设备等）整包拒绝。
+ * 排除 node_modules、dataDir 与 extraExcludeDirs（vendor 声明者的 engine/ 重建态）；
+ * symlink / 非常规条目（FIFO/设备等）整包拒绝。
  * 相对路径 .. / 绝对路径（正常 readdir 不产生）由 assertSafeTarMembers 在
  * tar 前终审——两层防线与安装侧 extractTarGz 对称。
  */
-export function collectPackEntries(root: string, dataDir: string): string[] {
+export function collectPackEntries(root: string, dataDir: string, extraExcludeDirs: string[] = []): string[] {
+  const excluded = (abs: string): boolean => {
+    if (abs === dataDir || abs.startsWith(dataDir + path.sep)) return true;
+    return extraExcludeDirs.some((d) => abs === d || abs.startsWith(d + path.sep));
+  };
   const out: string[] = [];
   const walk = (dir: string, relBase: string): void => {
     const entries = fs
@@ -60,8 +65,8 @@ export function collectPackEntries(root: string, dataDir: string): string[] {
       if (ent.isDirectory()) {
         // 排除：依赖不入包（任意深度，spec §6.4）
         if (ent.name === 'node_modules') continue;
-        // 排除：插件运行数据（按路径锚定——仅本插件 dataDir，同名目录不受牵连）
-        if (abs === dataDir || abs.startsWith(dataDir + path.sep)) continue;
+        // 排除：插件运行数据 / vendor 重建态（按路径锚定——同名目录不受牵连）
+        if (excluded(abs)) continue;
         walk(abs, rel);
         continue;
       }
@@ -119,7 +124,33 @@ export async function packPluginForPublish(
     );
   }
 
-  const entries = collectPackEntries(root, resolvePluginDataDir(pluginId));
+  // vendor 声明插件（installer.extractVendorArchives 对称面）：
+  //   engine/ 是安装侧由 vendor 归档 sha256 校验后重建的派生态（dev 目录里
+  //   已解压的引擎副本不入包——codegraph 234MB 超限根因）；发布包必须携带
+  //   声明的 vendor 归档且校验吻合，否则目标节点安装必失败——发布侧第一闸。
+  const extraExcludeDirs: string[] = [];
+  if (manifest.vendor !== undefined && manifest.vendor.archives.length > 0) {
+    extraExcludeDirs.push(path.join(root, 'engine'));
+    for (const arc of manifest.vendor.archives) {
+      const abs = path.resolve(root, arc.file);
+      if (!abs.startsWith(root + path.sep)) {
+        throw new Error(`vendor 包路径越界: ${arc.file}`);
+      }
+      if (!fs.existsSync(abs)) {
+        throw new Error(
+          `vendor 包缺失（${arc.file}）——需先构建 vendor 归档并回填 manifest sha256: ${pluginId}`,
+        );
+      }
+      const actual = crypto.createHash('sha256').update(fs.readFileSync(abs)).digest('hex');
+      if (actual !== arc.sha256.toLowerCase()) {
+        throw new Error(
+          `vendor 包 sha256 与 manifest 不符（${arc.file}）——vendor 归档更新后需回填 manifest: ${pluginId}`,
+        );
+      }
+    }
+  }
+
+  const entries = collectPackEntries(root, resolvePluginDataDir(pluginId), extraExcludeDirs);
   assertSafeTarMembers(entries); // tar 前终审：.. / 绝对路径成员拒绝（与安装侧同款）
 
   // 快速失败：源文件累计超限就不必花时间真打包（归档实际尺寸 tar 后终检）

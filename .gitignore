@@ -14,3 +14,4 @@ playwright-report/
 .superpowers
 .devcontainer
 plugins/codegraph/engine/
+plugins/codegraph/vendor/

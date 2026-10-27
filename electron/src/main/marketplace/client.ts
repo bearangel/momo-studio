@@ -187,11 +187,17 @@ async function fetchRemoteCatalog(url: string): Promise<Catalog> {
   return catalog;
 }
 
-/** 读本地内置 catalog（过校验纵深防御；不合法直接抛错）并记为已知结果 */
-function readLocalCatalog(url: string): Catalog {
-  const local = validateCatalog(
+/** 读本地内置 catalog（纯读：校验后直返，不触碰缓存态——镜像 catalog 自愈等
+ *  需要确定性本地清单的消费方用这个；不合法直接抛错） */
+export function readBundledCatalog(): Catalog {
+  return validateCatalog(
     JSON.parse(fs.readFileSync(resolveLocalCatalogPath(), 'utf-8')) as unknown,
   );
+}
+
+/** 读本地内置 catalog（过校验纵深防御；不合法直接抛错）并记为已知结果 */
+function readLocalCatalog(url: string): Catalog {
+  const local = readBundledCatalog();
   lastGoodCatalog.set(url, local);
   logger.info('Marketplace catalog 已加载（本地）', { items: local.items.length });
   return local;
