@@ -23,7 +23,9 @@ vi.mock('../im/ExportChatButton', () => ({ ExportChatButton: () => <div /> }));
 vi.mock('../im/TaskProgressButton', () => ({ TaskProgressButton: () => <div /> }));
 vi.mock('../im/InFlightPanel', () => ({ InFlightPanel: () => <div /> }));
 vi.mock('../agent/AgentsView', () => ({ AgentsView: () => <div data-testid="agents-stub" /> }));
-vi.mock('../settings/SettingsView', () => ({ SettingsView: () => <div /> }));
+vi.mock('../settings/SettingsView', () => ({
+  SettingsView: () => <div data-testid="settings-view-stub" />,
+}));
 vi.mock('../resource-library/ResourceLibraryView', () => ({
   ResourceLibraryView: () => <div />,
 }));
@@ -121,5 +123,24 @@ describe('MiddlePanel workgroups 视图独立于工作空间（D1 前置契约�
     render(ui());
     expect(screen.getByTestId('workgroup-view-stub')).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: '新建工作空间' })).not.toBeInTheDocument();
+  });
+});
+
+// M2.2 P2-8 守卫顺序回归锁：设置页不依赖工作空间（全局分类可用）——settings
+// 分发必须在 workspace 守卫之前；若守卫顺序回归（settings 落到 EmptyState 拦截），
+// 0-ws 设备将无法进入设置（模型服务等全局配置不可达）。
+describe('MiddlePanel settings 视图独立于工作空间（M2.2 P2-8）', () => {
+  it('无 workspace + settings 视图 → SettingsView 渲染（不被创建引导拦截）', () => {
+    useUiStore.setState({ activeView: 'settings' });
+    render(ui());
+    expect(screen.getByTestId('settings-view-stub')).toBeInTheDocument();
+    expect(screen.queryByText(/创建或选择一个工作空间开始/i)).not.toBeInTheDocument();
+  });
+
+  it('无 workspace + 其余视图维持引导语义（files 仍落创建引导）', () => {
+    useUiStore.setState({ activeView: 'files' });
+    render(ui());
+    expect(screen.getByText('创建或选择一个工作空间开始')).toBeInTheDocument();
+    expect(screen.queryByTestId('settings-view-stub')).not.toBeInTheDocument();
   });
 });

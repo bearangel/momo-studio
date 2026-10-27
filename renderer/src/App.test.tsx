@@ -16,11 +16,24 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import type { Workspace } from './ipc/types';
 import { useSessionStore } from './stores/session.store';
+import { useUiStore } from './stores/ui.store';
 
-// MainShell 桩：分支断言只关心是否进入主界面，不关心其内部加载逻辑
-vi.mock('./routes/MainShell', () => ({
-  MainShell: () => <div data-testid="main-shell" />,
-}));
+// MainShell 桩：分支断言只关心是否进入主界面；桩内挂真实 ActivityBar——
+// M2.2 P2-8 需在 App 级断言 0-ws 态活动栏（含设置项）在场且可切换。
+// ActivityBar 的插件面板 effect 在 0-ws 态短路（不触 ipc.plugin），ws 态由
+// mockApi.plugin 桩承接，不扰动既有分支断言。
+vi.mock('./routes/MainShell', async () => {
+  const { ActivityBar } = await vi.importActual<
+    typeof import('./components/layout/ActivityBar')
+  >('./components/layout/ActivityBar');
+  return {
+    MainShell: () => (
+      <div data-testid="main-shell">
+        <ActivityBar />
+      </div>
+    ),
+  };
+});
 
 import { App } from './App';
 
@@ -108,6 +121,11 @@ const mockApi = {
     onBrowserState: vi.fn().mockReturnValue(() => {}),
     onBrowserNotice: vi.fn().mockReturnValue(() => {}),
   },
+  // P2-8：MainShell 桩内挂真实 ActivityBar——ws 态挂载会拉面板清单 + 订阅推送
+  plugin: {
+    listPanels: vi.fn().mockResolvedValue([]),
+    onPanelsChanged: vi.fn().mockReturnValue(() => {}),
+  },
 };
 
 // 默认 sandbox 聚合信息（linux 已可用 → SandboxNotice 返回 null）
@@ -176,6 +194,31 @@ describe('App 启动分支（v2.0 P1 Task 11）', () => {
     render(<App />);
     expect(await screen.findByTestId('main-shell')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /AI 引导/ })).not.toBeInTheDocument();
+  });
+});
+
+describe('App 0-ws 设置可达（M2.2 P2-8）', () => {
+  beforeEach(() => {
+    useUiStore.setState({ activeView: 'im' });
+  });
+
+  it('0-ws 态渲染活动栏且含「设置」项', async () => {
+    mockApi.workspace.list.mockResolvedValue([]);
+    render(<App />);
+    expect(await screen.findByTestId('main-shell')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '设置' })).toBeInTheDocument();
+  });
+
+  it('0-ws 态点击「设置」→ 切换到 settings 视图（激活态落在设置项）', async () => {
+    mockApi.workspace.list.mockResolvedValue([]);
+    render(<App />);
+    await screen.findByTestId('main-shell');
+    fireEvent.click(screen.getByRole('button', { name: '设置' }));
+    expect(useUiStore.getState().activeView).toBe('settings');
+    expect(screen.getByRole('button', { name: '设置' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
   });
 });
 

@@ -105,8 +105,22 @@ function resolveLocalCatalogPath(): string {
 /** catalog 进程内 TTL 缓存时长（I6）：成功结果缓存 5 分钟 */
 export const CATALOG_CACHE_TTL_MS = 5 * 60 * 1000;
 
-/** 失败退避窗口时长：失败后窗口内直接本地回退、零网络重试 */
+/**
+ * 失败退避首档窗口时长：窗口内直接本地回退、零网络重试。
+ * 兼容导出（既有消费方/测试引用）；指数序列见 CATALOG_FAILURE_BACKOFF_STEPS_MS。
+ */
 export const CATALOG_FAILURE_BACKOFF_MS = 60 * 1000;
+
+/**
+ * 失败退避指数序列（M2.2 P2-9）：连续失败第 1 / 2 / 3+ 次分别退避
+ * 60s → 5min → 30min（封顶），成功即清零。取代固定 60s 窗口——远程 catalog
+ * 持久 404 / 网络长期不可达时不再每分钟刷一次失败日志与重试请求。
+ */
+export const CATALOG_FAILURE_BACKOFF_STEPS_MS: readonly number[] = [
+  CATALOG_FAILURE_BACKOFF_MS, // 第 1 次失败：60s
+  5 * 60 * 1000, // 第 2 次：5min
+  30 * 60 * 1000, // 第 3 次起：30min 封顶
+];
 
 /**
  * catalog 进程内缓存（I6）：URL → { expiresAt, catalog }，仅缓存远程成功结果。
@@ -124,6 +138,8 @@ export const CATALOG_FAILURE_BACKOFF_MS = 60 * 1000;
  */
 const catalogCache = new Map<string, { expiresAt: number; catalog: Catalog }>();
 const catalogFailureBackoff = new Map<string, number>();
+/** URL → 连续失败次数（指数退避步进计数；成功清零） */
+const catalogFailureStreak = new Map<string, number>();
 const lastGoodCatalog = new Map<string, Catalog>();
 const inflightRefresh = new Map<string, Promise<void>>();
 /**
@@ -134,11 +150,27 @@ const inflightRefresh = new Map<string, Promise<void>>();
  */
 const catalogDegraded = new Map<string, boolean>();
 
+/** 按连续失败次数取退避窗口（越界取末档——30min 封顶语义） */
+function failureBackoffDelayMs(consecutiveFailures: number): number {
+  const idx = Math.min(consecutiveFailures, CATALOG_FAILURE_BACKOFF_STEPS_MS.length - 1);
+  return CATALOG_FAILURE_BACKOFF_STEPS_MS[idx] ?? CATALOG_FAILURE_BACKOFF_MS;
+}
+
+/**
+ * 记一次失败：连续失败计数 +1 并推进指数退避窗口（60s → 5min → 30min 封顶）。
+ * 成功路径在 fetchRemoteCatalog 内清零（清窗口 + 清计数）。
+ */
+function recordCatalogFailure(url: string): void {
+  const streak = catalogFailureStreak.get(url) ?? 0;
+  catalogFailureStreak.set(url, streak + 1);
+  catalogFailureBackoff.set(url, Date.now() + failureBackoffDelayMs(streak));
+  catalogDegraded.set(url, true);
+}
+
 /**
  * 获取 catalog：优先远程（结构校验失败视为被篡改），失败回退本地内置；
- * 远程成功结果按 URL 缓存 CATALOG_CACHE_TTL_MS（I6），失败进
- * CATALOG_FAILURE_BACKOFF_MS 退避负缓存；已有已知结果时旧值直返 +
- * 后台单飞刷新（SWR，切页路径零网络阻塞）
+ * 远程成功结果按 URL 缓存 CATALOG_CACHE_TTL_MS（I6），失败进指数退避
+ * 负缓存（P2-9）；已有已知结果时旧值直返 + 后台单飞刷新（SWR，切页路径零网络阻塞）
  */
 export async function fetchCatalog(catalogUrl?: string): Promise<Catalog> {
   const url = catalogUrl ?? DEFAULT_CATALOG_URL;
@@ -160,8 +192,7 @@ export async function fetchCatalog(catalogUrl?: string): Promise<Catalog> {
       return await fetchRemoteCatalog(url);
     } catch (err) {
       logger.warn('远程 catalog 获取或校验失败，使用本地', { error: (err as Error).message });
-      catalogFailureBackoff.set(url, Date.now() + CATALOG_FAILURE_BACKOFF_MS);
-      catalogDegraded.set(url, true);
+      recordCatalogFailure(url);
       return readLocalCatalog(url);
     }
   }
@@ -181,7 +212,9 @@ async function fetchRemoteCatalog(url: string): Promise<Catalog> {
   const catalog = validateCatalog(raw);
   catalogCache.set(url, { expiresAt: Date.now() + CATALOG_CACHE_TTL_MS, catalog });
   lastGoodCatalog.set(url, catalog);
+  // 成功清零：退避窗口与连续失败计数一并清（P2-9——下次失败从 60s 首档重新起步）
   catalogFailureBackoff.delete(url);
+  catalogFailureStreak.delete(url);
   catalogDegraded.set(url, false);
   logger.info('Marketplace catalog 已加载（远程）', { items: catalog.items.length });
   return catalog;
@@ -203,15 +236,14 @@ function readLocalCatalog(url: string): Catalog {
   return local;
 }
 
-/** 后台刷新（单飞）：成功建立 TTL 缓存 + 清退避；失败续退避。错误吞掉只记日志 */
+/** 后台刷新（单飞）：成功建立 TTL 缓存 + 清退避；失败按指数序列续退避。错误吞掉只记日志 */
 function refreshInBackground(url: string): void {
   if (inflightRefresh.has(url)) return;
   const task = (async () => {
     try {
       await fetchRemoteCatalog(url);
     } catch (err) {
-      catalogFailureBackoff.set(url, Date.now() + CATALOG_FAILURE_BACKOFF_MS);
-      catalogDegraded.set(url, true);
+      recordCatalogFailure(url);
       logger.warn('后台刷新远程 catalog 失败，续退避窗口', {
         error: err instanceof Error ? err.message : String(err),
       });
@@ -231,9 +263,16 @@ export function isCatalogDegraded(catalogUrl?: string): boolean {
 export function __resetCatalogCacheForTest(): void {
   catalogCache.clear();
   catalogFailureBackoff.clear();
+  catalogFailureStreak.clear();
   lastGoodCatalog.clear();
   inflightRefresh.clear();
   catalogDegraded.clear();
+}
+
+/** 测试用：读当前失败退避窗口剩余毫秒（0 = 无退避；指数序列断言用） */
+export function __getFailureBackoffRemainingForTest(catalogUrl?: string): number {
+  const until = catalogFailureBackoff.get(catalogUrl ?? DEFAULT_CATALOG_URL) ?? 0;
+  return Math.max(0, until - Date.now());
 }
 
 /** 测试用：把缓存条目的过期时刻整体前移 ms（模拟 TTL 过期，不伪造系统时钟） */

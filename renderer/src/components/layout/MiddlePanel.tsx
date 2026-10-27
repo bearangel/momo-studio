@@ -51,8 +51,16 @@ export function MiddlePanel() {
     return <WorkgroupView />;
   }
 
-  // 0-ws 主区引导（D1：首启创建表单随主壳迁移至此——workgroups 视图已在
-  // 上方分支分发，其余视图统一落到本引导；工作组提示引导 0-ws 设备先接入）
+  // settings 视图（M2.2 P2-8）：设置页不依赖工作空间（12 分类中 8 个为全局：
+  // 模型服务/默认模型/会话设置/插件/外观/安全沙箱/节点互联/关于）——分发必须
+  // 先于 workspace 守卫，0-ws 态可进设置；workspace 级分类（记忆/浏览器/
+  // Git 策略/审计日志）由 SettingsView 内部占位提示
+  if (activeView === 'settings') {
+    return <SettingsView />;
+  }
+
+  // 0-ws 主区引导（D1：首启创建表单随主壳迁移至此——workgroups/settings 视图
+  // 已在上方分支分发，其余视图统一落到本引导；工作组提示引导 0-ws 设备先接入）
   if (!workspace) {
     return (
       <div className="flex flex-1 items-center justify-center bg-canvas p-6">
@@ -138,11 +146,6 @@ export function MiddlePanel() {
         <TaskBoardView workspaceId={workspace.id} />
       </div>
     );
-  }
-
-  // settings 视图：Git Policy 配置 + 审计日志
-  if (activeView === 'settings') {
-    return <SettingsView />;
   }
 
   // plugin 视图（工作空间维度 v1.1）：插件 page 面板的主区独立页面

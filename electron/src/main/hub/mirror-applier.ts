@@ -386,8 +386,15 @@ async function ensureWorkspace(workspaceName: string): Promise<{ workspaceId: st
     { name: workspaceName, directoryPath: dir, description: 'momo-hub 镜像创建' },
     'owner',
   ).catch((err: unknown) => {
-    // 不可写根整体拒绝 + 人话（不静默回退默认根——否则用户以为落在自定义位置实际没有）
-    throw new Error(`工作目录不可写（${root}）: ${(err as Error).message}`);
+    // P2-11 错误精准化：仅文件系统权限类错误（EACCES/EPERM/EROFS）改写为
+    // 「工作目录不可写」人话 + 整体拒绝（不静默回退默认根——否则用户以为落在
+    // 自定义位置实际没有）；其余失败（DB 故障、目录形态错误等）原样透传，
+    // 不再一律改写掩盖真实病因。
+    const code = (err as { code?: unknown } | null)?.code;
+    if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') {
+      throw new Error(`工作目录不可写（${root}）: ${(err as Error).message}`);
+    }
+    throw err;
   });
   return { workspaceId: ws.id, created: true };
 }

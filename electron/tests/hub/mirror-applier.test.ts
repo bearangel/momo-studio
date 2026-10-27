@@ -913,6 +913,46 @@ describe('applyMirrorSnapshot 工作目录', () => {
     }
   });
 
+  // ── P2-11 错误精准化：仅 fs 权限三码（EACCES/EPERM/EROFS）标「工作目录不可写」，
+  // 其余失败原样透传（改写会掩盖真实病因——DB 故障被报成目录不可写）──
+
+  it('P2-11：DB 类失败（workspace_members 表损坏）→ 透传原文，不改写为「工作目录不可写」', async () => {
+    // 真实 DB 故障注入：listWorkspaces 只读 workspaces 表不受影响，createWorkspace
+    // 的第二条 INSERT（workspace_members）撞缺失表 → SqliteError 原文透传
+    getDb().exec('DROP TABLE workspace_members');
+    const archive = await makeArchive(baseManifest({ workspaceName: 'DB 故障空间' }));
+    const outcome = await applyMirrorSnapshot(
+      applyPayload({ workspaceName: 'DB 故障空间' }),
+      noResDeps(archive),
+    );
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.code).toBe('internal');
+      expect(outcome.message).toMatch(/no such table: workspace_members/);
+      expect(outcome.message).not.toMatch(/工作目录不可写/);
+    }
+  });
+
+  it('P2-11：非权限类 fs 失败（根为普通文件 → mkdir ENOTDIR）→ 透传原文，不改写', async () => {
+    // 根配置指向普通文件：path.join 后 mkdir 撞 ENOTDIR——非权限三码，须原样透传
+    const fileRoot = path.join(tmpRoot, 'blocker-file');
+    fs.writeFileSync(fileRoot, 'not a directory');
+    const { createHubWorkspaceDirStore } = await import('../../src/main/hub/workspace-dir-settings');
+    createHubWorkspaceDirStore().write({ rootDir: fileRoot });
+
+    const archive = await makeArchive(baseManifest({ workspaceName: '根是文件空间' }));
+    const outcome = await applyMirrorSnapshot(
+      applyPayload({ workspaceName: '根是文件空间' }),
+      noResDeps(archive),
+    );
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.code).toBe('internal');
+      expect(outcome.message).toMatch(/ENOTDIR/);
+      expect(outcome.message).not.toMatch(/工作目录不可写/);
+    }
+  });
+
   it('既有空间零迁移：换根后重镜像（confirm）→ directory_path 不动', async () => {
     // 首次：默认根落位
     const archive = await makeArchive(baseManifest({ workspaceName: '存量空间' }));

@@ -6,9 +6,10 @@
 //   的 settings 分支是唯一挂载点，视图切换自动卸载监听）
 // - 12 个分类：模型服务 / 默认模型 / 会话设置 / 插件 / 记忆 / 外观 / 安全沙箱 / 浏览器 / 节点互联 / Git 策略 / 审计日志 / 关于
 //   （「节点互联」随 p2p 下架摘除后，momo-hub M0 2026-10-23 以 hub 语境回归）
-// - workspace 级配置（Git 策略 / 审计日志 / 记忆）仍要求当前激活 workspace；
-//   全局配置（模型服务 / 默认模型 / 关于 / 会话设置）的 workspace 守卫留待 P3
+// - M2.2 P2-8：0-ws 态整页可达（全局分类直接可用）；workspace 级分类
+//   （记忆 / 浏览器 / Git 策略 / 审计日志）在 0-ws 态渲染占位提示
 import { useEffect } from 'react';
+import type { ReactElement } from 'react';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useSettingsStore } from '../../stores/settings.store';
 import { useUiStore } from '../../stores/ui.store';
@@ -42,13 +43,12 @@ export function SettingsView() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [setActiveView]);
 
-  if (!workspace) {
-    return (
-      <div className="flex-1 flex items-center justify-center bg-canvas text-tertiary text-sm">
-        请先选择一个 workspace
-      </div>
-    );
-  }
+  /** workspace 级分类的 0-ws 占位（P2-8：整页可达，ws 级分类不渲染假数据） */
+  const wsRequired = (): ReactElement => (
+    <div className="flex-1 flex items-center justify-center text-sm text-tertiary">
+      该分类需要先选择一个工作空间
+    </div>
+  );
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -72,13 +72,17 @@ export function SettingsView() {
           {active === 'model_provider' && <ProviderSettings />}
           {active === 'default_model' && <DefaultModelSettings />}
           {active === 'conversation' && <ConversationSettings />}
-          {active === 'memory' && <MemorySettings workspaceId={workspace.id} />}
+          {active === 'memory' &&
+            (workspace ? <MemorySettings workspaceId={workspace.id} /> : wsRequired())}
           {active === 'appearance' && <AppearanceSettings />}
           {active === 'sandbox' && <SandboxSettingsPanel />}
-          {active === 'browser' && <BrowserSettings workspaceId={workspace.id} />}
+          {active === 'browser' &&
+            (workspace ? <BrowserSettings workspaceId={workspace.id} /> : wsRequired())}
           {active === 'hub' && <HubSettingsPanel />}
-          {active === 'git_policy' && <GitPolicySettings workspaceId={workspace.id} />}
-          {active === 'audit_log' && <AuditLog workspaceId={workspace.id} />}
+          {active === 'git_policy' &&
+            (workspace ? <GitPolicySettings workspaceId={workspace.id} /> : wsRequired())}
+          {active === 'audit_log' &&
+            (workspace ? <AuditLog workspaceId={workspace.id} /> : wsRequired())}
           {active === 'plugins' && <PluginSettings />}
           {active === 'about' && <About />}
         </div>

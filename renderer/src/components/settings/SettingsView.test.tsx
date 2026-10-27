@@ -245,4 +245,40 @@ describe('SettingsView', () => {
     render(<SettingsView />);
     expect(screen.getByRole('heading', { name: '设置' })).toBeInTheDocument();
   });
+
+  // M2.2 P2-8：0-ws 态设置整页可达——全局分类直接可用，workspace 级分类占位
+  describe('0-ws 可达（M2.2 P2-8）', () => {
+    beforeEach(() => {
+      useWorkspaceStore.setState({
+        workspaces: [],
+        activeWorkspaceId: null,
+        loading: false,
+        error: null,
+      });
+    });
+
+    it('0-ws 态整页渲染：标题 + 导航 + 默认全局分类（模型服务）', () => {
+      render(<SettingsView />);
+      expect(screen.getByRole('heading', { name: '设置' })).toBeInTheDocument();
+      expect(screen.getByRole('navigation', { name: '设置分类' })).toBeInTheDocument();
+      expect(screen.queryByText('请先选择一个 workspace')).not.toBeInTheDocument();
+    });
+
+    it('0-ws 态全局分类（节点互联）面板正常渲染', async () => {
+      render(<SettingsView />);
+      fireEvent.click(screen.getByRole('button', { name: '节点互联' }));
+      await waitFor(() => {
+        expect(screen.getByRole('heading', { name: '节点互联' })).toBeInTheDocument();
+      });
+    });
+
+    it('0-ws 态 workspace 级分类（记忆）→ 占位提示，不渲染面板不拉数据', () => {
+      render(<SettingsView />);
+      fireEvent.click(screen.getByRole('button', { name: '记忆' }));
+      expect(useSettingsStore.getState().activeCategory).toBe('memory');
+      expect(screen.getByText('该分类需要先选择一个工作空间')).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: '记忆' })).not.toBeInTheDocument();
+      expect(mockApi.memory.list).not.toHaveBeenCalled();
+    });
+  });
 });

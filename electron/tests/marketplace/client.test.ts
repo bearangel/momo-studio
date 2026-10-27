@@ -15,8 +15,10 @@ import {
   __resetCatalogCacheForTest,
   __rewindCatalogCacheForTest,
   __rewindFailureBackoffForTest,
+  __getFailureBackoffRemainingForTest,
   CATALOG_CACHE_TTL_MS,
   CATALOG_FAILURE_BACKOFF_MS,
+  CATALOG_FAILURE_BACKOFF_STEPS_MS,
 } from '../../src/main/marketplace/client';
 
 // 本地内置 catalog 条目数动态派生（防目录增删后计数锁漂移——2026-10-20 全量首跑实证）
@@ -231,6 +233,92 @@ describe('marketplace/client fetchCatalog 切页不阻塞（SWR 回归锁）', (
     const third = await fetchCatalog(url);
     expect(fetchSpy).toHaveBeenCalledTimes(2); // TTL 缓存命中，零网络
     expect(third.version).toBe('9.9');
+  });
+});
+
+// === 失败指数退避（M2.2 P2-9）：连续失败 60s → 5min → 30min 封顶 ===
+// 背景：远程 catalog URL 持久 404 / 网络长期不可达时，固定 60s 退避窗口意味着
+// 每分钟一次失败重试 + 刷屏日志。指数序列用 __rewindFailureBackoffForTest
+// 推进窗口（本文件既有惯例——不伪造系统时钟），窗口值经专用 getter 断言。
+
+describe('marketplace/client fetchCatalog 失败指数退避（P2-9）', () => {
+  const url = 'https://example.test/catalog.json';
+  const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it('退避序列常量锁定：60s → 5min → 30min', () => {
+    expect(CATALOG_FAILURE_BACKOFF_STEPS_MS).toEqual([60_000, 300_000, 1_800_000]);
+    expect(CATALOG_FAILURE_BACKOFF_MS).toBe(60_000); // 首档兼容导出
+  });
+
+  it('连续失败退避序列 60s → 5min → 30min 封顶（第 4 次仍 30min）', async () => {
+    fetchSpy.mockRejectedValue(new Error('down'));
+
+    await fetchCatalog(url); // 失败 #1 → 60s
+    expect(__getFailureBackoffRemainingForTest(url)).toBeGreaterThan(55_000);
+    expect(__getFailureBackoffRemainingForTest(url)).toBeLessThanOrEqual(60_000);
+
+    __rewindFailureBackoffForTest(60_000 + 1); // 60s 窗口流逝 → SWR 后台重试
+    await fetchCatalog(url); // 失败 #2 → 5min
+    await flush();
+    expect(__getFailureBackoffRemainingForTest(url)).toBeGreaterThan(4 * 60_000);
+    expect(__getFailureBackoffRemainingForTest(url)).toBeLessThanOrEqual(5 * 60_000);
+
+    __rewindFailureBackoffForTest(5 * 60_000 + 1); // 5min 窗口流逝
+    await fetchCatalog(url); // 失败 #3 → 30min
+    await flush();
+    expect(__getFailureBackoffRemainingForTest(url)).toBeGreaterThan(29 * 60_000);
+    expect(__getFailureBackoffRemainingForTest(url)).toBeLessThanOrEqual(30 * 60_000);
+
+    __rewindFailureBackoffForTest(30 * 60_000 + 1); // 30min 窗口流逝
+    await fetchCatalog(url); // 失败 #4 → 封顶仍 30min
+    await flush();
+    expect(__getFailureBackoffRemainingForTest(url)).toBeGreaterThan(29 * 60_000);
+    expect(__getFailureBackoffRemainingForTest(url)).toBeLessThanOrEqual(30 * 60_000);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(4); // 每个窗口过期恰好一次重试
+  });
+
+  it('成功清零：失败两次后成功 → 退避清空，再失败从 60s 首档重新起步', async () => {
+    fetchSpy.mockRejectedValue(new Error('down'));
+    await fetchCatalog(url); // 失败 #1 → 60s
+    __rewindFailureBackoffForTest(60_000 + 1);
+    await fetchCatalog(url); // 失败 #2 → 5min
+    await flush();
+    expect(__getFailureBackoffRemainingForTest(url)).toBeGreaterThan(4 * 60_000);
+
+    __rewindFailureBackoffForTest(5 * 60_000 + 1); // 窗口流逝 → 后台重试成功
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => fakeCatalog,
+    } as Response);
+    await fetchCatalog(url);
+    await flush();
+    expect(__getFailureBackoffRemainingForTest(url)).toBe(0); // 成功清零
+
+    __rewindCatalogCacheForTest(CATALOG_CACHE_TTL_MS + 1); // TTL 过期 → 下次走网络
+    fetchSpy.mockRejectedValue(new Error('down again'));
+    await fetchCatalog(url); // 再失败 → 60s 首档（非 5min 续档）
+    await flush();
+    expect(__getFailureBackoffRemainingForTest(url)).toBeGreaterThan(55_000);
+    expect(__getFailureBackoffRemainingForTest(url)).toBeLessThanOrEqual(60_000);
+  });
+
+  it('升级后的退避窗口内零网络请求（5min 窗口内反复调用不再重试）', async () => {
+    fetchSpy.mockRejectedValue(new Error('down'));
+    await fetchCatalog(url); // 失败 #1（60s）
+    __rewindFailureBackoffForTest(60_000 + 1);
+    await fetchCatalog(url); // 失败 #2（5min）
+    await flush();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+    // 5min 窗口内：流逝 1min / 再流逝 2min 后各调用一次（模拟面板高频切换）
+    __rewindFailureBackoffForTest(60_000);
+    await fetchCatalog(url);
+    __rewindFailureBackoffForTest(2 * 60_000);
+    await fetchCatalog(url);
+    await flush();
+    expect(fetchSpy).toHaveBeenCalledTimes(2); // 窗口内零网络请求
   });
 });
 
