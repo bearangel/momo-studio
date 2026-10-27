@@ -194,6 +194,30 @@ describe('DelegatedTaskCard — leader 侧六态', () => {
     expect(screen.queryByText('未知节点')).not.toBeInTheDocument();
   });
 
+  it('L-2e. P2-3：failed 卡摘要与 title 优先 errorMessage 全文（running 末拍残留不得占位）', () => {
+    renderCard(
+      mkTask({
+        id: 'T-100',
+        title: '人为失败探针',
+        status: 'failed',
+        errorMessage: '执行失败:模型服务连接失败：HTTP 500 mock人为失败（M2.2 P2-3 验收超长失败原因全文——悬浮 title 必须完整可见）',
+        delegationId: 'T-8f21abcd',
+        routing: { mode: 'node', groupId: 'g1', targetNodeId: 'node-b' },
+      }),
+      boardCtx({
+        nodeNames: { 'node-b': 'office-mac' },
+        ledger: { 'T-8f21abcd': { taskId: 'T-8f21abcd', workspaceName: 'dev-ws', targetNodeId: 'node-b', status: 'failed', title: '人为失败探针', createdAt: 1, updatedAt: 2 } },
+        // running 期最后一拍的空转兜底文本——failed 后不得压过 errorMessage
+        progress: { 'T-8f21abcd': { excerpt: '（无文本增量）', lastSeq: 5, at: 3 } },
+      }),
+    );
+    const line = document.querySelector('[data-progress-line] [title]');
+    expect(line).not.toBeNull();
+    expect(line!.textContent).toContain('执行失败:模型服务连接失败');
+    expect(line!.getAttribute('title')).toBe('执行失败:模型服务连接失败：HTTP 500 mock人为失败（M2.2 P2-3 验收超长失败原因全文——悬浮 title 必须完整可见）');
+    expect(line!.textContent).not.toContain('（无文本增量）');
+  });
+
   it('L-3. done：success 已完成徽标 + 终态降不透明 + 摘要行「已完成」', () => {
     renderCard(
       mkTask({ id: 'T-100', title: '升级依赖并修复类型错误', status: 'completed' }),

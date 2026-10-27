@@ -307,9 +307,11 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
         : `${nodeName(leaderTargetNodeId)} · 待派发`
       : nodeName(leaderTargetNodeId);
 
+  // P2-3 reason 链优先级：failed 且 errorMessage 在场 → reason 全文压过一切 running 末拍残留
+  // （delegation-sync 的 progress 快照停在最后一拍「（无文本增量）」，不压过则失败原因永不露面）
   const progressExcerpt =
-    (delegationId != null ? (board.progress[delegationId]?.excerpt ?? null) : null) ??
-    (task.status === 'failed' && task.errorMessage != null ? task.errorMessage : null);
+    (task.status === 'failed' && task.errorMessage != null ? task.errorMessage : null) ??
+    (delegationId != null ? (board.progress[delegationId]?.excerpt ?? null) : null);
 
   const canCancel = delegationId != null
     ? hubStatus === 'pending' || hubStatus === 'running' || hubStatus === 'interrupted'
