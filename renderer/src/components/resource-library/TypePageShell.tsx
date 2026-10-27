@@ -136,7 +136,7 @@ interface TypePageShellProps {
   onForkPreset?: (preview: BuiltinPresetPreview) => void;
   /** builtin agent 停用入口（2026-10-10 披露式级联：View 层挂影响面确认框） */
   onDisableAgent?: (id: string) => void;
-  /** 发布到 momo-hub 入口（M1 Task 14）：custom 资源限定；PublishDialog 挂在 View 层 */
+  /** 发布到 momo-hub 入口（M2.2 Task 2 起 canPublishToHub 门控：custom 四类型 + marketplace 已装 skill）；PublishDialog 挂在 View 层 */
   onPublishToHub?: (item: ResourceItem) => void;
 }
 

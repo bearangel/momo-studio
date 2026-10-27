@@ -20,6 +20,7 @@ import { Badge } from '../ui/Badge';
 import { SourceBadge } from './SourceBadge';
 import { Switch } from '../ui/Switch';
 import { TYPE_ICON } from './type-icons';
+import { canPublishToHub } from './publish-entry';
 
 interface ResourceCardProps {
   item: ResourceItem;
@@ -39,7 +40,7 @@ interface ResourceCardProps {
   onDisable?: (id: string) => void;
   /** 插件工作空间级启停（spec 2026-10-21 §9①：卡内开关；View 层接 store.setPluginEnabled） */
   onTogglePlugin?: (item: ResourceItem, next: boolean) => void;
-  /** 发布到 momo-hub 入口（M1 Task 14）：custom 资源四类型限定显示 */
+  /** 发布到 momo-hub 入口（M2.2 Task 2 起 canPublishToHub 单点门控：custom 四类型 + marketplace 已装 skill） */
   onPublishToHub?: (item: ResourceItem) => void;
   /** hub 是否已接入（enrolled）——false 时发布入口禁用 + title 引导 */
   hubEnrolled?: boolean;
@@ -231,8 +232,9 @@ export function ResourceCard({
               更新
             </button>
           )}
-          {/* 发布到 hub：custom 资源四类型限定；未接入禁用 + title 引导（M1 Task 14） */}
-          {item.source === 'custom' && onPublishToHub && (
+          {/* 发布到 hub：canPublishToHub 单点门控（custom 四类型 + marketplace 已装 skill——M2.2 Task 2 开放）；
+              未接入禁用 + title 引导（M1 Task 14） */}
+          {canPublishToHub(item) && onPublishToHub && (
             <button
               type="button"
               disabled={!hubEnrolled}

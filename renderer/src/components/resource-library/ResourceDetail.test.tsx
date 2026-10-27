@@ -420,7 +420,7 @@ describe('ResourceDetail — 详情面板验收缺陷回归锁（2026-10-23 D2/D
   });
 });
 
-describe('ResourceDetail 发布到 hub 入口（M1 Task 14：custom 限定 + 未接入引导）', () => {
+describe('ResourceDetail 发布到 hub 入口（M1 Task 14 + M2.2 Task 2：custom 限定 + marketplace 已装 skill + 未接入引导）', () => {
   const noop = (): void => undefined;
   const customAgent = (): ResourceItem =>
     baseItem({
@@ -434,6 +434,61 @@ describe('ResourceDetail 发布到 hub 入口（M1 Task 14：custom 限定 + 未
     render(<ResourceDetail item={item} onClose={noop} onPublishToHub={onPublish} hubEnrolled />);
     fireEvent.click(screen.getByRole('button', { name: /发布到 hub/ }));
     expect(onPublish).toHaveBeenCalledWith(item);
+  });
+
+  it('marketplace 已装 skill 渲染「发布到 hub」；点击回传整 item（M2.2 Task 2 开放）', () => {
+    const onPublish = vi.fn();
+    const item = baseItem({
+      id: 'marketplace-skill-superpowers-brainstorm', source: 'marketplace', type: 'skill',
+      slug: 'superpowers-brainstorm', name: '头脑风暴', installed: true, removable: true,
+      version: '1.4.0',
+    });
+    render(<ResourceDetail item={item} onClose={noop} onPublishToHub={onPublish} hubEnrolled />);
+    fireEvent.click(screen.getByRole('button', { name: /发布到 hub/ }));
+    expect(onPublish).toHaveBeenCalledWith(item);
+  });
+
+  it('marketplace 已装 skill 未接入：按钮禁用 + 引导条在场（gating 与按钮同源）', () => {
+    useUiStore.setState({ activeView: 'im' });
+    render(
+      <ResourceDetail
+        item={baseItem({
+          id: 'marketplace-skill-superpowers-brainstorm', source: 'marketplace', type: 'skill',
+          slug: 'superpowers-brainstorm', name: '头脑风暴', installed: true, removable: true,
+        })}
+        onClose={noop} onPublishToHub={vi.fn()} hubEnrolled={false}
+      />,
+    );
+    const btn = screen.getByRole('button', { name: /发布到 hub/ }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(screen.getByText(/未接入 momo-hub/)).toBeTruthy();
+  });
+
+  it('marketplace 未装 skill：入口与引导条双不渲染（无本地包可打）', () => {
+    render(
+      <ResourceDetail
+        item={baseItem({
+          id: 'marketplace-skill-y', source: 'marketplace', type: 'skill', slug: 'y',
+          name: '未装技能', installed: false, installable: true, removable: false,
+        })}
+        onClose={noop} onPublishToHub={vi.fn()} hubEnrolled={false}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /发布到 hub/ })).toBeNull();
+    expect(screen.queryByText(/未接入 momo-hub/)).toBeNull();
+  });
+
+  it('marketplace 已装 agent 不渲染发布入口（C3 维持仅 custom）', () => {
+    render(
+      <ResourceDetail
+        item={baseItem({
+          id: 'marketplace-agent-y', source: 'marketplace', type: 'agent', slug: 'y',
+          name: '市场智能体', installed: true, removable: false,
+        })}
+        onClose={noop} onPublishToHub={vi.fn()} hubEnrolled
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /发布到 hub/ })).toBeNull();
   });
 
   it('未接入：按钮禁用 + 引导条「未接入 momo-hub——去设置」；点去设置切 settings 视图', () => {

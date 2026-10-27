@@ -276,7 +276,7 @@ describe('ResourceCard 插件面（spec 2026-10-21 §9①：恒显徽标 + 卡�
   });
 });
 
-describe('ResourceCard 发布到 hub 入口（M1 Task 14：custom × 四类型 × 接入态矩阵）', () => {
+describe('ResourceCard 发布到 hub 入口（M1 Task 14 + M2.2 Task 2：custom 四类型 + marketplace 已装 skill × 接入态矩阵）', () => {
   const pluginNs = { id: 'cg-plugin', state: 'active' as const, devSource: false, sourcePath: null, components: [], enabled: true };
 
   it('四类型 custom 卡均渲染「发布到 hub」；点击不冒泡并回传整 item', () => {
@@ -311,6 +311,55 @@ describe('ResourceCard 发布到 hub 入口（M1 Task 14：custom × 四类型 �
           <ResourceCard
             key={s}
             item={mkItem({ id: `${s}-mcp-y`, source: s, slug: 'y', name: `卡${s}`, installed: false, installable: true, removable: false })}
+            selected={false} onSelect={noop} hubEnrolled onPublishToHub={noop}
+          />
+        ))}
+      </div>,
+    );
+    expect(screen.queryByRole('button', { name: '发布到 hub' })).toBeNull();
+  });
+
+  // ── M2.2 Task 2 扩面：marketplace 源 skill（superpowers 类主场景）────────────
+  it('marketplace 已装 skill 卡渲染「发布到 hub」；点击不冒泡并回传整 item', () => {
+    const onPublish = vi.fn();
+    const onSelect = vi.fn();
+    const item = mkItem({
+      id: 'marketplace-skill-superpowers-brainstorm',
+      type: 'skill', source: 'marketplace', slug: 'superpowers-brainstorm',
+      name: '头脑风暴', installed: true, installable: false, removable: true,
+      version: '1.4.0',
+    });
+    render(<ResourceCard item={item} selected={false} onSelect={onSelect} hubEnrolled onPublishToHub={onPublish} />);
+    const btn = screen.getByRole('button', { name: '发布到 hub' }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+    fireEvent.click(btn);
+    expect(onPublish).toHaveBeenCalledWith(item);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('marketplace 未装 skill 卡不渲染发布入口（无本地包可打——发布语义=本机已装且愿意分发）', () => {
+    render(
+      <ResourceCard
+        item={mkItem({
+          id: 'marketplace-skill-y', type: 'skill', source: 'marketplace', slug: 'y',
+          name: '未装技能', installed: false, installable: true, removable: false,
+        })}
+        selected={false} onSelect={noop} hubEnrolled onPublishToHub={noop}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: '发布到 hub' })).toBeNull();
+  });
+
+  it('marketplace 已装 agent/mcp 卡不渲染发布入口（C3 维持仅 custom——主进程同样拒绝，UI 不给死路入口）', () => {
+    render(
+      <div role="list">
+        {(['agent', 'mcp'] as const).map((t) => (
+          <ResourceCard
+            key={t}
+            item={mkItem({
+              id: `marketplace-${t}-y`, type: t, source: 'marketplace', slug: 'y', name: `卡${t}`,
+              installed: true, installable: false, removable: false,
+            })}
             selected={false} onSelect={noop} hubEnrolled onPublishToHub={noop}
           />
         ))}

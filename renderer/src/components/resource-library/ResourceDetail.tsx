@@ -36,6 +36,7 @@ import { Badge } from '../ui/Badge';
 import type { BadgeTone } from '../ui/Badge';
 import { MarkdownBody } from '../im/MarkdownBody';
 import { SourceBadge } from './SourceBadge';
+import { canPublishToHub } from './publish-entry';
 
 interface Props {
   item: ResourceItem;
@@ -62,7 +63,7 @@ interface Props {
   onForkPreset?: (preview: BuiltinPresetPreview) => void;
   /** builtin agent 停用（2026-10-10）：View 层挂影响面披露确认框后走 disablePreset 级联 */
   onDisable?: (id: string) => void;
-  /** 发布到 momo-hub（M1 Task 14）：custom 资源四类型限定显示；View 层挂 PublishDialog */
+  /** 发布到 momo-hub（M2.2 Task 2 起 canPublishToHub 单点门控：custom 四类型 + marketplace 已装 skill）；View 层挂 PublishDialog */
   onPublishToHub?: (item: ResourceItem) => void;
   /** hub 是否已接入——false 时发布入口禁用 + 引导条（去设置链接） */
   hubEnrolled?: boolean;
@@ -588,8 +589,8 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
             重载
           </Button>
         )}
-        {/* 发布到 momo-hub（M1 Task 14）：custom 资源四类型；未接入禁用（引导条承接跳设置） */}
-        {item.source === 'custom' && onPublishToHub && (
+        {/* 发布到 momo-hub：canPublishToHub 单点门控（custom 四类型 + marketplace 已装 skill——M2.2 Task 2）；未接入禁用（引导条承接跳设置） */}
+        {canPublishToHub(item) && onPublishToHub && (
           <Button
             size="sm"
             variant="secondary"
@@ -628,8 +629,9 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
           </span>
         )}
         </div>
-        {/* 未接入引导条（M1 Task 14 / T10 移交形态）：灰条 + 去设置链接——与 hub 页签引导条同款 */}
-        {item.source === 'custom' && onPublishToHub && !hubEnrolled && (
+        {/* 未接入引导条（M1 Task 14 / T10 移交形态）：灰条 + 去设置链接——与 hub 页签引导条同款；
+            gating 与发布按钮同源（canPublishToHub），marketplace 已装 skill 同样承接 */}
+        {canPublishToHub(item) && onPublishToHub && !hubEnrolled && (
           <p data-testid="hub-publish-guide" className="self-start inline-flex items-center gap-1 rounded-md bg-surface-3 px-3 py-1.5 text-xs text-secondary">
             未接入 momo-hub——
             <button

@@ -66,7 +66,8 @@ export function ResourceLibraryView() {
     name: string;
     impact: DefinitionImpact | null;
   } | null>(null);
-  // 发布到 momo-hub 目标（M1 Task 14）：custom 资源卡片/详情「发布到 hub」入口置位
+  // 发布到 momo-hub 目标（M1 Task 14）：可发布资源卡片/详情「发布到 hub」入口置位
+  // （M2.2 Task 2 起入口面 = custom 四类型 + marketplace 已装 skill，见 publish-entry.ts）
   const [publishTarget, setPublishTarget] = useState<ResourceItem | null>(null);
 
   // 冷启动首拉（旧视图同语义；后续刷新由 setActiveType/setSourceFilter/store 写操作触发）
@@ -331,7 +332,7 @@ export function ResourceLibraryView() {
           onSuccess={() => { setMcpEditTarget(null); void load(); }}
         />
       )}
-      {/* M1 Task 14：发布到 momo-hub 弹窗（custom 资源卡片/详情入口置位） */}
+      {/* M1 Task 14：发布到 momo-hub 弹窗（可发布资源卡片/详情入口置位——gating 见 publish-entry.ts） */}
       {publishTarget && (
         <PublishDialog item={publishTarget} onClose={() => setPublishTarget(null)} />
       )}

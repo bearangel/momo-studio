@@ -181,6 +181,24 @@ describe('PublishDialog · 提交 IPC 契约（ref 对齐 T13 buildPublishPackag
       publishResourceMock.mockClear();
     }
   });
+
+  it('marketplace 源 skill：ref = slug（M2.2 Task 2 开放源——载荷与 custom skill 同形，版本预填 catalog 元数据）', async () => {
+    render(
+      <PublishDialog
+        item={mkItem({
+          id: 'marketplace-skill-superpowers-brainstorm', type: 'skill', source: 'marketplace',
+          slug: 'superpowers-brainstorm', name: '头脑风暴', version: '1.4.0',
+        })}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByLabelText('版本')).toHaveValue('1.4.0');
+    fireEvent.click(screen.getByRole('button', { name: '发布' }));
+    await waitFor(() => expect(publishResourceMock).toHaveBeenCalledTimes(1));
+    expect(publishResourceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'skill', ref: 'superpowers-brainstorm' }),
+    );
+  });
 });
 
 describe('PublishDialog · 进行态 / 成功态 / 失败态', () => {

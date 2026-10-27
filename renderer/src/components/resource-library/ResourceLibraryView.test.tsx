@@ -276,6 +276,25 @@ describe('ResourceLibraryView — hub 发布链路接线（M1 Task 14）', () =>
     expect(screen.getByText('发布到 momo-hub')).toBeTruthy();
   });
 
+  it('marketplace 已装 skill 卡「发布到 hub」→ PublishDialog 挂载（M2.2 Task 2 入口开放端到端）', async () => {
+    hubGetStatus.mockResolvedValue({
+      configured: true, state: 'online', hubUrl: 'http://192.168.1.8:8717',
+      nodeName: '办公室 MacBook', nodeId: 'a3f9c2e1dead', lastError: null,
+    });
+    resourceList.mockResolvedValue([
+      {
+        id: 'marketplace-skill-superpowers-brainstorm', type: 'skill', source: 'marketplace',
+        slug: 'superpowers-brainstorm', name: '头脑风暴', description: 'd',
+        installed: true, installable: false, removable: true, version: '1.4.0',
+      },
+    ]);
+    render(<ResourceLibraryView />);
+    const btn = await screen.findByRole('button', { name: '发布到 hub' });
+    expect((btn as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(btn);
+    expect(screen.getByText('发布到 momo-hub')).toBeTruthy();
+  });
+
   it('未接入：custom 卡发布入口禁用（门控透传）', async () => {
     resourceList.mockResolvedValue([
       {
