@@ -6,6 +6,23 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 节点互联 M2.2：私有资源分发链闭环与打磨
+
+hub 仓零代码改动（v0.1.4 不变）；studio 侧分发链泛化 + 11 项打磨票 + 类型债清偿。设计见 momo-hub 仓 `docs/specs/2026-10-27-momo-hub-m2.2-distribution-closure-polish.md`。
+
+- **发布记账回填泛化**：agent/skill/mcp/plugin 四类发布成功统一回填 `installed_packages` `hub:{slug}` 记账（幂等升版单行 + item_type 限定防牵连 + 记账失败不翻转发布回执）——「发布 → 记账 → 快照携带 → 目标先装后落」闭环补完最后一环；发布入口对 marketplace 源 skill 开放（canPublishToHub 单点门控，防生效性≠可见性漂移）
+- **发布打包链修复**：marketplace 装面 skill 发布 slug 推导错误（版本号当 slug 静默错名上传）修复——slug 取 skill_definitions 行；已发布 custom skill 镜像改走 hub 补装位（collectSkills 内嵌不查记账的断裂修复，验收 D1）
+- **镜像 S2 分桶**：SnapshotSummary 增 skillResources/skillEmbedded——差异摘要「N 补装 + M 内嵌」与实际装包数一致（D8 清偿）
+- **委派域三票**：readonly 档写工具即时拒（不走等待/超时，kind='denied' 三处联合扩展）；批量提交超限预检提示（不拦提交）；failed 外派卡 reason 全文（title 悬浮 + 摘要优先 errorMessage）
+- **资源域三票**：saveAgentDefinition 改真 upsert（INSERT OR REPLACE 的 DELETE 侧触发 FK 级联静默清成员——M2 D3 根因修复；def 复用限 marketplace 血统，异源同 slug 行不动）；来源筛选切换即重拉；（S2 分桶见上）
+- **镜像 worker UX 两票**：大包补装进度通知（hub:installProgress 三阶段 + 512KB 字节节流 + 右下角条栈）；两步确认臂态倒计时（useArmedConfirm 公共 hook）
+- **壳杂项三票**：0-ws 态设置可达（MiddlePanel 分发前移 + SettingsView 全局分类放行，ws 级分类占位）；catalog 失败指数退避（60s→5min→30min 封顶，成功清零）；ensureWorkspace 错误改写收窄（仅 EACCES/EPERM/EROFS 标「工作目录不可写」）
+- **债务清偿**：electron test 类型债 76 条清零（typecheck 检查面闭合防回弹）
+- **真机验收**：UC-P1-3 全新 worker 全链（hub catalog→A 记账→manifest resources→B 零 skill unresolved 四件套）+ 恢复性场景（构建步硬失败→重发幂等自愈）+ P2 抽验 9/9
+- **已知限制**：hub 资源升版链版本停留（验收 D3——「更新」回执成功但版本不变，M2.3 票）；安装取旧版（latest 解析，同族）；本地 stdio MCP 分发域外维持；worker 本机 failed 卡 reason 无通道（M2.3 票）；agent-threads 测试组 NAPI 析构竞态（SIGSEGV 既有债，评估迁 forks）
+
+
+
 ## [未发布] — 节点互联 M2.1：工作组 IA 重分配 / 统一任务模型 / HITL
 
 hub 侧两个 payload 透传补丁（`v0.1.3` permissionTier / `v0.1.4` progress.kind，均向后兼容可选字段——hub 侧账目见该仓 CHANGELOG）；studio 侧 protocol pin `#v0.1.4`。设计见 momo-hub 仓 `docs/specs/2026-10-26-momo-hub-m2.1-workgroup-ia-unified-tasks.md`，视觉合同 `.omo/previews/hub-ia-fullapp.html`（6+1 屏）。
@@ -33,7 +50,7 @@ hub 侧（独立仓 momo-hub `v0.1.2`，协议 1.2.0）交付工作组内核、�
 - **测试**：M2 三段集成测试（镜像/委派/查看全链 + consent 语义）；`tests/hub` 17 文件 210+ 用例全绿
 - **已知限制**：UI 单组形态（一节点一组，多组 UI M3 议）；委派为单任务粒度（无编排/依赖图）；委派结果以会话消息流形态在查看面消费（拉取结果文件 M3+ 议）；文件树远程浏览不在版（M2 后跟进项——M2.1 票，spec §9）；镜像只做整体替换 + 差异摘要确认（无增量合并）；跨组路由/组间可见性不做
 
-版本 `2.1.0-alpha.31`。
+版本 `2.1.0-alpha.32`。
 
 ## [未发布] — 节点互联 M1：hub 私有 marketplace（资源分发）
 
