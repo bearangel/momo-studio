@@ -360,7 +360,7 @@ function Step2Build() {
       <CheckRow state={rowState} label="Agent 定义与成员清单" count={rowState === 'done' && s ? `${s.members} 定义 · ${s.members - s.embeddedMembers} 引用 + ${s.embeddedMembers} 内嵌` : undefined} />
       <CheckRow state={rowState} label="团队配置" count={rowState === 'done' && s ? `${s.teams} 个` : undefined} />
       <CheckRow state={rowState} label="MCP 启用清单（仅 stdio 引用）" count={rowState === 'done' && s ? `${s.mcp} 个` : undefined} />
-      <CheckRow state={rowState} label="Skill 清单（slug 引用）" count={rowState === 'done' && s ? `${s.skills} 个` : undefined} />
+      <CheckRow state={rowState} label="Skill 清单（补装 + 内嵌）" count={rowState === 'done' && s ? `${s.skillResources} 补装 + ${s.skillEmbedded} 内嵌` : undefined} />
       <CheckRow state={rowState} label="插件启用清单（hub 引用）" count={rowState === 'done' && s ? `${s.plugins} 个` : undefined} />
       <CheckRow state={rowState} label="Provider 引用与偏好（不含 Key）" count={rowState === 'done' && s ? `${s.providers} 个` : undefined} />
       <CheckRow state={rowState} label="打包 tar.gz 并计算校验和" />

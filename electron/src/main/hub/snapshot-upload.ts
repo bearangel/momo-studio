@@ -35,7 +35,13 @@ export interface SnapshotSummary {
   embeddedMembers: number;
   teams: number;
   mcp: number;
+  /** skill 总数（config.skills 全量——含 builtin / marketplace 目录桶，目标节点
+   *  同有或 catalog 自愈、不产生装包；仅作向后兼容，展示装包面用下两字段） */
   skills: number;
+  /** hub 记账 skill 数（resources 段 skill 条目——目标节点缺失时先装后落） */
+  skillResources: number;
+  /** 内嵌 custom skill 数（归档 skills/<slug>/ 实体——目标节点落盘即得） */
+  skillEmbedded: number;
   plugins: number;
   providers: number;
   /** 默认模型绑定段是否在场（D4——向导 S1 摘要「有/无」行） */
@@ -141,6 +147,8 @@ export async function buildAndUploadWorkspaceSnapshot(
         teams: built.manifest.config.teams.length,
         mcp: built.manifest.config.mcpEnabled.length,
         skills: built.manifest.config.skills.length,
+        skillResources: built.manifest.resources.filter((r) => r.type === 'skill').length,
+        skillEmbedded: built.skillEmbeddedCount,
         plugins: built.manifest.config.pluginsEnabled.length,
         providers: built.manifest.config.providerRefs.length,
         modelBinding: built.manifest.config.modelBinding !== undefined,

@@ -14,7 +14,7 @@ const UPLOAD_RESULT = {
   version: '3',
   sizeBytes: 2400 * 1024,
   excludedPlugins: ['local-webhook-debug'],
-  summary: { members: 6, embeddedMembers: 2, teams: 2, mcp: 3, skills: 5, plugins: 4, providers: 2, resources: 13 },
+  summary: { members: 6, embeddedMembers: 2, teams: 2, mcp: 3, skills: 5, skillResources: 2, skillEmbedded: 1, plugins: 4, providers: 2, resources: 13 },
 };
 
 const api = {

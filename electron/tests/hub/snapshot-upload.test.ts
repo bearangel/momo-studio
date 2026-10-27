@@ -17,11 +17,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { closeDb, runMigrations } from '../../src/main/storage/db';
+import { closeDb, getDb, runMigrations } from '../../src/main/storage/db';
 import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keychain';
 import { saveAgentDefinition, addMember } from '../../src/main/agent/crud';
 import { createProvider } from '../../src/main/agent/provider-crud';
 import { createWorkspace } from '../../src/main/workspace/crud';
+import { listInstalled } from '../../src/main/skill/zip-uploader';
 import type { EventEnvelope } from '../../src/main/hub/protocol';
 
 // —— manager 依赖替身（publish.test.ts 同款：createHubClient 捕获 opts，状态可推动）
@@ -132,6 +133,47 @@ function res(status: number, body: unknown): UploadResponseLike {
   return { status, json: async () => body };
 }
 
+// ── skill 四桶 fixture（snapshot-builder.test.ts 同款形态）──────────────────
+
+/** installed_packages 落一条 hub 记账行（item_id = `hub:{slug}`，M1 §6.2 形态） */
+function seedHubAccounting(itemType: 'skill', slug: string): void {
+  getDb()
+    .prepare(
+      `INSERT INTO installed_packages (id, item_id, item_type, slug, version, cache_path, checksum)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      randomUUID(),
+      `hub:${slug}`,
+      itemType,
+      slug,
+      '1.0.0',
+      path.join(tmpRoot, 'cache', slug),
+      crypto.createHash('sha256').update(slug).digest('hex'),
+    );
+}
+
+/** 落一个 custom skill 上传目录（内嵌桶——listInstalled 目录扫描识别为 custom） */
+function seedCustomSkillDir(slug: string): void {
+  const dir = path.join(tmpRoot, 'skills', slug);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'SKILL.md'),
+    `---\nname: ${slug} 名\ndescription: 内嵌 skill\nversion: 0.3.0\n---\n\n正文内容。`,
+  );
+  fs.writeFileSync(path.join(dir, '.sha256'), 'deadbeef');
+}
+
+/** skill_definitions 落一条 marketplace 安装行（hub 安装同表——无记账即纯目录桶） */
+function seedMarketplaceSkillRow(slug: string): void {
+  getDb()
+    .prepare(
+      `INSERT INTO skill_definitions (id, name, slug, version, description, cache_path)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(randomUUID(), `${slug}-name`, slug, '1.0.0', '市场 skill', path.join(tmpRoot, 'cache', slug));
+}
+
 interface CapturedPart { name: string; blob: Blob }
 
 /**
@@ -179,7 +221,40 @@ describe('buildAndUploadWorkspaceSnapshot', () => {
     expect(result.summary.members).toBe(1);
     expect(result.summary.embeddedMembers).toBe(1);
     expect(result.summary.resources).toBe(0);
+    // 无自定义/hub 记账 skill：分桶两计数为零（builtin 桶只进 skills 总数）
+    expect(result.summary.skillResources).toBe(0);
+    expect(result.summary.skillEmbedded).toBe(0);
     expect(checksumShort(result.checksum)).toBe(result.checksum.slice(0, 8));
+  });
+
+  it('summary skill 分桶（P2-6）：hub 记账补装 / custom 内嵌 / builtin 与 marketplace 目录桶只入总数', async () => {
+    const wsId = await mkWorkspace('分桶空间');
+    await seedMember(wsId, 'bucket-agent');
+    // 四桶混合：hub 记账（补装位）/ custom 目录（内嵌）/ marketplace 无记账 / builtin（应用实物）
+    seedMarketplaceSkillRow('hub-skill');
+    seedHubAccounting('skill', 'hub-skill');
+    seedCustomSkillDir('embed-skill');
+    seedMarketplaceSkillRow('bare-market-skill');
+    await goOnline();
+
+    const { deps } = captureUploadFetch();
+    const result = await buildAndUploadWorkspaceSnapshot(wsId, deps);
+
+    const installed = listInstalled();
+    // builtin 桶在场（electron/resources/skills 实物——清单总数含它但不装包）
+    const builtinCount = installed.filter((s) => s.source === 'builtin').length;
+    expect(builtinCount).toBeGreaterThan(0);
+    expect(installed.map((s) => s.slug)).toEqual(
+      expect.arrayContaining(['hub-skill', 'embed-skill', 'bare-market-skill']),
+    );
+    // 装包面 = hub 记账桶（resources 补装位）+ 内嵌 custom 桶——与 S4 实际装包口径一致
+    expect(result.summary.skillResources).toBe(1);
+    expect(result.summary.skillEmbedded).toBe(1);
+    // 总数字段向后兼容：四桶之和
+    expect(result.summary.skills).toBe(installed.length);
+    expect(result.summary.skills).toBeGreaterThan(
+      result.summary.skillResources + result.summary.skillEmbedded,
+    );
   });
 
   it('knownSecrets 复检变异：keychain 实值（无形态特征）渗入 custom skill → 拒传不上路', async () => {

@@ -83,6 +83,9 @@ export interface WorkspaceSnapshotResult {
   checksum: string;
   /** 无 hub 记账而被排除的插件 id（zip/dev 来源）——UI 差异提示用，不阻断构建 */
   excludedPlugins: string[];
+  /** 内嵌 custom skill 数（staging skills/<slug>/ 实体计数）——summary 分桶数据源；
+   *  manifest config.skills 只有 slug 无来源信息，内嵌面不可从清单推导（P2-6） */
+  skillEmbeddedCount: number;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -515,7 +518,13 @@ export async function buildWorkspaceSnapshot(workspaceId: string): Promise<Works
       resources: resources.length,
       excludedPlugins: plugins.excludedPlugins.length,
     });
-    return { manifest, archivePath, checksum, excludedPlugins: plugins.excludedPlugins };
+    return {
+      manifest,
+      archivePath,
+      checksum,
+      excludedPlugins: plugins.excludedPlugins,
+      skillEmbeddedCount: skills.embeddedDirs.length,
+    };
   } finally {
     fs.rmSync(stage, { recursive: true, force: true });
   }

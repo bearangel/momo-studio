@@ -35,7 +35,7 @@ const UPLOAD_RESULT = {
   version: '3',
   sizeBytes: 2_400_000,
   excludedPlugins: ['local-webhook-debug'],
-  summary: { members: 6, embeddedMembers: 2, teams: 2, mcp: 3, skills: 5, plugins: 4, providers: 2, modelBinding: true, resources: 13 },
+  summary: { members: 6, embeddedMembers: 2, teams: 2, mcp: 3, skills: 5, skillResources: 2, skillEmbedded: 1, plugins: 4, providers: 2, modelBinding: true, resources: 13 },
 };
 
 const WORKSPACES = [
@@ -125,6 +125,10 @@ describe('MirrorWizard S1/S2/S3', () => {
     expect(screen.getByText(/2\.3 MB|2 MB|MB/)).toBeInTheDocument();
     expect(screen.getByText(/sha256:9c4f21e0/)).toBeInTheDocument();
     expect(screen.getByText(/local-webhook-debug/)).toBeInTheDocument();
+    // S2 Skill 行双桶展示（P2-6）：装包面 = 补装 + 内嵌，不展示无差别总数
+    expect(screen.getByText('Skill 清单（补装 + 内嵌）')).toBeInTheDocument();
+    expect(screen.getByText('2 补装 + 1 内嵌')).toBeInTheDocument();
+    expect(screen.queryByText('5 个', { exact: true })).not.toBeInTheDocument();
   });
 
   it('S3 禁选规则：离线与本机禁选；未选时开始镜像禁用', async () => {
