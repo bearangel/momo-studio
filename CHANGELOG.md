@@ -16,6 +16,17 @@
 - **B12 撤回客户端 + UI**：`unpublishHubResource(slug)`（HTTP Bearer，与 publish 同信任模型）+ IPC `hub:unpublishResource` 三层；资源卡动作簇增「下架」armed-confirm（**仅 hub 来源卡**——builtin/custom/marketplace 零变化；确认文案含 slug 与「已安装节点不受影响」；未接入禁用）；404 → 「资源不存在或已撤回」toast；`resource.store` 消费 `resource.unpublished`（清该 slug 全部类型角标键 + 触发一次 load 刷新目录）
 - 测试：记账版本三态 / applier pinned 四格 + 404 跳过 / installHubPackage pinned 六格 / 事件合并幂等与 lastGood 一致性 + 旧 hub（无 revision）容错 / unpublish 客户端八格 / IPC 接线 / 菜单门控与两步确认流 / store 事件消费（electron 5169 · renderer 3009）
 
+## [未发布] — 节点互联 M3.4：资源生命周期与版本对齐（M3 收官）
+
+协议 minor **1.5.0**（全可选字段/事件，无新 RPC 无门槛登记）。设计见 momo-hub 仓 `docs/specs/2026-10-29-momo-hub-m3.4-resource-lifecycle.md`。
+
+- **B13 镜像按版本对齐**：manifest `resources[].version?`（记账版本钉死=快照定型语义；缺省=旧 latest 语义零变化）；applier 补装按 pinned 下载（**逐版本 X-Checksum-Sha256 权威校验和**；404/竞态软失败入 unresolvedRefs 不中止）；alreadyLatest 对 pinned——**镜像升级语义自此打开**（M2.3「不升级旧版」边界仅由带 version 的 manifest 触发翻转，CHANGELOG 明示）
+- **B12 撤回/下架（hub v0.1.9）**：`POST /resources/unpublish`（Bearer 同 publish 信任模型；幂等；404；**不删版本行/blob——下载历史保留**，roadmap 裁定）；resources.unpublished_at 墓碑（v7 迁移）+ catalog 过滤 + republish 清墓碑恢复；`resource.unpublished` 事件；studio 资源卡「下架」armed-confirm（**仅 hub 来源卡**，消费面矩阵；文案含 slug 与「已安装节点不受影响」）
+- **B10 目录增量合并与持久化修订号**：hub catalog 增持久化 `revision`（hub_meta，发布/撤回事务内递增；**取代请求时现打的 updatedAt 作为变更判据**——studio 容错缺省 0 不判变）；studio 目录源事件合并 `applyPublished/UnpublishedEvent`（upsert/剔除 cache 与 lastGood，幂等按 slug 终态）——**发布/撤回即时可见，消 5min TTL 盲窗**；全量拉取仍权威路径
+- 测试：hub 297（+19）/ electron 5169 / renderer 3009
+
+版本 `2.1.0-alpha.40`。hub 侧 `v0.1.9`（tag `v0.1.9` = `fbd3c3a`）。
+
 ## [未发布] — 节点互联 M3.3：任务编排与依赖
 
 studio 本体改造，**协议零改**（hub 0.1.8/1.4.0 与 pin 不动；依赖元数据透传 minor 延后至有真实消费方）。设计见 momo-hub 仓 `docs/specs/2026-10-29-momo-hub-m3.3-task-orchestration.md`。
