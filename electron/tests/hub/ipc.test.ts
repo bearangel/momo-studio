@@ -16,6 +16,7 @@ vi.mock('../../src/main/hub/index', () => ({
   hubEnroll: vi.fn(async () => ({ configured: true, state: 'connecting', hubUrl: 'http://h', nodeName: 'a', nodeId: 'n1', lastError: null })),
   hubForget: vi.fn(async () => undefined),
   replayPresenceSeed: vi.fn(),
+  hubGetPresenceNodes: vi.fn(() => [{ nodeId: 'node-1', nodeName: '本机' }]),
   hubRequest: vi.fn(async () => ({})),
   hubGetDelegationSettings: vi.fn(() => ({ acceptTasks: true, maxConcurrent: 2, hitlTimeoutMinutes: 15 })),
   hubSetDelegationSettings: vi.fn(async (input: { acceptTasks: boolean; maxConcurrent: number; hitlTimeoutMinutes: number }) => input),
@@ -58,7 +59,7 @@ const VIEW_CHANNELS = [
 beforeEach(() => { handlers.clear(); vi.clearAllMocks(); });
 
 describe('hub IPC 接线', () => {
-  it('注册三十四通道（M2.1 T6 增镜像登记查询、T8 增路由提交两通道、T9 增看板投影两通道、T12 增本机等待清单、工作目录两通道）；getStatus 透传 manager', async () => {
+  it('注册三十五通道（M2.5 T3 增节点清单补拉 hub:getNodes）；getStatus 透传 manager', async () => {
     registerHubIpc();
     expect([...handlers.keys()].sort()).toEqual([
       ...GROUP_CHANNELS,
@@ -69,9 +70,15 @@ describe('hub IPC 接线', () => {
       ...ROUTING_CHANNELS,
       ...BOARD_CHANNELS,
       ...VIEW_CHANNELS,
-      'hub:configure', 'hub:enroll', 'hub:forget', 'hub:getStatus', 'hub:publishResource',
+      'hub:configure', 'hub:enroll', 'hub:forget', 'hub:getStatus', 'hub:publishResource', 'hub:getNodes',
     ].sort());
     expect(await handlers.get('hub:getStatus')!()).toEqual(await manager.hubGetStatus());
+  });
+
+  it('getNodes → 透传 manager.hubGetPresenceNodes（本机行 + 在线对端权威集合）', async () => {
+    registerHubIpc();
+    expect(await handlers.get('hub:getNodes')!()).toEqual([{ nodeId: 'node-1', nodeName: '本机' }]);
+    expect(manager.hubGetPresenceNodes).toHaveBeenCalledTimes(1);
   });
 
   it('configure/enroll 透传参数', async () => {

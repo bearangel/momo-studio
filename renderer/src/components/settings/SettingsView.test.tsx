@@ -100,6 +100,7 @@ const mockApi = {
       nodeId: null,
       lastError: null,
     }),
+    getNodes: vi.fn().mockResolvedValue([]),
     configure: vi.fn(),
     enroll: vi.fn(),
     forget: vi.fn(),

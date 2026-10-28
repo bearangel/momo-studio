@@ -3044,6 +3044,8 @@ export interface HubViewAppendedEvent {
 /** hub 命名空间通道面（spec 2026-10-23：4 invoke + 2 推送；M1 T13 增发布 1 invoke + 1 推送；M2b T4 增工作组 6 invoke + 1 推送；M2c T8b 增镜像 2 invoke + 2 推送） */
 export interface HubApiSurface {
   getStatus(): Promise<HubStatus>;
+  /** 节点清单补拉（M2.5 T3 / A6）：主进程权威在线集合 = 本机行 + 在线对端（at 为事件时刻，种子行缺省） */
+  getNodes(): Promise<Array<{ nodeId: string; nodeName: string; at?: number }>>;
   configure(input: HubConfigureInput): Promise<HubStatus>;
   enroll(input: HubEnrollInput): Promise<HubStatus>;
   forget(): Promise<void>;

@@ -23,6 +23,7 @@ let presenceCb: ((e: HubNodePresenceEvent) => void) | undefined;
 const api = {
   hub: {
     getStatus: vi.fn(),
+    getNodes: vi.fn(async () => []),
     configure: vi.fn(),
     enroll: vi.fn(),
     forget: vi.fn(),

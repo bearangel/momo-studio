@@ -430,6 +430,61 @@ describe('hub manager 推送面', () => {
   });
 });
 
+// A6 节点清单补拉：renderer 冷启动/面板重挂载只靠推送会漏掉「已在线的其他节点」——
+// 本 accessor 把主进程权威集合（本机行 + presenceSeed）一次性交回（只读内存，不发 RPC）。
+describe('hubGetPresenceNodes 节点清单补拉（A6）', () => {
+  it('未接入 → 空（无本机身份、无在线集合）', () => {
+    expect(manager.hubGetPresenceNodes()).toEqual([]);
+  });
+
+  it('已接入但 hello 未到 → 仅本机行（accessor 拼回；presenceSeed 本就剔除本机）', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    expect(manager.hubGetPresenceNodes()).toEqual([{ nodeId: 'node-1', nodeName: 'n' }]);
+  });
+
+  it('hello 快照 + 后续 online 事件 → 本机行 + 全部在线对端；offline 后移除', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    m.clients[0]!.opts.onHelloSnapshot!([{ nodeId: 'node-2', nodeName: '客厅小主机' }]);
+    m.clients[0]!.opts.onEvent({
+      v: 1, kind: 'evt', method: 'node.online',
+      payload: { nodeId: 'node-3', nodeName: '书房台式机', at: 7 },
+    });
+    expect(manager.hubGetPresenceNodes()).toEqual([
+      { nodeId: 'node-1', nodeName: 'n' },
+      { nodeId: 'node-2', nodeName: '客厅小主机' },
+      { nodeId: 'node-3', nodeName: '书房台式机' },
+    ]);
+
+    m.clients[0]!.opts.onEvent({
+      v: 1, kind: 'evt', method: 'node.offline',
+      payload: { nodeId: 'node-2', at: 8 },
+    });
+    expect(manager.hubGetPresenceNodes()).toEqual([
+      { nodeId: 'node-1', nodeName: 'n' },
+      { nodeId: 'node-3', nodeName: '书房台式机' },
+    ]);
+  });
+
+  it('本机行不因对端事件重复（hub 回显本机 online 亦不双行）', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    m.clients[0]!.opts.onEvent({
+      v: 1, kind: 'evt', method: 'node.online',
+      payload: { nodeId: 'node-1', nodeName: '本机', at: 9 },
+    });
+    expect(manager.hubGetPresenceNodes()).toEqual([{ nodeId: 'node-1', nodeName: 'n' }]);
+  });
+
+  it('忘记接入 / 掉线 → 种子作废（重连前只余本机行；未接入则空）', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    m.clients[0]!.opts.onHelloSnapshot!([{ nodeId: 'node-2', nodeName: '客厅小主机' }]);
+    // 掉线（非 online 态）→ 快照过期，只剩本机行
+    m.clients[0]!.opts.onStateChange('connecting');
+    expect(manager.hubGetPresenceNodes()).toEqual([{ nodeId: 'node-1', nodeName: 'n' }]);
+    await manager.hubForget();
+    expect(manager.hubGetPresenceNodes()).toEqual([]);
+  });
+});
+
 describe('mirror.apply 应答器 → workspace:listChanged 广播（M2.1 D3）', () => {
   it('应用成功 → 广播 workspace:listChanged（reason + workspaceName）；应用失败不广播', async () => {
     await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });

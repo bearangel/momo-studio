@@ -41,6 +41,11 @@ interface HubState {
   loadError: string | null;
   /** 挂载时调用：订阅两推送 + 拉取 status 快照；返回解订阅函数（卸载时调用） */
   init(): () => void;
+  /**
+   * 节点清单补拉（A6）：取主进程权威在线集合（本机行 + 在线对端）并入节点表。
+   * 只增不删——种子与事件两路到达、种子可能旧于事件，删行只归 kind:'offline'。
+   */
+  pullNodes(): Promise<void>;
   /** 清 loadError 并重拉快照——复用 init 建立的订阅，不重复订阅（面板错误行「重试」调用） */
   refresh(): void;
   /** 接入（hub:enroll）；成功后 status 覆盖为返回快照，rejection 原样抛给调用方展示 */
@@ -56,6 +61,20 @@ interface HubState {
 let pendingState: HubStateChangedEvent | null = null;
 
 export const useHubStore = create<HubState>((set, get) => {
+  const pullNodes = async (): Promise<void> => {
+    try {
+      const seed = await ipc.hub.getNodes();
+      set((s) => {
+        // 种子在前（权威序），事件已到而种子未含者追加——只增不删（删除归 offline 事件）
+        const merged = new Map(seed.map((n) => [n.nodeId, { nodeId: n.nodeId, nodeName: n.nodeName }]));
+        for (const row of s.nodes) if (!merged.has(row.nodeId)) merged.set(row.nodeId, row);
+        return { nodes: [...merged.values()] };
+      });
+    } catch {
+      // 补拉是补给面：失败不翻转 status / 不置 loadError——推送路仍在维护节点表
+    }
+  };
+
   const pullStatusSnapshot = (): void => {
     void ipc.hub
       .getStatus()
@@ -70,6 +89,8 @@ export const useHubStore = create<HubState>((set, get) => {
               }
             : { status, loadError: null },
         );
+        // 快照落地 = 订阅已在位：补齐在线节点清单（冷启动/重连后事件已错过）
+        void pullNodes();
       })
       .catch(() => {
         // 不吞错：置 loadError 交面板呈现 + 重试；status 保持 null——不渲染半吊子状态
@@ -111,11 +132,15 @@ export const useHubStore = create<HubState>((set, get) => {
         });
       });
       pullStatusSnapshot();
+      // 面板挂载即补拉（不等状态快照成功——订阅已就位，事件路并行维护）
+      void pullNodes();
       return () => {
         disposeState();
         disposePresence();
       };
     },
+
+    pullNodes,
 
     refresh() {
       set({ loadError: null });

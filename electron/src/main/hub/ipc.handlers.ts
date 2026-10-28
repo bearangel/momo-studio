@@ -1,7 +1,8 @@
 // hub 命名空间 IPC——通道名与 types.d.ts / preload 逐一对齐（momo-boundary-rules）。
 import { ipcMain } from 'electron';
 import {
-  hubConfigure, hubDelegationBoard, hubEnroll, hubForget, hubGetDelegationSettings, hubGetStatus,
+  hubConfigure, hubDelegationBoard, hubEnroll, hubForget, hubGetDelegationSettings, hubGetPresenceNodes,
+  hubGetStatus,
   hubGetViewSettings, hubGetWorkspaceDirSettings, hubListMirrorRegistry, hubLocalWaiting,
   hubMarkDelegationCancelled, hubRequest,
   hubSetDelegationSettings, hubSetViewSettings, hubSetWorkspaceDirSettings, replayPresenceSeed,
@@ -33,6 +34,8 @@ export function registerHubIpc(): void {
     replayPresenceSeed();
     return status;
   });
+  // 节点清单补拉（M2.5 T3 / A6）：面板挂载与 getStatus 成功后取权威在线集合
+  ipcMain.handle('hub:getNodes', () => hubGetPresenceNodes());
   ipcMain.handle('hub:configure', (_evt, input: { hubUrl: string; nodeName: string }) => hubConfigure(input));
   ipcMain.handle('hub:enroll', (_evt, input: { hubUrl: string; enrollmentToken: string; nodeName: string }) => hubEnroll(input));
   ipcMain.handle('hub:forget', () => hubForget());

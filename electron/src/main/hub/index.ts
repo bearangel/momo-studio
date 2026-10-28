@@ -294,6 +294,20 @@ export function hubGetStatus(): HubStatus {
 }
 
 /**
+ * 节点清单补拉（A6）：面板冷启动/重挂载时一次性取回权威在线集合。
+ * presenceSeed 本就剔除本机（renderer 自合成本机行；重复播会双行）——本机行在此拼回。
+ * 只读主进程内存状态：不发 hub RPC、不改协议；快照过期语义随 presenceSeed 走
+ * （掉线/换址/忘记均置 null，故此时只余本机行或空）。
+ */
+export function hubGetPresenceNodes(): Array<{ nodeId: string; nodeName: string; at?: number }> {
+  const status = hubGetStatus();
+  return [
+    ...(status.nodeId !== null ? [{ nodeId: status.nodeId, nodeName: status.nodeName ?? '' }] : []),
+    ...(presenceSeed ?? []),
+  ];
+}
+
+/**
  * RPC 请求面（M2 组管理消费）——透传 client 关联器；未建连/未配置时人话拒绝。
  * 错误语义由 client.request 单点定义（hub 人话原文 / 连接已重置 / 超时）。
  */

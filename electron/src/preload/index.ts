@@ -614,6 +614,7 @@ const api: ApiSurface = {
   // M0 节点互联（spec 2026-10-23）：hub 连接状态/接入/忘记 + 状态与节点在线推送
   hub: {
     getStatus: () => invoke('hub:getStatus'),
+    getNodes: () => invoke('hub:getNodes'),
     configure: (input) => invoke('hub:configure', input),
     enroll: (input) => invoke('hub:enroll', input),
     forget: () => invoke('hub:forget'),
