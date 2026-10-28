@@ -59,7 +59,7 @@ import { listInstalled, getSkillsDir } from '../skill/zip-uploader';
 import { listPlugins, isPluginEnabled } from '../plugin/registry';
 import { getGlobalSettings, DEFAULT_JOURNAL_QUOTA_MB } from '../settings/crud';
 import { agentManifestYaml, collectRegularFiles, tarDirectory } from './publish';
-import { loadHubAccountingSet } from './mirror-applier';
+import { loadHubAccountingSet } from './accounting';
 import { resolveTmpDir } from '../paths';
 import { SECRET_VALUE_PATTERNS } from '../util/redact';
 import {
@@ -211,7 +211,7 @@ class HubAccounting {
 }
 
 function loadHubAccounting(): HubAccounting {
-  // 查询单点收口（M2.3 T5 件2）：hub 记账面 SQL 统一走 mirror-applier 导出的
+  // 查询单点收口（M2.3 T5 件2 / M2.4 T5 抽到 accounting.ts）：hub 记账面 SQL 统一走
   // loadHubAccountingSet（契约见其 JSDoc）——此前本模块私有同款查询，两处漂移风险
   const acc = new HubAccounting();
   for (const [type, slugs] of loadHubAccountingSet()) {

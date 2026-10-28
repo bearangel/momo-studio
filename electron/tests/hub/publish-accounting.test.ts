@@ -4,7 +4,7 @@
 // 任一类型资源（agent/skill/mcp/plugin）发布到 hub 成功后本地 installed_packages
 // 写 `hub:{slug}` 记账行，两个消费面：
 //   1. 镜像快照构建器 resources 段（snapshot-builder 以记账反查携带）
-//   2. 目标节点 installResources 已装判定①（mirror-applier loadHubAccountingSet）
+//   2. 目标节点 installResources 已装判定①（accounting loadHubAccountingSet）
 // 缺行 = 分发断链（全新目标 unresolvedRefs 残留——M2.1 path2 实测形态）。
 //
 // 断言锚点（M2.2 Task 1 契约）：
@@ -29,7 +29,7 @@ import path from 'node:path';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { logger } from '../../src/main/logger';
 import { hubPackageItemId, __setHubContextResolverForTest } from '../../src/main/resource/hub/momo-hub';
-import { loadHubAccountingSet } from '../../src/main/hub/mirror-applier';
+import { loadHubAccountingSet } from '../../src/main/hub/accounting';
 import {
   recordPublishAccounting,
   recordPublishAccountingSafe,
@@ -202,7 +202,7 @@ describe('recordPublishAccounting（四类发布回填 hub 记账）', () => {
     expect(cards[0]?.source).toBe('hub');
     expect(cards[0]?.installed).toBe(true);
 
-    // hub 链读取面（M2.3 T5 件2——直接消费 mirror-applier 导出的 loadHubAccountingSet，
+    // hub 链读取面（M2.3 T5 件2——直接消费 accounting 导出的 loadHubAccountingSet，
     // 导出契约在此锁死）：hub: 前缀行入集，marketplace 行不入集（不污染、不双计）
     const accSet = loadHubAccountingSet().get('skill') ?? new Set<string>();
     expect(accSet.has('superpowers')).toBe(true);
