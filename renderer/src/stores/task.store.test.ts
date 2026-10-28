@@ -19,6 +19,7 @@ const mockApi = {
     setPinned: vi.fn(),
     archive: vi.fn(),
     unarchive: vi.fn(),
+    createBatch: vi.fn(),
   },
 };
 
@@ -425,6 +426,92 @@ describe('task.store move（乐观更新 + 回滚 + 轮询守卫，Task 10）', 
     useTaskStore.setState({ tasks: [] });
 
     await expect(useTaskStore.getState().unarchive('T-X')).rejects.toThrow('任务不存在');
+    expect(useTaskStore.getState().tasks).toHaveLength(0);
+  });
+});
+
+// ── M3.3 批量创建：单 IPC task:createBatch，per-item union 语义（§2.2）────────
+//   - 全成功：ok 行按批内顺序 append（含 blocked/blockedBy/parentTaskId 透传）
+//   - 部分成功：仅 ok 行 append，失败项原样返回（调用方 per-line 展示）
+//   - 整批 rejection：rethrow 且本地零改动
+describe('task.store createBatch（M3.3 批量创建）', () => {
+  beforeEach(() => {
+    (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
+    useTaskStore.setState({
+      tasks: [],
+      selectedTaskId: null,
+      loading: false,
+      error: null,
+      currentWorkspaceId: null,
+      pendingMoveCount: 0,
+      dragging: false,
+    });
+    mockApi.task.createBatch.mockReset();
+  });
+
+  it('全成功：单次 IPC 携带原序 items，ok 行按批内顺序 append 本地 tasks', async () => {
+    const a = mkTask({ id: 'T-1', title: '甲', status: 'draft' });
+    const b = mkTask({ id: 'T-2', title: '乙', status: 'draft', blockedBy: ['T-1'] });
+    mockApi.task.createBatch.mockResolvedValue({ results: [{ ok: true, task: a }, { ok: true, task: b }] });
+
+    const result = await useTaskStore.getState().createBatch([
+      { workspaceId: 'ws1', title: '甲' },
+      { workspaceId: 'ws1', title: '乙 :: T-1', dependsOn: ['T-1'] },
+    ]);
+
+    expect(mockApi.task.createBatch).toHaveBeenCalledTimes(1);
+    expect(mockApi.task.createBatch).toHaveBeenCalledWith({
+      items: [
+        { workspaceId: 'ws1', title: '甲' },
+        { workspaceId: 'ws1', title: '乙 :: T-1', dependsOn: ['T-1'] },
+      ],
+    });
+    expect(result.results).toHaveLength(2);
+    // append 保序 + M3.3 新字段整体透传（store 不裁剪行字段）
+    expect(useTaskStore.getState().tasks.map((t) => t.id)).toEqual(['T-1', 'T-2']);
+    expect(useTaskStore.getState().tasks[1]!.blockedBy).toEqual(['T-1']);
+  });
+
+  it('部分成功：仅 ok 行 append，失败项（ok:false + index/error）原样返回', async () => {
+    const a = mkTask({ id: 'T-1', title: '甲', status: 'draft' });
+    mockApi.task.createBatch.mockResolvedValue({
+      results: [
+        { ok: true, task: a },
+        { ok: false, index: 1, error: '依赖任务 T-999 不存在' },
+      ],
+    });
+
+    const result = await useTaskStore.getState().createBatch([
+      { workspaceId: 'ws1', title: '正常' },
+      { workspaceId: 'ws1', title: '坏依赖', dependsOn: ['T-999'] },
+    ]);
+
+    expect(result.results[1]).toEqual({ ok: false, index: 1, error: '依赖任务 T-999 不存在' });
+    expect(useTaskStore.getState().tasks.map((t) => t.id)).toEqual(['T-1']);
+  });
+
+  it('全失败（per-item）→ 零 append，结果原样返回（不关窗语义由调用方承接）', async () => {
+    mockApi.task.createBatch.mockResolvedValue({
+      results: [
+        { ok: false, index: 0, error: '数据库已锁' },
+        { ok: false, index: 1, error: '数据库已锁' },
+      ],
+    });
+
+    const result = await useTaskStore.getState().createBatch([
+      { workspaceId: 'ws1', title: '甲行' },
+      { workspaceId: 'ws1', title: '乙行' },
+    ]);
+
+    expect(result.results.every((r) => !r.ok)).toBe(true);
+    expect(useTaskStore.getState().tasks).toHaveLength(0);
+  });
+
+  it('整批 rejection（超 50 上限）→ rethrow 且本地零改动（错误路径）', async () => {
+    mockApi.task.createBatch.mockRejectedValue(new Error('批量创建一次最多 50 条（收到 51 条）'));
+    await expect(
+      useTaskStore.getState().createBatch(Array.from({ length: 51 }, (_, i) => ({ workspaceId: 'ws1', title: `t${i}` }))),
+    ).rejects.toThrow('批量创建一次最多 50 条');
     expect(useTaskStore.getState().tasks).toHaveLength(0);
   });
 });

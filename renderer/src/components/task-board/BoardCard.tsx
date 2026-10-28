@@ -12,10 +12,10 @@
 //     TaskDetailPanel 先例）；执行管线中间态（assigned/session_queued/
 //     in_progress/paused）无编辑无归档——仅顶置；终态保留「归档」（spec
 //     §5.2）：调 task.store.archive（成功即本地剔除，卡片消失）；失败 toast
-import { Archive, Bot, Calendar, Clock, MessagesSquare, Pencil, Pin, PinOff, Repeat, Users } from 'lucide-react';
+import { Archive, Bot, Calendar, Clock, Lock, MessagesSquare, Pencil, Pin, PinOff, Repeat, Users } from 'lucide-react';
 import { useState, type CSSProperties } from 'react';
 import type { TaskRow } from '../../ipc/types';
-import { PENDING_WRAP_UP_STYLE, taskStatusStyle } from '../../lib/task-status';
+import { BLOCKED_STYLE, PENDING_WRAP_UP_STYLE, taskStatusStyle } from '../../lib/task-status';
 import { isEditableStatus, isTerminalStatus } from '../../lib/board';
 import { humanizeRecurrence } from '../../lib/recurrence';
 import { useTaskStore } from '../../stores/task.store';
@@ -116,6 +116,20 @@ export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps
             />
           )}
           <span className={status.className}>{status.label}</span>
+          {task.blocked && (
+            /* M3.3 阻塞派生角标（spec §2.2）：与状态徽标并列，blockedBy 悬停摘要 */
+            <span
+              className={BLOCKED_STYLE.className}
+              title={
+                task.blockedBy && task.blockedBy.length > 0
+                  ? `等待依赖完成：${task.blockedBy.join('、')}`
+                  : '等待未完成依赖'
+              }
+            >
+              <Lock size={16} strokeWidth={1.75} aria-hidden />
+              {BLOCKED_STYLE.label}
+            </span>
+          )}
           {pendingWrapUp && (
             <span className={PENDING_WRAP_UP_STYLE.className} title="任务仍在进行，但宿主会话当前没有运行回合">
               {PENDING_WRAP_UP_STYLE.label}

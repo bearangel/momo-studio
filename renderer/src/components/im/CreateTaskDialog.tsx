@@ -6,18 +6,24 @@
 //   - 执行位置区（传 workspaceName 才渲染）：RunRoutingField 三 radio 卡行（守门降级
 //     见该组件）；外派模式（group/node）下本地委派字段退场——S2 单任务合同只留
 //     标题/任务书/执行位置
-//   - 提交分流：local → 既有 ipc.task.create（零变化）；group/node →
-//     ipc.hub.submitRoutedTask（三模式统一落点在主进程 dispatch-submit，renderer
-//     不重复调度逻辑）；批量逐行顺序提交（依次派给空闲节点——每次提交重跑调度）
+//   - 提交分流：local → 本机批量走单 IPC task:createBatch（M3.3 替换逐行循环，
+//     per-item union 错误展示沿用既有 per-line UI）；单任务 local 走既有
+//     ipc.task.create（标题支持同款 `::` 依赖后缀）；group/node →
+//     ipc.hub.submitRoutedTask（hub 无批量/依赖通道，逐行循环保持——每次提交重跑调度，
+//     `::` 后缀在外派路径不解析，整行原样为标题）
+//   - `::` 依赖行语法（M3.3 spec §2.2 最小面）：`标题 :: T-1,T-2` 双冒号+逗号分隔，
+//     可省略——无后缀行解析零变化（测试锁）；单任务模式用同输入框后缀语法，
+//     无新控件（P2 口径：纯输入语法扩展，无布局语言变化——spec 定稿授权）
 //   - preset 预填：从 agent inline 建议或会话内按钮触发时传入已知字段
 //   - open=false 时 return null（hooks 仍在调用顺序中，符合 React 规则）
 // v2.1：外壳收敛 Dialog 原子件；表单控件换 Input/Select；textarea 无原子件走 token 类。
 import { useEffect, useState, type FormEvent } from 'react';
 import { X } from 'lucide-react';
 import { ipc } from '../../ipc/client';
-import type { PermissionTier, RoutingPrecheckResult, TaskRouting, WorkspaceAgentMember } from '../../ipc/types';
+import type { PermissionTier, RoutingPrecheckResult, TaskCreateBatchResult, TaskRouting, WorkspaceAgentMember } from '../../ipc/types';
 import { serializeRecurrence, type RecurrencePreset } from '../../lib/recurrence';
 import { useGroupStore } from '../../stores/group.store';
+import { useTaskStore } from '../../stores/task.store';
 import { Dialog } from '../ui/Dialog';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
@@ -56,6 +62,41 @@ type Priority = 'low' | 'medium' | 'high';
 type TargetKind = 'none' | 'agent' | 'team' | 'session';
 type RecurrenceKind = 'once' | 'every' | 'daily' | 'weekly';
 type CreateMode = 'single' | 'batch';
+
+// ── M3.3 `::` 依赖行语法解析（spec §2.2 最小面，批量行与单任务标题共用）────────
+
+/** 任务 id 形状：T-<seq>（本地建行与 worker 镜像行统一落此形状） */
+const TASK_ID_RE = /^T-\d+$/;
+/** 依赖后缀分隔符（`标题 :: T-1,T-2`）——lastIndexOf 取末次出现，标题内含
+ *  C++ 风格 `::`（如 std::vector）不被误切 */
+const DEPS_SEP = '::';
+
+export interface ParsedTaskLine {
+  title: string;
+  /** 依赖任务 id 列表；行内无合法 `::` 后缀时空数组 */
+  dependsOn: string[];
+}
+
+/**
+ * 解析一行任务书：`标题 :: T-1,T-2` → { title, dependsOn }。
+ * 后缀可省略——不含合法后缀的行（无 `::` / 后缀空 / 依赖项非 T-id 形状 / 标题段空）
+ * 一律整行原样为标题、dependsOn 空，**解析结果与扩展前完全一致**（零变化锁）。
+ */
+export function parseTaskLine(line: string): ParsedTaskLine {
+  const trimmed = line.trim();
+  const idx = trimmed.lastIndexOf(DEPS_SEP);
+  if (idx === -1) return { title: trimmed, dependsOn: [] };
+  const title = trimmed.slice(0, idx).trim();
+  const depIds = trimmed
+    .slice(idx + DEPS_SEP.length)
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '');
+  if (title === '' || depIds.length === 0 || !depIds.every((id) => TASK_ID_RE.test(id))) {
+    return { title: trimmed, dependsOn: [] };
+  }
+  return { title, dependsOn: depIds };
+}
 
 export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, workspaceName, preset, defaultGroupId }: CreateTaskDialogProps) {
   const [mode, setMode] = useState<CreateMode>('single');
@@ -172,9 +213,13 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
             ? { kind: 'weekly', weekday: Number(weekday), time: recTime }
             : { kind: 'once' };
     const recurrenceRule = serializeRecurrence(rulePreset);
+    // M3.3：单任务标题支持同款 `::` 依赖后缀（无新控件，P2 口径——spec §2.2
+    // 定稿授权）；无后缀标题 payload 零变化（不带 dependsOn 键）
+    const parsed = parseTaskLine(title.trim());
     const created = await ipc.task.create({
       workspaceId,
-      title: title.trim(),
+      title: parsed.title,
+      ...(parsed.dependsOn.length > 0 ? { dependsOn: parsed.dependsOn } : {}),
       description,
       priority: priorityNum,
       sourceSessionId: preset?.sourceSessionId ?? null,
@@ -191,28 +236,60 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
   };
 
   const submitBatch = async (): Promise<void> => {
-    // 顺序提交：group 路由每次重跑 least-busy（依次派给空闲节点，S2 批量 hint）。
-    // per-line catch（T8 Low-1 顺修）：单行失败不中断余行——批量里一行炸全弹窗
-    // 报错会让已成功的行「看似没建」；失败行摘要 toast，全失败时弹窗内错误行
-    // 呈现（不关窗，用户可改后重试）
+    if (routing.mode === 'local' || !workspaceName) {
+      // 本机批量：单 IPC task:createBatch（M3.3 替换逐行循环，语义等价——部分成功
+      // 允许 + per-line 错误展示沿用现有 UI）。items 保持用户输入顺序原样传递：
+      // 主进程逐项顺序落库，批内先行项可被后续行依赖（先行落库后行校验即通过）。
+      // 无依赖行 payload 形状与旧逐行 task.create 零变化（不带 dependsOn 键）
+      const items = batchLines.map((line) => {
+        const parsed = parseTaskLine(line);
+        return parsed.dependsOn.length > 0
+          ? { workspaceId, title: parsed.title, dependsOn: parsed.dependsOn }
+          : { workspaceId, title: parsed.title };
+      });
+      let result: TaskCreateBatchResult;
+      try {
+        result = await useTaskStore.getState().createBatch(items);
+      } catch (err) {
+        // 整批 rejection（超 50 上限等）→ 等价全失败：不关窗，错误在场供修改重试
+        setBatchError((err as Error).message);
+        return;
+      }
+      const failures = result.results.flatMap((r) =>
+        r.ok ? [] : [{ line: batchLines[r.index] ?? '', message: r.error }],
+      );
+      const okIds = result.results.flatMap((r) => (r.ok ? [r.task.id] : []));
+      if (failures.length > 0) {
+        const summary = `${failures.length} 个任务创建失败：${failures
+          .map((f) => `「${f.line}」${f.message}`)
+          .join('；')}`;
+        if (okIds.length === 0) {
+          setBatchError(summary);
+          return; // 全失败：不关窗不回调，错误行在场供修改后重试
+        }
+        showToast(summary);
+      }
+      // 批量只回调一次（末次成功任务），不逐任务开详情抽屉；全失败已在上方 return
+      onCreated(okIds[okIds.length - 1] ?? '');
+      onClose();
+      return;
+    }
+    // 外派路由批量：hub 无批量通道（spec 裁定协议零改），保持逐行顺序提交——
+    // group 路由每次重跑 least-busy（依次派给空闲节点，S2 批量 hint）。
+    // per-line catch：单行失败不中断余行；`::` 后缀不解析，整行原样为标题
     let lastId = '';
     let successCount = 0;
     const failures: Array<{ line: string; message: string }> = [];
     for (const line of batchLines) {
       try {
-        if (routing.mode === 'local' || !workspaceName) {
-          const created = await ipc.task.create({ workspaceId, title: line });
-          lastId = created.id;
-        } else {
-          const result = await ipc.hub.submitRoutedTask({
-            workspaceId,
-            workspaceName,
-            title: line,
-            routing,
-            permissionTier,
-          });
-          lastId = result.task.id;
-        }
+        const result = await ipc.hub.submitRoutedTask({
+          workspaceId,
+          workspaceName,
+          title: line,
+          routing,
+          permissionTier,
+        });
+        lastId = result.task.id;
         successCount += 1;
       } catch (err) {
         failures.push({ line, message: (err as Error).message });

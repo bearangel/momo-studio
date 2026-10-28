@@ -16,7 +16,7 @@
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
 import type { BoardColumnKey } from '../ipc/board-columns';
-import type { TaskRow, TaskStatus } from '../ipc/types';
+import type { TaskCreateBatchResult, TaskCreateInput, TaskRow, TaskStatus } from '../ipc/types';
 
 /**
  * 乐观状态映射（看板重构 Task 10）：目标列 → 列代表状态。
@@ -47,6 +47,14 @@ interface TaskState {
 
   load: (workspaceId: string) => Promise<void>;
   create: (input: Parameters<typeof ipc.task.create>[0]) => Promise<TaskRow>;
+  /**
+   * M3.3 批量创建（单 IPC task:createBatch，替换 CreateTaskDialog 逐行循环）：
+   * 部分成功允许——ok 行按批内顺序 append 本地 tasks，失败项原样返回由调用方
+   * 做 per-line 错误展示；整批 rejection（超 50 上限等）rethrow 且本地不动。
+   * 批内先行项按序引用语义：主进程逐项**顺序**落库（items 数组序即落库序），
+   * 后行可依赖批内前行已落库的任务——renderer 只须保持用户输入顺序原样传递。
+   */
+  createBatch: (items: TaskCreateInput[]) => Promise<TaskCreateBatchResult>;
   update: (id: string, patch: Partial<Omit<TaskRow, 'id' | 'createdAt'>>) => Promise<void>;
   transition: (
     id: string,
@@ -105,6 +113,17 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     const created = await ipc.task.create(input);
     set((s) => ({ tasks: [...s.tasks, created] }));
     return created;
+  },
+
+  createBatch: async (items) => {
+    const result = await ipc.task.createBatch({ items });
+    // M3.3：TaskRow 新字段（blocked/blockedBy/parentTaskId）随主进程返回行整体
+    // 透传进本地 tasks——store 不做字段裁剪，派生态消费方（角标/DAG 分层）直接读
+    const okRows = result.results.flatMap((r) => (r.ok ? [r.task] : []));
+    if (okRows.length > 0) {
+      set((s) => ({ tasks: [...s.tasks, ...okRows] }));
+    }
+    return result;
   },
 
   update: async (id, patch) => {

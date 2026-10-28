@@ -14,6 +14,11 @@
 // 同列跨泳道=换组、跨列=column 变化；renderer 只发落点，动作裁决单点在主进程
 // executeMove。
 //
+// M3.3 dag 模式（spec §2.2 DAG 视图）：task-graph 分层拓扑左→右列（层=拓扑
+// 深度，复用 BoardColumn 容器样式与 BoardCard/DelegatedTaskCard 渲染）。
+// **只读**——不注册任何 sortable/droppable（无拖拽），状态迁移仍走看板模式；
+// 点击卡片仅打开详情抽屉查看。
+//
 // 纯函数出口（单测主战场，BoardCanvas.test.tsx）：
 //   - resolveDrop：落点裁决（禁投预判 canDropIntoColumn 单源 → null）
 //   - buildDropIndex / buildDropTarget：dnd over.id → 落点目标组装
@@ -40,7 +45,8 @@ import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useSortable } from '@dnd-kit/sortable';
 import { BOARD_COLUMNS, canDropIntoColumn, columnOf, type BoardColumnKey } from '../../ipc/board-columns';
-import { groupChipColor, splitLanes, type BoardLane } from '../../lib/board';
+import { groupChipColor, sortColumn, splitLanes, type BoardLane } from '../../lib/board';
+import { layerTasks } from '../../lib/task-graph';
 import type { GroupRow, TaskRow } from '../../ipc/types';
 import { useTaskStore } from '../../stores/task.store';
 import { BoardCard, type BoardGroupChip } from './BoardCard';
@@ -195,11 +201,51 @@ function SortableBoardCard({ task, selected, onSelect, groupChip }: SortableBoar
 
 // ── 画板组件 ─────────────────────────────────────────────────────────────────
 
+/**
+ * M3.3 DAG 层列：复用 BoardColumn 容器样式（列宽 232px/圆角/列头/空态），
+ * 但非状态列——层 = task-graph 拓扑深度。刻意不接 useDroppable（DAG 视图
+ * 只读，无落点语义）；列内排序沿 sortColumn 单源（顶置/创建时间）。
+ */
+function DagLayerColumn({
+  index,
+  tasks,
+  renderCard,
+}: {
+  index: number;
+  tasks: TaskRow[];
+  renderCard: (task: TaskRow) => ReactNode;
+}): ReactNode {
+  const sorted = sortColumn(tasks);
+  return (
+    <section
+      aria-label={`依赖层 ${index + 1}`}
+      data-dag-layer={index + 1}
+      className="flex w-[232px] shrink-0 flex-col rounded-lg border border-subtle bg-surface-1"
+    >
+      <header className="flex items-center gap-1.5 border-b border-subtle px-2.5 pb-1.5 pt-2 text-xs font-semibold text-secondary">
+        <span>第 {index + 1} 层</span>
+        <span className="text-[11px] font-normal text-tertiary">{tasks.length}</span>
+        {index === 0 && (
+          <span className="ml-auto text-[11px] font-normal text-tertiary">无未完成依赖</span>
+        )}
+      </header>
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
+        {sorted.length === 0 ? (
+          <div className="py-6 text-center text-xs text-tertiary">暂无</div>
+        ) : (
+          sorted.map((task) => renderCard(task))
+        )}
+      </div>
+    </section>
+  );
+}
+
 interface BoardCanvasProps {
   /** 可见任务（调用方已完成搜索/指派人过滤） */
   tasks: TaskRow[];
   groups: GroupRow[];
-  laneMode: 'flat' | 'lanes';
+  /** M3.3 增 dag：依赖图分层视图（只读，无拖拽） */
+  laneMode: 'flat' | 'lanes' | 'dag';
   selectedId: string | null;
   onSelect: (id: string) => void;
   /** 指派弹框（§4.4 无目标 draft 拖入排队中）拉目标列表用 */
@@ -219,11 +265,14 @@ export function BoardCanvas({ tasks, groups, laneMode, selectedId, onSelect, wor
   // capture 阶段拦截防止「拖完一张卡误开详情抽屉」
   const suppressClickRef = useRef(false);
 
-  const lanes = useMemo(() => splitLanes(tasks, groups, laneMode), [tasks, groups, laneMode]);
-  const dropIndex = useMemo(() => buildDropIndex(lanes, laneMode), [lanes, laneMode]);
+  // dag 模式无拖拽画板——下方拖拽编排链（splitLanes/dropIndex/useBoardDrop）按
+  // 平铺口径保底运行（hooks 须无条件），dag 分支不消费其结果
+  const interactiveMode: 'flat' | 'lanes' = laneMode === 'dag' ? 'flat' : laneMode;
+  const lanes = useMemo(() => splitLanes(tasks, groups, interactiveMode), [tasks, groups, interactiveMode]);
+  const dropIndex = useMemo(() => buildDropIndex(lanes, interactiveMode), [lanes, interactiveMode]);
   // 落点协调(Task 13 收敛到 hook):确认拦截/move/toast/指示线;
   // 组件只做 dnd 事件 → 原始 id 的适配
-  const drop = useBoardDrop({ tasks, laneMode, dropIndex });
+  const drop = useBoardDrop({ tasks, laneMode: interactiveMode, dropIndex });
   // 组 chip 组装（UX 波 2 #7）：组色在此单点解析成 fg/bg 配色串传入 BoardCard，
   // 卡片与 DragOverlay 免重复解析；未知/无色 → null/null（卡片回退中性样式）
   const chipByGroup = useMemo(() => {
@@ -278,13 +327,74 @@ export function BoardCanvas({ tasks, groups, laneMode, selectedId, onSelect, wor
           selected={task.id === selectedId}
           onSelect={onSelect}
           groupChip={
-            laneMode === 'flat' && task.groupId !== null ? (chipByGroup.get(task.groupId) ?? null) : null
+            interactiveMode === 'flat' && task.groupId !== null ? (chipByGroup.get(task.groupId) ?? null) : null
           }
         />
       );
     },
-    [selectedId, onSelect, laneMode, chipByGroup],
+    [selectedId, onSelect, interactiveMode, chipByGroup],
   );
+
+  // M3.3 dag 只读渲染器：local 卡走静态 BoardCard（不接 sortable——DAG 视图
+  // 无拖拽语义）；跨组分层与平铺同口径补组 chip；外派卡同分发规则
+  const renderDagCard = useCallback(
+    (task: TaskRow): ReactNode => {
+      if (task.routing.mode !== 'local') {
+        return (
+          <DelegatedTaskCard
+            key={task.id}
+            task={task}
+            selected={task.id === selectedId}
+            onSelect={() => onSelect(task.id)}
+          />
+        );
+      }
+      return (
+        <BoardCard
+          key={task.id}
+          task={task}
+          selected={task.id === selectedId}
+          onClick={() => onSelect(task.id)}
+          groupChip={task.groupId !== null ? (chipByGroup.get(task.groupId) ?? null) : null}
+        />
+      );
+    },
+    [selectedId, onSelect, chipByGroup],
+  );
+
+  const dagLayering = useMemo(() => layerTasks(tasks), [tasks]);
+
+  // dag 分支（M3.3 spec §2.2）：分层左→右列只读浏览。语义边界——无拖拽/无
+  // 落点（不进 DndContext），状态迁移（move/确认流）与依赖编辑仍走看板模式；
+  // 环回退：layerTasks 整图平铺单层 + 警示行（视图不丢卡不炸）
+  if (laneMode === 'dag') {
+    return (
+      <div
+        data-testid="dag-board"
+        data-has-cycle={dagLayering.hasCycle}
+        className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3"
+      >
+        {dagLayering.hasCycle && (
+          <p role="status" className="break-words text-xs leading-relaxed text-status-warning">
+            依赖关系存在环，已平铺为单层展示——请检查任务的依赖设置
+          </p>
+        )}
+        {dagLayering.layers.length === 0 ? (
+          <div className="flex min-h-0 flex-1 items-center justify-center text-xs text-tertiary">
+            暂无任务
+          </div>
+        ) : (
+          <div className="flex gap-3 overflow-x-auto pb-1">
+            {dagLayering.layers.map((layer, i) => (
+              <DagLayerColumn key={i} index={i} tasks={layer} renderCard={renderDagCard} />
+            ))}
+          </div>
+        )}
+        {/* DelegatedTaskCard 菜单动作（取消/重试/代答）toast 出口 */}
+        <Toast />
+      </div>
+    );
+  }
 
   return (
     <DndContext

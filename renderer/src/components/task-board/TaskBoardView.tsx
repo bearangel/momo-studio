@@ -24,6 +24,8 @@
 // 泳道模式默认值（spec §5.3）：无持久化偏好时有活跃组→lanes、无组→flat；
 // 用户手动切换写 localStorage（纯 UI 偏好不入库），key 见 LANE_MODE_STORAGE_KEY。
 // workspace 切换由父层（MiddlePanel）控制，本组件按 workspaceId prop 重 load。
+// M3.3：第三值 dag（依赖图视图，spec §2.2）——只由用户手动选择持久化，
+// 派生默认逻辑不变（不产 dag）。
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ipc } from '../../ipc/client';
 import type { GlobalSettings, GroupRow, TaskRow } from '../../ipc/types';
@@ -48,7 +50,7 @@ const MAX_CONCURRENCY_FALLBACK = 3;
 /** 列表轮询间隔（毫秒） */
 const REFRESH_INTERVAL_MS = 5000;
 
-type LaneMode = 'flat' | 'lanes';
+type LaneMode = 'flat' | 'lanes' | 'dag';
 
 /**
  * 归档视图数据（selectedArchivedGroupId 非 null 时拉取）：
@@ -66,7 +68,7 @@ type ArchivedViewData =
 function readStoredLaneMode(): LaneMode | null {
   try {
     const v = window.localStorage.getItem(LANE_MODE_STORAGE_KEY);
-    return v === 'lanes' || v === 'flat' ? v : null;
+    return v === 'lanes' || v === 'flat' || v === 'dag' ? v : null;
   } catch {
     return null;
   }

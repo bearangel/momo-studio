@@ -253,6 +253,58 @@ describe('TaskBoardView 主区（看板重构 Task 11）', () => {
     expect(window.localStorage.getItem('kanban-lane-mode')).toBe('lanes');
   });
 
+  // ── M3.3 dag 模式（第三值）：入口/持久化/画板分发 ─────────────────────────
+  it('点「依赖图」→ dag 画板出现（分层列）+ localStorage 持久化 dag；再点回平铺', async () => {
+    const fixture = [
+      mkTask({ id: 't1', title: '起点任务', status: 'pending', priority: 5 }),
+      mkTask({ id: 't2', title: '后继任务', status: 'draft', priority: 5, blockedBy: ['t1'] }),
+    ];
+    mockApi.task.list.mockResolvedValue(fixture);
+    useTaskStore.setState({ tasks: fixture });
+    render(<TaskBoardView workspaceId="ws-1" />);
+    const dagToggle = screen.getByRole('button', { name: /^依赖图$/ });
+    expect(dagToggle).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(dagToggle);
+    // dag 画板出现：分层列在场，泳道列（待办/排队中等状态列头）退场
+    expect(await screen.findByTestId('dag-board')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: '依赖层 1' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: '依赖层 2' })).toBeInTheDocument();
+    expect(screen.queryByText('排队中')).not.toBeInTheDocument();
+    expect(dagToggle).toHaveAttribute('aria-pressed', 'true');
+    expect(window.localStorage.getItem('kanban-lane-mode')).toBe('dag');
+    // 再点依赖图 → 回平铺（toggle off），持久化 flat
+    fireEvent.click(dagToggle);
+    await waitFor(() => expect(screen.queryByTestId('dag-board')).not.toBeInTheDocument());
+    expect(screen.getByText('待办')).toBeInTheDocument();
+    expect(window.localStorage.getItem('kanban-lane-mode')).toBe('flat');
+  });
+
+  it('dag 持久化偏好 → 重开即进 dag 视图（LANE_MODE_STORAGE_KEY 沿用）', async () => {
+    window.localStorage.setItem('kanban-lane-mode', 'dag');
+    const fixture = [mkTask({ id: 't1', title: '孤点任务', status: 'pending', priority: 5 })];
+    mockApi.task.list.mockResolvedValue(fixture);
+    useTaskStore.setState({ tasks: fixture });
+    render(<TaskBoardView workspaceId="ws-1" />);
+    expect(await screen.findByTestId('dag-board')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^依赖图$/ })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('dag 视图中点「分组」→ 进泳道模式（不回退 dag）；localStorage 记 lanes', async () => {
+    window.localStorage.setItem('kanban-lane-mode', 'dag');
+    mockApi.taskGroup.list.mockResolvedValue([
+      { id: 'G-1', workspaceId: 'ws-1', name: '泳道组', color: null, position: 1024, archivedAt: null, createdAt: 1, updatedAt: 1 },
+    ]);
+    const fixture = [mkTask({ id: 't1', title: '组内任务', status: 'pending', priority: 5, groupId: 'G-1' })];
+    mockApi.task.list.mockResolvedValue(fixture);
+    useTaskStore.setState({ tasks: fixture, currentWorkspaceId: 'ws-1' });
+    render(<TaskBoardView workspaceId="ws-1" />);
+    expect(await screen.findByTestId('dag-board')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^分组$/ }));
+    await waitFor(() => expect(screen.getByRole('heading', { name: /泳道组/ })).toBeInTheDocument());
+    expect(screen.queryByTestId('dag-board')).not.toBeInTheDocument();
+    expect(window.localStorage.getItem('kanban-lane-mode')).toBe('lanes');
+  });
+
   it('settings.getGlobal 缺 maxConcurrentTasks 字段 → 状态栏显示 fallback 3', async () => {
     mockApi.task.list.mockResolvedValue([
       mkTask({ id: 'i1', title: '执行中', status: 'in_progress', priority: 5 }),
