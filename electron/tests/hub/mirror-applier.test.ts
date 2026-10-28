@@ -52,6 +52,7 @@ vi.mock('../../src/main/logger', () => ({
 }));
 
 import { applyMirrorSnapshot } from '../../src/main/hub/mirror-applier';
+import { HubCatalogStaleError } from '../../src/main/resource/hub-install';
 import { buildWorkspaceSnapshot } from '../../src/main/hub/snapshot-builder';
 import { agentManifestYaml } from '../../src/main/hub/publish';
 import type { MirrorApplierDeps } from '../../src/main/hub/mirror-applier';
@@ -494,6 +495,80 @@ describe('applyMirrorSnapshot 补装失败中止', () => {
     expect(retried.appliedResources).toEqual(['skill/bad-skill']); // ok-agent 不重复装
     expect(listMembers(wsId).map((m) => m.agentName)).toEqual(['新成员']);
     expect(getGlobalSettings().maxToolCalls).toBe(33);
+  });
+});
+
+// ── 5b. 补装遇 stale 目录：跳过并记 unresolvedRefs（其余资源继续）──────────
+
+describe('applyMirrorSnapshot 补装 stale 目录（M2.4 T1）', () => {
+  /** stale 抛错的可控安装链：staleOn 资源抛 HubCatalogStaleError，其余照常落装 */
+  function makeStaleDeps(
+    archive: ArchiveFixture,
+    opts: { staleOn?: string; failOn?: string } = {},
+  ): RecordedDeps {
+    const deps = makeDeps(archive, opts.failOn ? { failOn: opts.failOn } : {});
+    const base = deps.installResource!;
+    deps.installResource = async (type, slug, workspaceId) => {
+      if (opts.staleOn === `${type}/${slug}`) {
+        deps.installLog.push(`${type}/${slug}`); // 尝试序观测（抛出前记录）
+        throw new HubCatalogStaleError('无法连接到 momo-hub 获取最新目录（已装版本保持不变），请稍后重试');
+      }
+      await base(type, slug, workspaceId);
+    };
+    return deps;
+  }
+
+  it('stale 抛错 → 该资源跳过 + unresolvedRefs 记原因，其余资源仍装成功（整体 ok）', async () => {
+    const wsId = await mkWorkspace('prod-dev');
+    const manifest = baseManifest({
+      resources: [
+        { type: 'agent', slug: 'ok-first' },
+        { type: 'skill', slug: 'stale-skill' },
+        { type: 'agent', slug: 'ok-second' },
+      ],
+    });
+    const archive = await makeArchive(manifest);
+    const deps = makeStaleDeps(archive, { staleOn: 'skill/stale-skill' });
+
+    const outcome = await applyMirrorSnapshot(applyPayload({ confirm: true }), deps);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    // stale 资源跳过、不中止：其余资源照常补装
+    expect(outcome.appliedResources).toEqual(['agent/ok-first', 'agent/ok-second']);
+    expect(deps.installLog).toEqual(['agent/ok-first', 'skill/stale-skill', 'agent/ok-second']);
+    // 跳过原因压入既有 unresolvedRefs（不新增回执字段）
+    expect(outcome.unresolvedRefs).toEqual([
+      'skill:stale-skill（无法获取 hub 最新目录，已跳过）',
+    ]);
+    expect(listAgentDefinitions().some((d) => d.slug === 'ok-first')).toBe(true);
+    expect(listAgentDefinitions().some((d) => d.slug === 'ok-second')).toBe(true);
+    // 配置落库未被 stale 跳过阻断（工作空间已是目标态）
+    expect(listWorkspaces().some((w) => w.id === wsId)).toBe(true);
+  });
+
+  it('非 stale 错误仍整体中止（即使前一项 stale 已跳过）', async () => {
+    const wsId = await mkWorkspace('prod-dev');
+    await seedCustomMember(wsId, '旧成员', 'old-member');
+    updateGlobalSettings({ maxToolCalls: 50 });
+    const manifest = baseManifest({
+      resources: [
+        { type: 'skill', slug: 'stale-skill' },
+        { type: 'agent', slug: 'bad-agent' },
+      ],
+      config: { prefs: { maxToolCalls: 33 } },
+    });
+    const archive = await makeArchive(manifest);
+    const deps = makeStaleDeps(archive, { staleOn: 'skill/stale-skill', failOn: 'agent/bad-agent' });
+
+    const outcome = await applyMirrorSnapshot(applyPayload({ confirm: true }), deps);
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.code).toBe('internal');
+    expect(outcome.message).toContain('资源补装失败');
+    expect(outcome.message).toContain('配置未落库');
+    // 中止语义：配置零写入（prefs 保持原值），stale 的软失败不掩盖真失败
+    expect(getGlobalSettings().maxToolCalls).toBe(50);
+    expect(listMembers(wsId).map((m) => m.agentName)).toEqual(['旧成员']);
   });
 });
 
