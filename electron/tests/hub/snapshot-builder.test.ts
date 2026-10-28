@@ -496,8 +496,9 @@ describe('已发布 custom skill 走 hub 补装位（UC-P1-3）', () => {
 
   // M2.4 T4：listInstalled 是多源拼接（builtin → marketplace 表 → custom 目录），同 slug
   // 可在两源各出一行（已发布 custom skill：hub 安装行 + 本机 custom 目录）。清单是「slug
-  // 名单」语义须去重，而 resources 是「补装位引用」语义不去重（条数与序不动）。
-  it('同 slug 双源均已安装 → config.skills 去重 1 条（首见位）+ resources 保留 2 条原序', async () => {
+  // 名单」语义须去重；resources 侧由 buildWorkspaceSnapshot 收口处的 type+slug 全局去重
+  // （snapshot-builder.ts:477-484）恒为 1 条——本批只补 skills 清单，不动该去重。
+  it('同 slug 双源均已安装 → config.skills 去重 1 条（首见位）+ resources 经全局去重 1 条', async () => {
     const wsId = await mkWorkspace('同 slug 双源空间');
     seedMarketplaceSkillRow('a-market');
     seedMarketplaceSkillRow('dup-skill'); // hub 安装行（marketplace 表同表）

@@ -16,8 +16,8 @@
 - **测试护栏**：forks IPC 守卫提升为共享 `electron/tests/setup/`，`main-forks` 一并挂载（消除潜在事件污染通道）
 - **CI 纳 e2e**：新增 `.github/workflows/e2e.yml`（`push`/`pull_request` → main；`build` → **electron-rebuild（ABI 149）** → `pnpm e2e`；失败上传 `test-results/`）——既有 `build.yml` 仅 tag 触发，挡不住选择器/等待漂移回归
 - **契约注记**：`HubInstallOutcome.cachePath` 可能为空串（发布回填行），存在性以账表为准；hub CHANGELOG 补记 items 排序取 semver-max 行 publishedAt
-- **真机验收**：UC-P1-1~4 / P2-1~2 / P3-1 全 pass
-- **已知限制**：无终态 final 事件时仍回落「未知错误」（真兜底）；provider 主文案为设计文案（原始 401/JSON 落日志不进卡面）；e2e CI 首跑需推送后实测（预案：收窄 `--grep hub-distribution`）；本地 stdio MCP 分发域外维持
+- **验收**：UC-P1-1~3 真机 pass；UC-P1-4 真机 pass（不可达 provider 路径，reason 含 `fetch failed：bad port`）；UC-P2-1 以单测证据（ABI 149 期间不跑 node vitest）；UC-P2-2 真机 manifest；UC-P3-1 静态校验 + 本地等价全量 e2e 15 pass/1 skip
+- **已知限制**：无终态 final 事件时仍回落「未知错误」（真兜底，不伪装原因）；provider 失败卡面为既有双层契约的主文案（原始 401/响应体落日志不进卡面）；下载层失败仍以英文技术串呈现（`fetch failed`，M2.5 票）；**资源卡「可更新」角标仅由 `resource.published` 事件驱动**——重启/离线/带外目录变更后需等下一次发布事件（M2.5 首位票：`load()` 后一次性播种）；镜像对已装旧版不升级（既有镜像语义，M2.3 起记录边界）；e2e CI 首跑需推送后实测（预案：收窄 `--grep hub-distribution`）；本地 stdio MCP 分发域外维持
 
 版本 `2.1.0-alpha.34`。
 

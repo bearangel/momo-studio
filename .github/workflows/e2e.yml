@@ -46,7 +46,7 @@ jobs:
       # 不 rebuild 则首跑因 NODE_MODULE_VERSION 不匹配必红。
       # 在 electron/ 下跑：electron-rebuild 的 bin 只装在 electron workspace。
       - name: Rebuild native modules for Electron
-        run: cd electron && npx electron-rebuild -f -w better-sqlite3 -w keytar
+        run: cd electron && pnpm exec electron-rebuild -f -w better-sqlite3 -w keytar
 
       - name: Run e2e
         run: pnpm e2e
