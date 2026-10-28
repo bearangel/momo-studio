@@ -6,6 +6,18 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 节点互联 M3.1：HITL L2 远程代答
+
+补齐 HITL 链路最后一环：worker 写授权等待时 leader 远程批准/拒绝。协议 minor **1.3.0**（首个 minor-3 方法落地，M3.0 能力门槛首次实战）。设计见 momo-hub 仓 `docs/specs/2026-10-28-momo-hub-m3.1-hitl-l2-answer.md`。
+
+- **协议 1.3.0（hub `v0.1.7` + studio pin 升级）**：新 RPC `task.answer`（leader-only，`METHOD_REQUIRED_MINOR` 首个显式 minor-3 登记）；`waiting` 一等态（running↔waiting 由 worker 上报 kind 驱动，**状态单源**——answer 只写决策列不迁移状态）；决策四列（db v6：answered_by/answer_decision/answer_message/answered_at）；`task.answered` 事件（定向 leader）；新错误码 not_waiting/node_unsupported/answer_timeout
+- **hub 侧全链**：handleAnswer 六步（taskId 反查提取器守卫 + handler 复核**双校验**；worker 在线检查；**worker minor≥3 门槛**——M3.0 管道首次实战，旧 worker 得 node_unsupported 可读降级；view 模板 per-forward 10s timer 可注入；幂等口径 worker 自报 stale）；canTransition 矩阵 36→**49 对**（7×7 全覆盖）；onNodeOffline 补 waiting→interrupted 生产者
+- **studio worker 侧**：`handleHubRequest` 增 `task.answer` 分支（mirror.apply 模式；纯处理器 `delegation-answer.ts` 注入端口）——**复用本机代答原语零新机制**：approve=聚合 pending dirs 一次 `grantWriteDirs`+逐条清除（子进程 2s covered 轮询原地重执行）；deny=广播+`clearPendingOnDeny(sessionId,[])` 整会话；无委派/无 pending→stale 幂等
+- **studio leader 侧**：IPC 三层 `hub:taskAnswer`（RpcRemoteError.code 以 `[code] message` 前缀编码过 Electron IPC #24427）；`renderer/src/lib/hub-capability.ts` `hubSupportsMinor` 镜像 protocolSupports + **双侧契约测试**（同 fixture 等值，error-prefix 模式）；委派卡等待态 + leader 视角 + minor≥3 门控下出「批准/拒绝节点写入」两项（armed-confirm）；成功/stale/版本过低/原文四类 toast；`delegation-sync` 增 `answered` 留痕（保守解析）+ `task.answered` 事件桥 + 七态映射（waiting→in_progress 看板映射）
+- **不做 `task.waiting` 事件**（spec §3.4 裁定：leader 等待展示已有 progress kind 单信号通道且被 A-10~A-14 锁死，双信号必漂移）
+
+版本 `2.1.0-alpha.37`。hub 侧 `v0.1.7`（tag `v0.1.7` = `b60ba2d`）。
+
 ## [未发布] — 节点互联 M3.0：收官清理与协议前置
 
 无新功能面的清理批 + M3.1/M3.2 的兼容性前置。设计见 momo-hub 仓 `docs/specs/2026-10-28-momo-hub-m3.0-closeout.md`（三路探查回填定稿，Momus OKAY）。

@@ -187,10 +187,13 @@ export function __resetDelegationBatchesForTest(): void {
   disposeAllBatches();
 }
 
-/** 状态六态 → 展示元数据（label / Badge tone / 12px 图标名）——组件层消费 */
+/** 状态七态 → 展示元数据（label / Badge tone / 12px 图标名）——组件层消费 */
 export const DELEGATION_STATUS_META: Record<HubDelegationStatus, { label: string; tone: 'warning' | 'accent' | 'success' | 'error' | 'neutral' }> = {
   pending: { label: '待执行', tone: 'warning' },
   running: { label: '执行中', tone: 'accent' },
+  // M3.1 七态：waiting=running 中等待用户确认的中间态（等待角标仍由 progress
+  // waiting 标志驱动——本条只是 task.list 对账到 waiting 时的展示兜底）
+  waiting: { label: '等待节点确认', tone: 'warning' },
   done: { label: '已完成', tone: 'success' },
   failed: { label: '失败', tone: 'error' },
   interrupted: { label: '已中断', tone: 'warning' },

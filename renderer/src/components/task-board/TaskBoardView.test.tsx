@@ -38,19 +38,26 @@ const mockApi = {
   },
   // M2.1 T9：TaskBoardView 挂 DelegationBoardProvider——hub 面降级桩
   // （空账本/空进度/未接入；订阅通道返回 noop 解订阅——外派卡退化为行状态反推）；
-  // T12 localWaiting 拉取 + sandbox.onWriteBlocked 订阅同走降级桩
+  // T12 localWaiting 拉取 + sandbox.onWriteBlocked 订阅同走降级桩；
+  // M3.1：onTaskAnswered 订阅 + hub.store init 接线（onStateChanged/onNodePresence/
+  // getNodes——provider 挂载即订阅，门控输入 hubProtoVer 随快照落地）
   hub: {
     delegationBoard: vi.fn().mockResolvedValue({ progress: {}, received: [] }),
     taskList: vi.fn().mockResolvedValue({ tasks: [] }),
     getStatus: vi.fn().mockResolvedValue({
       configured: false, state: 'disconnected', hubUrl: null, nodeName: null, nodeId: null, lastError: null,
+      lastErrorCode: null, hubProtoVer: null,
     }),
     groupList: vi.fn().mockResolvedValue({ groups: [] }),
     localWaiting: vi.fn().mockResolvedValue([]),
+    getNodes: vi.fn().mockResolvedValue([]),
+    onStateChanged: vi.fn().mockReturnValue(() => {}),
+    onNodePresence: vi.fn().mockReturnValue(() => {}),
     onTaskProgress: vi.fn().mockReturnValue(() => {}),
     onTaskCompleted: vi.fn().mockReturnValue(() => {}),
     onTaskFailed: vi.fn().mockReturnValue(() => {}),
     onTaskInterrupted: vi.fn().mockReturnValue(() => {}),
+    onTaskAnswered: vi.fn().mockReturnValue(() => {}),
   },
   sandbox: {
     onWriteBlocked: vi.fn().mockReturnValue(() => {}),

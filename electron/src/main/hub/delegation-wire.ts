@@ -16,6 +16,34 @@ export const TASK_WIRE = {
   report: 'task.report',
 } as const;
 
+/**
+ * hub → 目标节点定向转发 RPC 名（M3.1 HITL L2 远程代答）——与协议包
+ * TASK_RPC.answer（v0.1.7）值逐字对齐。hub 侧 handleAnswer 经 minor 门槛
+ * （≥3）与在线检查后转发；本侧 handleHubRequest 应答（delegation-answer.ts）。
+ */
+export const TASK_ANSWER_WIRE = 'task.answer' as const;
+
+/**
+ * task.answer 转发载荷（M3.1）——与 hub v0.1.7 协议包 TaskAnswerReq 形状对齐。
+ * message 仅审计与 leader 侧展示（≤512，hub 校验），不注入子进程——approve 走
+ * covered 轮询原地重执行、deny 走标准拒绝文本，两条既有路径均无注入点。
+ */
+export interface TaskAnswerForward {
+  taskId: string;
+  decision: 'approve' | 'deny';
+  message?: string;
+}
+
+/**
+ * task.answer 转发应答（worker → hub res 载荷，M3.1）——ok 分支的 disposition
+ * 三枚举（stale=本机已无等待，幂等口径）；sessionId 附带给 hub 侧审计。
+ */
+export interface TaskAnswerWorkerRes {
+  ok: boolean;
+  disposition: 'granted' | 'denied' | 'stale';
+  sessionId?: string;
+}
+
 /** task.report 载荷——值形状与 hub 协议包 TaskReportPayload 逐字对齐。 */
 export interface TaskReportPayload {
   status: 'running' | 'done' | 'failed';

@@ -71,6 +71,9 @@ import type {
   HubTaskDelegateInput,
   HubTaskDelegateResult,
   HubTaskProgressEvent,
+  HubTaskAnsweredEvent,
+  HubTaskAnswerInput,
+  HubTaskAnswerResult,
   HubTaskTerminalEvent,
   HubViewSettings,
   HubViewOverview,
@@ -671,6 +674,8 @@ const api: ApiSurface = {
     taskList: (input?: { groupId?: string }) => invoke<HubTaskListResult>('hub:taskList', input ?? {}),
     taskDelegate: (input: HubTaskDelegateInput) => invoke<HubTaskDelegateResult>('hub:taskDelegate', input),
     taskCancel: (input: { taskId: string }) => invoke<{ ok: boolean }>('hub:taskCancel', input),
+    // M3.1 远程代答：错误 rejection 的 message 带 `[code] ` 前缀（主进程编码——见 ipc.handlers）
+    taskAnswer: (input: HubTaskAnswerInput) => invoke<HubTaskAnswerResult>('hub:taskAnswer', input),
     getViewSettings: () => invoke<HubViewSettings>('hub:getViewSettings'),
     setViewSettings: (input: HubViewSettings) => invoke<HubViewSettings>('hub:setViewSettings', input),
     viewWorkspace: (input: { targetNodeId: string; workspaceName: string }) => invoke<HubViewOverview>('hub:viewWorkspace', input),
@@ -720,6 +725,11 @@ const api: ApiSurface = {
       const handler = (_e: IpcRendererEvent, payload: HubTaskTerminalEvent): void => callback(payload);
       ipcRenderer.on('hub:taskInterrupted', handler);
       return () => { ipcRenderer.off('hub:taskInterrupted', handler); };
+    },
+    onTaskAnswered: (callback) => {
+      const handler = (_e: IpcRendererEvent, payload: HubTaskAnsweredEvent): void => callback(payload);
+      ipcRenderer.on('hub:taskAnswered', handler);
+      return () => { ipcRenderer.off('hub:taskAnswered', handler); };
     },
   },
   window: {

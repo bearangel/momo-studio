@@ -41,13 +41,14 @@ vi.mock('../../src/main/resource/hub-install', () => ({
 import { registerHubIpc } from '../../src/main/hub/ipc.handlers';
 import * as manager from '../../src/main/hub/index';
 import { publishToHub } from '../../src/main/hub/publish';
+import { RpcRemoteError } from '../../src/main/hub/client';
 import { recordPublishAccountingSafe } from '../../src/main/resource/hub-install';
 
 const GROUP_CHANNELS = ['hub:groupCreate', 'hub:groupInvite', 'hub:groupJoin', 'hub:groupLeave', 'hub:groupList', 'hub:groupTransfer'];
 const MIRROR_CHANNELS = ['hub:snapshotBuildUpload', 'hub:mirrorWorkspace', 'hub:mirrorRegistry'];
 const DELEGATION_CHANNELS = ['hub:getDelegationSettings', 'hub:setDelegationSettings'];
 const WS_DIR_CHANNELS = ['hub:getWorkspaceDirSettings', 'hub:setWorkspaceDirSettings'];
-const TASK_CHANNELS = ['hub:taskList', 'hub:taskDelegate', 'hub:taskCancel'];
+const TASK_CHANNELS = ['hub:taskList', 'hub:taskDelegate', 'hub:taskCancel', 'hub:taskAnswer'];
 const ROUTING_CHANNELS = ['hub:submitRoutedTask', 'hub:routingPrecheck'];
 const BOARD_CHANNELS = ['hub:delegationBoard', 'hub:retryDispatch', 'hub:localWaiting'];
 const VIEW_CHANNELS = [
@@ -59,7 +60,7 @@ const VIEW_CHANNELS = [
 beforeEach(() => { handlers.clear(); vi.clearAllMocks(); });
 
 describe('hub IPC 接线', () => {
-  it('注册三十五通道（M2.5 T3 增节点清单补拉 hub:getNodes）；getStatus 透传 manager', async () => {
+  it('注册三十六通道（M2.5 T3 增 hub:getNodes；M3.1 增 hub:taskAnswer）；getStatus 透传 manager', async () => {
     registerHubIpc();
     expect([...handlers.keys()].sort()).toEqual([
       ...GROUP_CHANNELS,
@@ -233,6 +234,27 @@ describe('hub IPC 委派 leader 侧三通道（M2e T12）', () => {
       .rejects.toThrow('任务已处于终态 done，不可取消');
     // rejection 路径不触发行同步（hub 账本未迁移）
     expect(manager.hubMarkDelegationCancelled).toHaveBeenCalledTimes(1);
+  });
+
+  it('taskAnswer → task.answer 原样透传；RpcRemoteError 编码 `[code] 原文` 前缀再抛（M3.1——Electron IPC 只保 message，renderer 据前缀判版本过低类降级）；非 RPC 错误原文抛', async () => {
+    registerHubIpc();
+    vi.mocked(manager.hubRequest).mockResolvedValueOnce({ disposition: 'granted' });
+    const out = await handlers.get('hub:taskAnswer')!(null, { taskId: 'tk-1', decision: 'approve' });
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('task.answer', { taskId: 'tk-1', decision: 'approve' }, undefined);
+    expect(out).toEqual({ disposition: 'granted' });
+    // message 可选字段透传（≤512 校验在 hub 侧）
+    vi.mocked(manager.hubRequest).mockResolvedValueOnce({ disposition: 'stale' });
+    await handlers.get('hub:taskAnswer')!(null, { taskId: 'tk-2', decision: 'deny', message: '稍后处理' });
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('task.answer', { taskId: 'tk-2', decision: 'deny', message: '稍后处理' }, undefined);
+
+    // RpcRemoteError：code 入前缀（renderer 端 ANSWER_VERSION_LOW_CODES 消费同格式）
+    vi.mocked(manager.hubRequest).mockRejectedValueOnce(new RpcRemoteError('node_unsupported', '目标节点协议版本 1.2.0 过低'));
+    await expect(handlers.get('hub:taskAnswer')!(null, { taskId: 'tk-3', decision: 'approve' }))
+      .rejects.toThrow('[node_unsupported] 目标节点协议版本 1.2.0 过低');
+    // 普通 Error：不加前缀原样抛（人话链路不变）
+    vi.mocked(manager.hubRequest).mockRejectedValueOnce(new Error('hub 未连接，请稍后重试'));
+    await expect(handlers.get('hub:taskAnswer')!(null, { taskId: 'tk-4', decision: 'deny' }))
+      .rejects.toThrow('hub 未连接，请稍后重试');
   });
 });
 

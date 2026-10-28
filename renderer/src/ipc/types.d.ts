@@ -2898,10 +2898,10 @@ export interface HubMirrorRegistryRow {
   mirroredAt: number;
 }
 
-// ── 委派 leader 侧（M2e T12，协议 delegation.ts 镜像） ──────────────────────
+// ── 委派 leader 侧（M2e T12，协议 delegation.ts 镜像；M3.1 七态）────────────
 
-/** 委派账本六态（协议 DelegationStatus 镜像） */
-export type HubDelegationStatus = 'pending' | 'running' | 'done' | 'failed' | 'interrupted' | 'cancelled';
+/** 委派账本七态（协议 DelegationStatus 镜像——waiting=M3.1 running 中等待用户确认的中间态） */
+export type HubDelegationStatus = 'pending' | 'running' | 'waiting' | 'done' | 'failed' | 'interrupted' | 'cancelled';
 
 /** 委派账本条目（协议 TaskRecord 镜像——七字段） */
 export interface HubTaskRecord {
@@ -2932,6 +2932,19 @@ export interface HubTaskDelegateResult {
   taskId: string;
 }
 
+/** hub:taskAnswer 入参（协议 TaskAnswerReq 镜像——M3.1 远程代答，leader-only） */
+export interface HubTaskAnswerInput {
+  taskId: string;
+  decision: 'approve' | 'deny';
+  /** 代答备注（≤512）：仅审计与 leader 侧展示，不注入 worker 子进程 */
+  message?: string;
+}
+
+/** hub:taskAnswer 回执（协议 TaskAnswerRes 镜像——stale=worker 侧已无等待，幂等口径） */
+export interface HubTaskAnswerResult {
+  disposition: 'granted' | 'denied' | 'stale';
+}
+
 /** hub:taskProgress 推送载荷（协议 TaskProgressEvent 镜像——目标 500ms 合并批的直转） */
 export interface HubTaskProgressEvent {
   taskId: string;
@@ -2949,6 +2962,12 @@ export interface HubTaskTerminalEvent {
   reason?: string;
 }
 
+/** hub:taskAnswered 推送载荷（协议 TaskAnsweredEvent 挑字段镜像——M3.1；by/disposition 属 hub 审计面不桥） */
+export interface HubTaskAnsweredEvent {
+  taskId: string;
+  decision: 'approve' | 'deny';
+}
+
 // ── 看板外派投影（M2.1 T9 delegation-sync 消费面）────────────────────────────
 
 /** 进度摘要条目（delegationId 键——主进程 hub 域 kv 'hub_delegation_progress' 镜像） */
@@ -2958,6 +2977,9 @@ export interface HubDelegationProgressEntry {
   at: number;
   /** 等待确认标志（T12）：等待拍 true；恢复拍清除（字段缺席 = 非等待） */
   waiting?: boolean;
+  /** 远程代答留痕（M3.1）：task.answered 事件置；后续进度拍自然清除——
+   *  卡片据 answered.at ≥ entry.at 判「较新」才显示 */
+  answered?: { decision: 'approve' | 'deny'; at: number };
 }
 
 /** 本机等待确认的委派会话（hub:localWaiting 条目——worker 等待卡数据源） */
@@ -3086,8 +3108,15 @@ export interface HubApiSurface {
   taskList(input?: { groupId?: string }): Promise<HubTaskListResult>;
   /** 新建委派（leader-only；hub 账本先行 pending，目标离线即拒 node_offline） */
   taskDelegate(input: HubTaskDelegateInput): Promise<HubTaskDelegateResult>;
-  /** 取消委派（pending/running/interrupted 可取消；终态 conflict 人话 rejection） */
+  /** 取消委派（pending/running/waiting/interrupted 可取消；终态 conflict 人话 rejection） */
   taskCancel(input: { taskId: string }): Promise<{ ok: boolean }>;
+  /**
+   * 远程代答（M3.1 HITL L2，leader-only，协议门槛 minor 3）：approve=worker 侧
+   * 会话级授予全部未决写目录、deny=整会话拒绝；stale=worker 已无等待（幂等）。
+   * 错误以 rejection 抛出——RpcRemoteError 的 code 经主进程编入 message 前缀
+   * `[code] 原文`（Electron IPC 只保 message，自定义属性不跨进程）。
+   */
+  taskAnswer(input: HubTaskAnswerInput): Promise<HubTaskAnswerResult>;
   /** 读取查看同意设置（允许本组查看开关；缺省 true） */
   getViewSettings(): Promise<HubViewSettings>;
   /** 写入查看同意设置（set 即时上报 hub；离线由重连重报兜底） */
@@ -3166,6 +3195,8 @@ export interface HubApiSurface {
   onTaskFailed(callback: (payload: HubTaskTerminalEvent) => void): () => void;
   /** 委派中断推送订阅（定向→本机 leader；目标节点离线，重连自动续跑） */
   onTaskInterrupted(callback: (payload: HubTaskTerminalEvent) => void): () => void;
+  /** 委派代答落账推送订阅（M3.1，定向→本机 leader——「已远程批准/拒绝」即时反馈） */
+  onTaskAnswered(callback: (payload: HubTaskAnsweredEvent) => void): () => void;
   /** 查看尾部增量推送订阅（定向→本机 leader；订阅会话的 view.appended 批） */
   onViewAppended(callback: (payload: HubViewAppendedEvent) => void): () => void;
 }
