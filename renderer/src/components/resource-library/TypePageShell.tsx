@@ -142,7 +142,7 @@ interface TypePageShellProps {
 
 export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPreset, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onTogglePlugin, onReloadPlugin, onForkPreset, onDisableAgent, onPublishToHub }: TypePageShellProps) {
   const {
-    items, loading, error, installNotice, catalogDegraded, hubDegraded, hubUpdates, sourceFilter, query,
+    items, loading, error, installNotice, catalogDegraded, hubDegraded, hubUpdates, hubSeeded, sourceFilter, query,
     setSourceFilter, setQuery, deleteResource, load, loadCatalogStatus,
   } = useResourceStore();
   const setActiveView = useUiStore((s) => s.setActiveView);
@@ -444,6 +444,7 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
                   onPublishToHub={onPublishToHub}
                   hubEnrolled={hubEnrolled}
                   hubUpdates={hubUpdates}
+                  hubSeeded={hubSeeded[item.type] === true}
                 />
               ))}
             </div>

@@ -65,6 +65,12 @@ interface ResourceStore {
    * 单源）得「可更新」角标；installResource 成功且记账版本到达事件版本才消键。
    */
   hubUpdates: Record<string, string>;
+  /**
+   * M2.5 T1（A1）：某类型是否已成功拉取过 hub 目录（播种基线已建立）。
+   * 卡片三态依据——未播种且无事件时不断言「已是最新」（无目录证据）。
+   * 仅在 hub 源可信（sources[hub].degraded===false）的 load 成功后置 true。
+   */
+  hubSeeded: Record<string, boolean>;
   /** 当前 type tab，'all' = 不限 */
   typeFilter: ResourceFilter['type'] | 'all';
   /** 当前 source tab，'all' = 不限 */
@@ -95,6 +101,12 @@ interface ResourceStore {
    */
   initHubUpdates: () => () => void;
   /**
+   * M2.5 T1（A1）：用目录版本播种某类型的更新基线——只作用于该类型（其他
+   * 类型 key 不动），入表条件 compareVersions(目录版本, 已装版本) > 0。
+   * hub 源降级时整体早退（既不清空也不新增）。事件路径仍为增量。
+   */
+  seedHubUpdates: (type: ResourceType, entries: Array<{ slug: string; version: string }>) => void;
+  /**
    * 组⑤：MCP 启停——写库 + 禁用时断开运行实例；成功横幅 + 列表刷新，
    * 失败落 error 字段（红色横幅）。name 为 MCP 注册名（item.slug）。
    */
@@ -120,6 +132,7 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   catalogDegraded: false,
   hubDegraded: false,
   hubUpdates: {},
+  hubSeeded: {},
   typeFilter: 'all',
   sourceFilter: 'all',
   query: '',
@@ -137,6 +150,23 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
       if (wsId) filter.workspaceId = wsId;
       const items = await ipc.resource.list(filter);
       set({ items, loading: false });
+      // M2.5 T1（A1）：列表成功后按 hub 源健康度播种更新基线——重启/离线/带外
+      // 目录变更后不再只依赖 resource.published 事件。degraded 为真时完全不动
+      //（不清空既有角标，也不新增）；stale 不影响（浏览链本就是 load）。
+      await get().loadCatalogStatus();
+      if (get().hubDegraded) return;
+      const seededTypes: ResourceType[] =
+        typeFilter === 'all' || typeFilter === undefined
+          ? ['agent', 'mcp', 'skill', 'plugin']
+          : [typeFilter];
+      for (const t of seededTypes) {
+        const entries = items.flatMap((i) =>
+          i.type === t && i.source === 'hub' && i.version
+            ? [{ slug: i.slug, version: i.version }]
+            : [],
+        );
+        get().seedHubUpdates(t, entries);
+      }
     } catch (err) {
       set({ error: (err as Error).message, loading: false });
     }
@@ -193,6 +223,42 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
         hubUpdates: { ...s.hubUpdates, [`${e.type}:${e.slug}`]: e.version },
       }));
     });
+  },
+
+  seedHubUpdates: (type, entries) => {
+    if (get().hubDegraded) return;
+    const { items, hubUpdates, hubSeeded } = get();
+    const prefix = `${type}:`;
+    const next = { ...hubUpdates };
+    // 本类型作用域内对账：只清理已不成立的键（已装达到/超过键版本），其他类型不碰
+    for (const key of Object.keys(next)) {
+      if (!key.startsWith(prefix)) continue;
+      const item = items.find(
+        (i) => i.type === type && i.slug === key.slice(prefix.length) && i.source === 'hub',
+      );
+      if (!item) continue;
+      const current = next[key];
+      if (current === undefined) continue;
+      const anchor = item.installedVersion ?? item.version;
+      if (!item.installed || !anchor || compareVersions(current, anchor) <= 0) {
+        delete next[key];
+      }
+    }
+    // 目录基线：仅目录版本高于已装版本才入表；与既有事件版本取高（事件=增量）
+    for (const entry of entries) {
+      const item = items.find(
+        (i) => i.type === type && i.slug === entry.slug && i.source === 'hub',
+      );
+      if (!item?.installed) continue;
+      const anchor = item.installedVersion ?? item.version;
+      if (!anchor || compareVersions(entry.version, anchor) <= 0) continue;
+      const key = `${type}:${entry.slug}`;
+      const current = next[key];
+      if (current === undefined || compareVersions(entry.version, current) > 0) {
+        next[key] = entry.version;
+      }
+    }
+    set({ hubUpdates: next, hubSeeded: { ...hubSeeded, [type]: true } });
   },
 
   setMcpEnabled: async (name, enabled) => {

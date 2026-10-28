@@ -59,7 +59,11 @@ beforeEach(() => {
     sourceFilter: 'all',
     query: '',
     activeType: 'agent',
+    hubUpdates: {},
+    hubSeeded: {},
+    hubDegraded: false,
   });
+  resourceGetCatalogStatus.mockReset();
 });
 
 describe('resource.store — install 反馈闭环', () => {
@@ -439,5 +443,81 @@ describe('resource.store — hub 发布事件 → 更新角标态（M1 Task 14�
     await useResourceStore.getState().loadCatalogStatus();
     expect(useResourceStore.getState().hubDegraded).toBe(false);
     expect(useResourceStore.getState().catalogDegraded).toBe(true);
+  });
+});
+
+// ── M2.5 T1（A1）：角标播种——重启/离线/带外目录变更后更新入口不再丢失 ────────
+// 契约：播种门控只认 hub 源可信（sources[hub].degraded === false）；degraded
+// 为真时完全不动（不清空也不新增）；只 replace 本次类型作用域；入表条件
+// compareVersions(目录版本, 已装版本) > 0。
+describe('resource.store — hub 角标播种（M2.5 T1 / A1）', () => {
+  const hubItem = (over: Partial<ResourceItem> = {}): ResourceItem => ({
+    id: 'hub-agent-x', type: 'agent', source: 'hub', slug: 'x',
+    name: 'X', description: 'd', version: '2.0.0', installedVersion: '1.0.0',
+    installed: true, installable: false, removable: true, ...over,
+  });
+
+  const statusOk = { degraded: false, sources: [
+    { source: 'marketplace' as const, degraded: false },
+    { source: 'hub' as const, degraded: false },
+  ] };
+  const statusHubDown = { degraded: false, sources: [
+    { source: 'marketplace' as const, degraded: false },
+    { source: 'hub' as const, degraded: true },
+  ] };
+
+  it('① hub 可信 + 目录 v2 > 已装 v1 → 该类型 key 出现且标记已播种', async () => {
+    resourceGetCatalogStatus.mockResolvedValue(statusOk);
+    resourceList.mockResolvedValue([hubItem()]);
+    useResourceStore.setState({ typeFilter: 'agent' });
+
+    await useResourceStore.getState().load();
+
+    expect(useResourceStore.getState().hubUpdates['agent:x']).toBe('2.0.0');
+    expect(useResourceStore.getState().hubSeeded.agent).toBe(true);
+  });
+
+  it('② 同版（目录 = 已装）→ 无 key（不误报可更新）', async () => {
+    resourceGetCatalogStatus.mockResolvedValue(statusOk);
+    resourceList.mockResolvedValue([hubItem({ version: '1.0.0', installedVersion: '1.0.0' })]);
+    useResourceStore.setState({ typeFilter: 'agent' });
+
+    await useResourceStore.getState().load();
+
+    expect(useResourceStore.getState().hubUpdates['agent:x']).toBeUndefined();
+    expect(useResourceStore.getState().hubSeeded.agent).toBe(true);
+  });
+
+  it('③ hub.degraded===true → 既有 key 不被清空、也不新增；hubSeeded 完全不动（早退）', async () => {
+    resourceGetCatalogStatus.mockResolvedValue(statusHubDown);
+    resourceList.mockResolvedValue([hubItem(), hubItem({ slug: 'y', id: 'hub-agent-y' })]);
+    useResourceStore.setState({
+      typeFilter: 'agent',
+      hubUpdates: { 'agent:legacy': '9.9.9' },
+      hubSeeded: {},
+    });
+
+    await useResourceStore.getState().load();
+
+    expect(useResourceStore.getState().hubUpdates).toEqual({ 'agent:legacy': '9.9.9' });
+    expect(useResourceStore.getState().hubSeeded).toEqual({});
+  });
+
+  it('④ 类型作用域：先播种 skill 再播种 mcp → skill 的 key 仍在（禁止全表清空）', () => {
+    useResourceStore.setState({
+      items: [
+        hubItem({ id: 'hub-skill-s', type: 'skill', slug: 's' }),
+        hubItem({ id: 'hub-mcp-m', type: 'mcp', slug: 'm' }),
+      ],
+    });
+
+    useResourceStore.getState().seedHubUpdates('skill', [{ slug: 's', version: '2.0.0' }]);
+    useResourceStore.getState().seedHubUpdates('mcp', [{ slug: 'm', version: '2.0.0' }]);
+
+    expect(useResourceStore.getState().hubUpdates).toEqual({
+      'skill:s': '2.0.0',
+      'mcp:m': '2.0.0',
+    });
+    expect(useResourceStore.getState().hubSeeded).toEqual({ skill: true, mcp: true });
   });
 });

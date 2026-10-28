@@ -47,6 +47,8 @@ interface ResourceCardProps {
   hubEnrolled?: boolean;
   /** hub 发布事件带来的最新版本表（key `${type}:${slug}` → 版本；角标判定源） */
   hubUpdates?: Record<string, string>;
+  /** 该类型是否已成功拉取过 hub 目录（三态：未播种且无事件时不显示「已是最新」） */
+  hubSeeded?: boolean;
 }
 
 /** 网格焦点移动：pick 基于全量卡片数组、当前索引与「当前行的列数」给出目标卡。
@@ -68,7 +70,7 @@ function moveFocus(
 
 export function ResourceCard({
   item, selected, onSelect, onInstall, onDelete, onEnable, onEdit, onConfigure, onDisable, onTogglePlugin,
-  onPublishToHub, hubEnrolled, hubUpdates,
+  onPublishToHub, hubEnrolled, hubUpdates, hubSeeded,
 }: ResourceCardProps) {
   const TypeIcon = TYPE_ICON[item.type];
   // hub 可更新角标判定（M1 Task 14 + D7 修正 + M2.3 T2 D3-4 semver 化）：
@@ -86,6 +88,9 @@ export function ResourceCard({
     !!installedAnchor &&
     !!hubLatest &&
     compareVersions(hubLatest, installedAnchor) > 0;
+  // M2.5 T1 三态：目录证据 = 本次类型已播种 或 曾收到发布事件；两者皆无时
+  // 不显示「已是最新」（未拉取目录的断言无依据）。
+  const hubEvidence = hubSeeded === true || hubLatest !== undefined;
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
     const el = e.currentTarget;
@@ -200,6 +205,7 @@ export function ResourceCard({
               </span>
             </>
           ) : (
+            hubEvidence &&
             installedAnchor && (
               <span className="whitespace-nowrap text-xs text-tertiary">
                 v{installedAnchor} · 已是最新
