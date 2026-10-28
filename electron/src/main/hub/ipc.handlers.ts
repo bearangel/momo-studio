@@ -9,6 +9,7 @@ import {
 } from './index';
 import { createGroupClient } from './groups';
 import { publishToHub, type PublishInput } from './publish';
+import { unpublishHubResource } from '../resource/hub/momo-hub';
 import { buildAndUploadWorkspaceSnapshot } from './snapshot-upload';
 import { RPC, TASK_RPC, VIEW_RPC } from './protocol';
 import { RpcRemoteError } from './client';
@@ -48,6 +49,10 @@ export function registerHubIpc(): void {
     recordPublishAccountingSafe(input.type, result.slug, result.version, result.checksum);
     return result;
   });
+  // 撤回（M3.4 §2.3.4 / B12）：hub 来源资源卡「下架」入口——HTTP Bearer 直连
+  // （与 publish 同信任模型）；404/未接入等以人话 rejection 抛出（renderer toast）
+  ipcMain.handle('hub:unpublishResource', (_evt, input: { slug: string }) =>
+    unpublishHubResource(input.slug));
   // 工作组六通道（M2b spec §3.1）——payload 直接采用 renderer 契约形状
   ipcMain.handle('hub:groupList', () => groups.list());
   ipcMain.handle('hub:groupCreate', (_evt, input: { groupName: string }) => groups.create(input.groupName));

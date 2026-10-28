@@ -43,11 +43,12 @@ import { listPlugins, getPlugin, isPluginEnabled, setPluginEnabled } from '../pl
 import { updateGlobalSettings, getGlobalSettings } from '../settings/crud';
 import { assertSafeTarMembers } from '../plugin/installer';
 import { resolveTmpDir } from '../paths';
-import { HubCatalogStaleError, installHubPackage } from '../resource/hub-install';
+import { HubCatalogStaleError, HubPinnedVersionUnavailableError, installHubPackage } from '../resource/hub-install';
 import { installPackage } from '../marketplace/installer';
 import { readBundledCatalog } from '../marketplace/client';
 import type { MarketplaceItem } from '../marketplace/types';
 import type { ResourceType } from '../resource/types';
+import { compareVersions } from '../resource/version-compare';
 import { agentManifestYaml } from './publish';
 import { createHubConfigStore } from './config-store';
 import { createHubWorkspaceDirStore } from './workspace-dir-settings';
@@ -74,8 +75,17 @@ const MAX_WORKSPACE_NAME = 128;
 export interface MirrorApplierDeps {
   /** 快照取包（HTTP 边界）：下载归档字节 + 服务端权威 checksum（X-Checksum-Sha256）。 */
   fetchSnapshotArchive?(snapshotId: string): Promise<{ bytes: Buffer; checksum: string }>;
-  /** hub 资源安装链边界（目录拉取 + 下载 + 注册）：workspaceId 供插件启停作用域。 */
-  installResource?(type: ResourceType, slug: string, workspaceId: string): Promise<void>;
+  /**
+   * hub 资源安装链边界（目录拉取 + 下载 + 注册）：workspaceId 供插件启停作用域；
+   * pinnedVersion（M3.4 B13）= manifest resources[].version 透传——在场时按该
+   * 版本安装/升级（installHubPackage 钉死语义），缺省 = 旧 latest 语义。
+   */
+  installResource?(
+    type: ResourceType,
+    slug: string,
+    workspaceId: string,
+    pinnedVersion?: string,
+  ): Promise<void>;
 }
 
 async function defaultFetchSnapshotArchive(snapshotId: string): Promise<{ bytes: Buffer; checksum: string }> {
@@ -102,8 +112,16 @@ async function defaultFetchSnapshotArchive(snapshotId: string): Promise<{ bytes:
   return { bytes, checksum };
 }
 
-async function defaultInstallResource(type: ResourceType, slug: string, workspaceId: string): Promise<void> {
-  await installHubPackage(type, slug, { workspaceId });
+async function defaultInstallResource(
+  type: ResourceType,
+  slug: string,
+  workspaceId: string,
+  pinnedVersion?: string,
+): Promise<void> {
+  await installHubPackage(type, slug, {
+    workspaceId,
+    ...(pinnedVersion !== undefined ? { pinnedVersion } : {}),
+  });
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -384,9 +402,17 @@ async function ensureWorkspace(workspaceName: string): Promise<{ workspaceId: st
 
 /**
  * 资源补装（先装后落）。
- * 返回本次新装清单 + stale 跳过清单（M2.4 T1）：hub 最新目录不可达
+ * 返回本次新装清单 + 跳过清单（M2.4 T1）：hub 最新目录不可达
  * （HubCatalogStaleError）时该资源**跳过**并记入 skipped（由调用方并入既有
  * unresolvedRefs），其余资源继续；非 stale 失败仍上抛中止整体（配置不落）。
+ *
+ * M3.4 B13 钉死版本（manifest resources[].version）：
+ *   - 记账命中 + 无 version → 旧跳过语义（latest 已装即跳过，零变化）
+ *   - 记账命中 + version 在场 → 镜像升级判定：已装 ≥ pinned → 跳过
+ *     （alreadyLatest）；已装 < pinned → 升级到 pinned（**M2.3「不升级旧版」
+ *     边界由此打开，且仅带 version 的 manifest 触发**）
+ *   - 未装（fresh）→ 按 pinned 下载该版本；版本行不存在 / 下载 404
+ *     （HubPinnedVersionUnavailableError）→ 记 skipped 不中止（沿 stale 模式）
  */
 async function installResources(
   manifest: SnapshotManifest,
@@ -398,18 +424,29 @@ async function installResources(
   const skipped: string[] = [];
   for (const r of manifest.resources) {
     const ref = `${r.type}/${r.slug}`;
-    // 已装判定①：hub 记账命中（本机从 hub 装过）→ 跳过
-    if (acc.get(r.type)?.has(r.slug)) continue;
-    // 已装判定②：本地点位在位（builtin/内置市场目录同有——T7 交接兜底序）→ 跳过
-    if (isLocallyPresent(r.type, r.slug)) continue;
-    // 补装：M1 链（目录查项 → 下载 → 注册/记账）
+    const installedVersion = acc.get(r.type)?.get(r.slug);
+    if (installedVersion !== undefined) {
+      // 已装判定①：hub 记账命中（本机从 hub 装过）——无钉死 → 跳过；
+      // 带钉死 → 已装 ≥ pinned 跳过（alreadyLatest），已装 < pinned 升级到 pinned
+      if (r.version === undefined || compareVersions(r.version, installedVersion) <= 0) continue;
+    } else if (isLocallyPresent(r.type, r.slug)) {
+      // 已装判定②：本地点位在位（builtin/内置市场目录同有——T7 交接兜底序）→ 跳过
+      //（无 hub 记账即无已装版本可比对；本地目录来源不按 hub 钉死版本升降）
+      continue;
+    }
+    // 补装：M1 链（目录查项 → 下载 → 注册/记账）；pinned 在场时按该版本
     try {
-      await installResource(r.type, r.slug, workspaceId);
+      await installResource(r.type, r.slug, workspaceId, r.version);
     } catch (err) {
-      // 只吞 stale 目录错误：无法获取 hub 最新目录 ≠ 该资源不存在，跳过即可
-      // （软失败，reason 进回执 unresolvedRefs）；其余失败照旧整体中止。
+      // 只吞软失败错误：目录不可达（HubCatalogStaleError）与钉死版本不可得
+      // （HubPinnedVersionUnavailableError——版本行不存在/下载 404）均跳过该
+      // 资源（软失败，reason 进回执 unresolvedRefs）；其余失败照旧整体中止。
       if (err instanceof HubCatalogStaleError) {
         skipped.push(`${r.type}:${r.slug}（无法获取 hub 最新目录，已跳过）`);
+        continue;
+      }
+      if (err instanceof HubPinnedVersionUnavailableError) {
+        skipped.push(`${r.type}:${r.slug}（钉死版本 ${r.version} 不存在或已撤回，已跳过）`);
         continue;
       }
       throw err;

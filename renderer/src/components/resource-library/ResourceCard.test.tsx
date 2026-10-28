@@ -646,3 +646,88 @@ describe('ResourceCard 2D 键盘导航（列数按 offsetTop 动态推导）', (
     expect(document.activeElement).toBe(at(cards, 5));
   });
 });
+
+// ── 下架入口（M3.4 §2.4 B12——仅 hub 来源卡，消费面矩阵）──────────────────
+
+describe('ResourceCard 下架入口（M3.4 §2.4）', () => {
+  const hubItem = mkItem({
+    id: 'hub-skill-demo', type: 'skill', source: 'hub', slug: 'demo-skill',
+    name: '演示技能', installed: false, installable: true, removable: false,
+  });
+
+  it('hub 来源卡渲染「下架」钮；确认文案（aria/title）含 slug 与「已安装节点不受影响」', () => {
+    render(
+      <ResourceCard
+        item={hubItem} selected={false} onSelect={noop}
+        onUnpublishFromHub={noop} hubEnrolled
+      />,
+    );
+    // accessible name 被 aria-label 覆盖（确认文案常驻可读屏）——按 testid 定位后断言文案
+    const btn = screen.getByTestId('unpublish-arm');
+    expect(btn.getAttribute('title')).toBe('从 momo-hub 下架 demo-skill——目录中不再可见，已安装节点不受影响');
+    expect(btn.getAttribute('aria-label')).toBe('从 momo-hub 下架 demo-skill——目录中不再可见，已安装节点不受影响');
+  });
+
+  it('消费面矩阵：builtin / custom / marketplace 卡零渲染（且不传回调也不渲染 hub 卡按钮）', () => {
+    const { rerender } = render(
+      <ResourceCard
+        item={mkItem({ id: 'builtin-skill-a', type: 'skill', source: 'builtin', slug: 'a' })}
+        selected={false} onSelect={noop} onUnpublishFromHub={noop} hubEnrolled
+      />,
+    );
+    expect(screen.queryByTestId('unpublish-arm')).toBeNull();
+    rerender(
+      <ResourceCard
+        item={mkItem({ id: 'custom-skill-b', type: 'skill', source: 'custom', slug: 'b' })}
+        selected={false} onSelect={noop} onUnpublishFromHub={noop} hubEnrolled
+      />,
+    );
+    expect(screen.queryByTestId('unpublish-arm')).toBeNull();
+    rerender(
+      <ResourceCard
+        item={mkItem({ id: 'marketplace-skill-c', type: 'skill', source: 'marketplace', slug: 'c' })}
+        selected={false} onSelect={noop} onUnpublishFromHub={noop} hubEnrolled
+      />,
+    );
+    expect(screen.queryByTestId('unpublish-arm')).toBeNull();
+    // hub 卡未传回调（消费面缺位）同样不渲染
+    rerender(<ResourceCard item={hubItem} selected={false} onSelect={noop} hubEnrolled />);
+    expect(screen.queryByTestId('unpublish-arm')).toBeNull();
+  });
+
+  it('两步确认（uninstall 模板）：首击进入臂态（不回调），臂态内再击才执行 onUnpublishFromHub；点击不冒泡', () => {
+    const onUnpublish = vi.fn();
+    const onSelect = vi.fn();
+    render(
+      <ResourceCard
+        item={hubItem} selected={false} onSelect={onSelect}
+        onUnpublishFromHub={onUnpublish} hubEnrolled
+      />,
+    );
+    // 首击：arm（进入「再次点击确认」态，零回调）
+    fireEvent.click(screen.getByTestId('unpublish-arm'));
+    expect(onUnpublish).not.toHaveBeenCalled();
+    const confirmBtn = screen.getByTestId('unpublish-confirm');
+    expect(confirmBtn.textContent).toMatch(/再次点击确认下架 · \d+s/);
+    // 二击：执行 + 回落；不冒泡到卡 onSelect
+    fireEvent.click(confirmBtn);
+    expect(onUnpublish).toHaveBeenCalledTimes(1);
+    expect(onUnpublish).toHaveBeenCalledWith(hubItem);
+    expect(onSelect).not.toHaveBeenCalled();
+    // 执行后回落臂态（回「下架」初始态）
+    expect(screen.queryByTestId('unpublish-confirm')).toBeNull();
+    expect(screen.getByTestId('unpublish-arm')).toBeTruthy();
+  });
+
+  it('未接入 hub（hubEnrolled=false）→ 禁用 + title 引导（与发布入口同口径）', () => {
+    render(
+      <ResourceCard
+        item={hubItem} selected={false} onSelect={noop}
+        onUnpublishFromHub={noop} hubEnrolled={false}
+      />,
+    );
+    const btn = screen.getByTestId('unpublish-arm') as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(btn.getAttribute('title')).toContain('未接入 momo-hub');
+  });
+});

@@ -26,6 +26,12 @@ const hubOnResourcePublished = vi.fn((cb: (e: { slug: string; type: string; name
   // 仿真真实解订阅语义（ipcRenderer.off 后回调不再可达）——mock 收窄铁律
   return () => { publishedCb = undefined; };
 });
+// M3.4 §2.4：撤回事件订阅（onResourceUnpublished 回调捕获——同上解订阅语义）
+let unpublishedCb: ((e: { slug: string; by: string; at: number }) => void) | undefined;
+const hubOnResourceUnpublished = vi.fn((cb: (e: { slug: string; by: string; at: number }) => void) => {
+  unpublishedCb = cb;
+  return () => { unpublishedCb = undefined; };
+});
 
 const mockApi = {
   resource: {
@@ -39,6 +45,7 @@ const mockApi = {
   },
   hub: {
     onResourcePublished: hubOnResourcePublished,
+    onResourceUnpublished: hubOnResourceUnpublished,
   },
 };
 
@@ -633,5 +640,60 @@ describe('resource.store — hub 发布事件取高（M2.5 终审 FIX-2）', () 
 
     expect(useResourceStore.getState().hubUpdates['skill:fresh']).toBe('1.0.0');
     stop();
+  });
+});
+
+// ── 撤回事件消费（M3.4 §2.4——resource.unpublished → 清角标键 + 刷新目录）──
+
+describe('resource.store — 撤回事件消费（M3.4 §2.4）', () => {
+  beforeEach(() => {
+    resourceList.mockReset().mockResolvedValue([] as ResourceItem[]);
+    resourceGetCatalogStatus.mockReset().mockResolvedValue({
+      degraded: false, hubNotEnrolled: false, sources: [],
+    });
+    unpublishedCb = undefined;
+  });
+
+  it('事件清该 slug 的全部类型角标键（载荷不带 type——按 :slug 后缀匹配）+ 触发一次 load 刷新目录', async () => {
+    useResourceStore.setState({
+      hubUpdates: {
+        'skill:gone-skill': '2.0.0',
+        'agent:gone-skill': '1.0.0', // 同 slug 异类键一并清（目录级撤回）
+        'agent:keep-agent': '1.5.0',
+      },
+    });
+    const dispose = useResourceStore.getState().initHubUpdates();
+    const listCallsBefore = resourceList.mock.calls.length;
+
+    unpublishedCb!({ slug: 'gone-skill', by: 'node-a', at: 1_700_000_000_000 });
+
+    expect(useResourceStore.getState().hubUpdates).toEqual({ 'agent:keep-agent': '1.5.0' });
+    // 目录刷新：resource.list 至少多一次（renderer 列表源于 IPC 拉取——事件到时刷新）
+    await vi.waitFor(() => expect(resourceList.mock.calls.length).toBeGreaterThan(listCallsBefore));
+    dispose();
+  });
+
+  it('无匹配键也照常刷新（幂等——目录已无此条目时 load 结果不变）', async () => {
+    useResourceStore.setState({ hubUpdates: { 'agent:keep-agent': '1.5.0' } });
+    const dispose = useResourceStore.getState().initHubUpdates();
+    const listCallsBefore = resourceList.mock.calls.length;
+
+    unpublishedCb!({ slug: 'not-here', by: 'node-a', at: 1 });
+
+    expect(useResourceStore.getState().hubUpdates).toEqual({ 'agent:keep-agent': '1.5.0' });
+    await vi.waitFor(() => expect(resourceList.mock.calls.length).toBeGreaterThan(listCallsBefore));
+    dispose();
+  });
+
+  it('dispose 后事件不再消费（解订阅语义——回调不可达）', async () => {
+    useResourceStore.setState({ hubUpdates: { 'skill:gone-skill': '2.0.0' } });
+    const dispose = useResourceStore.getState().initHubUpdates();
+    dispose();
+    const listCallsBefore = resourceList.mock.calls.length;
+
+    // dispose 已把捕获回调置空——真实语义下事件不可达，此处直接验证捕获位为空
+    expect(unpublishedCb).toBeUndefined();
+    expect(resourceList.mock.calls.length).toBe(listCallsBefore);
+    expect(useResourceStore.getState().hubUpdates).toEqual({ 'skill:gone-skill': '2.0.0' });
   });
 });

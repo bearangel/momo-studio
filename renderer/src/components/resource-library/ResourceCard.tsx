@@ -22,6 +22,7 @@ import { SourceBadge } from './SourceBadge';
 import { Switch } from '../ui/Switch';
 import { TYPE_ICON } from './type-icons';
 import { canPublishToHub } from './publish-entry';
+import { useArmedConfirm } from '../workgroup/useArmedConfirm';
 
 interface ResourceCardProps {
   item: ResourceItem;
@@ -43,7 +44,14 @@ interface ResourceCardProps {
   onTogglePlugin?: (item: ResourceItem, next: boolean) => void;
   /** 发布到 momo-hub 入口（M2.2 Task 2 起 canPublishToHub 单点门控：custom 四类型 + marketplace 已装 skill） */
   onPublishToHub?: (item: ResourceItem) => void;
-  /** hub 是否已接入（enrolled）——false 时发布入口禁用 + title 引导 */
+  /**
+   * 从 momo-hub 下架入口（M3.4 §2.4，spec 2026-10-29）：**仅 hub 来源卡**渲染
+   * （消费面矩阵——builtin/custom/marketplace 卡零变化）；armed-confirm 两步
+   * 确认（uninstall 模板「再次点击确认」3s 窗口），确认文案含 slug 与
+   * 「已安装节点不受影响」。
+   */
+  onUnpublishFromHub?: (item: ResourceItem) => void;
+  /** hub 是否已接入（enrolled）——false 时发布/下架入口禁用 + title 引导 */
   hubEnrolled?: boolean;
   /** hub 发布事件带来的最新版本表（key `${type}:${slug}` → 版本；角标判定源） */
   hubUpdates?: Record<string, string>;
@@ -70,9 +78,14 @@ function moveFocus(
 
 export function ResourceCard({
   item, selected, onSelect, onInstall, onDelete, onEnable, onEdit, onConfigure, onDisable, onTogglePlugin,
-  onPublishToHub, hubEnrolled, hubUpdates, hubSeeded,
+  onPublishToHub, onUnpublishFromHub, hubEnrolled, hubUpdates, hubSeeded,
 }: ResourceCardProps) {
   const TypeIcon = TYPE_ICON[item.type];
+  // 下架两步确认（M3.4 §2.4）：uninstall 模板臂态——首击 arm（3s 窗口），臂态内
+  // 再击才执行；到期/disarm 双回落（useArmedConfirm 单源）
+  const unpublishConfirm = useArmedConfirm();
+  const canUnpublishFromHub = item.source === 'hub' && onUnpublishFromHub !== undefined;
+  const unpublishTitle = `从 momo-hub 下架 ${item.slug}——目录中不再可见，已安装节点不受影响`;
   // hub 可更新角标判定（M1 Task 14 + D7 修正 + M2.3 T2 D3-4 semver 化）：
   // 已装 hub 资源 + 事件版本 semver **前进**（compareVersions > 0）才可更新。
   // 锚点 = installedVersion（installed_packages 记账版）?? version——目录先行 +
@@ -257,6 +270,39 @@ export function ResourceCard({
             >
               发布到 hub
             </button>
+          )}
+          {/* 下架（M3.4 §2.4 B12）：仅 hub 来源卡（消费面矩阵——builtin/custom/marketplace
+              卡零渲染）；armed-confirm 两步确认，确认文案（title/aria）含 slug 与
+              「已安装节点不受影响」；未接入禁用 + title 引导（与发布入口同口径） */}
+          {canUnpublishFromHub && (
+            unpublishConfirm.armed ? (
+              <button
+                type="button"
+                data-testid="unpublish-confirm"
+                aria-label={`${unpublishTitle}——再次点击确认下架`}
+                title={unpublishTitle}
+                className="text-xs px-2 py-0.5 rounded bg-status-error-tint text-status-error hover:opacity-80"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  unpublishConfirm.disarm();
+                  onUnpublishFromHub(item);
+                }}
+              >
+                再次点击确认下架 · {unpublishConfirm.remainingSec}s
+              </button>
+            ) : (
+              <button
+                type="button"
+                data-testid="unpublish-arm"
+                aria-label={unpublishTitle}
+                title={hubEnrolled ? unpublishTitle : '未接入 momo-hub——去「设置 → 节点互联」接入后可下架'}
+                disabled={!hubEnrolled}
+                className="text-xs px-2 py-0.5 rounded bg-surface-active text-status-error hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={(e) => { e.stopPropagation(); if (hubEnrolled) unpublishConfirm.arm(); }}
+              >
+                下架
+              </button>
+            )
           )}
           {/* 编辑：custom agent 专属（定义编辑入口） */}
           {item.type === 'agent' && item.source === 'custom' && item.installed && onEdit && (

@@ -49,6 +49,7 @@ import type {
   HubPublishResourceInput,
   HubPublishResult,
   HubResourcePublishedEvent,
+  HubResourceUnpublishedEvent,
   HubGroupChangedEvent,
   HubGroupListResult,
   HubGroupCreateResult,
@@ -644,6 +645,13 @@ const api: ApiSurface = {
       const handler = (_e: IpcRendererEvent, payload: HubResourcePublishedEvent): void => callback(payload);
       ipcRenderer.on('hub:resourcePublished', handler);
       return () => { ipcRenderer.off('hub:resourcePublished', handler); };
+    },
+    // 撤回（M3.4 §2.4）：下架入口 + resource.unpublished 推送订阅——与发布面对称
+    unpublishResource: (input: { slug: string }) => invoke<void>('hub:unpublishResource', input),
+    onResourceUnpublished: (callback) => {
+      const handler = (_e: IpcRendererEvent, payload: HubResourceUnpublishedEvent): void => callback(payload);
+      ipcRenderer.on('hub:resourceUnpublished', handler);
+      return () => { ipcRenderer.off('hub:resourceUnpublished', handler); };
     },
     groupList: () => invoke<HubGroupListResult>('hub:groupList'),
     groupCreate: (input) => invoke<HubGroupCreateResult>('hub:groupCreate', input),

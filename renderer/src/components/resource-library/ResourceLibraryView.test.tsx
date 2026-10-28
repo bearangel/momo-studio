@@ -22,6 +22,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { ResourceLibraryView } from './ResourceLibraryView';
+import { Toast } from '../ui/Toast';
 import { useResourceStore } from '../../stores/resource.store';
 import { useHubStore } from '../../stores/hub.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -39,6 +40,8 @@ const providerList = vi.fn();
 const settingsGetGlobal = vi.fn();
 const hubGetStatus = vi.fn();
 const hubOnResourcePublished = vi.fn(() => () => undefined);
+const hubOnResourceUnpublished = vi.fn(() => () => undefined);
+const hubUnpublishResource = vi.fn(async () => undefined);
 
 const mockApi = {
   resource: {
@@ -50,7 +53,12 @@ const mockApi = {
   agent: { list: agentList, getBuiltinSuggestions: agentBuiltinSuggestions },
   provider: { list: providerList },
   settings: { getGlobal: settingsGetGlobal },
-  hub: { getStatus: hubGetStatus, onResourcePublished: hubOnResourcePublished },
+  hub: {
+    getStatus: hubGetStatus,
+    onResourcePublished: hubOnResourcePublished,
+    onResourceUnpublished: hubOnResourceUnpublished,
+    unpublishResource: hubUnpublishResource,
+  },
 };
 
 // marketplace 可安装项工厂（安装链路回归锁用）
@@ -81,6 +89,8 @@ beforeEach(() => {
     configured: false, state: 'disconnected', hubUrl: null, nodeName: null, nodeId: null, lastError: null,
   });
   hubOnResourcePublished.mockClear();
+  hubOnResourceUnpublished.mockClear();
+  hubUnpublishResource.mockReset().mockResolvedValue(undefined);
   useHubStore.setState({ status: null, nodes: [], loadError: null });
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
@@ -305,5 +315,59 @@ describe('ResourceLibraryView — hub 发布链路接线（M1 Task 14）', () =>
     render(<ResourceLibraryView />);
     const btn = await screen.findByRole('button', { name: '发布到 hub' });
     expect((btn as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+// ── 下架链路（M3.4 §2.4 B12——armed-confirm → IPC → toast）────────────────
+
+describe('ResourceLibraryView — hub 下架链路（M3.4 §2.4）', () => {
+  const hubCard: ResourceItem = {
+    id: 'hub-skill-demo', type: 'skill', source: 'hub', slug: 'demo-skill',
+    name: '演示技能', description: 'd', installed: false, installable: true, removable: false,
+  };
+
+  function renderEnrolled(items: ResourceItem[]): void {
+    hubGetStatus.mockResolvedValue({
+      configured: true, state: 'online', hubUrl: 'http://192.168.1.8:8717',
+      nodeName: '办公室 MacBook', nodeId: 'a3f9c2e1dead', lastError: null,
+    });
+    resourceList.mockResolvedValue(items);
+    render(
+      <>
+        <ResourceLibraryView />
+        <Toast />
+      </>,
+    );
+  }
+
+  it('hub 卡两步确认 → ipc.hub.unpublishResource({slug}) → 成功 toast + 列表刷新', async () => {
+    renderEnrolled([hubCard]);
+    // 首击进入臂态（不触发 IPC）
+    fireEvent.click(await screen.findByTestId('unpublish-arm'));
+    expect(hubUnpublishResource).not.toHaveBeenCalled();
+    // 臂态内再击 → 执行
+    fireEvent.click(screen.getByTestId('unpublish-confirm'));
+    await waitFor(() => expect(hubUnpublishResource).toHaveBeenCalledWith({ slug: 'demo-skill' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('ui-toast').textContent).toContain('已从 momo-hub 下架「demo-skill」'),
+    );
+    // 成功后刷新目录（load 再拉）
+    await waitFor(() => expect(resourceList.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+
+  it('404 rejection → toast「资源不存在或已撤回」（UC-6 人话）', async () => {
+    hubUnpublishResource.mockRejectedValueOnce(new Error('资源不存在或已撤回'));
+    renderEnrolled([hubCard]);
+    fireEvent.click(await screen.findByTestId('unpublish-arm'));
+    fireEvent.click(screen.getByTestId('unpublish-confirm'));
+    await waitFor(() =>
+      expect(screen.getByTestId('ui-toast').textContent).toContain('资源不存在或已撤回'),
+    );
+  });
+
+  it('非 hub 卡零下架入口（消费面矩阵——marketplace 卡不渲染）', async () => {
+    renderEnrolled([mkInstallable({ id: 'marketplace-skill-x', type: 'skill', slug: 'x', name: '市场技能' })]);
+    await waitFor(() => expect(screen.getByText('市场技能')).toBeTruthy());
+    expect(screen.queryByTestId('unpublish-arm')).toBeNull();
   });
 });

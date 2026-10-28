@@ -6,6 +6,16 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 节点互联 M3.4：资源生命周期与版本对齐
+
+协议 minor **1.5.0**（hub v0.1.9：`SnapshotResourceRef.version?` + `HubCatalog.revision` + `resource.unpublished` 事件 + `POST /resources/unpublish` + catalog 墓碑过滤）。设计见 momo-hub 仓 `docs/specs/2026-10-29-momo-hub-m3.4-resource-lifecycle.md`。
+
+- **pin `#v0.1.9`**：协议单源升级；protocol-pin 测试扩锁 1.5.0 三面（manifest `resources[].version?` 透传三格 / `HubCatalog.revision` 容错归一 0 且非整数仍拒 / `EVT.resourceUnpublished` 登记）
+- **B13 版本对齐**：`loadHubAccountingSet` 扩为 type→slug→**version**（记账版本单源）；builder 四域收集点写 `version`（**快照定型语义**——记账版本 ≠ 目录 latest 时写记账版本；记账行空串/无记账不带 version = 旧 latest 语义，1.4 manifest 零变化）；`installHubPackage` 增可选 `pinnedVersion`——fresh 下载钉死版（versions 全集预检 + 下载端点 `X-Checksum-Sha256` 探测拿逐版本权威校验和，plugin 强校验链由此可用）；alreadyLatest 对 pinned（已装 ≥ pinned 零动作 / 已装 < pinned 升级到 pinned——**镜像升级语义翻转：M2.3「不升级旧版」边界由此打开，且仅带 version 的 manifest 触发**，无 version 全部存量行为零变化）；版本行不存在/下载 404 → `HubPinnedVersionUnavailableError`，镜像补装沿 stale 模式跳过不中止（unresolvedRefs 可见）
+- **B10 事件合并**：`createHubCatalogSource` 增 `applyPublishedEvent/applyUnpublishedEvent`（upsert/剔除 cache 与 lastGood items，幂等按 slug 终态，revision 不伪造）；hub/index.ts onEvent 桥 `resource.unpublished`（桥 renderer + 目录源剔除）且 `resource.published` 同接目录源——消「新发布最长 5min（TTL）不可见」盲窗；**全量拉取仍为权威路径**（TTL 不变，事件只做即时性，乱序由幂等终态 + 全量自愈）
+- **B12 撤回客户端 + UI**：`unpublishHubResource(slug)`（HTTP Bearer，与 publish 同信任模型）+ IPC `hub:unpublishResource` 三层；资源卡动作簇增「下架」armed-confirm（**仅 hub 来源卡**——builtin/custom/marketplace 零变化；确认文案含 slug 与「已安装节点不受影响」；未接入禁用）；404 → 「资源不存在或已撤回」toast；`resource.store` 消费 `resource.unpublished`（清该 slug 全部类型角标键 + 触发一次 load 刷新目录）
+- 测试：记账版本三态 / applier pinned 四格 + 404 跳过 / installHubPackage pinned 六格 / 事件合并幂等与 lastGood 一致性 + 旧 hub（无 revision）容错 / unpublish 客户端八格 / IPC 接线 / 菜单门控与两步确认流 / store 事件消费（electron 5169 · renderer 3009）
+
 ## [未发布] — 节点互联 M3.3：任务编排与依赖
 
 studio 本体改造，**协议零改**（hub 0.1.8/1.4.0 与 pin 不动；依赖元数据透传 minor 延后至有真实消费方）。设计见 momo-hub 仓 `docs/specs/2026-10-29-momo-hub-m3.3-task-orchestration.md`。
