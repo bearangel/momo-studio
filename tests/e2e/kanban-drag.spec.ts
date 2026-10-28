@@ -59,6 +59,9 @@ test('看板拖拽冒烟：新建任务落待办列 → 拖到已关闭列 → �
     await win.getByLabel('名称').fill('拖拽冒烟', { timeout: 15000 });
     await win.getByPlaceholder('选择或输入目录路径').fill(path.join(tmpUserData, 'ws'));
     await win.getByRole('button', { name: '创建', exact: true }).click();
+    // 创建是异步 IPC 链（建目录 + git init + 落库）——等内嵌表单卸载再切视图，
+    // 否则可能落在 0-ws 看板态（2026-10-28 诊断：点击后立查列表为空）。
+    await expect(win.getByRole('heading', { name: '新建工作空间' })).toBeHidden({ timeout: 15000 });
 
     // 2. 切看板视图（ActivityBar「看板」项）
     await win.getByRole('button', { name: '看板', exact: true }).click({ timeout: 15000 });
@@ -66,7 +69,9 @@ test('看板拖拽冒烟：新建任务落待办列 → 拖到已关闭列 → �
     // 3. 新建任务（侧边栏与工具栏同名入口，任一可用）
     await win.getByRole('button', { name: '新建任务' }).first().click();
     await win.getByLabel('标题*').fill('拖拽冒烟任务');
-    await win.getByRole('button', { name: '创建', exact: true }).click();
+    // 提交按钮文案随 M2.1 T8（执行位置三选/批量模式）改为「创建任务」，
+    // 与首启建工作空间的「创建」区分——旧断言「创建」已失配（2026-10-28 诊断）。
+    await win.getByRole('button', { name: '创建任务', exact: true }).click();
 
     // 4. 断言卡片在待办列（BoardColumn section aria-label=列名）
     const backlog = win.locator('section[aria-label="待办"]');

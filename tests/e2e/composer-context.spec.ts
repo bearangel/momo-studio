@@ -91,6 +91,10 @@ test('输入框支持文件引用与技能 chip：@ 文件 → / 技能 → 发�
     await win.getByLabel('名称').fill('E2E 上下文');
     await win.getByPlaceholder('选择或输入目录路径').fill(tmpWsDir);
     await win.getByRole('button', { name: '创建', exact: true }).click();
+    // 创建是异步 IPC 链（主进程建目录 + git init + 落库），内嵌表单在 create resolve
+    // 后才卸载——不等它就直接读 workspace.list 会撞空列表竞态（2026-10-28 诊断：
+    // 点击后立即查询 = 0 条，300ms 后 = 1 条，纯测试侧缺等待，产品链无问题）。
+    await expect(win.getByRole('heading', { name: '新建工作空间' })).toBeHidden({ timeout: 15000 });
 
     // 主布局就绪标志：活动栏智能体入口可见（2026-10-12 命名统一：Agent→智能体）
     await expect(win.getByLabel('智能体', { exact: true })).toBeVisible({ timeout: 20000 });
