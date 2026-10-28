@@ -7,9 +7,11 @@
 //   MirrorWizard/DelegationWizard/DelegationPanel/ViewPanel 全部随 T5 退役
 // - 态 1 未接入：接入表单（hub 地址 / 节点名〔helper〕/ 加入凭证〔password + helper〕）+
 //   主按钮「接入」（表单逻辑收敛复用 useHubEnroll hook——T2 自本组件抽出）
-// - 态 2 已接入·已连接：绿点徽章 + 信息行（hub 地址 / 本机节点名 + nodeId 8 位短码）+
-//   在线节点列表 + 隐私与受控（委派接受/远程查看同意两开关）+ 危险区「断开并忘记」两步确认
+// - 态 2 已接入·已连接：绿点徽章 + 信息行（hub 地址 / 本机节点名 + nodeId 8 位短码 /
+//   hub 协议版本〔M3.0-P2：hello 协商到版本时显示〕）+ 在线节点列表 + 隐私与受控
+//   （委派接受/远程查看同意两开关）+ 危险区「断开并忘记」两步确认
 // - 态 3 已接入·连接中断：黄点「连接中」徽章 + lastError 原文行 + 自动重连提示 + 列表降级灰点占位
+//   （M3.0-P2：lastErrorCode=proto_version_mismatch 时错误行后追加协议不兼容专属提示）
 // - 换址重接（configured && nodeId === null，主进程换址清凭证归零）：提示行 + 预填表单
 // - 换址入口（D1，已接入态）：身份区次级按钮「修改 hub 地址」→ 确认弹窗（改地址 + 断开告警）
 //   → 调 configure → 落到换址引导态
@@ -524,6 +526,9 @@ function EnrolledView({ status }: { status: HubStatus }) {
               {status.lastError}
             </p>
           )}
+          {showError && status.lastErrorCode === 'proto_version_mismatch' && (
+            <p className="text-xs text-status-error">hub 协议版本不兼容，请升级 hub 或客户端</p>
+          )}
           {status.state === 'connecting' && (
             <p className="flex items-center gap-1.5 text-xs text-secondary">
               <RefreshCw size={12} strokeWidth={1.75} aria-hidden />
@@ -547,6 +552,12 @@ function EnrolledView({ status }: { status: HubStatus }) {
             </span>
           </span>
         </div>
+        {status.hubProtoVer !== null && (
+          <div className="flex min-h-8 items-center gap-4">
+            <span className="w-[88px] shrink-0 text-[13px] text-secondary">hub 协议版本</span>
+            <span className="font-mono text-[13px] text-primary">{status.hubProtoVer}</span>
+          </div>
+        )}
       </div>
 
       <div className="flex justify-end">

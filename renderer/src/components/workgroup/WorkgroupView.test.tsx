@@ -59,6 +59,8 @@ const UNENROLLED: HubStatus = {
   nodeName: null,
   nodeId: null,
   lastError: null,
+  lastErrorCode: null,
+  hubProtoVer: null,
 };
 
 const ENROLLED_ONLINE: HubStatus = {
@@ -68,6 +70,8 @@ const ENROLLED_ONLINE: HubStatus = {
   nodeName: '办公室 MacBook',
   nodeId: 'a3f9c2e1deadbeef',
   lastError: null,
+  lastErrorCode: null,
+  hubProtoVer: null,
 };
 
 const ENROLLED_OFFLINE: HubStatus = {
@@ -77,6 +81,8 @@ const ENROLLED_OFFLINE: HubStatus = {
   nodeName: '办公室 MacBook',
   nodeId: 'a3f9c2e1deadbeef',
   lastError: null,
+  lastErrorCode: null,
+  hubProtoVer: null,
 };
 
 const SELF_ID = 'a3f9c2e1deadbeef';

@@ -695,11 +695,12 @@ describe('TypePageShell hub 页签与提示条（M1 Task 14：T10 移交三项�
     description: '纪要生成', version: '1.1.0', installed: false, installable: true, removable: false,
   };
   const NOT_ENROLLED = {
-    configured: false, state: 'disconnected' as const, hubUrl: null, nodeName: null, nodeId: null, lastError: null,
+    configured: false, state: 'disconnected' as const, hubUrl: null, nodeName: null, nodeId: null,
+    lastError: null, lastErrorCode: null, hubProtoVer: null,
   };
   const ENROLLED_ONLINE = {
     configured: true, state: 'online' as const, hubUrl: 'http://192.168.1.8:8717',
-    nodeName: '办公室 MacBook', nodeId: 'a3f9c2e1dead', lastError: null,
+    nodeName: '办公室 MacBook', nodeId: 'a3f9c2e1dead', lastError: null, lastErrorCode: null, hubProtoVer: null,
   };
 
   it('来源下拉含 momo-hub 选项（网络 / Smithery 仍不设死入口）——hub 页签回归', () => {

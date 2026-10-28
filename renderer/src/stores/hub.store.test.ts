@@ -37,6 +37,8 @@ const ONLINE: HubStatus = {
   nodeName: '办公室 MacBook',
   nodeId: 'a3f9c2e1deadbeef',
   lastError: null,
+  lastErrorCode: null,
+  hubProtoVer: null,
 };
 
 /** 订阅落地 + 状态快照落地（快照在途期间到达的事件会被暂存，故须等它落地） */
@@ -61,7 +63,7 @@ describe('hub store 节点表对账', () => {
     presenceCb?.({ kind: 'online', nodeId: 'b7d204ff', nodeName: '客厅小主机', at: 1 });
     expect(useHubStore.getState().nodes).toHaveLength(1);
 
-    stateChangedCb?.({ state: 'connecting', lastError: '连接超时' });
+    stateChangedCb?.({ state: 'connecting', lastError: '连接超时', lastErrorCode: null, hubProtoVer: null });
     expect(useHubStore.getState().nodes).toEqual([]);
     expect(useHubStore.getState().status?.state).toBe('connecting');
   });
@@ -71,18 +73,18 @@ describe('hub store 节点表对账', () => {
     presenceCb?.({ kind: 'online', nodeId: 'b7d204ff', nodeName: '客厅小主机', at: 1 });
     expect(useHubStore.getState().nodes).toHaveLength(1);
 
-    stateChangedCb?.({ state: 'disconnected', lastError: null });
+    stateChangedCb?.({ state: 'disconnected', lastError: null, lastErrorCode: null, hubProtoVer: null });
     expect(useHubStore.getState().nodes).toEqual([]);
   });
 
   it('断线清空后重连：online 种子重新填充节点表（幽灵行不复现）', async () => {
     await initStore();
     presenceCb?.({ kind: 'online', nodeId: 'b7d204ff', nodeName: '客厅小主机', at: 1 });
-    stateChangedCb?.({ state: 'connecting', lastError: '连接超时' });
+    stateChangedCb?.({ state: 'connecting', lastError: '连接超时', lastErrorCode: null, hubProtoVer: null });
     expect(useHubStore.getState().nodes).toEqual([]);
 
     // 重连成功 → 快照种子重填（stale 节点不复活）
-    stateChangedCb?.({ state: 'online', lastError: null });
+    stateChangedCb?.({ state: 'online', lastError: null, lastErrorCode: null, hubProtoVer: null });
     presenceCb?.({ kind: 'online', nodeId: 'b7d204ff', nodeName: '客厅小主机', at: 2 });
     expect(useHubStore.getState().nodes).toEqual([
       { nodeId: 'b7d204ff', nodeName: '客厅小主机' },
@@ -93,8 +95,35 @@ describe('hub store 节点表对账', () => {
     await initStore();
     presenceCb?.({ kind: 'online', nodeId: 'b7d204ff', nodeName: '客厅小主机', at: 1 });
 
-    stateChangedCb?.({ state: 'online', lastError: null });
+    stateChangedCb?.({ state: 'online', lastError: null, lastErrorCode: null, hubProtoVer: null });
     expect(useHubStore.getState().nodes).toHaveLength(1);
+  });
+});
+
+// M3.0-P2 协议协商消费侧管道：hubProtoVer / lastErrorCode 随 hub:stateChanged
+// 进入 store（主进程侧生产语义由 electron client.test / manager.test 锁）
+describe('hub store 协议诊断管道（M3.0-P2）', () => {
+  it('hello 拒绝带 code → lastErrorCode 覆盖进 status', async () => {
+    await initStore();
+    stateChangedCb?.({
+      state: 'connecting',
+      lastError: 'hub=2.0.0 node=1.2.0',
+      lastErrorCode: 'proto_version_mismatch',
+      hubProtoVer: null,
+    });
+    expect(useHubStore.getState().status?.lastErrorCode).toBe('proto_version_mismatch');
+    expect(useHubStore.getState().status?.lastError).toBe('hub=2.0.0 node=1.2.0');
+  });
+
+  it('hello ok → hubProtoVer 流转到 store；断开 → 回 null', async () => {
+    await initStore();
+    stateChangedCb?.({ state: 'online', lastError: null, lastErrorCode: null, hubProtoVer: '1.2.0' });
+    expect(useHubStore.getState().status?.hubProtoVer).toBe('1.2.0');
+    // online 后错误诊断清零（lastError/lastErrorCode 同生命周期）
+    expect(useHubStore.getState().status?.lastErrorCode).toBeNull();
+
+    stateChangedCb?.({ state: 'connecting', lastError: null, lastErrorCode: null, hubProtoVer: null });
+    expect(useHubStore.getState().status?.hubProtoVer).toBeNull();
   });
 });
 

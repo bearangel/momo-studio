@@ -78,6 +78,8 @@ const UNENROLLED: HubStatus = {
   nodeName: null,
   nodeId: null,
   lastError: null,
+  lastErrorCode: null,
+  hubProtoVer: null,
 };
 
 const ENROLLED_ONLINE: HubStatus = {
@@ -87,6 +89,8 @@ const ENROLLED_ONLINE: HubStatus = {
   nodeName: '办公室 MacBook',
   nodeId: 'a3f9c2e1deadbeef',
   lastError: null,
+  lastErrorCode: null,
+  hubProtoVer: null,
 };
 
 const ENROLLED_CONNECTING: HubStatus = {
@@ -154,7 +158,7 @@ describe('HubSettingsPanel', () => {
     expect(screen.queryByText('本机')).not.toBeInTheDocument();
 
     act(() => {
-      stateChangedCb?.({ state: 'online', lastError: null });
+      stateChangedCb?.({ state: 'online', lastError: null, lastErrorCode: null, hubProtoVer: null });
     });
     expect(screen.getByText('已连接')).toBeInTheDocument();
     expect(screen.queryByText('连接中')).not.toBeInTheDocument();
@@ -263,13 +267,13 @@ describe('HubSettingsPanel', () => {
 
     // 断线 → 列表降级占位（节点表清空）
     act(() => {
-      stateChangedCb?.({ state: 'connecting', lastError: '连接超时' });
+      stateChangedCb?.({ state: 'connecting', lastError: '连接超时', lastErrorCode: null, hubProtoVer: null });
     });
     expect(screen.getByText('连接中断——在线节点列表暂停更新')).toBeInTheDocument();
 
     // 重连 → online；对端未再上报则不再出现（幽灵行不复现）
     act(() => {
-      stateChangedCb?.({ state: 'online', lastError: null });
+      stateChangedCb?.({ state: 'online', lastError: null, lastErrorCode: null, hubProtoVer: null });
     });
     expect(screen.getByText('1 台')).toBeInTheDocument();
     expect(screen.queryByText('客厅小主机')).not.toBeInTheDocument();
@@ -565,5 +569,51 @@ describe('HubSettingsPanel 工作目录区段（2026-10-27 节点互联「工作
     fireEvent.click(screen.getByRole('button', { name: '更改…' }));
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('只读卷');
+  });
+});
+
+// M3.0-P2 协议诊断展示：状态行「hub 协议版本」段（协商到版本才显示）+
+// proto_version_mismatch 专属提示行（固定文案，错误行之后）
+describe('HubSettingsPanel 协议诊断（M3.0-P2）', () => {
+  it('hubProtoVer 非空 → 状态行显示「hub 协议版本」+ 版本值', async () => {
+    api.hub.getStatus.mockResolvedValue({ ...ENROLLED_ONLINE, hubProtoVer: '1.2.0' });
+    render(<HubSettingsPanel />);
+
+    expect(await screen.findByText('hub 协议版本')).toBeInTheDocument();
+    expect(screen.getByText('1.2.0')).toBeInTheDocument();
+  });
+
+  it('hubProtoVer 为 null → 不显示协议版本行（未连接即未知）', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
+    render(<HubSettingsPanel />);
+
+    await screen.findByText('本机节点');
+    expect(screen.queryByText('hub 协议版本')).not.toBeInTheDocument();
+  });
+
+  it('lastErrorCode=proto_version_mismatch → 错误行后追加协议不兼容固定文案', async () => {
+    api.hub.getStatus.mockResolvedValue({
+      ...ENROLLED_ONLINE,
+      state: 'connecting',
+      lastError: 'hub=2.0.0 node=1.2.0',
+      lastErrorCode: 'proto_version_mismatch',
+    });
+    render(<HubSettingsPanel />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('hub=2.0.0 node=1.2.0');
+    expect(screen.getByText('hub 协议版本不兼容，请升级 hub 或客户端')).toBeInTheDocument();
+  });
+
+  it('lastErrorCode 非 mismatch → 不追加协议提示行', async () => {
+    api.hub.getStatus.mockResolvedValue({
+      ...ENROLLED_ONLINE,
+      state: 'connecting',
+      lastError: '无法连接 hub',
+      lastErrorCode: 'internal',
+    });
+    render(<HubSettingsPanel />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('无法连接 hub');
+    expect(screen.queryByText('hub 协议版本不兼容，请升级 hub 或客户端')).not.toBeInTheDocument();
   });
 });

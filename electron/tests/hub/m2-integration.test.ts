@@ -60,7 +60,7 @@ import {
 } from '../../src/main/hub/client';
 import {
   EVT, PROTOCOL_VERSION, RPC, VIEW_RPC,
-  encodeEnvelope, parseEnvelope,
+  encodeEnvelope, isCompatible, parseEnvelope,
   type EventEnvelope, type RequestEnvelope, type ResponseEnvelope,
 } from '../../src/main/hub/protocol';
 import { MIRROR_WIRE, type MirrorApplyPayload, type MirrorApplyOutcome } from '../../src/main/hub/mirror-wire';
@@ -257,9 +257,12 @@ class SimHub {
     const req = env as RequestEnvelope;
     switch (req.method) {
       case RPC.hello: {
-        const p = (req.payload ?? {}) as { protoVer?: unknown };
-        if (p.protoVer !== PROTOCOL_VERSION) {
-          this.reply(sock, env.id, RPC.hello, { ok: false, error: { code: 'proto_version_mismatch', message: 'hub=proto-x' } });
+        // 版本闸门与真实 hub 对齐（M3.0-P2 e：major-only——hub server.ts 用
+        // isCompatible(ver, PROTOCOL_VERSION)；此前模拟偏差为严格相等，比真实更严）
+        const ver = (req.payload ?? {}) as { protoVer?: unknown };
+        const nodeVer = typeof ver.protoVer === 'string' ? ver.protoVer : '';
+        if (!isCompatible(nodeVer, PROTOCOL_VERSION)) {
+          this.reply(sock, env.id, RPC.hello, { ok: false, error: { code: 'proto_version_mismatch', message: `hub=${PROTOCOL_VERSION} node=${nodeVer}` } });
           return;
         }
         session.helloDone = true;
@@ -977,6 +980,8 @@ beforeAll(async () => {
   });
   clientA.start();
   await until(() => clientA.state() === 'online', 5000, 'clientA online');
+  // M3.0-P2 版本管道：hello 应答 protoVer 落连接态（SimHub HelloRes 已带 protoVer）
+  expect(clientA.hubProtoVer()).toBe(PROTOCOL_VERSION);
 
   clientB = createHubClient({
     url: 'ws://sim/ws', nodeName: NODE_B.nodeName, deviceToken: NODE_B.token,

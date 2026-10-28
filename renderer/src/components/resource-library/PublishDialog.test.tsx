@@ -31,6 +31,8 @@ const ONLINE: HubStatus = {
   nodeName: '办公室 MacBook',
   nodeId: 'a3f9c2e1deadbeef',
   lastError: null,
+  lastErrorCode: null,
+  hubProtoVer: null,
 };
 
 function mkItem(over: Partial<ResourceItem>): ResourceItem {

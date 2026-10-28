@@ -48,10 +48,16 @@ export interface HubStatus {
   nodeName: string | null;
   nodeId: string | null;
   lastError: string | null;
+  /** 最近一次连接错误的协议错误码（M3.0-P2，如 proto_version_mismatch）；无错误为 null */
+  lastErrorCode: string | null;
+  /** 当前连接协商到的 hub 协议版本（M3.0-P2，hello 应答 protoVer）；未连接为 null */
+  hubProtoVer: string | null;
 }
 
 let client: HubClient | null = null;
 let lastError: string | null = null;
+// 最近一次连接错误的协议错误码——与 lastError 同生命周期（online/forget/换址清零）
+let lastErrorCode: string | null = null;
 // 当前连接的在线节点快照（hello 成功时写入，已排除本机）——renderer 拉状态时重播，
 // 使「面板挂载晚于 hello」也见全量在线节点（快照是 hub 唯一的存量下发面：
 // 协议 onlineNodes 注释明言「后续增量走 node.online/offline 事件」）。
@@ -290,6 +296,8 @@ export function hubGetStatus(): HubStatus {
     nodeName: cfg?.nodeName ?? null,
     nodeId: cfg?.nodeId ?? null,
     lastError,
+    lastErrorCode,
+    hubProtoVer: client?.hubProtoVer() ?? null,
   };
 }
 
@@ -399,10 +407,12 @@ function startClient(
     url: wsUrlOf(hubUrl),
     nodeName,
     deviceToken,
-    onStateChange(state, err) {
+    onStateChange(state, err, errCode) {
       if (err) lastError = err;
+      if (errCode !== undefined) lastErrorCode = errCode;
       if (state === 'online') {
         lastError = null;
+        lastErrorCode = null;
         // 重连恢复（T11）：中断任务对账续传 + 缓冲进度拍冲刷（fire-and-forget——
         // 状态回调不 await 恢复链，连接状态机不被对账阻塞）
         void ensureDelegationRunner(nodeId).handleOnline();
@@ -412,7 +422,14 @@ function startClient(
       }
       // 掉线 → 快照过期（断连期间收不到 peer 上下线事件）
       else presenceSeed = null;
-      broadcast('hub:stateChanged', { state, lastError });
+      // 版本管道（M3.0-P2）：hubProtoVer 在 client 内先于 online 广播落值，
+      // 此处读到的即本次协商结果；断开路径 client 已先行清 null
+      broadcast('hub:stateChanged', {
+        state,
+        lastError,
+        lastErrorCode,
+        hubProtoVer: client?.hubProtoVer() ?? null,
+      });
     },
     onEvent(evt: EventEnvelope) {
       if (evt.method === EVT.taskAssigned) {
@@ -599,9 +616,10 @@ export async function hubConfigure(input: { hubUrl: string; nodeName: string }):
     // 换址 = 换 hub：旧 device token 是旧 hub 签发的，对新 hub 无效——拿它连新 hub
     // 会连出「鉴权失败 + 退避重连」的死循环。故断开旧连接、清凭证、nodeId 归零，
     // 不起新连接（用户必须重新 enroll 才能接入新 hub）。
-    // 换址重置陈旧错误——先清 lastError 再停连接（同 hubForget）：
+    // 换址重置陈旧错误——先清 lastError/lastErrorCode 再停连接（同 hubForget）：
     // client.stop() 会广播 disconnected，lastError 未清则 renderer 收到带历史错误的事件。
     lastError = null;
+    lastErrorCode = null;
     client?.stop();
     client = null;
     // 换 hub → 旧 hub 的在线快照作废（重播不得推上个 hub 的节点）
@@ -631,11 +649,12 @@ export async function hubEnroll(input: { hubUrl: string; enrollmentToken: string
 }
 
 export async function hubForget(): Promise<void> {
-  // 先清 lastError 再停连接——client.stop() 内部会 setState('disconnected') 触发一次
-  // 状态广播，若此时 lastError 还是旧值，renderer 会先收到一条带历史错误的
+  // 先清 lastError/lastErrorCode 再停连接——client.stop() 内部会 setState('disconnected')
+  // 触发一次状态广播，若此时 lastError 还是旧值，renderer 会先收到一条带历史错误的
   // disconnected 事件。
   const prev = configStore().read();
   lastError = null;
+  lastErrorCode = null;
   client?.stop();
   client = null;
   presenceSeed = null;
@@ -643,7 +662,12 @@ export async function hubForget(): Promise<void> {
   await clearDeviceToken();
   // 下载授权随接入收回（F2）：旧 hub origin 立即撤出 installer 信任集
   if (prev) unregisterTrustedDownloadOrigin(prev.hubUrl);
-  broadcast('hub:stateChanged', { state: 'disconnected', lastError: null });
+  broadcast('hub:stateChanged', {
+    state: 'disconnected',
+    lastError: null,
+    lastErrorCode: null,
+    hubProtoVer: null,
+  });
 }
 
 /** before-quit 调用。 */

@@ -59,6 +59,7 @@ vi.mock('../../src/main/hub/client', () => ({
       start: (): void => { rec.state = 'connecting'; },
       stop: (): void => { rec.state = 'disconnected'; },
       state: (): string => rec.state,
+      hubProtoVer: (): string | null => null,
       request: async () => ({ ok: true }),
     };
   },

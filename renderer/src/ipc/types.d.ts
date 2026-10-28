@@ -2640,12 +2640,20 @@ export interface HubStatus {
   nodeName: string | null;
   nodeId: string | null;
   lastError: string | null;
+  /** 最近一次连接错误的协议错误码（如 proto_version_mismatch）；无错误为 null */
+  lastErrorCode: string | null;
+  /** 当前连接协商到的 hub 协议版本（hello 应答 protoVer）；未连接为 null */
+  hubProtoVer: string | null;
 }
 
-/** hub:stateChanged 推送载荷（连接状态变化 / 错误信息） */
+/** hub:stateChanged 推送载荷（连接状态变化 / 错误信息 + 协议诊断） */
 export interface HubStateChangedEvent {
   state: HubConnectionState;
   lastError: string | null;
+  /** 最近一次连接错误的协议错误码；无错误为 null */
+  lastErrorCode: string | null;
+  /** 当前连接协商到的 hub 协议版本；未连接为 null */
+  hubProtoVer: string | null;
 }
 
 /** hub:nodePresence 推送载荷（其他节点上下线） */

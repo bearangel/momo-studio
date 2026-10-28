@@ -11,9 +11,9 @@ vi.mock('electron', () => ({
 vi.mock('../../src/main/hub/index', () => ({
   initHub: vi.fn(),
   stopHub: vi.fn(),
-  hubGetStatus: vi.fn(() => ({ configured: false, state: 'disconnected', hubUrl: null, nodeName: null, nodeId: null, lastError: null })),
-  hubConfigure: vi.fn(async (input: { hubUrl: string }) => ({ configured: true, state: 'connecting', hubUrl: input.hubUrl, nodeName: 'a', nodeId: null, lastError: null })),
-  hubEnroll: vi.fn(async () => ({ configured: true, state: 'connecting', hubUrl: 'http://h', nodeName: 'a', nodeId: 'n1', lastError: null })),
+  hubGetStatus: vi.fn(() => ({ configured: false, state: 'disconnected', hubUrl: null, nodeName: null, nodeId: null, lastError: null, lastErrorCode: null, hubProtoVer: null })),
+  hubConfigure: vi.fn(async (input: { hubUrl: string }) => ({ configured: true, state: 'connecting', hubUrl: input.hubUrl, nodeName: 'a', nodeId: null, lastError: null, lastErrorCode: null, hubProtoVer: null })),
+  hubEnroll: vi.fn(async () => ({ configured: true, state: 'connecting', hubUrl: 'http://h', nodeName: 'a', nodeId: 'n1', lastError: null, lastErrorCode: null, hubProtoVer: null })),
   hubForget: vi.fn(async () => undefined),
   replayPresenceSeed: vi.fn(),
   hubGetPresenceNodes: vi.fn(() => [{ nodeId: 'node-1', nodeName: '本机' }]),

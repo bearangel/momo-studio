@@ -11,6 +11,21 @@ import {
 
 export type HubConnectionState = 'disconnected' | 'connecting' | 'online';
 
+/**
+ * hub 拒绝的 RPC 应答错误（M3.0-P2）：在 Error 之上携带协议错误码（code），
+ * message 逐字保留 hub 人话原文（既有消费方读 message 的行为零变化）。
+ * code 取自 RpcErrorPayload.code；载荷异形（无非字符串 code）时兜底 'internal'。
+ */
+export class RpcRemoteError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'RpcRemoteError';
+    this.code = code;
+  }
+}
+
 export interface WebSocketLike {
   send(data: string): void;
   close(): void;
@@ -37,7 +52,13 @@ export interface HubClientOpts {
   url: string;
   nodeName: string;
   deviceToken: string;
-  onStateChange(state: HubConnectionState, lastError?: string): void;
+  /**
+   * 状态迁移回调。err/errCode 只在产生错误的迁移上携带（如 hello 被拒）；
+   * 无错误的迁移两者均为 undefined——消费方据此保留上一条错误（与既有
+   * lastError 语义一致，online 清零由 HubManager 层负责）。
+   * errCode 为 hub RpcErrorPayload.code（M3.0-P2 传播，如 proto_version_mismatch）。
+   */
+  onStateChange(state: HubConnectionState, lastError?: string, lastErrorCode?: string): void;
   onEvent(evt: EventEnvelope): void;
   /**
    * hello 应答成功时的在线节点快照回调（OBS-1）——hub 自 M0 T6 起随 hello 应答
@@ -68,9 +89,11 @@ export interface HubClient {
   start(): void;
   stop(): void;
   state(): HubConnectionState;
+  /** 当前连接协商到的 hub 协议版本（hello 应答 protoVer——M3.0-P2）；未连接为 null */
+  hubProtoVer(): string | null;
   /**
    * RPC 请求-响应关联器（M2 spec §3.1）：信封 id → pending 映射。
-   * - res.ok=false → reject Error(RpcErrorPayload.message)（hub 端人话原文）
+   * - res.ok=false → reject RpcRemoteError（message=hub 端人话原文，code=协议错误码）
    * - 非 online → 直接 reject（不排队不发半途请求）
    * - 连接断开 / stop → 全部 pending reject「连接已重置」（不留悬挂 Promise）
    * - timeoutMs 超时 → reject（缺省 10s）
@@ -100,6 +123,9 @@ export function createHubClient(opts: HubClientOpts): HubClient {
   let state: HubConnectionState = 'disconnected';
   // 当前连接（身份守卫基准）——过期连接（已被新连接取代）的 close 一律不碰状态/计时器/重连
   let sock: WebSocketLike | null = null;
+  // 当前连接协商到的 hub 协议版本（hello 应答 protoVer——M3.0-P2 版本管道）。
+  // 仅 online 期间有值；断开/停机/异形应答一律回 null（未连接即未知）
+  let hubProtoVer: string | null = null;
   // 当前连接私有计时器（hello 超时/心跳）的清理入口——stop 时立即掐断，不依赖 close 事件
   let clearCurrentTimers: (() => void) | null = null;
   // 待触发的重连计时器——stop 时清除（否则停机后仍会重连）
@@ -107,6 +133,9 @@ export function createHubClient(opts: HubClientOpts): HubClient {
   let attempts = 0;
   let stopped = true;
   let lastError: string | undefined;
+  // 最近一次 hello 被拒的协议错误码（如 proto_version_mismatch）——与 lastError 同生命周期
+  // （无错误的迁移不携带，online 由上层清零）；重连 close 时与 lastError 一同重放
+  let lastErrorCode: string | undefined;
   // RPC 关联器待答表：请求信封 id → pending（跨连接存续；断开/停机时全部清偿）
   const pending = new Map<string, PendingEntry>();
 
@@ -140,9 +169,9 @@ export function createHubClient(opts: HubClientOpts): HubClient {
       });
   };
 
-  const setState = (s: HubConnectionState, err?: string): void => {
+  const setState = (s: HubConnectionState, err?: string, errCode?: string): void => {
     state = s;
-    opts.onStateChange(s, err);
+    opts.onStateChange(s, err, errCode);
   };
 
   const scheduleReconnect = (): void => {
@@ -192,7 +221,14 @@ export function createHubClient(opts: HubClientOpts): HubClient {
         pending.delete(res.id);
         clearTimeout(entry.timer);
         if (res.ok) entry.resolve(res.payload);
-        else entry.reject(new Error((res.payload as RpcErrorPayload | null)?.message ?? `hub 拒绝: ${res.method}`));
+        // code 随错误类型保留（M3.0-P2）——message 逐字沿用既有文案（零行为变化）
+        else {
+          const errPayload = res.payload as RpcErrorPayload | null;
+          entry.reject(new RpcRemoteError(
+            typeof errPayload?.code === 'string' ? errPayload.code : 'internal',
+            errPayload?.message ?? `hub 拒绝: ${res.method}`,
+          ));
+        }
         return;
       }
       if (res.method === RPC.hello) {
@@ -201,6 +237,10 @@ export function createHubClient(opts: HubClientOpts): HubClient {
         if (res.ok) {
           attempts = 0;
           pongSincePing = true;
+          // 版本管道（M3.0-P2）：hello 应答 protoVer 先落连接态再广播 online——
+          // 上层在 onStateChange 回调内读 hubProtoVer() 即见本次协商结果
+          const ver = (res.payload as { protoVer?: unknown } | null)?.protoVer;
+          hubProtoVer = typeof ver === 'string' ? ver : null;
           setState('online');
           // hello 成功 → 透出在线节点快照（OBS-1：hub 已下发，client 不得丢弃）
           opts.onHelloSnapshot?.(readOnlineNodes(res.payload));
@@ -211,13 +251,15 @@ export function createHubClient(opts: HubClientOpts): HubClient {
           }, heartbeatMs);
           return;
         }
-        // hello 被拒（如版本不匹配）——记错误 → 关闭被拒连接 → 按退避重连。
+        // hello 被拒（如版本不匹配）——记错误与协议错误码 → 关闭被拒连接 → 按退避重连。
         // 顺序要紧：先摘除当前连接身份（sock = null），其后 hub 发来的 close 事件
         // 会被身份守卫拦下、不重复调度重连（否则一条被拒连接会连出两条新连接）。
-        lastError = (res.payload as { message?: string } | null)?.message ?? 'hello 被拒';
+        const rejectPayload = res.payload as { message?: unknown; code?: unknown } | null;
+        lastError = (typeof rejectPayload?.message === 'string' ? rejectPayload.message : undefined) ?? 'hello 被拒';
+        lastErrorCode = typeof rejectPayload?.code === 'string' ? rejectPayload.code : undefined;
         clearSocketTimers();
         if (clearCurrentTimers === clearSocketTimers) clearCurrentTimers = null;
-        setState('connecting', lastError);
+        setState('connecting', lastError, lastErrorCode);
         sock = null;
         s.close();
         scheduleReconnect();
@@ -231,11 +273,13 @@ export function createHubClient(opts: HubClientOpts): HubClient {
       // 身份守卫：过期连接（已被新连接取代）的 close 不清计时器、不改状态、不调度重连
       if (sock !== s) return;
       sock = null;
+      // 断开 → 协商版本作废（M3.0-P2：未连接即未知，先清再广播）
+      hubProtoVer = null;
       if (clearCurrentTimers === clearSocketTimers) clearCurrentTimers = null;
       clearSocketTimers();
       // 本连接上的在途请求全部清偿——不留悬挂 Promise 等一个永不到来的 res
       rejectAllPending('hub 连接已重置，请求未完成，请重试');
-      if (!stopped) { setState('connecting', lastError); scheduleReconnect(); }
+      if (!stopped) { setState('connecting', lastError, lastErrorCode); scheduleReconnect(); }
     });
   };
 
@@ -253,11 +297,13 @@ export function createHubClient(opts: HubClientOpts): HubClient {
       clearCurrentTimers = null;
       const s = sock;
       sock = null;
+      hubProtoVer = null;
       s?.close();
       rejectAllPending('hub 连接已停止，请求未完成');
       setState('disconnected');
     },
     state(): HubConnectionState { return state; },
+    hubProtoVer(): string | null { return hubProtoVer; },
     request<T = unknown>(method: string, payload: unknown, timeoutMs = 10_000): Promise<T> {
       return new Promise<T>((resolve, reject) => {
         if (stopped || state !== 'online' || !sock) {

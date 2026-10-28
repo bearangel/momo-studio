@@ -2,7 +2,7 @@
 // ws 经工厂注入（EventEmitter fake）——信封编解码用真 protocol（wire 语义不简化）。
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createHubClient, enrollOverHttp, type WsFactory, type WebSocketLike } from '../../src/main/hub/client';
+import { createHubClient, enrollOverHttp, RpcRemoteError, type WsFactory, type WebSocketLike } from '../../src/main/hub/client';
 import { EVT, PROTOCOL_VERSION, RPC, encodeEnvelope, parseEnvelope, type EventEnvelope } from '../../src/main/hub/protocol';
 
 class FakeSocket extends EventEmitter implements WebSocketLike {
@@ -403,6 +403,104 @@ describe('RPC 请求-响应关联器（M2 T4）', () => {
     server.sockets[0]!.emit('message', JSON.stringify({ v: 1, kind: 'res', id: reqId, method: 'group.leave', ok: true, payload: { ok: true } }));
     lateResolveCount += 1;
     expect(lateResolveCount).toBe(1);
+    client.stop();
+  });
+});
+
+describe('协议协商消费侧管道（M3.0-P2）', () => {
+  /** 通用 RPC 回声器（关联器用例同款——按请求 id 回固定应答） */
+  function replyRpc(server: FakeServer, method: string, respond: (id: string) => string): void {
+    server.on('to-server', (raw: string, sock: FakeSocket) => {
+      const env = JSON.parse(raw) as { kind: string; method: string; id: string };
+      if (env.kind !== 'req' || env.method !== method) return;
+      queueMicrotask(() => sock.emit('message', respond(env.id)));
+    });
+  }
+
+  it('hello ok → hubProtoVer() 读到应答 protoVer；断开 → 回 null', async () => {
+    const { factory, server } = makeFactory();
+    server.replyHello(); // 默认载荷带 protoVer: PROTOCOL_VERSION
+    const client = createHubClient({
+      url: 'ws://x/ws', nodeName: 'a', deviceToken: 't',
+      onStateChange: () => undefined, onEvent: () => undefined, ws: factory,
+    });
+    client.start();
+    expect(client.hubProtoVer()).toBeNull(); // 连接协商完成前未知
+    await flushMicrotasks();
+    expect(client.hubProtoVer()).toBe(PROTOCOL_VERSION);
+    server.sockets[0]!.emit('close', 1006, Buffer.from(''));
+    expect(client.hubProtoVer()).toBeNull();
+    client.stop();
+  });
+
+  it('hello ok 载荷缺 protoVer → hubProtoVer() 为 null（异形不炸，未连接语义）', async () => {
+    const { factory, server } = makeFactory();
+    server.helloPayload = { hubId: 'hub', serverTime: 0, onlineNodes: [] };
+    server.replyHello();
+    const client = createHubClient({
+      url: 'ws://x/ws', nodeName: 'a', deviceToken: 't',
+      onStateChange: () => undefined, onEvent: () => undefined, ws: factory,
+    });
+    client.start();
+    await flushMicrotasks();
+    expect(client.state()).toBe('online');
+    expect(client.hubProtoVer()).toBeNull();
+    client.stop();
+  });
+
+  it('hello 被拒 → onStateChange 第三参携带 payload.code（proto_version_mismatch）', async () => {
+    const { factory, server } = makeFactory();
+    server.replyHello(true); // 拒绝载荷 { code: 'proto_version_mismatch', message: 'hub=2.0.0' }
+    const codes: Array<string | undefined> = [];
+    const client = createHubClient({
+      url: 'ws://x/ws', nodeName: 'a', deviceToken: 't',
+      onStateChange: (_s, _err, code) => codes.push(code), onEvent: () => undefined, ws: factory,
+      backoffBaseMs: 100,
+    });
+    client.start();
+    await flushMicrotasks();
+    expect(codes).toContain('proto_version_mismatch');
+    client.stop();
+  });
+
+  it('res.ok=false → reject RpcRemoteError（instanceof、code 可读、message 人话原文保留）', async () => {
+    const { factory, server } = makeFactory();
+    server.replyHello();
+    replyRpc(server, 'group.join', (id) => JSON.stringify({ v: 1, kind: 'res', id, method: 'group.join', ok: false, payload: { code: 'not_found', message: '邀请码无效或已被撤销' } }));
+    const client = createHubClient({
+      url: 'ws://x/ws', nodeName: 'a', deviceToken: 't',
+      onStateChange: () => undefined, onEvent: () => undefined, ws: factory,
+    });
+    client.start();
+    await flushMicrotasks();
+    const err = await client.request('group.join', { inviteCode: 'x' }).then(
+      () => { throw new Error('应 reject'); },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(RpcRemoteError);
+    expect(err).toBeInstanceOf(Error); // 既有 catch (err instanceof Error) 消费面不受影响
+    expect((err as RpcRemoteError).code).toBe('not_found');
+    expect((err as RpcRemoteError).message).toBe('邀请码无效或已被撤销');
+    client.stop();
+  });
+
+  it('res.ok=false 载荷异形（无 code/message）→ 兜底 internal + 既有回退文案', async () => {
+    const { factory, server } = makeFactory();
+    server.replyHello();
+    replyRpc(server, 'group.leave', (id) => JSON.stringify({ v: 1, kind: 'res', id, method: 'group.leave', ok: false, payload: null }));
+    const client = createHubClient({
+      url: 'ws://x/ws', nodeName: 'a', deviceToken: 't',
+      onStateChange: () => undefined, onEvent: () => undefined, ws: factory,
+    });
+    client.start();
+    await flushMicrotasks();
+    const err = await client.request('group.leave', { groupId: 'g' }).then(
+      () => { throw new Error('应 reject'); },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(RpcRemoteError);
+    expect((err as RpcRemoteError).code).toBe('internal');
+    expect((err as RpcRemoteError).message).toBe('hub 拒绝: group.leave');
     client.stop();
   });
 });
