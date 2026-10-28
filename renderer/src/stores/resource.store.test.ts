@@ -89,6 +89,24 @@ describe('resource.store — install 反馈闭环', () => {
     expect(state.installNotice).toBeNull();
   });
 
+  it('installResource 失败（HubCatalogStaleError）→ 原文如实透传（不吞、不替换为泛化文案）', async () => {
+    // M2.4 T1：主进程目录回落时抛 HubCatalogStaleError；renderer 既有 catch 必须
+    // 把 message 原样拼进「导入失败：」前缀给用户——不得吞成通用「导入失败」。
+    const staleMessage = '无法确认 momo-hub 上的最新版本（网络不可用），请稍后重试';
+    const staleErr = Object.assign(new Error(staleMessage), { name: 'HubCatalogStaleError' });
+    resourceInstall.mockRejectedValueOnce(staleErr);
+
+    await expect(
+      useResourceStore.getState().installResource('hub-agent-stale-x1'),
+    ).resolves.toBe(false);
+
+    const state = useResourceStore.getState();
+    // 逐字透传（含前缀与全部标点/括号）
+    expect(state.error).toBe(`导入失败：${staleMessage}`);
+    expect(state.error).toContain('无法确认 momo-hub 上的最新版本（网络不可用），请稍后重试');
+    expect(state.installNotice).toBeNull();
+  });
+
   it('installResource 失败后再成功 → 旧 error 被清掉，新 installNotice 出现', async () => {
     // 第一次失败
     resourceInstall.mockRejectedValueOnce(new Error('timeout'));
