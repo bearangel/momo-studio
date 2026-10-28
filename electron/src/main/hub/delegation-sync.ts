@@ -90,9 +90,20 @@ export interface DelegationProgressEntry {
   /** 等待确认标志（T12）：kind='waiting-input' 拍置 true；恢复拍（无 kind）清除。
    *  可选——T11 前落库的旧条目无此字段（=== true 判定，不误报）。 */
   waiting?: boolean;
+  /** 远程代答留痕（M3.1）：task.answered 事件置 {decision, at}；后续进度拍
+   *  （handleProgress 整条覆写）自然清除——「较新才显示」由消费侧比较 at 判定。
+   *  可选——旧条目无此字段（形状不符即弃，保守解析）。 */
+  answered?: { decision: 'approve' | 'deny'; at: number };
 }
 
 const PROGRESS_KEY = 'hub_delegation_progress';
+
+/** answered 形状校验（保守解析——decision 枚举 + at 数字，异形整字段丢弃不渗入持久化面） */
+function isAnsweredShape(v: unknown): v is { decision: 'approve' | 'deny'; at: number } {
+  if (typeof v !== 'object' || v === null) return false;
+  const a = v as { decision?: unknown; at?: unknown };
+  return (a.decision === 'approve' || a.decision === 'deny') && typeof a.at === 'number';
+}
 
 function parseProgress(raw: string | undefined): Record<string, DelegationProgressEntry> {
   const out: Record<string, DelegationProgressEntry> = {};
@@ -104,8 +115,15 @@ function parseProgress(raw: string | undefined): Record<string, DelegationProgre
       if (typeof v !== 'object' || v === null) continue;
       const e = v as Partial<DelegationProgressEntry>;
       if (typeof e.excerpt === 'string' && typeof e.lastSeq === 'number' && typeof e.at === 'number') {
-        // waiting 仅 true 落形——旧条目/T12 前数据零改写（toEqual 形状锁不破）
-        out[k] = { excerpt: e.excerpt, lastSeq: e.lastSeq, at: e.at, ...(e.waiting === true ? { waiting: true } : {}) };
+        // waiting 仅 true 落形——旧条目/T12 前数据零改写（toEqual 形状锁不破）；
+        // answered 同款保守纪律（M3.1）
+        out[k] = {
+          excerpt: e.excerpt,
+          lastSeq: e.lastSeq,
+          at: e.at,
+          ...(e.waiting === true ? { waiting: true } : {}),
+          ...(isAnsweredShape(e.answered) ? { answered: e.answered } : {}),
+        };
       }
     }
   } catch {
@@ -159,6 +177,8 @@ export interface DelegationSyncPorts {
   updateTask(id: string, patch: Partial<TaskRow>): void;
   /** 进度摘要落 kv */
   saveProgress(delegationId: string, entry: DelegationProgressEntry): void;
+  /** 进度摘要读回（handleAnswered 合并写的前置读取——M3.1） */
+  getProgress(delegationId: string): DelegationProgressEntry | null;
   /** worker 侧收委派建行（生产=storage/tasks/repo insertTask） */
   insertWorkerTaskRow(input: {
     workspaceId: string;
@@ -186,6 +206,12 @@ export interface DelegationSync {
   handleTerminal(status: 'done' | 'failed' | 'interrupted', taskId: string, reason?: string): void;
   /** leader：task.cancel 回执（hub 账本权威 → 本地行同步） */
   markCancelled(taskId: string): void;
+  /**
+   * leader：task.answered 事件（M3.1）→ 进度 kv 条目合并写 answered 留痕
+   * （excerpt/lastSeq/at 保留——行状态不动：hub 代答不迁移账本，waiting↔running
+   * 单由 worker 上报驱动）。无既有条目（委派未开跑/无看板行）→ 静默无落点。
+   */
+  handleAnswered(evt: { taskId: string; decision: 'approve' | 'deny' }): void;
   /** worker：装饰 delegation store（观察 upsert/updateState；delegation-runner 零改） */
   wrapWorkerStore(store: HubDelegationStore): HubDelegationStore;
 }
@@ -259,6 +285,12 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
       // 终态清等待（T12 修复轮）：取消拍与 done/failed 同样整条覆盖摘要——
       // 等待中取消若无此步，kv waiting 残留会让等待卡对已取消任务误亮
       saveProgress(taskId, CANCELLED_SUMMARY, 0);
+    },
+
+    handleAnswered(evt) {
+      const prev = ports.getProgress(evt.taskId);
+      if (prev === null) return;
+      ports.saveProgress(evt.taskId, { ...prev, answered: { decision: evt.decision, at: ports.now() } });
     },
 
     wrapWorkerStore(store) {

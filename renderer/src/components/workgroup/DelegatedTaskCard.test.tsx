@@ -9,7 +9,7 @@
 //   - 操作菜单门控：取消（可取消态）/ 重试派发（仅待派发 RM-M21-5）/ 失败重派（仅 failed）
 //   - waiting 占位（T11/T12 接通前无生产者）：waitingSummary=null → 等待态零渲染
 // 纯组件测试：board context 直注入（IPC 边界由 provider/BoardCanvas 层承接）。
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import {
@@ -18,8 +18,9 @@ import {
   type DelegationBoardContextValue,
 } from './DelegatedTaskCard';
 import { showToast } from '../ui/Toast';
-import type { TaskRow } from '../../ipc/types';
+import type { HubStatus, TaskRow } from '../../ipc/types';
 import { ipc } from '../../ipc/client';
+import { useHubStore } from '../../stores/hub.store';
 
 /** 推送订阅捕获（vi.hoisted——vi.mock 工厂与用例体共享） */
 const h = vi.hoisted(() => {
@@ -34,16 +35,21 @@ vi.mock('../../ipc/client', () => ({
   ipc: {
     hub: {
       taskCancel: vi.fn().mockResolvedValue({ ok: true }),
+      taskAnswer: vi.fn().mockResolvedValue({ disposition: 'granted' }),
       retryDispatch: vi.fn().mockResolvedValue({ dispatched: true, nodeId: 'node-b', delegationId: 'hub-new' }),
       delegationBoard: vi.fn().mockResolvedValue({ progress: {}, received: [] }),
       taskList: vi.fn().mockResolvedValue({ tasks: [] }),
       getStatus: vi.fn().mockResolvedValue({ nodeId: 'node-self', state: 'online' }),
       groupList: vi.fn().mockResolvedValue({ groups: [] }),
       localWaiting: vi.fn().mockResolvedValue([]),
+      getNodes: vi.fn().mockResolvedValue([]),
+      onStateChanged: vi.fn(() => () => {}),
+      onNodePresence: vi.fn(() => () => {}),
       onTaskProgress: vi.fn((cb: (p: unknown) => void) => { (h.subs.progress ??= []).push(cb); return () => {}; }),
       onTaskCompleted: vi.fn((cb: (p: unknown) => void) => { (h.subs.completed ??= []).push(cb); return () => {}; }),
       onTaskFailed: vi.fn((cb: (p: unknown) => void) => { (h.subs.failed ??= []).push(cb); return () => {}; }),
       onTaskInterrupted: vi.fn((cb: (p: unknown) => void) => { (h.subs.interrupted ??= []).push(cb); return () => {}; }),
+      onTaskAnswered: vi.fn((cb: (p: unknown) => void) => { (h.subs.answered ??= []).push(cb); return () => {}; }),
     },
     task: { transition: vi.fn().mockResolvedValue({}) },
     sandbox: {
@@ -695,5 +701,253 @@ describe('DelegatedTaskCard — 操作菜单', () => {
     openMenu();
     fireEvent.click(screen.getByRole('button', { name: /失败重派/ }));
     await waitFor(() => expect(ipc.hub.retryDispatch).toHaveBeenCalledWith({ taskId: 'T-100' }));
+  });
+});
+
+// ── M3.1 远程代答：门控三态 + 动作链 + toasts + armed 确认 + 留痕行 ──────────
+
+/** 门控注入：hub.store status.hubProtoVer（卡片经 useHubStore 读取） */
+function setHubProtoVer(ver: string | null): void {
+  const status: HubStatus | null = ver === null ? null : {
+    configured: true, state: 'online', hubUrl: 'http://h', nodeName: 'self', nodeId: 'node-self',
+    lastError: null, lastErrorCode: null, hubProtoVer: ver,
+  };
+  useHubStore.setState({ status });
+}
+
+/** leader 等待卡基线：waitingSummary prop 点亮等待态 + 账本/节点名可解析 */
+const waitingLeaderBoard = (over: Partial<DelegationBoardContextValue> = {}): DelegationBoardContextValue =>
+  boardCtx({
+    nodeNames: { 'node-b': 'office-mac' },
+    ledger: { 'T-8f21abcd': { taskId: 'T-8f21abcd', workspaceName: 'dev-ws', targetNodeId: 'node-b', status: 'running', title: '批量重命名', createdAt: 1, updatedAt: 2 } },
+    ...over,
+  });
+
+describe('DelegatedTaskCard — 远程代答门控（M3.1）', () => {
+  afterEach(() => {
+    useHubStore.setState({ status: null });
+  });
+
+  it('A-1. 三态门控：hubProtoVer null / 1.2.0 → 菜单项隐藏；1.3.0 → 批准+拒绝在场', () => {
+    for (const ver of [null, '1.2.0'] as const) {
+      setHubProtoVer(ver);
+      const { unmount } = renderCard(
+        mkTask({ id: 'T-100', title: '为支付回调写集成测试', status: 'in_progress' }),
+        waitingLeaderBoard(),
+        'agent 等待写授权：rm -rf node_modules',
+      );
+      openMenu();
+      expect(screen.queryByTestId('approve-arm')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('deny-arm')).not.toBeInTheDocument();
+      unmount();
+    }
+    setHubProtoVer('1.3.0');
+    renderCard(
+      mkTask({ id: 'T-100', title: '为支付回调写集成测试', status: 'in_progress' }),
+      waitingLeaderBoard(),
+      'agent 等待写授权：rm -rf node_modules',
+    );
+    openMenu();
+    expect(screen.getByTestId('approve-arm')).toBeInTheDocument();
+    expect(screen.getByTestId('deny-arm')).toBeInTheDocument();
+  });
+
+  it('A-2. worker 视角等待卡 → 菜单项不出现（代答权=leader）；非等待卡 → 不出现', () => {
+    setHubProtoVer('1.3.0');
+    renderCard(
+      mkTask({ id: 'T-900', title: '为支付回调写集成测试', status: 'in_progress', routing: { mode: 'node', groupId: '', targetNodeId: 'node-self' } }),
+      boardCtx({ selfNodeId: 'node-self' }),
+      'agent 等待写授权',
+    );
+    openMenu();
+    expect(screen.queryByTestId('approve-arm')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('deny-arm')).not.toBeInTheDocument();
+  });
+
+  it('A-3. 非等待卡（running 正常拍）→ 菜单项不出现（waiting 是门控前提）', () => {
+    setHubProtoVer('1.3.0');
+    renderCard(
+      mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'in_progress' }),
+      waitingLeaderBoard(),
+    );
+    openMenu();
+    expect(screen.queryByTestId('approve-arm')).not.toBeInTheDocument();
+  });
+});
+
+describe('DelegatedTaskCard — 远程代答动作链（M3.1）', () => {
+  beforeEach(() => {
+    setHubProtoVer('1.3.0');
+  });
+  afterEach(() => {
+    useHubStore.setState({ status: null });
+  });
+
+  function renderWaitingLeader(): ReturnType<typeof render> {
+    return renderCard(
+      mkTask({ id: 'T-100', title: '为支付回调写集成测试', status: 'in_progress' }),
+      waitingLeaderBoard(),
+      'agent 等待写授权：rm -rf node_modules',
+    );
+  }
+
+  it('A-4. approve 两段确认：首击只 arm 不触发 IPC → 次击 taskAnswer({taskId, decision:"approve"}) + 成功 toast（worker：节点名）', async () => {
+    const refreshTasks = vi.fn();
+    renderCard(
+      mkTask({ id: 'T-100', title: '为支付回调写集成测试', status: 'in_progress' }),
+      waitingLeaderBoard({ refreshTasks }),
+      'agent 等待写授权：rm -rf node_modules',
+    );
+    openMenu();
+    fireEvent.click(screen.getByTestId('approve-arm'));
+    expect(screen.getByText(/再次点击确认批准 · \ds/)).toBeInTheDocument();
+    expect(ipc.hub.taskAnswer).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('approve-confirm'));
+    await waitFor(() => expect(ipc.hub.taskAnswer).toHaveBeenCalledWith({ taskId: 'T-8f21abcd', decision: 'approve' }));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('已远程批准（worker：office-mac）'));
+    expect(refreshTasks).toHaveBeenCalled();
+  });
+
+  it('A-5. deny → taskAnswer decision:"deny" + 已远程拒绝 toast（文案随回执 disposition）', async () => {
+    vi.mocked(ipc.hub.taskAnswer).mockResolvedValueOnce({ disposition: 'denied' });
+    renderWaitingLeader();
+    openMenu();
+    fireEvent.click(screen.getByTestId('deny-arm'));
+    fireEvent.click(screen.getByTestId('deny-confirm'));
+    await waitFor(() => expect(ipc.hub.taskAnswer).toHaveBeenCalledWith({ taskId: 'T-8f21abcd', decision: 'deny' }));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('已远程拒绝（worker：office-mac）'));
+  });
+
+  it('A-6. stale 口径 → 人话 toast（worker 已无等待——幂等）', async () => {
+    vi.mocked(ipc.hub.taskAnswer).mockResolvedValueOnce({ disposition: 'stale' });
+    renderWaitingLeader();
+    openMenu();
+    fireEvent.click(screen.getByTestId('approve-arm'));
+    fireEvent.click(screen.getByTestId('approve-confirm'));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('节点已无等待中的授权（可能已被处理）'));
+  });
+
+  it('A-7. 版本过低三码（[unsupported_method]/[unknown_method]/[node_unsupported] 前缀）→ 降级 toast；其余错误剥前缀原文 toast', async () => {
+    for (const code of ['unsupported_method', 'unknown_method', 'node_unsupported'] as const) {
+      vi.mocked(ipc.hub.taskAnswer).mockRejectedValueOnce(new Error(`[${code}] 原始人话错误`));
+      const { unmount } = renderWaitingLeader();
+      openMenu();
+      fireEvent.click(screen.getByTestId('deny-arm'));
+      fireEvent.click(screen.getByTestId('deny-confirm'));
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('节点或 hub 版本过低，无法远程代答'));
+      unmount();
+      vi.clearAllMocks();
+      setHubProtoVer('1.3.0');
+    }
+    // 非版本码：剥 [code] 前缀后原文呈现（如 not_waiting）
+    vi.mocked(ipc.hub.taskAnswer).mockRejectedValueOnce(new Error('[not_waiting] 任务当前状态为 running，非等待态不可代答'));
+    renderWaitingLeader();
+    openMenu();
+    fireEvent.click(screen.getByTestId('deny-arm'));
+    fireEvent.click(screen.getByTestId('deny-confirm'));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('远程代答失败: 任务当前状态为 running，非等待态不可代答'));
+  });
+
+  it('A-8. 菜单关闭即复位臂态（approve arm 后关菜单 → 重开回落首击文案，cancel 模板同款）', () => {
+    renderWaitingLeader();
+    openMenu();
+    fireEvent.click(screen.getByTestId('approve-arm'));
+    expect(screen.getByText(/再次点击确认批准/)).toBeInTheDocument();
+    // 点遮罩关菜单 → disarm；重开 → 回落「批准节点写入」首击文案
+    fireEvent.click(document.querySelector('.fixed.inset-0')!);
+    expect(screen.queryByTestId('approve-confirm')).not.toBeInTheDocument();
+    fireEvent.contextMenu(screen.getByRole('button', { name: /为支付回调/ }));
+    expect(screen.getByText('批准节点写入')).toBeInTheDocument();
+  });
+});
+
+describe('DelegatedTaskCard — 代答留痕行与 waiting 兜底（M3.1）', () => {
+  afterEach(() => {
+    useHubStore.setState({ status: null });
+  });
+
+  it('R-1. progress.answered 较新（at ≥ 条目拍时刻）→ 进度线下方「已远程批准」行', () => {
+    renderCard(
+      mkTask({ id: 'T-100', title: '为支付回调写集成测试', status: 'in_progress' }),
+      boardCtx({ progress: { 'T-8f21abcd': { excerpt: '等待批准写入', lastSeq: 5, at: 10, waiting: true, answered: { decision: 'approve', at: 11 } } } }),
+      null,
+    );
+    const line = document.querySelector('[data-answered-line]');
+    expect(line).not.toBeNull();
+    expect(line!.textContent).toBe('已远程批准');
+    // 留痕行在进度行下方（同一卡片按钮内、进度行之后）
+    const card = screen.getByRole('button', { name: /为支付回调/ });
+    expect(card.querySelector('[data-progress-line] + [data-answered-line]')).not.toBeNull();
+  });
+
+  it('R-2. answered 较旧（后续进度拍已到达）→ 行隐藏；终态卡 → 行隐藏', () => {
+    const { rerender } = render(
+      <DelegationBoardProvider value={boardCtx({ progress: { 'T-8f21abcd': { excerpt: '续跑产出', lastSeq: 6, at: 20, answered: { decision: 'deny', at: 11 } } } })}>
+        <DelegatedTaskCard task={mkTask({ id: 'T-100', title: '为支付回调写集成测试', status: 'in_progress' })} onSelect={() => {}} />
+      </DelegationBoardProvider>,
+    );
+    expect(document.querySelector('[data-answered-line]')).toBeNull();
+    rerender(
+      <DelegationBoardProvider value={boardCtx({ progress: { 'T-8f21abcd': { excerpt: '已完成', lastSeq: 7, at: 30, answered: { decision: 'approve', at: 29 } } } })}>
+        <DelegatedTaskCard task={mkTask({ id: 'T-100', title: '为支付回调写集成测试', status: 'completed' })} onSelect={() => {}} />
+      </DelegationBoardProvider>,
+    );
+    expect(document.querySelector('[data-answered-line]')).toBeNull();
+  });
+
+  it('R-3. 账本 waiting 兜底：ledger status=waiting 且等待信号在场 → 等待角标点亮（七态判定不回退）；无等待信号 → StatusBadge 兜底「等待节点确认」', () => {
+    // 七态：waiting 与 running 同样可点亮等待角标（摘要信号驱动，逻辑不动）
+    const { unmount } = renderCard(
+      mkTask({ id: 'T-100', title: '为支付回调写集成测试', status: 'in_progress' }),
+      waitingLeaderBoard({
+        ledger: { 'T-8f21abcd': { taskId: 'T-8f21abcd', workspaceName: 'dev-ws', targetNodeId: 'node-b', status: 'waiting', title: '批量重命名', createdAt: 1, updatedAt: 2 } },
+        progress: { 'T-8f21abcd': { excerpt: '等待批准写入', lastSeq: 5, at: 10, waiting: true } },
+      }),
+    );
+    expect(screen.getByText('等待节点确认')).toBeInTheDocument();
+    unmount();
+    // 对账滞后兜底：ledger waiting 但 kv 等待标志缺失 → StatusBadge 呈现等待语义
+    renderCard(
+      mkTask({ id: 'T-101', title: '排查生产 500', status: 'in_progress', delegationId: 'T-deadbeef' }),
+      boardCtx({
+        nodeNames: { 'node-b': 'office-mac' },
+        ledger: { 'T-deadbeef': { taskId: 'T-deadbeef', workspaceName: 'dev-ws', targetNodeId: 'node-b', status: 'waiting', title: '排查生产 500', createdAt: 1, updatedAt: 2 } },
+      }),
+    );
+    expect(screen.getByText('等待节点确认')).toBeInTheDocument();
+  });
+
+  it('R-4. 账本 waiting 可取消（hub 1.3 canTransition：cancelled 自 waiting 合法——升 1.3 前该时段显 running 可取消，行为保持）', async () => {
+    renderCard(
+      mkTask({ id: 'T-100', title: '为支付回调写集成测试', status: 'in_progress' }),
+      boardCtx({
+        ledger: { 'T-8f21abcd': { taskId: 'T-8f21abcd', workspaceName: 'dev-ws', targetNodeId: 'node-b', status: 'waiting', title: 'x', createdAt: 1, updatedAt: 2 } },
+      }),
+    );
+    openMenu();
+    fireEvent.click(screen.getByTestId('cancel-arm'));
+    fireEvent.click(screen.getByTestId('cancel-confirm'));
+    await waitFor(() => expect(ipc.hub.taskCancel).toHaveBeenCalledWith({ taskId: 'T-8f21abcd' }));
+  });
+
+  it('PROV-3. onTaskAnswered 推送 → answered 留痕合入 live 进度面（卡片即时反馈，kv 持久路由在主进程）', async () => {
+    render(
+      <DelegationBoardProvider refreshTasks={undefined}>
+        <DelegatedTaskCard
+          task={mkTask({ id: 'T-100', title: '为支付回调写集成测试', status: 'in_progress' })}
+          onSelect={() => {}}
+        />
+      </DelegationBoardProvider>,
+    );
+    // 先落一拍等待进度（live 条目），再收代答事件 → withAnswered 合入
+    await waitFor(() => expect(h.subs.progress?.length).toBeGreaterThan(0));
+    act(() => {
+      fire('progress', { taskId: 'T-8f21abcd', sessionId: 'sess-9', lastSeq: 15, excerpt: '等待批准写入', kind: 'waiting-input' });
+    });
+    expect(await screen.findByText('等待节点确认')).toBeInTheDocument();
+    act(() => {
+      fire('answered', { taskId: 'T-8f21abcd', decision: 'deny' });
+    });
+    expect(await screen.findByText('已远程拒绝')).toBeInTheDocument();
   });
 });

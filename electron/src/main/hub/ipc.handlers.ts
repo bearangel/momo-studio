@@ -11,6 +11,7 @@ import { createGroupClient } from './groups';
 import { publishToHub, type PublishInput } from './publish';
 import { buildAndUploadWorkspaceSnapshot } from './snapshot-upload';
 import { RPC, TASK_RPC, VIEW_RPC } from './protocol';
+import { RpcRemoteError } from './client';
 import {
   resolveRemoteTarget,
   routingPrecheck,
@@ -101,6 +102,15 @@ export function registerHubIpc(): void {
     hubRequest(TASK_RPC.cancel, input, undefined).then((res) => {
       hubMarkDelegationCancelled(input.taskId);
       return res;
+    }));
+  // 远程代答（M3.1）：task.answer 转发 hub（leader-only + minor 门槛 3 在 hub 侧守卫）。
+  // RpcRemoteError 的 code 编入 message 前缀 `[code] 原文` 再抛——Electron IPC
+  // rejection 只保 message（自定义属性不跨进程，Electron #24427），renderer 侧
+  // 据前缀区分「版本过低」类可读降级（hub-capability / 卡片 toast 消费）。
+  ipcMain.handle('hub:taskAnswer', (_evt, input: { taskId: string; decision: 'approve' | 'deny'; message?: string }) =>
+    hubRequest(TASK_RPC.answer, input, undefined).catch((err: unknown) => {
+      if (err instanceof RpcRemoteError) throw new Error(`[${err.code}] ${err.message}`);
+      throw err;
     }));
   // 查看同意设置两通道（M2e T14/T15：允许本组查看开关——set 内即时上报 hub）
   ipcMain.handle('hub:getViewSettings', () => hubGetViewSettings());

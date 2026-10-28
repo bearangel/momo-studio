@@ -15,12 +15,17 @@
 //     waitingSummary 保留为直注入覆盖（测试）
 //   - 操作菜单：取消（可取消态；已派发走 hub cancel 既有链、待派发走本地行取消）/
 //     重试派发（仅待派发，RM-M21-5 手动驱动）/ 失败重派（仅 failed，主进程换
-//     delegation_id）
+//     delegation_id）/ 批准·拒绝节点写入（M3.1 远程代答——leader 等待卡且 hub
+//     协议 minor ≥ 3，armed-confirm 两段确认，cancel 模板）
+//   - 远程代答留痕行（M3.1）：progress.answered 存在且较新（at ≥ 条目拍时刻，
+//     非终态）→ 进度线下方 text-xs「已远程批准/已远程拒绝」；后续进度拍自然清除
 // 外派卡不接拖拽（useSortable 零注册）：行状态由 hub 账本驱动，本地 move 会
 // 与远端真相打架——列间迁移只能经委派事件回写。
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Bot, CircleCheck, CircleHelp, CircleX, RefreshCw, RotateCcw, X, Zap } from 'lucide-react';
+import { Ban, Bot, Check, CircleCheck, CircleHelp, CircleX, RefreshCw, RotateCcw, X, Zap } from 'lucide-react';
 import { ipc } from '../../ipc/client';
+import { useHubStore } from '../../stores/hub.store';
+import { hubSupportsMinor } from '../../lib/hub-capability';
 import type {
   DelegationBoardResult,
   HubDelegationProgressEntry,
@@ -39,6 +44,9 @@ import { useArmedConfirm } from './useArmedConfirm';
 function shortNodeId(nodeId: string): string {
   return nodeId.length > 8 ? `${nodeId.slice(0, 4)}…${nodeId.slice(-4)}` : nodeId;
 }
+
+/** M3.1 版本过低类错误码（rejection message 前缀 [code]——主进程 ipc.handlers 编码） */
+const ANSWER_VERSION_LOW_CODES = new Set(['unsupported_method', 'unknown_method', 'node_unsupported']);
 
 /** 看板外派投影上下文（DelegationBoardProvider 注入；缺省空值=离线降级渲染） */
 export interface DelegationBoardContextValue {
@@ -71,6 +79,24 @@ const DelegationBoardContext = createContext<DelegationBoardContextValue>(EMPTY_
 
 /** localWaiting 拉取节拍：5s 轮询（grant/deny 处置无推送通道，轮询兜底去态） */
 const LOCAL_WAITING_POLL_MS = 5000;
+
+/**
+ * 远程代答留痕合入进度条目（M3.1）：live 推送路（onTaskAnswered）patch 进
+ * liveProgress/kv 合成面——answered 恒为最新一次代答；「较新才显示」由卡片
+ * 比较 answered.at 与条目拍时刻判定（后续进度拍 at 更大自然隐藏）。
+ */
+function withAnswered(
+  base: Record<string, HubDelegationProgressEntry>,
+  answered: Record<string, { decision: 'approve' | 'deny'; at: number }>,
+): Record<string, HubDelegationProgressEntry> {
+  if (Object.keys(answered).length === 0) return base;
+  const out = { ...base };
+  for (const [id, a] of Object.entries(answered)) {
+    const entry = out[id];
+    if (entry) out[id] = { ...entry, answered: a };
+  }
+  return out;
+}
 
 /**
  * 看板级外派数据 Provider：value 直注入（测试）；缺省内部拉取——delegationBoard
@@ -113,6 +139,9 @@ function useDelegationBoardData(refreshTasks?: () => void): DelegationBoardConte
   const [selfNodeId, setSelfNodeId] = useState<string | null>(null);
   const [liveProgress, setLiveProgress] = useState<Record<string, HubDelegationProgressEntry>>({});
   const [localWaiting, setLocalWaiting] = useState<Record<string, string>>({});
+  // M3.1 远程代答留痕（live 路）：taskId → {decision, at}（kv 持久路在主进程
+  // delegation-sync handleAnswered——两路经 withAnswered 合成）
+  const [liveAnswered, setLiveAnswered] = useState<Record<string, { decision: 'approve' | 'deny'; at: number }>>({});
 
   // T12 Low-2：终态推送回调用 refreshTasks 闭包——空依赖订阅若直捕会在切
   // workspace 后仍调旧闭包（刷旧 ws 行、新 ws 不对账）。经 ref 实时取最新。
@@ -168,7 +197,15 @@ function useDelegationBoardData(refreshTasks?: () => void): DelegationBoardConte
       ipc.hub.onTaskInterrupted(refreshAll),
       // writeBlocked 推送（T12）：新等待登记即时上卡（不等轮询窗）
       ipc.sandbox.onWriteBlocked(() => void fetchLocalWaiting()),
+      // 代答落账推送（M3.1）：taskId → answered 留痕合入进度面（卡片即时反馈）
+      ipc.hub.onTaskAnswered((evt) => {
+        setLiveAnswered((prev) => ({ ...prev, [evt.taskId]: { decision: evt.decision, at: Date.now() } }));
+      }),
     ];
+    // M3.1 门控输入：hub.store 接线（订阅+快照）——看板可能是首屏（用户直开任务
+    // 板未经过工作组/设置页），不 init 则 hubProtoVer 恒 null、代答按钮成死路
+    // （生效性≠可见性）。init 返回解订阅函数，随看板卸载释放。
+    const disposeHubStore = useHubStore.getState().init();
     void ipc.hub.delegationBoard().then(setBoard).catch(() => {});
     void ipc.hub
       .taskList()
@@ -194,6 +231,7 @@ function useDelegationBoardData(refreshTasks?: () => void): DelegationBoardConte
     const pollTimer = window.setInterval(() => void fetchLocalWaiting(), LOCAL_WAITING_POLL_MS);
     return () => {
       disposers.forEach((d) => d());
+      disposeHubStore();
       window.clearInterval(pollTimer);
     };
     // 数据拉取只在挂载时做一次（ipc 调用非响应式依赖）；refreshTasks 经 ref 实时取（订阅不重建）
@@ -204,12 +242,12 @@ function useDelegationBoardData(refreshTasks?: () => void): DelegationBoardConte
       selfNodeId,
       nodeNames,
       ledger,
-      progress: { ...(board?.progress ?? {}), ...liveProgress },
+      progress: withAnswered({ ...(board?.progress ?? {}), ...liveProgress }, liveAnswered),
       received: Object.fromEntries((board?.received ?? []).map((r) => [r.taskId, r])),
       localWaiting,
       refreshTasks: refreshTasks ?? refreshAll,
     }),
-    [board, ledger, nodeNames, selfNodeId, liveProgress, localWaiting, refreshTasks, refreshAll],
+    [board, ledger, nodeNames, selfNodeId, liveProgress, liveAnswered, localWaiting, refreshTasks, refreshAll],
   );
 }
 
@@ -258,10 +296,21 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
   // D6 取消两步确认（P2-10 公共臂态 hook）：armed 态菜单项变「再次点击确认取消 · Ns」，
   // 3s 无操作回落 + 剩余秒倒计时明示；菜单关闭即复位
   const cancelConfirm = useArmedConfirm();
+  // M3.1 远程代答两步确认（cancel 模板——写授权处置是不可逆动作）
+  const approveConfirm = useArmedConfirm();
+  const denyConfirm = useArmedConfirm();
   const disarmCancel = cancelConfirm.disarm;
+  const disarmApprove = approveConfirm.disarm;
+  const disarmDeny = denyConfirm.disarm;
   useEffect(() => {
-    if (menu === null) disarmCancel();
-  }, [menu, disarmCancel]);
+    if (menu === null) {
+      disarmCancel();
+      disarmApprove();
+      disarmDeny();
+    }
+  }, [menu, disarmCancel, disarmApprove, disarmDeny]);
+  // M3.1 门控输入：hub 协议版本（hub.store 订阅——provider 挂载时已 init 接线）
+  const hubProtoVer = useHubStore((s) => s.status?.hubProtoVer ?? null);
 
   const isWorkerView =
     task.routing.mode === 'node' && board.selfNodeId != null && task.routing.targetNodeId === board.selfNodeId;
@@ -285,8 +334,21 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
         ? (board.localWaiting[received.sessionId] ?? null)
         : null;
   const effectiveWaitingSummary = waitingSummary !== null ? waitingSummary : derivedWaitingSummary;
-  const waiting = effectiveWaitingSummary != null && (hubStatus === 'running' || hubStatus === 'pending');
+  // M3.1 七态：账本 waiting 是 running 的中间态——等待角标判定逻辑不动（仍由
+  // 摘要信号驱动），仅把 waiting 纳入「可点亮」的账本态集合（1.3.0 前 hub 不回此态）
+  const waiting =
+    effectiveWaitingSummary != null && (hubStatus === 'running' || hubStatus === 'pending' || hubStatus === 'waiting');
   const terminal = task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled';
+
+  // M3.1 代答留痕行：answered 存在且较新（at ≥ 条目拍时刻）且非终态才显示——
+  // 后续进度拍（at 更新）自然隐藏；终态卡不残留
+  const answeredEntry = progressEntry?.answered ?? null;
+  const answeredLine =
+    answeredEntry != null && progressEntry != null && !terminal && answeredEntry.at >= progressEntry.at
+      ? answeredEntry.decision === 'approve'
+        ? '已远程批准'
+        : '已远程拒绝'
+      : null;
 
   const nodeName = (nodeId: string | null | undefined): string =>
     nodeId == null ? '未知节点' : (board.nodeNames[nodeId] ?? shortNodeId(nodeId));
@@ -314,10 +376,14 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
     (delegationId != null ? (board.progress[delegationId]?.excerpt ?? null) : null);
 
   const canCancel = delegationId != null
-    ? hubStatus === 'pending' || hubStatus === 'running' || hubStatus === 'interrupted'
+    ? hubStatus === 'pending' || hubStatus === 'running' || hubStatus === 'waiting' || hubStatus === 'interrupted'
     : task.status === 'pending';
   const canRetry = delegationId == null && task.status === 'pending';
   const canRedispatch = task.status === 'failed';
+  // M3.1 远程代答门控：leader 视角的等待卡 + hub 协议 minor ≥ 3（hubSupportsMinor
+  // 镜像 protocolSupports；低版本 hub 按钮不出现——spec §3.4，文案级改动授权见
+  // spec §5「UI 无人预览」风险行）
+  const canAnswer = waiting && !isWorkerView && delegationId != null && hubSupportsMinor(hubProtoVer, 3);
 
   const handleCancel = async (): Promise<void> => {
     if (delegationId != null) {
@@ -345,6 +411,35 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
     } catch (err) {
       showToast(`重派失败: ${(err as Error).message}`);
       return;
+    }
+    board.refreshTasks();
+  };
+
+  /**
+   * M3.1 远程代答：hub task.answer 转发（leader-only）。错误分类——主进程把
+   * RpcRemoteError.code 编入 rejection message 前缀 `[code] 原文`（Electron IPC
+   * 只保 message），版本过低三码（hub/worker 任一低于 1.3）给人话降级文案，
+   * 其余剥前缀后原文 toast；stale 口径（worker 已无等待）单独提示。
+   */
+  const handleAnswer = async (decision: 'approve' | 'deny'): Promise<void> => {
+    if (delegationId == null) return;
+    let r: { disposition: 'granted' | 'denied' | 'stale' };
+    try {
+      r = await ipc.hub.taskAnswer({ taskId: delegationId, decision });
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err);
+      const coded = /^\[([a-z_]+)\] ([\s\S]*)$/.exec(raw);
+      if (coded !== null && ANSWER_VERSION_LOW_CODES.has(coded[1]!)) {
+        showToast('节点或 hub 版本过低，无法远程代答');
+      } else {
+        showToast(`远程代答失败: ${coded !== null ? coded[2]! : raw}`);
+      }
+      return;
+    }
+    if (r.disposition === 'stale') {
+      showToast('节点已无等待中的授权（可能已被处理）');
+    } else {
+      showToast(`已远程${r.disposition === 'granted' ? '批准' : '拒绝'}（worker：${nodeName(leaderTargetNodeId)}）`);
     }
     board.refreshTasks();
   };
@@ -419,6 +514,12 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
             </span>
           </div>
         )}
+        {answeredLine != null && (
+          /* M3.1 代答留痕行：进度线下方一行（spec §3.4 文案级最小改动——非布局变更） */
+          <div data-answered-line className="mt-1 px-2 text-xs leading-[1.5] text-tertiary">
+            {answeredLine}
+          </div>
+        )}
       </button>
       {menu && (
         <>
@@ -463,6 +564,62 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
                 )}
               </li>
             )}
+            {canAnswer && (
+              <li>
+                {approveConfirm.armed ? (
+                  <button
+                    type="button"
+                    data-testid="approve-confirm"
+                    onClick={() => {
+                      setMenu(null);
+                      void handleAnswer('approve');
+                    }}
+                    className="flex w-full items-center gap-1.5 px-3 py-1 text-left text-status-success hover:bg-surface-3"
+                  >
+                    <Check size={12} strokeWidth={1.75} aria-hidden />
+                    再次点击确认批准 · {approveConfirm.remainingSec}s
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    data-testid="approve-arm"
+                    onClick={() => approveConfirm.arm()}
+                    className="flex w-full items-center gap-1.5 px-3 py-1 text-left hover:bg-surface-3"
+                  >
+                    <Check size={12} strokeWidth={1.75} aria-hidden />
+                    批准节点写入
+                  </button>
+                )}
+              </li>
+            )}
+            {canAnswer && (
+              <li>
+                {denyConfirm.armed ? (
+                  <button
+                    type="button"
+                    data-testid="deny-confirm"
+                    onClick={() => {
+                      setMenu(null);
+                      void handleAnswer('deny');
+                    }}
+                    className="flex w-full items-center gap-1.5 px-3 py-1 text-left text-status-error hover:bg-surface-3"
+                  >
+                    <Ban size={12} strokeWidth={1.75} aria-hidden />
+                    再次点击确认拒绝 · {denyConfirm.remainingSec}s
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    data-testid="deny-arm"
+                    onClick={() => denyConfirm.arm()}
+                    className="flex w-full items-center gap-1.5 px-3 py-1 text-left hover:bg-surface-3"
+                  >
+                    <Ban size={12} strokeWidth={1.75} aria-hidden />
+                    拒绝节点写入
+                  </button>
+                )}
+              </li>
+            )}
             {canRetry && (
               <li>
                 <button
@@ -500,19 +657,31 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
   );
 }
 
-/** 六态徽标（待派发 null → 不渲染——节点槽已带「待派发」文案，S1） */
+/** 七态徽标（待派发 null → 不渲染——节点槽已带「待派发」文案，S1；waiting=
+ *  M3.1 账本中间态，常态由等待角标（摘要信号驱动）覆盖——本条仅对账滞后/
+ *  kv 缺失时兜底呈现等待语义） */
 function StatusBadge({ status }: { status: HubDelegationStatus | null }): ReactNode {
   if (status == null) return null;
   switch (status) {
     case 'running':
+    case 'waiting':
       return (
-        <Badge tone="violet" className="h-auto gap-1 px-1.5 py-0.5 text-[10px] leading-none">
-          <span
-            role="img"
-            aria-label="执行中"
-            className="h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-status-violet border-t-transparent"
-          />
-          执行中
+        <Badge tone={status === 'running' ? 'violet' : 'warning'} className="h-auto gap-1 px-1.5 py-0.5 text-[10px] leading-none">
+          {status === 'running' ? (
+            <>
+              <span
+                role="img"
+                aria-label="执行中"
+                className="h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-status-violet border-t-transparent"
+              />
+              执行中
+            </>
+          ) : (
+            <>
+              <CircleHelp size={12} strokeWidth={1.75} aria-hidden />
+              等待节点确认
+            </>
+          )}
         </Badge>
       );
     case 'done':

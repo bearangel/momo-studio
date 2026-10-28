@@ -88,6 +88,7 @@ function makeWorld(rowSeeds: TaskRow[] = [], selfNodeId: string | null = 'node-s
       if (prev) rows.set(id, { ...prev, ...patch });
     },
     saveProgress: (delegationId, entry) => progress.set(delegationId, entry),
+    getProgress: (delegationId) => progress.get(delegationId) ?? null,
     insertWorkerTaskRow: (input) => {
       const id = `W-${rows.size + 1}`;
       rows.set(
@@ -552,6 +553,63 @@ describe('createDelegationProgressStore（kv 持久）', () => {
     ).run(dirty);
     const store = createDelegationProgressStore(db);
     expect(store.list()).toEqual({ ok: { excerpt: '好条目', lastSeq: 1, at: 1 } });
+  });
+});
+
+// ── Part E：远程代答留痕（M3.1——handleAnswered + answered 保守解析）─────────
+
+describe('delegation-sync — handleAnswered（task.answered → kv 留痕）', () => {
+  it('E-1. 既有条目合并写 answered：excerpt/lastSeq/at 保留（行状态不动），at=now', () => {
+    const w = makeWorld([delegatedRow({ status: 'in_progress' })]);
+    const sync = createDelegationSync(w.ports);
+    sync.handleProgress({ taskId: 'hub-task-1', lastSeq: 5, excerpt: '等待批准写入', kind: 'waiting-input' });
+    sync.handleAnswered({ taskId: 'hub-task-1', decision: 'approve' });
+    expect(w.progress.get('hub-task-1')).toEqual({
+      excerpt: '等待批准写入',
+      lastSeq: 5,
+      at: NOW,
+      waiting: true,
+      answered: { decision: 'approve', at: NOW },
+    });
+    // 行状态不动（hub 代答不迁移账本——waiting↔running 单由 worker 上报驱动）
+    expect(w.rows.get('T-100')!.status).toBe('in_progress');
+  });
+
+  it('E-2. 无既有条目（委派未开跑/无看板行）→ 静默无落点，不新建条目不抛', () => {
+    const w = makeWorld([delegatedRow()]);
+    createDelegationSync(w.ports).handleAnswered({ taskId: 'hub-task-unknown', decision: 'deny' });
+    expect(w.progress.size).toBe(0);
+  });
+
+  it('E-3. 后续进度拍自然清除 answered（整条覆写——卡片「较新才显示」的 kv 侧对偶）', () => {
+    const w = makeWorld([delegatedRow({ status: 'in_progress' })]);
+    const sync = createDelegationSync(w.ports);
+    sync.handleProgress({ taskId: 'hub-task-1', lastSeq: 5, excerpt: '等待批准写入', kind: 'waiting-input' });
+    sync.handleAnswered({ taskId: 'hub-task-1', decision: 'deny' });
+    sync.handleProgress({ taskId: 'hub-task-1', lastSeq: 6, excerpt: '续跑产出' });
+    expect(w.progress.get('hub-task-1')).toEqual({ excerpt: '续跑产出', lastSeq: 6, at: NOW });
+  });
+});
+
+describe('createDelegationProgressStore — answered 保守解析（M3.1）', () => {
+  it('E-4. 合法 answered 落形保留；异形（decision 非枚举 / at 非数字 / 缺字段）整字段丢弃，条目其余部分不损', () => {
+    const db = newTmpDb();
+    const dirty = JSON.stringify({
+      ok: { excerpt: '好条目', lastSeq: 1, at: 1, waiting: true, answered: { decision: 'approve', at: 9 } },
+      badDecision: { excerpt: 'b', lastSeq: 1, at: 1, answered: { decision: 'maybe', at: 9 } },
+      badAt: { excerpt: 'c', lastSeq: 1, at: 1, answered: { decision: 'deny', at: '9' } },
+      noAt: { excerpt: 'd', lastSeq: 1, at: 1, answered: { decision: 'deny' } },
+    });
+    db.prepare(
+      `INSERT INTO kv_store (key, value, updated_at) VALUES ('hub_delegation_progress', ?, datetime('now'))`,
+    ).run(dirty);
+    const store = createDelegationProgressStore(db);
+    expect(store.list()).toEqual({
+      ok: { excerpt: '好条目', lastSeq: 1, at: 1, waiting: true, answered: { decision: 'approve', at: 9 } },
+      badDecision: { excerpt: 'b', lastSeq: 1, at: 1 },
+      badAt: { excerpt: 'c', lastSeq: 1, at: 1 },
+      noAt: { excerpt: 'd', lastSeq: 1, at: 1 },
+    });
   });
 });
 

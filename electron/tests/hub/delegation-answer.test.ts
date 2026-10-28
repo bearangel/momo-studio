@@ -5,11 +5,19 @@
 // approve 聚合多 pending dirs 一次授予 + 逐条清除 / deny 广播聚合 dirs + 整会话
 // 清除 / message 仅留痕不上报（审计日志唯一消费点）。纯注入 fake ports。
 import { describe, expect, it } from 'vitest';
+import { RPC } from '../../src/main/hub/protocol';
+import { TASK_ANSWER_WIRE } from '../../src/main/hub/delegation-wire';
 import {
   handleTaskAnswerRequest,
   type TaskAnswerPendingSignal,
   type TaskAnswerPorts,
 } from '../../src/main/hub/delegation-answer';
+
+describe('delegation-answer — wire 镜像契约', () => {
+  it('TASK_ANSWER_WIRE === 协议包 TASK_RPC.answer（本地镜像不漂移——hub 转发 method 与本侧分支判定同源）', () => {
+    expect(TASK_ANSWER_WIRE).toBe(RPC.task.answer);
+  });
+});
 
 interface FakeWorld {
   ports: TaskAnswerPorts;

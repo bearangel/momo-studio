@@ -141,6 +141,7 @@ function ensureDelegationSync(): DelegationSync {
     saveProgress: (delegationId, entry) => {
       createDelegationProgressStore(getDb()).save(delegationId, entry);
     },
+    getProgress: (delegationId) => createDelegationProgressStore(getDb()).get(delegationId),
     insertWorkerTaskRow: (input) =>
       insertTask({
         workspaceId: input.workspaceId,
@@ -173,6 +174,7 @@ function ensureDelegationSync(): DelegationSync {
     handleProgress: (evt) => guard('progress', () => raw.handleProgress(evt)),
     handleTerminal: (status, taskId, reason) => guard('terminal', () => raw.handleTerminal(status, taskId, reason)),
     markCancelled: (taskId) => guard('cancelled', () => raw.markCancelled(taskId)),
+    handleAnswered: (evt) => guard('answered', () => raw.handleAnswered(evt)),
     wrapWorkerStore: (store) => raw.wrapWorkerStore(store),
   };
   return delegationSync;
@@ -488,6 +490,18 @@ function startClient(
             taskId: p.taskId, sessionId: p.sessionId, lastSeq: p.lastSeq, excerpt: p.excerpt,
             ...(kind !== undefined ? { kind } : {}),
           });
+        }
+        return;
+      }
+      if (evt.method === EVT.taskAnswered) {
+        // 代答落账通知（M3.1）：定向→本机 leader——kv 留痕（卡片「已远程批准/
+        // 拒绝」行数据源）+ 桥 renderer。载荷挑字段（协议 TaskAnsweredEvent 形状，
+        // 异形丢弃——presence 桥同款纪律）；by/disposition 属 hub 审计面，卡片
+        // 展示只消费 decision。
+        const p = evt.payload as { taskId?: unknown; decision?: unknown };
+        if (p.taskId !== undefined && typeof p.taskId === 'string' && (p.decision === 'approve' || p.decision === 'deny')) {
+          ensureDelegationSync().handleAnswered({ taskId: p.taskId, decision: p.decision });
+          broadcast('hub:taskAnswered', { taskId: p.taskId, decision: p.decision });
         }
         return;
       }
