@@ -61,6 +61,7 @@ import { getGlobalSettings, DEFAULT_JOURNAL_QUOTA_MB } from '../settings/crud';
 import { agentManifestYaml, collectRegularFiles, tarDirectory } from './publish';
 import { loadHubAccountingSet } from './mirror-applier';
 import { resolveTmpDir } from '../paths';
+import { SECRET_VALUE_PATTERNS } from '../util/redact';
 import {
   validateSnapshotManifest,
   type SnapshotAgentMember,
@@ -149,14 +150,8 @@ export function findForbiddenFields(node: unknown, path = 'manifest'): RedlineVi
 
 /** 值形态扫描：已知 key 值形态的正则族（sk- 前缀 / Bearer 凭证 / ghp_ / xox / 64 位十六进制裸串）。
  *  64 位十六进制是 sha256 key/secret 的常见裸形态——快照正文（清单/内嵌 skill 文本）
- *  无正当携带场景，宁可误杀（fail-closed）不可漏放。 */
-const SECRET_VALUE_PATTERNS: Array<{ re: RegExp; label: string }> = [
-  { re: /\bsk-[A-Za-z0-9_-]{12,}/, label: 'provider key 值（sk- 前缀）' },
-  { re: /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/i, label: 'Bearer 凭证值' },
-  { re: /\bghp_[A-Za-z0-9]{20,}/, label: 'GitHub token 值（ghp_ 前缀）' },
-  { re: /\bxox[baprs]-[A-Za-z0-9-]{10,}/, label: 'Slack token 值（xox 前缀）' },
-  { re: /\b[0-9a-f]{64}\b/i, label: '64 位十六进制裸串（key/secret 形态）' },
-];
+ *  无正当携带场景，宁可误杀（fail-closed）不可漏放。
+ *  M2.4 T2：正则族已搬移至 util/redact.ts（委派链脱敏共用），此处只保留导入。 */
 
 /** 文本扫描：值形态正则 + 调用方已知凭证值（如上传流回填的 keychain 实值）全串包含比对。 */
 export function scanTextForSecrets(

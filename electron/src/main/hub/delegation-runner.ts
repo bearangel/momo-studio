@@ -18,6 +18,7 @@ import type { HubDelegationSettings } from './delegation-settings';
 import { composeTurnBody, normalizeTier, type PermissionTier } from './run-policy';
 import { consumeReadonlyDenied, markSessionReadonly, setWriteDeniedBroadcaster } from '../sandbox/write-blocked-emit';
 import { broadcastWriteGrantDenied } from '../agent/runtime-registry';
+import { redactSecrets, truncateCodePoints } from '../util/redact';
 
 // P2-1 即时拒的 deny 广播接线（注册反转——write-blocked-emit 为子进程可达模块，
 // 不可顶层依赖 runtime-registry；本模块仅主进程 hub/index 装载，恒先于委派回合）
@@ -174,11 +175,17 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
           ? `已中止${terminal.error ? `:${terminal.error}` : ''}`
           : undefined;
     // P2-1：reason 同源两落——本机账本（worker 卡 title 全文）与 hub 上报载荷
-    store.updateState(taskId, localState, localState === 'failed' ? reason : undefined);
+    // M2.4 T2：两处都先过凭证脱敏（含 query token）+ code point 截断，避免
+    // provider 原文/URL 里的密钥上行到 hub，也防超长串撑爆卡面。
+    const sanitizedReason =
+      reason === undefined
+        ? undefined
+        : truncateCodePoints(redactSecrets(reason, { includeQueryToken: true }));
+    store.updateState(taskId, localState, localState === 'failed' ? sanitizedReason : undefined);
     void sendReport(taskId, {
       status: terminal.status === 'done' ? 'done' : 'failed',
       sessionId: run.sessionId,
-      ...(reason !== undefined ? { reason: reason.slice(0, EXCERPT_MAX) } : {}),
+      ...(sanitizedReason !== undefined ? { reason: sanitizedReason } : {}),
     });
   };
 

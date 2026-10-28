@@ -49,6 +49,35 @@ function latestAgentStreamRow(sessionId: string, sinceRowIdExclusive: number): R
   return row ?? null;
 }
 
+/** 终态行对应的错误原文（M2.4 T2）：读该消息最后一条 final 事件的 payload.error。
+ *  provider 401/模型不存在/配额等原文由 llm-provider → runtime-entry end chunk →
+ *  stream-relay final 事件落库（message_events），此前 watchTurn 只映射 status
+ *  导致 TurnTerminal.error 恒 undefined → 委派卡「未知错误」。
+ *  T2 最小修点 = 读侧映射补 error（不改协议/不加通道/不动 renderer）。
+ *  无 final 事件（sweepStaleStreaming 等兜底终态）或载荷异形 → undefined，
+ *  交回消费侧真兜底。 */
+function terminalErrorFor(messageId: string): string | undefined {
+  try {
+    const row = getDb()
+      .prepare(
+        `SELECT payload_json FROM message_events
+         WHERE message_id = ? AND event_type = 'final'
+         ORDER BY rowid DESC LIMIT 1`,
+      )
+      .get(messageId) as { payload_json: string } | undefined;
+    if (!row) return undefined;
+    const payload = JSON.parse(row.payload_json) as { error?: unknown };
+    return typeof payload.error === 'string' && payload.error.length > 0 ? payload.error : undefined;
+  } catch (err) {
+    // 事件读取失败不阻断终态判定（错误原文缺失时消费侧兜底「未知错误」）
+    logger.warn('终态错误原文读取失败（降级为无原因）', {
+      messageId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return undefined;
+  }
+}
+
 /**
  * 回合终态订阅：轮询最新 agent 流行 status。
  * 'streaming'=在跑（继续等）；终态行（done/failed/aborted）回调一次；
@@ -70,8 +99,10 @@ export function watchTurnProduct(sessionId: string, onTerminal: (t: TurnTerminal
     if (!row || row.status === 'streaming') return;
     settled = true;
     clearInterval(timer);
+    const error = terminalErrorFor(row.id);
     onTerminal({
       status: row.status === 'done' ? 'done' : row.status === 'failed' ? 'failed' : 'aborted',
+      ...(error !== undefined ? { error } : {}),
     });
   }, TURN_POLL_MS);
   timer.unref?.();
