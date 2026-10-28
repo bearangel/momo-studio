@@ -6,6 +6,20 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 节点互联 M2.5：尾巴清偿与 M2 系列冻结
+
+**M2 系列最后一期**。只清「有用户可见影响」的尾巴，并把能力缺口一次性显式关闭。设计见 momo-hub 仓 `docs/specs/2026-10-28-momo-hub-m2.5-tail-closeout.md`。
+
+- **角标播种（A1）**：资源库目录**成功**加载后按类型一次性播种「可更新」基线（`seedHubUpdates`），重启/离线/带外目录变更后不再丢失更新入口；门控 = hub 源 `degraded===false` **且状态已知**（未知不播种）；卡片三态——未拉取时不显示角标、**也不再说「已是最新」**（消除无依据断言）；事件增量路径保留
+- **下载失败人话 + 单前缀（A2/A3）**：`describeNetworkError()` 五类映射（域名/拒绝/超时/证书/重置）+ 兜底「网络请求失败」，只包 fetch 抛错（非 2xx 保留 `下载失败: HTTP n`），原文进日志；错误前缀集合单点（导入/启停/停用/卸载/重载/下载资源包）双侧契约测试锁死，`TypePageShell` 与 store 均不再叠前缀
+- **节点清单补拉（A6，M0 起跨 6 期）**：新 IPC `hub:getNodes` 读主进程 `presenceSeed`（hello 快照 + presence 增量），冷启动/面板打开立即可见全部在线节点；拉取**只增不删**（删除仍归 offline 事件）；**零 hub RPC、零协议变更**
+- **历史 concern 核实出栈（4 条）**：device token keychain 残留=FIXED（三条失效路径均清）；`*:18787`=NOT-A-DEFECT（验收期端口，产品默认 8787）；B 窗口重载=FIXED（底层 D1 已修）；凭证截断=NOT-A-DEFECT（token 不出主进程、不进日志，启动横幅为全值）
+- **CI e2e 首次真实跑通**：PR #1 三轮实测（pnpm 版本冲突 → 2 条环境性红 → 隔离后全绿）；`browser.spec.ts` / `kanban-drag.spec.ts` 在 GitHub macOS runner 上确定性失败（拖拽时序/多窗口），已 `testIgnore` 隔离并留解禁条件（本地仍跑）
+- **B 组能力缺口一次性关闭/迁 M3**（详见 spec §5）：B1 HITL L2 远程代答 · B2 远端空间清单 RPC · B3 多组 UI · B4 文件树远程浏览 · B5 无候选自动轮询 · B6 任务源接入 · B7 委派编排 · B8 远端代发/远程写 · B9 子节点反向配置推送 · B10 镜像增量合并 · B11 本地 stdio MCP 分发 · B12 hub 资源删除/下架 · **B13 镜像按快照版本对齐**（A4 撤回：快照 `SnapshotResourceRef` 无版本字段，需协议扩展）
+- **已知限制**：A5 readonly 即时拒标记进程内易失=**设计边界**（重启仍由只读约束段 + HITL 超时拒兜底，持久化归 M3 权限子系统）；hub 通配绑定 `0.0.0.0` 与 `MOMO_HUB_HOST` 硬化归 hub 仓；隔离 profile 的 provider keychain 孤儿键归 M3（服务名未随 profile 作用域化）
+
+版本 `2.1.0-alpha.35`。
+
 ## [未发布] — 节点互联 M2.4：失败路径如实化与收尾硬化
 
 无新功能面的收尾批——把「失败路径说谎」清零，补齐测试/CI 护栏，理顺分层。设计见 momo-hub 仓 `docs/specs/2026-10-28-momo-hub-m2.4-failure-honesty-hardening.md`。
