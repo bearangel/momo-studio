@@ -6,6 +6,20 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 节点互联 M3.0：收官清理与协议前置
+
+无新功能面的清理批 + M3.1/M3.2 的兼容性前置。设计见 momo-hub 仓 `docs/specs/2026-10-28-momo-hub-m3.0-closeout.md`（三路探查回填定稿，Momus OKAY）。
+
+- **协议能力协商前置（T1，hub `v0.1.6` + studio pin 升级）**：hub 侧新增方法级 minor 门槛——`METHOD_REQUIRED_MINOR` 全量登记（1.2 基线全表=2，分发守卫对 1.2 节点**零行为变化**，形状锚点锁死）、`unsupported_method` 结构化降级（载荷带 `method`/`requiredMinor`，message 含双方版本；未入表仍 `unknown_method`，一义一名）、`minorOf`/`protocolSupports` 语义分层（minor=向后兼容新增）。studio 消费管道：`hubProtoVer` 版本管道（hello 读 `HelloRes.protoVer` → `HubStatus`/`hub:stateChanged`/设置面板「hub 协议版本」行）；错误 code 传播修复两丢点（`RpcRemoteError` 带 `readonly code`；hello 拒绝透出 `lastErrorCode`，mismatch 专属文案）；`m2-integration` 模拟 hub 由严格相等对齐真实 major-only
+- **hub 监听地址硬化（T4，hub 仓）**：`MOMO_HUB_HOST` 可配，默认收紧 `127.0.0.1`（原 `*` 绑定防疏忽暴露）；显式 `0.0.0.0` WARN 提示；非法值回退默认+WARN；Dockerfile 显式 `0.0.0.0` 维持容器端口映射语义
+- **非 2xx 下载人话化（T2）**：`describeHttpDownloadFailure` 映射（404→资源包不存在或已下架 / 403→无权访问 / ≥500→hub 服务异常 / 兜底），接入 `marketplace/installer.ts` downloadFile 汇聚点（resource+plugin 两条 hub 安装链同源覆盖）；`HTTP <status> <脱敏url>` 原文只进主进程日志；`DOWNLOAD_HTTP_FAILURE_PREFIX` 按「一义一名」退役（无生产者），兜底前缀更名 `DOWNLOAD_HTTP_FALLBACK_PREFIX`。Smithery 详情接口（非 hub 端点）不套 hub 文案
+- **renderer 测试超时固化（T3）**：`hookTimeout: 60000` 进 `renderer/vitest.config.ts`（monaco 全量并行加载背景注释）——全量测试零 CLI 参数跑绿
+- **keychain 门面作用域化（T5）**：作用域上提到 `keychain.ts` 门面、加在**服务名**——默认 profile `'Momo Studio'` 字节不变（既有用户 key 零影响）；隔离 profile `'Momo Studio-<hash8>'`（sha256 完整路径前 8 hex，防 basename 碰撞）；`creds.ts` 自有作用域退役回归裸 `hub.deviceToken` 键（门面分域接管，D2 无迁移裁决沿用——隔离实例重新 enroll）；boot 接线 `wireKeychainScope`（Electron `userData` 路径 vs 默认值）
+- **CI e2e 解禁（T6）**：根因实锤 = GitHub macos-latest 显示器 1024×768（workarea ≈1024×677）——看板失败为已关闭列中心在视口外（指针可达性死区，dnd-kit over=null），browser 失败为 resize 增高腿被 AppKit 钳制；**两条 spec 真实适配**（非 skip 守卫）：kanban 拖拽手势内程序化滚动泳道（dnd-kit 6.3.1 droppable rect 拖拽开始一次性测量——滚动前置到激活位移前，源码+artifacts 双证据）、browser resize 改偏移无关稳定性收敛（视图高位移 ≥40 且 600ms 不变）；新增钉几何 harness `E2E_PIN_GEOMETRY=1024x677`（本机复现 CI 几何零往返）；**删除 `testIgnore`**，PR #2 CI 首次零隔离全量 e2e 全绿
+- **M2.5 条目归因更正**：「拖拽时序/多窗口」→「runner 显示几何」（M3.0 T6 按 run 40676120418 artifacts 复核，追加注记保留原文）
+
+版本 `2.1.0-alpha.36`。hub 侧 `v0.1.6`（tag `v0.1.6` = `489c067`）。
+
 ## [未发布] — 节点互联 M2.5：尾巴清偿与 M2 系列冻结
 
 **M2 系列最后一期**。只清「有用户可见影响」的尾巴，并把能力缺口一次性显式关闭。设计见 momo-hub 仓 `docs/specs/2026-10-28-momo-hub-m2.5-tail-closeout.md`。
