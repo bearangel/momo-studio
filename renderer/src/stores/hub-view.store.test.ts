@@ -30,6 +30,8 @@ const api = {
     viewTasks: vi.fn(),
     viewSubscribe: vi.fn(),
     viewUnsubscribe: vi.fn(),
+    viewWorkspaces: vi.fn(),
+    viewFiles: vi.fn(),
     onViewAppended: vi.fn(
       (_cb: (e: { sessionId: string; events: HubViewMessage[] }) => void) => () => undefined,
     ),
@@ -77,6 +79,14 @@ function replayMessages(): HubViewMessage[] {
   return useHubViewStore.getState().replay?.messages ?? [];
 }
 
+/** utf-8 正确 base64（jsdom btoa 拒 Latin1 外字符——先经 TextEncoder 编码字节） */
+function b64(str: string): string {
+  const bytes = new TextEncoder().encode(str);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   (globalThis as unknown as { window: { api: typeof api } }).window.api = api;
@@ -90,10 +100,16 @@ beforeEach(() => {
   api.hub.viewMessages.mockResolvedValue({ messages: [], hasMore: false });
   api.hub.viewSubscribe.mockResolvedValue({ ok: true });
   api.hub.viewUnsubscribe.mockResolvedValue({ ok: true });
+  api.hub.viewWorkspaces.mockResolvedValue({ workspaces: [] });
+  api.hub.viewFiles.mockResolvedValue({ entries: [], truncated: false });
   useHubViewStore.setState({
-    open: false, picking: false, targetNodeId: null, targetName: null,
-    workspaceId: null, workspaceName: null, tab: 'overview',
-    overview: null, sessions: [], tasks: [], loading: false, error: null, replay: null,
+    open: false, picking: false,
+    pickerRemote: false, pickerWorkspaces: null, remoteLoading: false,
+    targetNodeId: null, targetName: null,
+    workspaceId: null, workspaceName: null, groupId: null, tab: 'overview',
+    overview: null, sessions: [], tasks: [],
+    files: { dirs: {}, preview: null, loadingDir: null, loadingFile: null, error: null },
+    loading: false, error: null, replay: null,
   });
 });
 
@@ -237,5 +253,175 @@ describe('错误路径（momo-test-rules #3：错误不吞）', () => {
     expect(useHubViewStore.getState().replay).toBeNull();
     expect(useHubViewStore.getState().error).toBe('对方节点关闭了本组查看——可在其「设置 → 节点互联」重新开启');
     expect(api.hub.viewSubscribe).not.toHaveBeenCalled();
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// M3.2（协议 1.4.0）：groupId 透传 + openRemotePick + files 子域
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('M3.2 groupId 透传（铁律 5：路由目标用当前上下文）', () => {
+  it('openPanel 带 groupId → 三发/订阅/退订载荷一律携带；缺省 → 旧形状零变化', async () => {
+    useHubViewStore.getState().openPanel({
+      targetNodeId: 'node-b', targetName: 'studio-mini',
+      workspaces: [{ id: 'ws-1', name: 'product-dev' }], groupId: 'g-dev',
+    });
+    await vi.waitFor(() => expect(useHubViewStore.getState().overview).not.toBeNull());
+    expect(api.hub.viewWorkspace).toHaveBeenCalledWith({ targetNodeId: 'node-b', workspaceName: 'product-dev', groupId: 'g-dev' });
+    expect(api.hub.viewSessions).toHaveBeenCalledWith({ targetNodeId: 'node-b', workspaceName: 'product-dev', limit: 50, groupId: 'g-dev' });
+    expect(api.hub.viewTasks).toHaveBeenCalledWith({ targetNodeId: 'node-b', workspaceName: 'product-dev', groupId: 'g-dev' });
+
+    await enterReplay(3);
+    expect(api.hub.viewMessages).toHaveBeenLastCalledWith({
+      targetNodeId: 'node-b', sessionId: 'sess-1', workspaceName: 'product-dev',
+      fromSeq: 1, limit: VIEW_PAGE_SIZE, groupId: 'g-dev',
+    });
+    expect(api.hub.viewSubscribe).toHaveBeenCalledWith({ targetNodeId: 'node-b', sessionId: 'sess-1', groupId: 'g-dev' });
+    useHubViewStore.getState().leaveReplay();
+    await vi.waitFor(() => expect(api.hub.viewUnsubscribe).toHaveBeenCalledWith({ targetNodeId: 'node-b', sessionId: 'sess-1', groupId: 'g-dev' }));
+
+    // 缺省回落：不携带 groupId（1.3 旧调用形状零变化锁）
+    useHubViewStore.getState().openPanel({
+      targetNodeId: 'node-c', targetName: 'n', workspaces: [{ id: 'ws-9', name: 'w9' }],
+    });
+    await vi.waitFor(() => expect(api.hub.viewWorkspace).toHaveBeenLastCalledWith({ targetNodeId: 'node-c', workspaceName: 'w9' }));
+    const last = vi.mocked(api.hub.viewWorkspace).mock.calls.at(-1)![0] as Record<string, unknown>;
+    expect('groupId' in last).toBe(false);
+  });
+});
+
+describe('M3.2 openRemotePick 远端清单前置步', () => {
+  it('多空间：viewWorkspaces 带 groupId → pickerWorkspaces 落地、picking 保持（选择器渲染远端行）', async () => {
+    api.hub.viewWorkspaces.mockResolvedValue({
+      workspaces: [
+        { id: 'rws-1', name: 'remote-lab', description: '远端主战场' },
+        { id: 'rws-2', name: 'remote-docs', description: '' },
+      ],
+    });
+    useHubViewStore.getState().openRemotePick({ targetNodeId: 'node-b', targetName: 'studio-mini', groupId: 'g-dev' });
+    expect(useHubViewStore.getState().picking).toBe(true);
+    expect(useHubViewStore.getState().pickerRemote).toBe(true);
+    expect(useHubViewStore.getState().remoteLoading).toBe(true);
+    expect(api.hub.viewWorkspaces).toHaveBeenCalledWith({ targetNodeId: 'node-b', groupId: 'g-dev' });
+
+    await vi.waitFor(() => expect(useHubViewStore.getState().remoteLoading).toBe(false));
+    expect(useHubViewStore.getState().pickerWorkspaces).toEqual([
+      { id: 'rws-1', name: 'remote-lab' },
+      { id: 'rws-2', name: 'remote-docs' },
+    ]);
+    expect(useHubViewStore.getState().picking).toBe(true); // 多空间仍选择
+    expect(api.hub.viewWorkspace).not.toHaveBeenCalled(); // 未选中不拉概览
+  });
+
+  it('单空间：自动直达 → loadAll 三发（groupId 继续透传）', async () => {
+    api.hub.viewWorkspaces.mockResolvedValue({ workspaces: [{ id: 'rws-1', name: 'remote-lab', description: '' }] });
+    useHubViewStore.getState().openRemotePick({ targetNodeId: 'node-b', targetName: 'studio-mini', groupId: 'g-dev' });
+    await vi.waitFor(() => expect(useHubViewStore.getState().workspaceName).toBe('remote-lab'));
+    expect(useHubViewStore.getState().picking).toBe(false);
+    expect(api.hub.viewWorkspace).toHaveBeenCalledWith({ targetNodeId: 'node-b', workspaceName: 'remote-lab', groupId: 'g-dev' });
+  });
+
+  it('失败：人话落 error + 清单空（选择器空态而非死等）；groupId 缺省不携带', async () => {
+    api.hub.viewWorkspaces.mockRejectedValue(new Error('目标节点已关闭本组查看'));
+    useHubViewStore.getState().openRemotePick({ targetNodeId: 'node-b', targetName: 'studio-mini', groupId: null });
+    await vi.waitFor(() => expect(useHubViewStore.getState().remoteLoading).toBe(false));
+    expect(api.hub.viewWorkspaces).toHaveBeenCalledWith({ targetNodeId: 'node-b' });
+    expect(useHubViewStore.getState().pickerWorkspaces).toEqual([]);
+    expect(useHubViewStore.getState().error).toBe('对方节点关闭了本组查看——可在其「设置 → 节点互联」重新开启');
+  });
+
+  it('pickWorkspace 从远端行选中 → 清远端选择态 + loadAll', async () => {
+    api.hub.viewWorkspaces.mockResolvedValue({
+      workspaces: [
+        { id: 'rws-1', name: 'remote-lab', description: '' },
+        { id: 'rws-2', name: 'remote-docs', description: '' },
+      ],
+    });
+    useHubViewStore.getState().openRemotePick({ targetNodeId: 'node-b', targetName: 'studio-mini', groupId: 'g-dev' });
+    await vi.waitFor(() => expect(useHubViewStore.getState().pickerWorkspaces).not.toBeNull());
+    useHubViewStore.getState().pickWorkspace('rws-2', 'remote-docs');
+    expect(useHubViewStore.getState().picking).toBe(false);
+    expect(useHubViewStore.getState().pickerWorkspaces).toBeNull();
+    await vi.waitFor(() => expect(api.hub.viewWorkspace).toHaveBeenCalledWith({ targetNodeId: 'node-b', workspaceName: 'remote-docs', groupId: 'g-dev' }));
+  });
+});
+
+describe('M3.2 files 子域（目录懒加载 + 文件预览）', () => {
+  function openWorkspace(): void {
+    useHubViewStore.getState().openPanel({
+      targetNodeId: 'node-b', targetName: 'studio-mini',
+      workspaces: [{ id: 'ws-1', name: 'product-dev' }], groupId: 'g-dev',
+    });
+  }
+
+  it('loadFilesDir：根（path 省略）→ 子目录（path 携带、斜杠拼接）；重复加载幂等；truncated 落域', async () => {
+    openWorkspace();
+    api.hub.viewFiles.mockResolvedValueOnce({
+      entries: [{ name: 'docs', isDirectory: true, size: 0 }, { name: 'README.md', isDirectory: false, size: 12 }],
+      truncated: false,
+    });
+    await useHubViewStore.getState().loadFilesDir('.');
+    expect(api.hub.viewFiles).toHaveBeenCalledWith({ targetNodeId: 'node-b', workspaceName: 'product-dev', op: 'list', groupId: 'g-dev' });
+    expect(useHubViewStore.getState().files.dirs['.']?.entries.map((e) => e.name)).toEqual(['docs', 'README.md']);
+
+    api.hub.viewFiles.mockResolvedValueOnce({ entries: [{ name: 'a.txt', isDirectory: false, size: 3 }], truncated: true });
+    await useHubViewStore.getState().loadFilesDir('docs');
+    expect(api.hub.viewFiles).toHaveBeenLastCalledWith({ targetNodeId: 'node-b', workspaceName: 'product-dev', op: 'list', path: 'docs', groupId: 'g-dev' });
+    expect(useHubViewStore.getState().files.dirs['docs']?.truncated).toBe(true);
+
+    // 幂等：已加载目录不重复拉
+    await useHubViewStore.getState().loadFilesDir('docs');
+    expect(api.hub.viewFiles).toHaveBeenCalledTimes(2);
+  });
+
+  it('openFilePreview：文本 base64 解码 + truncated 落域；关闭清空', async () => {
+    openWorkspace();
+    const text = '# 项目\n你好世界';
+    api.hub.viewFiles.mockResolvedValueOnce({ content: b64(text), size: text.length, truncated: false });
+    await useHubViewStore.getState().openFilePreview('README.md');
+    expect(api.hub.viewFiles).toHaveBeenCalledWith({ targetNodeId: 'node-b', workspaceName: 'product-dev', op: 'read', path: 'README.md', groupId: 'g-dev' });
+    const preview = useHubViewStore.getState().files.preview;
+    expect(preview).toMatchObject({ path: 'README.md', content: text, size: text.length, truncated: false, binary: false });
+
+    useHubViewStore.getState().closeFilePreview();
+    expect(useHubViewStore.getState().files.preview).toBeNull();
+  });
+
+  it('openFilePreview：二进制（utf-8 roundtrip 不一致）→ binary=true 且 content 空', async () => {
+    openWorkspace();
+    // PNG 头 + 非法续字节：utf-8 解码再编码必与原字节不一致（与 file:readForEditor 同判据）
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe, 0x00, 0x81]);
+    let bin = '';
+    for (const b of bytes) bin += String.fromCharCode(b);
+    api.hub.viewFiles.mockResolvedValueOnce({ content: btoa(bin), size: bytes.length, truncated: false });
+    await useHubViewStore.getState().openFilePreview('logo.png');
+    expect(useHubViewStore.getState().files.preview).toMatchObject({ path: 'logo.png', content: '', binary: true });
+  });
+
+  it('错误路径：list/read 失败 → files.error 人话（不吞）；面板重开清域', async () => {
+    openWorkspace();
+    api.hub.viewFiles.mockRejectedValue(new Error('目录不存在或不可访问: ghost'));
+    await useHubViewStore.getState().loadFilesDir('ghost');
+    expect(useHubViewStore.getState().files.error).toBe('目录不存在或不可访问: ghost');
+    expect(useHubViewStore.getState().files.loadingDir).toBeNull();
+
+    // 重开面板 files 域清零（无跨目标残留）
+    useHubViewStore.getState().openPanel({
+      targetNodeId: 'node-c', targetName: 'n', workspaces: [{ id: 'ws-2', name: 'w2' }],
+    });
+    expect(useHubViewStore.getState().files).toEqual({ dirs: {}, preview: null, loadingDir: null, loadingFile: null, error: null });
+  });
+
+  it('refresh（文件页）：目录树整域重载（根重拉、旧目录清空）', async () => {
+    openWorkspace();
+    api.hub.viewFiles.mockResolvedValue({ entries: [], truncated: false });
+    await useHubViewStore.getState().loadFilesDir('.');
+    await useHubViewStore.getState().loadFilesDir('docs');
+    expect(Object.keys(useHubViewStore.getState().files.dirs).sort()).toEqual(['.', 'docs']);
+
+    useHubViewStore.setState({ tab: 'files' });
+    await useHubViewStore.getState().refresh();
+    expect(Object.keys(useHubViewStore.getState().files.dirs)).toEqual(['.']);
+    expect(api.hub.viewFiles).toHaveBeenLastCalledWith({ targetNodeId: 'node-b', workspaceName: 'product-dev', op: 'list', groupId: 'g-dev' });
   });
 });

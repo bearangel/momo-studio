@@ -115,21 +115,29 @@ export function registerHubIpc(): void {
   // 查看同意设置两通道（M2e T14/T15：允许本组查看开关——set 内即时上报 hub）
   ipcMain.handle('hub:getViewSettings', () => hubGetViewSettings());
   ipcMain.handle('hub:setViewSettings', (_evt, input: { allowGroupView: boolean }) => hubSetViewSettings(input));
-  // 远程查看 leader 侧六通道（M2e T14，spec §3.1 view.*——hub 定向转发目标节点）
-  ipcMain.handle('hub:viewWorkspace', (_evt, input: { targetNodeId: string; workspaceName: string }) =>
+  // 远程查看 leader 侧六通道（M2e T14，spec §3.1 view.*——hub 定向转发目标节点）；
+  // M3.2 起载荷可带可选 groupId（选中组上下文——消 hub commonGroupId 多组歧义）
+  ipcMain.handle('hub:viewWorkspace', (_evt, input: { targetNodeId: string; workspaceName: string; groupId?: string }) =>
     hubRequest(VIEW_RPC.workspace, input));
   ipcMain.handle('hub:viewSessions', (_evt, input: {
-    targetNodeId: string; workspaceName: string; beforeSeq?: number; limit: number;
+    targetNodeId: string; workspaceName: string; beforeSeq?: number; limit: number; groupId?: string;
   }) => hubRequest(VIEW_RPC.sessions, input));
   ipcMain.handle('hub:viewMessages', (_evt, input: {
-    targetNodeId: string; sessionId: string; workspaceName?: string; fromSeq: number; limit: number;
+    targetNodeId: string; sessionId: string; workspaceName?: string; fromSeq: number; limit: number; groupId?: string;
   }) => hubRequest(VIEW_RPC.messages, input));
-  ipcMain.handle('hub:viewTasks', (_evt, input: { targetNodeId: string; workspaceName: string }) =>
+  ipcMain.handle('hub:viewTasks', (_evt, input: { targetNodeId: string; workspaceName: string; groupId?: string }) =>
     hubRequest(VIEW_RPC.tasks, input));
-  ipcMain.handle('hub:viewSubscribe', (_evt, input: { targetNodeId: string; sessionId: string }) =>
+  ipcMain.handle('hub:viewSubscribe', (_evt, input: { targetNodeId: string; sessionId: string; groupId?: string }) =>
     hubRequest(VIEW_RPC.subscribe, input));
-  ipcMain.handle('hub:viewUnsubscribe', (_evt, input: { targetNodeId: string; sessionId: string }) =>
+  ipcMain.handle('hub:viewUnsubscribe', (_evt, input: { targetNodeId: string; sessionId: string; groupId?: string }) =>
     hubRequest(VIEW_RPC.unsubscribe, input));
+  // 远程查看 M3.2 两通道（协议 1.4.0）：远端空间清单 + 只读文件树——载荷原样
+  // 透传（groupId 可选段随 renderer 上下文携带，hub 定向转发目标节点）
+  ipcMain.handle('hub:viewWorkspaces', (_evt, input: { targetNodeId: string; groupId?: string }) =>
+    hubRequest(VIEW_RPC.workspaces, input));
+  ipcMain.handle('hub:viewFiles', (_evt, input: {
+    targetNodeId: string; workspaceName: string; op: 'list' | 'read'; path?: string; groupId?: string;
+  }) => hubRequest(VIEW_RPC.files, input));
   // 镜像登记表查询（M2.1 T6 / RM-M21-7）：workspace.mirrored 广播的累积持久登记，
   // T3 徽标 / T4 选择器 / T7 调度 / T8 守门四消费方同源；workspaceName 可选过滤。
   // 失忆限制与 M3 票见 hub/index.ts hubListMirrorRegistry 注释。

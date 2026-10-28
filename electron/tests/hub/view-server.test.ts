@@ -29,13 +29,13 @@ vi.mock('../../src/main/logger', () => ({
 
 import { closeDb, getDb, runMigrations } from '../../src/main/storage/db';
 import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keychain';
-import { createWorkspace } from '../../src/main/workspace/crud';
+import { createWorkspace, getWorkspace } from '../../src/main/workspace/crud';
 import { insertSession } from '../../src/main/storage/sessions/repo';
 import { insertTask } from '../../src/main/storage/tasks/repo';
 import type { HubClient } from '../../src/main/hub/client';
 import { ViewServer } from '../../src/main/hub/view-server';
 import type { HubViewSettings } from '../../src/main/hub/view-settings';
-import { VIEW_RPC } from '../../src/main/hub/protocol';
+import { VIEW_RPC, VIEW_FILES_ENTRIES_MAX, VIEW_FILES_READ_MAX } from '../../src/main/hub/protocol';
 
 // ── 环境脚手架（delegation-ports.test 同款） ─────────────────────────────────
 
@@ -446,11 +446,184 @@ describe('尾部订阅与 view.tail 上行', () => {
 });
 
 // ────────────────────────────────────────────────────────────────────────────
-// 只读红线（§8.4：服务端六方法零写路径）
+// M3.2 远端可见性：view.workspaces / view.files
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('M3.2 view.workspaces 远端空间清单', () => {
+  it('投影白名单 {id,name,description}——键集恰三字段，不含 directoryPath/ownerId（本机路径泄漏面）', async () => {
+    const wsA = await seedWorkspace('prod-dev');
+    await seedWorkspace('lab');
+    const server = viewServerOf(null);
+    const r = await server.handleViewRequest(req(VIEW_RPC.workspaces, {}));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const workspaces = (r.payload as { workspaces: Array<Record<string, unknown>> }).workspaces;
+    expect(workspaces).toHaveLength(2);
+    for (const w of workspaces) {
+      expect(Object.keys(w).sort()).toEqual(['description', 'id', 'name']);
+    }
+    const names = workspaces.map((w) => w.name);
+    expect(names).toContain('prod-dev');
+    expect(names).toContain('lab');
+    // id 与 DB 行同源（picker pickWorkspace 直接消费）
+    expect(workspaces.find((w) => w.name === 'prod-dev')!.id).toBe(wsA);
+    server.destroy();
+  });
+
+  it('空库 → 空清单（非错误）', async () => {
+    const server = viewServerOf(null);
+    const r = await server.handleViewRequest(req(VIEW_RPC.workspaces, {}));
+    expect(r).toEqual({ ok: true, payload: { workspaces: [] } });
+    server.destroy();
+  });
+});
+
+describe('M3.2 view.files 只读文件树', () => {
+  let wsId = '';
+  let root = '';
+
+  beforeEach(async () => {
+    wsId = await seedWorkspace('prod-dev');
+    root = getWorkspace(wsId)!.directoryPath;
+    fs.mkdirSync(path.join(root, 'docs'));
+    fs.mkdirSync(path.join(root, 'docs', 'deep'));
+    fs.writeFileSync(path.join(root, 'README.md'), '# 项目\n你好世界');
+    fs.writeFileSync(path.join(root, 'docs', 'notes.txt'), '笔记内容 abc');
+    fs.writeFileSync(path.join(root, 'docs', 'deep', 'x.log'), 'x');
+  });
+
+  it('op=list：根目录（path 缺省 = 根）条目含目录/文件 + .git* 不可见；子目录按 path 列举', async () => {
+    const server = viewServerOf(null);
+    const r = await server.handleViewRequest(req(VIEW_RPC.files, { workspaceName: 'prod-dev', op: 'list' }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const p = r.payload as { entries: Array<{ name: string; isDirectory: boolean; size: number }>; truncated: boolean };
+    const names = p.entries.map((e) => e.name);
+    expect(names).toContain('README.md');
+    expect(names).toContain('docs');
+    // .git 目录与 .git* 前缀条目一律不可见（WorkspaceFS listDir 既有过滤）
+    for (const n of names) expect(n.toLowerCase().startsWith('.git')).toBe(false);
+    const docs = p.entries.find((e) => e.name === 'docs')!;
+    expect(docs.isDirectory).toBe(true);
+    expect(p.truncated).toBe(false);
+
+    const sub = await server.handleViewRequest(req(VIEW_RPC.files, { workspaceName: 'prod-dev', op: 'list', path: 'docs' }));
+    expect(sub.ok).toBe(true);
+    const subEntries = (sub.ok ? (sub.payload as { entries: Array<{ name: string }> }).entries : []).map((e) => e.name);
+    expect(subEntries).toEqual(['deep', 'notes.txt']);
+    server.destroy();
+  });
+
+  it(`op=list 超 ${VIEW_FILES_ENTRIES_MAX} 条 → 截断至 ${VIEW_FILES_ENTRIES_MAX} + truncated=true；恰 ${VIEW_FILES_ENTRIES_MAX} → false`, async () => {
+    const big = path.join(root, 'big');
+    fs.mkdirSync(big);
+    for (let i = 0; i <= VIEW_FILES_ENTRIES_MAX; i++) fs.writeFileSync(path.join(big, `f${i}.txt`), 'x');
+    const server = viewServerOf(null);
+    const over = await server.handleViewRequest(req(VIEW_RPC.files, { workspaceName: 'prod-dev', op: 'list', path: 'big' }));
+    const overP = over.ok ? (over.payload as { entries: unknown[]; truncated: boolean }) : null;
+    expect(overP?.entries).toHaveLength(VIEW_FILES_ENTRIES_MAX);
+    expect(overP?.truncated).toBe(true);
+
+    fs.unlinkSync(path.join(big, `f${VIEW_FILES_ENTRIES_MAX}.txt`));
+    const exact = await server.handleViewRequest(req(VIEW_RPC.files, { workspaceName: 'prod-dev', op: 'list', path: 'big' }));
+    const exactP = exact.ok ? (exact.payload as { entries: unknown[]; truncated: boolean }) : null;
+    expect(exactP?.entries).toHaveLength(VIEW_FILES_ENTRIES_MAX);
+    expect(exactP?.truncated).toBe(false);
+    server.destroy();
+  });
+
+  it('op=read：文本文件 base64 往返 + size = 原始字节数 + truncated=false', async () => {
+    const server = viewServerOf(null);
+    const r = await server.handleViewRequest(req(VIEW_RPC.files, { workspaceName: 'prod-dev', op: 'read', path: 'docs/notes.txt' }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const p = r.payload as { content: string; size: number; truncated: boolean };
+    const text = fs.readFileSync(path.join(root, 'docs', 'notes.txt'));
+    expect(Buffer.from(p.content, 'base64').equals(text)).toBe(true);
+    expect(p.size).toBe(text.length);
+    expect(p.truncated).toBe(false);
+    server.destroy();
+  });
+
+  it('op=read：二进制文件 base64 字节级往返（utf-8 roundtrip 必不一致的字节序列）', async () => {
+    const bin = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe, 0x00, 0x81]);
+    fs.writeFileSync(path.join(root, 'logo.png'), bin);
+    const server = viewServerOf(null);
+    const r = await server.handleViewRequest(req(VIEW_RPC.files, { workspaceName: 'prod-dev', op: 'read', path: 'logo.png' }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const p = r.payload as { content: string; size: number };
+    expect(Buffer.from(p.content, 'base64').equals(bin)).toBe(true);
+    expect(p.size).toBe(bin.length);
+    server.destroy();
+  });
+
+  it(`op=read 超 ${VIEW_FILES_READ_MAX} 字节 → content 截断至 ${VIEW_FILES_READ_MAX} + size=原始大小 + truncated=true`, async () => {
+    const big = Buffer.alloc(VIEW_FILES_READ_MAX + 1, 0x61);
+    fs.writeFileSync(path.join(root, 'huge.txt'), big);
+    const server = viewServerOf(null);
+    const r = await server.handleViewRequest(req(VIEW_RPC.files, { workspaceName: 'prod-dev', op: 'read', path: 'huge.txt' }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const p = r.payload as { content: string; size: number; truncated: boolean };
+    expect(Buffer.from(p.content, 'base64').length).toBe(VIEW_FILES_READ_MAX);
+    expect(p.size).toBe(VIEW_FILES_READ_MAX + 1);
+    expect(p.truncated).toBe(true);
+    server.destroy();
+  });
+
+  it('越界（..）/ 绝对路径 / 符号链接逃逸 / 不存在 → not_found（anti-probe 不细分）', async () => {
+    const outside = path.join(tmpRoot, 'outside-secret.txt');
+    fs.writeFileSync(outside, 'secret');
+    fs.symlinkSync(outside, path.join(root, 'escape-link.txt'));
+    fs.symlinkSync(tmpRoot, path.join(root, 'escape-dir'));
+    const server = viewServerOf(null);
+
+    const cases: Array<Record<string, unknown>> = [
+      { workspaceName: 'prod-dev', op: 'read', path: '../outside-secret.txt' },
+      { workspaceName: 'prod-dev', op: 'read', path: outside },
+      { workspaceName: 'prod-dev', op: 'list', path: '..' },
+      { workspaceName: 'prod-dev', op: 'read', path: 'escape-link.txt' },
+      { workspaceName: 'prod-dev', op: 'list', path: 'escape-dir' },
+      { workspaceName: 'prod-dev', op: 'read', path: 'ghost.txt' },
+      { workspaceName: 'prod-dev', op: 'list', path: 'ghost-dir' },
+      { workspaceName: 'ghost-ws', op: 'list' },
+    ];
+    for (const payload of cases) {
+      const r = await server.handleViewRequest(req(VIEW_RPC.files, payload));
+      expect(r.ok, JSON.stringify(payload)).toBe(false);
+      expect((r as { payload: { code: string } }).payload.code).toBe('not_found');
+    }
+    server.destroy();
+  });
+
+  it('op 非法/缺失 → bad_request；path 超 512 字符 → bad_request', async () => {
+    const server = viewServerOf(null);
+    const badOp = await server.handleViewRequest(req(VIEW_RPC.files, { workspaceName: 'prod-dev', op: 'write', path: 'x' }));
+    expect((badOp as { payload: { code: string } }).payload.code).toBe('bad_request');
+    const noOp = await server.handleViewRequest(req(VIEW_RPC.files, { workspaceName: 'prod-dev' }));
+    expect((noOp as { payload: { code: string } }).payload.code).toBe('bad_request');
+    const longPath = await server.handleViewRequest(req(VIEW_RPC.files, { workspaceName: 'prod-dev', op: 'list', path: 'a'.repeat(513) }));
+    expect((longPath as { payload: { code: string } }).payload.code).toBe('bad_request');
+    server.destroy();
+  });
+
+  it('read 目录路径 → not_found（EISDIR 归入不可访问）；list 文件路径 → not_found（ENOTDIR）', async () => {
+    const server = viewServerOf(null);
+    const readDir = await server.handleViewRequest(req(VIEW_RPC.files, { workspaceName: 'prod-dev', op: 'read', path: 'docs' }));
+    expect((readDir as { payload: { code: string } }).payload.code).toBe('not_found');
+    const listFile = await server.handleViewRequest(req(VIEW_RPC.files, { workspaceName: 'prod-dev', op: 'list', path: 'README.md' }));
+    expect((listFile as { payload: { code: string } }).payload.code).toBe('not_found');
+    server.destroy();
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// 只读红线（§8.4：服务端八方法零写路径）
 // ────────────────────────────────────────────────────────────────────────────
 
 describe('只读红线（静态源码断言）', () => {
-  it('view-server.ts 源码不含写路径 SQL（组装器全部只读——§8.4）', () => {
+  it('view-server.ts 源码不含写路径 SQL（组装器全部只读——§8.4；M3.2 workspaces/files 分支自动同覆盖）', () => {
     const src = fs.readFileSync(
       path.resolve(__dirname, '../../src/main/hub/view-server.ts'),
       'utf-8',

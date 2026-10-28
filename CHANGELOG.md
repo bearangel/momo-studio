@@ -6,6 +6,17 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 节点互联 M3.2：远端可见性补全
+
+协议 minor **1.4.0**（view.workspaces + view.files + view.* 载荷可选 groupId 消除 commonGroupId 任意单组歧义）。设计见 momo-hub 仓 `docs/specs/2026-10-29-momo-hub-m3.2-remote-visibility.md`。
+
+- **协议 1.4.0（hub v0.1.8）**：VIEW_RPC 增 workspaces/files（METHOD_REQUIRED_MINOR=4 首批 minor-4）；既有 6 方法 req 增可选 `groupId?`（缺省回落 commonGroupId 旧路径，旧形状零变化锁）；限额 path≤512 / entries≤500 / read≤256KB(base64)
+- **hub**：提取器 groupId 优先回落 target 推导（8 方法统一）；handleView 带 groupId 时 isMember 同组校验（多组消歧，MC6 锁）；新方法走既有 forward/consent/超时零新逻辑（hub 278 tests）
+- **studio worker**：workspaces 投影白名单三字段（**不暴露 directoryPath**）；files 复用 WorkspaceFS（无 extraRoots 只读域；assertInWorkspace 越界/符号链接逃逸→not_found anti-probe）；双截断 + base64；零写 SQL（只读静态断言覆盖）
+- **studio leader**：picker 门控 hubSupportsMinor(4) 切远端清单（带选中组 groupId，铁律 5）+ 旧 hub 回落本机；RemoteViewPane 第五「文件」tab（懒加载目录树 + 文本预览 + 截断徽标，复用既有容器形态）；全部 view 调用携带 groupId（electron 5063 / renderer 2956）
+
+版本 `2.1.0-alpha.38`。hub 侧 `v0.1.8`（tag `v0.1.8` = `776e965`）。
+
 ## [未发布] — 节点互联 M3.1：HITL L2 远程代答
 
 补齐 HITL 链路最后一环：worker 写授权等待时 leader 远程批准/拒绝。协议 minor **1.3.0**（首个 minor-3 方法落地，M3.0 能力门槛首次实战）。设计见 momo-hub 仓 `docs/specs/2026-10-28-momo-hub-m3.1-hitl-l2-answer.md`。
