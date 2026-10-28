@@ -6,6 +6,19 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 节点互联 M3.3：任务编排与依赖
+
+studio 本体改造，**协议零改**（hub 0.1.8/1.4.0 与 pin 不动；依赖元数据透传 minor 延后至有真实消费方）。设计见 momo-hub 仓 `docs/specs/2026-10-29-momo-hub-m3.3-task-orchestration.md`。
+
+- **依赖模型（迁移 070）**：`tasks.parent_task_id` 列 + `task_dependencies` 边表（复合主键/自环 CHECK/双索引）；纯模块 `dependency-graph.ts`（detectCycle 返回环路径/unsatisfiedDeps 仅 completed 解锁、悬挂边不阻塞）；写路径单点 `relations.ts`（同事务全图环检测——id 预生成→检测→插行插边；setRelations 全量替换且被替换关系分别剔除防环漏检）
+- **blocked = 派生态非第 10 状态**（M3.1 waiting 先例）：listTasks JOIN 批量派生 `blocked/blockedBy`——双看板镜像 9×5 锁、状态机、七态映射零破坏
+- **四派发闸**：executor peek（NOT EXISTS）/ retryDispatch / move assigned+active / startTaskAndKickoff——统一人话「存在未完成依赖（T-x）」，blocked 不进 queued/派发（roadmap 逐字）
+- **批量 IPC `task:createBatch`**（上限 50，per-item union——部分成功允许，与旧逐行循环语义等价）；CreateTaskDialog 改单 IPC；行语法扩展 `标题 :: T-1,T-2`（无依赖行解析零变化；外派路径不解析——协议零改边界测试锁死）
+- **DAG 视图**：laneMode 第三值 dag（Network 图标 pill 沿既有形态）；`task-graph.ts` Kahn 分层（层内保输入序、环回退平铺+警示行）；DagLayerColumn 复用 BoardColumn 容器 + 既有卡渲染，**只读无拖拽**（语义边界注释）；blocked Lock 角标（BLOCKED_STYLE 单源）+ blockedBy 悬停摘要
+- **agent 路径**：task-tools CreateTaskInput + dependsOn?（relations 同源校验）
+
+版本 `2.1.0-alpha.39`。
+
 ## [未发布] — 节点互联 M3.2：远端可见性补全
 
 协议 minor **1.4.0**（view.workspaces + view.files + view.* 载荷可选 groupId 消除 commonGroupId 任意单组歧义）。设计见 momo-hub 仓 `docs/specs/2026-10-29-momo-hub-m3.2-remote-visibility.md`。
