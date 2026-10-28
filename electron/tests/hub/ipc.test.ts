@@ -55,12 +55,13 @@ const VIEW_CHANNELS = [
   'hub:getViewSettings', 'hub:setViewSettings',
   'hub:viewWorkspace', 'hub:viewSessions', 'hub:viewMessages', 'hub:viewTasks',
   'hub:viewSubscribe', 'hub:viewUnsubscribe',
+  'hub:viewWorkspaces', 'hub:viewFiles',
 ];
 
 beforeEach(() => { handlers.clear(); vi.clearAllMocks(); });
 
 describe('hub IPC 接线', () => {
-  it('注册三十六通道（M2.5 T3 增 hub:getNodes；M3.1 增 hub:taskAnswer）；getStatus 透传 manager', async () => {
+  it('注册三十八通道（M2.5 T3 增 hub:getNodes；M3.1 增 hub:taskAnswer；M3.2 增 viewWorkspaces/viewFiles）；getStatus 透传 manager', async () => {
     registerHubIpc();
     expect([...handlers.keys()].sort()).toEqual([
       ...GROUP_CHANNELS,
@@ -283,5 +284,19 @@ describe('hub IPC 远程查看通道（M2e T14）', () => {
     await handlers.get('hub:viewUnsubscribe')!(null, { targetNodeId: 'n2', sessionId: 's' });
     expect(manager.hubRequest).toHaveBeenLastCalledWith('view.unsubscribe', { targetNodeId: 'n2', sessionId: 's' });
     expect(manager.hubRequest).toHaveBeenCalledTimes(6);
+  });
+
+  it('view M3.2 两通道：viewWorkspaces/viewFiles 方法名与载荷逐项映射（groupId 可选段原样透传——hub 定向转发）', async () => {
+    registerHubIpc();
+    await handlers.get('hub:viewWorkspaces')!(null, { targetNodeId: 'n2' });
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('view.workspaces', { targetNodeId: 'n2' });
+    await handlers.get('hub:viewWorkspaces')!(null, { targetNodeId: 'n2', groupId: 'g1' });
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('view.workspaces', { targetNodeId: 'n2', groupId: 'g1' });
+
+    await handlers.get('hub:viewFiles')!(null, { targetNodeId: 'n2', workspaceName: 'ws', op: 'list' });
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('view.files', { targetNodeId: 'n2', workspaceName: 'ws', op: 'list' });
+    await handlers.get('hub:viewFiles')!(null, { targetNodeId: 'n2', workspaceName: 'ws', op: 'read', path: 'docs/a.txt', groupId: 'g1' });
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('view.files', { targetNodeId: 'n2', workspaceName: 'ws', op: 'read', path: 'docs/a.txt', groupId: 'g1' });
+    expect(manager.hubRequest).toHaveBeenCalledTimes(4);
   });
 });

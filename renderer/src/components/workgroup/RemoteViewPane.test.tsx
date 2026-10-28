@@ -22,7 +22,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { RemoteViewPane } from './RemoteViewPane';
 import { useHubViewStore, VIEW_PAGE_SIZE } from '../../stores/hub-view.store';
-import type { HubViewAppendedEvent } from '../../ipc/types';
+import { useHubStore } from '../../stores/hub.store';
+import type { HubViewAppendedEvent, HubStatus } from '../../ipc/types';
 
 let appendedCb: ((e: HubViewAppendedEvent) => void) | undefined;
 
@@ -34,12 +35,35 @@ const api = {
     viewTasks: vi.fn(),
     viewSubscribe: vi.fn(),
     viewUnsubscribe: vi.fn(),
+    viewFiles: vi.fn(),
     onViewAppended: vi.fn((cb: (e: HubViewAppendedEvent) => void) => {
       appendedCb = cb;
       return () => undefined;
     }),
   },
 };
+
+/** 指定 hub 协议版本的在线状态（文件 tab 门控三态用） */
+function statusWithProto(ver: string | null): HubStatus {
+  return {
+    configured: true,
+    state: 'online',
+    hubUrl: 'https://hub.example.com:8787',
+    nodeName: '办公室 MacBook',
+    nodeId: 'a3f9c2e1deadbeef',
+    lastError: null,
+    lastErrorCode: null,
+    hubProtoVer: ver,
+  };
+}
+
+/** utf-8 正确 base64（jsdom btoa 拒 Latin1 外字符——先经 TextEncoder 编码字节） */
+function b64(str: string): string {
+  const bytes = new TextEncoder().encode(str);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
 
 const OVERVIEW = {
   overview: { name: 'product-dev', description: '', sessionCount: 2 },
@@ -79,10 +103,16 @@ beforeEach(() => {
   api.hub.viewMessages.mockResolvedValue({ messages: [], hasMore: false });
   api.hub.viewSubscribe.mockResolvedValue({ ok: true });
   api.hub.viewUnsubscribe.mockResolvedValue({ ok: true });
+  api.hub.viewFiles.mockResolvedValue({ entries: [], truncated: false });
+  useHubStore.setState({ status: null, nodes: [], loadError: null });
   useHubViewStore.setState({
-    open: false, picking: false, targetNodeId: null, targetName: null,
-    workspaceId: null, workspaceName: null, tab: 'overview',
-    overview: null, sessions: [], tasks: [], loading: false, error: null, replay: null,
+    open: false, picking: false,
+    pickerRemote: false, pickerWorkspaces: null, remoteLoading: false,
+    targetNodeId: null, targetName: null,
+    workspaceId: null, workspaceName: null, groupId: null, tab: 'overview',
+    overview: null, sessions: [], tasks: [],
+    files: { dirs: {}, preview: null, loadingDir: null, loadingFile: null, error: null },
+    loading: false, error: null, replay: null,
   });
 });
 
@@ -382,5 +412,128 @@ describe('错误路径（notes §4 断言点 5）', () => {
     // liveError 同时呈现在头部徽标与流尾 alert——按 role 锚定流尾人话错误态
     expect(screen.getByRole('alert')).toHaveTextContent('目标节点不在线');
     expect((screen.getByText('断开订阅') as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// M3.2 文件 tab（门控三态 + 懒加载树 + 预览 + truncated）
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('M3.2 文件 tab 门控（hubSupportsMinor 4 三态）', () => {
+  it('hub 1.4：tab 在场；点击进页拉根目录（path 省略）', async () => {
+    useHubStore.setState({ status: statusWithProto('1.4.0'), nodes: [], loadError: null });
+    api.hub.viewFiles.mockResolvedValueOnce({
+      entries: [{ name: 'docs', isDirectory: true, size: 0 }],
+      truncated: false,
+    });
+    openPanel();
+    render(<RemoteViewPane />);
+    await waitFor(() => expect(screen.getByRole('tab', { name: '文件' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('tab', { name: '文件' }));
+    await waitFor(() =>
+      expect(api.hub.viewFiles).toHaveBeenCalledWith({ targetNodeId: 'node-b', workspaceName: 'product-dev', op: 'list' }),
+    );
+    expect(await screen.findByText('docs')).toBeInTheDocument();
+  });
+
+  it('hub 1.3：tab 隐藏（门控——低版本无 view.files）', async () => {
+    useHubStore.setState({ status: statusWithProto('1.3.0'), nodes: [], loadError: null });
+    openPanel();
+    render(<RemoteViewPane />);
+    await waitFor(() => expect(screen.getByRole('tab', { name: '会话 2' })).toBeDefined());
+    expect(screen.queryByRole('tab', { name: '文件' })).toBeNull();
+    expect(api.hub.viewFiles).not.toHaveBeenCalled();
+  });
+
+  it('hub 版本未协商（null）：tab 同隐藏（未知即不可用）', async () => {
+    openPanel();
+    render(<RemoteViewPane />);
+    await waitFor(() => expect(screen.getByRole('tab', { name: '会话 2' })).toBeDefined());
+    expect(screen.queryByRole('tab', { name: '文件' })).toBeNull();
+  });
+});
+
+describe('M3.2 文件 tab 懒加载树与预览', () => {
+  beforeEach(() => {
+    useHubStore.setState({ status: statusWithProto('1.4.0'), nodes: [], loadError: null });
+  });
+
+  function rootEntries(): Array<{ name: string; isDirectory: boolean; size: number }> {
+    return [
+      { name: 'docs', isDirectory: true, size: 0 },
+      { name: 'README.md', isDirectory: false, size: 12 },
+    ];
+  }
+
+  async function openFilesTab(): Promise<void> {
+    api.hub.viewFiles.mockResolvedValueOnce({ entries: rootEntries(), truncated: false });
+    // M3.2 真实链路：openPanel 恒带选中组 groupId（WorkgroupView.handleOpenView 透传）
+    useHubViewStore.getState().openPanel({
+      targetNodeId: 'node-b', targetName: 'studio-mini', groupId: 'g-dev',
+      workspaces: [{ id: 'ws-1', name: 'product-dev' }],
+    });
+    render(<RemoteViewPane />);
+    await waitFor(() => expect(screen.getByRole('tab', { name: '文件' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('tab', { name: '文件' }));
+    await waitFor(() => expect(screen.getByLabelText('预览文件 README.md')).toBeInTheDocument());
+  }
+
+  it('逐层展开：目录点击 → 子目录 list（path 携带）+ truncated 标记呈现', async () => {
+    api.hub.viewFiles.mockResolvedValueOnce({ entries: rootEntries(), truncated: false });
+    api.hub.viewFiles.mockResolvedValueOnce({
+      entries: Array.from({ length: 3 }, (_, i) => ({ name: `f${i}.txt`, isDirectory: false, size: 1 })),
+      truncated: true,
+    });
+    useHubViewStore.getState().openPanel({
+      targetNodeId: 'node-b', targetName: 'studio-mini', groupId: 'g-dev',
+      workspaces: [{ id: 'ws-1', name: 'product-dev' }],
+    });
+    render(<RemoteViewPane />);
+    fireEvent.click(screen.getByRole('tab', { name: '文件' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '展开目录 docs' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '展开目录 docs' }));
+    await waitFor(() =>
+      expect(api.hub.viewFiles).toHaveBeenLastCalledWith({ targetNodeId: 'node-b', workspaceName: 'product-dev', op: 'list', path: 'docs', groupId: 'g-dev' }),
+    );
+    expect(await screen.findByText('f0.txt')).toBeInTheDocument();
+    expect(screen.getByText('目录条目超过 500 条上限，已截断')).toBeInTheDocument();
+  });
+
+  it('文件点击 → read 预览（base64 解码文本）+ 关闭预览', async () => {
+    await openFilesTab();
+    const text = '# 远端README';
+    api.hub.viewFiles.mockResolvedValueOnce({ content: b64(text), size: text.length, truncated: false });
+    fireEvent.click(screen.getByLabelText('预览文件 README.md'));
+    await waitFor(() => expect(screen.getByLabelText('文件预览 README.md')).toBeInTheDocument());
+    expect(screen.getByText(text)).toBeInTheDocument();
+    expect(api.hub.viewFiles).toHaveBeenLastCalledWith({ targetNodeId: 'node-b', workspaceName: 'product-dev', op: 'read', path: 'README.md', groupId: 'g-dev' });
+
+    fireEvent.click(screen.getByRole('button', { name: '关闭预览' }));
+    await waitFor(() => expect(screen.queryByLabelText('文件预览 README.md')).toBeNull());
+  });
+
+  it('截断与二进制预览态：truncated 徽标 + 截断说明；binary → 占位文案', async () => {
+    await openFilesTab();
+    api.hub.viewFiles.mockResolvedValueOnce({ content: btoa('a'), size: 300_000, truncated: true });
+    fireEvent.click(screen.getByLabelText('预览文件 README.md'));
+    await waitFor(() => expect(screen.getByLabelText('文件预览 README.md')).toBeInTheDocument());
+    expect(screen.getByText('已截断')).toBeInTheDocument();
+    expect(screen.getByText('文件超过 256KB 读取上限，以上为截断内容')).toBeInTheDocument();
+
+    const bytes = new Uint8Array([0x89, 0x50, 0xff, 0xfe]);
+    let bin = '';
+    for (const b of bytes) bin += String.fromCharCode(b);
+    api.hub.viewFiles.mockResolvedValueOnce({ content: btoa(bin), size: 4, truncated: false });
+    fireEvent.click(screen.getByLabelText('预览文件 README.md'));
+    await waitFor(() => expect(screen.getByText('二进制文件——文本预览不可用（内容未传输完整语义，仅前 256KB）')).toBeInTheDocument());
+  });
+
+  it('错误路径：list 失败 → files 子域 role=alert 人话（humanizeViewError 链）', async () => {
+    api.hub.viewFiles.mockRejectedValue(new Error('目标节点已关闭本组查看'));
+    openPanel();
+    render(<RemoteViewPane />);
+    fireEvent.click(screen.getByRole('tab', { name: '文件' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('对方节点关闭了本组查看');
   });
 });

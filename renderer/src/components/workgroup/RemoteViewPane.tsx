@@ -14,12 +14,18 @@
 //   底部 spinner「实时追加中」行 + view.appended 淡入追加（150ms）
 // - 任务页 = tcard 列 + mono #T-id + 状态徽标；「来自 X 委派」来源标注待 RM-M21-7
 //   （T6 登记表）接入——HubViewLocalTask 协议无来源字段，不编造
-import { useEffect, type ReactNode } from 'react';
+// - 文件页（M3.2 协议 1.4.0，hubSupportsMinor(4) 门控——低版本隐藏 tab）= 懒加载
+//   目录树（进页拉根、逐层展开）+ 文件点击 read 预览（base64 解码文本 / 二进制
+//   占位）+ 500/256KB truncated 明示；复用既有 TABS 容器与列表行样式，无新布局语言
+import { useEffect, useState, type ReactNode } from 'react';
 import {
-  ArrowUpToLine, Bot, ChevronLeft, Eye, EyeOff, MessageSquare, Monitor,
+  ArrowUpToLine, Bot, ChevronDown, ChevronLeft, ChevronRight, Eye, EyeOff, FileText,
+  Folder, FolderOpen, MessageSquare, Monitor,
   Plug, Puzzle, Radio, RefreshCw, Settings2, SlidersHorizontal, Sparkles, Users, X,
 } from 'lucide-react';
 import { useHubViewStore, VIEW_PAGE_SIZE, type ViewTab } from '../../stores/hub-view.store';
+import { useHubStore } from '../../stores/hub.store';
+import { hubSupportsMinor } from '../../lib/hub-capability';
 import { taskStatusStyle } from '../../lib/task-status';
 import { MessageFrame } from '../im/MessageFrame';
 import { ToolCallChip } from '../im/ToolCallChip';
@@ -28,10 +34,14 @@ import { Button } from '../ui/Button';
 import { Spinner } from '../ui/Spinner';
 import type { HubViewMessage, HubViewOverview, TaskStatus } from '../../ipc/types';
 
+/** 文件 tab 的协议门槛（M3.2 协议 1.4.0：view.files）——低版本 hub 隐藏 tab */
+const FILES_REQUIRED_MINOR = 4;
+
 const TABS: Array<{ key: ViewTab; label: string }> = [
   { key: 'overview', label: '概览' },
   { key: 'sessions', label: '会话' },
   { key: 'tasks', label: '任务' },
+  { key: 'files', label: '文件' },
   { key: 'config', label: '配置' },
 ];
 
@@ -116,6 +126,10 @@ function ConfigCard({ icon, title, lines }: { icon: ReactNode; title: string; li
 export function RemoteViewPane() {
   const st = useHubViewStore();
   const init = useHubViewStore((s) => s.init);
+  const hubProtoVer = useHubStore((s) => s.status?.hubProtoVer ?? null);
+  const filesEnabled = hubSupportsMinor(hubProtoVer, FILES_REQUIRED_MINOR);
+  // 文件 tab 门控与 picker 远端清单同门槛（spec §2.4）——旧 hub 无 view.files
+  const tabs = filesEnabled ? TABS : TABS.filter((t) => t.key !== 'files');
 
   useEffect(() => init(), [init]);
 
@@ -177,7 +191,7 @@ export function RemoteViewPane() {
       ) : (
         <>
           <div className="flex items-end gap-0 border-b border-subtle px-4" role="tablist" aria-label="查看页签">
-            {TABS.map((t) => (
+            {tabs.map((t) => (
               <button
                 key={t.key}
                 type="button"
@@ -204,6 +218,7 @@ export function RemoteViewPane() {
             {st.tab === 'overview' && st.overview !== null && <OverviewTab overview={st.overview} />}
             {st.tab === 'sessions' && <SessionsTab />}
             {st.tab === 'tasks' && <TasksTab />}
+            {st.tab === 'files' && <FilesTab />}
             {st.tab === 'config' && st.overview !== null && <ConfigTab overview={st.overview} />}
           </div>
         </>
@@ -303,6 +318,137 @@ function ConfigTab({ overview }: { overview: HubViewOverview }) {
       <ConfigCard icon={<Sparkles size={14} strokeWidth={1.75} />} title="skill" lines={overview.skills} />
       <ConfigCard icon={<Puzzle size={14} strokeWidth={1.75} />} title="插件（启用）" lines={overview.pluginsEnabled} />
       <ConfigCard icon={<SlidersHorizontal size={14} strokeWidth={1.75} />} title="偏好" lines={[]} />
+    </div>
+  );
+}
+
+/** 字节数人话（B/KB/MB——AuditLog/MirrorWizard 同法，文件树尺寸列共用） */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** 目录条目相对路径拼接（'/' 分隔——与 view.files / searchNames 路径约定一致） */
+function joinPath(dir: string, name: string): string {
+  return dir === '.' ? name : `${dir}/${name}`;
+}
+
+/** 懒加载目录树节点：展开即拉该层 list（已加载幂等跳过）；子目录递归同构 */
+function DirNode({ relPath, depth }: { relPath: string; depth: number }) {
+  const dir = useHubViewStore((s) => s.files.dirs[relPath]);
+  const loadingDir = useHubViewStore((s) => s.files.loadingDir);
+  const loadFilesDir = useHubViewStore((s) => s.loadFilesDir);
+  const openFilePreview = useHubViewStore((s) => s.openFilePreview);
+  const [expanded, setExpanded] = useState(depth === 0);
+  const label = relPath === '.' ? '根目录' : relPath.split('/').pop() ?? relPath;
+
+  const toggle = (): void => {
+    setExpanded((v) => {
+      if (!v) void loadFilesDir(relPath);
+      return !v;
+    });
+  };
+
+  return (
+    <div className="flex flex-col" aria-label={`目录 ${label}`}>
+      {depth > 0 && (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-label={`${expanded ? '收起目录' : '展开目录'} ${label}`}
+          onClick={toggle}
+          className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-left hover:bg-surface-2"
+          style={{ paddingLeft: depth * 14 + 8 }}
+        >
+          {expanded
+            ? <ChevronDown size={13} strokeWidth={1.75} className="shrink-0 text-tertiary" aria-hidden />
+            : <ChevronRight size={13} strokeWidth={1.75} className="shrink-0 text-tertiary" aria-hidden />}
+          {expanded
+            ? <FolderOpen size={14} strokeWidth={1.75} className="shrink-0 text-accent-600 dark:text-accent-300" aria-hidden />
+            : <Folder size={14} strokeWidth={1.75} className="shrink-0 text-accent-600 dark:text-accent-300" aria-hidden />}
+          <span className="min-w-0 flex-1 truncate text-[12.5px] text-primary">{label}</span>
+        </button>
+      )}
+      {expanded && (dir === undefined ? (
+        loadingDir === relPath ? (
+          <p className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-tertiary"><Spinner size={11} /> 拉取中…</p>
+        ) : null
+      ) : (
+        <div className="flex flex-col">
+          {dir.entries.map((e) =>
+            e.isDirectory ? (
+              <DirNode key={e.name} relPath={joinPath(relPath, e.name)} depth={depth + 1} />
+            ) : (
+              <button
+                key={e.name}
+                type="button"
+                aria-label={`预览文件 ${e.name}`}
+                onClick={() => void openFilePreview(joinPath(relPath, e.name))}
+                className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-left hover:bg-surface-2"
+                style={{ paddingLeft: (depth + 1) * 14 + 8 }}
+              >
+                <FileText size={14} strokeWidth={1.75} className="shrink-0 text-tertiary" aria-hidden />
+                <span className="min-w-0 flex-1 truncate text-[12.5px] text-secondary">{e.name}</span>
+                <span className="shrink-0 font-mono text-[10.5px] text-tertiary">{formatBytes(e.size)}</span>
+              </button>
+            ),
+          )}
+          {dir.truncated && (
+            <p className="px-3 py-1.5 text-[11px] text-status-warning">目录条目超过 500 条上限，已截断</p>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** 文件预览卡：read 产物（base64 已解码文本 / 二进制占位）+ truncated 明示 */
+function FilePreviewCard() {
+  const preview = useHubViewStore((s) => s.files.preview);
+  const closeFilePreview = useHubViewStore((s) => s.closeFilePreview);
+  if (preview === null) return null;
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-subtle bg-surface-1 p-3" aria-label={`文件预览 ${preview.path}`}>
+      <div className="flex min-w-0 items-center gap-2">
+        <FileText size={14} strokeWidth={1.75} className="shrink-0 text-tertiary" aria-hidden />
+        <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-primary">{preview.path}</span>
+        <span className="shrink-0 font-mono text-[10.5px] text-tertiary">{formatBytes(preview.size)}</span>
+        {preview.truncated && <Badge tone="warning">已截断</Badge>}
+        <Button variant="ghost" size="sm" className="h-6 w-6 shrink-0 px-0" aria-label="关闭预览" onClick={closeFilePreview}>
+          <X size={13} strokeWidth={1.75} aria-hidden />
+        </Button>
+      </div>
+      {preview.binary ? (
+        <p className="text-[11.5px] text-tertiary">二进制文件——文本预览不可用（内容未传输完整语义，仅前 256KB）</p>
+      ) : (
+        <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words rounded-md bg-surface-2 px-2.5 py-2 font-mono text-[11.5px] leading-relaxed text-secondary">{preview.content}</pre>
+      )}
+      {preview.truncated && (
+        <p className="text-[11px] text-status-warning">文件超过 256KB 读取上限，以上为截断内容</p>
+      )}
+    </div>
+  );
+}
+
+function FilesTab() {
+  const files = useHubViewStore((s) => s.files);
+  const loadFilesDir = useHubViewStore((s) => s.loadFilesDir);
+  useEffect(() => {
+    void loadFilesDir('.');
+  }, [loadFilesDir]);
+  return (
+    <div className="flex flex-col gap-2">
+      {files.error !== null && (
+        <p className="rounded-md bg-status-error-tint px-2.5 py-2 text-xs text-status-error" role="alert">{files.error}</p>
+      )}
+      <div className="flex flex-col rounded-lg border border-subtle bg-surface-1 p-1.5" aria-label="工作空间文件树">
+        <DirNode relPath="." depth={0} />
+        {files.loadingFile !== null && (
+          <p className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-tertiary"><Spinner size={11} /> 读取 {files.loadingFile}…</p>
+        )}
+      </div>
+      <FilePreviewCard />
     </div>
   );
 }

@@ -6,10 +6,11 @@
 //   S3b 定值：头部 nicon 26px（Eye）+ 标题「查看 {节点名} 的工作空间」+ 副题
 //   「远程只读 · 经 hub 定向拉取」+ 关闭位；行 = Folder 16px accent + 名称 + chevron；
 //   底部 consent callout（WifiOff + 403 提示与「查看与镜像无关」话术）
-// - 数据 = store 既有 picking 流：本机工作空间清单（workspace.list 拉取）。
-//   M2 协议 view.* 需 workspaceName 单空间作用域、无「远端空间清单」通道——
-//   行内「已镜像」徽标与会话/任务规模/最近活跃暂缺数据源，留待 RM-M21-7
-//   （T6 镜像登记表）与远端清单通道接入，此处不编造、不渲染
+// - 数据 = store 既有 picking 流。M3.2 起双数据源：远端模式（openRemotePick 置
+//   pickerRemote——行来自 viewWorkspaces 远端清单产物 pickerWorkspaces，空态文案
+//   指向目标节点）；本机回落模式（旧路径——workspace.list 本机清单，M2 迁移
+//   语义）。行内「已镜像」徽标与会话/任务规模/最近活跃暂缺数据源，留待 RM-M21-7
+//   （T6 镜像登记表）接入，此处不编造、不渲染
 // - 行点击 → store.pickWorkspace(id, name)（选择后 loadAll 三发定向拉取）；
 //   关闭位/遮罩点击 → store.close
 // - 空清单空态（复用 store openPanel 同款文案）；错误人话（humanizeViewError
@@ -26,6 +27,9 @@ export function ViewPickerDialog() {
   const picking = useHubViewStore((s) => s.picking);
   const targetName = useHubViewStore((s) => s.targetName);
   const error = useHubViewStore((s) => s.error);
+  const pickerRemote = useHubViewStore((s) => s.pickerRemote);
+  const pickerWorkspaces = useHubViewStore((s) => s.pickerWorkspaces);
+  const remoteLoading = useHubViewStore((s) => s.remoteLoading);
   const close = useHubViewStore((s) => s.close);
   const pickWorkspace = useHubViewStore((s) => s.pickWorkspace);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
@@ -33,10 +37,17 @@ export function ViewPickerDialog() {
   const loadWorkspaces = useWorkspaceStore((s) => s.load);
 
   useEffect(() => {
-    if (useHubViewStore.getState().picking && workspaces.length === 0) void loadWorkspaces();
-  }, [workspaces.length, loadWorkspaces, picking]);
+    if (useHubViewStore.getState().picking && !pickerRemote && workspaces.length === 0) void loadWorkspaces();
+  }, [workspaces.length, loadWorkspaces, picking, pickerRemote]);
 
   if (!picking) return null;
+
+  // 双数据源归一：远端模式行 = pickerWorkspaces（null = 拉取在途）；本机回落 = workspaceStore
+  const rows = pickerRemote ? pickerWorkspaces ?? [] : workspaces.map((w) => ({ id: w.id, name: w.name }));
+  const rowsLoading = pickerRemote ? remoteLoading : loading;
+  const emptyText = pickerRemote
+    ? '目标节点暂无工作空间——对方创建或镜像后可查看'
+    : '本机尚无工作空间——先在工作空间页创建或镜像后查看';
 
   return createPortal(
     <>
@@ -65,18 +76,18 @@ export function ViewPickerDialog() {
         )}
 
         <div className="flex flex-col gap-1" aria-label="工作空间清单">
-          {workspaces.length === 0 ? (
-            loading ? (
+          {rows.length === 0 ? (
+            rowsLoading ? (
               <p className="flex items-center gap-2 px-1 py-2.5 text-xs text-tertiary">
                 <Spinner size={12} /> 拉取中…
               </p>
             ) : (
               <p className="rounded-lg border border-subtle bg-surface-1 px-3 py-3 text-center text-xs text-tertiary">
-                本机尚无工作空间——先在工作空间页创建或镜像后查看
+                {emptyText}
               </p>
             )
           ) : (
-            workspaces.map((w) => (
+            rows.map((w) => (
               <button
                 key={w.id}
                 type="button"

@@ -12,9 +12,12 @@
 //      订阅后 500ms 轮询新事件、批 ≤200 条经 VIEW_WIRE.tail 上行（同委派
 //      进度拍节流纪律）；consent 关闭时停发（T13 交接：hub 不杀既有订阅，
 //      目标侧停上行；重开后游标未推进——关窗期事件在恢复后首批补投，无缺口）
-//   3) 只读红线（§8.4）：六方法零写路径——组装器只含 SELECT；subscribe/
+//   3) 只读红线（§8.4）：八方法零写路径——组装器只含 SELECT；subscribe/
 //      unsubscribe 仅动内存订阅表（连接管理语义，非业务写）。测试对源码静态
 //      断言无 INSERT/UPDATE/DELETE。
+//   4) M3.2 远端可见性（协议 1.4.0）：view.workspaces 空间清单（白名单投影）+
+//      view.files 只读文件树（list 500 截断 / read 256KB 截断 base64）——全程
+//      WorkspaceFS 只读面，零写调用。
 //
 // ViewMessage 投影（协议 §3.1：seq 天然全序单调，富形态由目标节点序列化进
 // content）：seq=message_events.rowid（与 sessionTailProduct 游标同键）、
@@ -31,7 +34,18 @@ import { listTeams } from '../agent/team';
 import { listRegistered } from '../mcp/host-manager';
 import { listInstalled } from '../skill/zip-uploader';
 import { listPlugins, isPluginEnabled } from '../plugin/registry';
-import { VIEW_RPC, type RequestEnvelope, type RpcErrorPayload, type ViewMessage, type ViewOverview, type ViewSessionSummary } from './protocol';
+import { WorkspaceFS } from '../files/workspace-fs';
+import {
+  VIEW_RPC,
+  VIEW_FILES_ENTRIES_MAX,
+  VIEW_FILES_PATH_MAX,
+  VIEW_FILES_READ_MAX,
+  type RequestEnvelope,
+  type RpcErrorPayload,
+  type ViewMessage,
+  type ViewOverview,
+  type ViewSessionSummary,
+} from './protocol';
 import { VIEW_WIRE } from './view-wire';
 import type { HubViewSettings } from './view-settings';
 import type { HubClient, HubResponderResult } from './client';
@@ -45,6 +59,9 @@ const CONTENT_MAX = 256 * 1024;
 const SESSIONS_LIMIT_MAX = 100;
 const MESSAGES_LIMIT_MAX = 200;
 const TASKS_LIMIT = 200;
+/** view.files 限额（协议包单源常量——与 hub 侧限额表同值）：单目录条目上限 / 单文件读取字节上限。 */
+const FILES_ENTRIES_MAX = VIEW_FILES_ENTRIES_MAX;
+const FILES_READ_MAX = VIEW_FILES_READ_MAX;
 
 export interface ViewServerOpts {
   /** 当前连接惰性取用（tail 上行经当前在线连接；连接重建不持过期引用） */
@@ -137,7 +154,7 @@ export class ViewServer {
     this.tailTickMs = opts.tailTickMs ?? TAIL_TICK_MS;
   }
 
-  /** view.* 六方法 responder 入口（hub 定向 req → 组装/登记 → res）。 */
+  /** view.* 八方法 responder 入口（hub 定向 req → 组装/登记 → res）。 */
   async handleViewRequest(req: RequestEnvelope): Promise<HubResponderResult> {
     const p = (req.payload ?? {}) as Record<string, unknown>;
     switch (req.method) {
@@ -196,6 +213,51 @@ export class ViewServer {
         if (!sessionId) return err('bad_request', 'sessionId 缺失');
         this.unsubscribe(sessionId);
         return { ok: true, payload: { ok: true } };
+      }
+      case VIEW_RPC.workspaces: {
+        // M3.2 远端空间清单：投影白名单 {id,name,description}——刻意不暴露
+        // directoryPath/ownerId（本机路径泄漏面，spec §2.3 风险表末行）
+        const workspaces = listWorkspaces().map((w) => ({
+          id: w.id,
+          name: w.name,
+          description: w.description,
+        }));
+        return { ok: true, payload: { workspaces } };
+      }
+      case VIEW_RPC.files: {
+        const name = typeof p.workspaceName === 'string' ? p.workspaceName : '';
+        const ws = listWorkspaces().find((w) => w.name === name);
+        if (!ws) return err('not_found', `工作空间不存在: ${name || '（未指定）'}`);
+        if (p.op !== 'list' && p.op !== 'read') return err('bad_request', 'op 缺失或非法（仅 list/read）');
+        const relPath = typeof p.path === 'string' && p.path !== '' ? p.path : '.';
+        if (relPath.length > VIEW_FILES_PATH_MAX) return err('bad_request', `path 过长（上限 ${VIEW_FILES_PATH_MAX} 字符）`);
+        // 每工作空间独立 WorkspaceFS 实例且不带 extraRoots——只读域 = 工作空间根
+        // （assertInWorkspace 拒 .. 越界 / 符号链接逃逸 / .git 保护，listDir 再滤 .git* 前缀）。
+        // 越界/逃逸/不存在一律 not_found 不细分（沿 messages anti-probe 口径 :167-171）
+        const wsFs = new WorkspaceFS(ws.directoryPath);
+        if (p.op === 'list') {
+          try {
+            const all = await wsFs.listDir(relPath);
+            const truncated = all.length > FILES_ENTRIES_MAX;
+            return {
+              ok: true,
+              payload: {
+                entries: truncated ? all.slice(0, FILES_ENTRIES_MAX) : all,
+                truncated,
+              },
+            };
+          } catch {
+            return err('not_found', `目录不存在或不可访问: ${relPath}`);
+          }
+        }
+        try {
+          const buf = await wsFs.readFile(relPath);
+          const truncated = buf.length > FILES_READ_MAX;
+          const content = (truncated ? buf.subarray(0, FILES_READ_MAX) : buf).toString('base64');
+          return { ok: true, payload: { content, size: buf.length, truncated } };
+        } catch {
+          return err('not_found', `文件不存在或不可访问: ${relPath}`);
+        }
       }
       default:
         return err('unknown_method', `节点不支持的查看方法: ${req.method}`);

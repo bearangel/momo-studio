@@ -20,10 +20,11 @@
 // connecting 短暂回弹空态表单（连接态细节由侧栏/监控台离线注记呈现）。
 import { useCallback, useEffect } from 'react';
 import { useHubStore } from '../../stores/hub.store';
-import { useHubGroupStore } from '../../stores/hub-group.store';
+import { useHubGroupStore, effectiveSelectedGroup } from '../../stores/hub-group.store';
 import { useHubDelegationStore } from '../../stores/hub-delegation.store';
 import { useHubViewStore } from '../../stores/hub-view.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
+import { hubSupportsMinor } from '../../lib/hub-capability';
 import { Button } from '../ui/Button';
 import { WorkgroupEmptyState } from './WorkgroupEmptyState';
 import { GroupMonitor } from './GroupMonitor';
@@ -58,19 +59,29 @@ export function WorkgroupView() {
   }, [online, initGroups, initDelegations]);
 
   // T4 查看链路入口：NodeCard「查看」→ S3b 选择器（store picking 前置步）。
-  // workspaces 取本机清单（M2 迁移语义——协议无远端空间清单通道）；工作组
-  // 视图上下文里 workspace store 可能尚未加载（首进视图未过工作空间页），
-  // 空清单先补拉再 openPanel——否则 ≤1 自动选中判定拿空数组误报「本机无工作空间」
+  // M3.2（协议 1.4.0）数据源切换：hub 支持 minor 4 时走远端空间清单
+  // （viewWorkspaces 带当前选中组 groupId——openRemotePick 前置步内拉取）；
+  // 旧 hub（<1.4 / 未协商出版本）回落本机清单（M2 迁移语义——本机清单是
+  // 「对方已镜像我这边空间」的代理视图）。工作组视图上下文里 workspace store
+  // 可能尚未加载（首进视图未过工作空间页），空清单先补拉再 openPanel——否则
+  // ≤1 自动选中判定拿空数组误报「本机无工作空间」
   const handleOpenView = useCallback(
     (nodeId: string, nodeName: string): void => {
+      const hubProtoVer = useHubStore.getState().status?.hubProtoVer ?? null;
+      const groupState = useHubGroupStore.getState();
+      const groupId = effectiveSelectedGroup(groupState.groups, groupState.selectedGroupId)?.groupId ?? null;
+      if (hubSupportsMinor(hubProtoVer, 4)) {
+        useHubViewStore.getState().openRemotePick({ targetNodeId: nodeId, targetName: nodeName, groupId });
+        return;
+      }
       const toEntries = (): Array<{ id: string; name: string }> =>
         useWorkspaceStore.getState().workspaces.map((w) => ({ id: w.id, name: w.name }));
       if (useWorkspaceStore.getState().workspaces.length > 0) {
-        openViewPanel({ targetNodeId: nodeId, targetName: nodeName, workspaces: toEntries() });
+        openViewPanel({ targetNodeId: nodeId, targetName: nodeName, workspaces: toEntries(), groupId });
         return;
       }
       void useWorkspaceStore.getState().load().then(() => {
-        openViewPanel({ targetNodeId: nodeId, targetName: nodeName, workspaces: toEntries() });
+        openViewPanel({ targetNodeId: nodeId, targetName: nodeName, workspaces: toEntries(), groupId });
       });
     },
     [openViewPanel],

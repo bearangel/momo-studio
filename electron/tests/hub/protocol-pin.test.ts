@@ -1,7 +1,8 @@
 // hub pin 形状锁（M2.3 T2b v0.1.5 / 裁定书 p1-0 §4.2；M3.0-P2 pin bump v0.1.6；
 // M3.1 pin bump v0.1.7——协议 1.3.0：task.answer RPC + waiting 态 + 决策列 +
-// task.answered 事件）——锁三件事：
-// ① pin 生效：node_modules 实装 momo-hub-protocol 版本 = pin 目标（0.1.7）——
+// task.answered 事件；M3.2 pin bump v0.1.8——协议 1.4.0：view.workspaces /
+// view.files 两方法 + view.* 可选 groupId + files 限额常量）——锁三件事：
+// ① pin 生效：node_modules 实装 momo-hub-protocol 版本 = pin 目标（0.1.8）——
 //    防「lockfile-only 更新后未 install」/「pin 漂移」两类事故（构建新鲜度红线）
 // ② v0.1.5 语义目录样本（hub 乱序发布产物，形状锚自 hub 仓 resources-latest-semver.test.ts
 //    与裁定书 §1 curl 实录）过 validateHubCatalog——生产消费链（momo-hub.ts load）同校验器
@@ -46,9 +47,9 @@ function semverCatalogSample(): HubCatalog {
   };
 }
 
-describe('hub pin v0.1.7（M3.1）', () => {
-  it('pin 生效：实装 momo-hub-protocol 版本 = 0.1.7（electron/package.json #v0.1.7）', () => {
-    expect(pkg.version).toBe('0.1.7');
+describe('hub pin v0.1.8（M3.2）', () => {
+  it('pin 生效：实装 momo-hub-protocol 版本 = 0.1.8（electron/package.json #v0.1.8）', () => {
+    expect(pkg.version).toBe('0.1.8');
   });
 
   it('v0.1.5 语义目录样本过 validateHubCatalog（生产消费链同校验器）', () => {

@@ -57,9 +57,13 @@ beforeEach(() => {
   ]);
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null, loading: false, error: null });
   useHubViewStore.setState({
-    open: false, picking: false, targetNodeId: null, targetName: null,
-    workspaceId: null, workspaceName: null, tab: 'overview',
-    overview: null, sessions: [], tasks: [], loading: false, error: null, replay: null,
+    open: false, picking: false,
+    pickerRemote: false, pickerWorkspaces: null, remoteLoading: false,
+    targetNodeId: null, targetName: null,
+    workspaceId: null, workspaceName: null, groupId: null, tab: 'overview',
+    overview: null, sessions: [], tasks: [],
+    files: { dirs: {}, preview: null, loadingDir: null, loadingFile: null, error: null },
+    loading: false, error: null, replay: null,
   });
 });
 
@@ -121,5 +125,50 @@ describe('ViewPickerDialog S3b 选择器', () => {
     useHubViewStore.setState({ error: '对方节点关闭了本组查看——可在其「设置 → 节点互联」重新开启' });
     render(<ViewPickerDialog />);
     expect(await screen.findByRole('alert')).toHaveTextContent('对方节点关闭了本组查看');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// M3.2 远端清单数据源（pickerRemote 双数据源归一）
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('ViewPickerDialog 远端清单模式（M3.2）', () => {
+  function openRemotePick(rows: Array<{ id: string; name: string; description?: string }> | null): void {
+    useHubViewStore.setState({
+      open: true, picking: true, pickerRemote: true, pickerWorkspaces: rows, remoteLoading: rows === null,
+      targetNodeId: 'node-b', targetName: 'studio-mini', groupId: 'g-dev',
+      workspaceId: null, workspaceName: null, tab: 'overview',
+      overview: null, sessions: [], tasks: [],
+      files: { dirs: {}, preview: null, loadingDir: null, loadingFile: null, error: null },
+      loading: false, error: null, replay: null,
+    });
+  }
+
+  it('远端行渲染（pickerWorkspaces）+ 不读本机清单；选中走 pickWorkspace → viewWorkspace', async () => {
+    openRemotePick([
+      { id: 'rws-1', name: 'remote-lab', description: '远端主战场' },
+      { id: 'rws-2', name: 'remote-docs', description: '' },
+    ]);
+    render(<ViewPickerDialog />);
+    expect(await screen.findByRole('button', { name: '选择工作空间 remote-lab' })).toBeInTheDocument();
+    expect(api.workspace.list).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: '选择工作空间 remote-docs' }));
+    await waitFor(() =>
+      expect(api.hub.viewWorkspace).toHaveBeenCalledWith({ targetNodeId: 'node-b', workspaceName: 'remote-docs', groupId: 'g-dev' }),
+    );
+  });
+
+  it('远端拉取在途（pickerWorkspaces null）→ 拉取中 spinner，不触发本机补拉', async () => {
+    openRemotePick(null);
+    render(<ViewPickerDialog />);
+    expect(await screen.findByText('拉取中…')).toBeInTheDocument();
+    expect(api.workspace.list).not.toHaveBeenCalled();
+  });
+
+  it('远端空清单 → 目标节点空态文案（区别于本机空态）', async () => {
+    openRemotePick([]);
+    render(<ViewPickerDialog />);
+    expect(await screen.findByText('目标节点暂无工作空间——对方创建或镜像后可查看')).toBeInTheDocument();
   });
 });

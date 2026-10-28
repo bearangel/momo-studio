@@ -44,6 +44,9 @@ const api = {
     viewTasks: vi.fn(),
     viewSubscribe: vi.fn(),
     viewUnsubscribe: vi.fn(),
+    // M3.2 远端清单 + 文件树
+    viewWorkspaces: vi.fn(),
+    viewFiles: vi.fn(),
     onViewAppended: vi.fn(() => () => undefined),
   },
   workspace: {
@@ -110,6 +113,8 @@ beforeEach(() => {
   });
   api.hub.viewSessions.mockResolvedValue({ sessions: [] });
   api.hub.viewTasks.mockResolvedValue({ tasks: [] });
+  api.hub.viewWorkspaces.mockResolvedValue({ workspaces: [] });
+  api.hub.viewFiles.mockResolvedValue({ entries: [], truncated: false });
   api.workspace.list.mockResolvedValue([
     { id: 'ws-1', name: 'product-dev' },
     { id: 'ws-2', name: 'lab' },
@@ -134,9 +139,13 @@ beforeEach(() => {
     reasons: {},
   });
   useHubViewStore.setState({
-    open: false, picking: false, targetNodeId: null, targetName: null,
-    workspaceId: null, workspaceName: null, tab: 'overview',
-    overview: null, sessions: [], tasks: [], loading: false, error: null, replay: null,
+    open: false, picking: false,
+    pickerRemote: false, pickerWorkspaces: null, remoteLoading: false,
+    targetNodeId: null, targetName: null,
+    workspaceId: null, workspaceName: null, groupId: null, tab: 'overview',
+    overview: null, sessions: [], tasks: [],
+    files: { dirs: {}, preview: null, loadingDir: null, loadingFile: null, error: null },
+    loading: false, error: null, replay: null,
   });
   // D2 断言前提：不准备任何工作空间（getActive() 为空）
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null, loading: false, error: null });
@@ -292,5 +301,53 @@ describe('WorkgroupView 查看链路（T4：S3b 选择器 + S4 全宽查看态�
     render(<WorkgroupView />);
     const officeCard = await screen.findByLabelText('节点 office-mac');
     expect(within(officeCard).getByRole('button', { name: '查看' })).toBeDisabled();
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// M3.2 查看入口门控（hubSupportsMinor 4 三态：1.4 远端清单 / 1.3·null 本机回落）
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('WorkgroupView 查看入口数据源门控（M3.2）', () => {
+  it('hub 1.4：节点卡「查看」→ openRemotePick（viewWorkspaces 带选中组 groupId，不读本机清单）', async () => {
+    api.hub.getStatus.mockResolvedValue({ ...ENROLLED_ONLINE, hubProtoVer: '1.4.0' });
+    api.hub.groupList.mockResolvedValue({ groups: [GROUP_DEV] });
+    api.hub.viewWorkspaces.mockResolvedValue({
+      workspaces: [
+        { id: 'rws-1', name: 'remote-lab', description: '' },
+        { id: 'rws-2', name: 'remote-docs', description: '' },
+      ],
+    });
+    render(<WorkgroupView />);
+    const officeCard = await screen.findByLabelText('节点 office-mac');
+    fireEvent.click(within(officeCard).getByRole('button', { name: '查看' }));
+
+    // 带选中组（GROUP_DEV）groupId；本机 workspace.list 不参与
+    await waitFor(() =>
+      expect(api.hub.viewWorkspaces).toHaveBeenCalledWith({ targetNodeId: '8f3a00000000c21e', groupId: 'g-dev' }),
+    );
+    expect(api.workspace.list).not.toHaveBeenCalled();
+    // 远端行渲染（选择器数据源 = pickerWorkspaces）
+    expect(await screen.findByRole('button', { name: '选择工作空间 remote-lab' })).toBeInTheDocument();
+  });
+
+  it('hub 1.3：回落本机清单（不调 viewWorkspaces；选择器行为与 M2 一致）', async () => {
+    api.hub.getStatus.mockResolvedValue({ ...ENROLLED_ONLINE, hubProtoVer: '1.3.0' });
+    api.hub.groupList.mockResolvedValue({ groups: [GROUP_DEV] });
+    render(<WorkgroupView />);
+    const officeCard = await screen.findByLabelText('节点 office-mac');
+    fireEvent.click(within(officeCard).getByRole('button', { name: '查看' }));
+    expect(await screen.findByRole('button', { name: '选择工作空间 lab' })).toBeInTheDocument();
+    expect(api.hub.viewWorkspaces).not.toHaveBeenCalled();
+  });
+
+  it('hub 版本未协商（null）：同回落本机清单（未连接/未知即不可用）', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE); // hubProtoVer: null
+    api.hub.groupList.mockResolvedValue({ groups: [GROUP_DEV] });
+    render(<WorkgroupView />);
+    const officeCard = await screen.findByLabelText('节点 office-mac');
+    fireEvent.click(within(officeCard).getByRole('button', { name: '查看' }));
+    expect(await screen.findByRole('button', { name: '选择工作空间 product-dev' })).toBeInTheDocument();
+    expect(api.hub.viewWorkspaces).not.toHaveBeenCalled();
   });
 });

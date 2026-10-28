@@ -10,13 +10,18 @@
 // - 订阅生命周期：离开回放（返回/切页签/关面板/断开按钮）四路径都恰好一次
 //   view.unsubscribe（组件卸载语义，不留悬挂订阅）
 // - 错误路径人话化：forbidden（对方关闭查看）/ node_offline / not_found
+// - M3.2（协议 1.4.0）：openRemotePick 远端空间清单选择前置步（viewWorkspaces，
+//   hub ≥1.4 门控在 WorkgroupView；旧 hub 回落本机清单 openPanel 旧路径）+ files
+//   子域（目录懒加载树 + 文件 base64 解码预览 + 500/256KB truncated 标记；无订阅
+//   ——teardown 不需 unsubscribe）；view.* 调用一律携带发起时选中组 groupId
+//   （boundary 铁律 5：路由目标用当前上下文，消 commonGroupId 多组任意取旧歧义）
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
 import type {
-  HubViewLocalTask, HubViewMessage, HubViewOverview, HubViewSessionSummary,
+  HubViewFileEntry, HubViewLocalTask, HubViewMessage, HubViewOverview, HubViewSessionSummary,
 } from '../ipc/types';
 
-export type ViewTab = 'overview' | 'sessions' | 'tasks' | 'config';
+export type ViewTab = 'overview' | 'sessions' | 'tasks' | 'files' | 'config';
 
 /** 回放页尺寸（与目标端 MESSAGES_LIMIT_MAX 对齐） */
 export const VIEW_PAGE_SIZE = 50;
@@ -36,18 +41,63 @@ export interface ViewReplayState {
   batches: Record<number, true>;
 }
 
+/** 文件预览态（view.files read 产物；binary=true 时 content 为空——文本预览不可用） */
+export interface ViewFilePreview {
+  /** 工作空间内相对路径（'/' 分隔，根相对） */
+  path: string;
+  content: string;
+  /** 原始字节数（截断前——与 truncated 配合可算被截掉量） */
+  size: number;
+  truncated: boolean;
+  binary: boolean;
+}
+
+/** files 子域状态（M3.2）：目录栈 + 内容缓存 + truncated 标记 */
+export interface ViewFilesState {
+  /** 已加载目录（'.' = 根）：relPath → 条目页 */
+  dirs: Record<string, { entries: HubViewFileEntry[]; truncated: boolean }>;
+  preview: ViewFilePreview | null;
+  /** 在途目录列举（relPath；非 null 时拒绝并发列举） */
+  loadingDir: string | null;
+  /** 在途文件读取（relPath） */
+  loadingFile: string | null;
+  /** files 子域局部错误（humanize 链；面板级 error 不混用） */
+  error: string | null;
+}
+
+function emptyFiles(): ViewFilesState {
+  return { dirs: {}, preview: null, loadingDir: null, loadingFile: null, error: null };
+}
+
+/** base64 → 字节（view.files read 内容解码；renderer 无 Buffer，用 atob） */
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
 interface HubViewState {
   open: boolean;
   /** 空间选择前置步（本机多工作空间时先选再看） */
   picking: boolean;
+  /** M3.2：选择器数据源为远端清单（openRemotePick 置位；本机回落路径恒 false） */
+  pickerRemote: boolean;
+  /** M3.2：远端清单行（viewWorkspaces 产物；本机模式 null——dialog 走 workspaceStore） */
+  pickerWorkspaces: Array<{ id: string; name: string }> | null;
+  /** M3.2：远端清单拉取在途（dialog spinner 位） */
+  remoteLoading: boolean;
   targetNodeId: string | null;
   targetName: string | null;
   workspaceId: string | null;
   workspaceName: string | null;
+  /** 发起查看时的选中组（view.* 载荷 groupId；null = 不携带走 hub 旧路径） */
+  groupId: string | null;
   tab: ViewTab;
   overview: HubViewOverview | null;
   sessions: HubViewSessionSummary[];
   tasks: HubViewLocalTask[];
+  files: ViewFilesState;
   loading: boolean;
   /** 面板级错误（forbidden / node_offline / not_found 人话） */
   error: string | null;
@@ -59,7 +109,15 @@ interface HubViewState {
     targetNodeId: string;
     targetName: string;
     workspaces: Array<{ id: string; name: string }>;
+    /** 发起查看时的选中组 id（缺省不携带） */
+    groupId?: string | null;
   }): void;
+  /**
+   * M3.2 远端清单前置步：进 picking 态即拉 viewWorkspaces（带 groupId），单空间
+   * 自动直达（与 openPanel 同语义）；失败人话落 error、清单空落 pickerWorkspaces=[]
+   * （dialog 呈「目标节点暂无工作空间」）。
+   */
+  openRemotePick(input: { targetNodeId: string; targetName: string; groupId: string | null }): void;
   close(): void;
   pickWorkspace(workspaceId: string, workspaceName: string): void;
   switchTab(tab: ViewTab): void;
@@ -76,6 +134,11 @@ interface HubViewState {
   leaveReplay(): void;
   /** 回放视图头「断开订阅」：显式 unsubscribe，按钮转 disabled */
   disconnectLive(): Promise<void>;
+  /** files 子域：懒加载目录（已加载/在途则幂等跳过；'.' = 根） */
+  loadFilesDir(relPath: string): Promise<void>;
+  /** files 子域：读取文件并解码预览（在途则跳过） */
+  openFilePreview(relPath: string): Promise<void>;
+  closeFilePreview(): void;
 }
 
 /** forbidden 等 hub 错误码 → 面板人话 */
@@ -89,6 +152,12 @@ export function humanizeViewError(err: unknown): string {
 export const useHubViewStore = create<HubViewState>((set, get) => {
   let disposeAppended: (() => void) | null = null;
 
+  /** view.* 载荷组上下文段（铁律 5）：groupId 在场则携带（协议可选段），缺省空段保持旧形状 */
+  const groupSeg = (): { groupId?: string } => {
+    const { groupId } = get();
+    return groupId !== null ? { groupId } : {};
+  };
+
   const teardownReplay = (): void => {
     const st = get();
     if (!st.replay || !st.targetNodeId) {
@@ -98,7 +167,7 @@ export const useHubViewStore = create<HubViewState>((set, get) => {
     const { targetNodeId } = st;
     set({ replay: null });
     void ipc.hub
-      .viewUnsubscribe({ targetNodeId, sessionId: st.replay.sessionId })
+      .viewUnsubscribe({ targetNodeId, sessionId: st.replay.sessionId, ...groupSeg() })
       .then(
         () => undefined,
         () => undefined, // 幂等清理：hub/目标侧豁免路径，本地静默即可
@@ -111,9 +180,9 @@ export const useHubViewStore = create<HubViewState>((set, get) => {
     set({ loading: true });
     try {
       const [overview, sessions, tasks] = await Promise.all([
-        ipc.hub.viewWorkspace({ targetNodeId: st.targetNodeId, workspaceName: st.workspaceName }),
-        ipc.hub.viewSessions({ targetNodeId: st.targetNodeId, workspaceName: st.workspaceName, limit: 50 }),
-        ipc.hub.viewTasks({ targetNodeId: st.targetNodeId, workspaceName: st.workspaceName }),
+        ipc.hub.viewWorkspace({ targetNodeId: st.targetNodeId, workspaceName: st.workspaceName, ...groupSeg() }),
+        ipc.hub.viewSessions({ targetNodeId: st.targetNodeId, workspaceName: st.workspaceName, limit: 50, ...groupSeg() }),
+        ipc.hub.viewTasks({ targetNodeId: st.targetNodeId, workspaceName: st.workspaceName, ...groupSeg() }),
       ]);
       set({ overview, sessions: sessions.sessions, tasks: tasks.tasks, loading: false, error: null });
     } catch (err) {
@@ -124,14 +193,19 @@ export const useHubViewStore = create<HubViewState>((set, get) => {
   return {
     open: false,
     picking: false,
+    pickerRemote: false,
+    pickerWorkspaces: null,
+    remoteLoading: false,
     targetNodeId: null,
     targetName: null,
     workspaceId: null,
     workspaceName: null,
+    groupId: null,
     tab: 'overview',
     overview: null,
     sessions: [],
     tasks: [],
+    files: emptyFiles(),
     loading: false,
     error: null,
     replay: null,
@@ -163,42 +237,85 @@ export const useHubViewStore = create<HubViewState>((set, get) => {
       return dispose;
     },
 
-    openPanel({ targetNodeId, targetName, workspaces }) {
+    openPanel({ targetNodeId, targetName, workspaces, groupId = null }) {
       teardownReplay();
       if (workspaces.length <= 1) {
         const only = workspaces[0];
         if (!only) {
           set({
-            open: true, picking: false, targetNodeId, targetName,
+            open: true, picking: false, pickerRemote: false, pickerWorkspaces: null, remoteLoading: false,
+            targetNodeId, targetName, groupId,
             workspaceId: null, workspaceName: null, tab: 'overview',
-            overview: null, sessions: [], tasks: [], loading: false,
+            overview: null, sessions: [], tasks: [], files: emptyFiles(), loading: false,
             error: '本机尚无工作空间——先在工作空间页创建或镜像后查看', replay: null,
           });
           return;
         }
         set({
-          open: true, picking: false, targetNodeId, targetName,
+          open: true, picking: false, pickerRemote: false, pickerWorkspaces: null, remoteLoading: false,
+          targetNodeId, targetName, groupId,
           workspaceId: only.id, workspaceName: only.name, tab: 'overview',
-          overview: null, sessions: [], tasks: [], loading: false, error: null, replay: null,
+          overview: null, sessions: [], tasks: [], files: emptyFiles(), loading: false, error: null, replay: null,
         });
         void loadAll();
         return;
       }
       set({
-        open: true, picking: true, targetNodeId, targetName,
+        open: true, picking: true, pickerRemote: false, pickerWorkspaces: null, remoteLoading: false,
+        targetNodeId, targetName, groupId,
         workspaceId: null, workspaceName: null, tab: 'overview',
-        overview: null, sessions: [], tasks: [], loading: false, error: null, replay: null,
+        overview: null, sessions: [], tasks: [], files: emptyFiles(), loading: false, error: null, replay: null,
       });
+    },
+
+    openRemotePick({ targetNodeId, targetName, groupId }) {
+      teardownReplay();
+      set({
+        open: true, picking: true, pickerRemote: true, pickerWorkspaces: null, remoteLoading: true,
+        targetNodeId, targetName, groupId,
+        workspaceId: null, workspaceName: null, tab: 'overview',
+        overview: null, sessions: [], tasks: [], files: emptyFiles(), loading: false, error: null, replay: null,
+      });
+      void ipc.hub
+        .viewWorkspaces({ targetNodeId, ...(groupId !== null ? { groupId } : {}) })
+        .then((res) => {
+          // 拉取在途期间面板可能被关闭/换目标——closed 后不落状态
+          const cur = get();
+          if (!cur.open || !cur.picking || cur.targetNodeId !== targetNodeId) return;
+          const workspaces = res.workspaces.map((w) => ({ id: w.id, name: w.name }));
+          if (workspaces.length <= 1) {
+            const only = workspaces[0];
+            if (!only) {
+              set({ remoteLoading: false, pickerWorkspaces: [] });
+              return;
+            }
+            set({
+              remoteLoading: false, picking: false, pickerWorkspaces: null,
+              workspaceId: only.id, workspaceName: only.name,
+            });
+            void loadAll();
+            return;
+          }
+          set({ remoteLoading: false, pickerWorkspaces: workspaces });
+        })
+        .catch((err: unknown) => {
+          const cur = get();
+          if (!cur.open || !cur.picking) return;
+          set({ remoteLoading: false, pickerWorkspaces: [], error: humanizeViewError(err) });
+        });
     },
 
     close() {
       teardownReplay();
-      set({ open: false, picking: false, replay: null });
+      set({
+        open: false, picking: false, pickerRemote: false, pickerWorkspaces: null, remoteLoading: false,
+        groupId: null, files: emptyFiles(), replay: null,
+      });
     },
 
     pickWorkspace(workspaceId, workspaceName) {
       if (!get().picking) return;
-      set({ picking: false, workspaceId, workspaceName });
+      set({ picking: false, pickerRemote: false, pickerWorkspaces: null, remoteLoading: false, workspaceId, workspaceName });
       void loadAll();
     },
 
@@ -210,6 +327,12 @@ export const useHubViewStore = create<HubViewState>((set, get) => {
     async refresh() {
       if (get().replay) {
         await get().refreshReplay(); // 回放态刷新 = 重订 + 尾后补拉（不自愈路径外的概览面）
+        return;
+      }
+      // 文件页刷新 = 目录树整域重载（根起逐层重展开；预览一并失效）
+      if (get().tab === 'files') {
+        set({ files: emptyFiles() });
+        await get().loadFilesDir('.');
         return;
       }
       await loadAll();
@@ -230,6 +353,7 @@ export const useHubViewStore = create<HubViewState>((set, get) => {
           workspaceName: st.workspaceName,
           fromSeq,
           limit: VIEW_PAGE_SIZE,
+          ...groupSeg(),
         });
         set({
           loading: false,
@@ -250,7 +374,7 @@ export const useHubViewStore = create<HubViewState>((set, get) => {
       }
       // 进入回放恰好一次 subscribe（失败降级「已断开」可手动重订）
       try {
-        await ipc.hub.viewSubscribe({ targetNodeId: st.targetNodeId, sessionId: session.sessionId });
+        await ipc.hub.viewSubscribe({ targetNodeId: st.targetNodeId, sessionId: session.sessionId, ...groupSeg() });
         const cur = get().replay;
         if (cur && cur.sessionId === session.sessionId) set({ replay: { ...cur, live: true } });
       } catch (err) {
@@ -275,6 +399,7 @@ export const useHubViewStore = create<HubViewState>((set, get) => {
           workspaceName: st.workspaceName,
           fromSeq,
           limit: VIEW_PAGE_SIZE,
+          ...groupSeg(),
         });
         const known = new Set(st.replay.messages.map((m) => m.seq));
         const fresh = page.messages.filter((m) => !known.has(m.seq));
@@ -307,10 +432,10 @@ export const useHubViewStore = create<HubViewState>((set, get) => {
       set({ loading: true });
       // 重订：先退订（幂等豁免路径静默）——旧 watcher 不清则重订不重锚
       await ipc.hub
-        .viewUnsubscribe({ targetNodeId, sessionId })
+        .viewUnsubscribe({ targetNodeId, sessionId, ...groupSeg() })
         .then(() => undefined, () => undefined);
       try {
-        await ipc.hub.viewSubscribe({ targetNodeId, sessionId });
+        await ipc.hub.viewSubscribe({ targetNodeId, sessionId, ...groupSeg() });
       } catch (err) {
         // 旧订阅已随退订移除：降级「已断开」人话（可再刷新/重进重试）
         const cur = get().replay;
@@ -328,6 +453,7 @@ export const useHubViewStore = create<HubViewState>((set, get) => {
           workspaceName,
           fromSeq: knownLast + 1,
           limit: VIEW_PAGE_SIZE,
+          ...groupSeg(),
         });
         const cur = get().replay;
         if (!cur || cur.sessionId !== sessionId) {
@@ -359,10 +485,85 @@ export const useHubViewStore = create<HubViewState>((set, get) => {
       const sessionId = st.replay.sessionId;
       set({ replay: { ...st.replay, live: false } });
       try {
-        await ipc.hub.viewUnsubscribe({ targetNodeId, sessionId });
+        await ipc.hub.viewUnsubscribe({ targetNodeId, sessionId, ...groupSeg() });
       } catch {
         // 幂等清理路径——hub 侧豁免，静默即可
       }
+    },
+
+    async loadFilesDir(relPath) {
+      const st = get();
+      if (!st.targetNodeId || !st.workspaceName) return;
+      if (st.files.dirs[relPath] !== undefined || st.files.loadingDir !== null) return;
+      set({ files: { ...st.files, loadingDir: relPath, error: null } });
+      try {
+        const res = await ipc.hub.viewFiles({
+          targetNodeId: st.targetNodeId,
+          workspaceName: st.workspaceName,
+          op: 'list',
+          ...(relPath !== '.' ? { path: relPath } : {}),
+          ...groupSeg(),
+        });
+        const cur = get();
+        if (!cur.open || cur.files.loadingDir !== relPath) return; // 面板已关或目标目录已切换
+        if (!('entries' in res)) {
+          set({ files: { ...cur.files, loadingDir: null, error: 'view.files 应答形状异常（期望 entries）' } });
+          return;
+        }
+        set({
+          files: {
+            ...cur.files,
+            dirs: { ...cur.files.dirs, [relPath]: { entries: res.entries, truncated: res.truncated } },
+            loadingDir: null,
+          },
+        });
+      } catch (err) {
+        const cur = get();
+        if (!cur.open || cur.files.loadingDir !== relPath) return;
+        set({ files: { ...cur.files, loadingDir: null, error: humanizeViewError(err) } });
+      }
+    },
+
+    async openFilePreview(relPath) {
+      const st = get();
+      if (!st.targetNodeId || !st.workspaceName) return;
+      if (st.files.loadingFile !== null) return;
+      set({ files: { ...st.files, loadingFile: relPath, error: null } });
+      try {
+        const res = await ipc.hub.viewFiles({
+          targetNodeId: st.targetNodeId,
+          workspaceName: st.workspaceName,
+          op: 'read',
+          path: relPath,
+          ...groupSeg(),
+        });
+        const cur = get();
+        if (!cur.open || cur.files.loadingFile !== relPath) return;
+        if (!('content' in res)) {
+          set({ files: { ...cur.files, loadingFile: null, error: 'view.files 应答形状异常（期望 content）' } });
+          return;
+        }
+        const bytes = base64ToBytes(res.content);
+        const text = new TextDecoder('utf-8').decode(bytes);
+        // 二进制检测与 file:readForEditor 同法：utf-8 解码再编码与原字节不一致即二进制
+        const reEncoded = new TextEncoder().encode(text);
+        const binary = reEncoded.length !== bytes.length || reEncoded.some((b, i) => b !== bytes[i]);
+        set({
+          files: {
+            ...cur.files,
+            loadingFile: null,
+            preview: { path: relPath, content: binary ? '' : text, size: res.size, truncated: res.truncated, binary },
+          },
+        });
+      } catch (err) {
+        const cur = get();
+        if (!cur.open || cur.files.loadingFile !== relPath) return;
+        set({ files: { ...cur.files, loadingFile: null, error: humanizeViewError(err) } });
+      }
+    },
+
+    closeFilePreview() {
+      set((s) => ({ files: { ...s.files, preview: null } }));
     },
   };
 });

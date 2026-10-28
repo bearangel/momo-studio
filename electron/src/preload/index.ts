@@ -81,6 +81,8 @@ import type {
   HubViewMessagePage,
   HubViewLocalTask,
   HubViewAppendedEvent,
+  HubViewWorkspaceSummary,
+  HubViewFilesResult,
   DelegationBoardResult,
   HubLocalWaitingEntry,
   RetryDispatchResult,
@@ -678,15 +680,20 @@ const api: ApiSurface = {
     taskAnswer: (input: HubTaskAnswerInput) => invoke<HubTaskAnswerResult>('hub:taskAnswer', input),
     getViewSettings: () => invoke<HubViewSettings>('hub:getViewSettings'),
     setViewSettings: (input: HubViewSettings) => invoke<HubViewSettings>('hub:setViewSettings', input),
-    viewWorkspace: (input: { targetNodeId: string; workspaceName: string }) => invoke<HubViewOverview>('hub:viewWorkspace', input),
-    viewSessions: (input: { targetNodeId: string; workspaceName: string; beforeSeq?: number; limit: number }) =>
+    viewWorkspace: (input: { targetNodeId: string; workspaceName: string; groupId?: string }) => invoke<HubViewOverview>('hub:viewWorkspace', input),
+    viewSessions: (input: { targetNodeId: string; workspaceName: string; beforeSeq?: number; limit: number; groupId?: string }) =>
       invoke<{ sessions: HubViewSessionSummary[] }>('hub:viewSessions', input),
-    viewMessages: (input: { targetNodeId: string; sessionId: string; workspaceName?: string; fromSeq: number; limit: number }) =>
+    viewMessages: (input: { targetNodeId: string; sessionId: string; workspaceName?: string; fromSeq: number; limit: number; groupId?: string }) =>
       invoke<HubViewMessagePage>('hub:viewMessages', input),
-    viewTasks: (input: { targetNodeId: string; workspaceName: string }) =>
+    viewTasks: (input: { targetNodeId: string; workspaceName: string; groupId?: string }) =>
       invoke<{ tasks: HubViewLocalTask[] }>('hub:viewTasks', input),
-    viewSubscribe: (input: { targetNodeId: string; sessionId: string }) => invoke<{ ok: boolean }>('hub:viewSubscribe', input),
-    viewUnsubscribe: (input: { targetNodeId: string; sessionId: string }) => invoke<{ ok: boolean }>('hub:viewUnsubscribe', input),
+    viewSubscribe: (input: { targetNodeId: string; sessionId: string; groupId?: string }) => invoke<{ ok: boolean }>('hub:viewSubscribe', input),
+    viewUnsubscribe: (input: { targetNodeId: string; sessionId: string; groupId?: string }) => invoke<{ ok: boolean }>('hub:viewUnsubscribe', input),
+    // M3.2 远端可见性：远端空间清单 + 只读文件树（载荷原样透传主进程）
+    viewWorkspaces: (input: { targetNodeId: string; groupId?: string }) =>
+      invoke<{ workspaces: HubViewWorkspaceSummary[] }>('hub:viewWorkspaces', input),
+    viewFiles: (input: { targetNodeId: string; workspaceName: string; op: 'list' | 'read'; path?: string; groupId?: string }) =>
+      invoke<HubViewFilesResult>('hub:viewFiles', input),
     // 镜像登记表查询（M2.1 T6 / RM-M21-7）：workspaceName 可选过滤
     mirrorRegistry: (input?: { workspaceName?: string }) =>
       invoke<{ mirrors: HubMirrorRegistryRow[] }>('hub:mirrorRegistry', input ?? {}),

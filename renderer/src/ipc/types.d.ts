@@ -3068,6 +3068,29 @@ export interface HubViewLocalTask {
   updatedAt: number;
 }
 
+/** 远程查看——远端空间摘要行（M3.2 协议 ViewWorkspaceSummary 镜像：白名单三字段，无 directoryPath） */
+export interface HubViewWorkspaceSummary {
+  id: string;
+  name: string;
+  description: string;
+}
+
+/** 远程查看——文件树目录条目（M3.2 协议 ViewFileEntry 镜像；size 目录恒 0） */
+export interface HubViewFileEntry {
+  name: string;
+  isDirectory: boolean;
+  size: number;
+}
+
+/**
+ * 远程查看——view.files 响应两态（M3.2 协议 ViewFilesRes 镜像）：list → entries +
+ * truncated（单目录上限 500 条）；read → content（base64）+ size（原始字节数）+
+ * truncated（单文件上限 256KB）。truncated=true 时内容不完整，不得视为全量。
+ */
+export type HubViewFilesResult =
+  | { entries: HubViewFileEntry[]; truncated: boolean }
+  | { content: string; size: number; truncated: boolean };
+
 /** hub:viewAppended 推送载荷（协议 ViewAppendedEvent 镜像——订阅会话的尾部增量批） */
 export interface HubViewAppendedEvent {
   sessionId: string;
@@ -3126,13 +3149,14 @@ export interface HubApiSurface {
   /** 写入节点工作目录（rootDir=null 恢复默认；回执为归一化 view） */
   setWorkspaceDirSettings(input: { rootDir: string | null }): Promise<HubWorkspaceDirView>;
   /** 远程查看：目标工作空间概览+配置七子段（M2e T14 四视图数据源之一） */
-  viewWorkspace(input: { targetNodeId: string; workspaceName: string }): Promise<HubViewOverview>;
+  viewWorkspace(input: { targetNodeId: string; workspaceName: string; groupId?: string }): Promise<HubViewOverview>;
   /** 远程查看：目标工作空间会话列表（lastSeq 降序分页） */
   viewSessions(input: {
     targetNodeId: string;
     workspaceName: string;
     beforeSeq?: number;
     limit: number;
+    groupId?: string;
   }): Promise<{ sessions: HubViewSessionSummary[] }>;
   /** 远程查看：会话消息回放页（seq 升序；workspaceName 为可选作用域校验附加键） */
   viewMessages(input: {
@@ -3141,13 +3165,24 @@ export interface HubApiSurface {
     workspaceName?: string;
     fromSeq: number;
     limit: number;
+    groupId?: string;
   }): Promise<HubViewMessagePage>;
   /** 远程查看：目标工作空间本地 #T 任务列表 */
-  viewTasks(input: { targetNodeId: string; workspaceName: string }): Promise<{ tasks: HubViewLocalTask[] }>;
+  viewTasks(input: { targetNodeId: string; workspaceName: string; groupId?: string }): Promise<{ tasks: HubViewLocalTask[] }>;
   /** 远程查看：订阅会话尾部增量（进入回放视图自动调；断开/离开自动 unsubscribe） */
-  viewSubscribe(input: { targetNodeId: string; sessionId: string }): Promise<{ ok: boolean }>;
+  viewSubscribe(input: { targetNodeId: string; sessionId: string; groupId?: string }): Promise<{ ok: boolean }>;
   /** 远程查看：注销尾部订阅（幂等清理——hub 侧 consent 关闭不阻断退订） */
-  viewUnsubscribe(input: { targetNodeId: string; sessionId: string }): Promise<{ ok: boolean }>;
+  viewUnsubscribe(input: { targetNodeId: string; sessionId: string; groupId?: string }): Promise<{ ok: boolean }>;
+  /** 远程查看（M3.2）：目标节点空间清单（白名单三字段投影；picker 远端数据源） */
+  viewWorkspaces(input: { targetNodeId: string; groupId?: string }): Promise<{ workspaces: HubViewWorkspaceSummary[] }>;
+  /** 远程查看（M3.2）：目标工作空间只读文件树——op=list 目录列举 / op=read 文件读取（base64） */
+  viewFiles(input: {
+    targetNodeId: string;
+    workspaceName: string;
+    op: 'list' | 'read';
+    path?: string;
+    groupId?: string;
+  }): Promise<HubViewFilesResult>;
   /**
    * 镜像登记表查询（M2.1 T6）：workspaceName 可选过滤；行=组内 workspace.mirrored
    * 广播累积登记（T3 徽标/T4 选择器/T7 调度/T8 守门四消费方同源数据）
