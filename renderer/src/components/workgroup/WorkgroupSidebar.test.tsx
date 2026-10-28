@@ -42,6 +42,8 @@ const ONLINE: HubStatus = {
   nodeName: 'mac-main',
   nodeId: 'a3f9c2e1deadbeef',
   lastError: null,
+  lastErrorCode: null,
+  hubProtoVer: null,
 };
 
 const OFFLINE: HubStatus = { ...ONLINE, state: 'disconnected' };

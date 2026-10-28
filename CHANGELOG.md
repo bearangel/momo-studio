@@ -6,6 +6,20 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 节点互联 M3.0：收官清理与协议前置
+
+无新功能面的清理批 + M3.1/M3.2 的兼容性前置。设计见 momo-hub 仓 `docs/specs/2026-10-28-momo-hub-m3.0-closeout.md`（三路探查回填定稿，Momus OKAY）。
+
+- **协议能力协商前置（T1，hub `v0.1.6` + studio pin 升级）**：hub 侧新增方法级 minor 门槛——`METHOD_REQUIRED_MINOR` 全量登记（1.2 基线全表=2，分发守卫对 1.2 节点**零行为变化**，形状锚点锁死）、`unsupported_method` 结构化降级（载荷带 `method`/`requiredMinor`，message 含双方版本；未入表仍 `unknown_method`，一义一名）、`minorOf`/`protocolSupports` 语义分层（minor=向后兼容新增）。studio 消费管道：`hubProtoVer` 版本管道（hello 读 `HelloRes.protoVer` → `HubStatus`/`hub:stateChanged`/设置面板「hub 协议版本」行）；错误 code 传播修复两丢点（`RpcRemoteError` 带 `readonly code`；hello 拒绝透出 `lastErrorCode`，mismatch 专属文案）；`m2-integration` 模拟 hub 由严格相等对齐真实 major-only
+- **hub 监听地址硬化（T4，hub 仓）**：`MOMO_HUB_HOST` 可配，默认收紧 `127.0.0.1`（原 `*` 绑定防疏忽暴露）；显式 `0.0.0.0` WARN 提示；非法值回退默认+WARN；Dockerfile 显式 `0.0.0.0` 维持容器端口映射语义
+- **非 2xx 下载人话化（T2）**：`describeHttpDownloadFailure` 映射（404→资源包不存在或已下架 / 403→无权访问 / ≥500→hub 服务异常 / 兜底），接入 `marketplace/installer.ts` downloadFile 汇聚点（resource+plugin 两条 hub 安装链同源覆盖）；`HTTP <status> <脱敏url>` 原文只进主进程日志；`DOWNLOAD_HTTP_FAILURE_PREFIX` 按「一义一名」退役（无生产者），兜底前缀更名 `DOWNLOAD_HTTP_FALLBACK_PREFIX`。Smithery 详情接口（非 hub 端点）不套 hub 文案
+- **renderer 测试超时固化（T3）**：`hookTimeout: 60000` 进 `renderer/vitest.config.ts`（monaco 全量并行加载背景注释）——全量测试零 CLI 参数跑绿
+- **keychain 门面作用域化（T5）**：作用域上提到 `keychain.ts` 门面、加在**服务名**——默认 profile `'Momo Studio'` 字节不变（既有用户 key 零影响）；隔离 profile `'Momo Studio-<hash8>'`（sha256 完整路径前 8 hex，防 basename 碰撞）；`creds.ts` 自有作用域退役回归裸 `hub.deviceToken` 键（门面分域接管，D2 无迁移裁决沿用——隔离实例重新 enroll）；boot 接线 `wireKeychainScope`（Electron `userData` 路径 vs 默认值）
+- **CI e2e 解禁（T6）**：根因实锤 = GitHub macos-latest 显示器 1024×768（workarea ≈1024×677）——看板失败为已关闭列中心在视口外（指针可达性死区，dnd-kit over=null），browser 失败为 resize 增高腿被 AppKit 钳制；**两条 spec 真实适配**（非 skip 守卫）：kanban 拖拽手势内程序化滚动泳道（dnd-kit 6.3.1 droppable rect 拖拽开始一次性测量——滚动前置到激活位移前，源码+artifacts 双证据）、browser resize 改偏移无关稳定性收敛（视图高位移 ≥40 且 600ms 不变）；新增钉几何 harness `E2E_PIN_GEOMETRY=1024x677`（本机复现 CI 几何零往返）；**删除 `testIgnore`**，PR #2 CI 首次零隔离全量 e2e 全绿
+- **M2.5 条目归因更正**：「拖拽时序/多窗口」→「runner 显示几何」（M3.0 T6 按 run 40676120418 artifacts 复核，追加注记保留原文）
+
+版本 `2.1.0-alpha.36`。hub 侧 `v0.1.6`（tag `v0.1.6` = `489c067`）。
+
 ## [未发布] — 节点互联 M2.5：尾巴清偿与 M2 系列冻结
 
 **M2 系列最后一期**。只清「有用户可见影响」的尾巴，并把能力缺口一次性显式关闭。设计见 momo-hub 仓 `docs/specs/2026-10-28-momo-hub-m2.5-tail-closeout.md`。
@@ -14,7 +28,7 @@
 - **下载失败人话 + 单前缀（A2/A3）**：`describeNetworkError()` 五类映射（域名/拒绝/超时/证书/重置）+ 兜底「网络请求失败」，只包 fetch 抛错，原文进日志；错误前缀集合单点（导入/启停/停用/卸载/重载/**下载资源包/下载失败**）双侧契约测试锁死，`TypePageShell` 与 store 均不再叠前缀。**非 2xx 仍为 `下载失败: HTTP n`（按 plan 硬约束保留，人话化归 M3）**
 - **节点清单补拉（A6，M0 起跨 6 期）**：新 IPC `hub:getNodes` 读主进程 `presenceSeed`（hello 快照 + presence 增量），冷启动/面板打开立即可见全部在线节点；拉取**只增不删**（删除仍归 offline 事件）；**零 hub RPC、零协议变更**
 - **历史 concern 核实出栈（4 条）**：device token keychain 残留=FIXED（三条失效路径均清）；`*:18787`=NOT-A-DEFECT（验收期端口，产品默认 8787）；B 窗口重载=FIXED（底层 D1 已修）；凭证截断=NOT-A-DEFECT（token 不出主进程、不进日志，启动横幅为全值）
-- **CI e2e 首次真实跑通**：PR #1 三轮实测（pnpm 版本冲突 → 2 条环境性红 → 隔离后全绿）；`browser.spec.ts` / `kanban-drag.spec.ts` 在 GitHub macOS runner 上确定性失败（拖拽时序/多窗口），已 `testIgnore` 隔离并留解禁条件（本地仍跑）
+- **CI e2e 首次真实跑通**：PR #1 三轮实测（pnpm 版本冲突 → 2 条环境性红 → 隔离后全绿）；`browser.spec.ts` / `kanban-drag.spec.ts` 在 GitHub macOS runner 上确定性失败（拖拽时序/多窗口），已 `testIgnore` 隔离并留解禁条件（本地仍跑）。**更正（2026-10-28，M3.0 T6 按 run 40676120418 artifacts 复核）**：真实根因为 runner 显示几何——macos-latest 显示器 1024×768、最大化 workarea ≈1024×677；看板失败 = 已关闭列中心在 1024 视口外（指针可达性死区，dnd-kit over=null），browser 失败 = resize 增高腿被 AppKit visible-frame 钳制（677 上限；导航/popup 收编/下载拦截/overlay 在 CI 全通过），「拖拽时序/多窗口」归因失实；两条 spec 已按几何适配（拖拽手势内程序化滚动泳道 / resize 断言腿改收缩）并删除 `testIgnore` 解禁
 - **B 组能力缺口一次性关闭/迁 M3**（逐条理由以 spec §5 为决议正文；B13 的 M3 前置条件 = manifest `resources[]` 增可选 `version`，缺省语义不变）：B1 HITL L2 远程代答 · B2 远端空间清单 RPC · B3 多组 UI · B4 文件树远程浏览 · B5 无候选自动轮询 · B6 任务源接入 · B7 委派编排 · B8 远端代发/远程写 · B9 子节点反向配置推送 · B10 镜像增量合并 · B11 本地 stdio MCP 分发 · B12 hub 资源删除/下架 · **B13 镜像按快照版本对齐**（A4 撤回：快照 `SnapshotResourceRef` 无版本字段，需协议扩展）
 - **已知限制**：A5 readonly 即时拒标记进程内易失=**设计边界**（重启仍由只读约束段 + HITL 超时拒兜底，持久化归 M3 权限子系统）；hub 通配绑定 `0.0.0.0` 与 `MOMO_HUB_HOST` 硬化归 hub 仓；隔离 profile 的 provider keychain 孤儿键归 M3（服务名未随 profile 作用域化）
 

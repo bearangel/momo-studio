@@ -55,7 +55,7 @@ beforeEach(() => {
   useHubStore.setState({
     status: {
       configured: true, state: 'online', hubUrl: 'https://hub.example.com',
-      nodeName: '办公室 MacBook', nodeId: 'node-a', lastError: null,
+      nodeName: '办公室 MacBook', nodeId: 'node-a', lastError: null, lastErrorCode: null, hubProtoVer: null,
     },
     nodes: [], loadError: null,
   });

@@ -381,7 +381,7 @@ describe('T12：hub 插件安装——与本地安装等价', () => {
   it('下载请求无凭证（installPluginHubArchive 不带 headers）→ mock hub 401 → 人话报错 + 零残留（D1 专项）', async () => {
     // D1 修复前的真实形态：下载链裸 fetch 无 Authorization 打全鉴权 hub。
     // 先拉目录暖信任集（hub origin 注册——真实时序：用户先浏览目录再安装）。
-    // 仿真层 401 → 人话错误（含鉴权提示）+ staging/归档零残留 + 不落库
+    // 仿真层 401 → 人话错误（M3.0 T2 兜底条）+ staging/归档零残留 + 不落库
     await listHubCatalogResources('plugin');
     const { installPluginHubArchive } = await import('../../src/main/plugin/hub-install');
     const fixture = fixtures.get('hub-plug-a')!;
@@ -408,7 +408,7 @@ describe('T12：hub 插件安装——与本地安装等价', () => {
         '2.1.0',
         TEST_WS,
       ),
-    ).rejects.toThrow(/下载失败: HTTP 401（鉴权失败/);
+    ).rejects.toThrow(/下载失败，请稍后重试/);
 
     const dlIdx = hubRequests.indexOf('/resources/hub-plug-a/0.2.0/download');
     expect(dlIdx).toBeGreaterThanOrEqual(0);

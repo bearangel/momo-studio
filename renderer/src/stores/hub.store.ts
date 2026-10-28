@@ -84,7 +84,14 @@ export const useHubStore = create<HubState>((set, get) => {
         set(
           pending
             ? {
-                status: { ...status, state: pending.state, lastError: pending.lastError },
+                // 事件覆盖快照（重放方向恒为事件新于快照）：协议诊断两字段一并覆盖
+                status: {
+                  ...status,
+                  state: pending.state,
+                  lastError: pending.lastError,
+                  lastErrorCode: pending.lastErrorCode,
+                  hubProtoVer: pending.hubProtoVer,
+                },
                 loadError: null,
               }
             : { status, loadError: null },
@@ -115,7 +122,13 @@ export const useHubStore = create<HubState>((set, get) => {
         set((s) =>
           s.status
             ? {
-                status: { ...s.status, state: e.state, lastError: e.lastError },
+                status: {
+                  ...s.status,
+                  state: e.state,
+                  lastError: e.lastError,
+                  lastErrorCode: e.lastErrorCode,
+                  hubProtoVer: e.hubProtoVer,
+                },
                 // 非 online 态 → 节点表作废（重连后由 hello 快照种子重新填充）
                 ...(e.state === 'online' ? {} : { nodes: [] }),
               }

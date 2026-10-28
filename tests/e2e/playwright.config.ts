@@ -10,10 +10,13 @@
 //
 // 本地：
 //   pnpm build && pnpm e2e
+//   E2E_PIN_GEOMETRY=1024x677 pnpm e2e ...  # 钉 CI runner 几何复现（pin-geometry.ts）
 // CI：`.github/workflows/e2e.yml` 在 push/PR → main 上跑全量（M2.4 T7）——
 //   步骤含 electron-rebuild（ABI 149，e2e 启动真 Electron 必需）。
-// 拖拽/浏览器交互类用例（kanban-drag / browser）在 CI runner 上受显示与
-// 输入模拟差异影响，靠 retries 吸收偶发；持续红则按 spec 预案隔离。
+// kanban-drag / browser 曾在 CI 隔离（M2.4 T7 首跑），M3.0 T6 已按实测根因
+// 适配并解禁：GitHub macos-latest 显示器 1024×768、最大化 workarea ≈1024×677
+// ——看板失败=指针可达性（目标列中心在 1024 视口外），browser 失败=增高腿被
+// AppKit visible-frame 钳制（677 上限）。
 import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
@@ -24,13 +27,6 @@ export default defineConfig({
   expect: {
     timeout: 15000,
   },
-  // CI 隔离（M2.4 T7 首跑实测）：这两条依赖「鼠标拖拽时序」与「外部页面加载 +
-  // popup 收编 + 下载拦截」——在 GitHub macOS runner 上确定性失败（retries=2 仍红），
-  // 本机全绿。不在 CI 里假绿：显式排除并留票（M2.5 台账 / CHANGELOG 已知限制）。
-  // 移除条件：给它们加输入/显示适配层（或换 CI 载体）后本文件删掉该分支。
-  testIgnore: process.env.CI
-    ? ['**/browser.spec.ts', '**/kanban-drag.spec.ts']
-    : [],
   // Electron's single-instance lock makes parallel workers race against each
   // other. Serialize the e2e suite.
   workers: 1,

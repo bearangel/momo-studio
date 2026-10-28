@@ -180,7 +180,7 @@ describe('TypePageShell（已安装单态，P2.3 Task 1）', () => {
   });
 
   // A3：已知业务前缀一律单前缀（前缀集合与 lib/error-prefix.ts 同步；契约测试在 electron 侧）
-  it.each(['导入失败：', '启停失败：', '停用失败：', '重载失败：', '卸载失败：', '下载资源包失败：'])(
+  it.each(['导入失败：', '启停失败：', '停用失败：', '重载失败：', '卸载失败：', '下载资源包失败：', '下载失败，'])(
     'store 错误已带「%s」→ 原样展示，不叠加「加载失败：」',
     (prefix) => {
       useResourceStore.setState({ error: `${prefix}boom` });
@@ -695,11 +695,12 @@ describe('TypePageShell hub 页签与提示条（M1 Task 14：T10 移交三项�
     description: '纪要生成', version: '1.1.0', installed: false, installable: true, removable: false,
   };
   const NOT_ENROLLED = {
-    configured: false, state: 'disconnected' as const, hubUrl: null, nodeName: null, nodeId: null, lastError: null,
+    configured: false, state: 'disconnected' as const, hubUrl: null, nodeName: null, nodeId: null,
+    lastError: null, lastErrorCode: null, hubProtoVer: null,
   };
   const ENROLLED_ONLINE = {
     configured: true, state: 'online' as const, hubUrl: 'http://192.168.1.8:8717',
-    nodeName: '办公室 MacBook', nodeId: 'a3f9c2e1dead', lastError: null,
+    nodeName: '办公室 MacBook', nodeId: 'a3f9c2e1dead', lastError: null, lastErrorCode: null, hubProtoVer: null,
   };
 
   it('来源下拉含 momo-hub 选项（网络 / Smithery 仍不设死入口）——hub 页签回归', () => {

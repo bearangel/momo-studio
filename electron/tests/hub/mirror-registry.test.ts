@@ -59,6 +59,7 @@ vi.mock('../../src/main/hub/client', () => ({
       start: (): void => { rec.state = 'connecting'; },
       stop: (): void => { rec.state = 'disconnected'; },
       state: (): string => rec.state,
+      hubProtoVer: (): string | null => null,
       request: async () => ({ ok: true }),
     };
   },
@@ -69,8 +70,6 @@ vi.mock('../../src/main/hub/creds', () => ({
   getDeviceToken: vi.fn(async () => 'tok'),
   setDeviceToken: vi.fn(async () => undefined),
   clearDeviceToken: vi.fn(async () => undefined),
-  deriveDeviceTokenScopeSuffix: vi.fn(() => ''),
-  setDeviceTokenScopeResolver: vi.fn(),
 }));
 
 vi.mock('../../src/main/logger', () => ({

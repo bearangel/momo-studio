@@ -44,7 +44,7 @@ vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] },
 }));
 vi.mock('../../src/main/hub/client', () => ({
-  createHubClient: vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), state: (): string => 'disconnected' })),
+  createHubClient: vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), state: (): string => 'disconnected', hubProtoVer: (): string | null => null })),
   enrollOverHttp: vi.fn(async () => ({ nodeId: 'node-1', deviceToken: 'tok-1' })),
 }));
 vi.mock('../../src/main/logger', () => ({

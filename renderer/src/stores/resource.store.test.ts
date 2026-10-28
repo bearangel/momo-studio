@@ -95,16 +95,16 @@ describe('resource.store — install 反馈闭环', () => {
     expect(state.installNotice).toBeNull();
   });
 
-  it('installResource 失败且文案已带「下载失败:」半角前缀 → 单前缀透传（不叠加「导入失败：」）', async () => {
-    // A3（P3 验收）：非 2xx 下载走 electron 既有「下载失败: HTTP n」文案（半角冒号）；
-    // renderer 必须识别该前缀原样展示，否则 store 再拼一层「导入失败：」。
-    resourceInstall.mockRejectedValueOnce(new Error('下载失败: HTTP 404'));
+  it('installResource 失败且文案已带「下载失败，」兜底前缀 → 单前缀透传（不叠加「导入失败：」）', async () => {
+    // M3.0 T2：非 2xx 下载人话映射的兜底条（404/403/5xx 专属文案走「导入失败：」
+    // 单前缀包装）；兜底文案自身已是完整人话句，renderer 必须识别前缀原样展示。
+    resourceInstall.mockRejectedValueOnce(new Error('下载失败，请稍后重试'));
 
     await expect(
-      useResourceStore.getState().installResource('hub-agent-404'),
+      useResourceStore.getState().installResource('hub-agent-418'),
     ).resolves.toBe(false);
 
-    expect(useResourceStore.getState().error).toBe('下载失败: HTTP 404');
+    expect(useResourceStore.getState().error).toBe('下载失败，请稍后重试');
   });
 
   it('installResource 失败（HubCatalogStaleError）→ 原文如实透传（不吞、不替换为泛化文案）', async () => {

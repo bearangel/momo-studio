@@ -41,7 +41,10 @@ import { BROWSER_SHOT_SCHEME } from './browser/protocol';
 // 主进程路由——assembleBrowserSubsystem 产出的真实 policy/manager 在此注册
 import { initBrowserOpRouter } from './browser/op-router';
 // M0 节点互联（spec 2026-10-23）：hub 连接生命周期（app ready 后自动连接 / 退出前断开）
-import { initHub, stopHub, wireHubCredsScope } from './hub/index';
+import { initHub, stopHub } from './hub/index';
+// M3.0 T5：keychain 门面实例作用域（服务名分域）——hub token 之外的四族
+// 账户键（provider / agent / plugin）同受其隔离
+import { wireKeychainScope } from './storage/keychain';
 
 // 单实例锁（v2.10 Windows 全平台化 Task 4）：同一用户数据目录只允许一个实例。
 // 无锁 = 已有实例在运行——app.quit() 后不进入任何 boot（whenReady 不注册、
@@ -180,11 +183,12 @@ if (!app.requestSingleInstanceLock()) {
         onWorkspaceSwitched: (wsId, dir) => browserBoot.switchWorkspace(wsId, dir),
       });
 
-      // D2（M2 Task 1）：hub token 键实例作用域——须在任何 hub 凭证读写（目录拉取
-      // 鉴权 / initHub）之前接线。默认 userData 路径 = 裸键（向后兼容）；隔离实例
-      // （--user-data-dir=$RUN_DIR/profile 等）= sha256 完整路径前 8 位后缀——
-      // hash 全路径防同名 profile 目录互撞（fix round 1）
-      wireHubCredsScope(
+      // M3.0 T5：keychain 服务名实例作用域（自 D2 hub token 键作用域上提——
+      // 门面统一分域，五族账户键全量隔离）。须在任何凭证读写（hub token /
+      // provider key / plugin 配置）之前接线。默认 userData 路径 = 裸服务名
+      // 'Momo Studio'（既有凭证零变化）；隔离实例（--user-data-dir=$RUN_DIR/profile
+      // 等）= 'Momo Studio-<sha256 完整路径前 8 位>'（hash 全路径防同名目录互撞）
+      wireKeychainScope(
         app.getPath('userData'),
         path.join(app.getPath('appData'), app.getName()),
       );

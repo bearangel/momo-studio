@@ -25,6 +25,7 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import { pinWindowGeometry } from './pin-geometry';
 
 const ELECTRON_APP_DIR = path.join(__dirname, '..', '..', 'electron');
 
@@ -182,6 +183,8 @@ test('v2.7 浏览器全链路：导航→user 态点击→popup 收编→下载�
   try {
     const win = await app.firstWindow();
     await win.waitForLoadState('domcontentloaded');
+    // 钉几何（可选）：E2E_PIN_GEOMETRY=1024x677 时复现 CI runner 视口，见 pin-geometry.ts
+    await pinWindowGeometry(app);
 
     // ---- 1. 首启空态：跳过引导向导 → 创建 workspace → 激活（im 视图带浏览器侧栏） ----
     await win.getByRole('button', { name: '跳过引导' }).click({ timeout: 15000 });
@@ -371,38 +374,88 @@ test('v2.7 浏览器全链路：导航→user 态点击→popup 收编→下载�
 
     // ---- 7. 主窗口 resize → 浏览器视图 bounds 同步（占位区上报 → setBounds） ----
     // 侧栏是固定 380px 右列：窗口变宽只影响 chat 列，浏览器视图宽度恒定、随窗口
-    // 变化的是高度。故断言面 = 高度同步：先定已知小尺寸（1100×700），再增高 240。
+    // 变化的是高度。方向选择（M3.0 T6 几何适配）：原「先 1100×700 再增高 240」
+    // 在 CI 双重翻车——(a) 增高被 AppKit visible-frame 钳制（workarea 上限 677，
+    // 677 起步 +240 请求无效 → ResizeObserver 不触发 → view bounds 不动，run
+    // 40676120418 实锤）；(b) 基准捕获竞态：钉几何本地实测暴露原收敛窗 (400,620)
+    // 同时匹配前置几何与目标布局（且窗口 chrome 偏移实测 183 而非假设的 130，
+    // 绝对收敛窗不可移植）。
+    //
+    // 现编舞（稳定性收敛，偏移无关）：规范化 1100×600（minHeight 下限，CI 也有
+    // 677-600=77px 真实变化余量）→ 定基准 1100×700（CI 钳 677；本机 700）→
+    // 收缩 1100×600。每阶段等「视图高相对上一阶段发生变化且稳定 600ms」——
+    // 不依赖任何绝对像素（chrome 偏移、标题栏、字体渲染跨机差异全部免疫），
+    // 多级过渡（unmaximize 还原态 → 目标态）也被稳定性条件自然滤过。
     const initial = await app.evaluate(async ({ BrowserWindow }, { url }) => {
       const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
       if (!win) throw new Error('主窗口不存在');
-      if (win.isMaximized()) win.unmaximize();
-      const current = win.getContentBounds();
-      win.setContentBounds({ x: current.x, y: current.y, width: 1100, height: 700 });
-      const deadline = Date.now() + 5000;
+      const deadline = Date.now() + 8000;
       const children = win.contentView.children as unknown as Array<{
         webContents?: { getURL(): string };
         getBounds(): { x: number; y: number; width: number; height: number };
       }>;
-      // 占位区重报有延迟——收敛窗 (400,620) 只匹配目标 1100×700 布局（视图高 ≈570）；
-      // unmaximize 过渡态 1280×800（视图高 670）与最大化态（~870）均落在窗外防误捕
-      for (;;) {
-        const tab = children.find((c) => c.webContents?.getURL() === url);
-        if (tab && tab.getBounds().height > 400 && tab.getBounds().height < 620) {
-          return { tabBounds: tab.getBounds() };
+      const heightOf = () => {
+        const t = children.find((c) => c.webContents?.getURL() === url);
+        return t ? t.getBounds().height : null;
+      };
+      // 超时诊断：打印窗口实际 bounds 与全部子视图（错误路径必须可读）
+      const diag = () =>
+        JSON.stringify({
+          window: win.getContentBounds(),
+          views: children.map((c) => ({ url: c.webContents?.getURL() ?? '', ...c.getBounds() })),
+        });
+      // 等视图高「不等于 from 且连续 600ms 不变」——过渡报告链（还原态→目标态）
+      // 中途值不会满足稳定性，收敛必为最终布局
+      const waitSettled = async (from: number | null, minShift: number, what: string) => {
+        let last: number | null = null;
+        let stableSince = 0;
+        for (;;) {
+          const h = heightOf();
+          if (h !== null && h !== last) {
+            last = h;
+            stableSince = Date.now();
+          }
+          if (
+            h !== null &&
+            last !== null &&
+            h === last &&
+            Date.now() - stableSince >= 600 &&
+            from !== null &&
+            Math.abs(h - from) >= minShift
+          ) {
+            return h;
+          }
+          if (Date.now() > deadline) throw new Error(`${what}: ${diag()}`);
+          await new Promise((r) => setTimeout(r, 100));
         }
-        if (Date.now() > deadline) throw new Error('浏览器视图 bounds 未随窗口收敛');
-        await new Promise((r) => setTimeout(r, 150));
-      }
+      };
+      // 前置态基线（最大化/钉几何均可能——采样后再动窗口）
+      const h0 = heightOf();
+      // 阶段一（规范化）：1100×600——视图高相对前置态位移 ≥40（前置内容高 677+，
+      // 与 600 至少差 77；unmaximize 还原过渡被稳定性条件滤过）
+      if (win.isMaximized()) win.unmaximize();
+      const c0 = win.getContentBounds();
+      win.setContentBounds({ x: c0.x, y: c0.y, width: 1100, height: 600 });
+      const h1 = await waitSettled(h0, 40, '浏览器视图 bounds 未随窗口规范化收敛');
+      // 阶段二（定基准）：1100×700（CI 钳 677）——相对规范化态净增 ≥40
+      // （本机 +100 / CI +77），稳定后作为收缩基准
+      const c1 = win.getContentBounds();
+      win.setContentBounds({ x: c1.x, y: c1.y, width: c1.width, height: 700 });
+      const h2 = await waitSettled(h1, 40, '浏览器视图 bounds 未随窗口定基准收敛');
+      if (h2 <= h1) throw new Error(`定基准阶段视图高未净增: h1=${h1} h2=${h2} ${diag()}`);
+      const tab = children.find((c) => c.webContents?.getURL() === url);
+      return { tabBounds: tab!.getBounds() };
     }, { url: fixtureUrl() });
 
     await app.evaluate(({ BrowserWindow }) => {
       const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
       if (!win) throw new Error('主窗口不存在');
       const b = win.getContentBounds();
-      win.setContentBounds({ x: b.x, y: b.y, width: b.width, height: b.height + 240 });
+      win.setContentBounds({ x: b.x, y: b.y, width: b.width, height: 600 });
     });
 
-    // 占位区 ResizeObserver → 上报 → main setBounds（轮询视图高度位移）
+    // 占位区 ResizeObserver → 上报 → main setBounds（轮询视图高度位移；收缩
+    // 幅 CI ≈-77 / 本机 =-100，阈值 -50 两侧皆稳）
     await expect
       .poll(
         async () => {
@@ -411,10 +464,10 @@ test('v2.7 浏览器全链路：导航→user 态点击→popup 收编→下载�
         },
         { timeout: 10000 },
       )
-      .toBeGreaterThanOrEqual(140);
+      .toBeLessThanOrEqual(-50);
     const resized = (await viewChildren(app)).find((c) => c.url === fixtureUrl());
-    expect(Math.abs(resized!.x - initial.tabBounds.x), '增高时 x 不位移').toBeLessThanOrEqual(2);
-    expect(Math.abs(resized!.width - initial.tabBounds.width), '增高时宽度不变').toBeLessThanOrEqual(4);
+    expect(Math.abs(resized!.x - initial.tabBounds.x), '收缩时 x 不位移').toBeLessThanOrEqual(2);
+    expect(Math.abs(resized!.width - initial.tabBounds.width), '收缩时宽度不变').toBeLessThanOrEqual(4);
   } finally {
     await app.close();
   }

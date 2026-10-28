@@ -46,6 +46,7 @@ vi.mock('../../src/main/hub/client', () => ({
     start: vi.fn(),
     stop: vi.fn(),
     state: (): string => 'disconnected',
+    hubProtoVer: (): string | null => null,
   })),
   enrollOverHttp: vi.fn(async () => ({ nodeId: 'node-1', deviceToken: 'tok-1' })),
 }));

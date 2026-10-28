@@ -20,7 +20,7 @@ interface CapturedOpts {
   url: string;
   nodeName: string;
   deviceToken: string;
-  onStateChange(state: string, err?: string): void;
+  onStateChange(state: string, err?: string, errCode?: string): void;
   onEvent(evt: EventEnvelope): void;
   onHelloSnapshot?: (nodes: Array<{ nodeId: string; nodeName: string }>) => void;
   onRequest?: (req: { id: string; method: string; payload: unknown }) => Promise<unknown>;
@@ -32,6 +32,8 @@ interface CapturedClient {
   state: string;
   starts: number;
   stops: number;
+  /** mock 侧 hubProtoVer 读值（M3.0-P2 用例注入；真实语义由 client.test.ts 锁） */
+  protoVer: string | null;
 }
 
 // mock 装置必须挂在 vi.hoisted 上——vitest 会把 vi.mock 工厂提到文件顶部，
@@ -82,12 +84,13 @@ vi.mock('electron', () => ({
 // 由用例显式调用 opts.onStateChange(...) 覆盖；client 自身语义由 client.test.ts 锁。
 vi.mock('../../src/main/hub/client', () => ({
   createHubClient: (opts: CapturedOpts) => {
-    const rec: CapturedClient = { id: ++m.seq, opts, state: 'disconnected', starts: 0, stops: 0 };
+    const rec: CapturedClient = { id: ++m.seq, opts, state: 'disconnected', starts: 0, stops: 0, protoVer: null };
     m.clients.push(rec);
     return {
       start: (): void => { rec.starts += 1; rec.state = 'connecting'; m.calls.push('client.start'); },
       stop: (): void => { rec.stops += 1; rec.state = 'disconnected'; m.calls.push('client.stop'); },
       state: (): string => rec.state,
+      hubProtoVer: (): string | null => rec.protoVer,
       request: async (method: string, payload: unknown): Promise<unknown> => {
         m.reqs.push({ method, payload });
         return { ok: true };
@@ -180,7 +183,7 @@ describe('hub manager 推送面', () => {
     m.clients[0]!.opts.onStateChange('online');
     expect(m.sent).toContainEqual({
       channel: 'hub:stateChanged',
-      payload: { state: 'online', lastError: null },
+      payload: { state: 'online', lastError: null, lastErrorCode: null, hubProtoVer: null },
     });
   });
 
@@ -190,7 +193,41 @@ describe('hub manager 推送面', () => {
     m.clients[0]!.opts.onStateChange('connecting', '连接超时');
     expect(m.sent).toContainEqual({
       channel: 'hub:stateChanged',
-      payload: { state: 'connecting', lastError: '连接超时' },
+      payload: { state: 'connecting', lastError: '连接超时', lastErrorCode: null, hubProtoVer: null },
+    });
+  });
+
+  it('hello 被拒带 code → lastErrorCode 进状态快照与广播（M3.0-P2）', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    m.sent.length = 0;
+    m.clients[0]!.opts.onStateChange('connecting', 'hub=2.0.0 node=1.2.0', 'proto_version_mismatch');
+    expect(manager.hubGetStatus().lastErrorCode).toBe('proto_version_mismatch');
+    expect(m.sent).toContainEqual({
+      channel: 'hub:stateChanged',
+      payload: {
+        state: 'connecting',
+        lastError: 'hub=2.0.0 node=1.2.0',
+        lastErrorCode: 'proto_version_mismatch',
+        hubProtoVer: null,
+      },
+    });
+    // 无错误迁移不携带 code → 上一条 code 保留（与 lastError 同语义）；online 才清零
+    m.clients[0]!.opts.onStateChange('connecting', '连接超时');
+    expect(manager.hubGetStatus().lastErrorCode).toBe('proto_version_mismatch');
+    m.clients[0]!.opts.onStateChange('online');
+    expect(manager.hubGetStatus().lastErrorCode).toBeNull();
+    expect(manager.hubGetStatus().lastError).toBeNull();
+  });
+
+  it('hubProtoVer 经状态快照与广播透出（M3.0-P2 版本管道）', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    m.clients[0]!.protoVer = '1.2.0';
+    m.sent.length = 0;
+    m.clients[0]!.opts.onStateChange('online');
+    expect(manager.hubGetStatus().hubProtoVer).toBe('1.2.0');
+    expect(m.sent).toContainEqual({
+      channel: 'hub:stateChanged',
+      payload: { state: 'online', lastError: null, lastErrorCode: null, hubProtoVer: '1.2.0' },
     });
   });
 
@@ -536,7 +573,7 @@ describe('hub manager 生命周期', () => {
       'broadcast:hub:stateChanged',
     ]);
     expect(m.sent).toEqual([
-      { channel: 'hub:stateChanged', payload: { state: 'disconnected', lastError: null } },
+      { channel: 'hub:stateChanged', payload: { state: 'disconnected', lastError: null, lastErrorCode: null, hubProtoVer: null } },
     ]);
   });
 
