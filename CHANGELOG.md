@@ -6,6 +6,22 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 节点互联 M2.3：版本取值链修复与债务清偿
+
+hub 侧 `v0.1.5`（目录 latest 语义 semver 化——乱序发布不回退；协议包仅注释语义更新，零字段变更）；studio 侧 pin 升级 `#v0.1.5` + 版本链四点修复 + 通道/锁面债务 + 测试基建与回归沉淀。设计见 momo-hub 仓 `docs/specs/2026-10-27-momo-hub-m2.3-version-chain-debt.md`。
+
+- **版本取值链修复（验收 D3/O-1 根治）**：安装/更新链强制 fresh 目录（绕 TTL/退避/lastGood 陈旧快照——装旧版根因）；已装判定 semver 化（target ≤ 已装 → 如实「已是最新版本」零动作，根治同版幂等静默假成功）；可更新角标 semver 前进判定（替代字符串不等）；消 hubUpdates 键条件化。新 `version-compare.ts` 单源（数值段/缺段/预发布/非法段容忍）— 与 hub v0.1.5 私有实现契约锁（同输入同输出表）
+- **hub v0.1.5**：目录 latest = versions 全集 semver max（时序乱序回退修复）；versions semver 降序
+- **worker reason 通道**：`DelegationRecord.reason?`（kv 可选字段零 DDL）——runner settleRun 同源落账本 → sync 写 worker 本机卡 errorMessage（leader 侧对称面补齐；缺席回退老数据零改写）
+- **锁面补强七件**：双源单卡锁 / loadHubAccountingSet 导出契约化 / 回填缓存守卫+自愈 / collectSkills 未计入 warn / installProgress 常量契约测试 / CHANGELOG 补句 / **workspace.store load() 保 active 守卫**（消除全关标签后 listChanged 复活 + notifySwitch 无条件重放——漂移排查 P-A 路径）
+- **测试基建**：agent-threads 组迁 forks 池（SIGSEGV NAPI 析构债根治，两跑稳定零差）；hookTimeout 10s→30s；monaco diagnostics 三关（unhandled rejection 噪声）
+- **e2e 回归沉淀**：`tests/e2e/hub-distribution.spec.ts` 六场景（发布→记账/manifest 携带/全新 profile 零 unresolved/readonly 即时拒/版本链前进/已是最新如实）——mock hub 五端点 + ws 定向 + 本地 OpenAI 兼容 mock LLM，零外网；另修两处既有 e2e 测试侧债（创建空间异步等待竞态 / 提交键改名失配）→ 全量 e2e 15 pass
+- **真机验收**：版本全链四段（v1 装→v2 前进→乱序不降级→镜像补装 v2 同 checksum）+ P2 四项全 pass；零 P0/P1/P2
+- **已知限制**：worker 运行期 provider 失败 reason 泛化为「未知错误」（原文未透传，M2.4 票）；镜像快照 config.skills 同 slug 冗余（resources/落装正确，去重 M2.4 票）；CI 未纳 e2e（选择器漂移风险，M2.4 票）；本地 stdio MCP 分发域外维持；readonly 标记进程内易失（重启降级）
+
+版本 `2.1.0-alpha.33`。
+
+
 ## [未发布] — 节点互联 M2.2：私有资源分发链闭环与打磨
 
 hub 仓零代码改动（v0.1.4 不变）；studio 侧分发链泛化 + 11 项打磨票 + 类型债清偿。设计见 momo-hub 仓 `docs/specs/2026-10-27-momo-hub-m2.2-distribution-closure-polish.md`。
