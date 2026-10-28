@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest';
 import {
   ELECTRON_ERROR_PREFIXES,
   DOWNLOAD_RESOURCE_FAILURE_PREFIX,
+  DOWNLOAD_HTTP_FALLBACK_PREFIX,
 } from '../../src/main/util/error-prefix';
 import { KNOWN_ERROR_PREFIXES } from '../../../renderer/src/lib/error-prefix';
 
@@ -31,5 +32,13 @@ describe('错误文案前缀双侧契约（electron ⊆ renderer）', () => {
   it('下载资源包失败前缀两侧字面量一致', () => {
     expect(DOWNLOAD_RESOURCE_FAILURE_PREFIX).toBe('下载资源包失败：');
     expect(KNOWN_ERROR_PREFIXES as readonly string[]).toContain(DOWNLOAD_RESOURCE_FAILURE_PREFIX);
+  });
+
+  it('非 2xx 下载兜底前缀两侧字面量一致（M3.0 T2：旧「下载失败:」直出形态退役）', () => {
+    expect(DOWNLOAD_HTTP_FALLBACK_PREFIX).toBe('下载失败，');
+    expect(KNOWN_ERROR_PREFIXES as readonly string[]).toContain(DOWNLOAD_HTTP_FALLBACK_PREFIX);
+    // 旧冒号形态零生产者，两侧集合不得残留（防同文案两种标点双前缀复发）
+    expect(KNOWN_ERROR_PREFIXES as readonly string[]).not.toContain('下载失败:');
+    expect(KNOWN_ERROR_PREFIXES as readonly string[]).not.toContain('下载失败：');
   });
 });

@@ -439,10 +439,10 @@ describe('T10 e2e：D1 下载链鉴权（错误路径专项）', () => {
   it('下载请求无凭证（downloadFile 不带 headers）→ mock hub 401 → 安装失败人话 + 不落账', async () => {
     // 先拉目录暖信任集（hub origin 注册进 installer——真实时序：用户先浏览目录
     // 再安装）。随后直连 installPackage 不传 headers——D1 修复前的真实形态（裸
-    // fetch 无 Authorization 打全鉴权 hub）。仿真层 401 → 人话错误（含鉴权提示）。
+    // fetch 无 Authorization 打全鉴权 hub）。仿真层 401 → 人话错误（M3.0 T2 兜底条）。
     await listHubCatalogResources('agent');
     await expect(installPackage(directInstallItem())).rejects.toThrow(
-      /下载失败: HTTP 401（鉴权失败/,
+      /下载失败，请稍后重试/,
     );
 
     // 下载确实打到了 mock hub 且无 Bearer
@@ -464,7 +464,7 @@ describe('T10 e2e：D1 下载链鉴权（错误路径专项）', () => {
     hub!.setExpectedAuth('tok-rotated');
 
     await expect(installHubPackage('agent', 'hub-e2e-agent')).rejects.toThrow(
-      /下载失败: HTTP 401（鉴权失败/,
+      /下载失败，请稍后重试/,
     );
 
     const dlIdx = hubRequests.indexOf('/resources/hub-e2e-agent/1.0.0/download');
@@ -749,21 +749,23 @@ describe('P2-7 补装进度事件：三阶段序 / 失败终止 / 字节节流',
     expect(events.map((e) => e.stage)).not.toContain('extracting');
   });
 
-  it('下载 401（凭证失效）→ failed + 鉴权人话 message', async () => {
+  it('下载 401（凭证失效）→ failed + 人话 message（无 HTTP 原文）', async () => {
     await listHubCatalogResources('agent'); // 暖目录缓存（TTL 内零网络）
     hub!.setExpectedAuth('tok-rotated');
 
     const [events, dispose] = collect();
     try {
       await expect(installHubPackage('agent', 'hub-e2e-agent')).rejects.toThrow(
-        /下载失败: HTTP 401（鉴权失败/,
+        /下载失败，请稍后重试/,
       );
     } finally {
       dispose();
     }
 
     expect(events[events.length - 1]!.stage).toBe('failed');
-    expect(events[events.length - 1]!.message).toMatch(/HTTP 401/);
+    // 进度事件 message 是 worker UI 直展面——M3.0 T2 契约：只见人话，无 HTTP 原文
+    expect(events[events.length - 1]!.message).toBe('下载失败，请稍后重试');
+    expect(events[events.length - 1]!.message).not.toContain('HTTP');
     expect(events.map((e) => e.stage)).not.toContain('done');
   });
 });

@@ -1,14 +1,18 @@
 // electron/tests/util/network-error.test.ts
 //
-// A2：下载层网络失败人话映射。describeNetworkError 只服务「fetch 抛错」这一层；
-// 非 2xx 分支的 `下载失败: HTTP n` 不经本函数（零改动）。
+// 下载层失败人话映射的两个层面：describeNetworkError 服务「fetch 抛错」
+// （网络层，M2.5 A2）；describeHttpDownloadFailure 服务 HTTP 非 2xx
+// （M3.0 T2——人话进 UI，`HTTP <status> <url>` 原文只进主进程日志）。
 //
 // 真实 Node fetch 形状：`TypeError: fetch failed`，底层原因在 `cause` 链上
 // （ENOTFOUND / ECONNREFUSED / ETIMEDOUT / CERT_* / ECONNRESET），abort 则是
 // name='AbortError' 的异常。测试按真实形状构造（momo-test-rules：mock 仿真）。
 
 import { describe, it, expect } from 'vitest';
-import { describeNetworkError } from '../../src/main/util/network-error';
+import {
+  describeNetworkError,
+  describeHttpDownloadFailure,
+} from '../../src/main/util/network-error';
 
 /** 构造 fetch 真实失败形状：外层 TypeError('fetch failed')，cause 携带 code */
 function fetchErrorWithCode(code: string, causeMessage = `connect ${code}`): Error {
@@ -65,5 +69,31 @@ describe('describeNetworkError（fetch 抛错 → 人话）', () => {
     expect(describeNetworkError(null)).toBe('网络请求失败');
     expect(describeNetworkError('boom')).toBe('网络请求失败');
     expect(describeNetworkError({})).toBe('网络请求失败');
+  });
+});
+
+describe('describeHttpDownloadFailure（HTTP 非 2xx → 人话，M3.0 T2 映射逐条）', () => {
+  it.each([
+    [404, '资源包不存在或已下架'],
+    [403, '无权访问该资源包'],
+    [500, 'hub 服务异常，请稍后重试'],
+    [502, 'hub 服务异常，请稍后重试'],
+    [503, 'hub 服务异常，请稍后重试'],
+    // 418 茶壶态：非 404/403/5xx 的怪异码走兜底条
+    [418, '下载失败，请稍后重试'],
+    // 401 不再带旧鉴权提示（M2.5 401 hint 随映射表收编退役）——走兜底条
+    [401, '下载失败，请稍后重试'],
+    [302, '下载失败，请稍后重试'],
+  ])('HTTP %i → %s', (status, message) => {
+    expect(describeHttpDownloadFailure(status)).toBe(message);
+  });
+
+  it('映射文案不含 HTTP 状态码 / 技术原文（UI 无原文——原文只进日志）', () => {
+    for (const status of [401, 403, 404, 418, 500, 502]) {
+      const message = describeHttpDownloadFailure(status);
+      expect(message).not.toContain('HTTP');
+      expect(message).not.toContain(String(status));
+      expect(message).not.toContain('http');
+    }
   });
 });

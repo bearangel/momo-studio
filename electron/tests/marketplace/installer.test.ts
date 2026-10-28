@@ -182,11 +182,40 @@ describe('marketplace/installer installPackage（远程 checksum）', () => {
     expect(listInstalled()).toHaveLength(0);
   });
 
-  it('下载 HTTP 错误时抛错', async () => {
-    const item = makeItem({ downloadUrl: 'https://example.test/pkg.tar.gz' });
+  it('下载 HTTP 错误 → UI 人话文案 + 原文（状态码/脱敏 url）只进日志（M3.0 T2 双向）', async () => {
+    // url query 携带 token 形态值——原文进日志时必须被 redact（includeQueryToken）
+    const item = makeItem({
+      downloadUrl: 'https://example.test/pkg.tar.gz?token=supersecret1',
+    });
     fetchSpy.mockResolvedValue({ ok: false, status: 404, body: null, headers: new Headers() } as Response);
+    const warnSpy = vi.spyOn(logger, 'warn');
 
-    await expect(installPackage(item)).rejects.toThrow(/下载失败: HTTP 404/);
+    let caught: Error | undefined;
+    try {
+      await installPackage(item);
+    } catch (err) {
+      caught = err as Error;
+    }
+
+    // UI 侧：人话映射文案，不含 HTTP 状态码 / url / token（无原文）
+    expect(caught).toBeDefined();
+    expect(caught?.message).toBe('资源包不存在或已下架');
+    expect(caught?.message).not.toContain('HTTP');
+    expect(caught?.message).not.toContain('example.test');
+    expect(caught?.message).not.toContain('supersecret1');
+
+    // 日志侧：原文在场（HTTP <status> <脱敏 url>），token 值被替换为 ***
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const [logMessage] = warnSpy.mock.calls[0] as [string];
+    expect(logMessage).toContain('HTTP 404');
+    expect(logMessage).toContain('https://example.test/pkg.tar.gz?***');
+    expect(logMessage).not.toContain('supersecret1');
+  });
+
+  it('下载 401 → 兜底人话（旧「HTTP 401（鉴权失败…」hint 随映射表退役）', async () => {
+    const item = makeItem({ downloadUrl: 'https://example.test/pkg.tar.gz' });
+    fetchSpy.mockResolvedValue({ ok: false, status: 401, body: null, headers: new Headers() } as Response);
+    await expect(installPackage(item)).rejects.toThrow('下载失败，请稍后重试');
   });
 
   it('fetch 抛网络错误 → 上抛人话前缀（不含原始技术串）+ 原文进 logger', async () => {

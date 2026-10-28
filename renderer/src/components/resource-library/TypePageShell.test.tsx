@@ -180,7 +180,7 @@ describe('TypePageShell（已安装单态，P2.3 Task 1）', () => {
   });
 
   // A3：已知业务前缀一律单前缀（前缀集合与 lib/error-prefix.ts 同步；契约测试在 electron 侧）
-  it.each(['导入失败：', '启停失败：', '停用失败：', '重载失败：', '卸载失败：', '下载资源包失败：'])(
+  it.each(['导入失败：', '启停失败：', '停用失败：', '重载失败：', '卸载失败：', '下载资源包失败：', '下载失败，'])(
     'store 错误已带「%s」→ 原样展示，不叠加「加载失败：」',
     (prefix) => {
       useResourceStore.setState({ error: `${prefix}boom` });
