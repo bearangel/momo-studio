@@ -480,6 +480,42 @@ describe('重连续传', () => {
     expect(r?.payload.reason).toBe('local_session_lost');
   });
 
+  // M2.4 T3：补终态拍消费账本 reason（M2.3 P2-1 已把 reason 落本机账本，leader 侧
+  // 补拍必须同源——旧实现硬编码老文案，本机卡与 leader 卡不同文）
+  it('本地已终态 failed 且账本有 reason → 补终态拍 reason 逐字等于账本 reason', async () => {
+    const h = makeHarness();
+    await admitOne(h, 't1');
+    h.fireTerminal('sess-1', { status: 'failed', error: '模型供应商连接失败' });
+    await vi.advanceTimersByTimeAsync(0);
+    const localReason = h.store.get('t1')?.reason;
+    expect(localReason).toContain('模型供应商连接失败');
+    const before = h.log.reports.length;
+
+    h.setInterrupted([{ taskId: 't1', title: '修复登录超时', workspaceName: 'ws-a' }]);
+    await h.runner.handleOnline();
+
+    const patched = h.log.reports.slice(before).find((r) => r.payload.status === 'failed');
+    expect(patched?.payload.reason).toBe(localReason);
+  });
+
+  it('本地已终态 failed 但账本无 reason（P2-1 前老数据）→ 补终态拍沿用老文案', async () => {
+    const h = makeHarness();
+    await admitOne(h, 't1');
+    // 先清活跃回合（done 释放 watcher 且不落 reason），再翻账本 failed 模拟无因终态
+    h.fireTerminal('sess-1', { status: 'done' });
+    await vi.advanceTimersByTimeAsync(0);
+    h.store.updateState('t1', 'failed');
+    expect(h.store.get('t1')?.state).toBe('failed');
+    expect(h.store.get('t1')?.reason).toBeUndefined();
+    const before = h.log.reports.length;
+
+    h.setInterrupted([{ taskId: 't1', title: '修复登录超时', workspaceName: 'ws-a' }]);
+    await h.runner.handleOnline();
+
+    const patched = h.log.reports.slice(before).find((r) => r.payload.status === 'failed');
+    expect(patched?.payload.reason).toBe('中断前本地回合已失败');
+  });
+
   // ── D6 续传 boot 竞态（重连早于 RouterService lazy 启动）───────────────────
 
   it('D6：startTurn 前两次未就绪拒绝 → 1s 退避重试第三次成功续传（不误报失败）', async () => {

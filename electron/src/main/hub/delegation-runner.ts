@@ -499,7 +499,9 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
           await sendReport(record.taskId, {
             status: terminalState,
             sessionId: record.sessionId,
-            ...(terminalState === 'failed' ? { reason: '中断前本地回合已失败' } : {}),
+            ...(terminalState === 'failed'
+              ? { reason: record.reason ?? '中断前本地回合已失败' }
+              : {}),
           });
           continue;
         }
