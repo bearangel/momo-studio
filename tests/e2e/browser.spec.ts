@@ -374,7 +374,12 @@ test('v2.7 浏览器全链路：导航→user 态点击→popup 收编→下载�
 
     // ---- 7. 主窗口 resize → 浏览器视图 bounds 同步（占位区上报 → setBounds） ----
     // 侧栏是固定 380px 右列：窗口变宽只影响 chat 列，浏览器视图宽度恒定、随窗口
-    // 变化的是高度。故断言面 = 高度同步：先定已知小尺寸（1100×700），再增高 240。
+    // 变化的是高度。故断言面 = 高度同步：先定已知小尺寸（1100×700；CI workarea
+    // 钳到 677），再收缩。方向选择（M3.0 T6 几何适配）：原「增高 240」在 CI 被
+    // AppKit visible-frame 钳制——677 已是上限，+240 请求无效 → ResizeObserver
+    // 不触发 → view bounds 不动（run 40676120418 实锤）；收缩永不被钳，两环境
+    // 几何均确定（CI：677→600；本机：700→600）。目标高度 600 = window.ts
+    // minHeight 下限。
     const initial = await app.evaluate(async ({ BrowserWindow }, { url }) => {
       const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
       if (!win) throw new Error('主窗口不存在');
@@ -402,10 +407,11 @@ test('v2.7 浏览器全链路：导航→user 态点击→popup 收编→下载�
       const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
       if (!win) throw new Error('主窗口不存在');
       const b = win.getContentBounds();
-      win.setContentBounds({ x: b.x, y: b.y, width: b.width, height: b.height + 240 });
+      win.setContentBounds({ x: b.x, y: b.y, width: b.width, height: 600 });
     });
 
-    // 占位区 ResizeObserver → 上报 → main setBounds（轮询视图高度位移）
+    // 占位区 ResizeObserver → 上报 → main setBounds（轮询视图高度位移；收缩
+    // 幅 CI ≈-77 / 本机 =-100，阈值 -50 两侧皆稳）
     await expect
       .poll(
         async () => {
@@ -414,10 +420,10 @@ test('v2.7 浏览器全链路：导航→user 态点击→popup 收编→下载�
         },
         { timeout: 10000 },
       )
-      .toBeGreaterThanOrEqual(140);
+      .toBeLessThanOrEqual(-50);
     const resized = (await viewChildren(app)).find((c) => c.url === fixtureUrl());
-    expect(Math.abs(resized!.x - initial.tabBounds.x), '增高时 x 不位移').toBeLessThanOrEqual(2);
-    expect(Math.abs(resized!.width - initial.tabBounds.width), '增高时宽度不变').toBeLessThanOrEqual(4);
+    expect(Math.abs(resized!.x - initial.tabBounds.x), '收缩时 x 不位移').toBeLessThanOrEqual(2);
+    expect(Math.abs(resized!.width - initial.tabBounds.width), '收缩时宽度不变').toBeLessThanOrEqual(4);
   } finally {
     await app.close();
   }
