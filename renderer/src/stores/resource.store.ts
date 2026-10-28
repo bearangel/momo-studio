@@ -66,6 +66,12 @@ interface ResourceStore {
    */
   hubStatusKnown: boolean;
   /**
+   * M2.5 终审 FIX-1：hub 是否未接入（getCatalogStatus.hubNotEnrolled）。
+   * 未接入 ≠ 目录为空——兜底记账行（已装但目录无此条目）不得作为
+   * 「已是最新」的证据，播种门控据此拒绝建基线。
+   */
+  hubNotEnrolled: boolean;
+  /**
    * M1 Task 14：hub 发布事件带来的最新版本表（key `${type}:${slug}` → 版本）。
    * 已装 hub 资源与该表 semver 前进比较（M2.3 T2——lib/version-compare 镜像
    * 单源）得「可更新」角标；installResource 成功且记账版本到达事件版本才消键。
@@ -109,7 +115,7 @@ interface ResourceStore {
   /**
    * M2.5 T1（A1）：用目录版本播种某类型的更新基线——只作用于该类型（其他
    * 类型 key 不动），入表条件 compareVersions(目录版本, 已装版本) > 0。
-   * hub 源降级时整体早退（既不清空也不新增）。事件路径仍为增量。
+   * hub 源降级或未接入时整体早退（既不清空也不新增）。事件路径仍为增量。
    */
   seedHubUpdates: (type: ResourceType, entries: Array<{ slug: string; version: string }>) => void;
   /**
@@ -138,6 +144,7 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   catalogDegraded: false,
   hubDegraded: false,
   hubStatusKnown: false,
+  hubNotEnrolled: false,
   hubUpdates: {},
   hubSeeded: {},
   typeFilter: 'all',
@@ -161,9 +168,11 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
       // 目录变更后不再只依赖 resource.published 事件。degraded 为真时完全不动
       //（不清空既有角标，也不新增）；stale 不影响（浏览链本就是 load）。
       await get().loadCatalogStatus();
-      // 仅「状态已知且 hub 未降级」才播种：查询失败 = 状态未知 → 不播种（不清空
-      // 也不新增），卡片落回「未拉取」三态；hubDegraded 的 false 占位只服务提示条。
-      if (!get().hubStatusKnown || get().hubDegraded) return;
+      // 仅「状态已知且 hub 未降级、已接入」才播种：查询失败 = 状态未知 → 不播种
+      //（不清空也不新增），卡片落回「未拉取」三态；hubDegraded 的 false 占位只服务
+      // 提示条。未接入时目录为空但兜底记账行仍在（hub-install 的已装行）——此时
+      // 播种会把记账版本当成目录证据，卡片谎报「已是最新」（M2.5 终审 FIX-1）。
+      if (!get().hubStatusKnown || get().hubDegraded || get().hubNotEnrolled) return;
       const seededTypes: ResourceType[] =
         typeFilter === 'all' || typeFilter === undefined
           ? ['agent', 'mcp', 'skill', 'plugin']
@@ -219,25 +228,35 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
       set({
         catalogDegraded: r.degraded,
         hubDegraded: r.sources?.find((s) => s.source === 'hub')?.degraded ?? false,
+        hubNotEnrolled: r.hubNotEnrolled ?? false,
         hubStatusKnown: true,
       });
     } catch {
       // 通道未就绪（主进程并行接线）或查询失败——不误报降级（提示条语义不变），
       // 但标记状态未知：播种据此拒绝建基线。
-      set({ catalogDegraded: false, hubDegraded: false, hubStatusKnown: false });
+      set({
+        catalogDegraded: false,
+        hubDegraded: false,
+        hubNotEnrolled: false,
+        hubStatusKnown: false,
+      });
     }
   },
 
   initHubUpdates: () => {
     return ipc.hub.onResourcePublished((e: HubResourcePublishedEvent) => {
-      set((s) => ({
-        hubUpdates: { ...s.hubUpdates, [`${e.type}:${e.slug}`]: e.version },
-      }));
+      // FIX-2：hub 支持乱序发布、latest=semver max——事件只能把基线抬高。
+      // 低版事件覆盖会让「可更新」指向旧版本，点更新实际装高版（错版本）。
+      const key = `${e.type}:${e.slug}`;
+      const current = get().hubUpdates[key];
+      if (current !== undefined && compareVersions(e.version, current) <= 0) return;
+      set((s) => ({ hubUpdates: { ...s.hubUpdates, [key]: e.version } }));
     });
   },
 
   seedHubUpdates: (type, entries) => {
-    if (get().hubDegraded) return;
+    // 目录不可信（降级 / 未接入）时整体早退：不清空既有 key，也不新增基线。
+    if (get().hubDegraded || get().hubNotEnrolled) return;
     const { items, hubUpdates, hubSeeded } = get();
     const prefix = `${type}:`;
     const next = { ...hubUpdates };

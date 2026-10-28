@@ -2481,9 +2481,12 @@ export interface ApiSurface {
      * 2026-10-12 D9：市场目录健康状态（主进程探测 catalog 源可达性；离线/网络
      * 受限时 degraded=true）。资源库 agent 页据此显示「当前显示本地目录」降级提示。
      * M1c：sources 逐源聚合（marketplace 远程目录 + momo-hub 目录各自降级态）。
+     * hubNotEnrolled（M2.5 终审 FIX-1）：hub 未接入——与「目录为空」区分，
+     * 播种门控据此拒绝建基线。
      */
     getCatalogStatus(): Promise<{
       degraded: boolean;
+      hubNotEnrolled: boolean;
       sources?: Array<{ source: 'marketplace' | 'hub'; degraded: boolean }>;
     }>;
   };

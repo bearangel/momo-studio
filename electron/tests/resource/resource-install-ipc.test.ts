@@ -44,6 +44,19 @@ vi.mock('../../src/main/resource/hub-install', () => ({
   HUB_INSTALL_PROGRESS_CHANNEL: 'hub:installProgress',
 }));
 
+// M2.5 终审 FIX-1：只覆盖 catalog 健康/接入两个同步读取面，其余（hubProvider 等）
+// 保留真实实现——handler 只消费这两个判定。
+const hubCatalogMocks = vi.hoisted(() => ({ notEnrolled: false, degraded: false }));
+vi.mock('../../src/main/resource/hub/momo-hub', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../src/main/resource/hub/momo-hub')>();
+  return {
+    ...actual,
+    isHubCatalogDegraded: () => hubCatalogMocks.degraded,
+    isHubNotEnrolled: () => hubCatalogMocks.notEnrolled,
+  };
+});
+
 vi.mock('../../src/main/resource/library', () => libraryMocks);
 
 import { ipcMain } from 'electron';
@@ -122,5 +135,34 @@ describe('resource:install — 失败文案人话化（M2.4 D1）', () => {
       alreadyLatest?: boolean;
     };
     expect(r.alreadyLatest).toBe(true);
+  });
+});
+
+// M2.5 终审 FIX-1：getCatalogStatus 必须如实透出「hub 未接入」——renderer 播种
+// 门控据此区分「目录为空」与「未接入」，杜绝兜底记账行被当成目录证据。
+describe('resource:getCatalogStatus — hubNotEnrolled（M2.5 终审 FIX-1）', () => {
+  it('未接入 → hubNotEnrolled=true；接入 → false；两者 hub 源均不报降级', async () => {
+    const handler = getHandler('resource:getCatalogStatus');
+
+    hubCatalogMocks.notEnrolled = true;
+    hubCatalogMocks.degraded = false;
+    expect(await handler({})).toEqual({
+      degraded: false,
+      hubNotEnrolled: true,
+      sources: [
+        { source: 'marketplace', degraded: false },
+        { source: 'hub', degraded: false },
+      ],
+    });
+
+    hubCatalogMocks.notEnrolled = false;
+    expect(await handler({})).toEqual({
+      degraded: false,
+      hubNotEnrolled: false,
+      sources: [
+        { source: 'marketplace', degraded: false },
+        { source: 'hub', degraded: false },
+      ],
+    });
   });
 });

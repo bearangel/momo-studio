@@ -63,6 +63,7 @@ beforeEach(() => {
     hubSeeded: {},
     hubDegraded: false,
     hubStatusKnown: false,
+    hubNotEnrolled: false,
   });
   resourceGetCatalogStatus.mockReset();
 });
@@ -483,11 +484,11 @@ describe('resource.store — hub 角标播种（M2.5 T1 / A1）', () => {
     installed: true, installable: false, removable: true, ...over,
   });
 
-  const statusOk = { degraded: false, sources: [
+  const statusOk = { degraded: false, hubNotEnrolled: false, sources: [
     { source: 'marketplace' as const, degraded: false },
     { source: 'hub' as const, degraded: false },
   ] };
-  const statusHubDown = { degraded: false, sources: [
+  const statusHubDown = { degraded: false, hubNotEnrolled: false, sources: [
     { source: 'marketplace' as const, degraded: false },
     { source: 'hub' as const, degraded: true },
   ] };
@@ -558,5 +559,79 @@ describe('resource.store — hub 角标播种（M2.5 T1 / A1）', () => {
       'mcp:m': '2.0.0',
     });
     expect(useResourceStore.getState().hubSeeded).toEqual({ skill: true, mcp: true });
+  });
+
+  const statusNotEnrolled = { degraded: false, hubNotEnrolled: true, sources: [
+    { source: 'marketplace' as const, degraded: false },
+    { source: 'hub' as const, degraded: false },
+  ] };
+
+  it('⑥ hub 未接入（hubNotEnrolled=true）→ 不播种、hubSeeded 不置位、既有 key 不清空', async () => {
+    resourceGetCatalogStatus.mockResolvedValue(statusNotEnrolled);
+    resourceList.mockResolvedValue([hubItem()]);
+    useResourceStore.setState({
+      typeFilter: 'agent',
+      hubUpdates: { 'agent:legacy': '9.9.9' },
+      hubSeeded: {},
+    });
+
+    await useResourceStore.getState().load();
+
+    expect(useResourceStore.getState().hubUpdates).toEqual({ 'agent:legacy': '9.9.9' });
+    expect(useResourceStore.getState().hubSeeded.agent).toBeUndefined();
+    expect(useResourceStore.getState().hubDegraded).toBe(false);
+  });
+
+  it('⑦ 未接入 + 已装记账兜底行（目录中已无此条目）→ 卡片证据态不成立（hubSeeded 不置位）', async () => {
+    resourceGetCatalogStatus.mockResolvedValue(statusNotEnrolled);
+    resourceList.mockResolvedValue([
+      hubItem({
+        version: '1.5.0',
+        installedVersion: '1.5.0',
+        description: '已从 momo-hub 安装（当前目录中已无此条目）',
+      }),
+    ]);
+    useResourceStore.setState({ typeFilter: 'agent' });
+
+    await useResourceStore.getState().load();
+
+    // 假「已是最新」的根源：兜底行 version 被当成目录证据播种；未接入时不得建基线
+    expect(useResourceStore.getState().hubSeeded.agent).toBeUndefined();
+    expect(useResourceStore.getState().hubUpdates).toEqual({});
+  });
+});
+
+// ── M2.5 终审 FIX-2：hub 事件只能抬高基线（乱序发布 latest=semver max）──────────
+describe('resource.store — hub 发布事件取高（M2.5 终审 FIX-2）', () => {
+  const publish = (over: { slug: string; type: string; version: string }): void => {
+    publishedCb?.({
+      slug: over.slug,
+      type: over.type,
+      name: over.slug,
+      version: over.version,
+      author: 'node',
+      at: Date.now(),
+    });
+  };
+
+  it('已播种 2.0 → 乱序 1.9 事件不回退；2.1 事件前进', () => {
+    const stop = useResourceStore.getState().initHubUpdates();
+    useResourceStore.setState({ hubUpdates: { 'agent:meeting': '2.0.0' } });
+
+    publish({ slug: 'meeting', type: 'agent', version: '1.9.0' });
+    expect(useResourceStore.getState().hubUpdates['agent:meeting']).toBe('2.0.0');
+
+    publish({ slug: 'meeting', type: 'agent', version: '2.1.0' });
+    expect(useResourceStore.getState().hubUpdates['agent:meeting']).toBe('2.1.0');
+    stop();
+  });
+
+  it('无既有 key → 事件版本直接写入（首见即基线）', () => {
+    const stop = useResourceStore.getState().initHubUpdates();
+
+    publish({ slug: 'fresh', type: 'skill', version: '1.0.0' });
+
+    expect(useResourceStore.getState().hubUpdates['skill:fresh']).toBe('1.0.0');
+    stop();
   });
 });

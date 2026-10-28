@@ -377,6 +377,16 @@ export function isHubCatalogDegraded(): boolean {
   return defaultSource.isDegraded();
 }
 
+/**
+ * hub 是否未接入（配置缺失）——resource:getCatalogStatus 同步读取面（M2.5 终审
+ * FIX-1）。事实源与 load() 的 notEnrolled 判定同源：hubGetStatus().configured。
+ * 同步判定（hubGetStatus 读 HubManager 内存配置），不新增 RPC、不依赖目录是否
+ * 已拉取——冷启动首帧即可如实回答，renderer 播种门控据此拒绝建基线。
+ */
+export function isHubNotEnrolled(): boolean {
+  return !hubGetStatus().configured;
+}
+
 /** hub 原始元数据（含 versions 数组——T9 仅透传，版本比较语义留 T10/T14） */
 export async function listHubResourceMetas(type?: HubMarketplaceType): Promise<HubResourceMeta[]> {
   const { catalog } = await defaultSource.load();

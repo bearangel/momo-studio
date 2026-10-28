@@ -20,7 +20,7 @@ import fastGlob from 'fast-glob';
 import { dump as yamlDump } from 'js-yaml';
 import { logger } from '../logger';
 import { describeNetworkError } from '../util/network-error';
-import { DOWNLOAD_RESOURCE_FAILURE_PREFIX } from '../util/error-prefix';
+import { DOWNLOAD_RESOURCE_FAILURE_PREFIX, DOWNLOAD_HTTP_FAILURE_PREFIX } from '../util/error-prefix';
 import { getDb } from '../storage/db';
 import { resolveUserDataDir } from '../paths';
 import { parseAgentManifest } from '../agent/manifest-parser';
@@ -373,7 +373,7 @@ export async function downloadFile(
   if (!response.ok || !response.body) {
     // 401 人话提示：hub 资源端点全鉴权，凭证缺失/失效是用户可自诊的常见态
     const hint = response.status === 401 ? '（鉴权失败：hub 凭证缺失或已失效，请检查 hub 接入配置）' : '';
-    throw new Error(`下载失败: HTTP ${response.status}${hint}`);
+    throw new Error(`${DOWNLOAD_HTTP_FAILURE_PREFIX} HTTP ${response.status}${hint}`);
   }
   // Content-Length 可得则透传（展示用总量）；缺失/非数字（可伪造头）按 null
   const contentLength = response.headers.get('content-length');

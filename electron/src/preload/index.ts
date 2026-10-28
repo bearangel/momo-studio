@@ -517,6 +517,7 @@ const api: ApiSurface = {
     getCatalogStatus: () =>
       invoke<{
         degraded: boolean;
+        hubNotEnrolled: boolean;
         sources?: Array<{ source: 'marketplace' | 'hub'; degraded: boolean }>;
       }>('resource:getCatalogStatus'),
   },

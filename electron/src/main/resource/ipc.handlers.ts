@@ -74,7 +74,7 @@ import {
 } from './mcp-config';
 import { HUB_PROVIDERS } from './hub';
 import { isSmitheryDegraded } from './hub/smithery';
-import { isHubCatalogDegraded } from './hub/momo-hub';
+import { isHubCatalogDegraded, isHubNotEnrolled } from './hub/momo-hub';
 import { installPackage, uninstallPackage } from '../marketplace/installer';
 import { fetchCatalog, isCatalogDegraded } from '../marketplace/client';
 import { deleteRegistered, registerMcpDefinition } from '../mcp/host-manager';
@@ -551,8 +551,11 @@ export function registerResourceHandlers(): void {
   // resource:getCatalogStatus — 远程目录降级态（走查 D9）。renderer 资源库据此
   // 显示「网络目录暂时不可达」提示条，区分「离线降级」与「目录为空」。
   // sources 逐源聚合（M1c）：marketplace 远程目录 + momo-hub 目录各自的降级态。
+  // hubNotEnrolled（M2.5 终审 FIX-1）：hub 未接入是「无目录」而非「目录为空」，
+  // renderer 播种门控必须据此拒绝把兜底记账行当成「已是最新」的目录证据。
   ipcMain.handle('resource:getCatalogStatus', () => ({
     degraded: isCatalogDegraded(),
+    hubNotEnrolled: isHubNotEnrolled(),
     sources: [
       { source: 'marketplace' as const, degraded: isCatalogDegraded() },
       { source: 'hub' as const, degraded: isHubCatalogDegraded() },

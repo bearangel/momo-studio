@@ -43,6 +43,7 @@ vi.mock('../../src/main/logger', () => ({
 import {
   hubProvider,
   isHubCatalogDegraded,
+  isHubNotEnrolled,
   listHubMarketplaceItems,
 } from '../../src/main/resource/hub/momo-hub';
 import { __resetTrustedDownloadOriginsForTest } from '../../src/main/marketplace/installer';
@@ -77,6 +78,8 @@ describe('F1: notEnrolled 路径复位 degraded（两 IPC 面一致）', () => {
     m.token = 'tok';
     expect(await listHubMarketplaceItems()).toEqual([]);
     expect(isHubCatalogDegraded()).toBe(true);
+    // M2.5 终审 FIX-1：已接入 ≠ 未接入（getCatalogStatus.hubNotEnrolled 事实源）
+    expect(isHubNotEnrolled()).toBe(false);
     // registryList 面此刻同样报 degraded（降级中，两面对齐）
     const degradedFace = await hubProvider.list('agent');
     expect(degradedFace.degraded).toBe(true);
@@ -94,6 +97,8 @@ describe('F1: notEnrolled 路径复位 degraded（两 IPC 面一致）', () => {
     expect(face.degraded).toBe(false);
     // F1 核心断言：getCatalogStatus 面同步复位（修复前持续 true——两面矛盾）
     expect(isHubCatalogDegraded()).toBe(false);
+    // M2.5 终审 FIX-1：forget 后同步面如实回答未接入
+    expect(isHubNotEnrolled()).toBe(true);
     // install 消费面同刻输出一致（未接入 → 空）
     expect(await listHubMarketplaceItems()).toEqual([]);
   });
