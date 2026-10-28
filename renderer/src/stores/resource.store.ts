@@ -27,6 +27,7 @@ import { create } from 'zustand';
 import { ipc } from '../ipc/client';
 import { useWorkspaceStore } from './workspace.store';
 import { compareVersions } from '../lib/version-compare';
+import { hasKnownErrorPrefix } from '../lib/error-prefix';
 import type { ViewKey } from './ui.store';
 import type {
   HubResourcePublishedEvent,
@@ -348,7 +349,11 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
       return true;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      set({ error: `导入失败：${message}`, loading: false, installNotice: null });
+      set({
+        error: hasKnownErrorPrefix(message) ? message : `导入失败：${message}`,
+        loading: false,
+        installNotice: null,
+      });
       // 不 rethrow——安装失败必须落到 error 字段给 View 渲染，
       // 避免 unhandled rejection；调用方 await installResource() 拿到 false 语义
       return false;

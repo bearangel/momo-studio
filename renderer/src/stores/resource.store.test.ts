@@ -112,6 +112,19 @@ describe('resource.store — install 反馈闭环', () => {
     expect(state.installNotice).toBeNull();
   });
 
+  it('installResource 失败且 message 已带已知前缀 → 原样写 error（不叠加「导入失败：」）', async () => {
+    // A2 下载网络失败已由主进程翻译为「下载资源包失败：<人话>」；store 不得再包一层
+    resourceInstall.mockRejectedValueOnce(new Error('下载资源包失败：连接被拒绝'));
+
+    await expect(
+      useResourceStore.getState().installResource('hub-mcp-down-x1'),
+    ).resolves.toBe(false);
+
+    const state = useResourceStore.getState();
+    expect(state.error).toBe('下载资源包失败：连接被拒绝');
+    expect(state.installNotice).toBeNull();
+  });
+
   it('installResource 失败后再成功 → 旧 error 被清掉，新 installNotice 出现', async () => {
     // 第一次失败
     resourceInstall.mockRejectedValueOnce(new Error('timeout'));
