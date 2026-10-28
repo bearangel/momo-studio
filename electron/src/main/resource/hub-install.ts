@@ -241,6 +241,8 @@ export interface InstallHubOptions {
  *  正常安装/更新 = { cachePath }；已装版本不低于 fresh 目录 latest =
  *  { cachePath, alreadyLatest: true, version: 已装版本 }——零动作如实回执。 */
 export interface HubInstallOutcome {
+  /** 安装落盘目录。**可能为空串**（发布记账回填行 cache_path=''）——
+   *  消费方不得据此判断「已安装/存在」；存在性以 installed_packages 行为准。 */
   cachePath: string;
   /** true = 已是最新（target ≤ 已装，semver）——未发生下载/落账 */
   alreadyLatest?: boolean;
