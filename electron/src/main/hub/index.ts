@@ -21,6 +21,11 @@ import { bridgeGroupChanged } from './groups';
 import type { HubResponderResult } from './client';
 import { createDelegationRunner, type AssignedTaskEvent, type DelegationRunner } from './delegation-runner';
 import { sessionWaitingProduct, wireDelegationRunnerPorts } from './delegation-ports';
+import { TASK_ANSWER_WIRE } from './delegation-wire';
+import { handleTaskAnswerRequest, type TaskAnswerPorts } from './delegation-answer';
+import { grantWriteDirs } from '../sandbox/write-grant';
+import { clearPendingOnDeny, clearPendingOnGrant, listPendingWriteBlocked } from '../sandbox/write-blocked-emit';
+import { broadcastWriteGrantDenied } from '../agent/runtime-registry';
 import { createHubDelegationSettingsStore, type HubDelegationSettings } from './delegation-settings';
 import { createHubWorkspaceDirStore, type HubWorkspaceDirView } from './workspace-dir-settings';
 import { createHubDelegationStore, type DelegationRecord } from './delegation-store';
@@ -323,6 +328,23 @@ export function hubRequest<T>(method: string, payload: unknown, timeoutMs?: numb
 }
 
 /**
+ * task.answer 生产端口（M3.1 远程代答）：本机代答原语同一 API 面——
+ * sandbox:grantWrite / sandbox:denyWrite IPC 同款接线（grant/deny 原语 +
+ * write-blocked-emit 登记清除 + runtime-registry deny 广播）。
+ */
+function taskAnswerPorts(): TaskAnswerPorts {
+  return {
+    findDelegationSession: (taskId) => createHubDelegationStore(getDb()).get(taskId)?.sessionId ?? null,
+    listPending: (sessionId) => listPendingWriteBlocked(sessionId),
+    grantDirs: (sessionId, dirs) => grantWriteDirs('session', sessionId, dirs),
+    clearGranted: (sessionId, dirs) => clearPendingOnGrant('session', sessionId, dirs),
+    clearDenied: (sessionId) => clearPendingOnDeny(sessionId, []),
+    broadcastDenied: (dirs) => broadcastWriteGrantDenied(dirs),
+    logAnswered: (info) => logger.info('远程代答处置', info),
+  };
+}
+
+/**
  * mirror.apply 被动应答器（目标节点侧）：应用器 outcome → mirror.receipt res 信封
  * （id=对账键透传；conflict 附 diffSummary 超集——RpcErrorPayload + diffSummary）。
  * 未知 req 方法回 unknown_method（诚实应答优于静默——hub 侧按 id 结算不悬挂）。
@@ -358,6 +380,11 @@ async function handleHubRequest(req: RequestEnvelope): Promise<HubResponderResul
   // view.* 六方法（M2e T14 查看服务端）：目标节点只读组装/尾部订阅
   if ((Object.values(VIEW_RPC) as readonly string[]).includes(req.method)) {
     return ensureViewServer().handleViewRequest(req);
+  }
+  // task.answer 转发（M3.1 HITL L2 远程代答）：worker 侧应答——复用本机代答原语
+  // 解除写授权等待（delegation-answer.ts 纯处理器 + taskAnswerPorts 生产装配）
+  if (req.method === TASK_ANSWER_WIRE) {
+    return handleTaskAnswerRequest(req.payload, taskAnswerPorts());
   }
   return { ok: false, payload: { code: 'unknown_method', message: `节点不支持的方法: ${req.method}` } satisfies RpcErrorPayload };
 }
