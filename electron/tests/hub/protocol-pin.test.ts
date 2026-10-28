@@ -1,6 +1,6 @@
-// hub pin 形状锁（M2.3 T2b v0.1.5 / 裁定书 p1-0 §4.2）——
+// hub pin 形状锁（M2.3 T2b v0.1.5 / 裁定书 p1-0 §4.2；M3.0-P2 pin bump v0.1.6）——
 // 锁三件事：
-// ① pin 生效：node_modules 实装 momo-hub-protocol 版本 = pin 目标（0.1.5）——
+// ① pin 生效：node_modules 实装 momo-hub-protocol 版本 = pin 目标（0.1.6）——
 //    防「lockfile-only 更新后未 install」/「pin 漂移」两类事故（构建新鲜度红线）
 // ② v0.1.5 语义目录样本（hub 乱序发布产物，形状锚自 hub 仓 resources-latest-semver.test.ts
 //    与裁定书 §1 curl 实录）过 validateHubCatalog——生产消费链（momo-hub.ts load）同校验器
@@ -45,9 +45,9 @@ function semverCatalogSample(): HubCatalog {
   };
 }
 
-describe('hub pin v0.1.5（M2.3 T2b）', () => {
-  it('pin 生效：实装 momo-hub-protocol 版本 = 0.1.5（electron/package.json #v0.1.5）', () => {
-    expect(pkg.version).toBe('0.1.5');
+describe('hub pin v0.1.6（M3.0-P2）', () => {
+  it('pin 生效：实装 momo-hub-protocol 版本 = 0.1.6（electron/package.json #v0.1.6）', () => {
+    expect(pkg.version).toBe('0.1.6');
   });
 
   it('v0.1.5 语义目录样本过 validateHubCatalog（生产消费链同校验器）', () => {
