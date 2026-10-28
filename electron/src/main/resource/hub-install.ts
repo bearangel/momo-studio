@@ -249,6 +249,24 @@ export interface HubInstallOutcome {
 }
 
 /**
+ * 目录回落（stale）专用错误（M2.4 T1）：loadFresh 拉取失败、安装链只能用
+ * cache/lastGood 快照判定时抛。语义：**无法确认 hub 上的最新版本**——不得
+ * 冒充「已是最新」（版本可能已前进）也不得归因为「已下架」（目录不可达 ≠
+ * 条目不存在）。renderer 既有 catch 直接展示 message（前缀「导入失败：」）；
+ * 镜像补装链按 `instanceof` 识别并跳过该资源（不中止整体）。
+ */
+export class HubCatalogStaleError extends Error {
+  override readonly name = 'HubCatalogStaleError';
+
+  constructor(message: string) {
+    super(message);
+    // 保持原型链（ES5 目标下继承内置 Error 的常规修正；本项目 target 较新，
+    // 此行冗余但零副作用——instanceof 判定在两侧运行时均可靠）
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
  * hub 下载链鉴权头（D1）：hub spec §3.1 三个资源端点全部 Bearer 鉴权，目录拉取
  * 与包下载必须同凭证。token 与目录源共用 resolveHubContext（生产 = keychain
  * deviceToken；测试注入 mock 上下文同缝生效）；无凭证（未接入 / keychain 空）
@@ -410,7 +428,24 @@ export async function installHubPackage(
   slug: string,
   opts?: InstallHubOptions,
 ): Promise<HubInstallOutcome> {
-  const item = await findHubMarketplaceItem(type, slug);
+  const { item, stale, enrolled } = await findHubMarketplaceItem(type, slug);
+  // 判定矩阵（M2.4 T1，顺序：enrolled → stale → item → 已装行 → cmp）：
+  //   ① !enrolled            → 现状「未找到条目」文案（不改）
+  //   ② enrolled && !stale && !item → 现状「可能已下架」文案（不改）
+  //   ③ stale && !item       → 无法获取目录（不说「下架」——目录不可达 ≠ 条目消失）
+  //   ④ stale && item && 未装 → 照常安装（回落快照的下载链是真闸门）
+  //   ⑤ stale && item && 已装 && cmp<=0 → 无法确认最新版本（禁止 alreadyLatest）
+  //   ⑥ !stale && item       → 现状（cmp<=0 alreadyLatest 如实 / cmp>0 装新版）
+  if (!enrolled) {
+    throw new Error(
+      `momo-hub 目录中未找到 ${type} 条目「${slug}」（可能尚未接入 hub、hub 离线或该条目已下架）`,
+    );
+  }
+  if (stale && !item) {
+    throw new HubCatalogStaleError(
+      '无法连接到 momo-hub 获取最新目录（已装版本保持不变），请稍后重试',
+    );
+  }
   if (!item) {
     throw new Error(
       `momo-hub 目录中未找到 ${type} 条目「${slug}」（可能尚未接入 hub、hub 离线或该条目已下架）`,
@@ -423,6 +458,13 @@ export async function installHubPackage(
     (p) => p.itemId === hubPackageItemId(slug) && p.itemType === type,
   );
   if (installedRow && compareVersions(item.version, installedRow.version) <= 0) {
+    // ⑤ 回落快照的「同版」不可信：hub 上可能已有新版——如实报「无法确认」，
+    // 不得返回 alreadyLatest（否则卡面「可更新」角标与回执文案互相矛盾）。
+    if (stale) {
+      throw new HubCatalogStaleError(
+        '无法确认 momo-hub 上的最新版本（网络不可用），请稍后重试',
+      );
+    }
     return { cachePath: installedRow.cachePath, alreadyLatest: true, version: installedRow.version };
   }
   const headers = await hubAuthHeaders();

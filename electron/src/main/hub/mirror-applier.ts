@@ -12,8 +12,9 @@
 //      回 conflict + diffSummary（hub 透传 leader 两段式确认）
 //   4. 执行序 = **先资源补装后配置落库**（spec §5.2.4 顺序约束）：
 //      manifest.resources 逐项——本机已装（hub 记账命中或本地点位在位）跳过 →
-//      从 hub 资源仓安装（M1 链）→ 失败**中止整体**（配置不落、目标保持原状；
-//      已装资源保留——幂等可重试）
+//      从 hub 资源仓安装（M1 链）→ 非 stale 失败**中止整体**（配置不落、目标
+//      保持原状；已装资源保留——幂等可重试）；hub 最新目录不可达
+//      （HubCatalogStaleError）→ 该资源跳过并记入 unresolvedRefs，其余继续
 //   5. 配置整体替换落库（七子段逐域写，见 applyConfig 各段注释）；目标无法解析
 //      的引用（custom stdio MCP 名 / name≠slug 类）**不阻断**，记入回执
 //      unresolvedRefs（软失败——T7 硬交接语义，leader 结果面分列展示）
@@ -42,7 +43,7 @@ import { listPlugins, getPlugin, isPluginEnabled, setPluginEnabled } from '../pl
 import { updateGlobalSettings, getGlobalSettings } from '../settings/crud';
 import { assertSafeTarMembers } from '../plugin/installer';
 import { resolveTmpDir } from '../paths';
-import { installHubPackage } from '../resource/hub-install';
+import { HubCatalogStaleError, installHubPackage } from '../resource/hub-install';
 import { installPackage } from '../marketplace/installer';
 import { readBundledCatalog } from '../marketplace/client';
 import type { MarketplaceItem } from '../marketplace/types';
@@ -407,25 +408,41 @@ async function ensureWorkspace(workspaceName: string): Promise<{ workspaceId: st
   return { workspaceId: ws.id, created: true };
 }
 
-/** 资源补装（先装后落——任何失败上抛中止整体）。返回本次新装清单。 */
+/**
+ * 资源补装（先装后落）。
+ * 返回本次新装清单 + stale 跳过清单（M2.4 T1）：hub 最新目录不可达
+ * （HubCatalogStaleError）时该资源**跳过**并记入 skipped（由调用方并入既有
+ * unresolvedRefs），其余资源继续；非 stale 失败仍上抛中止整体（配置不落）。
+ */
 async function installResources(
   manifest: SnapshotManifest,
   workspaceId: string,
   installResource: NonNullable<MirrorApplierDeps['installResource']>,
-): Promise<string[]> {
+): Promise<{ applied: string[]; skipped: string[] }> {
   const acc = loadHubAccountingSet();
   const applied: string[] = [];
+  const skipped: string[] = [];
   for (const r of manifest.resources) {
     const ref = `${r.type}/${r.slug}`;
     // 已装判定①：hub 记账命中（本机从 hub 装过）→ 跳过
     if (acc.get(r.type)?.has(r.slug)) continue;
     // 已装判定②：本地点位在位（builtin/内置市场目录同有——T7 交接兜底序）→ 跳过
     if (isLocallyPresent(r.type, r.slug)) continue;
-    // 补装：M1 链（目录查项 → 下载 → 注册/记账）；失败即整体中止（配置不落）
-    await installResource(r.type, r.slug, workspaceId);
+    // 补装：M1 链（目录查项 → 下载 → 注册/记账）
+    try {
+      await installResource(r.type, r.slug, workspaceId);
+    } catch (err) {
+      // 只吞 stale 目录错误：无法获取 hub 最新目录 ≠ 该资源不存在，跳过即可
+      // （软失败，reason 进回执 unresolvedRefs）；其余失败照旧整体中止。
+      if (err instanceof HubCatalogStaleError) {
+        skipped.push(`${r.type}:${r.slug}（无法获取 hub 最新目录，已跳过）`);
+        continue;
+      }
+      throw err;
+    }
     applied.push(ref);
   }
-  return applied;
+  return { applied, skipped };
 }
 
 /** 配置整体替换（后于资源补装）。软失败引用收集入 unresolvedRefs。
@@ -750,10 +767,14 @@ export async function applyMirrorSnapshot(
       workspaceId = existing.id;
     }
 
-    // 3. 先资源补装（失败中止——配置不落，目标保持原状；已装资源保留可重试）
+    // 3. 先资源补装（非 stale 失败中止——配置不落，目标保持原状；已装资源保留
+    //    可重试；stale 目录错误跳过该资源并记 skipped，不中止整体）
     let appliedResources: string[];
+    let staleSkipped: string[];
     try {
-      appliedResources = await installResources(manifest, workspaceId, installResource);
+      const installed = await installResources(manifest, workspaceId, installResource);
+      appliedResources = installed.applied;
+      staleSkipped = installed.skipped;
     } catch (err) {
       return {
         ok: false,
@@ -763,14 +784,15 @@ export async function applyMirrorSnapshot(
     }
 
     // 4. 后配置落库（七子段 + modelBinding/defaultAgent 可选段整体替换；
-    //    软失败引用入 unresolvedRefs）
-    const unresolvedRefs = await applyConfig(
+    //    软失败引用入 unresolvedRefs——stale 跳过的资源同列其中，协议零变更）
+    const configUnresolved = await applyConfig(
       workspaceId,
       manifest,
       stageDir,
       fetched.modelBinding,
       fetched.defaultAgent,
     );
+    const unresolvedRefs = [...staleSkipped, ...configUnresolved];
 
     logger.info('镜像应用完成', {
       mirrorId: payload.mirrorId,

@@ -65,6 +65,12 @@ export interface HubCatalogLoad {
   degraded: boolean;
   /** 未接入引导态（hub 未配置——空目录 + degraded=false） */
   notEnrolled: boolean;
+  /**
+   * M2.4 R1：本次加载是否命中回落快照（仅 loadFresh() 失败时 true）。
+   * 浏览链（load）与成功路径恒 false；此位不写退避、不置 degraded——
+   * 只服务安装链的「失败如实化」判定（HubCatalogStaleError）。
+   */
+  stale: boolean;
 }
 
 export interface HubCatalogSourceOptions {
@@ -257,14 +263,26 @@ export function createHubCatalogSource(
       // （hubForget → configured=false）后，isDegraded() 若仍挂着上次失败的
       // true，与 notEnrolled 分支输出的 degraded=false 两面结论相反（F1）。
       degraded = false;
-      return { catalog: EMPTY_CATALOG, hubUrl: null, degraded: false, notEnrolled: true };
+      return {
+        catalog: EMPTY_CATALOG,
+        hubUrl: null,
+        degraded: false,
+        notEnrolled: true,
+        stale: false,
+      };
     }
     // hub origin 入 installer 信任集（配置变更后下次拉取即重新登记）
     registerTrustedDownloadOrigin(ctx.hubUrl);
 
     // TTL 命中——零网络
     if (cache && cache.expiresAt > Date.now()) {
-      return { catalog: cache.catalog, hubUrl: ctx.hubUrl, degraded, notEnrolled: false };
+      return {
+        catalog: cache.catalog,
+        hubUrl: ctx.hubUrl,
+        degraded,
+        notEnrolled: false,
+        stale: false,
+      };
     }
     // 退避窗口内零网络——直返 lastGood（无则空目录）
     if (failureBackoffUntil > Date.now()) {
@@ -273,6 +291,7 @@ export function createHubCatalogSource(
         hubUrl: ctx.hubUrl,
         degraded: true,
         notEnrolled: false,
+        stale: false,
       };
     }
     // 进程内首次（无任何已知结果）：阻塞式拉取——唯一允许阻塞调用方的路径
@@ -281,15 +300,21 @@ export function createHubCatalogSource(
       try {
         const catalog = await fetchCatalog(ctx);
         recordSuccess(catalog);
-        return { catalog, hubUrl: ctx.hubUrl, degraded: false, notEnrolled: false };
+        return { catalog, hubUrl: ctx.hubUrl, degraded: false, notEnrolled: false, stale: false };
       } catch (err) {
         recordFailure(err);
-        return { catalog: EMPTY_CATALOG, hubUrl: ctx.hubUrl, degraded: true, notEnrolled: false };
+        return {
+          catalog: EMPTY_CATALOG,
+          hubUrl: ctx.hubUrl,
+          degraded: true,
+          notEnrolled: false,
+          stale: false,
+        };
       }
     }
     // 已有已知结果（过期缓存 / lastGood）：直返旧值 + 后台单飞刷新
     refreshInBackground(ctx);
-    return { catalog: known, hubUrl: ctx.hubUrl, degraded, notEnrolled: false };
+    return { catalog: known, hubUrl: ctx.hubUrl, degraded, notEnrolled: false, stale: false };
   }
 
   // 安装/更新链专用（M2.3 T2 D3-1/O1-1）：绕全部缓存语义阻塞拉取——目录快照
@@ -297,13 +322,19 @@ export function createHubCatalogSource(
   async function loadFresh(): Promise<HubCatalogLoad> {
     const ctx = await resolveContext();
     if (!ctx) {
-      return { catalog: EMPTY_CATALOG, hubUrl: null, degraded: false, notEnrolled: true };
+      return {
+        catalog: EMPTY_CATALOG,
+        hubUrl: null,
+        degraded: false,
+        notEnrolled: true,
+        stale: false,
+      };
     }
     registerTrustedDownloadOrigin(ctx.hubUrl);
     try {
       const catalog = await fetchCatalog(ctx);
       recordSuccess(catalog);
-      return { catalog, hubUrl: ctx.hubUrl, degraded: false, notEnrolled: false };
+      return { catalog, hubUrl: ctx.hubUrl, degraded: false, notEnrolled: false, stale: false };
     } catch (err) {
       // 失败回落已知快照（不写退避/degraded——语义契约见接口 docstring）；
       // 真闸门在下载链：目录能回落说明 hub 曾可达，回落快照的 downloadUrl
@@ -312,7 +343,9 @@ export function createHubCatalogSource(
         error: err instanceof Error ? err.message : String(err),
       });
       const known = cache?.catalog ?? lastGoodCatalog ?? EMPTY_CATALOG;
-      return { catalog: known, hubUrl: ctx.hubUrl, degraded, notEnrolled: false };
+      // stale=true：本次装的是回落快照而非 hub 最新目录——安装链据此拒绝
+      // 「已是最新」的假结论与「已下架」的假归因（M2.4 T1）。
+      return { catalog: known, hubUrl: ctx.hubUrl, degraded, notEnrolled: false, stale: true };
     }
   }
 
@@ -364,16 +397,21 @@ export async function listHubMarketplaceItems(type?: ResourceType): Promise<Mark
  * 载入走 loadFresh（M2.3 T2，D3-1/O1-1）：安装/更新链强制拉最新目录——
  * hub v0.1.5 起 latest = versions 全集 semver max（乱序发布不回退），meta.version
  * 即应装版本；TTL/退避/lastGood 的陈旧快照只服务浏览链（load），不进版本取值链。
+ *
+ * M2.4 T1：交回 item + 本次载入是否回落（stale）+ 接入态（enrolled）——
+ * 安装链按「enrolled → stale → item」判定，回落快照不得冒充 hub 最新目录。
+ * hubUrl 为 null（未接入）时 item=null。
  */
 export async function findHubMarketplaceItem(
   type: ResourceType,
   slug: string,
-): Promise<MarketplaceItem | null> {
-  const { catalog, hubUrl } = await defaultSource.loadFresh();
-  if (!hubUrl) return null;
+): Promise<{ item: MarketplaceItem | null; stale: boolean; enrolled: boolean }> {
+  const { catalog, hubUrl, stale, notEnrolled } = await defaultSource.loadFresh();
+  const enrolled = !notEnrolled;
+  if (!hubUrl) return { item: null, stale, enrolled };
   const meta = catalog.items.find((m) => m.type === type && m.slug === slug);
-  if (!meta || !isMarketplaceType(meta.type)) return null;
-  return toMarketplaceItem(meta, hubUrl);
+  if (!meta || !isMarketplaceType(meta.type)) return { item: null, stale, enrolled };
+  return { item: toMarketplaceItem(meta, hubUrl), stale, enrolled };
 }
 
 /** MarketplaceItem → HubEntry（registryList 消费面——与 smithery 同构） */
