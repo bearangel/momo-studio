@@ -67,6 +67,7 @@ import {
   __resetEventBufferForTest,
   __flushEventBufferForTest,
 } from '../../src/main/agent/stream-relay';
+import { emitChildIpcMessage } from './child-ipc-sim';
 
 const SID = 'sid-overflow';
 const ROOM = 'room-overflow';
@@ -116,7 +117,7 @@ function installScriptedProvider(): void {
         };
         yield { type: 'done', finishReason: 'tool_use' };
         if (step.emitSteer !== undefined) {
-          (process.emit as (event: string, ...args: unknown[]) => boolean)('message', { type: 'steer', streamSessionId: SID, body: step.emitSteer });
+          emitChildIpcMessage({ type: 'steer', streamSessionId: SID, body: step.emitSteer });
         }
       } else {
         yield { type: 'thinking', content: '' };

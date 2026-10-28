@@ -22,14 +22,13 @@ import {
   __resetMemoryProviderForTest,
   type MemoryProvider,
 } from '../../src/main/memory';
+import { emitChildIpcMessage } from './child-ipc-sim';
 
 // === runChatLoop 测试夹具（沿用 runtime-segment.test.ts 模式）===
 
-// @types/node 对 emit('message') 有专用重载形态（message + sendHandle），测试以
-// 单参消息体模拟子进程 IPC——经通用签名强转发出（运行时与 process.emit 等价）
-const emitChildMessage = (msg: unknown): void => {
-  (process.emit as (event: string, ...args: unknown[]) => boolean)('message', msg);
-};
+// 子进程下行 IPC 模拟——经 child-ipc-sim 逐监听直投（forks 池下 vitest 反序列化
+// 监听在场，process.emit 直发必产生 unhandled rejection，见该文件头注）
+const emitChildMessage = emitChildIpcMessage;
 
 const sentChunks: unknown[] = [];
 

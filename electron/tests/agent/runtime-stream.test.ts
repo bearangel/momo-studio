@@ -11,6 +11,7 @@ import { insertSession, addSessionMember } from '../../src/main/storage/sessions
 import type { LLMMessage, LLMToolDef, StreamDelta } from '../../src/main/agent/llm-provider';
 import type { StreamChunk } from '../../src/main/agent/stream-chunk';
 import type { WorkspaceFS } from '../../src/main/files/workspace-fs';
+import { emitChildIpcMessage } from './child-ipc-sim';
 
 // 必须在 import runtime-entry 之前 mock llm-provider（vi.mock 会被 hoist）
 vi.mock('../../src/main/agent/llm-provider', () => ({
@@ -398,11 +399,9 @@ describe('runChatLoop streaming', () => {
     });
 
     // 触发 abort——模拟主进程通过 IPC 发送 abort 消息
-    // （process.emit 的类型签名限制为 Signals，这里直接调用 listeners）
+    // （经 child-ipc-sim 逐监听直投——forks 池下 vitest 反序列化监听在场）
     const startChunk = streamChunks().find((c) => c.type === 'start') as { streamSessionId: string };
-    for (const listener of process.listeners('message')) {
-      listener({ type: 'abort', streamSessionId: startChunk.streamSessionId }, undefined);
-    }
+    emitChildIpcMessage({ type: 'abort', streamSessionId: startChunk.streamSessionId });
 
     const result = await promise;
 

@@ -88,6 +88,7 @@ import {
   __resetMemoryProviderForTest,
   type MemoryProvider,
 } from '../../src/main/memory';
+import { emitChildIpcMessage } from './child-ipc-sim';
 
 // === 公共 stub（与 dispatch-parallel.test.ts / orchestration-e2e.test.ts 同款） ===
 
@@ -266,9 +267,7 @@ async function waitForCapture(n: number): Promise<void> {
  * streamSessionId 后 abortController.abort()）。
  */
 function abortPmStream(streamSessionId: string): void {
-  for (const listener of process.listeners('message')) {
-    listener({ type: 'abort', streamSessionId }, undefined);
-  }
+  emitChildIpcMessage({ type: 'abort', streamSessionId });
 }
 
 /** 流式 chunk 过滤（排除内部事件信封等） */

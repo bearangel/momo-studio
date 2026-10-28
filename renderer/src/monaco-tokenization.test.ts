@@ -48,6 +48,18 @@ beforeAll(async () => {
     getWorker: () => new StubWorker() as unknown as Worker,
   };
   monaco = (await import('monaco-editor')) as typeof MonacoNs;
+  // P3-3 噪声治源（2026-10-28）：ts 模型创建触发 DiagnosticsAdapter._doValidate——jsdom
+  // 里 StubWorker 握手失败后 monaco 回退主线程本地 EditorWorker，其无 foreign module →
+  // $fmr('getSyntacticDiagnostics' 等) 异步 reject 且适配器不接 catch，落在用例结束后
+  // → vitest 判 suite FAIL（4/4 用例过的假红）。本锁只测文法 tokenization，诊断属 worker
+  // 边界（App 内有真实 worker），这里按 monaco 公开配置三路全关：_doValidate 的 promises
+  // 为空即不再触达 worker 协议。注意 0.56 API 位点在包顶层导出 monaco.typescript（主入口
+  // eager 求值 features/typescript/register.js，import 完成即存在），非旧版 languages.typescript
+  monaco.typescript.typescriptDefaults.setDiagnosticsOptions({
+    noSyntaxValidation: true,
+    noSemanticValidation: true,
+    noSuggestionDiagnostics: true,
+  });
 });
 
 /** 轮询等待懒加载的 tokens factory 生效（tokenize 多 token）或超时 */

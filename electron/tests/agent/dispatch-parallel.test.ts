@@ -38,6 +38,7 @@ import {
   __resetMemoryProviderForTest,
   type MemoryProvider,
 } from '../../src/main/memory';
+import { emitChildIpcMessage } from './child-ipc-sim';
 
 // MemoryProvider stub：空对话 + 无 task（与 runtime-stream.test.ts 同款）
 const stubMemoryProvider: MemoryProvider = {
@@ -442,9 +443,7 @@ describe('dispatch 同轮并发执行（spec 2026-08-25）', () => {
         const startChunk = streamChunks().find((c) => c.type === 'start') as {
           streamSessionId: string;
         };
-        for (const listener of process.listeners('message')) {
-          listener({ type: 'abort', streamSessionId: startChunk.streamSessionId }, undefined);
-        }
+        emitChildIpcMessage({ type: 'abort', streamSessionId: startChunk.streamSessionId });
       },
     );
 

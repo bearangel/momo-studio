@@ -48,6 +48,7 @@ import {
   type MemoryProvider,
   type TaskContext,
 } from '../../src/main/memory';
+import { emitChildIpcMessage } from './child-ipc-sim';
 
 // === Mock 状态 ===
 
@@ -621,8 +622,8 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
 
     // 同步注入 abort：runChatLoop 启动后会注册 process.on('message')，下一宏任务 emit
     setTimeout(() => {
-      // @types/node 对 emit('message') 是双参专用重载——经通用签名强转（运行时等价）
-      (process.emit as (event: string, ...args: unknown[]) => boolean)('message', {
+      // forks 池下经 child-ipc-sim 逐监听直投（vitest 反序列化监听在场，见其头注）
+      emitChildIpcMessage({
         type: 'abort',
         streamSessionId: 'sub-sess-abort',
       });

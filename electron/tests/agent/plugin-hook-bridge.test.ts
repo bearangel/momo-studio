@@ -5,6 +5,7 @@
 // null / postToolUse fire-and-forget 不等待。
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { requestPreToolUse, notifyPostToolUse, PRE_TOOL_USE_TIMEOUT_MS } from '../../src/main/agent/plugin-hook-bridge';
+import { emitChildIpcMessage } from './child-ipc-sim';
 
 interface ProcShape {
   send?: (msg: unknown) => void;
@@ -140,7 +141,7 @@ describe('requestPluginCallService workspaceId 透传', () => {
       sent.push(msg);
       // 立即回包（id 配对）
       const m = msg as { id?: string };
-      setTimeout(() => (process as unknown as { emit(ev: string, payload: unknown): boolean }).emit('message', { id: m.id, result: 'ok' }), 0);
+      setTimeout(() => emitChildIpcMessage({ id: m.id, result: 'ok' }), 0);
       return true;
     } as never;
     try {
