@@ -32,12 +32,16 @@ import { isTerminal } from '../storage/tasks/state-machine';
 import { logger } from '../logger';
 
 /**
- * 六态映射表（hub 委派账本态 → 本地 tasks 行状态——测试锁 + 文档单源）：
+ * 七态映射表（hub 委派账本态 → 本地 tasks 行状态——测试锁 + 文档单源）：
  *
  * | hub 委派态   | 本地 TaskStatus | 看板列 | 说明                              |
  * |--------------|-----------------|--------|-----------------------------------|
  * | pending      | pending         | 待办   | 派发落行即 pending（无推送，纯初值）|
  * | running      | in_progress     | 进行中 | progress 拍驱动；首次写 startedAt  |
+ * | waiting      | in_progress     | 进行中 | M3.1 七态：running 中等待用户确认 |
+ * |              |                 |        | 的中间态——本地行维持进行中（看板 |
+ * |              |                 |        | 无等待态；等待角标由 progress kv   |
+ * |              |                 |        | waiting 标志驱动，不造新行状态）  |
  * | done         | completed       | 已完成 | 终态；completedAt + 摘要「已完成」  |
  * | failed       | failed          | 已关闭 | 终态；errorMessage=reason 原文     |
  * | cancelled    | cancelled       | 已关闭 | 终态；task.cancel 回执驱动         |
@@ -52,6 +56,7 @@ import { logger } from '../logger';
 export const DELEGATION_STATUS_TO_TASK: Record<DelegationStatus, TaskStatus> = {
   pending: 'pending',
   running: 'in_progress',
+  waiting: 'in_progress',
   done: 'completed',
   failed: 'failed',
   cancelled: 'cancelled',

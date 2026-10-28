@@ -155,13 +155,16 @@ function fakeStore(records: DelegationRecord[] = []): HubDelegationStore {
   };
 }
 
-// ── Part A：leader 侧六态映射矩阵 + 粘滞 + 进度摘要 ─────────────────────────
+// ── Part A：leader 侧七态映射矩阵 + 粘滞 + 进度摘要 ─────────────────────────
 
-describe('delegation-sync — leader 侧状态回写（六态映射矩阵）', () => {
-  it('A-1. 六态映射矩阵：映射表值域与看板状态枚举对齐（文档锁）', () => {
+describe('delegation-sync — leader 侧状态回写（七态映射矩阵）', () => {
+  it('A-1. 七态映射矩阵：映射表值域与看板状态枚举对齐（文档锁；M3.1 增 waiting）', () => {
     expect(DELEGATION_STATUS_TO_TASK).toEqual({
       pending: 'pending',
       running: 'in_progress',
+      // M3.1 七态：waiting=running 中等待用户确认的中间态——本地行维持进行中，
+      // 等待角标由 progress kv waiting 标志驱动（task.list 对账不造看板新状态）
+      waiting: 'in_progress',
       done: 'completed',
       failed: 'failed',
       cancelled: 'cancelled',
