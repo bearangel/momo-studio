@@ -70,8 +70,6 @@ vi.mock('../../src/main/hub/creds', () => ({
   getDeviceToken: vi.fn(async () => 'tok'),
   setDeviceToken: vi.fn(async () => undefined),
   clearDeviceToken: vi.fn(async () => undefined),
-  deriveDeviceTokenScopeSuffix: vi.fn(() => ''),
-  setDeviceTokenScopeResolver: vi.fn(),
 }));
 
 vi.mock('../../src/main/logger', () => ({
