@@ -493,6 +493,30 @@ describe('已发布 custom skill 走 hub 补装位（UC-P1-3）', () => {
     expect(warnCalls).toHaveLength(1);
     expect(warnCalls[0]![1]).toMatchObject({ count: 1, slugs: ['orphan-market-skill'] });
   });
+
+  // M2.4 T4：listInstalled 是多源拼接（builtin → marketplace 表 → custom 目录），同 slug
+  // 可在两源各出一行（已发布 custom skill：hub 安装行 + 本机 custom 目录）。清单是「slug
+  // 名单」语义须去重，而 resources 是「补装位引用」语义不去重（条数与序不动）。
+  it('同 slug 双源均已安装 → config.skills 去重 1 条（首见位）+ resources 保留 2 条原序', async () => {
+    const wsId = await mkWorkspace('同 slug 双源空间');
+    seedMarketplaceSkillRow('a-market');
+    seedMarketplaceSkillRow('dup-skill'); // hub 安装行（marketplace 表同表）
+    seedCustomSkill('dup-skill'); // 本机 custom 目录同名（已发布来源）
+    seedHubAccounting('skill', 'dup-skill');
+
+    const r = await buildWorkspaceSnapshot(wsId);
+
+    // 清单去重且保首见序：dup 首见于 marketplace 段（a-market 之后、custom 段之前）
+    const skills = r.manifest.config.skills;
+    expect(skills.filter((s) => s === 'dup-skill')).toHaveLength(1);
+    expect(skills.indexOf('dup-skill')).toBe(skills.indexOf('a-market') + 1);
+    // resources 面零变化：collectSkills 内不去重，但 builder 收口处既有 type+slug 去重
+    // 仍只占一席（本改动不波及条数与顺序）
+    expect(r.manifest.resources.filter((x) => x.type === 'skill')).toEqual([
+      { type: 'skill', slug: 'dup-skill' },
+    ]);
+    expect(validateSnapshotManifest(r.manifest)).not.toBeNull();
+  });
 });
 
 // ── 2. 红线零渗漏（真实敏感材料在场）──────────────────────────────────────

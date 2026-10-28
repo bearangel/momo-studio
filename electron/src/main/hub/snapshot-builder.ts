@@ -306,8 +306,15 @@ function collectSkills(acc: HubAccounting): {
   // marketplace 源且无记账：既不占 resources 也不内嵌——只进清单（目标节点能否
   // 解析取决于其本地目录，M2.2 T8 观察件——聚合计数 warn 一行供 leader 预警）
   const unaccounted: string[] = [];
+  // listInstalled 多源拼接（builtin / marketplace 表 / custom 目录）同 slug 可出多行——
+  // 清单是 slug 名单语义，按首见去重（顺序保持原遍历序，不用 Set 迭代序重排）；
+  // resources 是补装位引用语义，不去重（条数与序不动）。
+  const seenSlugs = new Set<string>();
   for (const s of listInstalled()) {
-    skills.push(s.slug);
+    if (!seenSlugs.has(s.slug)) {
+      seenSlugs.add(s.slug);
+      skills.push(s.slug);
+    }
     if (acc.has('skill', s.slug)) {
       resources.push({ type: 'skill', slug: s.slug });
     } else if (s.source === 'custom') {
