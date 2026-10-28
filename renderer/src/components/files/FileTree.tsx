@@ -14,7 +14,6 @@ import { ipc } from '../../ipc/client';
 import type { SearchHit } from '../../ipc/types';
 import { sortSearchHits } from './sort-entries';
 import { FileTypeIcon, FolderTypeIcon } from './file-icon';
-import { cn } from '../../lib/cn';
 
 /** 搜索防抖间隔（毫秒） */
 const SEARCH_DEBOUNCE_MS = 200;

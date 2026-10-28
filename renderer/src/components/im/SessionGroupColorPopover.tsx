@@ -11,7 +11,6 @@ import { GROUP_COLOR_PALETTE, groupDotColor, type GroupColorTheme } from '../../
 import type { SessionGroupRow } from '../../ipc/types';
 import { Button } from '../ui/Button';
 
-const POPOVER_WIDTH_PX = 260;
 const VIEWPORT_MARGIN_PX = 8;
 
 interface Props {

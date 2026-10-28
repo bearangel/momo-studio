@@ -28,14 +28,6 @@ const groupList = vi.fn();
 const groupCreate = vi.fn();
 const sessionMoveToGroup = vi.fn();
 
-/** 便捷读取当前 window.api 桩 */
-function api(): {
-  sessionGroup: { list: typeof groupList; create: typeof groupCreate };
-  session: { moveToGroup: typeof sessionMoveToGroup };
-} {
-  return (window as unknown as { api: never })['api'];
-}
-
 function makeGroup(overrides: Partial<SessionGroupRow> & { id: string }): SessionGroupRow {
   return { workspaceId: 'ws-1', name: '分组', position: 1024, color: '#5E6AD2', createdAt: 0, ...overrides };
 }
