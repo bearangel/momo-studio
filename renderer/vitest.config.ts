@@ -17,5 +17,9 @@ export default defineConfig({
     globals: false,
     setupFiles: ['./src/test-setup.ts'],
     css: false,
+    // monaco 相关测试在全量并行跑时 hook 内加载 editor 全量模块，默认 10s hook
+    // 超时不够（P2 实测：裸跑红、CLI --hookTimeout=60000 全绿）——固化到配置，
+    // CI 与本地零 CLI 参数一致（M3.0 T3）。
+    hookTimeout: 60000,
   },
 });
