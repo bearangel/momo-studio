@@ -47,8 +47,8 @@ export default defineConfig({
           testTimeout: 15_000,
           // forks 下 process.send 是 vitest tinypool 真通道：守卫把属性置回
           // undefined，按构造复刻 threads「无桥」环境（探测/桥语义/打桩链全一致）
-          // ——见 tests/agent/forks-ipc-guard.ts 头注
-          setupFiles: ['./tests/agent/forks-ipc-guard.ts'],
+          // ——见 tests/setup/forks-ipc-guard.ts 头注
+          setupFiles: ['./tests/setup/forks-ipc-guard.ts'],
           // 哨兵置位（生产=spawner env，见 internal-event.ts hasChildIpcChannel）：
           // 打了桩的用例（属性替换 process.send）经哨兵放行照常送达测试收集器；
           // 未打桩的上行（含 audit:toolCall / momo-internal-event）由 setupFiles
@@ -64,8 +64,13 @@ export default defineConfig({
           environment: 'node',
           pool: 'forks',
           testTimeout: 15_000,
-          // 同上：foks worker 内 stub 依赖哨兵送达；无 stub 的发送因通道归 vitest 而被
-          // 哨兵拦截（迟到事件防污染——integration 两文件另有 beforeEach/afterEach 作用域哨兵）
+          // 同上 + 与 agent-threads 同一条守卫（M2.4 T6 补挂）：env 哨兵为 1 时生产侧
+          // 多处只判 env 就发（audit/stream-chunk/write-grant 等），forks 下 process.send
+          // 真是 tinypool 通道 → 未打桩上行会漏进 vitest reporter。守卫置 send=undefined
+          // 把这些上行收口为 NO_SEND no-op；打桩用例（属性替换）不受影响。
+          setupFiles: ['./tests/setup/forks-ipc-guard.ts'],
+          // 同上：foks worker 内 stub 依赖哨兵送达（迟到事件防污染——integration 两文件
+          // 另有 beforeEach/afterEach 作用域哨兵）
           env: { MOMO_RUNTIME_CHILD: '1' },
         },
       },

@@ -1,6 +1,7 @@
-// electron/tests/agent/forks-ipc-guard.ts
+// electron/tests/setup/forks-ipc-guard.ts
 //
-// agent 组 forks 池 IPC 守卫（P3-1 迁池配套，2026-10-28）。
+// forks 池 IPC 守卫（P3-1 迁池配套，2026-10-28；M2.4 T6 迁至 tests/setup 共享，
+// agent-threads 与 main-forks 双项目同挂）。
 //
 // threads 时代 worker 线程无 process.send 属性、vitest RPC 走 worker_threads
 // 端口——process 的消息通道（send 属性 + 'message' 事件）是测试与生产监听的
