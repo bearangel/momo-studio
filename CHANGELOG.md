@@ -6,6 +6,21 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 节点互联 M2.4：失败路径如实化与收尾硬化
+
+无新功能面的收尾批——把「失败路径说谎」清零，补齐测试/CI 护栏，理顺分层。设计见 momo-hub 仓 `docs/specs/2026-10-28-momo-hub-m2.4-failure-honesty-hardening.md`。
+
+- **失败如实化（M2.3 Important-1 根治）**：`HubCatalogLoad` 增 `stale`（仅 `loadFresh` 失败回落时 true，**不写退避/不置 degraded**——P2-9 浏览零刷屏语义不破）；安装链 6 格判定矩阵——hub 不可达时**不再冒充「已是最新」**，改 `HubCatalogStaleError` 人话（「无法确认 hub 上的最新版本（网络不可用）」）；null 条目也不再误报「已下架」；镜像补装遇 stale → 跳过并记入既有 `unresolvedRefs`（协议零变更），其余资源继续
+- **provider 错误原文透传（验收 D1 根治）**：断点在 `delegation-ports` 的 `watchTurnProduct` 只映射 status——改为读终态 final 事件的 `payload.error`；新建 `util/redact.ts`（密钥正则族集中，含 `token=`/`access_token=` 可选形态）+ **code point 安全截断 300**+`…`；`\n||details||\n` 分隔符拆分：主文案进卡面、技术详情脱敏后落日志（卡面不再印分隔符）
+- **一致性与分层**：`handleOnline` 重启补拍消费 `record.reason`（leader/worker 对称）；`config.skills` 按 slug 首见去重（`config.resources` 既有 type+slug 全局去重保持原样）；`hub/accounting.ts` 抽取（仅 15 行裸查询，自愈链/目录缓存留在 mirror-applier）+ 双架构锁防回环
+- **测试护栏**：forks IPC 守卫提升为共享 `electron/tests/setup/`，`main-forks` 一并挂载（消除潜在事件污染通道）
+- **CI 纳 e2e**：新增 `.github/workflows/e2e.yml`（`push`/`pull_request` → main；`build` → **electron-rebuild（ABI 149）** → `pnpm e2e`；失败上传 `test-results/`）——既有 `build.yml` 仅 tag 触发，挡不住选择器/等待漂移回归
+- **契约注记**：`HubInstallOutcome.cachePath` 可能为空串（发布回填行），存在性以账表为准；hub CHANGELOG 补记 items 排序取 semver-max 行 publishedAt
+- **真机验收**：UC-P1-1~4 / P2-1~2 / P3-1 全 pass
+- **已知限制**：无终态 final 事件时仍回落「未知错误」（真兜底）；provider 主文案为设计文案（原始 401/JSON 落日志不进卡面）；e2e CI 首跑需推送后实测（预案：收窄 `--grep hub-distribution`）；本地 stdio MCP 分发域外维持
+
+版本 `2.1.0-alpha.34`。
+
 ## [未发布] — 节点互联 M2.3：版本取值链修复与债务清偿
 
 hub 侧 `v0.1.5`（目录 latest 语义 semver 化——乱序发布不回退；协议包仅注释语义更新，零字段变更）；studio 侧 pin 升级 `#v0.1.5` + 版本链四点修复 + 通道/锁面债务 + 测试基建与回归沉淀。设计见 momo-hub 仓 `docs/specs/2026-10-27-momo-hub-m2.3-version-chain-debt.md`。
