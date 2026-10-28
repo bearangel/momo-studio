@@ -94,6 +94,18 @@ describe('resource.store — install 反馈闭环', () => {
     expect(state.installNotice).toBeNull();
   });
 
+  it('installResource 失败且文案已带「下载失败:」半角前缀 → 单前缀透传（不叠加「导入失败：」）', async () => {
+    // A3（P3 验收）：非 2xx 下载走 electron 既有「下载失败: HTTP n」文案（半角冒号）；
+    // renderer 必须识别该前缀原样展示，否则 store 再拼一层「导入失败：」。
+    resourceInstall.mockRejectedValueOnce(new Error('下载失败: HTTP 404'));
+
+    await expect(
+      useResourceStore.getState().installResource('hub-agent-404'),
+    ).resolves.toBe(false);
+
+    expect(useResourceStore.getState().error).toBe('下载失败: HTTP 404');
+  });
+
   it('installResource 失败（HubCatalogStaleError）→ 原文如实透传（不吞、不替换为泛化文案）', async () => {
     // M2.4 T1：主进程目录回落时抛 HubCatalogStaleError；renderer 既有 catch 必须
     // 把 message 原样拼进「导入失败：」前缀给用户——不得吞成通用「导入失败」。
