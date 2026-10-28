@@ -280,5 +280,23 @@ describe('SettingsView', () => {
       expect(screen.queryByRole('heading', { name: '记忆' })).not.toBeInTheDocument();
       expect(mockApi.memory.list).not.toHaveBeenCalled();
     });
+
+    // M2.3 P2-4：0-ws 占位卡「去创建工作空间」动线——切 im 视图（MiddlePanel
+    // 0-ws 主区即创建引导 + 内嵌 CreateWorkspaceDialog，该引导由既有测试锁定）
+    it('0-ws 占位卡「去创建工作空间」在场，点击切 im 视图（创建引导所在视图）', () => {
+      render(<SettingsView />);
+      fireEvent.click(screen.getByRole('button', { name: '记忆' }));
+      const cta = screen.getByRole('button', { name: /去创建工作空间/ });
+      expect(cta).toBeInTheDocument();
+      fireEvent.click(cta);
+      expect(useUiStore.getState().activeView).toBe('im');
+    });
+  });
+
+  it('workspace 在场：ws 级分类直渲染面板，去创建按钮不在场', () => {
+    render(<SettingsView />);
+    fireEvent.click(screen.getByRole('button', { name: '记忆' }));
+    expect(screen.queryByText('该分类需要先选择一个工作空间')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /去创建工作空间/ })).not.toBeInTheDocument();
   });
 });

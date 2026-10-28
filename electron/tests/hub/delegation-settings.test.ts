@@ -91,4 +91,58 @@ describe('hub 委派本地账本存储', () => {
     expect(store.list()).toEqual([]);
     db.close();
   });
+
+  // ── M2.3 P2-1：failed reason 通道（kv JSON 行增可选字段——无 DDL）──────────
+
+  it('updateState failed 附 reason → 账本行落值（与上报 hub 载荷同源）', () => {
+    const db = freshDb();
+    const store = createHubDelegationStore(db);
+    store.upsert({
+      taskId: 't1', sessionId: 's1', workspaceId: 'w1', workspaceName: 'ws-a',
+      title: '修 bug', byNode: 'node-1', state: 'running', createdAt: 1, updatedAt: 1,
+    });
+    store.updateState('t1', 'failed', '执行失败:模型服务连接失败');
+    expect(store.get('t1')?.state).toBe('failed');
+    expect(store.get('t1')?.reason).toBe('执行失败:模型服务连接失败');
+    db.close();
+  });
+
+  it('缺席回退：updateState 不带 reason → 行无 reason 字段；老数据（P2-1 前落库）回读不空白不崩', () => {
+    const db = freshDb();
+    const store = createHubDelegationStore(db);
+    store.upsert({
+      taskId: 't1', sessionId: 's1', workspaceId: 'w1', workspaceName: 'ws-a',
+      title: '修 bug', byNode: 'node-1', state: 'running', createdAt: 1, updatedAt: 1,
+    });
+    store.updateState('t1', 'failed');
+    expect(store.get('t1')?.state).toBe('failed');
+    expect(store.get('t1')?.reason).toBeUndefined();
+    // 老库形状（无 reason 字段）直接注入 kv → 回读字段完好
+    db.prepare("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('hub_delegations', ?)")
+      .run(JSON.stringify({
+        t2: {
+          taskId: 't2', sessionId: 's2', workspaceId: 'w1', workspaceName: 'ws-a',
+          title: '旧任务', byNode: 'node-1', state: 'failed', createdAt: 1, updatedAt: 2,
+        },
+      }));
+    const legacy = store.get('t2');
+    expect(legacy).toMatchObject({ taskId: 't2', state: 'failed', title: '旧任务' });
+    expect(legacy?.reason).toBeUndefined();
+    db.close();
+  });
+
+  it('异形 reason（非字符串）→ 读侧剥除不落形（持久化面不渗杂字段）', () => {
+    const db = freshDb();
+    const store = createHubDelegationStore(db);
+    db.prepare("INSERT INTO kv_store (key, value) VALUES ('hub_delegations', ?)")
+      .run(JSON.stringify({
+        t1: {
+          taskId: 't1', sessionId: 's1', workspaceId: 'w1', workspaceName: 'ws-a',
+          title: '修 bug', byNode: 'node-1', state: 'failed', reason: 123, createdAt: 1, updatedAt: 2,
+        },
+      }));
+    expect(store.get('t1')?.reason).toBeUndefined();
+    expect(store.get('t1')?.state).toBe('failed');
+    db.close();
+  });
 });

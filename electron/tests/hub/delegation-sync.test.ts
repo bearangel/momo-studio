@@ -138,15 +138,18 @@ function mkRecord(overrides: Partial<DelegationRecord> = {}): DelegationRecord {
   };
 }
 
-/** 最小 delegation store fake（wrap 只依赖 get/upsert/updateState 语义） */
+/** 最小 delegation store fake（wrap 只依赖 get/upsert/updateState 语义——reason 落形仿真真 store） */
 function fakeStore(records: DelegationRecord[] = []): HubDelegationStore {
   const map = new Map(records.map((r) => [r.taskId, r]));
   return {
     get: (taskId) => map.get(taskId) ?? null,
     upsert: (record) => map.set(record.taskId, record),
-    updateState: (taskId, state) => {
+    updateState: (taskId, state, reason) => {
       const prev = map.get(taskId);
-      if (prev) map.set(taskId, { ...prev, state, updatedAt: NOW });
+      if (!prev) return;
+      const next = { ...prev, state, updatedAt: NOW };
+      if (state === 'failed' && typeof reason === 'string') next.reason = reason;
+      map.set(taskId, next);
     },
     list: () => [...map.values()],
   };
@@ -384,6 +387,28 @@ describe('delegation-sync — worker 侧 store 包装', () => {
     wrapped.updateState('hub-task-9', 'failed');
     expect(w.rows.get(id)!.status).toBe('failed');
     expect(w.rows.get(id)!.errorMessage).toBeNull();
+  });
+
+  // ── M2.3 P2-1：worker 侧 reason 对称面（leader A-4 同款——failed 附因落 errorMessage）──
+
+  it('B-4c. updateState failed 附 reason → tasks 行 errorMessage 落值（卡面 title 全文数据源）', () => {
+    const w = makeWorld();
+    const wrapped = createDelegationSync(w.ports).wrapWorkerStore(fakeStore());
+    wrapped.upsert(mkRecord());
+    const id = [...w.rows.keys()][0]!;
+    wrapped.updateState('hub-task-9', 'failed', '执行失败:目标节点 cargo build 崩溃（os error 1）');
+    const row = w.rows.get(id)!;
+    expect(row.status).toBe('failed');
+    expect(row.errorMessage).toBe('执行失败:目标节点 cargo build 崩溃（os error 1）');
+  });
+
+  it('B-4d. reason 透传账本：wrapped.updateState 第三参落 store 行（与 tasks 行同源）', () => {
+    const w = makeWorld();
+    const inner = fakeStore();
+    const wrapped = createDelegationSync(w.ports).wrapWorkerStore(inner);
+    wrapped.upsert(mkRecord());
+    wrapped.updateState('hub-task-9', 'failed', '执行失败:X');
+    expect(inner.get('hub-task-9')?.reason).toBe('执行失败:X');
   });
 
   it('B-5. selfNodeId 为 null（未 enroll 完成的极端窗口）→ targetNodeId 落空串不抛', () => {

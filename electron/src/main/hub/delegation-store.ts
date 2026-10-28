@@ -18,6 +18,12 @@ export interface DelegationRecord {
   /** 派单节点 id（审计留痕） */
   byNode: string;
   state: DelegationLocalState;
+  /**
+   * failed 终态人话原因（M2.3 P2-1）——与 runner 上报 hub 的 failed 载荷 reason
+   * 同源（本机落值不经 hub 中转），worker 本机看板卡 title 全文数据源。
+   * 可选：缺席 = 老数据（P2-1 前落库）或无因失败，消费方回退现状不空白。
+   */
+  reason?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -27,7 +33,7 @@ const KEY = 'hub_delegations';
 export interface HubDelegationStore {
   get(taskId: string): DelegationRecord | null;
   upsert(record: DelegationRecord): void;
-  updateState(taskId: string, state: DelegationLocalState): void;
+  updateState(taskId: string, state: DelegationLocalState, reason?: string): void;
   list(): DelegationRecord[];
 }
 
@@ -47,7 +53,11 @@ function parseAll(raw: string | undefined): Map<string, DelegationRecord> {
         (r.state === 'running' || r.state === 'done' || r.state === 'failed' || r.state === 'cancelled') &&
         typeof r.createdAt === 'number' && typeof r.updatedAt === 'number'
       ) {
-        out.set(r.taskId, r as DelegationRecord);
+        // reason 仅字符串落形（P2-1——progress store waiting 同款纪律：老数据无
+        // 此字段零改写，异形值剥除不渗入持久化面）
+        const rec = r as DelegationRecord;
+        if (typeof rec.reason !== 'string') delete rec.reason;
+        out.set(r.taskId, rec);
       }
     }
   } catch {
@@ -77,11 +87,13 @@ export function createHubDelegationStore(db: Database): HubDelegationStore {
       records.set(record.taskId, record);
       save(records);
     },
-    updateState(taskId, state) {
+    updateState(taskId, state, reason) {
       const records = load();
       const prev = records.get(taskId);
       if (!prev) return;
-      records.set(taskId, { ...prev, state, updatedAt: Date.now() });
+      const next: DelegationRecord = { ...prev, state, updatedAt: Date.now() };
+      if (state === 'failed' && typeof reason === 'string') next.reason = reason;
+      records.set(taskId, next);
       save(records);
     },
     list() {

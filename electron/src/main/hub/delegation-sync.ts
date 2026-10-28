@@ -276,13 +276,16 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
           startedAt: ports.now(),
         });
       };
-      const syncState = (taskId: string, state: DelegationRecord['state']): void => {
+      const syncState = (taskId: string, state: DelegationRecord['state'], reason?: string): void => {
         const row = ports.findTaskByDelegation(taskId);
         if (!row) return;
         const next = WORKER_STATE_TO_TASK[state];
         if (isTerminal(row.status) && row.status !== next) return; // 终态粘滞
         const extra: Partial<TaskRow> =
           state === 'done' && row.completedAt === null ? { completedAt: ports.now() } : {};
+        // P2-1 worker 侧对称面：failed 附因落 errorMessage（leader handleTerminal 同款
+        // 形态——reason 缺席不写，老数据/无因失败回退现状）
+        if (state === 'failed' && typeof reason === 'string') extra.errorMessage = reason;
         ports.updateTask(row.id, { status: next, ...extra });
       };
       return {
@@ -291,9 +294,9 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
           store.upsert(record);
           ensureRow(record);
         },
-        updateState(taskId, state) {
-          store.updateState(taskId, state);
-          syncState(taskId, state);
+        updateState(taskId, state, reason) {
+          store.updateState(taskId, state, reason);
+          syncState(taskId, state, reason);
         },
         list: () => store.list(),
       };

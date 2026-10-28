@@ -359,6 +359,63 @@ describe('DelegatedTaskCard — worker 侧', () => {
     );
     expect(screen.getByText(/来自 node…ader/)).toBeInTheDocument();
   });
+
+  // ── M2.3 P2-1：worker 本机 failed reason（delegation-sync syncState 落 errorMessage——title 全文 + 摘要截断，对齐 leader L-4b）──
+
+  it('W-3. worker 视角 failed：reason（tasks 行 errorMessage）截断显示 + title 悬浮全文 + 来源徽标在场', () => {
+    const longReason =
+      '执行失败:模型服务连接失败：HTTP 500 上游超时（worker 本机结算，reason 与 leader 卡同源同文——P2-1 对称面验收超长文本，悬浮 title 必须完整可见）';
+    renderCard(
+      mkTask({
+        id: 'T-900',
+        title: '排查生产 500',
+        status: 'failed',
+        errorMessage: longReason,
+        routing: { mode: 'node', groupId: '', targetNodeId: 'node-self' },
+      }),
+      boardCtx({
+        selfNodeId: 'node-self',
+        nodeNames: { 'node-leader': 'mac-main' },
+        received: {
+          'T-8f21abcd': {
+            taskId: 'T-8f21abcd', sessionId: 'sess-1', workspaceId: 'ws-1', workspaceName: 'dev-ws',
+            title: '排查生产 500', byNode: 'node-leader', state: 'failed', createdAt: 1, updatedAt: 2,
+          },
+        },
+      }),
+    );
+    expect(screen.getByText('来自 mac-main')).toBeInTheDocument();
+    expect(screen.getByText('失败')).toBeInTheDocument();
+    const line = screen.getByText(longReason);
+    expect(line.className).toContain('truncate');
+    expect(line.getAttribute('title')).toBe(longReason);
+  });
+
+  it('W-4. worker 视角 failed reason 缺席（老数据 errorMessage null）→ 回退现状：无进度行、零 title 悬浮、不崩', () => {
+    renderCard(
+      mkTask({
+        id: 'T-900',
+        title: '排查生产 500',
+        status: 'failed',
+        errorMessage: null,
+        routing: { mode: 'node', groupId: '', targetNodeId: 'node-self' },
+      }),
+      boardCtx({
+        selfNodeId: 'node-self',
+        nodeNames: { 'node-leader': 'mac-main' },
+        received: {
+          'T-8f21abcd': {
+            taskId: 'T-8f21abcd', sessionId: 'sess-1', workspaceId: 'ws-1', workspaceName: 'dev-ws',
+            title: '排查生产 500', byNode: 'node-leader', state: 'failed', createdAt: 1, updatedAt: 2,
+          },
+        },
+      }),
+    );
+    expect(screen.getByText('失败')).toBeInTheDocument();
+    const card = screen.getByRole('button', { name: /排查生产 500/ });
+    expect(card.querySelector('[data-progress-line]')).toBeNull();
+    expect(card.querySelector('[title]')).toBeNull();
+  });
 });
 
 // ── waiting 占位（T11/T12 接通前的占位禁用）─────────────────────────────────

@@ -10,6 +10,7 @@
 //   （记忆 / 浏览器 / Git 策略 / 审计日志）在 0-ws 态渲染占位提示
 import { useEffect } from 'react';
 import type { ReactElement } from 'react';
+import { FolderPlus } from 'lucide-react';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useSettingsStore } from '../../stores/settings.store';
 import { useUiStore } from '../../stores/ui.store';
@@ -26,6 +27,7 @@ import { AppearanceSettings } from './AppearanceSettings';
 import { SandboxSettingsPanel } from './SandboxSettingsPanel';
 import { BrowserSettings } from './BrowserSettings';
 import { HubSettingsPanel } from './HubSettingsPanel';
+import { Button } from '../ui/Button';
 
 export function SettingsView() {
   const workspace = useWorkspaceStore((s) => s.getActive());
@@ -43,10 +45,18 @@ export function SettingsView() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [setActiveView]);
 
-  /** workspace 级分类的 0-ws 占位（P2-8：整页可达，ws 级分类不渲染假数据） */
+  /**
+   * workspace 级分类的 0-ws 占位（P2-8：整页可达，ws 级分类不渲染假数据）。
+   * M2.3 P2-4：「去创建工作空间」跳 im 视图——0-ws 态 MiddlePanel 主区即创建
+   * 引导（EmptyState + 内嵌 CreateWorkspaceDialog），最小面复用既有引导动线。
+   */
   const wsRequired = (): ReactElement => (
-    <div className="flex-1 flex items-center justify-center text-sm text-tertiary">
+    <div className="flex-1 flex flex-col items-center justify-center gap-3 text-sm text-tertiary">
       该分类需要先选择一个工作空间
+      <Button variant="secondary" size="sm" onClick={() => setActiveView('im')}>
+        <FolderPlus size={14} strokeWidth={1.75} aria-hidden />
+        去创建工作空间
+      </Button>
     </div>
   );
 

@@ -167,13 +167,14 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
     run.unwatch();
     active.delete(taskId);
     const localState: DelegationRecord['state'] = terminal.status === 'done' ? 'done' : 'failed';
-    store.updateState(taskId, localState);
     const reason =
       terminal.status === 'failed'
         ? `执行失败:${terminal.error ?? '未知错误'}`
         : terminal.status === 'aborted'
           ? `已中止${terminal.error ? `:${terminal.error}` : ''}`
           : undefined;
+    // P2-1：reason 同源两落——本机账本（worker 卡 title 全文）与 hub 上报载荷
+    store.updateState(taskId, localState, localState === 'failed' ? reason : undefined);
     void sendReport(taskId, {
       status: terminal.status === 'done' ? 'done' : 'failed',
       sessionId: run.sessionId,

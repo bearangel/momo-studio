@@ -375,6 +375,25 @@ describe('完成与失败上报', () => {
     expect(h.store.get('t1')?.state).toBe('failed');
   });
 
+  // M2.3 P2-1：reason 与上报 hub 载荷同源落本机账本（worker 本机卡 title 全文数据源）
+  it('turn 失败 → 账本行 reason 与 report reason 同源（本机卡与 leader 卡同文）', async () => {
+    const h = makeHarness();
+    await admitOne(h, 't1');
+    h.fireTerminal('sess-1', { status: 'failed', error: '模型供应商连接失败' });
+    await vi.advanceTimersByTimeAsync(0);
+    const failed = h.log.reports.find((r) => r.taskId === 't1' && r.payload.status === 'failed');
+    expect(h.store.get('t1')?.reason).toBe(failed?.payload.reason);
+  });
+
+  it('turn 正常完成 → 账本行不落 reason（done 无因，缺席不空白）', async () => {
+    const h = makeHarness();
+    await admitOne(h, 't1');
+    h.fireTerminal('sess-1', { status: 'done' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.store.get('t1')?.state).toBe('done');
+    expect(h.store.get('t1')?.reason).toBeUndefined();
+  });
+
   it('turn 中止（aborted）→ report failed 附因', async () => {
     const h = makeHarness();
     await admitOne(h, 't1');
