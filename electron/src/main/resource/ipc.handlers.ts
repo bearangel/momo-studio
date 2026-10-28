@@ -92,6 +92,7 @@ import { deleteDefinition, removeMcpRefsFromAgents } from '../agent/crud';
 import { broadcastSessionListChanged } from '../im/session-service';
 import { listBuiltinPresetAgents, previewBuiltinPresetAgent } from '../agent/builtin';
 import { getActiveWorkspaceId } from '../workspace/ipc.handlers';
+import { toUserFacingError } from '../util/user-facing-error';
 
 /** resource:registerMcp 入参——注册自定义 MCP 的最小配置（id / version 由主进程补全） */
 export interface RegisterMcpInput {
@@ -213,9 +214,15 @@ export function registerResourceHandlers(): void {
     return installPackage(catalogItem);
   };
   ipcMain.handle('resource:install', async (evt: unknown, id: string): Promise<unknown> => {
-    const __r = await __resourceInstall(evt, id);
-    emitPluginEvent('resourceInstalled', { id });
-    return __r;
+    try {
+      const __r = await __resourceInstall(evt, id);
+      emitPluginEvent('resourceInstalled', { id });
+      return __r;
+    } catch (err) {
+      // M2.4 D1：hub 安装/更新失败上行前剥掉错误类名前缀（HubCatalogStaleError: …）
+      // 与 Electron 包装（防御幂等）——renderer 通知只留人话；未知错误原文照传。
+      throw toUserFacingError(err);
+    }
   });
 
   // resource:installSmitheryRemote — smithery needsConfig 二段安装（P2.1 Task 3）。
