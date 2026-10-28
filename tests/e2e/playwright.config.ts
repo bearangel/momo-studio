@@ -8,10 +8,12 @@
 //   - the Electron app takes a single-instance lock, so only one test can run
 //     at a time -> workers: 1
 //
-// The suite is intentionally NOT part of `pnpm test` / CI; run it manually
-// before tagging a release:
-//   pnpm --filter ./electron build && pnpm --filter ./renderer build
-//   xvfb-run -a pnpm e2e
+// 本地：
+//   pnpm build && pnpm e2e
+// CI：`.github/workflows/e2e.yml` 在 push/PR → main 上跑全量（M2.4 T7）——
+//   步骤含 electron-rebuild（ABI 149，e2e 启动真 Electron 必需）。
+// 拖拽/浏览器交互类用例（kanban-drag / browser）在 CI runner 上受显示与
+// 输入模拟差异影响，靠 retries 吸收偶发；持续红则按 spec 预案隔离。
 import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
@@ -26,7 +28,9 @@ export default defineConfig({
   // other. Serialize the e2e suite.
   workers: 1,
   fullyParallel: false,
-  retries: 0,
+  // CI 上拖拽/浏览器交互类用例受显示与输入模拟差异影响 → 重试两次吸收偶发；
+  // 本地保持 0，失败即真红（不让重试掩盖本地回归）。
+  retries: process.env.CI ? 2 : 0,
   use: {
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
