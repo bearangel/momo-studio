@@ -35,6 +35,7 @@ import type {
   SessionGroupRow,
   SkillCreateInput,
   SmitheryInstallResult,
+  HubInstallResult,
   TaskRow,
   UploadedSkill,
   PluginSummary,
@@ -427,8 +428,9 @@ const api: ApiSurface = {
     // v1.7：按 id 查单个资源详情（找不到返回 null）
     getDetail: (id: string) => invoke<ResourceItem | null>('resource:getDetail', id),
     // v1.7：安装资源（builtin/custom 不可安装）。P2.1 Task 3：smithery 条目返回
-    // needsConfig 两态（Task 6 弹窗消费），其余源返回空
-    install: (id: string) => invoke<SmitheryInstallResult | void>('resource:install', id),
+    // needsConfig 两态（Task 6 弹窗消费）。M2.3 T2：hub 条目返回 HubInstallResult
+    // （alreadyLatest=true 如实回执「已是最新」），其余源返回空
+    install: (id: string) => invoke<SmitheryInstallResult | HubInstallResult | void>('resource:install', id),
     // P2.1 Task 3：smithery needsConfig 二段安装（弹窗收集配置后提交）
     installSmitheryRemote: (id: string, config: Record<string, string>) =>
       invoke<void>('resource:installSmitheryRemote', id, config),

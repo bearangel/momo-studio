@@ -312,3 +312,134 @@ describe('D7 e2e：目录行透出已装版本（角标锚 installedVersion 数�
     expect(it!.version).toBe('1.0.0'); // 兜底行无目录元数据，version 即记账版本
   });
 });
+
+// ── M2.3 T2：版本取值链修复回归锁（裁定书 p1-0 D3-1~4 / O1-1）──────────────────
+//
+// 与上面 D6/D7 组的关键差异：**不再借 __setHubContextResolverForTest 重注入清缓存**
+// 来仿真「TTL 过期传播」——D3 实锤正是安装链消费陈旧目录快照（TTL 命中/退避
+// lastGood 直返旧值）。本组用真实时序复现：暖缓存后轮换 fixture 版本，目录缓存
+// 仍是旧值，安装/更新链必须自己强制 fresh 拉取（findHubMarketplaceItem →
+// loadFresh），不许消费陈旧快照。
+//
+// 已装判定 semver 化（D3-2）：target（fresh 目录版本）≤ 已装记账版本 → 如实
+// 返回 alreadyLatest 零动作；> 已装 → 版本前进走安装。消除两条旧路径：
+//   - installer `.installed` 标记幂等跳过的「静默成功零 DB 写入」（D3 现象闭环）
+//   - 乱序/旧目录低版本下的降级安装（字符串比较无 semver 前进判定）
+
+describe('M2.3 T2：D3/O-1 复现锁——fresh latest 取值 + 已装 semver 判定', () => {
+  it('D3：v1 装后 hub 出 v2（目录 TTL 缓存陈旧）→ 更新 → 记账/def 前进 v2（现状：停留 v1 报成功）', async () => {
+    const handler = resourceInstallHandler();
+    await handler({}, RES_ID); // 首装 v1.0.0（顺带暖目录 TTL 缓存）
+    expect(installedRows()[0]!.version).toBe('1.0.0');
+
+    // hub 侧发布 v2.0.0——**不重注入解析器**（不清目录缓存）：TTL 5min 内旧快照仍在，
+    // 这正是 D3 实锤时序（事件链 hubUpdates 已知 1.1.0/2.0.0，目录缓存另一套新鲜度）
+    const v2 = agentPackage(SLUG, '2.0.0');
+    fixtures.set(SLUG, { archive: v2, checksum: sha256(v2), version: '2.0.0' });
+
+    await handler({}, RES_ID); // 「更新」
+
+    // 版本前进：记账 + agent_definitions 落 v2（红现状：TTL 命中 v1 → 幂等跳过 → 停留 1.0.0）
+    const rows = installedRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.version).toBe('2.0.0');
+    const def = listAgentDefinitions().find((d) => d.slug === SLUG);
+    expect(def!.version).toBe('2.0.0');
+    expect(def!.systemPrompt).toContain('2.0.0');
+    // v2 下载真的打到 mock hub（fresh 目录 → downloadUrl 版本段 2.0.0）
+    expect(hubRequests).toContain(`/resources/${SLUG}/2.0.0/download`);
+  });
+
+  it('O-1：目录缓存陈旧场景全新安装 → 仍取 fresh latest（现状：取旧 meta 装 v1）', async () => {
+    // 浏览目录暖缓存（v1.0.0 快照进 TTL）——用户先看了一眼资源库再装
+    await listHubCatalogResources('agent');
+
+    // hub 发布 v2.0.1（不清缓存——O-1 次轮实锤时序：P2-7 删除重装仍装旧版）
+    const v201 = agentPackage(SLUG, '2.0.1');
+    fixtures.set(SLUG, { archive: v201, checksum: sha256(v201), version: '2.0.1' });
+
+    const handler = resourceInstallHandler();
+    await handler({}, RES_ID); // 全新安装（无记账行）
+
+    // 装的是 fresh latest（红现状：TTL 命中 v1.0.0 → 落装 1.0.0）
+    const rows = installedRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.version).toBe('2.0.1');
+    expect(hubRequests).toContain(`/resources/${SLUG}/2.0.1/download`);
+  });
+
+  it('D3-2 同版：target == 已装 → alreadyLatest 如实回执（经 IPC 透传），零下载零记账变更', async () => {
+    const handler = resourceInstallHandler();
+    await handler({}, RES_ID); // 首装 v1.0.0
+    const before = installedRows();
+    const dlCountBefore = hubRequests.filter((u) => u.endsWith('/download')).length;
+
+    // 目录仍 v1.0.0（不轮换）——同版重装 = 更新按钮在 semver 判定下本不应出现，
+    // 但若用户经其他入口触发（如兜底行），安装链必须如实报「已是最新」而非静默成功
+    const result = (await handler({}, RES_ID)) as {
+      cachePath: string;
+      alreadyLatest?: boolean;
+      version?: string;
+    };
+
+    expect(result.alreadyLatest).toBe(true); // 红现状：返回 {cachePath} 无 alreadyLatest（幂等跳过谎报成功）
+    expect(result.version).toBe('1.0.0');
+    expect(installedRows()).toEqual(before); // 记账零变更
+    expect(listAgentDefinitions().find((d) => d.slug === SLUG)!.version).toBe('1.0.0');
+    // 零下载（幂等跳过路径本就不下载；alreadyLatest 路径连 installPackage 都不进）
+    expect(hubRequests.filter((u) => u.endsWith('/download')).length).toBe(dlCountBefore);
+  });
+
+  it('版本相等语义（Review Focus 1）：已装记账 1.0 vs 目录 1.0.0 缺段相等 → alreadyLatest 不重装', async () => {
+    const handler = resourceInstallHandler();
+    await handler({}, RES_ID); // 首装 1.0.0（缓存目录 .../1.0.0 带 .installed 标记）
+
+    // 仿真存量记账行短版形态（旧数据/手工导入）：'1.0' 与目录 '1.0.0' semver 相等
+    getDb()
+      .prepare('UPDATE installed_packages SET version = ? WHERE item_id = ?')
+      .run('1.0', hubPackageItemId(SLUG));
+
+    const result = (await handler({}, RES_ID)) as { alreadyLatest?: boolean; version?: string };
+    expect(result.alreadyLatest).toBe(true); // 红现状：无 semver 判定 → 进 installPackage → .installed 命中 → 谎报成功
+    expect(result.version).toBe('1.0');
+    // 记账版本原样保留（不重写为 1.0.0——零动作语义）
+    expect(installedRows()[0]!.version).toBe('1.0');
+  });
+
+  it('乱序低版本目录（旧 hub 数据单版本，Review Focus 2）：已装 1.0.0 > 目录 0.9.0 → alreadyLatest 不降级', async () => {
+    const handler = resourceInstallHandler();
+    await handler({}, RES_ID); // 首装 1.0.0
+
+    // 目录轮换到低版本 0.9.0（旧 hub v0.1.4 时序 latest / 乱序发布遗留数据），
+    // 重注入解析器仿真缓存已过期——安装链可见 fresh 目录的 0.9.0
+    const v09 = agentPackage(SLUG, '0.9.0');
+    fixtures.set(SLUG, { archive: v09, checksum: sha256(v09), version: '0.9.0' });
+    __setHubContextResolverForTest(async () => ({ hubUrl, deviceToken: 'tok-e2e' }));
+
+    const result = (await handler({}, RES_ID)) as { alreadyLatest?: boolean; version?: string };
+    expect(result.alreadyLatest).toBe(true); // 红现状：无 semver 前进判定 → 下载 0.9.0 降级落账
+    expect(result.version).toBe('1.0.0');
+    expect(installedRows()[0]!.version).toBe('1.0.0'); // 记账不降级
+    // 降级下载未发生
+    expect(hubRequests).not.toContain(`/resources/${SLUG}/0.9.0/download`);
+  });
+
+  it('版本前进跨数量级（字典序陷阱）：1.9.0 → 1.10.0 更新落账（数值段比较，非字符串序）', async () => {
+    const handler = resourceInstallHandler();
+    // 首装 1.9.0
+    const v19 = agentPackage(SLUG, '1.9.0');
+    fixtures.set(SLUG, { archive: v19, checksum: sha256(v19), version: '1.9.0' });
+    __setHubContextResolverForTest(async () => ({ hubUrl, deviceToken: 'tok-e2e' }));
+    await handler({}, RES_ID);
+    expect(installedRows()[0]!.version).toBe('1.9.0');
+
+    // hub 出 1.10.0（字符串序 '1.10.0' < '1.9.0'——字典序陷阱；semver 数值段 10 > 9）
+    const v110 = agentPackage(SLUG, '1.10.0');
+    fixtures.set(SLUG, { archive: v110, checksum: sha256(v110), version: '1.10.0' });
+
+    const result = (await handler({}, RES_ID)) as { alreadyLatest?: boolean };
+    expect(result.alreadyLatest).toBeFalsy(); // 前进 → 真安装（红现状：字符串比较也会装，但此用例锁 semver 判定不被后续改动退化为字符串）
+    expect(installedRows()[0]!.version).toBe('1.10.0');
+    expect(listAgentDefinitions().find((d) => d.slug === SLUG)!.version).toBe('1.10.0');
+  });
+});

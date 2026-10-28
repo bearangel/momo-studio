@@ -74,6 +74,14 @@ export interface HubCatalogSourceOptions {
 
 export interface HubCatalogSource {
   load(): Promise<HubCatalogLoad>;
+  /**
+   * 强制 fresh 载入（安装/更新链消费——M2.3 T2，D3-1/O1-1 主修点）：
+   * 绕 TTL/退避/lastGood 阻塞拉取最新目录；成功照常 recordSuccess 顺带治愈
+   * 缓存；失败回落已知快照（cache/lastGood）且**不写退避与 degraded**——
+   * 安装是用户动作，不因单次失败把浏览链打进零网络窗口（P2-9 退避零刷屏
+   * 语义不破；回落的已知快照 downloadUrl 指向同 hub，下载链是真闸门）。
+   */
+  loadFresh(): Promise<HubCatalogLoad>;
   /** 当前是否降级（resource:getCatalogStatus 消费） */
   isDegraded(): boolean;
   /** 测试用：清缓存/退避/降级态 */
@@ -151,8 +159,9 @@ export function hubPackageItemId(slug: string): string {
 
 /**
  * HubResourceMeta → MarketplaceItem（spec §6.2：installPackage 原样复用）。
- * versions 数组丢弃语义（M1c 不做版本比较——hub 的 versions[0] 是时序最新而非
- * semver 最大，比较语义留 T10/T14；原始数组经 listHubResourceMetas 透传）；
+ * versions 数组丢弃（studio 侧版本比较单源在 resource/version-compare.ts——
+ * M2.3 T2 起安装链判定 semver 化，不再依赖数组时序语义；hub v0.1.5 起
+ * versions 已是 semver 降序，原始数组经 listHubResourceMetas 透传）；
  * installCount 丢弃语义（spec §10：hub 无评分/安装计数）。
  */
 export function toMarketplaceItem(meta: HubResourceMeta, hubUrl: string): MarketplaceItem {
@@ -283,8 +292,33 @@ export function createHubCatalogSource(
     return { catalog: known, hubUrl: ctx.hubUrl, degraded, notEnrolled: false };
   }
 
+  // 安装/更新链专用（M2.3 T2 D3-1/O1-1）：绕全部缓存语义阻塞拉取——目录快照
+  // 陈旧时装旧版的两条实锤路径（更新停留 v1 / 全新安装取旧 meta）在此治愈。
+  async function loadFresh(): Promise<HubCatalogLoad> {
+    const ctx = await resolveContext();
+    if (!ctx) {
+      return { catalog: EMPTY_CATALOG, hubUrl: null, degraded: false, notEnrolled: true };
+    }
+    registerTrustedDownloadOrigin(ctx.hubUrl);
+    try {
+      const catalog = await fetchCatalog(ctx);
+      recordSuccess(catalog);
+      return { catalog, hubUrl: ctx.hubUrl, degraded: false, notEnrolled: false };
+    } catch (err) {
+      // 失败回落已知快照（不写退避/degraded——语义契约见接口 docstring）；
+      // 真闸门在下载链：目录能回落说明 hub 曾可达，回落快照的 downloadUrl
+      // 仍指向该 hub，hub 真不可达时下载会如实失败。
+      logger.warn('hub catalog fresh 拉取失败，安装链回落已知快照', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      const known = cache?.catalog ?? lastGoodCatalog ?? EMPTY_CATALOG;
+      return { catalog: known, hubUrl: ctx.hubUrl, degraded, notEnrolled: false };
+    }
+  }
+
   return {
     load,
+    loadFresh,
     isDegraded: () => degraded,
     resetForTest: () => {
       cache = null;
@@ -327,14 +361,15 @@ export async function listHubMarketplaceItems(type?: ResourceType): Promise<Mark
 
 /**
  * hub 目录项按 type + slug 精确查（安装分支消费）。
- * 版本取目录当前版本（meta.version）——hub 的 versions[0] 是时序最新而非 semver
- * 最大，故不做 semver 比较（更新语义裁定在更新角标任务落地）。
+ * 载入走 loadFresh（M2.3 T2，D3-1/O1-1）：安装/更新链强制拉最新目录——
+ * hub v0.1.5 起 latest = versions 全集 semver max（乱序发布不回退），meta.version
+ * 即应装版本；TTL/退避/lastGood 的陈旧快照只服务浏览链（load），不进版本取值链。
  */
 export async function findHubMarketplaceItem(
   type: ResourceType,
   slug: string,
 ): Promise<MarketplaceItem | null> {
-  const { catalog, hubUrl } = await defaultSource.load();
+  const { catalog, hubUrl } = await defaultSource.loadFresh();
   if (!hubUrl) return null;
   const meta = catalog.items.find((m) => m.type === type && m.slug === slug);
   if (!meta || !isMarketplaceType(meta.type)) return null;

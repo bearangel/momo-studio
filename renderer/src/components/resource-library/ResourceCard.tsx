@@ -16,6 +16,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Check, RefreshCw, Trash2 } from 'lucide-react';
 import type { ResourceItem } from '../../ipc/types';
 import { cn } from '../../lib/cn';
+import { compareVersions } from '../../lib/version-compare';
 import { Badge } from '../ui/Badge';
 import { SourceBadge } from './SourceBadge';
 import { Switch } from '../ui/Switch';
@@ -70,15 +71,21 @@ export function ResourceCard({
   onPublishToHub, hubEnrolled, hubUpdates,
 }: ResourceCardProps) {
   const TypeIcon = TYPE_ICON[item.type];
-  // hub 可更新角标判定（M1 Task 14 + D7 修正）：已装 hub 资源 + 事件版本 ≠ 已装版本。
-  // 锚点 = installedVersion（installed_packages 记账版）?? version——目录先行 + 事件
-  // 迟到时 item.version 已是目录 head、与事件版本恒等，锚它会误判「已是最新」。
-  // 恒等比较不做 semver（T10 裁定：hub versions[0] 是时序最新而非 semver 最大）
+  // hub 可更新角标判定（M1 Task 14 + D7 修正 + M2.3 T2 D3-4 semver 化）：
+  // 已装 hub 资源 + 事件版本 semver **前进**（compareVersions > 0）才可更新。
+  // 锚点 = installedVersion（installed_packages 记账版）?? version——目录先行 +
+  // 事件迟到时 item.version 已是目录 head、与事件版本恒等，锚它会误判「已是最新」。
+  // 旧字符串不等判定已退役（T10 旧裁定随 hub v0.1.5 latest semver 化一并作废）：
+  // 乱序发布低版本事件不 offer 降级、'1.0' vs '1.0.0' 缺段相等不误报。
   const hubLatest =
     item.source === 'hub' ? hubUpdates?.[`${item.type}:${item.slug}`] : undefined;
   const installedAnchor = item.installedVersion ?? item.version;
   const hubUpdatable =
-    item.source === 'hub' && item.installed && !!installedAnchor && !!hubLatest && hubLatest !== installedAnchor;
+    item.source === 'hub' &&
+    item.installed &&
+    !!installedAnchor &&
+    !!hubLatest &&
+    compareVersions(hubLatest, installedAnchor) > 0;
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
     const el = e.currentTarget;

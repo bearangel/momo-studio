@@ -495,6 +495,57 @@ describe('ResourceCard hub 可更新角标（M1 Task 14：事件链末端徽标�
   });
 });
 
+// ── M2.3 T2 D3-4：角标判定 semver 前进（裁定书 p1-0 §3）──────────────────────
+// 旧判定 = 字符串不等（hubLatest !== installedAnchor）：乱序发布低版本事件也
+// offer「可更新」（点击即降级）；'1.0' vs '1.0.0' 缺段相等误报可更新。
+// 新判定 = compareVersions(hubLatest, installedAnchor) > 0——semver 前进才可更新。
+describe('ResourceCard hub 角标 semver 判定（M2.3 T2 D3-4）', () => {
+  const hubSkill = (over: Partial<ResourceItem> = {}): ResourceItem =>
+    mkItem({
+      id: 'hub-skill-pdf-summary', type: 'skill', source: 'hub', slug: 'pdf-summary',
+      name: 'PDF 摘要器', installed: true, installable: false, removable: true,
+      ...over,
+    });
+
+  it('字典序陷阱：事件 1.10.0 > 已装 1.9.0 → 可更新（字符串序会误判 1.10.0 < 1.9.0）', () => {
+    const onInstall = vi.fn();
+    render(
+      <ResourceCard
+        item={hubSkill({ installedVersion: '1.9.0' })} selected={false} onSelect={noop} onInstall={onInstall}
+        hubUpdates={{ 'skill:pdf-summary': '1.10.0' }}
+      />,
+    );
+    expect(screen.getByText('可更新')).toBeTruthy();
+    expect(screen.getByText('v1.9.0 → v1.10.0')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '更新' }));
+    expect(onInstall).toHaveBeenCalledWith('hub-skill-pdf-summary');
+  });
+
+  it('缺段相等（Review Focus 1）：事件 1.0.0 vs 已装 1.0 → 已是最新，无更新按钮', () => {
+    render(
+      <ResourceCard
+        item={hubSkill({ installedVersion: '1.0' })} selected={false} onSelect={noop}
+        hubUpdates={{ 'skill:pdf-summary': '1.0.0' }}
+      />,
+    );
+    expect(screen.getByText('v1.0 · 已是最新')).toBeTruthy();
+    expect(screen.queryByText('可更新')).toBeNull();
+    expect(screen.queryByRole('button', { name: '更新' })).toBeNull();
+  });
+
+  it('乱序低版本事件：事件 1.5.0 < 已装 2.0.0 → 已是最新，不 offer 降级', () => {
+    render(
+      <ResourceCard
+        item={hubSkill({ installedVersion: '2.0.0' })} selected={false} onSelect={noop}
+        hubUpdates={{ 'skill:pdf-summary': '1.5.0' }}
+      />,
+    );
+    expect(screen.getByText('v2.0.0 · 已是最新')).toBeTruthy();
+    expect(screen.queryByText('可更新')).toBeNull();
+    expect(screen.queryByRole('button', { name: '更新' })).toBeNull();
+  });
+});
+
 describe('ResourceCard 2D 键盘导航（列数按 offsetTop 动态推导）', () => {
   /** 模拟 2 行 × 3 列网格。jsdom 无布局引擎——Object.defineProperty 注入
    *  offsetTop 仿真浏览器「同值 offsetTop = 同一视觉行」的真实分组语义。 */

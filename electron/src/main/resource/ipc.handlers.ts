@@ -170,7 +170,8 @@ export function registerResourceHandlers(): void {
   // smithery：详情 deploymentUrl 直连（两态返回——needsConfig 见
   // installSmitheryEntry；renderer types.d.ts 的 SmitheryInstallResult 有镜像）。
   // hub（momo-hub 第五源）：目录项 → MarketplaceItem → installPackage 全链
-  // （installHubPackage 内查目录，版本取目录当前版本）。
+  // （installHubPackage 内 fresh 查目录取 latest + 已装 semver 判定——target ≤
+  // 已装返回 alreadyLatest 如实回执，M2.3 T2；返回形状透传 renderer）。
   const __resourceInstall = async (_evt: unknown, id: string): Promise<unknown> => {
     const item = await resolveResourceById(id);
     if (!item) {

@@ -332,11 +332,12 @@ describe('resource.store — hub 发布事件 → 更新角标态（M1 Task 14�
 
   it('installResource hub 项成功：安装/更新横幅区分 + hubUpdates 键消退（徽标消退契约）', async () => {
     // 更新场景：before 已装（1.1.0）→ 横幅「已从 momo-hub 更新」+ 角标键清除
+    //（mock 保真：已装行恒带 installedVersion——D7 记账锚点，消键条件消费）
     useResourceStore.setState({
       items: [hubInstalled],
       hubUpdates: { 'agent:meeting': '1.2.0' },
     });
-    resourceList.mockResolvedValue([{ ...hubInstalled, version: '1.2.0' }]);
+    resourceList.mockResolvedValue([{ ...hubInstalled, version: '1.2.0', installedVersion: '1.2.0' }]);
     await useResourceStore.getState().installResource('hub-agent-meeting');
     expect(useResourceStore.getState().installNotice).toBe('已从 momo-hub 更新「会议纪要生成器」');
     expect(useResourceStore.getState().hubUpdates).toEqual({});
@@ -355,6 +356,53 @@ describe('resource.store — hub 发布事件 → 更新角标态（M1 Task 14�
     useResourceStore.setState({ items: [] });
     await useResourceStore.getState().installResource('p2p-agent-x1y2-research');
     expect(useResourceStore.getState().installNotice).toBe('已导入至「自定义」');
+  });
+
+  it('installResource hub 项：消键仅当记账版本到达事件版本（D3-3——未到达不消键）', async () => {
+    // 防御面仿真：安装成功但记账版本仍 1.0.0 < 事件版本 2.0.0（主进程修复后
+    // 正常不可达——store 层守卫独立锁：键残留让角标继续指向 2.0.0，不误报已最新）
+    useResourceStore.setState({
+      items: [hubInstalled],
+      hubUpdates: { 'agent:meeting': '2.0.0' },
+    });
+    resourceList.mockResolvedValue([{ ...hubInstalled, version: '1.0.0', installedVersion: '1.0.0' }]);
+    await useResourceStore.getState().installResource('hub-agent-meeting');
+    expect(useResourceStore.getState().hubUpdates).toEqual({ 'agent:meeting': '2.0.0' }); // 键保留（红现状：无条件消键）
+  });
+
+  it('installResource hub 项：记账版本到达事件版本 → 消键（等值语义：1.0 == 1.0.0 缺段相等）', async () => {
+    useResourceStore.setState({
+      items: [hubInstalled],
+      hubUpdates: { 'agent:meeting': '1.0.0' },
+    });
+    resourceList.mockResolvedValue([{ ...hubInstalled, version: '1.0.0', installedVersion: '1.0' }]);
+    await useResourceStore.getState().installResource('hub-agent-meeting');
+    expect(useResourceStore.getState().hubUpdates).toEqual({}); // semver 相等即到达 → 消键
+  });
+
+  it('installResource hub 项 alreadyLatest 回执（D3-2）：横幅「已是最新版本」如实透出 + 到达即消键', async () => {
+    useResourceStore.setState({
+      items: [hubInstalled],
+      hubUpdates: { 'agent:meeting': '1.2.0' },
+    });
+    resourceInstall.mockResolvedValueOnce({ cachePath: '/x', alreadyLatest: true, version: '1.2.0' });
+    resourceList.mockResolvedValue([{ ...hubInstalled, version: '1.2.0', installedVersion: '1.2.0' }]);
+    const ok = await useResourceStore.getState().installResource('hub-agent-meeting');
+    expect(ok).toBe(true);
+    expect(useResourceStore.getState().installNotice).toBe('「会议纪要生成器」已是最新版本（v1.2.0）'); // 红现状：谎报「已从 momo-hub 更新」
+    expect(useResourceStore.getState().hubUpdates).toEqual({});
+  });
+
+  it('installResource hub 项 alreadyLatest 且记账高于事件版本（乱序低版事件）→ 仍消键（semver ≥ 即到达）', async () => {
+    useResourceStore.setState({
+      items: [{ ...hubInstalled, installedVersion: '2.0.0' }],
+      hubUpdates: { 'agent:meeting': '1.5.0' },
+    });
+    resourceInstall.mockResolvedValueOnce({ cachePath: '/x', alreadyLatest: true, version: '2.0.0' });
+    resourceList.mockResolvedValue([{ ...hubInstalled, version: '2.0.0', installedVersion: '2.0.0' }]);
+    await useResourceStore.getState().installResource('hub-agent-meeting');
+    expect(useResourceStore.getState().installNotice).toBe('「会议纪要生成器」已是最新版本（v2.0.0）');
+    expect(useResourceStore.getState().hubUpdates).toEqual({});
   });
 
   it('loadCatalogStatus：sources[].hub 降级位写入 hubDegraded；sources 缺席回 false', async () => {

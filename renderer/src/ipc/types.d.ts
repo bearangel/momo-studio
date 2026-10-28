@@ -1172,6 +1172,19 @@ export interface SmitheryInstallResult {
 }
 
 /**
+ * resource:install hub 条目返回（M2.3 T2，与 electron 端 resource/hub-install.ts
+ * 的 HubInstallOutcome 对齐——跨进程独立定义，仅结构对齐）：
+ *   - { cachePath }                          正常安装/更新完成
+ *   - { cachePath, alreadyLatest: true, version }  已装版本 ≥ fresh 目录 latest
+ *     （semver）——零动作如实回执（回执横幅「已是最新版本」消费）
+ */
+export interface HubInstallResult {
+  cachePath: string;
+  alreadyLatest?: boolean;
+  version?: string;
+}
+
+/**
  * P2.1 Task 5：DXT / MCPB 本地包 user_config 字段描述（resource:parseMcpBundle
  * 返回 userConfigSchema 的元素）。与 electron 端 mcp/bundle-import.ts 的
  * BundleConfigField 对齐（跨进程独立定义，仅结构对齐）。
@@ -2359,9 +2372,11 @@ export interface ApiSurface {
     /**
      * v1.7：安装资源（builtin/custom 不可安装，抛错）。
      * P2.1 Task 3：smithery 条目返回两态 SmitheryInstallResult（needsConfig=true
-     * 带 schema 未安装）；其余源返回空。
+     * 带 schema 未安装）。
+     * M2.3 T2：hub 条目安装/更新返回 HubInstallResult（alreadyLatest=true 为
+     * 「已是最新」零动作如实回执）；其余源返回空。
      */
-    install(id: string): Promise<SmitheryInstallResult | void>;
+    install(id: string): Promise<SmitheryInstallResult | HubInstallResult | void>;
     /**
      * P2.1 Task 3：smithery needsConfig 二段安装——Task 6 弹窗收集配置后提交。
      * 主进程重拉详情作 schema 真源，按 x-from 分流（query 进 URL / 其余进 headers）。

@@ -26,6 +26,7 @@
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
 import { useWorkspaceStore } from './workspace.store';
+import { compareVersions } from '../lib/version-compare';
 import type { ViewKey } from './ui.store';
 import type {
   HubResourcePublishedEvent,
@@ -60,8 +61,8 @@ interface ResourceStore {
   hubDegraded: boolean;
   /**
    * M1 Task 14：hub 发布事件带来的最新版本表（key `${type}:${slug}` → 版本）。
-   * 已装 hub 资源与该表恒等比较（禁 semver——T10 裁定）得「可更新」角标；
-   * installResource 成功后消键（徽标消退契约）。
+   * 已装 hub 资源与该表 semver 前进比较（M2.3 T2——lib/version-compare 镜像
+   * 单源）得「可更新」角标；installResource 成功且记账版本到达事件版本才消键。
    */
   hubUpdates: Record<string, string>;
   /** 当前 type tab，'all' = 不限 */
@@ -228,25 +229,41 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
     try {
       const result = await ipc.resource.install(id);
       // P2.1 Task 3：smithery needsConfig 两态——需要用户补配置时未安装，
-      // 不刷列表、不设成功横幅，结果原样透传给调用方（Task 6 弹窗消费）
-      if (result && typeof result === 'object' && result.needsConfig) {
+      // 不刷列表、不设成功横幅，结果原样透传给调用方（Task 6 弹窗消费）。
+      // M2.3 T2：install 返回联合含 HubInstallResult（hub alreadyLatest 回执），
+      // 'needsConfig' in 窄化取 smithery 分支；hub 分支落下方横幅逻辑。
+      if (result && typeof result === 'object' && 'needsConfig' in result && result.needsConfig) {
         return result;
       }
       await get().load();
       const after = get().items.find((i) => i.id === id);
       if (after?.source === 'hub') {
-        // hub 项：横幅区分首装/更新 + 消角标键（「成功后徽标消退」契约，M1 Task 14）
+        // hub 项：横幅区分首装/更新/已是最新 + 消角标键（M1 Task 14 + M2.3 T2
+        // D3-2/D3-3 消键条件化：仅记账版本 semver 到达事件版本才消——安装未
+        // 达事件版本时键保留，角标继续指向新版本，不误报「已是最新」）
         const { hubUpdates } = get();
         const key = `${after.type}:${after.slug}`;
-        if (key in hubUpdates) {
+        const eventVersion = hubUpdates[key];
+        if (
+          eventVersion !== undefined &&
+          after.installedVersion !== undefined &&
+          compareVersions(after.installedVersion, eventVersion) >= 0
+        ) {
           const next = { ...hubUpdates };
           delete next[key];
           set({ hubUpdates: next });
         }
+        // alreadyLatest 回执（主进程 semver 判定 target ≤ 已装——零动作）：
+        // 如实报「已是最新版本」，不谎报「已更新」（结构化窄化：install 返回联合
+        // 中的 HubInstallResult 分支，见 ipc/types.d.ts）
+        const hubResult = result as { alreadyLatest?: boolean; version?: string } | null | undefined;
+        const alreadyLatest = hubResult?.alreadyLatest === true;
         set({
-          installNotice: before?.installed
-            ? `已从 momo-hub 更新「${after.name}」`
-            : `已从 momo-hub 安装「${after.name}」`,
+          installNotice: alreadyLatest
+            ? `「${after.name}」已是最新版本（v${after.installedVersion ?? hubResult?.version ?? ''}）`
+            : before?.installed
+              ? `已从 momo-hub 更新「${after.name}」`
+              : `已从 momo-hub 安装「${after.name}」`,
         });
         return true;
       }

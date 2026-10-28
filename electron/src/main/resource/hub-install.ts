@@ -41,6 +41,7 @@ import {
   listHubMarketplaceItems,
   resolveHubContext,
 } from './hub/momo-hub';
+import { compareVersions } from './version-compare';
 
 const SMITHERY_BASE = 'https://registry.smithery.ai';
 
@@ -216,12 +217,15 @@ export async function listHubCatalogResources(type?: ResourceType): Promise<Reso
 }
 
 /**
- * momo-hub 条目安装：目录查项（按 type + slug）→ 分型安装链。
+ * momo-hub 条目安装：目录查项（按 type + slug，fresh 载入——D3-1/O1-1）→
+ * 已装 semver 判定（D3-2）→ 分型安装链。
  *   - agent / mcp / skill：installPackage 全链（marketplace 缓存链，spec §6.2）
  *   - plugin：plugin 域注册链（installPluginHubArchive——PluginRecord 落库 +
  *     组件激活 + installed 目录落位，与本地 zip 安装完全等价）+ installed_packages
  *     记账（item_type='plugin'，页签已装态判定源）
- * 版本取目录当前版本（meta.version，非 semver 比较——更新语义裁定见 T14）。
+ * 版本取 fresh 目录 latest（hub v0.1.5 起 = versions 全集 semver max）；target
+ * ≤ 已装记账版本（compareVersions）时如实返回 alreadyLatest 零动作——不进
+ * installer 的 `.installed` 幂等静默跳过路径（消除「回执成功但 DB 零变化」）。
  * 目录查不到 → 人话错误（未接入 / 已下架 / slug 拼错）。
  */
 export interface InstallHubOptions {
@@ -230,6 +234,17 @@ export interface InstallHubOptions {
   /** 安装作用域工作空间（plugin 链 enablement 单行落此 ws；缺省报错——与
    *  本地安装同语义：无作用域不装） */
   workspaceId?: string;
+}
+
+/** installHubPackage 返回（renderer types.d.ts HubInstallResult 有镜像）：
+ *  正常安装/更新 = { cachePath }；已装版本不低于 fresh 目录 latest =
+ *  { cachePath, alreadyLatest: true, version: 已装版本 }——零动作如实回执。 */
+export interface HubInstallOutcome {
+  cachePath: string;
+  /** true = 已是最新（target ≤ 已装，semver）——未发生下载/落账 */
+  alreadyLatest?: boolean;
+  /** alreadyLatest 在场时的已装版本（回执文案消费） */
+  version?: string;
 }
 
 /**
@@ -377,12 +392,21 @@ export async function installHubPackage(
   type: ResourceType,
   slug: string,
   opts?: InstallHubOptions,
-): Promise<{ cachePath: string }> {
+): Promise<HubInstallOutcome> {
   const item = await findHubMarketplaceItem(type, slug);
   if (!item) {
     throw new Error(
       `momo-hub 目录中未找到 ${type} 条目「${slug}」（可能尚未接入 hub、hub 离线或该条目已下架）`,
     );
+  }
+  // 已装判定 semver 化（M2.3 T2 D3-2）：fresh 目录版本 ≤ 已装记账版本 →
+  // 如实返回「已是最新」零动作（缺段容忍：'1.0' == '1.0.0' 同样命中，不重装）；
+  // 乱序/旧目录低版本不降级；版本前进才继续走安装链。
+  const installedRow = listInstalled().find(
+    (p) => p.itemId === hubPackageItemId(slug) && p.itemType === type,
+  );
+  if (installedRow && compareVersions(item.version, installedRow.version) <= 0) {
+    return { cachePath: installedRow.cachePath, alreadyLatest: true, version: installedRow.version };
   }
   const headers = await hubAuthHeaders();
   const onProgress = makePhaseEmitter(type, slug);
