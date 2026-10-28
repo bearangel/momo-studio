@@ -180,17 +180,26 @@ function countInProgress(): number {
 
 /** 队首候选：assigned / session_queued 按放行序（v2.3 车道队列并入），排除本轮已处理过的失败候选。
  * scheduled_at 闸门（spec 2026-09-30 §3.2）：NULL 或已到点（<= now）才有放行资格——
- * 未来时间的任务停在排队中，由 executor 30s 兜底扫描 + scheduler due-wakeup 到点捞起。 */
+ * 未来时间的任务停在排队中，由 executor 30s 兜底扫描 + scheduler due-wakeup 到点捞起。
+ * blocked 闸门（M3.3 spec §2.1）：存在未完成依赖（NOT EXISTS 半连接依赖边 ×
+ * 依赖行状态 <> completed）的任务不进入放行——依赖完成（completed）后自然放行，
+ * 与 scheduled_at 闸门正交（逐行过滤，非整池熔断）。 */
 function peekNextAssigned(slots: number, skip: ReadonlySet<string>): TaskRow | null {
   const skipIds = [...skip];
   // 排除子句只拼接占位符（skip 内容是内部生成的任务 id，仍走参数绑定）
   const excludeClause =
-    skipIds.length > 0 ? `AND id NOT IN (${skipIds.map(() => '?').join(',')})` : '';
+    skipIds.length > 0 ? `AND t.id NOT IN (${skipIds.map(() => '?').join(',')})` : '';
   const rows = getDb()
     .prepare(
-      `SELECT id FROM tasks WHERE status IN ('assigned', 'session_queued') ${excludeClause}
-       AND (scheduled_at IS NULL OR scheduled_at <= ?)
-       ORDER BY priority DESC, COALESCE(scheduled_at, created_at) ASC, created_at ASC
+      `SELECT t.id FROM tasks t
+       WHERE t.status IN ('assigned', 'session_queued') ${excludeClause}
+       AND (t.scheduled_at IS NULL OR t.scheduled_at <= ?)
+       AND NOT EXISTS (
+         SELECT 1 FROM task_dependencies d
+         JOIN tasks dep ON dep.id = d.depends_on_task_id
+         WHERE d.task_id = t.id AND dep.status <> 'completed'
+       )
+       ORDER BY t.priority DESC, COALESCE(t.scheduled_at, t.created_at) ASC, t.created_at ASC
        LIMIT ?`,
     )
     .all(...skipIds, Date.now(), Math.max(slots, 1)) as Array<{ id: string }>;

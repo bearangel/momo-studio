@@ -32,6 +32,7 @@ import {
 } from '../../src/main/storage/tasks/repo';
 import { createGroup, archiveGroup } from '../../src/main/storage/task-groups/repo';
 import { executeMove } from '../../src/main/task/move';
+import { setTaskRelations } from '../../src/main/task/relations';
 import {
   startTaskAndKickoff,
   resumePausedTask,
@@ -257,5 +258,48 @@ describe('executeMove 换组校验', () => {
     expect(after.status).toBe('in_progress');
     expect(after.completedAt).toBeNull();
     expect(after.pinnedAt).toBeNull();
+  });
+});
+
+// ── M3.3 blocked 派发闸（spec §2.1：assigned/active 目标检查追加）──────────────
+// 人话口径「存在未完成依赖」；同列 no-op 不受闸（未触状态迁移）。
+describe('executeMove blocked 派发闸（M3.3）', () => {
+  it('draft→assigned：有委派目标但存在未完成依赖 → 拒绝入队，状态不动', async () => {
+    const dep = seed('draft');
+    const t = seed('draft', { assigneeAgentId: 'i-1' });
+    setTaskRelations({ taskId: t.id, dependsOn: [dep.id] });
+    await expect(executeMove(t.id, { column: 'assigned', groupId: null })).rejects.toThrow(
+      `任务存在未完成依赖（${dep.id}），依赖完成前不可入队`,
+    );
+    expect(getTask(t.id)!.status).toBe('draft'); // 拒绝零副作用
+  });
+
+  it('assigned→active：存在未完成依赖 → 拒绝启动且不触 startTaskAndKickoff', async () => {
+    const dep = seed('draft');
+    const t = seed('assigned', { assigneeAgentId: 'i-1' });
+    setTaskRelations({ taskId: t.id, dependsOn: [dep.id] });
+    await expect(executeMove(t.id, { column: 'active', groupId: null })).rejects.toThrow(
+      `任务存在未完成依赖（${dep.id}），依赖完成前不可启动`,
+    );
+    expect(getTask(t.id)!.status).toBe('assigned');
+    expect(startMock).not.toHaveBeenCalled();
+  });
+
+  it('依赖 completed → 入队/启动放行（闸门随派生消失）', async () => {
+    const dep = seedViaChain('completed');
+    const t = seed('assigned', { assigneeAgentId: 'i-1' });
+    setTaskRelations({ taskId: t.id, dependsOn: [dep.id] });
+    await expect(executeMove(t.id, { column: 'active', groupId: null })).resolves.toBeDefined();
+    expect(startMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('同列 no-op：blocked 任务同列跨组换泳道不受闸（无状态迁移）', async () => {
+    const dep = seed('draft');
+    const g = createGroup({ workspaceId: WS, name: 'g1' });
+    const t = seed('draft', { groupId: g.id });
+    setTaskRelations({ taskId: t.id, dependsOn: [dep.id] });
+    const row = await executeMove(t.id, { column: 'backlog', groupId: null });
+    expect(row.groupId).toBeNull();
+    expect(row.status).toBe('draft');
   });
 });

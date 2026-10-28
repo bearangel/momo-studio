@@ -9,25 +9,31 @@
 //   6. 选团队目标 → create 携带 targetTeamId（v29）
 //   7. 选循环每天 09:00 → create 携带 recurrenceRule=daily@09:00（v29）
 //   8. 团队目标未选时禁用创建按钮，选中后恢复（v29 校验路径）
-//   9. M2.1 T8：单/批量 seg；批量 N 行→N 任务（空行跳过）统一路由；local 走既有
-//      task.create；group/node 走 hub.submitRoutedTask；routing≠local 隐藏本地委派字段
+//   9. M2.1 T8：单/批量 seg；批量 N 行→N 任务（空行跳过）统一路由；**本机批量走
+//      单 IPC task.createBatch（M3.3 替换逐行循环，store 真实实现承接）**；group/node
+//      走 hub.submitRoutedTask 逐行（hub 无批量通道）；routing≠local 隐藏本地委派字段
+//  10. M3.3 `::` 依赖语法：parseTaskLine 纯函数（无依赖行零变化锁）+ 批量/单任务
+//      提交链 dependsOn 透传 + 整批 rejection / per-item 失败展示
 //
-// Mock 策略：mock ../../ipc/client（IPC 进程边界，业务逻辑 serializeRecurrence
-// 走真实实现），agent.listMembers / team.list / session.list / task.create /
-// hub.routingPrecheck / hub.submitRoutedTask 均为 vi.fn()，返回形状与 types.d.ts 契约对齐。
+// Mock 策略：mock ../../ipc/client（IPC 进程边界，业务逻辑 serializeRecurrence /
+// task.store 走真实实现），agent.listMembers / team.list / session.list / task.create /
+// task.createBatch / hub.routingPrecheck / hub.submitRoutedTask 均为 vi.fn()，
+// 返回形状与 types.d.ts 契约对齐。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { CreateTaskDialog } from './CreateTaskDialog';
+import { CreateTaskDialog, parseTaskLine } from './CreateTaskDialog';
 import { useGroupStore } from '../../stores/group.store';
+import { useTaskStore } from '../../stores/task.store';
 import type { GroupRow, RoutingPrecheckResult } from '../../ipc/types';
 
 // vi.hoisted 保证 mock fn 在 vi.mock 工厂（会被提升到文件顶部）执行时已存在，
 // 同时能在每个 test 内通过 mockResolvedValueOnce 精确控制返回值。
 const {
-  mockTaskCreate, mockListAssignments, mockTeamList, mockSessionList, mockTaskGroupList,
+  mockTaskCreate, mockTaskCreateBatch, mockListAssignments, mockTeamList, mockSessionList, mockTaskGroupList,
   mockRoutingPrecheck, mockSubmitRoutedTask, mockGetDelegationSettings, showToastMock,
 } = vi.hoisted(() => ({
   mockTaskCreate: vi.fn(),
+  mockTaskCreateBatch: vi.fn(),
   mockListAssignments: vi.fn(),
   mockTeamList: vi.fn(),
   mockSessionList: vi.fn(),
@@ -40,7 +46,7 @@ const {
 
 vi.mock('../../ipc/client', () => ({
   ipc: {
-    task: { create: mockTaskCreate },
+    task: { create: mockTaskCreate, createBatch: mockTaskCreateBatch },
     agent: { listMembers: mockListAssignments },
     team: { list: mockTeamList },
     session: { list: mockSessionList },
@@ -391,6 +397,7 @@ describe('CreateTaskDialog', () => {
 describe('CreateTaskDialog — 单/批量与执行位置（M2.1 T8）', () => {
   beforeEach(() => {
     mockTaskCreate.mockReset().mockResolvedValue({ id: 'T-100' });
+    mockTaskCreateBatch.mockReset().mockResolvedValue({ results: [{ ok: true, task: { id: 'T-100' } }] });
     mockListAssignments.mockReset().mockResolvedValue([]);
     mockTeamList.mockReset().mockResolvedValue([]);
     mockSessionList.mockReset().mockResolvedValue([]);
@@ -398,6 +405,8 @@ describe('CreateTaskDialog — 单/批量与执行位置（M2.1 T8）', () => {
     mockRoutingPrecheck.mockReset().mockResolvedValue(precheckFixture());
     mockSubmitRoutedTask.mockReset().mockResolvedValue({ task: { id: 'T-rem' }, dispatched: true, nodeId: 'node-a' });
     useGroupStore.setState({ groups: [], loading: false, error: null, currentWorkspaceId: null, selectedGroupId: null });
+    // store 真实实现承接批量（M3.3）：tasks 跨用例残留会污染 append 断言
+    useTaskStore.setState({ tasks: [], selectedTaskId: null, loading: false, error: null, currentWorkspaceId: null, pendingMoveCount: 0, dragging: false });
   });
 
   it('T8-1. 默认单任务：seg 在场且单任务选中；标题/描述在场，无批量 textarea', () => {
@@ -424,9 +433,16 @@ describe('CreateTaskDialog — 单/批量与执行位置（M2.1 T8）', () => {
     expect(screen.getByRole('button', { name: '创建 3 个任务' })).toBeEnabled();
   });
 
-  it('T8-3. 批量 local（未传 workspaceName）：N 行→N 次 task.create，空行跳过', async () => {
+  it('T8-3. 批量 local（未传 workspaceName）：N 行→单次 task.createBatch（M3.3），空行跳过，items 保输入序', async () => {
     const onCreated = vi.fn();
     const onClose = vi.fn();
+    mockTaskCreateBatch.mockResolvedValue({
+      results: [
+        { ok: true, task: { id: 'T-101' } },
+        { ok: true, task: { id: 'T-102' } },
+        { ok: true, task: { id: 'T-103' } },
+      ],
+    });
     render(<CreateTaskDialog open onClose={onClose} onCreated={onCreated} workspaceId="ws1" />);
     fireEvent.click(screen.getByRole('radio', { name: '批量' }));
     fireEvent.change(screen.getByLabelText(/批量任务书/), {
@@ -434,14 +450,19 @@ describe('CreateTaskDialog — 单/批量与执行位置（M2.1 T8）', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: '创建 3 个任务' }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
-    expect(mockTaskCreate).toHaveBeenCalledTimes(3);
-    expect(mockTaskCreate).toHaveBeenNthCalledWith(1, expect.objectContaining({ title: '升级 electron 到 44.x' }));
-    expect(mockTaskCreate).toHaveBeenNthCalledWith(2, expect.objectContaining({ title: '修复暗黑对比度' }));
-    expect(mockTaskCreate).toHaveBeenNthCalledWith(3, expect.objectContaining({ title: '补齐单测' }));
+    // 单 IPC 批量（替换逐行循环）：一次调用携带 3 项，行序保持用户输入序
+    expect(mockTaskCreateBatch).toHaveBeenCalledTimes(1);
+    expect(mockTaskCreateBatch).toHaveBeenCalledWith({
+      items: [
+        { workspaceId: 'ws1', title: '升级 electron 到 44.x' },
+        { workspaceId: 'ws1', title: '修复暗黑对比度' },
+        { workspaceId: 'ws1', title: '补齐单测' },
+      ],
+    });
     expect(mockSubmitRoutedTask).not.toHaveBeenCalled();
-    // onCreated 只回调一次（末任务 id），不逐任务开详情抽屉
+    // onCreated 只回调一次（末次成功任务 id），不逐任务开详情抽屉
     expect(onCreated).toHaveBeenCalledTimes(1);
-    expect(onCreated).toHaveBeenCalledWith('T-100');
+    expect(onCreated).toHaveBeenCalledWith('T-103');
   });
 
   it('T8-4. 传 workspaceName → 预检拉取 + 执行位置区渲染；local 提交仍走 task.create（routing 不透传）', async () => {
@@ -581,18 +602,26 @@ describe('CreateTaskDialog — 单/批量与执行位置（M2.1 T8）', () => {
   it('T9-2. 批量全失败 → 不关窗 + 弹窗内错误行呈现失败摘要（可改后重试）', async () => {
     const onCreated = vi.fn();
     const onClose = vi.fn();
-    mockTaskCreate.mockReset().mockRejectedValue(new Error('数据库已锁'));
+    // M3.3：全失败经 per-item union 表达（不再是逐行 IPC rejection）
+    mockTaskCreateBatch.mockResolvedValue({
+      results: [
+        { ok: false, index: 0, error: '数据库已锁' },
+        { ok: false, index: 1, error: '数据库已锁' },
+      ],
+    });
     render(<CreateTaskDialog open onClose={onClose} onCreated={onCreated} workspaceId="ws1" />);
     fireEvent.click(screen.getByRole('radio', { name: '批量' }));
     fireEvent.change(screen.getByLabelText(/批量任务书/), {
       target: { value: '甲行\n乙行' },
     });
     fireEvent.click(screen.getByRole('button', { name: '创建 2 个任务' }));
-    await waitFor(() => expect(mockTaskCreate).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mockTaskCreateBatch).toHaveBeenCalledTimes(1));
     expect(onCreated).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
     expect(await screen.findByText(/2 个任务创建失败/)).toBeInTheDocument();
-    expect(screen.getByText(/数据库已锁/)).toBeInTheDocument();
+    // per-line 错误展示沿用现有 UI：原始行 + 主进程人话错误
+    expect(screen.getByText(/「甲行」数据库已锁/)).toBeInTheDocument();
+    expect(screen.getByText(/「乙行」数据库已锁/)).toBeInTheDocument();
   });
 
   // M2.1 T10：权限档位三选——外派模式档位行 + 提交链随载荷
@@ -657,10 +686,12 @@ describe('CreateTaskDialog — 单/批量与执行位置（M2.1 T8）', () => {
 describe('CreateTaskDialog — 批量并发预检（M2.2 P2-2）', () => {
   beforeEach(() => {
     mockTaskCreate.mockReset().mockResolvedValue({ id: 'T-100' });
+    mockTaskCreateBatch.mockReset().mockResolvedValue({ results: [{ ok: true, task: { id: 'T-100' } }] });
     mockRoutingPrecheck.mockReset().mockResolvedValue(precheckFixture());
     mockSubmitRoutedTask.mockReset().mockResolvedValue({ task: { id: 'T-rem' }, dispatched: true, nodeId: 'node-a' });
     mockGetDelegationSettings.mockReset().mockResolvedValue({ acceptTasks: true, maxConcurrent: 2, hitlTimeoutMinutes: 15 });
     useGroupStore.setState({ groups: [], loading: false, error: null, currentWorkspaceId: null, selectedGroupId: null });
+    useTaskStore.setState({ tasks: [], selectedTaskId: null, loading: false, error: null, currentWorkspaceId: null, pendingMoveCount: 0, dragging: false });
   });
 
   it('P2-2a. 批量行数 > 目标并发上限（外派路由）→ 提示行在场且可提交（不拦提交）', async () => {
@@ -714,5 +745,161 @@ describe('CreateTaskDialog — 批量并发预检（M2.2 P2-2）', () => {
     await waitFor(() =>
       expect(screen.getByTestId('batch-concurrency-hint').textContent).toContain('2'),
     );
+  });
+});
+
+// ═══ M3.3 `::` 依赖行语法：解析纯函数（无依赖行零变化锁）+ 批量/单任务提交链 ═══
+describe('parseTaskLine 纯函数（M3.3 §2.2 行语法）', () => {
+  it('无 `::` 后缀 → 整行 trim 为标题、dependsOn 空（零变化）', () => {
+    expect(parseTaskLine('普通任务标题')).toEqual({ title: '普通任务标题', dependsOn: [] });
+    expect(parseTaskLine('  带空白行  ')).toEqual({ title: '带空白行', dependsOn: [] });
+  });
+
+  it('标题含单个冒号（时间/URL）→ 不误切（零变化）', () => {
+    expect(parseTaskLine('09:00 站会')).toEqual({ title: '09:00 站会', dependsOn: [] });
+    expect(parseTaskLine('https://example.com')).toEqual({ title: 'https://example.com', dependsOn: [] });
+  });
+
+  it('`标题 :: T-1,T-2` → 拆标题 + 依赖列表', () => {
+    expect(parseTaskLine('联调后端 :: T-1,T-2')).toEqual({ title: '联调后端', dependsOn: ['T-1', 'T-2'] });
+  });
+
+  it('分隔符两侧空格可省略；依赖列表空白容忍 + 尾逗号容忍', () => {
+    expect(parseTaskLine('联调后端::T-1')).toEqual({ title: '联调后端', dependsOn: ['T-1'] });
+    expect(parseTaskLine('联调后端 :: T-1, T-2 ,')).toEqual({ title: '联调后端', dependsOn: ['T-1', 'T-2'] });
+  });
+
+  it('标题内含 `::`（C++ 风格）→ 取末次分隔符，标题保完整', () => {
+    expect(parseTaskLine('迁移 std::vector 用法 :: T-9')).toEqual({
+      title: '迁移 std::vector 用法',
+      dependsOn: ['T-9'],
+    });
+  });
+
+  it('后缀非 T-id 形状 / 后缀为空 / 标题段为空 → 整行按无依赖处理（零变化）', () => {
+    expect(parseTaskLine('备注 :: 张三负责')).toEqual({ title: '备注 :: 张三负责', dependsOn: [] });
+    expect(parseTaskLine('备注 ::')).toEqual({ title: '备注 ::', dependsOn: [] });
+    expect(parseTaskLine(':: T-1')).toEqual({ title: ':: T-1', dependsOn: [] });
+  });
+});
+
+describe('CreateTaskDialog — `::` 依赖提交链（M3.3）', () => {
+  beforeEach(() => {
+    mockTaskCreate.mockReset().mockResolvedValue({ id: 'T-100' });
+    mockTaskCreateBatch.mockReset();
+    mockListAssignments.mockReset().mockResolvedValue([]);
+    mockTeamList.mockReset().mockResolvedValue([]);
+    mockSessionList.mockReset().mockResolvedValue([]);
+    mockTaskGroupList.mockReset().mockResolvedValue([]);
+    mockRoutingPrecheck.mockReset().mockResolvedValue(precheckFixture());
+    mockSubmitRoutedTask.mockReset().mockResolvedValue({ task: { id: 'T-rem' }, dispatched: true, nodeId: 'node-a' });
+    showToastMock.mockReset();
+    useGroupStore.setState({ groups: [], loading: false, error: null, currentWorkspaceId: null, selectedGroupId: null });
+    useTaskStore.setState({ tasks: [], selectedTaskId: null, loading: false, error: null, currentWorkspaceId: null, pendingMoveCount: 0, dragging: false });
+  });
+
+  it('批量带依赖行 → 单次 createBatch：依赖行带 dependsOn，无依赖行不带该键（payload 零变化）', async () => {
+    mockTaskCreateBatch.mockResolvedValue({
+      results: [
+        { ok: true, task: { id: 'T-1' } },
+        { ok: true, task: { id: 'T-2' } },
+        { ok: true, task: { id: 'T-3' } },
+      ],
+    });
+    const onCreated = vi.fn();
+    render(<CreateTaskDialog open onClose={() => {}} onCreated={onCreated} workspaceId="ws1" />);
+    fireEvent.click(screen.getByRole('radio', { name: '批量' }));
+    fireEvent.change(screen.getByLabelText(/批量任务书/), {
+      target: { value: '采购物料\n组装零件 :: T-1\n质检出货 :: T-1,T-2' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '创建 3 个任务' }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    expect(mockTaskCreateBatch).toHaveBeenCalledWith({
+      items: [
+        { workspaceId: 'ws1', title: '采购物料' },
+        { workspaceId: 'ws1', title: '组装零件', dependsOn: ['T-1'] },
+        { workspaceId: 'ws1', title: '质检出货', dependsOn: ['T-1', 'T-2'] },
+      ],
+    });
+  });
+
+  it('批量部分失败（per-item）→ 成功行照常关窗回调 + 失败摘要 toast 含原始行文本', async () => {
+    mockTaskCreateBatch.mockResolvedValue({
+      results: [
+        { ok: true, task: { id: 'T-1' } },
+        { ok: false, index: 1, error: '依赖任务 T-999 不存在' },
+        { ok: true, task: { id: 'T-3' } },
+      ],
+    });
+    const onCreated = vi.fn();
+    const onClose = vi.fn();
+    render(<CreateTaskDialog open onClose={onClose} onCreated={onCreated} workspaceId="ws1" />);
+    fireEvent.click(screen.getByRole('radio', { name: '批量' }));
+    fireEvent.change(screen.getByLabelText(/批量任务书/), {
+      target: { value: '采购物料\n坏依赖行 :: T-999\n质检出货 :: T-1' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '创建 3 个任务' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    // 部分成功：回调末次成功行；失败摘要沿用 toast（原始行含 :: 后缀原样展示）
+    expect(onCreated).toHaveBeenCalledWith('T-3');
+    expect(showToastMock).toHaveBeenCalledWith(expect.stringContaining('1 个任务创建失败'));
+    expect(showToastMock).toHaveBeenCalledWith(expect.stringContaining('「坏依赖行 :: T-999」依赖任务 T-999 不存在'));
+    // store 真实实现：仅 ok 行 append
+    expect(useTaskStore.getState().tasks.map((t) => t.id)).toEqual(['T-1', 'T-3']);
+  });
+
+  it('整批 rejection（超 50 上限）→ 弹窗内错误呈现、不关窗不回调（错误路径）', async () => {
+    mockTaskCreateBatch.mockRejectedValue(new Error('批量创建一次最多 50 条（收到 51 条）'));
+    const onCreated = vi.fn();
+    const onClose = vi.fn();
+    render(<CreateTaskDialog open onClose={onClose} onCreated={onCreated} workspaceId="ws1" />);
+    fireEvent.click(screen.getByRole('radio', { name: '批量' }));
+    fireEvent.change(screen.getByLabelText(/批量任务书/), {
+      target: { value: Array.from({ length: 51 }, (_, i) => `行${i + 1}`).join('\n') },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '创建 51 个任务' }));
+    expect(await screen.findByText(/批量创建一次最多 50 条/)).toBeInTheDocument();
+    expect(onCreated).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(useTaskStore.getState().tasks).toHaveLength(0);
+  });
+
+  it('单任务标题带 `::` 后缀 → create 携带拆分标题 + dependsOn', async () => {
+    const onCreated = vi.fn();
+    render(<CreateTaskDialog open onClose={() => {}} onCreated={onCreated} workspaceId="ws1" />);
+    fireEvent.change(screen.getByLabelText(/标题/), { target: { value: '部署上线 :: T-7,T-8' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    expect(mockTaskCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ title: '部署上线', dependsOn: ['T-7', 'T-8'] }),
+    );
+  });
+
+  it('单任务标题无后缀 → create payload 不含 dependsOn 键（零变化锁）', async () => {
+    const onCreated = vi.fn();
+    render(<CreateTaskDialog open onClose={() => {}} onCreated={onCreated} workspaceId="ws1" />);
+    fireEvent.change(screen.getByLabelText(/标题/), { target: { value: '普通单任务' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    const call = mockTaskCreate.mock.calls[0]![0] as Record<string, unknown>;
+    expect(call.title).toBe('普通单任务');
+    expect('dependsOn' in call).toBe(false);
+  });
+
+  it('外派路径不解析 `::`：批量 remote 行原样为标题逐行提交（协议零改语义）', async () => {
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '批量' }));
+    fireEvent.click(await screen.findByRole('radio', { name: '组内调度' }));
+    fireEvent.change(screen.getByLabelText(/批量任务书/), {
+      target: { value: '远端行 :: T-1' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '创建 1 个任务' }));
+    await waitFor(() => expect(mockSubmitRoutedTask).toHaveBeenCalledTimes(1));
+    expect(mockSubmitRoutedTask).toHaveBeenCalledWith(
+      expect.objectContaining({ title: '远端行 :: T-1' }),
+    );
+    expect(mockTaskCreateBatch).not.toHaveBeenCalled();
   });
 });

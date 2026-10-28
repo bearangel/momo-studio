@@ -385,6 +385,13 @@ export async function retryDispatch(
   if (row.status !== 'pending' && row.status !== 'failed') {
     throw new Error('仅待派发或已失败的外派任务可重派');
   }
+  // M3.3 派发闸：存在未完成依赖 → 拒绝重派（blocked 为 getTask 派生态，
+  // 与 executor peek / move / startTaskAndKickoff 四闸同口径）
+  if (row.blocked) {
+    throw new Error(
+      `任务存在未完成依赖（${row.blockedBy?.join('、') ?? ''}），依赖完成前不可派发`,
+    );
+  }
   const workspaceName = ports.workspaceNameOf(row.workspaceId);
   if (!workspaceName) {
     throw new Error(`任务 ${taskId} 的工作空间已不存在，无法重派`);

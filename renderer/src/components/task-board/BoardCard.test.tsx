@@ -37,7 +37,7 @@ const base: TaskRow = {
   priority: 0, scheduledAt: null, recurrenceRule: null, deadlineAt: null, queuePosition: null,
   runtimeInstanceId: null, estimatedTokens: null, actualTokens: null, toolCallsUsed: 0,
   errorMessage: null, sourceNodeId: null, createdAt: 0, updatedAt: 0, startedAt: null, completedAt: null,
-  groupId: null, pinnedAt: null, archivedAt: null, routing: { mode: 'local' }, delegationId: null,
+  groupId: null, pinnedAt: null, archivedAt: null, routing: { mode: 'local' }, delegationId: null, parentTaskId: null,
 };
 
 beforeEach(() => {
@@ -365,8 +365,7 @@ describe('BoardCard 派生徽标「待收尾」（spec §3.5）', () => {
 });
 
 // ── 顶置（迁移 050）：图钉标识 + 右键菜单开关 ──────────────────────────────
-describe('BoardCard 顶置', () => {
-  it('pinnedAt 非 null → 状态徽标左侧渲染图钉（aria-label 已顶置）', () => {
+describe('BoardCard 顶置', () => {  it('pinnedAt 非 null → 状态徽标左侧渲染图钉（aria-label 已顶置）', () => {
     render(<BoardCard task={{ ...base, pinnedAt: 999 }} selected={false} onClick={() => {}} />);
     expect(screen.getByLabelText('已顶置')).toBeInTheDocument();
   });
@@ -423,5 +422,41 @@ describe('BoardCard 顶置', () => {
     await waitFor(() => {
       expect(useTaskStore.getState().tasks[0]!.pinnedAt).toBeNull();
     });
+  });
+});
+
+// ── M3.3 阻塞派生角标（blocked 非状态，与状态徽标并列；blockedBy 悬停摘要）────
+describe('BoardCard 阻塞角标（M3.3 §2.2）', () => {
+  it('blocked=true + blockedBy 在场 → 「阻塞」角标与状态徽标并列，title 含依赖 id', () => {
+    render(
+      <BoardCard
+        task={{ ...base, blocked: true, blockedBy: ['T-7', 'T-8'] }}
+        selected={false}
+        onClick={() => {}}
+      />,
+    );
+    const badge = screen.getByText('阻塞', { exact: true });
+    expect(badge).toBeInTheDocument();
+    // 并列不替换：状态徽标（排队中）仍在
+    expect(screen.getByText('排队中')).toBeInTheDocument();
+    expect(badge.closest('[title]')).toHaveAttribute('title', '等待依赖完成：T-7、T-8');
+  });
+
+  it('blockedBy 未填充（派生字段缺失）→ 角标在场，title 走兜底文案', () => {
+    render(<BoardCard task={{ ...base, blocked: true }} selected={false} onClick={() => {}} />);
+    const badge = screen.getByText('阻塞', { exact: true });
+    expect(badge.closest('[title]')).toHaveAttribute('title', '等待未完成依赖');
+  });
+
+  it('blocked=false / undefined → 无阻塞角标（显隐门控）', () => {
+    const { rerender } = render(<BoardCard task={{ ...base }} selected={false} onClick={() => {}} />);
+    expect(screen.queryByText('阻塞', { exact: true })).not.toBeInTheDocument();
+    rerender(<BoardCard task={{ ...base, blocked: false, blockedBy: [] }} selected={false} onClick={() => {}} />);
+    expect(screen.queryByText('阻塞', { exact: true })).not.toBeInTheDocument();
+    // blockedBy 在场但 blocked=false（数据不一致）→ 同样不渲染
+    rerender(
+      <BoardCard task={{ ...base, blocked: false, blockedBy: ['T-7'] }} selected={false} onClick={() => {}} />,
+    );
+    expect(screen.queryByText('阻塞', { exact: true })).not.toBeInTheDocument();
   });
 });

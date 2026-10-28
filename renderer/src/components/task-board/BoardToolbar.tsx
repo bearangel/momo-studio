@@ -6,7 +6,10 @@
 // 状态栏迁入，文案格式不变）/ 归档入口（Task 14 接线 ArchivePanel）/
 // 新建任务。
 // UX 修复：泳道开关改为 pill 形 toggle 按钮（旧 switch 轨道形态不像可点按钮）。
-import { Archive, Columns3, Plus, Search } from 'lucide-react';
+// M3.3：模式面加第三值 dag（依赖图视图）——沿既有 pill toggle 形态加第二枚
+// 独立按钮「依赖图」；分组钮语义 = lanes 亮起/toggle 回平铺（从 dag 点分组
+// 进 lanes），依赖图钮同构（dag 亮起/toggle 回平铺）。
+import { Archive, Columns3, Network, Plus, Search } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { Input } from '../ui/Input';
 import { Select } from '../ui/Select';
@@ -34,8 +37,8 @@ interface BoardToolbarProps {
   onAssignee: (value: string) => void;
   /** assignee 下拉选项（父层从 agent.store.members 派生，不含「全部 agent」占位） */
   assigneeOptions: AssigneeOption[];
-  laneMode: 'flat' | 'lanes';
-  onLaneMode: (mode: 'flat' | 'lanes') => void;
+  laneMode: 'flat' | 'lanes' | 'dag';
+  onLaneMode: (mode: 'flat' | 'lanes' | 'dag') => void;
   onOpenArchive: () => void;
   concurrency: BoardConcurrency;
   onCreateTask: () => void;
@@ -89,7 +92,7 @@ export function BoardToolbar({
         type="button"
         aria-pressed={laneMode === 'lanes'}
         title="泳道模式（按分组横向分道）"
-        onClick={() => onLaneMode(laneMode === 'flat' ? 'lanes' : 'flat')}
+        onClick={() => onLaneMode(laneMode === 'lanes' ? 'flat' : 'lanes')}
         className={cn(
           'inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs transition-colors',
           laneMode === 'lanes'
@@ -99,6 +102,22 @@ export function BoardToolbar({
       >
         <Columns3 size={14} strokeWidth={1.75} aria-hidden />
         分组
+      </button>
+      {/* 依赖图开关（M3.3 §2.2 DAG 视图入口）：dag 亮起，再点回平铺 */}
+      <button
+        type="button"
+        aria-pressed={laneMode === 'dag'}
+        title="依赖图模式（按未完成依赖分层左→右，只读）"
+        onClick={() => onLaneMode(laneMode === 'dag' ? 'flat' : 'dag')}
+        className={cn(
+          'inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs transition-colors',
+          laneMode === 'dag'
+            ? 'border-focus bg-surface-active text-primary'
+            : 'border-subtle bg-surface-2 text-secondary hover:bg-surface-3 hover:text-primary',
+        )}
+      >
+        <Network size={14} strokeWidth={1.75} aria-hidden />
+        依赖图
       </button>
       {/* 并发徽标：文案格式与迁入前一致（TaskBoardView 既有测试锁死） */}
       <span className="ml-auto shrink-0 text-[11px] text-tertiary">

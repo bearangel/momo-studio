@@ -91,6 +91,7 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title' | 'stat
     archivedAt: null,
     routing: { mode: 'group', groupId: 'g1' },
     delegationId: 'T-8f21abcd',
+    parentTaskId: null,
     ...partial,
   };
 }
@@ -311,7 +312,7 @@ describe('DelegatedTaskCard — 待派发', () => {
         id: 'T-100',
         title: '排查生产环境 WebSocket 断连',
         status: 'pending',
-        delegationId: null,
+        delegationId: null, parentTaskId: null,
         routing: { mode: 'node', groupId: 'g1', targetNodeId: 'node-b' },
       }),
       boardCtx({ nodeNames: { 'node-b': 'office-mac' } }),
@@ -949,5 +950,60 @@ describe('DelegatedTaskCard — 代答留痕行与 waiting 兜底（M3.1）', ()
       fire('answered', { taskId: 'T-8f21abcd', decision: 'deny' });
     });
     expect(await screen.findByText('已远程拒绝')).toBeInTheDocument();
+  });
+});
+
+// ── M3.3 阻塞派生角标（远端委派行同展示；blockedBy 来自本地行派生）──────────
+describe('DelegatedTaskCard — blocked 阻塞角标（M3.3 §2.2）', () => {
+  it('blocked=true + blockedBy 在场 → 「阻塞」角标渲染，title 含依赖 id；与节点徽标并列', () => {
+    renderCard(
+      mkTask({
+        id: 'T-100',
+        title: '外派被阻塞任务',
+        status: 'pending',
+        delegationId: null,
+        blocked: true,
+        blockedBy: ['T-7', 'T-8'],
+      }),
+    );
+    const badge = screen.getByText('阻塞', { exact: true });
+    expect(badge).toBeInTheDocument();
+    expect(badge.closest('[title]')).toHaveAttribute('title', '等待依赖完成：T-7、T-8');
+    // 并列不替换：待派发节点徽标仍在
+    expect(screen.getByText(/待派发/)).toBeInTheDocument();
+  });
+
+  it('blockedBy 未填充 → 角标在场，title 走兜底文案', () => {
+    renderCard(
+      mkTask({
+        id: 'T-100',
+        title: '外派被阻塞任务',
+        status: 'pending',
+        delegationId: null,
+        blocked: true,
+      }),
+    );
+    expect(screen.getByText('阻塞', { exact: true }).closest('[title]')).toHaveAttribute(
+      'title',
+      '等待未完成依赖',
+    );
+  });
+
+  it('blocked 缺省 / false → 无阻塞角标（显隐门控）', () => {
+    const { rerender } = render(
+      <DelegationBoardProvider value={EMPTY_BOARD}>
+        <DelegatedTaskCard task={mkTask({ id: 'T-100', title: '外派任务', status: 'pending' })} onSelect={() => {}} />
+      </DelegationBoardProvider>,
+    );
+    expect(screen.queryByText('阻塞', { exact: true })).not.toBeInTheDocument();
+    rerender(
+      <DelegationBoardProvider value={EMPTY_BOARD}>
+        <DelegatedTaskCard
+          task={mkTask({ id: 'T-100', title: '外派任务', status: 'pending', blocked: false, blockedBy: [] })}
+          onSelect={() => {}}
+        />
+      </DelegationBoardProvider>,
+    );
+    expect(screen.queryByText('阻塞', { exact: true })).not.toBeInTheDocument();
   });
 });

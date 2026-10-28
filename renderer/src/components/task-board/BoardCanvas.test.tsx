@@ -69,7 +69,7 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title' | 'stat
     groupId: null,
     pinnedAt: null,
     archivedAt: null,
-    routing: { mode: 'local' }, delegationId: null,
+    routing: { mode: 'local' }, delegationId: null, parentTaskId: null,
     ...partial,
   };
 }
@@ -308,7 +308,7 @@ describe('BoardCanvas 外派卡分发(M2.1 T9)', () => {
   const mixed = [
     mkTask({ id: 'T1', title: '本地甲', status: 'draft', groupId: 'G-1' }),
     mkTask({
-      id: 'T9', title: '外派排查', status: 'pending', groupId: 'G-1', delegationId: null,
+      id: 'T9', title: '外派排查', status: 'pending', groupId: 'G-1', delegationId: null, parentTaskId: null,
       routing: { mode: 'group', groupId: 'hub-g1' },
     }),
   ];
@@ -340,6 +340,82 @@ describe('BoardCanvas 外派卡分发(M2.1 T9)', () => {
     render(<BoardCanvas tasks={mixed} groups={groups} laneMode="lanes" selectedId={null} onSelect={onSelect} workspaceId="ws1" />);
     fireEvent.click(screen.getByRole('button', { name: '外派排查' }));
     expect(onSelect).toHaveBeenCalledWith('T9');
+  });
+});
+
+// ── M3.3 dag 模式：分层左→右列 + 只读（无拖拽注册）──────────────────────────
+describe('BoardCanvas dag 模式（M3.3 §2.2 DAG 视图）', () => {
+  const groups = [mkGroup({ id: 'G-1', name: '前端组', position: 1 })];
+  const dagTasks = (): TaskRow[] => [
+    mkTask({ id: 'T-A', title: '起点任务', status: 'in_progress' }),
+    mkTask({ id: 'T-B', title: '后继任务', status: 'draft', blockedBy: ['T-A'] }),
+    mkTask({ id: 'T-R', title: '外派行', status: 'pending', routing: { mode: 'group', groupId: 'hub-g1' }, delegationId: null }),
+  ];
+
+  beforeEach(() => {
+    (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
+    useTaskStore.setState({ tasks: [], dragging: false, pendingMoveCount: 0 });
+  });
+
+  it('DAG-1. 依赖分层左→右：起点层与后继层各成列，卡片入对应层', () => {
+    render(<BoardCanvas tasks={dagTasks()} groups={groups} laneMode="dag" selectedId={null} onSelect={() => {}} workspaceId="ws1" />);
+    const board = screen.getByTestId('dag-board');
+    expect(board).toHaveAttribute('data-has-cycle', 'false');
+    // 两层列：层头 aria-label + 卡片落位（外派行无依赖 → 起点层）
+    expect(screen.getByRole('region', { name: '依赖层 1' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: '依赖层 2' })).toBeInTheDocument();
+    const layer1 = screen.getByRole('region', { name: '依赖层 1' });
+    const layer2 = screen.getByRole('region', { name: '依赖层 2' });
+    expect(layer1).toHaveTextContent('起点任务');
+    expect(layer1).toHaveTextContent('外派行');
+    expect(layer2).toHaveTextContent('后继任务');
+  });
+
+  it('DAG-2. 只读：无任何 sortable 包装（touch-none 零注册）——状态迁移仍走看板模式', () => {
+    const { container } = render(
+      <BoardCanvas tasks={dagTasks()} groups={groups} laneMode="dag" selectedId={null} onSelect={() => {}} workspaceId="ws1" />,
+    );
+    expect(container.querySelectorAll('.touch-none').length).toBe(0);
+  });
+
+  it('DAG-3. 外派卡在 dag 视图照常渲染（DelegatedTaskCard 分发规则不因视图丢失）', () => {
+    render(<BoardCanvas tasks={dagTasks()} groups={groups} laneMode="dag" selectedId={null} onSelect={() => {}} workspaceId="ws1" />);
+    expect(screen.getByText('组内调度 · 待派发')).toBeInTheDocument();
+  });
+
+  it('DAG-4. 点击卡片仍走 onSelect（只读指查看，选中打开详情抽屉）', () => {
+    const onSelect = vi.fn();
+    render(<BoardCanvas tasks={dagTasks()} groups={groups} laneMode="dag" selectedId={null} onSelect={onSelect} workspaceId="ws1" />);
+    fireEvent.click(screen.getByRole('button', { name: /起点任务/ }));
+    expect(onSelect).toHaveBeenCalledWith('T-A');
+  });
+
+  it('DAG-5. 依赖成环 → 整图平铺单层 + has-cycle 标注 + 警示行（不炸不丢卡）', () => {
+    const cyclic = [
+      mkTask({ id: 'T-X', title: '环甲', status: 'draft', blockedBy: ['T-Y'] }),
+      mkTask({ id: 'T-Y', title: '环乙', status: 'draft', blockedBy: ['T-X'] }),
+    ];
+    render(<BoardCanvas tasks={cyclic} groups={groups} laneMode="dag" selectedId={null} onSelect={() => {}} workspaceId="ws1" />);
+    const board = screen.getByTestId('dag-board');
+    expect(board).toHaveAttribute('data-has-cycle', 'true');
+    expect(screen.getByRole('status')).toHaveTextContent('依赖关系存在环');
+    // 平铺单层：只有「依赖层 1」，两张卡都在
+    expect(screen.getByRole('region', { name: '依赖层 1' })).toHaveTextContent('环甲');
+    expect(screen.getByRole('region', { name: '依赖层 1' })).toHaveTextContent('环乙');
+    expect(screen.queryByRole('region', { name: '依赖层 2' })).not.toBeInTheDocument();
+  });
+
+  it('DAG-6. 空任务列表 → 空态提示（不渲染层列）', () => {
+    render(<BoardCanvas tasks={[]} groups={groups} laneMode="dag" selectedId={null} onSelect={() => {}} workspaceId="ws1" />);
+    expect(screen.getByTestId('dag-board')).toHaveTextContent('暂无任务');
+    expect(screen.queryByRole('region', { name: '依赖层 1' })).not.toBeInTheDocument();
+  });
+
+  it('DAG-7. flat/lanes 模式不渲染 dag 板（渲染门控：dag 分支只在 dag 模式进入）', () => {
+    render(<BoardCanvas tasks={dagTasks()} groups={groups} laneMode="flat" selectedId={null} onSelect={() => {}} workspaceId="ws1" />);
+    expect(screen.queryByTestId('dag-board')).not.toBeInTheDocument();
+    // flat 模式照常五列 + sortable 注册
+    expect(screen.getByText('待办')).toBeInTheDocument();
   });
 });
 

@@ -22,7 +22,7 @@
 // 外派卡不接拖拽（useSortable 零注册）：行状态由 hub 账本驱动，本地 move 会
 // 与远端真相打架——列间迁移只能经委派事件回写。
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Ban, Bot, Check, CircleCheck, CircleHelp, CircleX, RefreshCw, RotateCcw, X, Zap } from 'lucide-react';
+import { Ban, Bot, Check, CircleCheck, CircleHelp, CircleX, Lock, RefreshCw, RotateCcw, X, Zap } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useHubStore } from '../../stores/hub.store';
 import { hubSupportsMinor } from '../../lib/hub-capability';
@@ -478,6 +478,22 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
             </Badge>
           )}
           <span className="ml-auto flex shrink-0 items-center gap-1">
+            {task.blocked && (
+              /* M3.3 阻塞派生角标（spec §2.2 远端委派行同展示）：blockedBy 来自
+               * 本地行派生，与状态徽标并列，悬停摘要 */
+              <Badge
+                tone="warning"
+                className="h-auto gap-1 px-1.5 py-0.5 text-[10px] leading-none"
+                title={
+                  task.blockedBy && task.blockedBy.length > 0
+                    ? `等待依赖完成：${task.blockedBy.join('、')}`
+                    : '等待未完成依赖'
+                }
+              >
+                <Lock size={16} strokeWidth={1.75} aria-hidden />
+                阻塞
+              </Badge>
+            )}
             {waiting ? (
               <Badge tone="warning" className="h-auto gap-1 px-1.5 py-0.5 text-[10px] leading-none">
                 <CircleHelp size={12} strokeWidth={1.75} aria-hidden />

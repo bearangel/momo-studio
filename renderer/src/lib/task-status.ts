@@ -91,3 +91,14 @@ export const PENDING_WRAP_UP_STYLE: TaskStatusStyle = {
   tone: 'warning',
   className: `inline-flex h-5 items-center rounded px-2 text-xs font-medium ${BADGE_TONE_CLASSES.warning}`,
 };
+
+/**
+ * M3.3 派生徽标「阻塞」（spec §2.2，样式沿 M3.1 等待角标模式）：blocked 是
+ * 派生态非第 10 状态——与状态徽标并列展示，不替换底层状态真相。色值复用
+ * warning tone（等待系语义），禁新造色；Lock 图标由消费方内嵌。
+ */
+export const BLOCKED_STYLE: TaskStatusStyle = {
+  label: '阻塞',
+  tone: 'warning',
+  className: `inline-flex h-5 items-center gap-1 rounded px-2 text-xs font-medium ${BADGE_TONE_CLASSES.warning}`,
+};

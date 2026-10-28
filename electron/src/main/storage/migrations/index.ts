@@ -44,6 +44,7 @@ import { migration066 } from './066_plugin_scoped_activation';
 import * as migration067 from './067_session_groups_pin_type';
 import * as migration068 from './068_session_group_color';
 import * as migration069 from './069_m21_task_routing_mirror_registry';
+import * as migration070 from './070_m33_task_dependencies';
 
 export interface Migration {
   version: number;
@@ -1156,6 +1157,13 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // （workspace.mirrored 广播累积，UNIQUE 三键覆盖 snapshot_id）。
     version: migration069.version,
     sql: migration069.up,
+  },
+  {
+    // M3.3 任务编排与依赖（spec 2026-10-29 §2.1）：tasks + parent_task_id 列
+    // （任务层级链）+ task_dependencies 依赖边表（复合主键 + 自环 CHECK + 双索引；
+    // blocked 派生态不落列不加状态，读侧聚合派生）。
+    version: migration070.version,
+    sql: migration070.up,
   },
 ];
 
