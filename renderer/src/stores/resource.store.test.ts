@@ -62,6 +62,7 @@ beforeEach(() => {
     hubUpdates: {},
     hubSeeded: {},
     hubDegraded: false,
+    hubStatusKnown: false,
   });
   resourceGetCatalogStatus.mockReset();
 });
@@ -501,6 +502,19 @@ describe('resource.store — hub 角标播种（M2.5 T1 / A1）', () => {
 
     expect(useResourceStore.getState().hubUpdates).toEqual({ 'agent:legacy': '9.9.9' });
     expect(useResourceStore.getState().hubSeeded).toEqual({});
+  });
+
+  it('⑤ getCatalogStatus 抛错（状态未知）→ 不播种；hubDegraded 仍 false（提示条语义不变）', async () => {
+    resourceGetCatalogStatus.mockRejectedValue(new Error('ipc down'));
+    resourceList.mockResolvedValue([hubItem()]);
+    useResourceStore.setState({ typeFilter: 'agent' });
+
+    await useResourceStore.getState().load();
+
+    expect(useResourceStore.getState().hubUpdates).toEqual({});
+    expect(useResourceStore.getState().hubSeeded.agent).toBeUndefined();
+    expect(useResourceStore.getState().hubDegraded).toBe(false);
+    expect(useResourceStore.getState().hubStatusKnown).toBe(false);
   });
 
   it('④ 类型作用域：先播种 skill 再播种 mcp → skill 的 key 仍在（禁止全表清空）', () => {

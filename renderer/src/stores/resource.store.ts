@@ -60,6 +60,11 @@ interface ResourceStore {
    */
   hubDegraded: boolean;
   /**
+   * M2.5 T1 收紧：hub 目录健康状态是否已成功读取（known=false 时占位 false
+   * 的 hubDegraded 只是提示条语义，不代表目录可信——播种门控必须另判）。
+   */
+  hubStatusKnown: boolean;
+  /**
    * M1 Task 14：hub 发布事件带来的最新版本表（key `${type}:${slug}` → 版本）。
    * 已装 hub 资源与该表 semver 前进比较（M2.3 T2——lib/version-compare 镜像
    * 单源）得「可更新」角标；installResource 成功且记账版本到达事件版本才消键。
@@ -131,6 +136,7 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   installNotice: null,
   catalogDegraded: false,
   hubDegraded: false,
+  hubStatusKnown: false,
   hubUpdates: {},
   hubSeeded: {},
   typeFilter: 'all',
@@ -154,7 +160,9 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
       // 目录变更后不再只依赖 resource.published 事件。degraded 为真时完全不动
       //（不清空既有角标，也不新增）；stale 不影响（浏览链本就是 load）。
       await get().loadCatalogStatus();
-      if (get().hubDegraded) return;
+      // 仅「状态已知且 hub 未降级」才播种：查询失败 = 状态未知 → 不播种（不清空
+      // 也不新增），卡片落回「未拉取」三态；hubDegraded 的 false 占位只服务提示条。
+      if (!get().hubStatusKnown || get().hubDegraded) return;
       const seededTypes: ResourceType[] =
         typeFilter === 'all' || typeFilter === undefined
           ? ['agent', 'mcp', 'skill', 'plugin']
@@ -210,10 +218,12 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
       set({
         catalogDegraded: r.degraded,
         hubDegraded: r.sources?.find((s) => s.source === 'hub')?.degraded ?? false,
+        hubStatusKnown: true,
       });
     } catch {
-      // 通道未就绪（主进程并行接线）或查询失败——不误报降级
-      set({ catalogDegraded: false, hubDegraded: false });
+      // 通道未就绪（主进程并行接线）或查询失败——不误报降级（提示条语义不变），
+      // 但标记状态未知：播种据此拒绝建基线。
+      set({ catalogDegraded: false, hubDegraded: false, hubStatusKnown: false });
     }
   },
 
