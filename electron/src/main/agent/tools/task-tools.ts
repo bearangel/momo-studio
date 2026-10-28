@@ -27,12 +27,12 @@
 //     实现 ToolModule 接口（注册到 tools/index.ts）。
 import { getMemoryProvider } from '../../memory';
 import {
-  insertTask,
   transitionTaskStatus,
   getTask,
   listTasks as listTasksRepo,
   type TaskRow,
 } from '../../storage/tasks/repo';
+import { insertTaskWithRelations } from '../../task/relations';
 import { listMessagesBySession, type MessageRow } from '../../storage/messages/repo';
 import {
   listEventsByMessage,
@@ -163,6 +163,8 @@ export interface CreateTaskInput {
   scheduledAt?: number | null;
   /** 看板分组 ID（task_groups.id，G-<seq>）；设置时校验组存在 / 同 ws / 未归档（Task 8） */
   groupId?: string;
+  /** M3.3：直接依赖任务 id 列表；逐个校验存在 + 环检测后同事务插边（与表单路径同源校验） */
+  dependsOn?: string[];
 }
 
 /**
@@ -198,23 +200,28 @@ export async function createTask(input: CreateTaskInput): Promise<TaskRow> {
   // create-status.ts（表单路径=一律 draft，见 task/ipc.handlers.ts）。
   // 谓词统一走 starter.hasDelegationTarget——四处同义判定收敛单点（终审 N1/M6）
   const hasTarget = hasDelegationTarget(input);
-  const row = insertTask({
-    workspaceId: input.workspaceId,
-    title: input.title,
-    status: resolveCreateStatus(
-      { hasDelegationTarget: hasTarget, scheduledAt: input.scheduledAt ?? null },
-      'agent',
-    ),
-    description: input.description ?? '',
-    creatorUserId: input.creatorUserId,
-    priority: input.priority ?? 0,
-    assigneeAgentId: input.assigneeAgentId,
-    targetTeamId: input.targetTeamId,
-    targetSessionId: input.targetSessionId,
-    recurrenceRule: input.recurrenceRule,
-    scheduledAt: input.scheduledAt,
-    groupId: input.groupId,
-  });
+  // M3.3：dependsOn 走 relations 写路径单点（存在性 + 环检测 + 插行插边同事务，
+  // 与表单 createTaskFromForm 同源校验）；无依赖时等价原 insertTask
+  const row = insertTaskWithRelations(
+    {
+      workspaceId: input.workspaceId,
+      title: input.title,
+      status: resolveCreateStatus(
+        { hasDelegationTarget: hasTarget, scheduledAt: input.scheduledAt ?? null },
+        'agent',
+      ),
+      description: input.description ?? '',
+      creatorUserId: input.creatorUserId,
+      priority: input.priority ?? 0,
+      assigneeAgentId: input.assigneeAgentId,
+      targetTeamId: input.targetTeamId,
+      targetSessionId: input.targetSessionId,
+      recurrenceRule: input.recurrenceRule,
+      scheduledAt: input.scheduledAt,
+      groupId: input.groupId,
+    },
+    { dependsOn: input.dependsOn },
+  );
   // assigned 落态即时触发放行评估（100ms 去抖合并；丢了有 30s 兜底扫描自愈）
   if (row.status === 'assigned') notifyExecutor();
   return row;
@@ -346,6 +353,15 @@ function parseStringArgOptional(value: unknown, name: string): string | undefine
   return value;
 }
 
+/** M3.3：把 unknown 归一化为字符串数组；缺失返回 undefined，存在但非字符串数组抛错 */
+function parseStringArrayArgOptional(value: unknown, name: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+    throw new Error(`参数 "${name}" 不是字符串数组`);
+  }
+  return value as string[];
+}
+
 /** 无指派创建的 warning 文案（委派信息闭环 ③：让 agent 立即知道死局与出路） */
 const NO_ASSIGNMENT_WARNING =
   '任务未指派委派目标（assigneeAgentId / targetTeamId / targetSessionId 均为空）。' +
@@ -469,6 +485,12 @@ export class TaskTools implements ToolModule {
               type: 'string',
               description:
                 '任务分组 ID（看板泳道）。传前先调用 list_task_groups 获取真实 ID；组不存在/跨工作空间/已归档会被拒绝',
+            },
+            dependsOn: {
+              type: 'array',
+              items: { type: 'string' },
+              description:
+                '依赖任务 ID 列表（本任务在这些任务 completed 前保持 blocked，不会被调度执行）；逐个校验存在性，成环提交会被拒绝',
             },
           },
           required: ['title'],
@@ -618,6 +640,8 @@ export class TaskTools implements ToolModule {
           scheduledAt: typeof args.scheduledAt === 'number' ? args.scheduledAt : undefined,
           // 分组入参照 assigneeAgentId 的 '' → undefined 归一先例（防空串误判有组）
           groupId: parseStringArgOptional(args.groupId, 'groupId') || undefined,
+          // M3.3 依赖列表：字符串数组；异形人话抛错（与 parseStringArg 同反馈风格）
+          dependsOn: parseStringArrayArgOptional(args.dependsOn, 'dependsOn'),
         };
         const result = await createTask(input);
         // 委派信息闭环 ③：无指派 → TaskRow 顶层附加 warning（形状向后兼容，

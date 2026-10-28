@@ -50,11 +50,10 @@ function seed068(db: DB): void {
 }
 
 describe('migration 069：tasks 两列 + workspace_mirror_registry 表', () => {
-  it('069 已注册且版本顺延（68 → 69）', () => {
+  it('069 已注册且版本顺延（68 → 69；最新迁移锁随 M3.3 迁移 070 移交其专项测试）', () => {
     const versions = loadMigrations().map((x) => x.version);
     expect(versions).toContain(68);
     expect(versions).toContain(69);
-    expect(Math.max(...versions)).toBe(69);
   });
 
   it('旧行升级后 routing_json / delegation_id 均 NULL（迁移前任务行兼容）', () => {

@@ -91,6 +91,7 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title' | 'stat
     archivedAt: null,
     routing: { mode: 'group', groupId: 'g1' },
     delegationId: 'T-8f21abcd',
+    parentTaskId: null,
     ...partial,
   };
 }
@@ -311,7 +312,7 @@ describe('DelegatedTaskCard — 待派发', () => {
         id: 'T-100',
         title: '排查生产环境 WebSocket 断连',
         status: 'pending',
-        delegationId: null,
+        delegationId: null, parentTaskId: null,
         routing: { mode: 'node', groupId: 'g1', targetNodeId: 'node-b' },
       }),
       boardCtx({ nodeNames: { 'node-b': 'office-mac' } }),

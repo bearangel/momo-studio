@@ -52,6 +52,7 @@ function makeRow(partial: Partial<TaskRow> = {}): TaskRow {
     archivedAt: null,
     routing: { mode: 'group', groupId: 'g1' },
     delegationId: null,
+    parentTaskId: null,
     ...partial,
   };
 }

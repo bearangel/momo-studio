@@ -23,6 +23,7 @@ import { insertTask, getTask, transitionTaskStatus } from '../../src/main/storag
 import * as sessionServiceMod from '../../src/main/im/session-service';
 import * as runtimeRegistryMod from '../../src/main/agent/runtime-registry';
 import { startTaskAndKickoff, resumePausedTask, cancelTask, abortTaskExecution } from '../../src/main/task/lifecycle';
+import { setTaskRelations } from '../../src/main/task/relations';
 
 // spy 模块导出（tsc→CJS 编译为属性访问，spy 生效——同 ipc-handlers.test.ts
 // 先例），不断言内部实现。sendUserMessage 全文件拦截为成功值（真身是
@@ -253,5 +254,58 @@ describe('abortTaskExecution（Task 7 铺路：只 abort 运行时流，不 tran
 
     expect(() => abortTaskExecution(t.id)).not.toThrow();
     expect(abortSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ── M3.3 blocked 派发闸（spec §2.1：startTaskAndKickoff 启动前拒绝）───────────
+// task:start IPC 与 move→active 双入口同闸；blocked 为 getTask 派生态。
+describe('startTaskAndKickoff blocked 派发闸（M3.3）', () => {
+  it('存在未完成依赖 → 人话拒绝，状态保持 assigned，kickoff 零注入', async () => {
+    seedAgentMember('inst-blocked');
+    const dep = insertTask({
+      workspaceId: 'ws1',
+      title: '依赖',
+      creatorUserId: '@owner:home',
+      status: 'draft',
+    });
+    const t = insertTask({
+      workspaceId: 'ws1',
+      title: '被阻塞',
+      creatorUserId: '@owner:home',
+      assigneeAgentId: 'inst-blocked',
+      status: 'assigned',
+    });
+    setTaskRelations({ taskId: t.id, dependsOn: [dep.id] });
+
+    await expect(startTaskAndKickoff(t.id)).rejects.toThrow(
+      `任务存在未完成依赖（${dep.id}），依赖完成前不可启动`,
+    );
+    expect(getTask(t.id)!.status).toBe('assigned'); // 拒绝零副作用
+    expect(sendUserMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it('依赖 completed → 启动放行（闸门随派生消失）', async () => {
+    seedAgentMember('inst-unblocked');
+    const dep = insertTask({
+      workspaceId: 'ws1',
+      title: '依赖',
+      creatorUserId: '@owner:home',
+      assigneeAgentId: 'inst-unblocked',
+      status: 'assigned',
+    });
+    transitionTaskStatus(dep.id, 'in_progress', { executionSessionId: 's-dep' });
+    transitionTaskStatus(dep.id, 'completed', { completedAt: Date.now() });
+    const t = insertTask({
+      workspaceId: 'ws1',
+      title: '解锁后启动',
+      creatorUserId: '@owner:home',
+      assigneeAgentId: 'inst-unblocked',
+      status: 'assigned',
+    });
+    setTaskRelations({ taskId: t.id, dependsOn: [dep.id] });
+
+    const res = await startTaskAndKickoff(t.id);
+    expect(res.task.status).toBe('in_progress');
+    expect(sendUserMessageSpy).toHaveBeenCalledTimes(1);
   });
 });

@@ -37,6 +37,7 @@ import type {
   SmitheryInstallResult,
   HubInstallResult,
   TaskRow,
+  TaskCreateBatchResult,
   UploadedSkill,
   PluginSummary,
   PluginDetail,
@@ -528,6 +529,10 @@ const api: ApiSurface = {
   },
   task: {
     create: (input) => invoke<TaskRow>('task:create', input),
+    // M3.3 批量创建（上限 50；per-item union 部分成功允许）
+    createBatch: (input) => invoke<TaskCreateBatchResult>('task:createBatch', input),
+    // M3.3 关系写通道（parentTaskId / dependsOn 各自可选更新；dependsOn 全量替换）
+    setRelations: (input) => invoke<TaskRow>('task:setRelations', input),
     list: (opts) => invoke<TaskRow[]>('task:list', opts),
     get: (id) => invoke<TaskRow | null>('task:get', id),
     update: (id, patch) => invoke<void>('task:update', id, patch),

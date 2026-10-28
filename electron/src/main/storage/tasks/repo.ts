@@ -22,6 +22,8 @@ import {
 } from './state-machine';
 // TaskRouting 语义单点在 hub 域（plan 契约区）；task-routing 是零依赖叶子模块，无环
 import { parseTaskRouting, serializeTaskRouting, type TaskRouting } from '../../hub/task-routing';
+// M3.3 blocked 派生聚合（依赖边 JOIN，纯 SQL 层无环——dependencies-repo 只依赖纯模块）
+import { deriveBlockedBy } from './dependencies-repo';
 
 export type { TaskStatus } from './state-machine';
 
@@ -69,6 +71,19 @@ export interface TaskRow {
   routing: TaskRouting;
   /** hub 委派 id 关联（M2.1 迁移 069；T8 提交链回写 / T9 delegation-sync 消费，本列只落不派生） */
   delegationId: string | null;
+  /**
+   * 父任务 id（M3.3 迁移 070，任务层级链——区别于循环实例链 recurrenceParentId）。
+   * 写路径校验存在 + 链无环（task/dependency-graph.ts 合并图环检测）。
+   */
+  parentTaskId: string | null;
+  /**
+   * M3.3 blocked 派生态（非第 10 状态）：存在未完成直接依赖时 true。
+   * 读路径派生填充（getTask / listTasks 聚合，不落列）；未填充时 undefined，
+   * 消费方按 falsy 处理等同未阻塞。
+   */
+  blocked?: boolean;
+  /** M3.3：未完成直接依赖的 id 列表（blocked=true 时非空）；与 blocked 同源派生，只读 */
+  blockedBy?: string[];
 }
 
 // better-sqlite3 返回行是 snake_case 列名直出。
@@ -105,6 +120,7 @@ type SqlRow = {
   archived_at: number | null;
   routing_json: string | null;
   delegation_id: string | null;
+  parent_task_id: string | null;
 };
 
 function rowToCamel(r: SqlRow): TaskRow {
@@ -141,6 +157,7 @@ function rowToCamel(r: SqlRow): TaskRow {
     archivedAt: r.archived_at,
     routing: parseTaskRouting(r.routing_json),
     delegationId: r.delegation_id,
+    parentTaskId: r.parent_task_id,
   };
 }
 
@@ -150,8 +167,11 @@ function rowToCamel(r: SqlRow): TaskRow {
  * seq = max(已有 T-<n> 的 n) + 1，零填充到 ≥3 位（T-001 … T-999，T-1000+ 自然增长）。
  * 跳过非 `T-` 前缀的行（legacy UUID 等）——通过 `^T-(\d+)$` 严格匹配。
  * 显式传入 id 时不走本函数（insertTask 短路）。
+ *
+ * M3.3 导出：relations 写路径在事务内先定 id（环检测图需要节点名），
+ * 再带显式 id 走 insertTask——同连接事务内无 TOCTOU。
  */
-function nextTaskId(db: ReturnType<typeof getDb>): string {
+export function nextTaskId(db: ReturnType<typeof getDb>): string {
   const rows = db
     .prepare("SELECT id FROM tasks WHERE id LIKE 'T-%'")
     .all() as Array<{ id: string }>;
@@ -207,8 +227,8 @@ export function insertTask(
       priority, scheduled_at, recurrence_rule, deadline_at,
       queue_position, runtime_instance_id, estimated_tokens, actual_tokens, tool_calls_used, error_message,
       created_at, updated_at, started_at, completed_at,
-      group_id, pinned_at, archived_at, routing_json, delegation_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      group_id, pinned_at, archived_at, routing_json, delegation_id, parent_task_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.workspaceId,
@@ -242,6 +262,7 @@ export function insertTask(
     input.archivedAt ?? null,
     input.routing !== undefined ? serializeTaskRouting(input.routing) : null,
     input.delegationId ?? null,
+    input.parentTaskId ?? null,
   );
   emitPluginEvent('taskCreated', { id, workspaceId: input.workspaceId, title: input.title, status });
   return getTask(id)!;
@@ -272,7 +293,7 @@ export function updateTask(id: string, patch: Partial<Omit<TaskRow, 'id' | 'crea
       queue_position=?, runtime_instance_id=?, estimated_tokens=?, actual_tokens=?, tool_calls_used=?, error_message=?,
       group_id=?, pinned_at=?, archived_at=?,
       updated_at=?, started_at=?, completed_at=?,
-      routing_json=?, delegation_id=?
+      routing_json=?, delegation_id=?, parent_task_id=?
     WHERE id=?`,
   ).run(
     next.workspaceId,
@@ -305,6 +326,7 @@ export function updateTask(id: string, patch: Partial<Omit<TaskRow, 'id' | 'crea
     next.completedAt,
     serializeTaskRouting(next.routing),
     next.delegationId,
+    next.parentTaskId,
     id,
   );
 }
@@ -356,7 +378,10 @@ export function transitionTaskStatus(
 export function getTask(id: string): TaskRow | null {
   const db = getDb();
   const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as SqlRow | undefined;
-  return row ? rowToCamel(row) : null;
+  if (!row) return null;
+  // M3.3：blocked/blockedBy 派生态读路径单点（不落列）——四派发闸 / renderer 角标同源
+  const blockedBy = deriveBlockedBy([id]).get(id) ?? [];
+  return { ...rowToCamel(row), blocked: blockedBy.length > 0, blockedBy };
 }
 
 /**
@@ -447,7 +472,15 @@ export function listTasks(opts: {
   const rows = db
     .prepare(`SELECT * FROM tasks ${whereClause} ${orderClause} ${limitClause}`)
     .all(...params) as SqlRow[];
-  return rows.map(rowToCamel);
+  // M3.3：blocked/blockedBy 批量派生（一次 JOIN 覆盖整页，避免逐行点查）；
+  // 语义与 getTask 单点派生同源（dependencies-repo.deriveBlockedBy）
+  const camelRows = rows.map(rowToCamel);
+  if (camelRows.length === 0) return camelRows;
+  const blockedMap = deriveBlockedBy(camelRows.map((r) => r.id));
+  return camelRows.map((r) => {
+    const blockedBy = blockedMap.get(r.id) ?? [];
+    return { ...r, blocked: blockedBy.length > 0, blockedBy };
+  });
 }
 
 /**

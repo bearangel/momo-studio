@@ -292,6 +292,7 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
         errorMessage: null,
         routing: { mode: 'local' },
         delegationId: null,
+        parentTaskId: null,
         creatorUserId: '@owner:localhost',
         createdAt: 1000,
         updatedAt: 1000,

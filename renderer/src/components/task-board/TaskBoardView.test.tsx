@@ -93,7 +93,7 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title' | 'stat
     groupId: null,
     pinnedAt: null,
     archivedAt: null,
-    routing: { mode: 'local' }, delegationId: null,
+    routing: { mode: 'local' }, delegationId: null, parentTaskId: null,
     ...partial,
   };
 }
@@ -319,7 +319,7 @@ describe('TaskBoardView 主区（看板重构 Task 11）', () => {
       color: null,
       position: 1024,
       archivedAt: 111,
-      routing: { mode: 'local' }, delegationId: null,
+      routing: { mode: 'local' }, delegationId: null, parentTaskId: null,
       createdAt: 1,
       updatedAt: 1,
     };
@@ -331,7 +331,7 @@ describe('TaskBoardView 主区（看板重构 Task 11）', () => {
         priority: 5,
         groupId: 'g-z1',
         archivedAt: 999,
-        routing: { mode: 'local' }, delegationId: null,
+        routing: { mode: 'local' }, delegationId: null, parentTaskId: null,
       }),
       mkTask({
         id: 'tz2',
@@ -340,7 +340,7 @@ describe('TaskBoardView 主区（看板重构 Task 11）', () => {
         priority: 5,
         groupId: 'g-z1',
         archivedAt: 888,
-        routing: { mode: 'local' }, delegationId: null,
+        routing: { mode: 'local' }, delegationId: null, parentTaskId: null,
       }),
     ];
     const activeTask = mkTask({ id: 't9', title: '活跃任务九', status: 'pending', priority: 5 });

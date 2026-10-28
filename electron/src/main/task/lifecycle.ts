@@ -55,6 +55,13 @@ export async function startTaskAndKickoff(
   opts?: StartTaskOpts,
 ): Promise<StartTaskResult> {
   const before = getTask(id);
+  // M3.3 派发闸：存在未完成依赖 → 拒绝启动（task:start IPC 与 move→active 双入口
+  // 同闸；blocked 为 getTask 派生态，与 executor peek 的 SQL NOT EXISTS 同口径）
+  if (before?.blocked) {
+    throw new Error(
+      `任务存在未完成依赖（${before.blockedBy?.join('、') ?? ''}），依赖完成前不可启动`,
+    );
+  }
   const result = await startTask(id, opts);
   // K10：新建执行会话 → 通知 renderer 刷新会话列表（停留 IM 视图可见）
   if (result.createdNewRoom) broadcastSessionListChanged();

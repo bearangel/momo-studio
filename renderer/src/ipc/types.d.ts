@@ -240,6 +240,19 @@ export interface TaskRow {
   routing: TaskRouting;
   /** M2.1：hub 委派 id 关联（delegation-sync 回写；缺省 null） */
   delegationId: string | null;
+  /**
+   * M3.3：父任务 id（层级链，区别于循环实例链 recurrenceParentId）；写路径走
+   * task:setRelations（存在 + 链无环校验），task:update 剥离
+   */
+  parentTaskId: string | null;
+  /**
+   * M3.3 blocked 派生态（非状态，不落列）：存在未完成直接依赖时 true。
+   * 读路径派生填充（task:get / task:list 聚合）；未填充时 undefined，
+   * 消费方按 falsy 处理等同未阻塞
+   */
+  blocked?: boolean;
+  /** M3.3：未完成直接依赖的 id 列表（blocked=true 时非空）；只读派生态 */
+  blockedBy?: string[];
 }
 
 /**
@@ -282,27 +295,60 @@ export interface InterruptedTaskInfo {
   streamSessionId: string;
 }
 
+/**
+ * task:create / task:createBatch 单项入参（不含 creatorUserId，由 main 注入）。
+ * M3.3 抽出命名类型：批量通道复用同一形状，杜绝两处内联漂移。
+ */
+export interface TaskCreateInput {
+  workspaceId: string;
+  title: string;
+  description?: string;
+  priority?: number;
+  sourceSessionId?: string | null;
+  sourceMessageId?: string | null;
+  assigneeAgentId?: string | null;
+  /** v29：委派目标三列（互斥） */
+  targetTeamId?: string | null;
+  /** v29：委派目标三列（互斥） */
+  targetSessionId?: string | null;
+  /** v29：循环规则 */
+  recurrenceRule?: string | null;
+  scheduledAt?: number | null;
+  deadlineAt?: number | null;
+  /** 看板分组（UX 修复）：落组 id，缺省不分组；主进程三重校验（存在/同 ws/未归档） */
+  groupId?: string;
+  /** M2.1：执行路由三选；缺省不传 = 本机（落列 NULL）；异形主进程人话拒绝 */
+  routing?: TaskRouting;
+  /** M3.3：父任务 id；主进程校验存在 + 链无环 */
+  parentTaskId?: string | null;
+  /** M3.3：直接依赖任务 id 列表；主进程逐个校验存在 + 环检测（同事务插边） */
+  dependsOn?: string[];
+}
+
+/**
+ * M3.3 task:createBatch 返回：per-item union（部分成功允许，与逐行循环 catch
+ * 语义等价）；失败项带原始 index 供 per-line 错误展示。
+ */
+export interface TaskCreateBatchResult {
+  results: Array<{ ok: true; task: TaskRow } | { ok: false; index: number; error: string }>;
+}
+
 export interface TaskApiSurface {
-  create(input: {
-    workspaceId: string;
-    title: string;
-    description?: string;
-    priority?: number;
-    sourceSessionId?: string | null;
-    sourceMessageId?: string | null;
-    assigneeAgentId?: string | null;
-    /** v29：委派目标三列（互斥） */
-    targetTeamId?: string | null;
-    /** v29：委派目标三列（互斥） */
-    targetSessionId?: string | null;
-    /** v29：循环规则 */
-    recurrenceRule?: string | null;
-    scheduledAt?: number | null;
-    deadlineAt?: number | null;
-    /** 看板分组（UX 修复）：落组 id，缺省不分组；主进程三重校验（存在/同 ws/未归档） */
-    groupId?: string;
-    /** M2.1：执行路由三选；缺省不传 = 本机（落列 NULL）；异形主进程人话拒绝 */
-    routing?: TaskRouting;
+  create(input: TaskCreateInput): Promise<TaskRow>;
+  /**
+   * M3.3 批量创建：上限 50（超限整体 bad_request）；逐项走 create 同源校验
+   * （分组/routing/依赖），失败只败该项不拖垮整批
+   */
+  createBatch(input: { items: TaskCreateInput[] }): Promise<TaskCreateBatchResult>;
+  /**
+   * M3.3 关系写通道：parentTaskId / dependsOn 各自可选更新（未携带的保持不变）；
+   * dependsOn 为全量替换语义（数组即最终态）；parentTaskId 传 null 清除父任务。
+   * 成环/引用不存在任务时人话拒绝（含环路径）
+   */
+  setRelations(input: {
+    taskId: string;
+    parentTaskId?: string | null;
+    dependsOn?: string[];
   }): Promise<TaskRow>;
   list(opts: {
     workspaceId?: string;

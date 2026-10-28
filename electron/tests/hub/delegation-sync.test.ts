@@ -67,6 +67,7 @@ function mkRow(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title'>): TaskR
     archivedAt: null,
     routing: { mode: 'local' },
     delegationId: null,
+    parentTaskId: null,
     ...partial,
   };
 }
@@ -621,4 +622,39 @@ it('映射表值域 ∈ 看板九态', () => {
     'paused', 'completed', 'failed', 'cancelled',
   ]);
   for (const s of Object.values(DELEGATION_STATUS_TO_TASK)) expect(valid.has(s)).toBe(true);
+});
+
+// ── Part E：retryDispatch blocked 派发闸（M3.3 spec §2.1）────────────────────
+// 门控口径：仅 completed 解锁；blocked 为 getTask 派生态（生产接线 repo.getTask
+// 已聚合；本文件纯注入 world 的行按真实派生形状构造）。
+describe('delegation-sync — retryDispatch blocked 闸（M3.3）', () => {
+  it('E-1. 存在未完成依赖（pending/failed 态均可命中）→ 人话拒绝，行零复位零派发', async () => {
+    const row = delegatedRow({ status: 'failed', blocked: true, blockedBy: ['T-2'] });
+    const w = makeRedispatchWorld(row);
+    await expect(retryDispatch('T-100', w.ports)).rejects.toThrow(
+      '任务存在未完成依赖（T-2），依赖完成前不可派发',
+    );
+    expect(w.updates).toHaveLength(0); // 拒绝先于复位写
+    expect(w.delegateCalls).toHaveLength(0);
+  });
+
+  it('E-2. 门序：blocked 检查在状态门之后（合法态 + blocked → 拒；非法态仍先报状态错）', async () => {
+    // in_progress 行（状态门先拒，blocked 信息不出场）
+    const running = makeRedispatchWorld(delegatedRow({ status: 'in_progress', blocked: true }));
+    await expect(retryDispatch('T-100', running.ports)).rejects.toThrow(
+      '仅待派发或已失败的外派任务可重派',
+    );
+    // pending（合法待重派态）+ blocked → blocked 门拒
+    const pendingBlocked = makeRedispatchWorld(
+      delegatedRow({ status: 'pending', delegationId: null, blocked: true, blockedBy: ['T-9'] }),
+    );
+    await expect(retryDispatch('T-100', pendingBlocked.ports)).rejects.toThrow('存在未完成依赖');
+  });
+
+  it('E-3. 无依赖（blocked 缺省）→ 既有重派链路不受闸影响', async () => {
+    const row = delegatedRow({ status: 'failed', errorMessage: '执行失败:X', delegationId: 'hub-old-id' });
+    const w = makeRedispatchWorld(row);
+    const result = await retryDispatch('T-100', w.ports);
+    expect(result.dispatched).toBe(true);
+  });
 });

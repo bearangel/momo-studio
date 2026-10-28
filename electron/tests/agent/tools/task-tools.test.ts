@@ -186,6 +186,42 @@ describe('create_task', () => {
     expect(t.status).toBe('assigned');
     expect(t.scheduledAt).toBe(at);
   });
+
+  // M3.3（spec §2.1 agent 路径）：dependsOn 走 relations 写路径单点——与表单
+  // createTaskFromForm 同源校验（存在性 + 环检测 + 同事务插边）
+  it('dependsOn 合法 → 落边 + 行内 blocked 派生；无依赖行为不变', async () => {
+    const dep = await createTask({
+      workspaceId: 'ws1',
+      title: '依赖',
+      creatorUserId: '@owner:home',
+    });
+    const t = await createTask({
+      workspaceId: 'ws1',
+      title: '带依赖',
+      creatorUserId: '@owner:home',
+      dependsOn: [dep.id],
+    });
+    expect(t.blocked).toBe(true);
+    expect(t.blockedBy).toEqual([dep.id]);
+
+    const plain = await createTask({
+      workspaceId: 'ws1',
+      title: '无依赖',
+      creatorUserId: '@owner:home',
+    });
+    expect(plain.blocked).toBe(false);
+  });
+
+  it('dependsOn 引用不存在任务 → 人话拒绝（与表单路径同源）', async () => {
+    await expect(
+      createTask({
+        workspaceId: 'ws1',
+        title: '坏依赖',
+        creatorUserId: '@owner:home',
+        dependsOn: ['T-999'],
+      }),
+    ).rejects.toThrow('依赖任务 T-999 不存在');
+  });
 });
 
 describe('complete_task', () => {

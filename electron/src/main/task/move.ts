@@ -73,11 +73,24 @@ export async function executeMove(id: string, target: MoveTarget): Promise<TaskR
         if (task.status === 'draft' && !hasDelegationTarget(task)) {
           throw new Error('任务未设置委派目标,请先编辑任务指派 agent/团队/会话');
         }
+        // M3.3 派发闸：存在未完成依赖 → 拒绝入队(与 executor peek 闸/启动闸同口径)
+        if (task.blocked) {
+          throw new Error(
+            `任务存在未完成依赖（${task.blockedBy?.join('、') ?? ''}），依赖完成前不可入队`,
+          );
+        }
         transitionTaskStatus(id, 'assigned');
         notifyExecutor();
         break;
       }
       case 'active': {
+        // M3.3 派发闸：存在未完成依赖 → 拒绝启动(下方 startTaskAndKickoff 同闸兜底，
+        // 此处先抛给出更贴合「拖拽入列」语境的文案)
+        if (task.blocked) {
+          throw new Error(
+            `任务存在未完成依赖（${task.blockedBy?.join('、') ?? ''}），依赖完成前不可启动`,
+          );
+        }
         await startTaskAndKickoff(id); // assigned / session_queued
         break;
       }

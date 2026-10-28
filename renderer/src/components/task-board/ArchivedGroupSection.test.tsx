@@ -65,7 +65,7 @@ function mkTask(
     completedAt: null,
     pinnedAt: null,
     archivedAt: null,
-    routing: { mode: 'local' }, delegationId: null,
+    routing: { mode: 'local' }, delegationId: null, parentTaskId: null,
     ...partial,
   };
 }

@@ -11,7 +11,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
-import { insertTask, getTask, listTasks } from '../../src/main/storage/tasks/repo';
+import { insertTask, getTask, listTasks, transitionTaskStatus } from '../../src/main/storage/tasks/repo';
+import { setTaskRelations } from '../../src/main/task/relations';
 import { insertSession } from '../../src/main/storage/sessions/repo';
 import { TaskExecutor } from '../../src/main/task/executor';
 import type { ExecutorDeps } from '../../src/main/task/executor';
@@ -252,5 +253,107 @@ describe('TaskExecutor.admitOnce scheduled_at 闸门（spec 2026-09-30 §3.2）'
     const kickoff = vi.fn().mockResolvedValue(undefined);
     await mkExecutor(3, kickoff).admitOnce();
     expect(getTask('T-001')!.status).toBe('in_progress');
+  });
+});
+
+// ── M3.3 blocked 派发闸（spec §2.1：peekNextAssigned NOT EXISTS 半连接）──────
+// 语义：存在未完成直接依赖的 assigned/session_queued 不进入放行——与
+// scheduled_at 闸门正交（逐行过滤非整池熔断）；依赖 completed 后自然放行。
+describe('TaskExecutor.admitOnce blocked 闸门（M3.3）', () => {
+  it('依赖未完成 → 队首候选跳过，任务保持 assigned，kickoff 零注入', async () => {
+    seedAgentMember('inst1');
+    const dep = insertTask({ workspaceId: 'ws1', title: '依赖', creatorUserId: '@o' });
+    const blocked = insertTask({
+      workspaceId: 'ws1',
+      title: '被阻塞',
+      creatorUserId: '@o',
+      assigneeAgentId: 'inst1',
+      status: 'assigned',
+    });
+    setTaskRelations({ taskId: blocked.id, dependsOn: [dep.id] });
+    const kickoff = vi.fn(async () => {});
+    const ex = mkExecutor(3, kickoff);
+
+    await ex.admitOnce();
+
+    expect(getTask(blocked.id)!.status).toBe('assigned'); // 不放行
+    expect(kickoff).not.toHaveBeenCalled();
+  });
+
+  it('blocked 候选不挡道：同池无依赖候选正常放行（闸门按行过滤）', async () => {
+    seedAgentMember('inst1');
+    const dep = insertTask({ workspaceId: 'ws1', title: '依赖', creatorUserId: '@o' });
+    const blocked = insertTask({
+      workspaceId: 'ws1',
+      title: '被阻塞',
+      creatorUserId: '@o',
+      assigneeAgentId: 'inst1',
+      status: 'assigned',
+      priority: 9, // 高优先——若闸门失效会先于自由任务被选中
+    });
+    setTaskRelations({ taskId: blocked.id, dependsOn: [dep.id] });
+    const free = insertTask({
+      workspaceId: 'ws1',
+      title: '自由任务',
+      creatorUserId: '@o',
+      assigneeAgentId: 'inst1',
+      status: 'assigned',
+    });
+    const kickoff = vi.fn(async () => {});
+    await mkExecutor(3, kickoff).admitOnce();
+
+    expect(getTask(free.id)!.status).toBe('in_progress'); // 自由任务放行
+    expect(getTask(blocked.id)!.status).toBe('assigned'); // 被阻塞任务跳过
+  });
+
+  it('依赖 completed → 解锁自然放行（拉取式：badge 消失即有资格）', async () => {
+    seedAgentMember('inst1');
+    // dep 落 draft（无目标不自放行）——完成走生产合法链，避免与本测试的放行断言互相干扰
+    const dep = insertTask({ workspaceId: 'ws1', title: '依赖', creatorUserId: '@o' });
+    const blocked = insertTask({
+      workspaceId: 'ws1',
+      title: '被阻塞',
+      creatorUserId: '@o',
+      assigneeAgentId: 'inst1',
+      status: 'assigned',
+    });
+    setTaskRelations({ taskId: blocked.id, dependsOn: [dep.id] });
+    const kickoff = vi.fn(async () => {});
+    await mkExecutor(3, kickoff).admitOnce();
+    expect(getTask(blocked.id)!.status).toBe('assigned');
+
+    // 依赖走生产合法链到 completed
+    transitionTaskStatus(dep.id, 'assigned');
+    transitionTaskStatus(dep.id, 'in_progress', { executionSessionId: 's-dep' });
+    transitionTaskStatus(dep.id, 'completed', { completedAt: Date.now() });
+    await mkExecutor(3, kickoff).admitOnce();
+
+    expect(getTask(blocked.id)!.status).toBe('in_progress'); // 解锁放行
+    expect(kickoff).toHaveBeenCalledTimes(1);
+  });
+
+  it('依赖 failed（非 completed 终态）→ 仍阻塞（仅 completed 解锁）', async () => {
+    seedAgentMember('inst1');
+    const dep = insertTask({
+      workspaceId: 'ws1',
+      title: '依赖',
+      creatorUserId: '@o',
+      assigneeAgentId: 'inst1',
+      status: 'assigned',
+    });
+    const blocked = insertTask({
+      workspaceId: 'ws1',
+      title: '被阻塞',
+      creatorUserId: '@o',
+      assigneeAgentId: 'inst1',
+      status: 'assigned',
+    });
+    setTaskRelations({ taskId: blocked.id, dependsOn: [dep.id] });
+    transitionTaskStatus(dep.id, 'in_progress', { executionSessionId: 's-dep' });
+    transitionTaskStatus(dep.id, 'failed', { completedAt: Date.now() });
+
+    const kickoff = vi.fn(async () => {});
+    await mkExecutor(3, kickoff).admitOnce();
+    expect(getTask(blocked.id)!.status).toBe('assigned'); // failed 依赖不解锁
   });
 });

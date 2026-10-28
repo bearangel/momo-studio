@@ -29,7 +29,6 @@
 import { ipcMain } from 'electron';
 import { logger } from '../logger';
 import {
-  insertTask,
   listTasks,
   getTask,
   updateTask,
@@ -49,6 +48,7 @@ import { startTaskAndKickoff, resumePausedTask, cancelTask, abortTaskExecution }
 import { detectInterrupted, resumeTask, type InterruptedTaskInfo } from './resume';
 import { executeMove, type MoveTarget } from './move';
 import { validateTaskRoutingInput, type TaskRouting } from '../hub/task-routing';
+import { insertTaskWithRelations, setTaskRelations, type TaskRelationsInput } from './relations';
 
 /** renderer task:create 入参（不含 creatorUserId，由 main 注入） */
 export interface CreateInput {
@@ -71,7 +71,22 @@ export interface CreateInput {
   groupId?: string;
   /** M2.1 T6：执行路由三选；异形人话拒绝（不静默降级本机），undefined 落列 NULL=local */
   routing?: TaskRouting;
+  /** M3.3：父任务 id（落库前校验存在 + 链无环，relations.ts 单点） */
+  parentTaskId?: string | null;
+  /** M3.3：直接依赖任务 id 列表（落库前逐个校验存在 + 环检测，同事务插边） */
+  dependsOn?: string[];
 }
+
+/**
+ * M3.3 task:createBatch 返回：per-item union（dispatch-submit 失败聚合先例）——
+ * 部分成功允许，与现 renderer 逐行循环 catch 语义等价；失败项携带原始 index。
+ */
+export interface TaskCreateBatchResult {
+  results: Array<{ ok: true; task: TaskRow } | { ok: false; index: number; error: string }>;
+}
+
+/** M3.3 批量创建上限（spec §2.1：超限整体 bad_request，不走 per-item 失败） */
+export const TASK_CREATE_BATCH_LIMIT = 50;
 
 /** renderer task:list 入参，与 listTasks opts 对齐 */
 interface ListOpts {
@@ -125,24 +140,29 @@ export function createTaskFromForm(input: CreateInput): TaskRow {
   // M2.1 T6：routing 三选校验（异形人话抛错——IPC 边界契约违反要响亮）；
   // undefined = 未指定 → 落列 NULL → 读侧 parseTaskRouting 兜底 local
   const routing = validateTaskRoutingInput(input.routing);
-  const created = insertTask({
-    workspaceId: input.workspaceId,
-    title: input.title,
-    creatorUserId: 'owner',
-    status,
-    description: input.description,
-    priority: input.priority,
-    sourceSessionId: input.sourceSessionId,
-    sourceMessageId: input.sourceMessageId,
-    assigneeAgentId: input.assigneeAgentId,
-    targetTeamId: input.targetTeamId,
-    targetSessionId: input.targetSessionId,
-    recurrenceRule: input.recurrenceRule,
-    scheduledAt: input.scheduledAt,
-    deadlineAt: input.deadlineAt,
-    groupId: input.groupId,
-    ...(routing !== undefined ? { routing } : {}),
-  });
+  // M3.3：parentTaskId / dependsOn 走 relations 写路径单点（存在性 + 环检测 +
+  // 插行插边同事务）；无关系时等价原 insertTask（行为零变化）
+  const created = insertTaskWithRelations(
+    {
+      workspaceId: input.workspaceId,
+      title: input.title,
+      creatorUserId: 'owner',
+      status,
+      description: input.description,
+      priority: input.priority,
+      sourceSessionId: input.sourceSessionId,
+      sourceMessageId: input.sourceMessageId,
+      assigneeAgentId: input.assigneeAgentId,
+      targetTeamId: input.targetTeamId,
+      targetSessionId: input.targetSessionId,
+      recurrenceRule: input.recurrenceRule,
+      scheduledAt: input.scheduledAt,
+      deadlineAt: input.deadlineAt,
+      groupId: input.groupId,
+      ...(routing !== undefined ? { routing } : {}),
+    },
+    { parentTaskId: input.parentTaskId, dependsOn: input.dependsOn },
+  );
   notifyExecutor();
   return created;
 }
@@ -150,6 +170,46 @@ export function createTaskFromForm(input: CreateInput): TaskRow {
 export function registerTaskHandlers(): void {
   ipcMain.handle('task:create', async (_evt, input: CreateInput): Promise<TaskRow> =>
     createTaskFromForm(input),
+  );
+
+  // M3.3 批量创建（spec §2.1）：上限 50 超限整体 bad_request；逐项走
+  // createTaskFromForm（含分组/routing/依赖校验）——per-item union 部分成功允许，
+  // 与 renderer 既有逐行循环 catch 语义等价（失败项带原始 index 供 per-line 展示）
+  ipcMain.handle(
+    'task:createBatch',
+    async (_evt, input: { items: CreateInput[] }): Promise<TaskCreateBatchResult> => {
+      if (!Array.isArray(input?.items)) throw new Error('task:createBatch 需要 items 数组');
+      if (input.items.length === 0) throw new Error('task:createBatch items 不能为空');
+      if (input.items.length > TASK_CREATE_BATCH_LIMIT) {
+        throw new Error(
+          `批量创建一次最多 ${TASK_CREATE_BATCH_LIMIT} 条（收到 ${input.items.length} 条）`,
+        );
+      }
+      const results = input.items.map(
+        (
+          item,
+          index,
+        ): { ok: true; task: TaskRow } | { ok: false; index: number; error: string } => {
+          try {
+            return { ok: true, task: createTaskFromForm(item) };
+          } catch (err) {
+            return { ok: false, index, error: err instanceof Error ? err.message : String(err) };
+          }
+        },
+      );
+      return { results };
+    },
+  );
+
+  // M3.3 关系写通道（parentTaskId / dependsOn 各自可选更新；dependsOn 全量替换；
+  // 环拒绝人话报错含环路径）。关系变化可能解锁 assigned 任务 → 触发放行重评估
+  ipcMain.handle(
+    'task:setRelations',
+    async (_evt, input: { taskId: string } & TaskRelationsInput): Promise<TaskRow> => {
+      const row = setTaskRelations(input);
+      notifyExecutor();
+      return row;
+    },
   );
 
   ipcMain.handle('task:list', async (_evt, opts: ListOpts): Promise<TaskRow[]> => {
@@ -169,25 +229,49 @@ export function registerTaskHandlers(): void {
       // 可绕过分组位与归档域校验）。状态变更强制走 task:transition / task:cancel
       // （断言 + bump updated_at），分组走 task:move，顶置走 task:setPinned，
       // 归档走 task:archive / task:unarchive，分组管理走 taskGroup 通道。
+      // M3.3 追加：parentTaskId / dependsOn 走 task:setRelations（存在性 + 环检测
+      // 专属校验），blocked / blockedBy 为只读派生态——五字段同样剥离。
       // renderer 误传时记 warn 帮助定位，受保护字段静默丢弃
       let applied: Partial<TaskRow>;
       if (patch) {
+        // 边界放宽说明：dependsOn / parentId 非 TaskRow 字段，但 renderer 误传时
+        // 也须剥离——按关系字段一并接收处理
+        const patchRecord = patch as Partial<TaskRow> & {
+          dependsOn?: unknown;
+          parentId?: unknown;
+        };
         const {
           status: _status,
           pinnedAt: _pinnedAt,
           archivedAt: _archivedAt,
           groupId: _groupId,
+          parentTaskId: _parentTaskId,
+          blocked: _blocked,
+          blockedBy: _blockedBy,
+          dependsOn: _dependsOn,
+          parentId: _parentId,
           ...rest
-        } = patch;
+        } = patchRecord;
         const protectedKeys = (
-          ['status', 'pinnedAt', 'archivedAt', 'groupId'] as const
-        ).filter((k) => Object.prototype.hasOwnProperty.call(patch, k));
+          [
+            'status',
+            'pinnedAt',
+            'archivedAt',
+            'groupId',
+            'parentTaskId',
+            'dependsOn',
+            'parentId',
+            'blocked',
+            'blockedBy',
+          ] as const
+        ).filter((k) => Object.prototype.hasOwnProperty.call(patchRecord, k));
         if (protectedKeys.length > 0) {
           logger.warn(
             `task:update 携带受保护字段已剥离（${protectedKeys.join('/')}）——` +
               '状态请用 task:transition / task:cancel，分组请用 task:move，' +
               '顶置请用 task:setPinned，归档请用 task:archive / task:unarchive，' +
-              '分组管理请走 taskGroup 通道',
+              '分组管理请走 taskGroup 通道，任务关系（父任务/依赖）请用 task:setRelations，' +
+              'blocked/blockedBy 为只读派生态',
             { id },
           );
         }

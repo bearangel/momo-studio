@@ -109,6 +109,7 @@ function mkTaskRow(id: string, status: TaskRow['status']): TaskRow {
     errorMessage: null,
     routing: { mode: 'local' },
     delegationId: null,
+    parentTaskId: null,
     createdAt: 0,
     updatedAt: 0,
     startedAt: null,

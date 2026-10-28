@@ -69,7 +69,7 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title' | 'stat
     groupId: null,
     pinnedAt: null,
     archivedAt: null,
-    routing: { mode: 'local' }, delegationId: null,
+    routing: { mode: 'local' }, delegationId: null, parentTaskId: null,
     ...partial,
   };
 }
@@ -308,7 +308,7 @@ describe('BoardCanvas 外派卡分发(M2.1 T9)', () => {
   const mixed = [
     mkTask({ id: 'T1', title: '本地甲', status: 'draft', groupId: 'G-1' }),
     mkTask({
-      id: 'T9', title: '外派排查', status: 'pending', groupId: 'G-1', delegationId: null,
+      id: 'T9', title: '外派排查', status: 'pending', groupId: 'G-1', delegationId: null, parentTaskId: null,
       routing: { mode: 'group', groupId: 'hub-g1' },
     }),
   ];
