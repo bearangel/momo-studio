@@ -466,6 +466,33 @@ describe('已发布 custom skill 走 hub 补装位（UC-P1-3）', () => {
     expect(r.skillEmbeddedCount).toBe(1);
     expect(validateSnapshotManifest(r.manifest)).not.toBeNull();
   });
+
+  it('marketplace skill 无记账 → 聚合计数 warn 一行（只进清单，不占 resources 不内嵌）；custom/builtin/有记账不 warn', async () => {
+    const wsId = await mkWorkspace('skill 无记账告警空间');
+    seedMarketplaceSkillRow('orphan-market-skill');
+    seedMarketplaceSkillRow('accounted-market-skill');
+    seedHubAccounting('skill', 'accounted-market-skill');
+    seedCustomSkill('plain-custom-skill');
+
+    const r = await buildWorkspaceSnapshot(wsId);
+
+    // 三源 slug 全量入清单（口径不变）
+    expect(r.manifest.config.skills).toEqual(
+      expect.arrayContaining(['orphan-market-skill', 'accounted-market-skill', 'plain-custom-skill']),
+    );
+    // 有记账才占补装位；无记账 marketplace 不占（对 hub 仓发起安装必然失败）
+    expect(r.manifest.resources).toContainEqual({ type: 'skill', slug: 'accounted-market-skill' });
+    expect(r.manifest.resources).not.toContainEqual({ type: 'skill', slug: 'orphan-market-skill' });
+    // custom 无记账仍内嵌（回归锁）
+    expect(tarList(r.archivePath)).toContain('skills/plain-custom-skill/SKILL.md');
+
+    // leader 可见信号：聚合计数恰一行（count + slugs 定位），命中集只含无记账 marketplace 项
+    const warnCalls = vi.mocked(logger.warn).mock.calls.filter(
+      (c) => String(c[0]).includes('skill 无 hub 记账'),
+    );
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0]![1]).toMatchObject({ count: 1, slugs: ['orphan-market-skill'] });
+  });
 });
 
 // ── 2. 红线零渗漏（真实敏感材料在场）──────────────────────────────────────

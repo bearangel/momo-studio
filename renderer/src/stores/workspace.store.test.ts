@@ -382,3 +382,71 @@ describe('workspace.store subscribeWorkspaceListChanged（M2.1 D3：镜像落地
     expect(listChangedCb).toBeNull();
   });
 });
+
+describe('workspace.store load() 保 active 守卫（M2.3 T5 件7，T4 排查 P-A/P-C）', () => {
+  it('P-A 复活路径锁：全关 → active=null → listChanged 重拉 → 不从持久键复活已关闭空间', async () => {
+    // 两空间均可见，激活 ws-1；关 ws-1 时切 ws-2 落盘，全关后持久键残留 ws-2
+    mockApi.workspace.list.mockResolvedValue([MOCK_WS, MOCK_WS_2]);
+    await useWorkspaceStore.getState().load();
+    useWorkspaceStore.getState().closeTab('ws-1');
+    useWorkspaceStore.getState().closeTab('ws-2');
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull();
+    expect(localStorage.getItem('momo.activeWorkspace')).toBe('ws-2');
+
+    // 镜像应用等触发的 listChanged → load 重拉（列表仍含两空间）
+    const dispose = subscribeWorkspaceListChanged();
+    listChangedCb!({ reason: 'mirror-applied', workspaceName: 'dev-ws' });
+
+    await vi.waitFor(() => {
+      expect(mockApi.workspace.list).toHaveBeenCalledTimes(2);
+    });
+    // 修复前：persisted=ws-2 命中列表 → 已关闭空间复活（closedIds 残留 → tab 不可见撕裂）
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull();
+    expect(useWorkspaceStore.getState().closedIds).toEqual(['ws-1', 'ws-2']);
+    // 持久键不动（无激活不落盘）——下次启动仍可按原语义恢复
+    expect(localStorage.getItem('momo.activeWorkspace')).toBe('ws-2');
+    dispose();
+  });
+
+  it('notifySwitch 不重放：内存激活值仍在列表的 load 不再向 main 重放 switch', async () => {
+    // boot：恢复 persisted=ws-2，switch 通知恰好 1 次
+    mockApi.workspace.list.mockResolvedValue([MOCK_WS, MOCK_WS_2]);
+    localStorage.setItem('momo.activeWorkspace', 'ws-2');
+    await useWorkspaceStore.getState().load();
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-2');
+    expect(mockApi.workspace.switch).toHaveBeenCalledTimes(1);
+
+    // listChanged 重拉（active 未变）：不重放 notifySwitch（修复前 main 单点被无条件重播）
+    const dispose = subscribeWorkspaceListChanged();
+    listChangedCb!({ reason: 'mirror-applied', workspaceName: 'dev-ws' });
+    await vi.waitFor(() => {
+      expect(mockApi.workspace.list).toHaveBeenCalledTimes(2);
+    });
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-2');
+    expect(mockApi.workspace.switch).toHaveBeenCalledTimes(1);
+    dispose();
+  });
+
+  it('persisted 失效回退不夺内存值：持久键指向已删空间而内存激活仍在列表 → 保持内存值（不回退 list[0]）', async () => {
+    mockApi.workspace.list.mockResolvedValue([MOCK_WS, MOCK_WS_2]);
+    localStorage.setItem('momo.activeWorkspace', 'ws-2');
+    await useWorkspaceStore.getState().load();
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-2');
+
+    // 持久键失效（指向已删空间），重拉列表首项为 ws-1——内存值 ws-2 胜出
+    localStorage.setItem('momo.activeWorkspace', 'ws-gone');
+    await useWorkspaceStore.getState().load();
+
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-2');
+  });
+
+  it('boot 恢复语义不回归：内存 null + 空列表的首次 load 仍恢复持久键并通知 main', async () => {
+    mockApi.workspace.list.mockResolvedValue([MOCK_WS, MOCK_WS_2]);
+    localStorage.setItem('momo.activeWorkspace', 'ws-2');
+
+    await useWorkspaceStore.getState().load();
+
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-2');
+    expect(mockApi.workspace.switch).toHaveBeenCalledWith('ws-2');
+  });
+});

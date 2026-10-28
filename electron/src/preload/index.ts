@@ -87,6 +87,15 @@ function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   return ipcRenderer.invoke(channel, ...args);
 }
 
+/**
+ * hub 补装进度通道名（M2.3 T5 件5）——与主进程 resource/hub-install.ts 的
+ * HUB_INSTALL_PROGRESS_CHANNEL 同值单点对齐。sandbox preload 不可运行时导入主进程
+ * 模块（window.ts sandbox: true），故此处本地常量承载值；跨进程值一致由
+ * tests/ipc/preload-hub-channel-contract.test.ts 契约锁（两侧导入机械比对），
+ * 改通道名须两端同 commit（与主进程常量 JSDoc 约定一致）。
+ */
+const HUB_INSTALL_PROGRESS_CHANNEL = 'hub:installProgress';
+
 const api: ApiSurface = {
   system: {
     getInfo: () => invoke('system:getInfo'),
@@ -646,11 +655,11 @@ const api: ApiSurface = {
       ipcRenderer.on('hub:mirrorResult', handler);
       return () => { ipcRenderer.off('hub:mirrorResult', handler); };
     },
-    // M2.2 P2-7：hub 资源补装进度（通道名与主进程 HUB_INSTALL_PROGRESS_CHANNEL 单点对齐）
+    // M2.2 P2-7：hub 资源补装进度（通道名见顶部 HUB_INSTALL_PROGRESS_CHANNEL 契约注记）
     onInstallProgress: (callback) => {
       const handler = (_e: IpcRendererEvent, payload: HubInstallProgressEvent): void => callback(payload);
-      ipcRenderer.on('hub:installProgress', handler);
-      return () => { ipcRenderer.off('hub:installProgress', handler); };
+      ipcRenderer.on(HUB_INSTALL_PROGRESS_CHANNEL, handler);
+      return () => { ipcRenderer.off(HUB_INSTALL_PROGRESS_CHANNEL, handler); };
     },
     onWorkspaceMirrored: (callback) => {
       const handler = (_e: IpcRendererEvent, payload: HubWorkspaceMirroredEvent): void => callback(payload);

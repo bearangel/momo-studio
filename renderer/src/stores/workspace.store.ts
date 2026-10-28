@@ -82,16 +82,35 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const list = await ipc.workspace.list();
-      // 列表非空时恢复上次活跃 workspace；持久 id 已失效（被删）时回退列表首项
-      //（noUncheckedIndexedAccess 下需非空断言）
+      // 保 active 守卫（M2.3 T5 件7，T4 排查 P-A/P-C 两缺陷修复）：
+      //   ① 内存激活值仍在列表 → 保内存值且不重放 persist/notify——消除
+      //      listChanged 重拉对 main 激活单点的 notifySwitch 重放（多页面污染窗口），
+      //      persisted 失效回退 list[0] 也不再夺走内存值；
+      //   ② 内存 null 且此前已有列表（全关态）→ 不从 persisted 复活已关闭空间
+      //      （P-A 复活路径：closedIds 残留 + tab 不可见的视觉撕裂）；
+      //   ③ boot / 0-ws 翻转 / 内存值已失效（被删）→ 原恢复语义：persisted 命中
+      //      列表则恢复，否则回退列表首项（noUncheckedIndexedAccess 下需非空断言）
+      const prev = get();
+      const memory = prev.activeWorkspaceId;
       let activeId: string | null = null;
+      let replaySideEffects = true;
       if (list.length > 0) {
-        const persisted = readPersistedActive();
-        activeId = list.some((w) => w.id === persisted) ? persisted : list[0]!.id;
+        if (memory !== null && list.some((w) => w.id === memory)) {
+          activeId = memory;
+          replaySideEffects = false;
+        } else if (memory === null && prev.workspaces.length > 0) {
+          activeId = null;
+          replaySideEffects = false;
+        } else {
+          const persisted = readPersistedActive();
+          activeId = list.some((w) => w.id === persisted) ? persisted : list[0]!.id;
+        }
       }
       set({ workspaces: list, activeWorkspaceId: activeId, loading: false });
-      persistActive(activeId); // 回退/恢复结果落盘，保证持久键与激活一致
-      notifySwitch(activeId); // 初始激活通知 main（boot 初始激活的 renderer 侧来源）
+      if (replaySideEffects) {
+        persistActive(activeId); // 回退/恢复结果落盘，保证持久键与激活一致
+        notifySwitch(activeId); // 初始激活通知 main（boot 初始激活的 renderer 侧来源）
+      }
     } catch (err) {
       set({ loading: false, error: (err as Error).message });
     }

@@ -23,11 +23,13 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { logger } from '../../src/main/logger';
-import { hubPackageItemId, HUB_ITEM_ID_PREFIX } from '../../src/main/resource/hub/momo-hub';
+import { hubPackageItemId, __setHubContextResolverForTest } from '../../src/main/resource/hub/momo-hub';
+import { loadHubAccountingSet } from '../../src/main/hub/mirror-applier';
 import {
   recordPublishAccounting,
   recordPublishAccountingSafe,
@@ -35,6 +37,7 @@ import {
   listHubCatalogResources,
 } from '../../src/main/resource/hub-install';
 import { uninstallPackage } from '../../src/main/marketplace/installer';
+import { listMarketplaceResources } from '../../src/main/resource/marketplace';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-publish-acc-${Date.now()}`);
 
@@ -199,18 +202,11 @@ describe('recordPublishAccounting（四类发布回填 hub 记账）', () => {
     expect(cards[0]?.source).toBe('hub');
     expect(cards[0]?.installed).toBe(true);
 
-    // hub 链读取面（mirror-applier loadHubAccountingSet 同款查询——已装判定①数据源）：
-    // hub: 前缀行入集，marketplace 行不入集（不污染、不双计）
-    const accRows = getDb()
-      .prepare('SELECT item_id, item_type FROM installed_packages')
-      .all() as Array<{ item_id: string; item_type: string }>;
-    const hubSlugs = new Set(
-      accRows
-        .filter((r) => r.item_id.startsWith(HUB_ITEM_ID_PREFIX) && r.item_type === 'skill')
-        .map((r) => r.item_id.slice(HUB_ITEM_ID_PREFIX.length)),
-    );
-    expect(hubSlugs.has('superpowers')).toBe(true);
-    expect(hubSlugs.size).toBe(1);
+    // hub 链读取面（M2.3 T5 件2——直接消费 mirror-applier 导出的 loadHubAccountingSet，
+    // 导出契约在此锁死）：hub: 前缀行入集，marketplace 行不入集（不污染、不双计）
+    const accSet = loadHubAccountingSet().get('skill') ?? new Set<string>();
+    expect(accSet.has('superpowers')).toBe(true);
+    expect(accSet.size).toBe(1);
 
     // 卸载方向一：卸 hub 行 → marketplace 行与缓存目录原样
     uninstallHubPackage('skill', 'superpowers');
@@ -251,5 +247,135 @@ describe('recordPublishAccounting（四类发布回填 hub 记账）', () => {
     expect(fs.existsSync(path.join(sentinel, 'keep.txt'))).toBe(true);
     expect(rowsOf(hubPackageItemId('cp-skill'), 'skill')).toHaveLength(0);
     expect(rowsOf(hubPackageItemId('cp-mcp'), 'mcp')).toHaveLength(0);
+  });
+
+  it('孤儿缓存守卫（T5 件3）：旧 hub 安装行 cache_path 指向已删目录 → warn 一条 + 行随置换自愈', () => {
+    // 形态：hub 安装链落的真实行（cache_path 非空），目录被外部清掉（行在目录亡）
+    seedRow('orphan-1', hubPackageItemId('ghost-cache'), 'skill', 'ghost-cache', '1.0.0', path.join(tmpRoot, 'gone-dir'));
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+
+    recordPublishAccountingSafe('skill', 'ghost-cache', '2.0.0', 'sum');
+
+    // 守卫可观察面：warn 留痕（type/slug/cachePath 定位），不抛、不翻转回执语义
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('孤儿缓存行'),
+      expect.objectContaining({ type: 'skill', slug: 'ghost-cache' }),
+    );
+    // 自愈：坏行被置换为回填行（单行、cache_path=''）
+    const rows = rowsOf(hubPackageItemId('ghost-cache'), 'skill');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.version).toBe('2.0.0');
+    expect(rows[0]?.cache_path).toBe('');
+    warn.mockRestore();
+  });
+
+  it('孤儿缓存守卫反向（T5 件3）：cache_path 目录真实在场 → 静默置换（不误报 warn）', () => {
+    const liveDir = path.join(tmpRoot, 'live-cache');
+    fs.mkdirSync(liveDir, { recursive: true });
+    seedRow('live-1', hubPackageItemId('live-cache'), 'skill', 'live-cache', '1.0.0', liveDir);
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+
+    recordPublishAccountingSafe('skill', 'live-cache', '2.0.0', 'sum2');
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(rowsOf(hubPackageItemId('live-cache'), 'skill')).toHaveLength(1);
+    warn.mockRestore();
+  });
+
+  it('双源单卡 catalog 在场路径（T5 件1，T1 评审 Minor）：hub 目录含该 slug 时单卡——兜底行不叠加，本地页签独立卡不受牵连', async () => {
+    // mock hub 目录（catalog-only）：superpowers 以 skill 形态在目录中在场
+    const catalogBody = JSON.stringify({
+      version: '1.0.0',
+      updatedAt: '2026-10-28T00:00:00.000Z',
+      items: [
+        {
+          slug: 'superpowers',
+          type: 'skill',
+          name: 'superpowers',
+          version: '2.5.0',
+          author: 'node-a',
+          description: '双源单卡目录在场演示',
+          readme: '# superpowers',
+          tags: ['e2e'],
+          category: 'dev',
+          iconEmoji: '🧪',
+          verificationStatus: 'unverified',
+          downloadUrl: '/resources/superpowers/2.5.0/download',
+          checksum: '',
+          sizeBytes: 1024,
+          publishedAt: 1_700_000_000_000,
+          versions: ['2.5.0'],
+        },
+      ],
+    });
+    const server = http.createServer((req, res) => {
+      if (req.url === '/resources/catalog') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(catalogBody);
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address() as { port: number };
+    __setHubContextResolverForTest(async () => ({
+      hubUrl: `http://127.0.0.1:${addr.port}`,
+      deviceToken: 'tok-acc',
+    }));
+
+    try {
+      // 双源并存：marketplace 已装行（无 hub: 前缀 + 真实缓存目录）+ hub 回填行
+      const mktCache = path.join(tmpRoot, 'mkt-cache2', 'superpowers', '1.0.0');
+      fs.mkdirSync(mktCache, { recursive: true });
+      fs.writeFileSync(path.join(mktCache, 'SKILL.md'), '---\nname: x\n---\n');
+      seedRow('mkt-c', 'skill-superpowers', 'skill', 'superpowers', '1.0.0', mktCache);
+      recordPublishAccounting('skill', 'superpowers', '2.0.0', 'hub-sum');
+
+      // hub 页签单卡（catalog 在场路径）：目录卡唯一——记账行被 catalogSlugs 去重，
+      // 兜底行不叠加第二张；已装锚定回填记账版本（installedVersion D7 锚点）
+      const hubView = await listHubCatalogResources('skill');
+      const cards = hubView.filter((r) => r.slug === 'superpowers');
+      expect(cards).toHaveLength(1);
+      expect(cards[0]?.source).toBe('hub');
+      expect(cards[0]?.installed).toBe(true);
+      expect(cards[0]?.installedVersion).toBe('2.0.0');
+
+      // 本地页签独立卡不受牵连：marketplace 页签按自身目录出卡（source=marketplace），
+      // hub 侧去重/记账不泄漏进本地视图
+      const mktView = listMarketplaceResources({
+        version: '1.0.0',
+        updatedAt: '',
+        items: [
+          {
+            id: 'skill-superpowers',
+            type: 'skill',
+            slug: 'superpowers',
+            name: 'superpowers',
+            version: '1.0.0',
+            author: 'mkt',
+            description: '',
+            readme: '',
+            tags: [],
+            category: '',
+            iconEmoji: '',
+            verificationStatus: 'unverified',
+            downloadUrl: 'https://example.com/x.tar.gz',
+            checksum: '',
+            sizeBytes: 1,
+            installCount: 0,
+          },
+        ],
+      });
+      expect(mktView).toHaveLength(1);
+      expect(mktView[0]?.source).toBe('marketplace');
+      expect(mktView[0]?.slug).toBe('superpowers');
+      expect(mktView[0]?.installed).toBe(true); // marketplace 已装行命中（item_id 同键）
+    } finally {
+      __setHubContextResolverForTest(null);
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });

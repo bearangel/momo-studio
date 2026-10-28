@@ -186,8 +186,16 @@ async function extractSnapshot(
 // 本机已装判定（resources 逐项跳过依据）
 // ──────────────────────────────────────────────────────────────────────────
 
-/** installed_packages 的 hub 记账面：item_type → slug 集。 */
-function loadHubAccountingSet(): Map<string, Set<string>> {
+/**
+ * installed_packages 的 hub 记账面：item_type → slug 集（M2.3 T5 件2 导出契约化）。
+ *
+ * 契约：只收 `hub:` 前缀记账行（生产者 = recordPublishAccounting 发布回填 +
+ * installHubPackage 安装落账，均 `hub:{slug}` 单点前缀）；marketplace 本地行不入集。
+ * 跨模块消费面两处——本模块 installResources 已装判定①，及 snapshot-builder
+ * resources 段记账反查（此前 builder 私有同款 SQL，M2.3 T5 收口为导入单点，
+ * 漂移由 tests/hub/publish-accounting.test.ts 契约锁）。
+ */
+export function loadHubAccountingSet(): Map<string, Set<string>> {
   const acc = new Map<string, Set<string>>();
   const rows = getDb()
     .prepare('SELECT item_id, item_type FROM installed_packages')

@@ -17,7 +17,9 @@
 //                    && 非 plugin 来源（红线：url 形态/凭证头零进快照；plugin 来源
 //                    MCP 由插件激活面重建，不占引用位）；marketplace 来源无 hub 记账
 //                    → logger.warn（leader 可见信号，名字仍入清单——T8b 兜底解析）
-//   skills        ——listInstalled（skill/zip-uploader；builtin/marketplace/custom 三源）
+//   skills        ——listInstalled（skill/zip-uploader；builtin/marketplace/custom 三源）；
+//                    marketplace 来源无 hub 记账 → 聚合计数 logger.warn（leader 可见
+//                    信号，M2.2 T8 观察件——目标节点可能 unresolved）
 //   pluginsEnabled——listPlugins + isPluginEnabled（plugin/registry）+ installed_packages
 //                    hub: 前缀记账反查（resource/hub/momo-hub）；无记账的 zip/dev 插件
 //                    列入 excludedPlugins 并 warn，不阻断
@@ -45,7 +47,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { getDb } from '../storage/db';
 import { logger } from '../logger';
 import { getWorkspace } from '../workspace/crud';
 import { listMembers, getAgentDefinition } from '../agent/agent-queries';
@@ -57,8 +58,8 @@ import { listRegistered } from '../mcp/host-manager';
 import { listInstalled, getSkillsDir } from '../skill/zip-uploader';
 import { listPlugins, isPluginEnabled } from '../plugin/registry';
 import { getGlobalSettings, DEFAULT_JOURNAL_QUOTA_MB } from '../settings/crud';
-import { HUB_ITEM_ID_PREFIX } from '../resource/hub/momo-hub';
 import { agentManifestYaml, collectRegularFiles, tarDirectory } from './publish';
+import { loadHubAccountingSet } from './mirror-applier';
 import { resolveTmpDir } from '../paths';
 import {
   validateSnapshotManifest,
@@ -215,13 +216,11 @@ class HubAccounting {
 }
 
 function loadHubAccounting(): HubAccounting {
+  // 查询单点收口（M2.3 T5 件2）：hub 记账面 SQL 统一走 mirror-applier 导出的
+  // loadHubAccountingSet（契约见其 JSDoc）——此前本模块私有同款查询，两处漂移风险
   const acc = new HubAccounting();
-  const rows = getDb()
-    .prepare('SELECT item_id, item_type FROM installed_packages')
-    .all() as Array<{ item_id: string; item_type: string }>;
-  for (const row of rows) {
-    if (!row.item_id.startsWith(HUB_ITEM_ID_PREFIX)) continue;
-    acc.add(row.item_type, row.item_id.slice(HUB_ITEM_ID_PREFIX.length));
+  for (const [type, slugs] of loadHubAccountingSet()) {
+    for (const slug of slugs) acc.add(type, slug);
   }
   return acc;
 }
@@ -309,13 +308,24 @@ function collectSkills(acc: HubAccounting): {
   const skills: string[] = [];
   const resources: SnapshotResourceRef[] = [];
   const embeddedDirs: Array<{ slug: string; dir: string }> = [];
+  // marketplace 源且无记账：既不占 resources 也不内嵌——只进清单（目标节点能否
+  // 解析取决于其本地目录，M2.2 T8 观察件——聚合计数 warn 一行供 leader 预警）
+  const unaccounted: string[] = [];
   for (const s of listInstalled()) {
     skills.push(s.slug);
     if (acc.has('skill', s.slug)) {
       resources.push({ type: 'skill', slug: s.slug });
     } else if (s.source === 'custom') {
       embeddedDirs.push({ slug: s.slug, dir: path.join(getSkillsDir(), s.slug) });
+    } else if (s.source === 'marketplace') {
+      unaccounted.push(s.slug);
     }
+  }
+  if (unaccounted.length > 0) {
+    logger.warn('skill 无 hub 记账（marketplace 目录来源），只进清单不占补装位——目标节点可能 unresolved', {
+      count: unaccounted.length,
+      slugs: unaccounted,
+    });
   }
   return { skills, resources, embeddedDirs };
 }

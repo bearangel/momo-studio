@@ -22,6 +22,7 @@
 // 完整 qualifiedName 含 @ 与 /，过不了 SLUG_PATTERN，故不在此复用该校验）。
 
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
 import { registerMcpDefinition, listRegistered, deleteRegistered, isAllowedRemoteUrl } from '../mcp/host-manager';
@@ -279,6 +280,22 @@ export function recordPublishAccounting(
   checksum: string,
 ): void {
   const db = getDb();
+  // 孤儿缓存行守卫（M2.3 T5 件3）：旧 hub 安装行 cache_path 指向已删目录
+  //（外部清缓存等）→ warn 留痕，行随置换自愈。回填不解引用旧 cache_path，
+  // IPC 面无坏态消费点——故只观察不动作；置换有效路径产生的磁盘残渣为 M3 票
+  //（卸载链补扫 hub 记账同 slug 的孤儿缓存目录）。
+  const stale = db
+    .prepare('SELECT cache_path FROM installed_packages WHERE item_id = ? AND item_type = ?')
+    .all(hubPackageItemId(slug), type) as Array<{ cache_path: string }>;
+  for (const row of stale) {
+    if (row.cache_path !== '' && !fs.existsSync(row.cache_path)) {
+      logger.warn('回填置换孤儿缓存行（cache_path 指向已删目录，随置换自愈）', {
+        type,
+        slug,
+        cachePath: row.cache_path,
+      });
+    }
+  }
   db.prepare('DELETE FROM installed_packages WHERE item_id = ? AND item_type = ?').run(
     hubPackageItemId(slug),
     type,

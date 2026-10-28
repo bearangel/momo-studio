@@ -19,7 +19,7 @@ hub 仓零代码改动（v0.1.4 不变）；studio 侧分发链泛化 + 11 项�
 - **壳杂项三票**：0-ws 态设置可达（MiddlePanel 分发前移 + SettingsView 全局分类放行，ws 级分类占位）；catalog 失败指数退避（60s→5min→30min 封顶，成功清零）；ensureWorkspace 错误改写收窄（仅 EACCES/EPERM/EROFS 标「工作目录不可写」）
 - **债务清偿**：electron test 类型债 76 条清零（typecheck 检查面闭合防回弹）
 - **真机验收**：UC-P1-3 全新 worker 全链（hub catalog→A 记账→manifest resources→B 零 skill unresolved 四件套）+ 恢复性场景（构建步硬失败→重发幂等自愈）+ P2 抽验 9/9
-- **已知限制**：hub 资源升版链版本停留（验收 D3——「更新」回执成功但版本不变，M2.3 票）；安装取旧版（latest 解析，同族）；本地 stdio MCP 分发域外维持；worker 本机 failed 卡 reason 无通道（M2.3 票）；agent-threads 测试组 NAPI 析构竞态（SIGSEGV 既有债，评估迁 forks）
+- **已知限制**：hub 资源升版链版本停留（验收 D3——「更新」回执成功但版本不变，M2.3 票）；安装取旧版（latest 解析，同族）；本地 stdio MCP 分发域外维持；worker 本机 failed 卡 reason 无通道（M2.3 票）；readonly 即时拒标记进程内易失（重启降级——回落约束段 + HITL 超时链承载，T3 documented）；agent-threads 测试组 NAPI 析构竞态（SIGSEGV 既有债，评估迁 forks）
 
 
 
