@@ -26,8 +26,8 @@ jobs:
       # 缺这一步后面的 pnpm install 必失败。
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
+        # 不传 version：由 package.json 的 packageManager 字段决定（传了会与
+        # packageManager 冲突报 Multiple versions of pnpm specified）
 
       - name: Setup Node
         uses: actions/setup-node@v4
