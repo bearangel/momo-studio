@@ -90,14 +90,47 @@ test('看板拖拽冒烟：新建任务落待办列 → 拖到已关闭列 → �
     //    「任务未设置委派目标」拒绝），首启工作空间无 agent 无法满足；closed 列
     //    （cancel 语义）与 assigned 同为跨列拖拽链路（激活/碰撞/落点/move IPC/
     //    状态迁移渲染），且 draft→closed 无确认框直落
+    //
+    //    CI 几何适配（M3.0 T6）：1024 视口下看板内容 ~1220px 横向溢出，已关闭列
+    //    中心在视口外——鼠标 move 派发进死区，dnd-kit over=null（run 40676120418
+    //    实锤，非时序/焦点问题，纯指针可达性）。dnd-kit（6.3.1）droppable rect 在
+    //    拖拽「开始时」一次性测量（MeasuringFrequency.Optimized，拖拽中不随祖先
+    //    滚动重测），因此把程序化滚动放在 pointerdown 之后、激活位移之前：按住
+    //    卡片先把泳道滚到底，激活后的首次测量即落在滚动后几何上，已关闭列进入
+    //    视口内可达区，再 move 到重取的新坐标。大屏（无横向溢出）时 scrollLeft
+    //    赋值为 no-op，与本机原语义等价。
     const cardBox = await backlog.getByText('拖拽冒烟任务').boundingBox();
-    const targetBox = await win.locator('section[aria-label="已关闭"]').boundingBox();
-    if (!cardBox || !targetBox) throw new Error('卡片或目标列不可见，无法拖拽');
+    if (!cardBox) throw new Error('卡片不可见，无法拖拽');
 
-    await win.mouse.move(cardBox.x + cardBox.width / 2, cardBox.y + 10);
+    const startX = cardBox.x + cardBox.width / 2;
+    const startY = cardBox.y + 10;
+
+    await win.mouse.move(startX, startY);
     await win.mouse.down();
+
+    // 按住未激活（未过 5px 阈值，drag 尚未开始）时把已关闭列所在的横向滚动
+    // 容器滚到底（Lane overflow-x-auto；大屏无溢出则找不到、静默跳过）
+    await win.evaluate(() => {
+      const target = document.querySelector('section[aria-label="已关闭"]');
+      let node = target?.parentElement ?? null;
+      while (node) {
+        if (node.scrollWidth > node.clientWidth) {
+          node.scrollLeft = node.scrollWidth;
+          return;
+        }
+        node = node.parentElement;
+      }
+    });
+
+    // 过 PointerSensor 激活阈值（BoardCanvas DRAG_ACTIVATION_DISTANCE_PX=5）
+    await win.mouse.move(startX + 12, startY);
+
+    // 滚动后重取目标列坐标（大屏未滚动时与原值一致）
+    const targetBox = await win.locator('section[aria-label="已关闭"]').boundingBox();
+    if (!targetBox) throw new Error('目标列不可见，无法拖拽');
+
     await win.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, {
-      steps: 20,
+      steps: 8,
     });
     await win.mouse.up();
 
