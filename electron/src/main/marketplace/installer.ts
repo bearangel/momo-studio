@@ -19,6 +19,8 @@ import { promisify } from 'node:util';
 import fastGlob from 'fast-glob';
 import { dump as yamlDump } from 'js-yaml';
 import { logger } from '../logger';
+import { describeNetworkError } from '../util/network-error';
+import { DOWNLOAD_RESOURCE_FAILURE_PREFIX } from '../util/error-prefix';
 import { getDb } from '../storage/db';
 import { resolveUserDataDir } from '../paths';
 import { parseAgentManifest } from '../agent/manifest-parser';
@@ -189,6 +191,7 @@ export async function installPackage(
       onProgress
         ? (receivedBytes, totalBytes) => onProgress('downloading', { receivedBytes, totalBytes })
         : undefined,
+      item.slug,
     );
 
     if (item.checksum) {
@@ -354,11 +357,19 @@ export async function downloadFile(
   maxBytes: number = MAX_DOWNLOAD_BYTES,
   headers?: Record<string, string>,
   onBytes?: (receivedBytes: number, totalBytes: number | null) => void,
+  slug?: string,
 ): Promise<void> {
   if (!isTrustedDownloadUrl(url)) {
     throw new Error(`下载地址必须是 https 或已注册的可信源: ${url}`);
   }
-  const response = await fetch(url, { headers });
+  let response: Response;
+  try {
+    response = await fetch(url, { headers });
+  } catch (err) {
+    // 原文进日志保留诊断；UI 只收人话（A2：禁止 TypeError/fetch failed 透出）
+    logger.warn('下载失败', { slug: slug ?? null, error: err });
+    throw new Error(`${DOWNLOAD_RESOURCE_FAILURE_PREFIX}${describeNetworkError(err)}`);
+  }
   if (!response.ok || !response.body) {
     // 401 人话提示：hub 资源端点全鉴权，凭证缺失/失效是用户可自诊的常见态
     const hint = response.status === 401 ? '（鉴权失败：hub 凭证缺失或已失效，请检查 hub 接入配置）' : '';

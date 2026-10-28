@@ -132,6 +132,7 @@ export async function installPluginHubArchive(
       onProgress
         ? (receivedBytes, totalBytes) => onProgress('downloading', { receivedBytes, totalBytes })
         : undefined,
+      item.slug,
     );
     const actual = crypto.createHash('sha256').update(fs.readFileSync(archivePath)).digest('hex');
     if (actual !== item.checksum.toLowerCase()) {

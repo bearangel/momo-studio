@@ -175,8 +175,22 @@ describe('TypePageShell（已安装单态，P2.3 Task 1）', () => {
     render(
       <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
     );
-    expect(screen.getByText('加载失败：导入失败：boom')).toBeTruthy();
+    // A3：store 已带业务前缀 → 原样单前缀（不再拼「加载失败：」）
+    expect(screen.getByText('导入失败：boom')).toBeTruthy();
   });
+
+  // A3：已知业务前缀一律单前缀（前缀集合与 lib/error-prefix.ts 同步；契约测试在 electron 侧）
+  it.each(['导入失败：', '启停失败：', '停用失败：', '重载失败：', '卸载失败：', '下载资源包失败：'])(
+    'store 错误已带「%s」→ 原样展示，不叠加「加载失败：」',
+    (prefix) => {
+      useResourceStore.setState({ error: `${prefix}boom` });
+      render(
+        <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
+      );
+      expect(screen.getByText(`${prefix}boom`)).toBeTruthy();
+      expect(screen.queryByText(`加载失败：${prefix}boom`)).toBeNull();
+    },
+  );
 
   it('全页唯一搜索框且在工具栏内（原双搜索框防回归的单态延续）', () => {
     render(

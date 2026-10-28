@@ -19,6 +19,7 @@ import {
   uninstallPackage,
 } from '../../src/main/marketplace/installer';
 import { listAgentDefinitions } from '../../src/main/agent/crud';
+import { logger } from '../../src/main/logger';
 import { SAFE_MINIMUM_TOOLS, ALL_BUILTIN_TOOLS } from '../../src/main/agent/tools/catalog';
 import type { MarketplaceItem } from '../../src/main/marketplace/types';
 
@@ -186,6 +187,36 @@ describe('marketplace/installer installPackage（远程 checksum）', () => {
     fetchSpy.mockResolvedValue({ ok: false, status: 404, body: null, headers: new Headers() } as Response);
 
     await expect(installPackage(item)).rejects.toThrow(/下载失败: HTTP 404/);
+  });
+
+  it('fetch 抛网络错误 → 上抛人话前缀（不含原始技术串）+ 原文进 logger', async () => {
+    const item = makeItem({ downloadUrl: 'https://example.test/pkg.tar.gz' });
+    // 真实 Node fetch 失败形状：TypeError('fetch failed') + cause.code
+    const cause = Object.assign(new Error('getaddrinfo ENOTFOUND example.test'), {
+      code: 'ENOTFOUND',
+    });
+    const original = Object.assign(new TypeError('fetch failed'), { cause });
+    fetchSpy.mockRejectedValue(original);
+    const warnSpy = vi.spyOn(logger, 'warn');
+
+    let caught: Error | undefined;
+    try {
+      await installPackage(item);
+    } catch (err) {
+      caught = err as Error;
+    }
+
+    expect(caught).toBeDefined();
+    expect(caught?.message).toBe('下载资源包失败：无法解析域名');
+    // 原始技术串不得透到 UI
+    expect(caught?.message).not.toContain('TypeError');
+    expect(caught?.message).not.toContain('fetch failed');
+    // 原文必须进日志（诊断不丢）
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      '下载失败',
+      expect.objectContaining({ slug: 'test-agent', error: original }),
+    );
   });
 });
 

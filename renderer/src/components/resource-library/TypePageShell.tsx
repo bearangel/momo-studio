@@ -13,6 +13,7 @@ import { useSessionStore } from '../../stores/session.store';
 import { useResourceStore } from '../../stores/resource.store';
 import { useHubStore } from '../../stores/hub.store';
 import { useUiStore } from '../../stores/ui.store';
+import { hasKnownErrorPrefix } from '../../lib/error-prefix';
 import { EmptyState } from '../ui/EmptyState';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
@@ -400,7 +401,7 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
           {/* store 错误行（导入/删除等写操作失败反馈）+ 重试（组③：失败不止红字） */}
           {error && (
             <div className="flex items-center justify-center gap-2 py-2 text-status-error text-sm">
-              <span>加载失败：{error}</span>
+              <span>{hasKnownErrorPrefix(error) ? error : `加载失败：${error}`}</span>
               <Button size="sm" variant="secondary" onClick={() => void load()}>
                 重试
               </Button>
