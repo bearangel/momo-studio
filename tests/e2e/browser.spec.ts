@@ -25,6 +25,7 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import { pinWindowGeometry } from './pin-geometry';
 
 const ELECTRON_APP_DIR = path.join(__dirname, '..', '..', 'electron');
 
@@ -182,6 +183,8 @@ test('v2.7 浏览器全链路：导航→user 态点击→popup 收编→下载�
   try {
     const win = await app.firstWindow();
     await win.waitForLoadState('domcontentloaded');
+    // 钉几何（可选）：E2E_PIN_GEOMETRY=1024x677 时复现 CI runner 视口，见 pin-geometry.ts
+    await pinWindowGeometry(app);
 
     // ---- 1. 首启空态：跳过引导向导 → 创建 workspace → 激活（im 视图带浏览器侧栏） ----
     await win.getByRole('button', { name: '跳过引导' }).click({ timeout: 15000 });

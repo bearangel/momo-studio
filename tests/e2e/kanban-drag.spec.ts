@@ -18,6 +18,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import { pinWindowGeometry } from './pin-geometry';
 
 const electronRequire = createRequire(
   path.join(__dirname, '..', '..', 'electron', 'package.json'),
@@ -53,6 +54,8 @@ test('看板拖拽冒烟：新建任务落待办列 → 拖到已关闭列 → �
   try {
     const win = await app.firstWindow();
     await win.waitForLoadState('domcontentloaded');
+    // 钉几何（可选）：E2E_PIN_GEOMETRY=1024x677 时复现 CI runner 视口，见 pin-geometry.ts
+    await pinWindowGeometry(app);
 
     // 1. 首启空态：引导 pending → 跳过向导落回内嵌创建表单（smoke.spec 同款两步）
     await win.getByRole('button', { name: '跳过引导' }).click({ timeout: 15000 });
