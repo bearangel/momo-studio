@@ -18,6 +18,7 @@ import type { HubDelegationSettings } from './delegation-settings';
 import { composeTurnBody, normalizeTier, type PermissionTier } from './run-policy';
 import { consumeReadonlyDenied, markSessionReadonly, setWriteDeniedBroadcaster } from '../sandbox/write-blocked-emit';
 import { broadcastWriteGrantDenied } from '../agent/runtime-registry';
+import { STREAM_ERROR_DETAILS_SEP } from '../agent/llm-provider';
 import { redactSecrets, truncateCodePoints } from '../util/redact';
 
 // P2-1 即时拒的 deny 广播接线（注册反转——write-blocked-emit 为子进程可达模块，
@@ -162,6 +163,23 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
     await sendReport(taskId, { status: 'failed', reason: `declined:${detail}` });
   };
 
+  /** provider 流错误双层契约（`STREAM_ERROR_DETAILS_SEP`：前半用户可读主文案、后半技术详情，
+   *  StreamErrorBox 依赖它分流）。委派卡不解析该分隔符——卡面 reason 只取主文案，
+   *  技术详情落日志保留诊断，不丢信息也不把 `||details||`/JSON 印到卡面。 */
+  const splitReasonDetails = (reason: string, taskId: string): string => {
+    const idx = reason.indexOf(STREAM_ERROR_DETAILS_SEP);
+    if (idx <= 0) return reason;
+    const main = reason.slice(0, idx).trim();
+    const details = reason.slice(idx + STREAM_ERROR_DETAILS_SEP.length).trim();
+    if (details.length > 0) {
+      logger.info('委派失败技术详情', {
+        taskId,
+        details: redactSecrets(details, { includeQueryToken: true }),
+      });
+    }
+    return main.length > 0 ? main : reason;
+  };
+
   const settleRun = (taskId: string, run: ActiveRun, terminal: TurnTerminal): void => {
     if (run.terminal) return; // 幂等：终态只清算一次
     run.terminal = terminal;
@@ -180,7 +198,9 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
     const sanitizedReason =
       reason === undefined
         ? undefined
-        : truncateCodePoints(redactSecrets(reason, { includeQueryToken: true }));
+        : truncateCodePoints(
+            redactSecrets(splitReasonDetails(reason, taskId), { includeQueryToken: true }),
+          );
     store.updateState(taskId, localState, localState === 'failed' ? sanitizedReason : undefined);
     void sendReport(taskId, {
       status: terminal.status === 'done' ? 'done' : 'failed',

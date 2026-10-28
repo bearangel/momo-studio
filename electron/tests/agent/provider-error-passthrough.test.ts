@@ -45,11 +45,13 @@ import { createHubDelegationSettingsStore } from '../../src/main/hub/delegation-
 import { createHubDelegationStore } from '../../src/main/hub/delegation-store';
 import type { TaskReportPayload } from '../../src/main/hub/delegation-wire';
 import { redactSecrets, truncateCodePoints } from '../../src/main/util/redact';
+import { logger } from '../../src/main/logger';
 
 /** provider 401 原文（与 llm-provider.buildStreamErrorMessage 同形：主文案 + ||details|| + HTTP 状态/响应体） */
-const PROVIDER_401 =
-  '模型服务连接失败：API Key 无效或无权限，请到设置中检查供应商密钥。本轮未完成，发送「继续」可从断点恢复' +
-  '\n||details||\nHTTP 401 Unauthorized: {"error":{"message":"invalid api key"}}';
+const PROVIDER_401_MAIN =
+  '模型服务连接失败：API Key 无效或无权限，请到设置中检查供应商密钥。本轮未完成，发送「继续」可从断点恢复';
+const PROVIDER_401_DETAILS = 'HTTP 401 Unauthorized: {"error":{"message":"invalid api key"}}';
+const PROVIDER_401 = `${PROVIDER_401_MAIN}\n||details||\n${PROVIDER_401_DETAILS}`;
 
 // ── 环境脚手架（delegation-ports.test 同款） ────────────────────────────────
 
@@ -144,16 +146,26 @@ describe('① provider 错误原文透传（有救：读侧映射补 error）', 
     expect(terminals[0]!.error).toBeUndefined();
   });
 
-  it('委派 reason 携带 401 原文（非「未知错误」），本机账本与 hub 上报同源', async () => {
+  it('委派 reason 携带 provider 主文案（非「未知错误」），本机账本与 hub 上报同源', async () => {
     const h = makeRunnerHarness();
     await h.admit('t-401');
     h.fireTerminal('sess-1', { status: 'failed', error: PROVIDER_401 });
 
     const failed = h.reports.find((r) => r.taskId === 't-401' && r.payload.status === 'failed');
     expect(failed).toBeDefined();
-    expect(failed!.payload.reason).toContain('401');
+    expect(failed!.payload.reason).toBe(`执行失败:${PROVIDER_401_MAIN}`);
     expect(failed!.payload.reason).not.toContain('未知错误');
     expect(h.store.get('t-401')?.reason).toBe(failed!.payload.reason);
+  });
+
+  it('无分隔符的 provider 原文原样透传（401 可见；行为不变）', async () => {
+    const h = makeRunnerHarness();
+    await h.admit('t-401-raw');
+    h.fireTerminal('sess-1', { status: 'failed', error: 'HTTP 401 Unauthorized: invalid api key' });
+
+    const failed = h.reports.find((r) => r.taskId === 't-401-raw' && r.payload.status === 'failed');
+    expect(failed!.payload.reason).toBe('执行失败:HTTP 401 Unauthorized: invalid api key');
+    expect(h.store.get('t-401-raw')?.reason).toBe(failed!.payload.reason);
   });
 
   it('委派 reason 超长：红act 后 ≤301 code point（含 …），不劈代理对', async () => {
@@ -169,6 +181,22 @@ describe('① provider 错误原文透传（有救：读侧映射补 error）', 
     expect(reason).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
     expect(reason).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
     expect(h.store.get('t-long')?.reason).toBe(reason);
+  });
+
+  it('error 含 ||details|| 分隔符 → reason 仅取主文案（卡面不印分隔符/JSON），技术详情落日志', async () => {
+    vi.mocked(logger.info).mockClear();
+    const h = makeRunnerHarness();
+    await h.admit('t-details');
+    const MAIN = '模型服务连接失败：API Key 无效或无权限，请到设置中检查供应商密钥。本轮未完成，发送「继续」可从断点恢复';
+    const DETAILS = 'HTTP 401 {"error":{"message":"invalid api key"}}';
+    h.fireTerminal('sess-1', { status: 'failed', error: `${MAIN}\n||details||\n${DETAILS}` });
+
+    const failed = h.reports.find((r) => r.taskId === 't-details' && r.payload.status === 'failed');
+    expect(failed!.payload.reason).toBe(`执行失败:${MAIN}`);
+    expect(failed!.payload.reason).not.toContain('||details||');
+    expect(failed!.payload.reason).not.toContain('invalid api key');
+    expect(h.store.get('t-details')?.reason).toBe(failed!.payload.reason);
+    expect(logger.info).toHaveBeenCalledWith('委派失败技术详情', { taskId: 't-details', details: DETAILS });
   });
 });
 
