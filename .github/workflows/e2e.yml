@@ -1,0 +1,64 @@
+name: E2E
+
+# 独立 e2e 回归拦截（build.yml 只在 tag v* 发布时跑，无法拦截普通推送回归）。
+# 设计依据：M2.4 T7 / plan 批3（docs/specs 2026-10-28 momo-hub m2.4 §6 口径）。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 同一 ref 只跑最新一次，旧的取消
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: Playwright e2e (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 必须在 setup-node 之前：Node 24 不再自带 pnpm shim，
+      # 缺这一步后面的 pnpm install 必失败。
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # e2e 用 _electron 启动真实 App，需要 electron/dist + renderer/dist
+      - name: Build
+        run: pnpm build
+
+      # e2e 启动的是真 Electron（ABI 149）；Node 侧 ABI 是 137，
+      # 不 rebuild 则首跑因 NODE_MODULE_VERSION 不匹配必红。
+      # 在 electron/ 下跑：electron-rebuild 的 bin 只装在 electron workspace。
+      - name: Rebuild native modules for Electron
+        run: cd electron && npx electron-rebuild -f -w better-sqlite3 -w keytar
+
+      - name: Run e2e
+        run: pnpm e2e
+        env:
+          CI: '1'
+
+      # 失败时保留 trace / 截图（playwright.config 未显式设 outputDir，
+      # 默认 = 仓库根 test-results/，与本地 `pnpm e2e` 一致）
+      - name: Upload e2e artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results
+          path: test-results/
+          retention-days: 7
