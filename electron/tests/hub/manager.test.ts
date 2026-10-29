@@ -8,6 +8,7 @@
 // 4. startClient 先停旧连接（连续两次 enroll 不留双连接）。
 // 5. hubConfigure 的换址分叉（换址强制重新接入 / 同址仅改名保留凭证）。
 // 6. 信任源撤销（F2）：forget / 换址收回旧 hub origin 的下载授权。
+// 7. parseTaskAssigned 挑字段面（M4.3：task.dependsOn 剥除——依赖闸在 leader 侧，worker 零消费）。
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EventEnvelope } from '../../src/main/hub/protocol';
 import {
@@ -767,5 +768,34 @@ describe('hub manager 查看同意上报链（M2e T14/T15）', () => {
         payload: { sessionId: 'sess-1', events: [{ seq: 9, at: 3, role: 'assistant', content: 'z' }] },
       },
     ]);
+  });
+});
+
+describe('parseTaskAssigned 挑字段面', () => {
+  // M4.3 语义裁定：依赖闸在 leader 侧，worker 不消费——协议 1.7.0 的
+  // task.dependsOn（leader 本地任务 id，跨节点不可解析）在 worker 解析入口剥除。
+  // 此为运行时锁：若剥除逻辑回退（透传 dependsOn），此处即红。
+  it('task.assigned 载荷含 task.dependsOn → 解析输出 task 不含 dependsOn 键（worker 零消费）', () => {
+    const evt = manager.parseTaskAssigned({
+      taskId: 'T-100',
+      workspaceName: 'dev',
+      byNode: 'node-leader',
+      task: {
+        title: '联调登录链路',
+        prompt: '按任务书执行联调',
+        agentSlug: 'coder',
+        permissionTier: 'confirm',
+        dependsOn: ['T-001', 'T-002'],
+      },
+    });
+    expect(evt).not.toBeNull();
+    // 白名单锁：出参恰为挑字段形状——dependsOn 一旦漏过即 toEqual 红
+    expect(evt!.task).toEqual({
+      title: '联调登录链路',
+      prompt: '按任务书执行联调',
+      agentSlug: 'coder',
+      permissionTier: 'confirm',
+    });
+    expect('dependsOn' in evt!.task).toBe(false);
   });
 });

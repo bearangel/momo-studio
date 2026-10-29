@@ -266,8 +266,12 @@ function ensureDelegationRunner(nodeId: string | null): DelegationRunner {
   return delegationRunner;
 }
 
-/** 派单载荷挑字段（协议 TaskAssignedEvent 形状，异形键丢弃——与 presence 桥同款纪律） */
-function parseTaskAssigned(payload: unknown): AssignedTaskEvent | null {
+/**
+ * 派单载荷挑字段（协议 TaskAssignedEvent 形状，异形键丢弃——与 presence 桥同款纪律）。
+ * export 仅供测试锚定（tests/hub/manager.test.ts parseTaskAssigned 面——M4.3
+ * dependsOn 剥除的运行时锁），生产调用方仍限本模块 startClient。
+ */
+export function parseTaskAssigned(payload: unknown): AssignedTaskEvent | null {
   if (typeof payload !== 'object' || payload === null) return null;
   const p = payload as {
     taskId?: unknown; workspaceName?: unknown; byNode?: unknown; task?: unknown;
