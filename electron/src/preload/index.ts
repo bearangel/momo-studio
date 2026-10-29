@@ -491,14 +491,17 @@ const api: ApiSurface = {
       type: RegistryListEntry['type'],
       query?: string,
       page?: number,
+      opts?: { fresh?: boolean },
     ) =>
-      invoke<{ entries: RegistryListEntry[]; degraded: boolean; hasMore: boolean; notEnrolled?: boolean }>(
-        'resource:registryList',
-        providerKey,
-        type,
-        query,
-        page,
-      ),
+      invoke<{
+        entries: RegistryListEntry[];
+        degraded: boolean;
+        hasMore: boolean;
+        notEnrolled?: boolean;
+        nodeName?: string;
+        total?: number;
+        revision?: number;
+      }>('resource:registryList', providerKey, type, query, page, opts),
     // P2.2 Task 6：查看已装远程 MCP 配置（bare=true 时无 schema——裸表单回显 url/headers）
     getMcpConfig: (name: string) => invoke<McpConfigView>('resource:getMcpConfig', name),
     // P2.2 Task 6：编辑已装远程 MCP 配置（headers 仅裸模式整包覆盖；schema 可选透传落库）

@@ -28,7 +28,13 @@ export type ResourceSource =
   // D2：插件自带资源（MCP server 等）——随插件生命周期，不可手动删
   | 'plugin';
 
-/** 资源列表过滤条件——所有字段可选，undefined 表示不过滤该维度 */
+/**
+ * 资源列表过滤条件——所有字段可选，undefined 表示不过滤该维度。
+ *
+ * library-store-split（spec 2026-10-29 §2.4）：resource:list 默认语义已收窄为
+ * 本地实体（builtin + custom + 已装远端出处条目）——source 过滤随之收窄为
+ * 「该来源的已装行」，未装远端目录条目经 resource:registryList 浏览。
+ */
 export interface ResourceFilter {
   type?: ResourceType;
   source?: ResourceSource;

@@ -489,7 +489,8 @@ describe('T10 e2e：resource:list 并入 hub 已装项 + 五源并列', () => {
     expect(item!.removable).toBe(true);
     expect(item!.version).toBe('1.0.0');
 
-    // 未装条目也在目录面（可装）——marketplace 同款口径
+    // 已装条目经收窄后的 list 仍在场（library-store-split：目录面职能迁弹窗，
+    // 本断言锚定已装 hub 行不丢）
     const all = await listResources({ type: 'agent' });
     const uninstalled = all.find((i) => i.id === 'hub-agent-hub-e2e-agent');
     expect(uninstalled).toBeDefined();
@@ -577,6 +578,14 @@ describe('T10 e2e：resource:list 并入 hub 已装项 + 五源并列', () => {
     await installSmitheryRemote('e2e-smithery', 'https://e2e.run.tools', {});
     // hub 已装 MCP（真包安装）
     await installHubPackage('mcp', 'hub-e2e-mcp');
+    // marketplace remote-demo 记一笔已装（断言迁移——library-store-split：list 收窄为
+    // 本地实体后，已装记账行（item_id=catalog id）是 marketplace 行留在库页的形态）
+    getDb()
+      .prepare(
+        `INSERT INTO installed_packages (id, item_id, item_type, slug, version, cache_path, checksum)
+         VALUES ('e2e-mp-row', 'mcp-remote-demo', 'mcp', 'remote-demo', '1.0.0', '', '')`,
+      )
+      .run();
 
     const items = await listResources({ type: 'mcp' });
     const bySource = new Map(items.map((i) => [i.source, i]));

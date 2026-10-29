@@ -78,7 +78,7 @@ beforeEach(() => {
 });
 
 describe('TypePageShell（已安装单态，P2.3 Task 1）', () => {
-  it('工具栏单行：搜索框 + 来源下拉（带计数）+ AddMenu、外部市场入口；不渲染模式 Segmented 与「网络获取」', () => {
+  it('工具栏单行：搜索框 + 来源下拉（带计数）+ AddMenu（断言迁移——library-store-split：外部市场入口退场，远端获取迁 AddMenu 远端组）', () => {
     render(
       <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
     );
@@ -87,15 +87,14 @@ describe('TypePageShell（已安装单态，P2.3 Task 1）', () => {
     expect(screen.queryByRole('radio', { name: '网络获取' })).toBeNull();
     expect(screen.queryByText('网络获取')).toBeNull();
     expect(screen.getByPlaceholderText('搜索名称 / 描述 / slug…')).toBeTruthy();
-    // 来源筛选 = 原生 select（键盘可达）；无「网络」选项（走查 N4：死筛选不设入口）
+    // 来源筛选 = 原生 select（键盘可达）；本地三档（预览 §A 定值：全部/系统预置/自定义）
     const select = screen.getByLabelText('来源筛选');
-    expect(within(select).getByRole('option', { name: /全部来源/ })).toBeTruthy();
-    expect(within(select).getByRole('option', { name: /预置/ })).toBeTruthy();
+    expect(within(select).getByRole('option', { name: /全部/ })).toBeTruthy();
+    expect(within(select).getByRole('option', { name: /系统预置/ })).toBeTruthy();
     expect(within(select).getByRole('option', { name: /自定义/ })).toBeTruthy();
-    expect(within(select).queryByRole('option', { name: /网络/ })).toBeNull();
     expect(screen.getByRole('button', { name: '添加服务器' })).toBeTruthy();
-    // P2.3 Task 3：外部市场快捷打开入口挂载（原 Segmented 位）
-    expect(screen.getByRole('button', { name: '外部市场' })).toBeTruthy();
+    // 外部市场弹层入口已随组件退场
+    expect(screen.queryByRole('button', { name: '外部市场' })).toBeNull();
   });
 
   it('已安装空列表渲染 EmptyState 文案', () => {
@@ -119,7 +118,7 @@ describe('TypePageShell（已安装单态，P2.3 Task 1）', () => {
     expect(screen.getByLabelText('关闭详情')).toBeTruthy();
   });
 
-  it('来源下拉计数：全部=N，各来源分组计数（组③——下拉标签带弱化数字）', () => {
+  it('来源下拉计数：全部=N，各来源分组计数（断言迁移——library-store-split：标签改为 全部/系统预置/自定义）', () => {
     useResourceStore.setState({
       items: [
         { ...builtinItem, id: 'builtin-agent-1' },
@@ -131,8 +130,8 @@ describe('TypePageShell（已安装单态，P2.3 Task 1）', () => {
       <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
     );
     const select = screen.getByLabelText('来源筛选');
-    expect(within(select).getByRole('option', { name: '全部来源 3' })).toBeTruthy();
-    expect(within(select).getByRole('option', { name: '预置 2' })).toBeTruthy();
+    expect(within(select).getByRole('option', { name: '全部 3' })).toBeTruthy();
+    expect(within(select).getByRole('option', { name: '系统预置 2' })).toBeTruthy();
     expect(within(select).getByRole('option', { name: '自定义 1' })).toBeTruthy();
   });
 
@@ -309,14 +308,15 @@ describe('TypePageShell - 删除二次确认（P2.5 Task 4）', () => {
 
 // ── 2026-10-09 真机走查修复：筛选状态诚实性 ──────────────────────────────
 describe('TypePageShell - 筛选状态诚实性（走查 N1/N2/N4 + A2）', () => {
-  it('来源下拉无「网络/Smithery」死选项（P2.3 后两源无新增产出；M1 起 hub 为活源入列——四选项）', () => {
+  it('来源下拉无远端死选项（断言迁移——library-store-split：仅本地三档，hub 档退场）', () => {
     render(
       <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
     );
     const select = screen.getByLabelText('来源筛选');
     expect(within(select).queryByRole('option', { name: /网络/ })).toBeNull();
     expect(within(select).queryByRole('option', { name: /Smithery/ })).toBeNull();
-    expect(within(select).getAllByRole('option')).toHaveLength(4);
+    expect(within(select).queryByRole('option', { name: /momo-hub/ })).toBeNull();
+    expect(within(select).getAllByRole('option')).toHaveLength(3);
   });
 
   it('搜索无匹配 → 「没有匹配的资源」+ 清除筛选按钮（不得误报空库）', () => {
@@ -513,33 +513,18 @@ describe('TypePageShell - installNotice CTA（D13）', () => {
   });
 });
 
-// ── D9：市场目录降级提示（仅 agent 页）────────────────────────────────────
-describe('TypePageShell - 目录降级提示（D9）', () => {
-  it('degraded=true 且 agent 页 → 显示 warning 细横幅', () => {
+// ── D9 → library-store-split：市场目录降级横幅退场（语义迁 FetchDialog）──────
+describe('TypePageShell - 目录降级提示退场（library-store-split §2.1）', () => {
+  it('degraded=true 且 agent 页 → 横幅不再渲染（断言迁移——市场降级黄条随库页收窄退场）', () => {
     useResourceStore.setState({ catalogDegraded: true });
     render(
       <TypePageShell type="agent" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
     );
-    expect(screen.getByTestId('catalog-degraded-notice')).toBeInTheDocument();
-    expect(screen.getByText('网络目录暂时不可达（离线或网络受限），当前显示本地目录。')).toBeInTheDocument();
-  });
-
-  it('degraded=true 但非 agent 页（mcp）→ 不显示（catalog 只影响 agent 目录）', () => {
-    useResourceStore.setState({ catalogDegraded: true });
-    render(
-      <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
-    );
     expect(screen.queryByTestId('catalog-degraded-notice')).not.toBeInTheDocument();
+    expect(screen.queryByText('网络目录暂时不可达（离线或网络受限），当前显示本地目录。')).toBeNull();
   });
 
-  it('degraded=false → 不显示', () => {
-    render(
-      <TypePageShell type="agent" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
-    );
-    expect(screen.queryByTestId('catalog-degraded-notice')).not.toBeInTheDocument();
-  });
-
-  it('agent 页挂载即探测目录状态（loadCatalogStatus → ipc.resource.getCatalogStatus）', async () => {
+  it('agent 页挂载仍探测目录状态（loadCatalogStatus → 播种门控数据源不变）', async () => {
     getCatalogStatusMock.mockResolvedValue({ degraded: true });
     render(
       <TypePageShell type="agent" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
@@ -689,81 +674,36 @@ describe('TypePageShell - 插件启停与卸载（P1）', () => {
   });
 });
 
-describe('TypePageShell hub 页签与提示条（M1 Task 14：T10 移交三项落位）', () => {
+// ── library-store-split：hub 档与两条提示横幅退场（语义迁 FetchDialog 特殊态）──
+describe('TypePageShell - hub 档与提示条退场（library-store-split §2.1）', () => {
   const hubRow: ResourceItem = {
     id: 'hub-agent-meeting', type: 'mcp', source: 'hub', slug: 'meeting', name: '会议纪要',
-    description: '纪要生成', version: '1.1.0', installed: false, installable: true, removable: false,
-  };
-  const NOT_ENROLLED = {
-    configured: false, state: 'disconnected' as const, hubUrl: null, nodeName: null, nodeId: null,
-    lastError: null, lastErrorCode: null, hubProtoVer: null,
-  };
-  const ENROLLED_ONLINE = {
-    configured: true, state: 'online' as const, hubUrl: 'http://192.168.1.8:8717',
-    nodeName: '办公室 MacBook', nodeId: 'a3f9c2e1dead', lastError: null, lastErrorCode: null, hubProtoVer: null,
+    description: '纪要生成', version: '1.1.0', installed: true, installable: false, removable: true,
   };
 
-  it('来源下拉含 momo-hub 选项（网络 / Smithery 仍不设死入口）——hub 页签回归', () => {
-    render(<TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />);
-    const select = screen.getByLabelText('来源筛选');
-    expect(within(select).getByRole('option', { name: /momo-hub/ })).toBeTruthy();
-    expect(within(select).queryByRole('option', { name: /网络/ })).toBeNull();
-    expect(within(select).queryByRole('option', { name: /Smithery/ })).toBeNull();
-  });
-
-  it('hub 源行计入 momo-hub 选项计数；选 hub 只显示 hub 行（前端筛选同语义）', () => {
+  it('已装 hub 行计入「全部」计数（无 momo-hub 专属档——断言迁移）', () => {
     useResourceStore.setState({
       items: [hubRow, { ...itemA }],
       sourceFilter: 'all', query: '',
     });
     render(<TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />);
     const select = screen.getByLabelText('来源筛选');
-    expect(within(select).getByRole('option', { name: /全部来源 2/ })).toBeTruthy();
-    expect(within(select).getByRole('option', { name: /momo-hub 1/ })).toBeTruthy();
-    fireEvent.change(select, { target: { value: 'hub' } });
+    expect(within(select).getByRole('option', { name: /全部 2/ })).toBeTruthy();
+    expect(within(select).queryByRole('option', { name: /momo-hub/ })).toBeNull();
+    // 已装 hub 卡仍在网格（来源徽标不变——矩阵 #7）
     expect(screen.getByText('会议纪要')).toBeTruthy();
-    expect(screen.queryByText('甲')).toBeNull();
   });
 
-  it('未接入引导灰条：sourceFilter=hub 且未接入 → 灰条 + 去设置切 settings；非 hub 筛选不挂条', () => {
-    useHubStore.setState({ status: NOT_ENROLLED, nodes: [], loadError: null });
-    useResourceStore.setState({ items: [hubRow], sourceFilter: 'all', query: '' });
-    const { rerender } = render(
-      <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
-    );
-    expect(screen.queryByTestId('hub-not-enrolled-notice')).toBeNull();
-    useResourceStore.getState().setSourceFilter('hub');
-    rerender(
-      <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
-    );
-    const bar = screen.getByTestId('hub-not-enrolled-notice');
-    expect(bar.textContent).toMatch(/未接入 momo-hub/);
-    expect(bar.textContent).toMatch(/接入后可安装组内共享资源/);
-    expect(screen.queryByTestId('hub-degraded-notice')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: /去设置/ }));
-    expect(useUiStore.getState().activeView).toBe('settings');
-  });
-
-  it('degraded 黄条：已接入 + hub 目录降级 → 「hub 暂不可达」黄条；未接入时不显示黄条', () => {
-    useResourceStore.setState({ items: [hubRow], sourceFilter: 'hub', query: '', hubDegraded: true });
-    useHubStore.setState({ status: ENROLLED_ONLINE, nodes: [], loadError: null });
-    render(<TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />);
-    const bar = screen.getByTestId('hub-degraded-notice');
-    expect(bar.textContent).toMatch(/hub 暂不可达（离线或网络受限），展示最近目录。/);
-    expect(screen.queryByTestId('hub-not-enrolled-notice')).toBeNull();
-    // 未接入 → degraded 不可信（F1：notEnrolled 路径复位 degraded），只剩灰条
-    act(() => {
-      useHubStore.setState({ status: NOT_ENROLLED, nodes: [], loadError: null });
-    });
-    expect(screen.queryByTestId('hub-degraded-notice')).toBeNull();
-    expect(screen.getByTestId('hub-not-enrolled-notice')).toBeTruthy();
-  });
-
-  it('已接入且未降级：hub 筛选下两条都不挂', () => {
-    useResourceStore.setState({ items: [hubRow], sourceFilter: 'hub', query: '', hubDegraded: false });
-    useHubStore.setState({ status: ENROLLED_ONLINE, nodes: [], loadError: null });
+  it('未接入灰条与降级黄条不再渲染（断言迁移——两条横幅随库页收窄退场，语义迁弹窗）', () => {
+    useResourceStore.setState({ items: [hubRow], sourceFilter: 'all', query: '', hubDegraded: true });
+    useHubStore.setState({ status: {
+      configured: false, state: 'disconnected', hubUrl: null, nodeName: null, nodeId: null,
+      lastError: null, lastErrorCode: null, hubProtoVer: null,
+    }, nodes: [], loadError: null });
     render(<TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />);
     expect(screen.queryByTestId('hub-not-enrolled-notice')).toBeNull();
     expect(screen.queryByTestId('hub-degraded-notice')).toBeNull();
+    expect(screen.queryByText(/接入后可安装组内共享资源/)).toBeNull();
+    expect(screen.queryByText(/hub 暂不可达/)).toBeNull();
   });
 });

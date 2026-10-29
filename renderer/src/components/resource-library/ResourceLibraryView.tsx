@@ -30,6 +30,8 @@ import { GitImportDialog } from './GitImportDialog';
 import { InstallPluginZipDialog } from './InstallPluginZipDialog';
 import { RegisterPluginDirDialog } from './RegisterPluginDirDialog';
 import { PublishDialog } from './PublishDialog';
+import { FetchDialog } from './FetchDialog';
+import { buildRemoteFetchItems, type FetchSource } from './fetch-sources';
 import { showToast } from '../ui/Toast';
 import type { AgentDefinition, BuiltinPresetPreview, DefinitionImpact, McpConfigUpdateInput, ResourceItem, ResourceType } from '../../ipc/types';
 
@@ -70,6 +72,8 @@ export function ResourceLibraryView() {
   // 发布到 momo-hub 目标（M1 Task 14）：可发布资源卡片/详情「发布到 hub」入口置位
   // （M2.2 Task 2 起入口面 = custom 四类型 + marketplace 已装 skill，见 publish-entry.ts）
   const [publishTarget, setPublishTarget] = useState<ResourceItem | null>(null);
+  // library-store-split：获取弹窗目标（AddMenu 远端组入口置位——源 × 当前类型页）
+  const [fetchTarget, setFetchTarget] = useState<FetchSource | null>(null);
 
   // 冷启动首拉（旧视图同语义；后续刷新由 setActiveType/setSourceFilter/store 写操作触发）
   useEffect(() => {
@@ -203,33 +207,37 @@ export function ResourceLibraryView() {
     useResourceStore.setState({ installNotice: `配置已更新：${configTarget.displayName}` });
   };
 
-  // ── 三类页的「＋」菜单（本地导入单态；P2.3 Task 1 移除「从网络获取」项）───
+  // ── 四类页的「＋」菜单（本地导入 + 远端获取组——library-store-split spec §2.2，
+  //     远端组顺序/文案为预览定值，构建逻辑单点收敛在 fetch-sources.ts）───────────
   const addItemsFor = (type: ResourceType): AddMenuItem[] => {
-    if (type === 'agent') {
+    const local: AddMenuItem[] = (() => {
+      if (type === 'agent') {
+        return [
+          { key: 'wizard', title: '新建智能体…', hint: '分步向导：基础信息 → 提示词 → 能力 → 模型', onSelect: () => setCreateAgentOpen(true) },
+          { key: 'import-yaml', title: '导入 YAML 文件…', hint: 'manifest 格式，校验后注册为自定义 agent', onSelect: () => setImportYamlOpen(true) },
+        ];
+      }
+      if (type === 'mcp') {
+        return [
+          { key: 'form', title: '快速创建…', hint: '本地 stdio / 远程 HTTP，名称命令或 URL', onSelect: () => setRegisterMcpOpen(true) },
+          { key: 'json', title: '导入 JSON…', hint: 'mcpServers / VS Code servers 格式，支持一次导入多条', onSelect: () => setMcpJsonOpen(true) },
+          { key: 'import-bundle', title: '导入 DXT / MCPB 包', hint: '本地 .dxt / .mcpb 文件', onSelect: () => setBundleOpen(true) },
+        ];
+      }
+      if (type === 'plugin') {
+        return [
+          { key: 'zip', title: '安装插件 zip…', hint: '校验 momo-plugin.json 后落位注册', onSelect: () => setPluginZipOpen(true) },
+          { key: 'dev', title: '注册开发目录…', hint: '指向本地源码目录，改码后重载生效', onSelect: () => setPluginDevOpen(true) },
+        ];
+      }
       return [
-        { key: 'wizard', title: '新建智能体…', hint: '分步向导：基础信息 → 提示词 → 能力 → 模型', onSelect: () => setCreateAgentOpen(true) },
-        { key: 'import-yaml', title: '导入 YAML 文件…', hint: 'manifest 格式，校验后注册为自定义 agent', onSelect: () => setImportYamlOpen(true) },
+        { key: 'zip', title: '导入 zip 包…', hint: '拖放或选择文件（SKILL.md 打包）', onSelect: () => setUploadSkillOpen(true) },
+        { key: 'create', title: '新建 SKILL.md…', hint: 'frontmatter（name/description）+ Markdown 正文', onSelect: () => setSkillCreateOpen(true) },
+        // P2.6 Task 3：Git 仓库导入（下载 zip 归档自动发现全部 SKILL.md，两阶段确认）
+        { key: 'git-import', title: '从 Git 仓库导入…', hint: 'GitHub / GitLab 地址，自动发现全部 SKILL.md', onSelect: () => setGitImportOpen(true) },
       ];
-    }
-    if (type === 'mcp') {
-      return [
-        { key: 'form', title: '快速创建…', hint: '本地 stdio / 远程 HTTP，名称命令或 URL', onSelect: () => setRegisterMcpOpen(true) },
-        { key: 'json', title: '导入 JSON…', hint: 'mcpServers / VS Code servers 格式，支持一次导入多条', onSelect: () => setMcpJsonOpen(true) },
-        { key: 'import-bundle', title: '导入 DXT / MCPB 包', hint: '本地 .dxt / .mcpb 文件', onSelect: () => setBundleOpen(true) },
-      ];
-    }
-    if (type === 'plugin') {
-      return [
-        { key: 'zip', title: '安装插件 zip…', hint: '校验 momo-plugin.json 后落位注册', onSelect: () => setPluginZipOpen(true) },
-        { key: 'dev', title: '注册开发目录…', hint: '指向本地源码目录，改码后重载生效', onSelect: () => setPluginDevOpen(true) },
-      ];
-    }
-    return [
-      { key: 'zip', title: '导入 zip 包…', hint: '拖放或选择文件（SKILL.md 打包）', onSelect: () => setUploadSkillOpen(true) },
-      { key: 'create', title: '新建 SKILL.md…', hint: 'frontmatter（name/description）+ Markdown 正文', onSelect: () => setSkillCreateOpen(true) },
-      // P2.6 Task 3：Git 仓库导入（下载 zip 归档自动发现全部 SKILL.md，两阶段确认）
-      { key: 'git-import', title: '从 Git 仓库导入…', hint: 'GitHub / GitLab 地址，自动发现全部 SKILL.md', onSelect: () => setGitImportOpen(true) },
-    ];
+    })();
+    return [...local, ...buildRemoteFetchItems(type, (source) => setFetchTarget(source))];
   };
 
   return (
@@ -352,6 +360,14 @@ export function ResourceLibraryView() {
       {/* M1 Task 14：发布到 momo-hub 弹窗（可发布资源卡片/详情入口置位——gating 见 publish-entry.ts） */}
       {publishTarget && (
         <PublishDialog item={publishTarget} onClose={() => setPublishTarget(null)} />
+      )}
+      {/* library-store-split：远端获取弹窗（AddMenu 远端组入口；关闭即卸载重置态） */}
+      {fetchTarget && (
+        <FetchDialog
+          source={fetchTarget}
+          type={activeType}
+          onClose={() => setFetchTarget(null)}
+        />
       )}
       {/* P2.2 Task 7：远程 MCP 配置编辑弹窗（McpConfigDialog mount 拉 getMcpConfig） */}
       {configTarget && (

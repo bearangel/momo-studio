@@ -16,6 +16,8 @@ export interface HubEntry {
   tags: string[];
   category?: string;
   item: ResourceItem;
+  /** library-store-split：hub 目录 meta.versions 数量（弹窗行「N 个版本」元信息） */
+  versionCount?: number;
 }
 
 export interface HubListResult {
@@ -26,6 +28,17 @@ export interface HubListResult {
   hasMore: boolean;
   /** 未接入引导态（hub 未配置——空目录 + degraded=false，UI 引导链到设置） */
   notEnrolled?: boolean;
+  /** library-store-split（弹窗脚注元数据，仅 momo-hub 源携带）：
+   *  本节点名（已连接 {nodeName}）/ 目录修订号 / 该类型目录条目总数（搜索前口径） */
+  nodeName?: string;
+  revision?: number;
+  total?: number;
+}
+
+/** registryList hub 分支的可选指令（library-store-split） */
+export interface HubListOptions {
+  /** true = 绕 TTL/退避/lastGood 强制 fresh 拉取（弹窗「刷新」入口；失败回落快照不写降级） */
+  fresh?: boolean;
 }
 
 /** hub provider 契约——每个网络注册表一个实现（smithery；momo-hub 为 M1c 新增第五源） */
@@ -35,5 +48,5 @@ export interface HubProvider {
   readonly region: 'intl' | 'cn' | 'local';
   readonly types: ResourceType[];
   /** page 1 起始（2026-09-23 实测 Smithery page 参数 1 起、page=0 被 422 拒绝） */
-  list(type: ResourceType, query?: string, page?: number): Promise<HubListResult>;
+  list(type: ResourceType, query?: string, page?: number, opts?: HubListOptions): Promise<HubListResult>;
 }

@@ -99,6 +99,27 @@ beforeEach(() => {
 });
 
 describe('AgentCreateWizard', () => {
+  it('library-store-split 回归锁：候选仅已装——未装行不入能力多选（resource:list 收窄后语义对齐）', async () => {
+    listMock.mockImplementation(async (filter?: { type?: string }): Promise<ResourceItem[]> => {
+      if (filter?.type === 'mcp') return [
+        { id: 'custom-mcp-github', type: 'mcp', source: 'custom', slug: 'github', name: 'github', description: '', installed: true, installable: false, removable: true },
+        { id: 'hub-mcp-ghost', type: 'mcp', source: 'hub', slug: 'ghost', name: 'ghost', description: '', installed: false, installable: true, removable: false },
+      ];
+      return [
+        { id: 'custom-skill-pdf', type: 'skill', source: 'custom', slug: 'pdf', name: 'pdf', description: '', installed: true, installable: false, removable: true },
+        { id: 'marketplace-skill-stale', type: 'skill', source: 'marketplace', slug: 'stale', name: 'stale', description: '', installed: false, installable: true, removable: false },
+      ];
+    });
+    render(<AgentCreateWizard onClose={vi.fn()} onSuccess={vi.fn()} />);
+    fillStep1AndNext();
+    fillStep2AndNext();
+    // 已装项出现；未装项（防御性——electron 侧已收窄）被前端过滤兜住
+    expect(await screen.findByText('github')).toBeTruthy();
+    expect(screen.getByText('pdf')).toBeTruthy();
+    expect(screen.queryByText('ghost')).toBeNull();
+    expect(screen.queryByText('stale')).toBeNull();
+  });
+
   it('四步流转：基础→提示词→能力→模型；必填校验拦截空步', async () => {
     render(<AgentCreateWizard onClose={vi.fn()} onSuccess={vi.fn()} />);
     // 步 1：名称必填

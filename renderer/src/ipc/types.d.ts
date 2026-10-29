@@ -978,6 +978,9 @@ export type ResourceSource =
 
 /**
  * v1.7 资源列表过滤条件，所有字段可选，undefined 表示不过滤该维度。
+ * library-store-split（spec 2026-10-29 §2.4）：resource:list 默认语义已收窄为
+ * 本地实体（builtin + custom + 已装远端出处条目）——source 过滤随之收窄为
+ * 「该来源的已装行」，未装远端目录条目经 resource:registryList 浏览。
  * 与 electron 端 resource/types.ts 的 ResourceFilter 对齐。
  */
 export interface ResourceFilter {
@@ -1282,6 +1285,8 @@ export interface RegistryListEntry {
   tags: string[];
   category?: string;
   item: ResourceItem;
+  /** library-store-split：hub 目录 meta.versions 数量（弹窗行「N 个版本」元信息） */
+  versionCount?: number;
 }
 
 /**
@@ -2476,18 +2481,29 @@ export interface ApiSurface {
      * P2 Task 4：按 provider 拉取注册表条目（builtin 分支本地过滤排序、hasMore 恒 false；
      * hub 失败 degraded 不抛错）。P2.1 Task 4：query 服务端搜索 + page 分页（1 起始），
      * hasMore 驱动「加载更多」。
+     * library-store-split（spec 2026-10-29 §2.4）：获取弹窗三源唯一浏览通道；
+     * opts.fresh 供 hub「刷新」入口（loadFresh，失败回落快照不写降级）；
+     * nodeName/total/revision 为弹窗脚注元数据（hub 携带 nodeName/revision/total，
+     * builtin 携带 total，smithery 均无）。
      */
     registryList(
       providerKey: RegistryProviderMeta['key'],
       type: ResourceType,
       query?: string,
       page?: number,
+      opts?: { fresh?: boolean },
     ): Promise<{
       entries: RegistryListEntry[];
       degraded: boolean;
       hasMore: boolean;
       /** M1c：未接入引导态（hub 未配置——空目录 + degraded=false，UI 引导链到设置） */
       notEnrolled?: boolean;
+      /** library-store-split 弹窗脚注：hub 节点名（已连接 {nodeName}） */
+      nodeName?: string;
+      /** library-store-split 弹窗脚注：该类型目录条目总数（搜索前口径） */
+      total?: number;
+      /** library-store-split 弹窗脚注：hub 目录修订号 */
+      revision?: number;
     }>;
     /**
      * P2.2 Task 6：查看已装远程 MCP 配置（McpConfigDialog 打开时拉取）。

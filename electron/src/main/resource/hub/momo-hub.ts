@@ -548,6 +548,15 @@ function toHubEntry(item: MarketplaceItem): HubEntry {
   };
 }
 
+/**
+ * HubResourceMeta → HubEntry（library-store-split 弹窗行）：携带 versionCount
+ * （meta.versions 数量——「N 个版本」元信息）。item 仍经 toMarketplaceItem →
+ * fromCatalogItem 生成（与安装链 / 库页已装行同源，零形状分叉）。
+ */
+function toHubEntryFromMeta(meta: HubResourceMeta, hubUrl: string): HubEntry {
+  return { ...toHubEntry(toMarketplaceItem(meta, hubUrl)), versionCount: meta.versions.length };
+}
+
 /** 关键词匹配（name/description/slug/tags——与 marketplace searchItems 同口径） */
 function matchesQuery(item: MarketplaceItem, query?: string): boolean {
   const q = query?.trim().toLowerCase();
@@ -563,6 +572,8 @@ function matchesQuery(item: MarketplaceItem, query?: string): boolean {
 /**
  * momo-hub provider（资源库第五源——spec §6.1）。
  * 目录无服务端分页：page 参数忽略、hasMore 恒 false（与 builtin 源同款）。
+ * library-store-split：list 承载获取弹窗——结果携带 nodeName/revision/total
+ * 脚注元数据；opts.fresh 走 loadFresh（「刷新」入口，失败回落快照不写降级）。
  */
 export function createHubProvider(source: HubCatalogSource): HubProvider {
   return {
@@ -570,21 +581,24 @@ export function createHubProvider(source: HubCatalogSource): HubProvider {
     label: 'momo-hub',
     region: 'local',
     types: ['agent', 'mcp', 'skill', 'plugin'],
-    async list(type, query, _page): Promise<HubListResult> {
-      const { catalog, hubUrl, degraded: deg, notEnrolled } = await source.load();
+    async list(type, query, _page, opts): Promise<HubListResult> {
+      const { catalog, hubUrl, degraded: deg, notEnrolled } = opts?.fresh
+        ? await source.loadFresh()
+        : await source.load();
       if (notEnrolled || !hubUrl) {
         return { entries: [], degraded: false, hasMore: false, notEnrolled: true };
       }
-      const items = catalog.items
-        .filter((m) => isMarketplaceType(m.type))
-        .filter((m) => m.type === type)
-        .map((m) => toMarketplaceItem(m, hubUrl))
-        .filter((item) => matchesQuery(item, query));
+      const typed = catalog.items.filter((m) => isMarketplaceType(m.type) && m.type === type);
       return {
-        entries: items.map(toHubEntry),
+        entries: typed
+          .filter((m) => matchesQuery(toMarketplaceItem(m, hubUrl), query))
+          .map((m) => toHubEntryFromMeta(m, hubUrl)),
         degraded: deg,
         hasMore: false,
         notEnrolled: false,
+        nodeName: hubGetStatus().nodeName ?? undefined,
+        revision: catalog.revision,
+        total: typed.length,
       };
     },
   };
