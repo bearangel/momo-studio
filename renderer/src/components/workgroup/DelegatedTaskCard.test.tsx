@@ -21,6 +21,7 @@ import { showToast } from '../ui/Toast';
 import type { HubStatus, TaskRow } from '../../ipc/types';
 import { ipc } from '../../ipc/client';
 import { useHubStore } from '../../stores/hub.store';
+import { useHubDelegationStore } from '../../stores/hub-delegation.store';
 
 /** 推送订阅捕获（vi.hoisted——vi.mock 工厂与用例体共享） */
 const h = vi.hoisted(() => {
@@ -125,6 +126,8 @@ function openMenu(): void {
 beforeEach(() => {
   vi.clearAllMocks();
   for (const key of Object.keys(h.subs)) delete h.subs[key];
+  // M4.2：组名缓存单例复位（组徽标用例注入的映射不泄漏进其余用例）
+  useHubDelegationStore.setState({ groupNames: {} });
 });
 
 // ── leader 侧六态徽标 ────────────────────────────────────────────────────────
@@ -426,6 +429,74 @@ describe('DelegatedTaskCard — worker 侧', () => {
 });
 
 // ── waiting 占位（T11/T12 接通前的占位禁用）─────────────────────────────────
+
+// ── M4.2 组徽标（协议 1.6.0 TaskRecord.groupId 门控——leader 徽标旁组归属）─────
+
+describe('DelegatedTaskCard — M4.2 组徽标', () => {
+  it('G-1. 账本行带 groupId + 组名缓存命中 → leader 徽标旁 Users 组名徽标', () => {
+    useHubDelegationStore.setState({ groupNames: { 'g-dev': '产品组' } });
+    renderCard(
+      mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'in_progress' }),
+      boardCtx({
+        ledger: {
+          'T-8f21abcd': { taskId: 'T-8f21abcd', workspaceName: 'dev-ws', targetNodeId: 'node-b', groupId: 'g-dev', status: 'running', title: '批量重命名', createdAt: 1, updatedAt: 2 },
+        },
+      }),
+    );
+    expect(screen.getByText('产品组')).toBeInTheDocument();
+    // title 悬浮完整 groupId（名解析降级时可对账）
+    expect(screen.getByTitle('g-dev')).toBeInTheDocument();
+  });
+
+  it('G-2. 账本行无 groupId（旧 hub 1.5 形状）→ 组徽标零渲染（可选字段门控不崩）', () => {
+    useHubDelegationStore.setState({ groupNames: { 'g-dev': '产品组' } });
+    renderCard(
+      mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'in_progress' }),
+      boardCtx({
+        ledger: {
+          'T-8f21abcd': { taskId: 'T-8f21abcd', workspaceName: 'dev-ws', targetNodeId: 'node-b', status: 'running', title: '批量重命名', createdAt: 1, updatedAt: 2 },
+        },
+      }),
+    );
+    expect(screen.queryByText('产品组')).not.toBeInTheDocument();
+  });
+
+  it('G-3. 组名缓存缺失 → 降级 groupId 短码（组归属事实优先于名解析，不隐藏徽标）', () => {
+    useHubDelegationStore.setState({ groupNames: {} });
+    renderCard(
+      mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'in_progress' }),
+      boardCtx({
+        ledger: {
+          'T-8f21abcd': { taskId: 'T-8f21abcd', workspaceName: 'dev-ws', targetNodeId: 'node-b', groupId: 'g-0123456789abcdef', status: 'running', title: '批量重命名', createdAt: 1, updatedAt: 2 },
+        },
+      }),
+    );
+    expect(screen.getByText('g-01…cdef')).toBeInTheDocument();
+  });
+
+  it('G-4. worker 视角（「来自 {node}」来源徽标在场）→ 组徽标不渲染（账本行带 groupId 也不并列）', () => {
+    useHubDelegationStore.setState({ groupNames: { 'g-dev': '产品组' } });
+    renderCard(
+      mkTask({
+        id: 'T-100',
+        title: '排查生产告警',
+        status: 'in_progress',
+        routing: { mode: 'node', groupId: 'g-dev', targetNodeId: 'node-self' },
+      }),
+      boardCtx({
+        selfNodeId: 'node-self',
+        ledger: {
+          'T-8f21abcd': { taskId: 'T-8f21abcd', workspaceName: 'dev-ws', targetNodeId: 'node-self', groupId: 'g-dev', status: 'running', title: '排查生产告警', createdAt: 1, updatedAt: 2 },
+        },
+        received: {
+          'T-8f21abcd': { taskId: 'T-8f21abcd', sessionId: 'sess-1', workspaceId: 'ws-9', workspaceName: 'dev-ws', title: '排查生产告警', byNode: 'node-b', state: 'running', createdAt: 1, updatedAt: 1 },
+        },
+      }),
+    );
+    expect(screen.getByText(/来自/)).toBeInTheDocument();
+    expect(screen.queryByText('产品组')).not.toBeInTheDocument();
+  });
+});
 
 describe('DelegatedTaskCard — waiting 态（占位）', () => {
   it('Q-1. waitingSummary=null（T9 缺省）→ 等待态零渲染（无生产者不点亮）', () => {

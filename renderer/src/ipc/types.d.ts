@@ -2961,11 +2961,14 @@ export interface HubMirrorRegistryRow {
 /** 委派账本七态（协议 DelegationStatus 镜像——waiting=M3.1 running 中等待用户确认的中间态） */
 export type HubDelegationStatus = 'pending' | 'running' | 'waiting' | 'done' | 'failed' | 'interrupted' | 'cancelled';
 
-/** 委派账本条目（协议 TaskRecord 镜像——七字段） */
+/** 委派账本条目（协议 TaskRecord 镜像——七字段 + M4.2 组归属字段） */
 export interface HubTaskRecord {
   taskId: string;
   workspaceName: string;
   targetNodeId: string;
+  /** 组归属（M4.2，协议 1.6.0 镜像）：hub 从 delegations.group_id 直接投影——
+   *  委派板组徽标数据源；可选字段（旧 hub 1.5 不发 → 徽标门控不显示） */
+  groupId?: string;
   status: HubDelegationStatus;
   title: string;
   createdAt: number;
@@ -3153,6 +3156,9 @@ export type HubViewFilesResult =
 export interface HubViewAppendedEvent {
   sessionId: string;
   events: HubViewMessage[];
+  /** 组锚定（M4.2，协议 1.6.0 镜像）：显式 groupId 订阅的透传记录（主进程桥挑字段
+   *  转发）；旧 hub / 隐式订阅不带键——查看面板单开不按它分叉，类型面透传 */
+  groupId?: string;
 }
 
 /** hub 命名空间通道面（spec 2026-10-23：4 invoke + 2 推送；M1 T13 增发布 1 invoke + 1 推送；M2b T4 增工作组 6 invoke + 1 推送；M2c T8b 增镜像 2 invoke + 2 推送） */

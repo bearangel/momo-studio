@@ -19,12 +19,16 @@
 //     协议 minor ≥ 3，armed-confirm 两段确认，cancel 模板）
 //   - 远程代答留痕行（M3.1）：progress.answered 存在且较新（at ≥ 条目拍时刻，
 //     非终态）→ 进度线下方 text-xs「已远程批准/已远程拒绝」；后续进度拍自然清除
+//   - 组徽标（M4.2 协议 1.6.0）：账本行 TaskRecord.groupId 有值 → leader 徽标旁
+//     Users+组名 Badge（组名经 hub-delegation.store 的 group.list 映射缓存解析，
+//     缺失降级 groupId 短码）；旧 hub 不发此键 → 零渲染（可选字段门控）
 // 外派卡不接拖拽（useSortable 零注册）：行状态由 hub 账本驱动，本地 move 会
 // 与远端真相打架——列间迁移只能经委派事件回写。
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Ban, Bot, Check, CircleCheck, CircleHelp, CircleX, Lock, RefreshCw, RotateCcw, X, Zap } from 'lucide-react';
+import { Ban, Bot, Check, CircleCheck, CircleHelp, CircleX, Lock, RefreshCw, RotateCcw, Users, X, Zap } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useHubStore } from '../../stores/hub.store';
+import { cacheDelegationGroupNames, useHubDelegationStore } from '../../stores/hub-delegation.store';
 import { hubSupportsMinor } from '../../lib/hub-capability';
 import { parseRpcErrorCode, rpcErrorMessage } from '../../lib/rpc-error';
 import type {
@@ -44,6 +48,11 @@ import { useArmedConfirm } from './useArmedConfirm';
 /** nodeId 短码（NodeCard 同款——名称不可解析时的兜底呈现） */
 function shortNodeId(nodeId: string): string {
   return nodeId.length > 8 ? `${nodeId.slice(0, 4)}…${nodeId.slice(-4)}` : nodeId;
+}
+
+/** groupId 短码（M4.2 组徽标——组名映射缺失时的兜底呈现，与 nodeId 短码同格式） */
+function shortGroupId(groupId: string): string {
+  return groupId.length > 8 ? `${groupId.slice(0, 4)}…${groupId.slice(-4)}` : groupId;
 }
 
 /** M3.1 版本过低类错误码（rejection message 前缀 [code]——主进程 ipc.handlers 编码） */
@@ -226,6 +235,9 @@ function useDelegationBoardData(refreshTasks?: () => void): DelegationBoardConte
         const names: Record<string, string> = {};
         for (const g of r.groups) for (const m of g.members) names[m.nodeId] = m.name;
         setNodeNames(names);
+        // M4.2：组名映射就近回写委派 store 共享缓存（直开任务板时工作组视图
+        // 未挂载，store 自身的 group.list 拉取不在场——徽标名不降级短码）
+        cacheDelegationGroupNames(r.groups);
       })
       .catch(() => {});
     void fetchLocalWaiting();
@@ -312,6 +324,8 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
   }, [menu, disarmCancel, disarmApprove, disarmDeny]);
   // M3.1 门控输入：hub 协议版本（hub.store 订阅——provider 挂载时已 init 接线）
   const hubProtoVer = useHubStore((s) => s.status?.hubProtoVer ?? null);
+  // M4.2 组名映射缓存（hub-delegation.store——init/看板 provider 双路保鲜）
+  const groupNames = useHubDelegationStore((s) => s.groupNames);
 
   const isWorkerView =
     task.routing.mode === 'node' && board.selfNodeId != null && task.routing.targetNodeId === board.selfNodeId;
@@ -369,6 +383,13 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
         ? '组内调度 · 待派发'
         : `${nodeName(leaderTargetNodeId)} · 待派发`
       : nodeName(leaderTargetNodeId);
+
+  // M4.2 组徽标：账本行 TaskRecord.groupId（协议 1.6.0 起 hub 从 delegations
+  // .group_id 投影；旧 hub 缺席 → null 零渲染）。行内 routing.groupId 不取——
+  // 待派发行无账本本就无组归属争议，已派发行以账本（hub 真相）为准
+  const ledgerGroupId = delegationId != null ? (board.ledger[delegationId]?.groupId ?? null) : null;
+  const groupBadgeLabel =
+    ledgerGroupId !== null ? (groupNames[ledgerGroupId] ?? shortGroupId(ledgerGroupId)) : null;
 
   // P2-3 reason 链优先级：failed 且 errorMessage 在场 → reason 全文压过一切 running 末拍残留
   // （delegation-sync 的 progress 快照停在最后一拍「（无文本增量）」，不压过则失败原因永不露面）
@@ -475,10 +496,23 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
               )}
             </>
           ) : (
-            <Badge tone="accent" className="h-auto gap-1 px-1.5 py-0.5 text-[10px] leading-none">
-              <Bot size={12} strokeWidth={1.75} aria-hidden />
-              {leaderBadge}
-            </Badge>
+            <>
+              <Badge tone="accent" className="h-auto gap-1 px-1.5 py-0.5 text-[10px] leading-none">
+                <Bot size={12} strokeWidth={1.75} aria-hidden />
+                {leaderBadge}
+              </Badge>
+              {groupBadgeLabel !== null && (
+                /* M4.2 组归属徽标：title 悬浮完整 groupId（名解析降级时可对账） */
+                <Badge
+                  tone="neutral"
+                  className="h-auto gap-1 px-1.5 py-0.5 text-[10px] leading-none"
+                  title={ledgerGroupId ?? undefined}
+                >
+                  <Users size={12} strokeWidth={1.75} aria-hidden />
+                  {groupBadgeLabel}
+                </Badge>
+              )}
+            </>
           )}
           <span className="ml-auto flex shrink-0 items-center gap-1">
             {task.blocked && (

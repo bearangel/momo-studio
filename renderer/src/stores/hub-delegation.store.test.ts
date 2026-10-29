@@ -4,6 +4,9 @@
 // （同窗多拍一条增量、终态冲刷在途批）/ 终态四推送状态迁移 / cancelled 无推送——
 // 由 taskCancel 回执本地落 + 重拉对账 / 向导受理链（delegate → accepted + prompts
 // 记录 + 重拉）/ 未知 taskId 事件不凭空造行。
+// M4.2（协议 1.6.0）：taskList 选中组过滤双态锁（有组携带 groupId / 无组无参
+// 全组聚合现状）+ 组切换重拉重入护栏（旧过滤应答不覆盖新结果）+ 组名映射缓存
+// （group.list 投影 / group.changed 推送刷新 / 失败尽力而为不落 error）。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { __resetDelegationBatchesForTest, humanizeDelegationReason } from './hub-delegation.store';
 import type {
@@ -16,6 +19,7 @@ let progressCb: ((e: HubTaskProgressEvent) => void) | undefined;
 let completedCb: ((e: HubTaskTerminalEvent) => void) | undefined;
 let failedCb: ((e: HubTaskTerminalEvent) => void) | undefined;
 let interruptedCb: ((e: HubTaskTerminalEvent) => void) | undefined;
+let groupChangedCb: (() => void) | undefined;
 
 function task(overrides?: Partial<HubTaskRecord>): HubTaskRecord {
   return {
@@ -39,6 +43,8 @@ const mockApi = {
     onTaskCompleted: vi.fn((cb: (e: HubTaskTerminalEvent) => void) => { completedCb = cb; return () => undefined; }),
     onTaskFailed: vi.fn((cb: (e: HubTaskTerminalEvent) => void) => { failedCb = cb; return () => undefined; }),
     onTaskInterrupted: vi.fn((cb: (e: HubTaskTerminalEvent) => void) => { interruptedCb = cb; return () => undefined; }),
+    groupList: vi.fn(),
+    onGroupChanged: vi.fn((cb: () => void) => { groupChangedCb = cb; return () => undefined; }),
   },
 };
 
@@ -48,8 +54,10 @@ beforeEach(() => {
   completedCb = undefined;
   failedCb = undefined;
   interruptedCb = undefined;
+  groupChangedCb = undefined;
   (globalThis as unknown as { window: { api: typeof mockApi } }).window = { api: mockApi };
   mockApi.hub.taskList.mockResolvedValue({ tasks: [task()] });
+  mockApi.hub.groupList.mockResolvedValue({ groups: [] });
 });
 
 afterEach(() => {
@@ -62,6 +70,7 @@ async function freshInit(fakeTimers = false): Promise<void> {
   useHubDelegationStore.setState({
     tasks: [], loading: false, error: null,
     streams: {}, prompts: {}, agentSlugs: {}, sessionIds: {}, reasons: {}, waiting: {},
+    groupNames: {}, groupIdFilter: null,
   });
   useHubDelegationStore.getState().init();
   if (fakeTimers) {
@@ -195,6 +204,116 @@ describe('取消（无 cancelled 推送——回执本地落 + 重拉对账）',
     await expect(useHubDelegationStore.getState().cancel('tk-1')).rejects.toThrow('任务已处于终态 done，不可取消');
     expect(useHubDelegationStore.getState().tasks[0]!.status).toBe('done');
     expect(useHubDelegationStore.getState().error).toBe('任务已处于终态 done，不可取消');
+  });
+});
+
+describe('M4.2 组过滤（taskList 选中组透传——双态锁）', () => {
+  it('态一：无选中组（缺省）→ taskList 无参调用（全组聚合现状零变化）', async () => {
+    await freshInit();
+    expect(mockApi.hub.taskList).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it('态二：选中组 → taskList 带 groupId；切回 null → 回落无参旧形状', async () => {
+    await freshInit();
+    const { useHubDelegationStore } = await import('./hub-delegation.store');
+    mockApi.hub.taskList.mockResolvedValueOnce({ tasks: [task({ taskId: 'tk-g1' })] });
+    useHubDelegationStore.getState().setGroupFilter('g-1');
+    await vi.waitFor(() => expect(useHubDelegationStore.getState().tasks[0]!.taskId).toBe('tk-g1'));
+    expect(mockApi.hub.taskList).toHaveBeenLastCalledWith({ groupId: 'g-1' });
+
+    mockApi.hub.taskList.mockResolvedValueOnce({ tasks: [task()] });
+    useHubDelegationStore.getState().setGroupFilter(null);
+    await vi.waitFor(() => expect(mockApi.hub.taskList).toHaveBeenLastCalledWith(undefined));
+  });
+
+  it('同值 setGroupFilter 不重拉（值变化才拉）', async () => {
+    await freshInit();
+    const { useHubDelegationStore } = await import('./hub-delegation.store');
+    const calls = mockApi.hub.taskList.mock.calls.length;
+    useHubDelegationStore.getState().setGroupFilter(null);
+    expect(mockApi.hub.taskList.mock.calls.length).toBe(calls);
+  });
+
+  it('cancel 对账重拉也走当前过滤（过滤随行——组上下文全链路不丢）', async () => {
+    await freshInit();
+    const { useHubDelegationStore } = await import('./hub-delegation.store');
+    useHubDelegationStore.getState().setGroupFilter('g-1');
+    await vi.waitFor(() => expect(mockApi.hub.taskList).toHaveBeenLastCalledWith({ groupId: 'g-1' }));
+
+    mockApi.hub.taskCancel.mockResolvedValueOnce({ ok: true });
+    mockApi.hub.taskList.mockResolvedValueOnce({ tasks: [task({ status: 'cancelled' })] });
+    await useHubDelegationStore.getState().cancel('tk-1');
+    expect(mockApi.hub.taskList).toHaveBeenLastCalledWith({ groupId: 'g-1' });
+  });
+
+  it('重入护栏：组切换与在途拉取并发 → 末次补拉取新过滤（旧应答不覆盖新结果）', async () => {
+    const { useHubDelegationStore } = await import('./hub-delegation.store');
+    let resolveA!: (v: { tasks: HubTaskRecord[] }) => void;
+    let resolveB!: (v: { tasks: HubTaskRecord[] }) => void;
+    mockApi.hub.taskList
+      .mockImplementationOnce(() => new Promise((res) => { resolveA = res; }))
+      .mockImplementationOnce(() => new Promise((res) => { resolveB = res; }));
+    useHubDelegationStore.setState({
+      tasks: [], loading: false, error: null,
+      streams: {}, prompts: {}, agentSlugs: {}, sessionIds: {}, reasons: {}, waiting: {},
+      groupNames: {}, groupIdFilter: null,
+    });
+    useHubDelegationStore.getState().init();
+    // 首拉（无过滤）在途 → 组过滤切换排队补拉（不并发第二发）
+    useHubDelegationStore.getState().setGroupFilter('g-1');
+    expect(mockApi.hub.taskList).toHaveBeenCalledTimes(1);
+
+    resolveA({ tasks: [task({ taskId: 'tk-all' })] });
+    await vi.waitFor(() => expect(mockApi.hub.taskList).toHaveBeenCalledTimes(2));
+    expect(mockApi.hub.taskList).toHaveBeenLastCalledWith({ groupId: 'g-1' });
+    resolveB({ tasks: [task({ taskId: 'tk-g1' })] });
+    await vi.waitFor(() => expect(useHubDelegationStore.getState().tasks[0]!.taskId).toBe('tk-g1'));
+  });
+});
+
+describe('M4.2 组名映射缓存（group.list 投影——委派板组徽标数据源）', () => {
+  it('init 附带 group.list → groupNames 落地（groupId → groupName）', async () => {
+    mockApi.hub.groupList.mockResolvedValue({
+      groups: [{ groupId: 'g-1', groupName: '产品组', leaderNodeId: 'node-a', members: [] }],
+    });
+    await freshInit();
+    const { useHubDelegationStore } = await import('./hub-delegation.store');
+    expect(mockApi.hub.groupList).toHaveBeenCalledTimes(1);
+    expect(useHubDelegationStore.getState().groupNames).toEqual({ 'g-1': '产品组' });
+  });
+
+  it('group.changed 推送 → 重拉 group.list 刷新缓存（只刷名不刷任务）', async () => {
+    mockApi.hub.groupList.mockResolvedValueOnce({
+      groups: [{ groupId: 'g-1', groupName: '产品组', leaderNodeId: 'node-a', members: [] }],
+    });
+    await freshInit();
+    const { useHubDelegationStore } = await import('./hub-delegation.store');
+    mockApi.hub.groupList.mockResolvedValueOnce({
+      groups: [{ groupId: 'g-1', groupName: '产品组', leaderNodeId: 'node-a', members: [] }, { groupId: 'g-2', groupName: '基建组', leaderNodeId: 'node-b', members: [] }],
+    });
+    groupChangedCb!();
+    // 等缓存落地而非调用计数（promise 决议在调用之后）
+    await vi.waitFor(() =>
+      expect(useHubDelegationStore.getState().groupNames).toEqual({ 'g-1': '产品组', 'g-2': '基建组' }),
+    );
+    expect(mockApi.hub.groupList).toHaveBeenCalledTimes(2);
+    // 只刷名不刷任务：taskList 仍只 init 首拉一次
+    expect(mockApi.hub.taskList).toHaveBeenCalledTimes(1);
+  });
+
+  it('group.list 失败 → 尽力而为：缓存保留旧值、error 不置位（徽标降级短码不红行）', async () => {
+    mockApi.hub.groupList
+      .mockResolvedValueOnce({ groups: [{ groupId: 'g-1', groupName: '产品组', leaderNodeId: 'node-a', members: [] }] })
+      .mockRejectedValueOnce(new Error('hub 未连接，请先在设置中接入 momo-hub'));
+    await freshInit();
+    const { useHubDelegationStore } = await import('./hub-delegation.store');
+    groupChangedCb!();
+    await vi.waitFor(() => expect(mockApi.hub.groupList).toHaveBeenCalledTimes(2));
+    // 微任务冲刷后缓存保持旧值（失败不清洗）、error 不置位
+    await vi.waitFor(() =>
+      expect(useHubDelegationStore.getState().groupNames).toEqual({ 'g-1': '产品组' }),
+    );
+    expect(useHubDelegationStore.getState().error).toBeNull();
   });
 });
 

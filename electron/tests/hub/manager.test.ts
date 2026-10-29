@@ -727,4 +727,45 @@ describe('hub manager 查看同意上报链（M2e T14/T15）', () => {
     });
     expect(m.sent).toEqual([]);
   });
+
+  // M4.2（协议 1.6.0）：显式组订阅的 tail 推送带 groupId——桥挑字段透传
+  // （订阅链验证 spec §2.3：view.tail 推送 groupId 消费面）；缺省不带键。
+  it('view.appended 带 groupId（1.6.0 组锚定）→ 桥透传；缺省 → 载荷零变化（1.5 形状锁）', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    m.sent.length = 0;
+    m.clients[0]!.opts.onEvent({
+      v: 1, kind: 'evt', method: 'view.appended',
+      payload: {
+        sessionId: 'sess-1',
+        events: [{ seq: 8, at: 2, role: 'assistant', content: 'y' }],
+        groupId: 'g-dev',
+      },
+    });
+    expect(m.sent).toEqual([
+      {
+        channel: 'hub:viewAppended',
+        payload: {
+          sessionId: 'sess-1',
+          events: [{ seq: 8, at: 2, role: 'assistant', content: 'y' }],
+          groupId: 'g-dev',
+        },
+      },
+    ]);
+    // groupId 非法类型（非 string）→ 不透传该键，其余字段照常（挑字段纪律不放松）
+    m.sent.length = 0;
+    m.clients[0]!.opts.onEvent({
+      v: 1, kind: 'evt', method: 'view.appended',
+      payload: {
+        sessionId: 'sess-1',
+        events: [{ seq: 9, at: 3, role: 'assistant', content: 'z' }],
+        groupId: 42,
+      },
+    });
+    expect(m.sent).toEqual([
+      {
+        channel: 'hub:viewAppended',
+        payload: { sessionId: 'sess-1', events: [{ seq: 9, at: 3, role: 'assistant', content: 'z' }] },
+      },
+    ]);
+  });
 });
