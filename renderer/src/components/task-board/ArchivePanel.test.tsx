@@ -124,7 +124,7 @@ describe('ArchivePanel', () => {
   });
 
   it('open 时按契约拉取归档任务 + 全量组，渲染归档行（短ID·标题/组名/状态徽标/归档时间）', async () => {
-renderPanel();
+    renderPanel();
 
     await waitFor(() => {
       expect(mockApi.task.list).toHaveBeenCalledWith({
@@ -151,12 +151,12 @@ renderPanel();
 
   it('空数据渲染空态文案', async () => {
     mockApi.task.list.mockResolvedValue([]);
-renderPanel();
+    renderPanel();
     expect(await screen.findByText('暂无归档任务')).toBeInTheDocument();
   });
 
   it('单条恢复：调 ipc.task.unarchive → 行消失、其余保留、store.tasks 追加恢复行', async () => {
-renderPanel();
+    renderPanel();
     await screen.findByText(/归档任务甲/);
 
     fireEvent.click(within(rowOf('归档任务甲')).getByRole('button', { name: '恢复' }));
@@ -173,7 +173,7 @@ renderPanel();
   });
 
   it('勾选两条 → 批量恢复按列表序逐条 unarchive，已选计数归零', async () => {
-renderPanel();
+    renderPanel();
     await screen.findByText(/归档任务甲/);
 
     fireEvent.click(within(rowOf('归档任务甲')).getByRole('checkbox'));
@@ -209,7 +209,7 @@ renderPanel();
       activeRows = [{ ...T_IN_G1_A, archivedAt: null }, { ...T_IN_G1_B, archivedAt: null }];
       return mkGroup({ ...GROUPS_ALL[0]!, archivedAt: null });
     });
-renderPanel();
+    renderPanel();
     await screen.findByText(/归档任务甲/);
 
     fireEvent.change(screen.getByLabelText('恢复整组'), { target: { value: 'g-1' } });
@@ -233,7 +233,7 @@ renderPanel();
 
   it('恢复整组失败：toast 提示且行保留（错误路径）', async () => {
     mockApi.taskGroup.unarchive.mockRejectedValue(new Error('组不存在'));
-renderPanel();
+    renderPanel();
     await screen.findByText(/归档任务甲/);
 
     fireEvent.change(screen.getByLabelText('恢复整组'), { target: { value: 'g-1' } });
@@ -247,7 +247,7 @@ renderPanel();
   });
 
   it('恢复整组候选只列「还有归档任务的已归档组」', async () => {
-renderPanel();
+    renderPanel();
     await screen.findByText(/归档任务甲/);
 
     const select = screen.getByLabelText('恢复整组') as HTMLSelectElement;
@@ -256,7 +256,7 @@ renderPanel();
   });
 
   it('过滤：搜索框命中标题、组 select、状态 select 三维 AND 叠加', async () => {
-renderPanel();
+    renderPanel();
     await screen.findByText(/归档任务甲/);
 
     // 搜索：只留「乙」
@@ -275,7 +275,7 @@ renderPanel();
 
   it('单条恢复失败：toast 提示且行保留', async () => {
     mockApi.task.unarchive.mockRejectedValue(new Error('任务不存在'));
-renderPanel();
+    renderPanel();
     await screen.findByText(/归档任务甲/);
 
     fireEvent.click(within(rowOf('归档任务甲')).getByRole('button', { name: '恢复' }));

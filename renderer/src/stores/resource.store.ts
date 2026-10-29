@@ -110,7 +110,9 @@ interface ResourceStore {
   loadCatalogStatus: () => Promise<void>;
   /**
    * M1 Task 14：订阅 hub:resourcePublished（含本机与其他节点的发布），按
-   * `${type}:${slug}` 记录最新版本到 hubUpdates。返回解订阅函数（View 卸载调用）。
+   * `${type}:${slug}` 记录最新版本到 hubUpdates；事件同时触发一次 load()
+   * 刷新列表与来源计数（M3.0 验收 D1——主进程目录已 upsert，不重拉则计数
+   * 停留上次快照）。返回解订阅函数（View 卸载调用）。
    * M3.4 §2.4：同挂 hub:resourceUnpublished 订阅——撤回事件清该 slug 的全部
    * 角标键（事件载荷不带 type，键按 `:${slug}` 后缀匹配）+ 触发一次 load()
    * 刷新目录（主进程目录源已剔除，renderer 列表源于 IPC 拉取——事件到时刷新
@@ -254,8 +256,14 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
       // 低版事件覆盖会让「可更新」指向旧版本，点更新实际装高版（错版本）。
       const key = `${e.type}:${e.slug}`;
       const current = get().hubUpdates[key];
-      if (current !== undefined && compareVersions(e.version, current) <= 0) return;
-      set((s) => ({ hubUpdates: { ...s.hubUpdates, [key]: e.version } }));
+      if (current === undefined || compareVersions(e.version, current) > 0) {
+        set((s) => ({ hubUpdates: { ...s.hubUpdates, [key]: e.version } }));
+      }
+      // 发布即时同步（M3.0 验收 D1）：主进程目录源已 upsert 该条目（M3.4 §2.3
+      // applyPublishedEvent），renderer 列表/来源计数源于 IPC 拉取——事件到时不
+      // 重拉则计数停留上次 load 快照（切页 remount 首拉与事件到达存在竞态，真机
+      // 上首拉先到即陈旧到 reload）。与 onResourceUnpublished 同模式：load 幂等。
+      void get().load();
     });
     const offUnpublished = ipc.hub.onResourceUnpublished((e: HubResourceUnpublishedEvent) => {
       // 撤回即时同步：清该 slug 的全部类型角标键 + 刷新一次目录（幂等——
