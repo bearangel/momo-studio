@@ -69,8 +69,8 @@ importers:
         specifier: ^1.12.3
         version: 1.12.3
       momo-hub-protocol:
-        specifier: github:bearangel/momo-hub#v0.1.9
-        version: https://codeload.github.com/bearangel/momo-hub/tar.gz/c501d957853dddda830a499395d1fd15feab3f0d
+        specifier: github:bearangel/momo-hub#v0.2.0
+        version: https://codeload.github.com/bearangel/momo-hub/tar.gz/eed5f02aea46f83e766ade71d33692e21626557d
       pdfjs-dist:
         specifier: ^3.11.174
         version: 3.11.174
@@ -2998,9 +2998,9 @@ packages:
     resolution: {integrity: sha512-FP+p8RB8OWpF3YZBCrP5gtADmtXApB5AMLn+vdyA+PyxCjrCs00mjyUozssO33cwDeT3wNGdLxJ5M//YqtHAJw==}
     hasBin: true
 
-  momo-hub-protocol@https://codeload.github.com/bearangel/momo-hub/tar.gz/c501d957853dddda830a499395d1fd15feab3f0d:
-    resolution: {tarball: https://codeload.github.com/bearangel/momo-hub/tar.gz/c501d957853dddda830a499395d1fd15feab3f0d}
-    version: 0.1.9
+  momo-hub-protocol@https://codeload.github.com/bearangel/momo-hub/tar.gz/eed5f02aea46f83e766ade71d33692e21626557d:
+    resolution: {tarball: https://codeload.github.com/bearangel/momo-hub/tar.gz/eed5f02aea46f83e766ade71d33692e21626557d}
+    version: 0.2.0
     engines: {node: '>=24.0.0'}
 
   monaco-editor@0.56.0:
@@ -7331,7 +7331,7 @@ snapshots:
     dependencies:
       minimist: 1.2.8
 
-  momo-hub-protocol@https://codeload.github.com/bearangel/momo-hub/tar.gz/c501d957853dddda830a499395d1fd15feab3f0d: {}
+  momo-hub-protocol@https://codeload.github.com/bearangel/momo-hub/tar.gz/eed5f02aea46f83e766ade71d33692e21626557d: {}
 
   monaco-editor@0.56.0:
     dependencies:
