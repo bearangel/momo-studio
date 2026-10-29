@@ -4,8 +4,10 @@
 // view.files 两方法 + view.* 可选 groupId + files 限额常量；M3.4 pin bump
 // v0.1.9——协议 1.5.0：SnapshotResourceRef.version? / HubCatalog.revision /
 // EVT.resourceUnpublished；M4.2 pin bump v0.2.0——协议 1.6.0：TaskRecord.groupId? /
-// ViewAppendedEvent.groupId? 两可选字段，PROTOCOL_VERSION 对齐）——锁五件事：
-// ① pin 生效：node_modules 实装 momo-hub-protocol 版本 = pin 目标（0.2.0）——
+// ViewAppendedEvent.groupId? 两可选字段，PROTOCOL_VERSION 对齐；M4.3 pin bump
+// v0.3.0——协议 1.7.0：DelegationTask.dependsOn? 可选字段（外派依赖元数据，
+// 纯透传不校验存在性），PROTOCOL_VERSION 对齐）——锁六件事：
+// ① pin 生效：node_modules 实装 momo-hub-protocol 版本 = pin 目标（0.3.0）——
 //    防「lockfile-only 更新后未 install」/「pin 漂移」两类事故（构建新鲜度红线）
 // ② v0.1.5 语义目录样本（hub 乱序发布产物，形状锚自 hub 仓 resources-latest-semver.test.ts
 //    与裁定书 §1 curl 实录）过 validateHubCatalog——生产消费链（momo-hub.ts load）同校验器
@@ -17,6 +19,10 @@
 // ⑤ 1.6.0 两面（M4.2 §2.1）：TaskRecord.groupId? 与 ViewAppendedEvent.groupId?
 //    变体锁——在场合法（组归属消费面：委派板组徽标 / view.appended 桥透传）且
 //    缺省合法（旧 hub 1.5 形状零变化——可选字段，消费面门控渲染不崩）
+// ⑥ 1.7.0 一面（M4.3 §2.1）：DelegationTask.dependsOn? 变体锁——在场合法
+//    （leader 侧 brief 透传面：dispatch-submit 组装带出）且缺省合法不带键
+//    （1.6 载荷向后兼容）；上限校验（≤50 项/项 ≤128 字符）在 hub 侧白名单
+//    （hub 仓 delegations.test.ts 锁死——studio 侧纯类型面，不重复运行时锁）
 // 版本 introspection 直读包内 package.json：单入口规则（protocol.ts）约束的是协议符号
 // import；此处是 pin 锁定断言，目的不同，不走协议面。
 import { readFileSync } from 'node:fs';
@@ -27,6 +33,7 @@ import {
   PROTOCOL_VERSION,
   validateHubCatalog,
   validateSnapshotManifest,
+  type DelegationTask,
   type HubCatalog,
   type TaskRecord,
   type ViewAppendedEvent,
@@ -84,9 +91,9 @@ function manifestSample(resources: unknown): unknown {
   };
 }
 
-describe('hub pin v0.2.0（M4.2）', () => {
-  it('pin 生效：实装 momo-hub-protocol 版本 = 0.2.0（electron/package.json #v0.2.0）', () => {
-    expect(pkg.version).toBe('0.2.0');
+describe('hub pin v0.3.0（M4.3）', () => {
+  it('pin 生效：实装 momo-hub-protocol 版本 = 0.3.0（electron/package.json #v0.3.0）', () => {
+    expect(pkg.version).toBe('0.3.0');
   });
 
   it('v0.1.5 语义目录样本过 validateHubCatalog（生产消费链同校验器）', () => {
@@ -191,10 +198,6 @@ describe('hub pin v0.2.0（M4.2）', () => {
       return { sessionId: 'sess-1', events: [] };
     }
 
-    it('协议版本对齐：PROTOCOL_VERSION = 1.6.0（view 订阅组锚定 + TaskRecord 组归属）', () => {
-      expect(PROTOCOL_VERSION).toBe('1.6.0');
-    });
-
     it('TaskRecord.groupId 在场合法（0.2.0 hub 投影——委派板组徽标数据源）', () => {
       const r: TaskRecord = { ...recordSample(), groupId: 'g-dev' };
       expect(r.groupId).toBe('g-dev');
@@ -213,6 +216,27 @@ describe('hub pin v0.2.0（M4.2）', () => {
     it('ViewAppendedEvent.groupId 缺省合法且不带键（旧订阅形状逐字节零变化）', () => {
       const e: ViewAppendedEvent = appendedSample();
       expect('groupId' in e).toBe(false);
+    });
+  });
+
+  describe('1.7.0：DelegationTask.dependsOn? 变体锁（M4.3 外派依赖透传）', () => {
+    /** 最小合法 DelegationTask（1.6 三字段形状——dependsOn 缺省态的载体） */
+    function delegationTaskSample(): DelegationTask {
+      return { title: '联调登录链路', prompt: '按任务书执行联调' };
+    }
+
+    it('协议版本对齐：PROTOCOL_VERSION = 1.7.0（外派依赖元数据可选字段）', () => {
+      expect(PROTOCOL_VERSION).toBe('1.7.0');
+    });
+
+    it('dependsOn 在场合法（leader 侧 brief 透传面——dispatch-submit 组装带出）', () => {
+      const t: DelegationTask = { ...delegationTaskSample(), dependsOn: ['T-001', 'T-002'] };
+      expect(t.dependsOn).toEqual(['T-001', 'T-002']);
+    });
+
+    it('dependsOn 缺省合法且不带键（1.6 载荷向后兼容——无依赖外派零变化）', () => {
+      const t: DelegationTask = delegationTaskSample();
+      expect('dependsOn' in t).toBe(false);
     });
   });
 });
