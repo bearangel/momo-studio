@@ -21,6 +21,30 @@
 //   6. 已是最新如实报：同版再装 → installHubPackage 返回 alreadyLatest:true
 //      零动作（无第二次下载——不谎报已更新）
 //
+// M4.0 T3 追加（spec 2026-10-29 §2.2——HITL 远程代答 e2e 沉淀，场景7/8）：
+//   7. 代答主链：A（leader）建组委派 B → B 真实收派（task.assigned → 委派会话
+//      建立回合启动，mock LLM hold 剧本保持 running 无终态）→ A 卡等待角标 →
+//      「批准节点写入」两段确认 → toast 已远程批准 + hub 收 task.answer 对账 +
+//      task.answered 事件回卡留痕（门控链：hubProtoVer 1.5.0 + waiting + leader 视角）
+//   8. 版本门控负例：低版本节点（hello 回 1.2.0，major 同可连接）同构 waiting 卡
+//      → 右键菜单无代答项（hubSupportsMinor(ver,3) false——版本过低菜单不出现）
+//
+// T3 mock 边界（如实记录——真实链背书 = M3.1 真机验收 + tests/hub 单测）：
+//   ① waiting 拍合成：真实产生点 = worker runner L1b（sessionWaiting 检测写授权
+//      等待登记后自发 task.report kind='waiting-input'，hub 转发 leader）——e2e
+//      由 mock hub 直接向 leader 合成该事件；runner 等待语义锁在
+//      tests/hub/delegation-runner.test.ts。e2e 锁的是 leader 侧消费链
+//      （事件桥 → delegation-sync kv → renderer 门控 → 菜单 → task.answer →
+//      toast → answered 留痕）与 worker 侧真实收派前半链。
+//   ② workspace.mirrored 合成：真实链 = 镜像向导上传 + mirror.apply 回执（本文件
+//      场景2/3 已锁）；场景7/8 只为 RunRoutingField 预检门与 pickWorker mirroredBy
+//      候选最小造数，B 的同名工作空间为场景3 mirror.apply 真实产物。
+//   ③ task.answer 恒回 granted：worker 侧真实应答（granted/denied/stale 按未决
+//      登记裁决）锁在 tests/hub/delegation-answer.test.ts——mock 只模拟 hub 契约
+//      形状（回执 + task.answered 事件）。
+//   ④ 进度拍只转发首拍：真实 hub 持续转发 worker 上报；mock 抑制后续拍，防 B 侧
+//      hold 剧本零星增量拍冲掉合成 waiting 态（等待→代答链不依赖后续拍）。
+//
 // 环境（零外网零 sibling 仓——studio 消费端点逐一 mock，单端口）：
 //   - mock hub（node:http + ws）：
 //       POST /enroll                              → {nodeId, deviceToken}
@@ -68,11 +92,29 @@ const CHAIN_SLUG = 'chain-skill';
 const TASK_ID = 'task-e2e-readonly';
 const MIRROR_ID = 'mirror-e2e-1';
 const ENROLL_TOKEN = 'join-e2e-token';
+/** mock hub 固定邀请码（group.invite 应答——场景7 B 凭此入组） */
+const INVITE_CODE = 'e2e-invite';
+
+// ── M4.0 T3（HITL 远程代答）常量 ────────────────────────────────────────────
+
+/**
+ * mock hub 协议版本——必须与 momo-hub pin 对齐（pin v0.1.9 → 协议 1.5.0）。
+ * ⚠️ 协议升级（pin bump）时必须与 electron/tests/hub/protocol-pin.test.ts
+ * 同步更新本常量，否则 hubSupportsMinor(3) 代答门控与真实 pin 漂移
+ * （场景7 正例门控 / 场景8 负例门控的前提）。
+ */
+const HUB_PROTO_VER = '1.5.0';
+/** 低版本负例节点名：hello 回 1.2.0（major 同 → 客户端可连接，minor 3 < 代答门控） */
+const LOW_NODE_NAME = 'e2e-node-low';
+const LOW_HUB_PROTO_VER = '1.2.0';
+const HITL_WS_NAME = 'e2e-hitl-low-ws';
+const HITL_TASK_TITLE = 'e2e HITL 代答任务';
 
 const runId = `${Date.now()}-${process.pid}`;
 const tmpRoot = path.join(os.tmpdir(), `momo-hub-dist-e2e-${runId}`);
 const userA = path.join(tmpRoot, 'profile-a');
 const userB = path.join(tmpRoot, 'profile-b');
+const userC = path.join(tmpRoot, 'profile-c');
 const wsDirA = path.join(tmpRoot, 'ws-a');
 const denyFile = path.join(os.homedir(), `momo-e2e-hub-deny-${runId}.txt`);
 
@@ -142,8 +184,17 @@ const hub = {
   /** nodeId → 活跃 ws 连接（定向下发面） */
   conns: new Map<string, WsLike>(),
   allSockets: new Set<WsLike>(),
-  /** mock LLM：SSE 剧本（'deny-write' | 'final-text'，消费即清） */
-  llmScript: [] as Array<'deny-write' | 'final-text'>,
+  /** mock LLM：SSE 剧本（'deny-write' | 'final-text' | 'hold'，消费即清；hold=T3
+   *  worker 保持 running 无终态——单 chunk 后 SSE 挂起不收尾） */
+  llmScript: [] as Array<'deny-write' | 'final-text' | 'hold'>,
+  /** M4.0 T3：委派账本（taskId → 路由元数据——task.delegate 记账，answer/progress 定向用） */
+  delegations: new Map<string, { leaderNodeId: string; workerNodeId: string; workspaceName: string }>(),
+  /** task.answer 收包记录（leader 决策对账断言面） */
+  answerRequests: [] as Array<{ taskId: string; decision: 'approve' | 'deny' }>,
+  /** 已向 leader 转发过进度拍的委派（首拍转发即停——mock 边界④，见文件头） */
+  progressForwarded: new Set<string>(),
+  /** 委派 taskId 序号（task-hub-N） */
+  taskSeq: 0,
 };
 
 function downloadCount(slug: string, version: string): number {
@@ -216,6 +267,47 @@ function sendToNode(nodeId: string, env: Record<string, unknown>): boolean {
   const sock = hub.conns.get(nodeId);
   if (!sock) return false;
   try { sock.send(JSON.stringify(env)); return true; } catch { return false; }
+}
+
+/** nodeId → 节点名（mock hub 反查——hello 按节点名区分协议版本用） */
+function nodeNameOf(nodeId: string): string | null {
+  for (const node of hub.nodes.values()) {
+    if (node.nodeId === nodeId) return node.nodeName;
+  }
+  return null;
+}
+
+/**
+ * M4.0 T3：向委派 leader 合成 waiting 拍（mock 边界①，见文件头——真实产生点 =
+ * worker runner L1b sessionWaiting 自发上报；此处直发 task.progress 事件，
+ * 形状对齐协议 TaskProgressEvent：{taskId, sessionId, lastSeq, excerpt, kind}）
+ */
+function hubPushWaitingProgress(taskId: string): boolean {
+  const dlg = hub.delegations.get(taskId);
+  if (!dlg) return false;
+  return sendToNode(dlg.leaderNodeId, {
+    v: 1,
+    kind: 'evt',
+    method: 'task.progress',
+    payload: {
+      taskId,
+      sessionId: `sess-mock-${taskId}`,
+      lastSeq: 1,
+      excerpt: '等待节点写入授权确认',
+      kind: 'waiting-input',
+    },
+  });
+}
+
+/**
+ * M4.0 T3：合成 workspace.mirrored 组内广播（mock 边界②，见文件头——真实链 =
+ * 镜像向导 + mirror.apply 回执，本文件场景2/3 已锁；此处为 RunRoutingField
+ * 预检门与 pickWorker mirroredBy 候选最小造数，形状对齐 WorkspaceMirroredEvent）
+ */
+function hubBroadcastMirrored(rec: {
+  groupId: string; targetNodeId: string; workspaceName: string; snapshotId: string;
+}): void {
+  broadcastEvt('workspace.mirrored', { ...rec, appliedResources: [] });
 }
 
 /** multipart/form-data 手工解析（undici FormData 产出形态：\r\n 分隔 + boundary） */
@@ -301,10 +393,28 @@ function handleWsMessage(sock: WsLike, raw: unknown, selfNodeId: string): void {
   // ── res 信封：studio 主动上行面（task.report；mirror.apply 的回执）──
   if (env.kind === 'res' && typeof env.id === 'string' && typeof env.method === 'string') {
     if (env.method === 'task.report') {
-      const payload = (env.payload ?? {}) as { status?: string; progress?: { kind?: string; excerpt?: string } };
+      const payload = (env.payload ?? {}) as { status?: string; sessionId?: string; progress?: { kind?: string; excerpt?: string; lastSeq?: number } };
       const q = hub.taskReports.get(env.id) ?? [];
       q.push({ status: payload.status ?? 'unknown', progress: payload.progress });
       hub.taskReports.set(env.id, q);
+      // M4.0 T3：真实 hub 将 worker 上报转发 leader（task.progress 事件）。
+      // mock 边界④（见文件头）：只转发首拍——后续拍抑制，防 hold 剧本零星
+      // 增量拍冲掉合成 waiting 态；等待→代答链不依赖后续拍
+      const dlg = hub.delegations.get(env.id);
+      const prog = payload.progress;
+      if (
+        dlg && !hub.progressForwarded.has(env.id) && prog &&
+        typeof prog.lastSeq === 'number' && typeof prog.excerpt === 'string' &&
+        typeof payload.sessionId === 'string'
+      ) {
+        hub.progressForwarded.add(env.id);
+        sendToNode(dlg.leaderNodeId, {
+          v: 1,
+          kind: 'evt',
+          method: 'task.progress',
+          payload: { taskId: env.id, sessionId: payload.sessionId, lastSeq: prog.lastSeq, excerpt: prog.excerpt },
+        });
+      }
       return;
     }
     if (hub.pendingMirrors.has(env.id)) {
@@ -321,8 +431,14 @@ function handleWsMessage(sock: WsLike, raw: unknown, selfNodeId: string): void {
 
   switch (env.method) {
     case 'hello':
+      // M4.0 T3：protoVer 常量锚定 pin（HUB_PROTO_VER——协议升级时与
+      // electron/tests/hub/protocol-pin.test.ts 同步更新）；低版本负例节点回
+      // 1.2.0（major 同 → 客户端 isCompatible 通过可连接，minor 3 < 代答门控）
       replyReq(sock, req, true, {
-        hubId: 'e2e-hub-mock', protoVer: '1.2.0', serverTime: Date.now(), onlineNodes: [],
+        hubId: 'e2e-hub-mock',
+        protoVer: nodeNameOf(selfNodeId) === LOW_NODE_NAME ? LOW_HUB_PROTO_VER : HUB_PROTO_VER,
+        serverTime: Date.now(),
+        onlineNodes: [],
       });
       return;
     case 'ping':
@@ -342,11 +458,30 @@ function handleWsMessage(sock: WsLike, raw: unknown, selfNodeId: string): void {
       return;
     }
     case 'group.list':
-      replyReq(sock, req, true, { groups: hub.groups });
+      // M4.0 T3 收紧为节点视角（真实 hub 语义：只回请求节点所在的组）——
+      // 之前全量返回会让多组节点的 RunRoutingField 默认选中首组（别人的组）
+      replyReq(sock, req, true, {
+        groups: hub.groups.filter((g) => g.members.some((m) => m.nodeId === selfNodeId)),
+      });
       return;
     case 'group.invite':
-      replyReq(sock, req, true, { inviteCode: 'e2e-invite' });
+      replyReq(sock, req, true, { inviteCode: INVITE_CODE });
       return;
+    case 'group.join': {
+      // M4.0 T3：入组——最新组加成员 + 组内广播 group.changed（GroupChangedEvent
+      // 形状 {groupId, kind:'joined', nodeId}——真实 hub 语义）
+      const group = hub.groups[hub.groups.length - 1];
+      if (!group) {
+        replyReq(sock, req, false, { code: 'not_found', message: '无组可加入' });
+        return;
+      }
+      if (!group.members.some((m) => m.nodeId === selfNodeId)) {
+        group.members.push({ nodeId: selfNodeId, name: nodeNameOf(selfNodeId) ?? selfNodeId, online: true });
+      }
+      broadcastEvt('group.changed', { groupId: group.groupId, kind: 'joined', nodeId: selfNodeId });
+      replyReq(sock, req, true, { groupId: group.groupId });
+      return;
+    }
     case 'group.leave':
     case 'group.transfer':
       replyReq(sock, req, true, { ok: true });
@@ -354,12 +489,65 @@ function handleWsMessage(sock: WsLike, raw: unknown, selfNodeId: string): void {
     case 'task.list':
       replyReq(sock, req, true, { tasks: [] });
       return;
-    case 'task.delegate':
-      replyReq(sock, req, true, { taskId: `task-hub-${Date.now()}` });
+    case 'task.delegate': {
+      // M4.0 T3 升级：记账 + 定向 task.assigned 下发 worker（TaskAssignedEvent
+      // 形状 + permissionTier 容错扩展字段——协议 1.2.0 起向后兼容）；低版本
+      // 负例 leader 不下发（场景8 无 worker 参与，只锁 leader 菜单门控）
+      hub.taskSeq += 1;
+      const taskId = `task-hub-${hub.taskSeq}`;
+      const targetNodeId = typeof payload.targetNodeId === 'string' ? payload.targetNodeId : '';
+      const workspaceName = typeof payload.workspaceName === 'string' ? payload.workspaceName : '';
+      hub.delegations.set(taskId, { leaderNodeId: selfNodeId, workerNodeId: targetNodeId, workspaceName });
+      const task = (payload.task ?? {}) as { title?: unknown; prompt?: unknown; permissionTier?: unknown };
+      const workerIsLeaderTarget = nodeNameOf(selfNodeId) === LOW_NODE_NAME;
+      if (!workerIsLeaderTarget && targetNodeId !== '') {
+        sendToNode(targetNodeId, {
+          v: 1,
+          kind: 'evt',
+          method: 'task.assigned',
+          payload: {
+            taskId,
+            workspaceName,
+            task: {
+              title: typeof task.title === 'string' ? task.title : 'e2e 委派任务',
+              prompt: typeof task.prompt === 'string' ? task.prompt : 'e2e 委派任务书',
+              ...(task.permissionTier !== undefined ? { permissionTier: task.permissionTier } : {}),
+            },
+            byNode: selfNodeId,
+          },
+        });
+      }
+      replyReq(sock, req, true, { taskId });
       return;
+    }
     case 'task.cancel':
       replyReq(sock, req, true, { ok: true });
       return;
+    case 'task.answer': {
+      // M4.0 T3：leader 代答决策（mock 边界③，见文件头）——校验载荷 → 回
+      // {disposition:'granted'} 并按协议 TaskAnsweredEvent 形状
+      // {taskId, decision, by, disposition} 向 leader/worker 推 task.answered
+      const taskId = typeof payload.taskId === 'string' ? payload.taskId : '';
+      const decision = payload.decision === 'approve' || payload.decision === 'deny' ? payload.decision : null;
+      if (taskId === '' || decision === null) {
+        replyReq(sock, req, false, { code: 'bad_request', message: 'task.answer 载荷非法（taskId + decision approve|deny）' });
+        return;
+      }
+      hub.answerRequests.push({ taskId, decision });
+      const evt = {
+        v: 1,
+        kind: 'evt',
+        method: 'task.answered',
+        payload: { taskId, decision, by: selfNodeId, disposition: 'granted' },
+      };
+      const dlg = hub.delegations.get(taskId);
+      if (dlg) {
+        sendToNode(dlg.leaderNodeId, evt);
+        if (dlg.workerNodeId !== '') sendToNode(dlg.workerNodeId, evt);
+      }
+      replyReq(sock, req, true, { disposition: 'granted' });
+      return;
+    }
     default:
       // view.consent 等其余方法——ok 容忍（协议未知容忍语义）
       replyReq(sock, req, true, { ok: true });
@@ -391,6 +579,15 @@ async function startMockHub(): Promise<void> {
         return;
       }
       const step = hub.llmScript.shift();
+      if (step === 'hold') {
+        // M4.0 T3：worker 保持剧本——单 chunk 后 SSE 挂起不收尾（turn 无终态，
+        // B 侧持续 running；waiting 态由 mock hub 合成注入，mock 边界①见文件头）。
+        // 安全阀 300s：正常路径不可达（测试收摊关 app 即断连），防连接悬挂
+        res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8' });
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '任务已接收，正在处理。' } }] })}\n\n`);
+        setTimeout(() => res.end(), 300_000);
+        return;
+      }
       let chunks: Array<Record<string, unknown>>;
       if (step === 'deny-write') {
         const args = JSON.stringify({ command: `touch '${denyFile}'` });
@@ -619,14 +816,20 @@ async function waitForNodeConn(nodeName: string): Promise<string> {
 // 六场景（serial：场景 1/2/4/5/6 共享实例 A；场景 3 用全新 profile 实例 B）
 // ──────────────────────────────────────────────────────────────────────────
 
-test.describe.serial('hub 分发链 / readonly 即时拒 / 版本链（M2.3 Task 7）', () => {
+test.describe.serial('hub 分发链 / readonly 即时拒 / 版本链（M2.3 Task 7 + M4.0 T3 HITL 代答）', () => {
   let appA: ElectronApplication | null = null;
   let winA: Page | null = null;
   let appB: ElectronApplication | null = null;
+  /** 场景3 打开的实例 B 窗口（场景7 复用——B 侧 HITL worker 链） */
+  let winBHitl: Page | null = null;
+  let appC: ElectronApplication | null = null;
+  /** 场景7 记账的委派 taskId（场景8 区分 C 的新委派用） */
+  let hitl7TaskId = '';
 
   test.beforeAll(async () => {
     fs.mkdirSync(userA, { recursive: true });
     fs.mkdirSync(userB, { recursive: true });
+    fs.mkdirSync(userC, { recursive: true });
     fs.mkdirSync(wsDirA, { recursive: true });
     await startMockHub();
     // 预种子版本链 skill v1.0.0（场景 5 安装起点——不广播事件，静默在目录）
@@ -643,6 +846,7 @@ test.describe.serial('hub 分发链 / readonly 即时拒 / 版本链（M2.3 Task
   test.afterAll(async () => {
     await appA?.close().catch(() => undefined);
     await appB?.close().catch(() => undefined);
+    await appC?.close().catch(() => undefined);
     for (const sock of hub.allSockets) {
       try { sock.terminate(); } catch { /* 已关 */ }
     }
@@ -921,6 +1125,7 @@ test.describe.serial('hub 分发链 / readonly 即时拒 / 版本链（M2.3 Task
     // 全新 profile 实例 B（隔离 userData——零工作空间零 skill 记账）
     appB = await launchApp(userB);
     const winB = await appB.firstWindow();
+    winBHitl = winB;
     await winB.waitForLoadState('domcontentloaded');
     await winB.getByRole('button', { name: '跳过引导' }).click({ timeout: 15000 });
     // 不建工作空间——镜像 apply 会创建（ensureWorkspace 落 <userData>/workspaces）
@@ -975,5 +1180,183 @@ test.describe.serial('hub 分发链 / readonly 即时拒 / 版本链（M2.3 Task
     expect(check.hasWs, '镜像应创建同名工作空间').toBe(true);
     expect(check.installed, 'B 应经补装链安装该 skill 并落记账').toBe(true);
     expect(check.version).toBe(SKILL_PUBLISH_VERSION);
+  });
+
+  test('场景7 HITL 代答主链：A 委派 B → 等待节点确认 → 批准节点写入 → 已远程批准', async () => {
+    test.setTimeout(300_000);
+    expect(winA, '依赖场景1的实例 A').not.toBeNull();
+    expect(winBHitl, '依赖场景3的实例 B').not.toBeNull();
+
+    // B 侧 fixture（真实面）：mock LLM provider + 委派执行 agent 成员 + 工作空间
+    // 默认 agent（task.assigned 不带 agentSlug → runner 走默认 agent 解析）
+    await winBHitl!.evaluate(async ([llmBase, wsName, agentSlug]) => {
+      const w = window as unknown as {
+        api: {
+          workspace: {
+            list(): Promise<Array<{ id: string; name: string }>>;
+            setDefaultAgent(workspaceId: string, instanceId: string | null): Promise<void>;
+          };
+          provider: { create(input: Record<string, unknown>): Promise<{ id: string }> };
+          agent: {
+            createCustom(input: Record<string, unknown>): Promise<{ id: string }>;
+            assign(workspaceId: string, defId: string, agentUserId: string): Promise<{ instanceId: string }>;
+          };
+        };
+      };
+      const ws = (await w.api.workspace.list()).find((x) => x.name === wsName);
+      if (!ws) throw new Error('B 侧镜像工作空间不存在（依赖场景3）');
+      const prov = await w.api.provider.create({
+        name: 'E2E HITL Mock LLM',
+        baseUrl: llmBase,
+        apiKey: 'e2e-mock-key',
+        defaultModel: 'e2e-mock-model',
+        platform: 'openai',
+      });
+      const def = await w.api.agent.createCustom({
+        name: 'HITL 执行员',
+        slug: agentSlug,
+        description: 'hitl answer e2e fixture',
+        systemPrompt: '你是 e2e HITL 执行员。',
+        scope: 'global',
+        modelProviderId: prov.id,
+        modelName: 'e2e-mock-model',
+      });
+      // agentUserId 用生产格式 agent-<slug>-<后缀>（write-blocked 归属解析契约，场景4 同款）
+      const member = await w.api.agent.assign(ws.id, def.id, `agent-${agentSlug}-hitl01`);
+      await w.api.workspace.setDefaultAgent(ws.id, member.instanceId);
+    }, [`${hub.baseUrl}/v1`, WS_NAME, 'e2e-hitl-worker'] as const);
+
+    // A 建组（场景2 已有一组 → 侧栏折叠入口「创建工作组」展开表单）
+    await winA!.getByRole('button', { name: '工作组', exact: true }).click();
+    await winA!.getByRole('button', { name: '创建工作组' }).click();
+    await winA!.getByLabel('组名').fill('e2e HITL 组');
+    await winA!.getByRole('button', { name: '创建', exact: true }).click();
+    await expect(winA!.getByText('e2e HITL 组').first()).toBeVisible({ timeout: 15000 });
+
+    // B 入组（mock group.invite 恒回固定邀请码）。B 无组空态：加入表单直接
+    // 展开（折叠入口「凭邀请码加入」仅已有组的侧栏渲染——WorkgroupSidebar）
+    await winBHitl!.getByRole('button', { name: '工作组', exact: true }).click();
+    await winBHitl!.getByLabel('邀请码').fill(INVITE_CODE);
+    await winBHitl!.getByRole('button', { name: '入组', exact: true }).click();
+    await expect(winBHitl!.getByText('e2e HITL 组').first()).toBeVisible({ timeout: 15000 });
+
+    const nodeB = await waitForNodeConn('e2e-node-b');
+    const hitlGroup = hub.groups[hub.groups.length - 1]!;
+    // 镜像登记合成（mock 边界②）→ A 的 RunRoutingField 预检解锁「组内调度」+ pickWorker 候选=B
+    hubBroadcastMirrored({
+      groupId: hitlGroup.groupId, targetNodeId: nodeB, workspaceName: WS_NAME, snapshotId: 'snap-e2e-hitl',
+    });
+
+    // B 回合剧本：hold（收派后 running 无终态——不冲掉合成 waiting 态）
+    hub.llmScript = ['hold'];
+
+    // A 看板建任务 → 执行位置「组内调度」→ 提交（hub task.delegate → mock 记账 + 下发 B）
+    await winA!.getByRole('button', { name: '看板', exact: true }).click();
+    await winA!.getByRole('button', { name: '新建任务' }).first().click();
+    const dlg = winA!.getByRole('dialog').filter({
+      has: winA!.getByRole('radiogroup', { name: '创建模式' }),
+    });
+    await expect(dlg).toBeVisible();
+    await dlg.getByLabel('标题*').fill(HITL_TASK_TITLE);
+    await dlg.getByRole('radio', { name: '组内调度' }).click();
+    // A 在两组（场景2 分发组 + HITL 组）——radio 默认选首组，显式切到 HITL 组
+    //（B 只入该组；pickWorker 候选 = 在线 ∧ 已镜像）
+    await dlg.getByLabel('工作组').selectOption({ label: 'e2e HITL 组' });
+    await dlg.getByRole('button', { name: '创建任务', exact: true }).click();
+    await expect(dlg).toBeHidden({ timeout: 30000 });
+    await winA!.keyboard.press('Escape');
+    await expect(winA!.getByRole('dialog', { name: '任务详情' })).toBeHidden({ timeout: 10000 });
+
+    // 委派记账 + B 真实收派首拍（task.assigned → 委派会话建立 → 回合启动 → running 上报）
+    await expect
+      .poll(() => hub.delegations.size, { timeout: 30000, intervals: [1000], message: 'mock hub 应收到 task.delegate' })
+      .toBeGreaterThan(0);
+    const hitlTaskId = [...hub.delegations.keys()].at(-1)!;
+    hitl7TaskId = hitlTaskId;
+    await expect
+      .poll(() => (hub.taskReports.get(hitlTaskId) ?? []).length, {
+        timeout: 180_000, intervals: [1500], message: 'B 侧应上报首拍 running（真实收派链）',
+      })
+      .toBeGreaterThan(0);
+
+    // B 侧触达深度复核：真实委派记录在场（delegation store 落行，state=running）
+    const bReceived = await winBHitl!.evaluate(async (taskId) => {
+      const w = window as unknown as {
+        api: { hub: { delegationBoard(): Promise<{ received: Array<{ taskId: string; state: string }> }> } };
+      };
+      const board = await w.api.hub.delegationBoard();
+      return board.received.find((r) => r.taskId === taskId) ?? null;
+    }, hitlTaskId);
+    expect(bReceived?.state, 'B 侧委派记录应为 running（真实收派链触达）').toBe('running');
+
+    // waiting 拍合成（mock 边界①）→ A 委派卡「等待节点确认」
+    expect(hubPushWaitingProgress(hitlTaskId), 'waiting 拍应送达 leader A').toBe(true);
+    const card = winA!.locator('button').filter({ hasText: HITL_TASK_TITLE }).first();
+    await expect(card.getByText('等待节点确认')).toBeVisible({ timeout: 20000 });
+
+    // 门控链全开（hubProtoVer 1.5.0 + waiting + leader 视角）→ 右键「批准节点写入」两段确认
+    await card.click({ button: 'right' });
+    await winA!.getByTestId('approve-arm').click();
+    await winA!.getByTestId('approve-confirm').click();
+
+    // toast 人话 + answered 事件回卡留痕 + hub 侧 task.answer 收包对账
+    await expect(winA!.getByTestId('ui-toast')).toContainText('已远程批准', { timeout: 15000 });
+    await expect(card.getByText('已远程批准')).toBeVisible({ timeout: 15000 });
+    expect(hub.answerRequests.some((r) => r.taskId === hitlTaskId && r.decision === 'approve')).toBe(true);
+  });
+
+  test('场景8 版本门控负例：hello 1.2.0 → 同构 waiting 卡右键无代答菜单项', async () => {
+    test.setTimeout(300_000);
+
+    // 低版本节点 C（hello 回 1.2.0——major 同可连接，已连接态可达）
+    appC = await launchApp(userC);
+    const winC = await appC.firstWindow();
+    await winC.waitForLoadState('domcontentloaded');
+    await winC.getByRole('button', { name: '跳过引导' }).click({ timeout: 15000 });
+    await winC.getByLabel('名称').fill(HITL_WS_NAME);
+    await winC.getByPlaceholder('选择或输入目录路径').fill(path.join(tmpRoot, 'ws-c'));
+    await winC.getByRole('button', { name: '创建', exact: true }).click();
+    await expect(winC.getByRole('heading', { name: '新建工作空间' })).toBeHidden({ timeout: 15000 });
+    await enrollViaSettings(winC, LOW_NODE_NAME);
+
+    // C 建组（C 无组空态：创建表单直接展开——同 B 入组，折叠入口仅已有组渲染）
+    // + 合成镜像登记（pickWorker 候选=C 自身——负例无 worker 参与，
+    // mock 对低版本 leader 的 task.delegate 不下发 task.assigned）
+    await winC.getByRole('button', { name: '工作组', exact: true }).click();
+    await winC.getByLabel('组名').fill('e2e 低版本组');
+    await winC.getByRole('button', { name: '创建', exact: true }).click();
+    await expect(winC.getByText('e2e 低版本组').first()).toBeVisible({ timeout: 15000 });
+    const nodeC = await waitForNodeConn(LOW_NODE_NAME);
+    const lowGroup = hub.groups[hub.groups.length - 1]!;
+    hubBroadcastMirrored({
+      groupId: lowGroup.groupId, targetNodeId: nodeC, workspaceName: HITL_WS_NAME, snapshotId: 'snap-e2e-low',
+    });
+
+    // C 委派（组内调度——候选=C 自身）→ waiting 合成 → 卡等待角标在场
+    await winC.getByRole('button', { name: '看板', exact: true }).click();
+    await winC.getByRole('button', { name: '新建任务' }).first().click();
+    const dlg = winC.getByRole('dialog').filter({
+      has: winC.getByRole('radiogroup', { name: '创建模式' }),
+    });
+    await expect(dlg).toBeVisible();
+    await dlg.getByLabel('标题*').fill(HITL_TASK_TITLE);
+    await dlg.getByRole('radio', { name: '组内调度' }).click();
+    await dlg.getByRole('button', { name: '创建任务', exact: true }).click();
+    await expect(dlg).toBeHidden({ timeout: 30000 });
+    await winC.keyboard.press('Escape');
+    await expect(winC.getByRole('dialog', { name: '任务详情' })).toBeHidden({ timeout: 10000 });
+
+    const lowTaskId = [...hub.delegations.keys()].at(-1)!;
+    expect(lowTaskId, 'C 的委派应是新记账（区别于场景7）').not.toBe(hitl7TaskId);
+    expect(hubPushWaitingProgress(lowTaskId), 'waiting 拍应送达 C').toBe(true);
+    const card = winC.locator('button').filter({ hasText: HITL_TASK_TITLE }).first();
+    await expect(card.getByText('等待节点确认')).toBeVisible({ timeout: 20000 });
+
+    // 负例断言：waiting 在场（正控）+ 右键菜单打开（取消任务在场）但无代答双项
+    // （hubSupportsMinor('1.2.0', 3) false——canAnswer 门控关，菜单不出现）
+    await card.click({ button: 'right' });
+    await expect(winC.getByTestId('cancel-arm')).toBeVisible({ timeout: 10000 });
+    await expect(winC.getByTestId('approve-arm'), '版本过低不应出现「批准节点写入」').toHaveCount(0);
+    await expect(winC.getByTestId('deny-arm'), '版本过低不应出现「拒绝节点写入」').toHaveCount(0);
   });
 });
