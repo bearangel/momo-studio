@@ -29,6 +29,7 @@ import type { PermissionTier, DelegationTaskBrief } from './dispatch-submit';
 import type { TaskRouting } from './task-routing';
 import type { TaskRow, TaskStatus } from '../storage/tasks/repo';
 import { isTerminal } from '../storage/tasks/state-machine';
+import { blockedDispatchError } from '../task/dependency-gate';
 import { logger } from '../logger';
 
 /**
@@ -386,11 +387,10 @@ export async function retryDispatch(
     throw new Error('仅待派发或已失败的外派任务可重派');
   }
   // M3.3 派发闸：存在未完成依赖 → 拒绝重派（blocked 为 getTask 派生态，
-  // 与 executor peek / move / startTaskAndKickoff 四闸同口径）
+  // 与 executor peek / move / startTaskAndKickoff 四闸同口径）；M4.3 起文案
+  // 单源迁移 task/dependency-gate.ts（submitRoutedTask / taskDelegate 直通道同引）
   if (row.blocked) {
-    throw new Error(
-      `任务存在未完成依赖（${row.blockedBy?.join('、') ?? ''}），依赖完成前不可派发`,
-    );
+    throw blockedDispatchError(row.blockedBy ?? []);
   }
   const workspaceName = ports.workspaceNameOf(row.workspaceId);
   if (!workspaceName) {

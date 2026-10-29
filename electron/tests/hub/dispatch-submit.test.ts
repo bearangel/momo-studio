@@ -67,6 +67,8 @@ interface PortOverrides {
   registry?: Array<{ groupId: string; targetNodeId: string; workspaceName: string }>;
   delegateResult?: Promise<{ taskId: string }>;
   delegateError?: Error;
+  /** M4.3 派发闸数据源 fake：taskId → 未完成依赖 id 列表（缺省恒空 = 不阻塞） */
+  blockedBy?: Record<string, string[]>;
 }
 
 // 返回类型刻意不注解：保留 vi.fn() 的 Mock 推断（.mock/.mockRejectedValue 可达），
@@ -89,6 +91,7 @@ function makePorts(overrides: PortOverrides = {}) {
     createRemoteTask: vi.fn().mockImplementation((input: { routing: TaskRouting }) =>
       makeRow({ id: 'T-rem', status: 'pending', routing: input.routing }),
     ),
+    deriveBlockedBy: vi.fn().mockImplementation((taskId: string) => overrides.blockedBy?.[taskId] ?? []),
     updateDelegationLink: vi.fn(),
   };
 }
@@ -333,6 +336,83 @@ describe('submitRoutedTask — 入参校验', () => {
       submitRoutedTask(baseInput({ mode: 'wrong' } as unknown as TaskRouting), ports),
     ).rejects.toThrow(/routing 形状非法/);
     expect(ports.createLocalTask).not.toHaveBeenCalled();
+  });
+});
+
+// ── M4.3：外派行 `::` 建链 + 派发闸（spec 2026-10-29 §2.3）──────────────────
+describe('submitRoutedTask — M4.3 依赖建链与派发闸', () => {
+  it('14. dependsOn 随行建链：createRemoteTask 携带 dependsOn（存在/环检测在 relations 单源）', async () => {
+    const ports = makePorts({ groups: standardGroup(), registry: standardRegistry() });
+    await submitRoutedTask(
+      { ...baseInput({ mode: 'group', groupId: 'g1' }), dependsOn: ['T-001', 'T-002'] },
+      ports,
+    );
+    expect(ports.createRemoteTask).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending', dependsOn: ['T-001', 'T-002'] }),
+    );
+  });
+
+  it('15. 派发闸 blocked：建链后存在未完成依赖 → 人话拒绝（与 retryDispatch 闸逐字同源），零委派零回写', async () => {
+    const ports = makePorts({
+      groups: standardGroup(),
+      registry: standardRegistry(),
+      blockedBy: { 'T-rem': ['T-001', 'T-009'] },
+    });
+    await expect(
+      submitRoutedTask(
+        { ...baseInput({ mode: 'group', groupId: 'g1' }), dependsOn: ['T-001', 'T-009'] },
+        ports,
+      ),
+    ).rejects.toThrow('任务存在未完成依赖（T-001、T-009），依赖完成前不可派发');
+    // 行保留（建链账不回滚——重试入口在待派发卡），但不委派
+    expect(ports.createRemoteTask).toHaveBeenCalledTimes(1);
+    expect(ports.delegate).not.toHaveBeenCalled();
+    expect(ports.updateDelegationLink).not.toHaveBeenCalled();
+  });
+
+  it('16. 派发闸放行：依赖全部完成（派生空）→ 正常派发，brief.task 透传 dependsOn（协议 1.7.0）', async () => {
+    const ports = makePorts({ groups: standardGroup(), registry: standardRegistry() });
+    const result = await submitRoutedTask(
+      { ...baseInput({ mode: 'group', groupId: 'g1' }), dependsOn: ['T-001'] },
+      ports,
+    );
+    expect(ports.delegate).toHaveBeenCalledTimes(1);
+    const brief = ports.delegate.mock.calls[0]?.[0] as DelegationTaskBrief;
+    expect(brief.task.dependsOn).toEqual(['T-001']);
+    expect(result.dispatched).toBe(true);
+  });
+
+  it('17. dependsOn 空数组（行内 `::` 解析容错）→ createRemoteTask / brief 均不带键（1.6 载荷零变化）', async () => {
+    const ports = makePorts({ groups: standardGroup(), registry: standardRegistry() });
+    await submitRoutedTask(
+      { ...baseInput({ mode: 'group', groupId: 'g1' }), dependsOn: [] },
+      ports,
+    );
+    const createArg = ports.createRemoteTask.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect('dependsOn' in createArg).toBe(false);
+    const brief = ports.delegate.mock.calls[0]?.[0] as DelegationTaskBrief;
+    expect('dependsOn' in brief.task).toBe(false);
+  });
+
+  it('18. 闸序：blocked 检查在落库之后（行保留待处理）、无候选返回之前——拒绝对外零委派', async () => {
+    // 无候选 + blocked 并存：闸先拒（人话优先于「留待处理」静默语义）
+    const ports = makePorts({
+      groups: [
+        {
+          groupId: 'g1',
+          groupName: 'dev-team',
+          members: [{ nodeId: 'node-off', name: 'sleepy', online: false }],
+        },
+      ],
+      registry: standardRegistry(),
+      blockedBy: { 'T-rem': ['T-001'] },
+    });
+    await expect(
+      submitRoutedTask(
+        { ...baseInput({ mode: 'group', groupId: 'g1' }), dependsOn: ['T-001'] },
+        ports,
+      ),
+    ).rejects.toThrow('任务存在未完成依赖（T-001），依赖完成前不可派发');
   });
 });
 

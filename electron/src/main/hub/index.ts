@@ -286,7 +286,9 @@ function parseTaskAssigned(payload: unknown): AssignedTaskEvent | null {
       prompt: t.prompt,
       ...(typeof t.agentSlug === 'string' ? { agentSlug: t.agentSlug } : {}),
       // T10 协议未知容忍：hub 1.2.0 剥离 permissionTier（白名单重建），合法值才拾取
-      // （normalizeTier 兜底收敛 confirm）；hub 升级透传后直接消费
+      // （normalizeTier 兜底收敛 confirm）；hub 升级透传后直接消费。
+      // M4.3：dependsOn（1.7.0）在此刻意丢弃——worker 零消费（语义裁定见
+      // delegation-runner.AssignedTaskEvent 注释：leader 本地 id，跨节点无意义）
       ...(isPermissionTier(t.permissionTier) ? { permissionTier: t.permissionTier } : {}),
     },
   };

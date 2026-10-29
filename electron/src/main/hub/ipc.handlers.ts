@@ -22,7 +22,10 @@ import {
 } from './dispatch-submit';
 import { retryDispatch, type RedispatchPorts } from './delegation-sync';
 import { assertBoardGroupValid, createTaskFromForm } from '../task/ipc.handlers';
-import { insertTask, updateTask, getTask } from '../storage/tasks/repo';
+import { insertTaskWithRelations } from '../task/relations';
+import { blockedDispatchError } from '../task/dependency-gate';
+import { deriveBlockedBy } from '../storage/tasks/dependencies-repo';
+import { updateTask, getTask } from '../storage/tasks/repo';
 import { listWorkspaces } from '../workspace/crud';
 import { recordPublishAccountingSafe } from '../resource/hub-install';
 
@@ -104,19 +107,30 @@ export function registerHubIpc(): void {
   // （账本先行 pending）/ cancel（可取消态单点校验在 hub）；载荷采用 renderer 契约形状
   ipcMain.handle('hub:taskList', (_evt, input?: { groupId?: string }) =>
     coded(() => hubRequest(TASK_RPC.list, { ...(input?.groupId !== undefined ? { groupId: input.groupId } : {}) }, undefined)));
-  ipcMain.handle('hub:taskDelegate', (_evt, input: {
+  ipcMain.handle('hub:taskDelegate', async (_evt, input: {
     groupId: string; targetNodeId: string; workspaceName: string;
     title: string; prompt: string; agentSlug?: string;
-  }) => coded(() => hubRequest(TASK_RPC.delegate, {
-    groupId: input.groupId,
-    targetNodeId: input.targetNodeId,
-    workspaceName: input.workspaceName,
-    task: {
-      title: input.title,
-      prompt: input.prompt,
-      ...(input.agentSlug !== undefined && input.agentSlug !== '' ? { agentSlug: input.agentSlug } : {}),
-    },
-  }, undefined)));
+    /** M4.3 派发闸：关联本地任务 id（在场则 blocked 派生拒绝）；无本地行的
+     *  ad-hoc 委派（无依赖可查）不携带——缺省放行 */
+    taskId?: string;
+  }) => {
+    // M4.3 派发闸（spec §2.3.1 三入口之二）：blocked 派生单源（deriveBlockedBy）
+    // → 人话拒绝，文案单源 task/dependency-gate.ts（与 retryDispatch 逐字同源）
+    if (input.taskId !== undefined) {
+      const unmetDeps = deriveBlockedBy([input.taskId]).get(input.taskId) ?? [];
+      if (unmetDeps.length > 0) throw blockedDispatchError(unmetDeps);
+    }
+    return coded(() => hubRequest(TASK_RPC.delegate, {
+      groupId: input.groupId,
+      targetNodeId: input.targetNodeId,
+      workspaceName: input.workspaceName,
+      task: {
+        title: input.title,
+        prompt: input.prompt,
+        ...(input.agentSlug !== undefined && input.agentSlug !== '' ? { agentSlug: input.agentSlug } : {}),
+      },
+    }, undefined));
+  });
   // 协议无 cancelled leader 推送——取消回执即回写本地行（T9 取消链收口：
   // 外派卡取消 → hub 账本权威 → delegation-sync 行状态同步）
   ipcMain.handle('hub:taskCancel', (_evt, input: { taskId: string }) =>
@@ -188,16 +202,23 @@ export function registerHubIpc(): void {
       }),
     createRemoteTask: (input) => {
       if (input.groupId !== undefined) assertBoardGroupValid(input.workspaceId, input.groupId);
-      return insertTask({
-        workspaceId: input.workspaceId,
-        title: input.title,
-        creatorUserId: 'owner',
-        status: input.status,
-        description: input.description,
-        groupId: input.groupId,
-        routing: input.routing,
-      });
+      // M4.3：外派行 `::` 建链走 insertTaskWithRelations（存在 + 环检测 + 插行
+      // 插边同事务——与 task.create / createBatch 同源；无依赖时退回 insertTask 零变化）
+      return insertTaskWithRelations(
+        {
+          workspaceId: input.workspaceId,
+          title: input.title,
+          creatorUserId: 'owner',
+          status: input.status,
+          description: input.description,
+          groupId: input.groupId,
+          routing: input.routing,
+        },
+        { dependsOn: input.dependsOn ?? [] },
+      );
     },
+    // M4.3 派发闸数据源：M3.3 blocked 派生单源（仅 completed 解锁）
+    deriveBlockedBy: (taskId) => deriveBlockedBy([taskId]).get(taskId) ?? [],
     updateDelegationLink: (taskId, delegationId, routing) => {
       updateTask(taskId, { delegationId, routing });
     },

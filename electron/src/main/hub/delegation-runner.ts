@@ -29,6 +29,11 @@ setWriteDeniedBroadcaster(broadcastWriteGrantDenied);
  * task.assigned 载荷的 studio 侧容错扩展（T10）：协议 1.2.0 的 DelegationTask 无
  * permissionTier（hub parseDelegationTask 白名单重建剥离），本端按可选字段容错
  * 消费（normalizeTier 缺省/非法收敛 confirm），hub 升级透传后直接生效零改动。
+ *
+ * M4.3 语义裁定（spec §2.1）：协议 1.7.0 的 DelegationTask.dependsOn? 是 leader
+ * 本地任务 id——worker 零消费（不进本类型消费面，hub/index.parseTaskAssigned
+ * 挑字段时丢弃）：依赖闸在 leader 侧派发前置，blocked 任务不会到达 worker；
+ * 若 worker 按其拦截将制造跨节点不可解析的假闸（leader 本地 id 对 worker 无意义）。
  */
 export type AssignedTaskEvent = Omit<TaskAssignedEvent, 'task'> & {
   task: TaskAssignedEvent['task'] & { permissionTier?: PermissionTier };
