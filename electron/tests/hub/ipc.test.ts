@@ -26,6 +26,19 @@ vi.mock('../../src/main/hub/index', () => ({
   hubSetViewSettings: vi.fn(async (input: { allowGroupView: boolean }) => input),
   hubDelegationBoard: vi.fn(() => ({ progress: {}, received: [] })),
   hubMarkDelegationCancelled: vi.fn(),
+  hubListMirrorRegistry: vi.fn(() => []),
+}));
+
+// 本地 DB 边界（momo-test-rules #5：DB 属进程边界可 mock）：retryDispatch /
+// submitRoutedTask 通道链路触达 getTask / listWorkspaces——真实实现会开库建表
+// （electron app 被_mock_ 后无 userData 路径），hub RPC 仍统一走 hubRequest mock
+vi.mock('../../src/main/storage/tasks/repo', () => ({
+  insertTask: vi.fn(),
+  updateTask: vi.fn(),
+  getTask: vi.fn(() => null),
+}));
+vi.mock('../../src/main/workspace/crud', () => ({
+  listWorkspaces: vi.fn(() => []),
 }));
 
 // publishToHub 只锁接线（透传入参）——打包/上传矩阵在 publish.test.ts
@@ -51,6 +64,14 @@ import { publishToHub } from '../../src/main/hub/publish';
 import { RpcRemoteError } from '../../src/main/hub/client';
 import { recordPublishAccountingSafe } from '../../src/main/resource/hub-install';
 import { unpublishHubResource } from '../../src/main/resource/hub/momo-hub';
+import { getTask } from '../../src/main/storage/tasks/repo';
+import { listWorkspaces } from '../../src/main/workspace/crud';
+import type { TaskRow } from '../../src/main/storage/tasks/repo';
+import type { Workspace } from '../../src/main/workspace/types';
+// 双侧 fixture 单源（hub-capability-contract.test.ts 同款跨仓 import 模式）：
+// renderer 侧 rpc-error.ts 的 fixture 在此消费——coded 编码 → parseRpcErrorCode
+// 解码的等值关系改动必须两侧同 commit 红
+import { parseRpcErrorCode, RPC_ERROR_ROUNDTRIP_FIXTURES } from '../../../renderer/src/lib/rpc-error';
 
 const GROUP_CHANNELS = ['hub:groupCreate', 'hub:groupInvite', 'hub:groupJoin', 'hub:groupLeave', 'hub:groupList', 'hub:groupTransfer'];
 const MIRROR_CHANNELS = ['hub:snapshotBuildUpload', 'hub:mirrorWorkspace', 'hub:mirrorRegistry'];
@@ -312,5 +333,135 @@ describe('hub IPC 远程查看通道（M2e T14）', () => {
     await handlers.get('hub:viewFiles')!(null, { targetNodeId: 'n2', workspaceName: 'ws', op: 'read', path: 'docs/a.txt', groupId: 'g1' });
     expect(manager.hubRequest).toHaveBeenLastCalledWith('view.files', { targetNodeId: 'n2', workspaceName: 'ws', op: 'read', path: 'docs/a.txt', groupId: 'g1' });
     expect(manager.hubRequest).toHaveBeenCalledTimes(4);
+  });
+});
+
+// ── M4.1 错误契约（coded 包裹）───────────────────────────────────────────────
+//
+// 通道清单锁机制（spec Review Focus #3 裁定）：注册面断言（上方「注册三十九通道」
+// toEqual 锁——新增通道不进清单即红）+ 本处 CODED_RPC_CHANNELS 循环锁（清单内
+// 通道逐一断言 RpcRemoteError→前缀 / 普通 Error→原样）配对。新增 RPC 通道须同时
+// 改两份清单：只进注册锁不进本清单会被 review 拦下；进本清单但实现未包 coded 则
+// 本循环红。选择注册面断言而非 grep 验收：机械可执行、随测试套件常跑。
+const CODED_RPC_CHANNELS = [
+  ...GROUP_CHANNELS,
+  'hub:mirrorWorkspace',
+  'hub:taskList', 'hub:taskDelegate', 'hub:taskCancel', 'hub:taskAnswer',
+  'hub:viewWorkspace', 'hub:viewSessions', 'hub:viewMessages', 'hub:viewTasks',
+  'hub:viewSubscribe', 'hub:viewUnsubscribe', 'hub:viewWorkspaces', 'hub:viewFiles',
+  'hub:submitRoutedTask', 'hub:retryDispatch',
+] as const;
+
+/** 各通道最小可触发调用（载荷形状与正式接线契约一致） */
+function invokeChannel(channel: string): Promise<unknown> {
+  const h = handlers.get(channel)!;
+  switch (channel) {
+    case 'hub:groupList':
+      return h(null) as Promise<unknown>;
+    case 'hub:groupCreate':
+      return h(null, { groupName: 'g' }) as Promise<unknown>;
+    case 'hub:groupInvite':
+    case 'hub:groupLeave':
+      return h(null, { groupId: 'g1' }) as Promise<unknown>;
+    case 'hub:groupJoin':
+      return h(null, { inviteCode: 'c1' }) as Promise<unknown>;
+    case 'hub:groupTransfer':
+      return h(null, { groupId: 'g1', toNodeId: 'n2' }) as Promise<unknown>;
+    case 'hub:mirrorWorkspace':
+      return h(null, { groupId: 'g1', targetNodeId: 'n2', workspaceName: 'ws', snapshotId: 'snap-1' }) as Promise<unknown>;
+    case 'hub:taskList':
+      return h(null, {}) as Promise<unknown>;
+    case 'hub:taskDelegate':
+      return h(null, { groupId: 'g1', targetNodeId: 'n2', workspaceName: 'ws', title: 't', prompt: 'p' }) as Promise<unknown>;
+    case 'hub:taskCancel':
+    case 'hub:taskAnswer':
+      return h(null, { taskId: 'tk-1', decision: 'approve' }) as Promise<unknown>;
+    case 'hub:viewWorkspace':
+    case 'hub:viewTasks':
+      return h(null, { targetNodeId: 'n2', workspaceName: 'ws' }) as Promise<unknown>;
+    case 'hub:viewSessions':
+      return h(null, { targetNodeId: 'n2', workspaceName: 'ws', limit: 20 }) as Promise<unknown>;
+    case 'hub:viewMessages':
+      return h(null, { targetNodeId: 'n2', sessionId: 's1', fromSeq: 0, limit: 50 }) as Promise<unknown>;
+    case 'hub:viewSubscribe':
+    case 'hub:viewUnsubscribe':
+      return h(null, { targetNodeId: 'n2', sessionId: 's1' }) as Promise<unknown>;
+    case 'hub:viewWorkspaces':
+      return h(null, { targetNodeId: 'n2' }) as Promise<unknown>;
+    case 'hub:viewFiles':
+      return h(null, { targetNodeId: 'n2', workspaceName: 'ws', op: 'list' }) as Promise<unknown>;
+    case 'hub:submitRoutedTask':
+      return h(null, { workspaceId: 'ws-9', workspaceName: 'ws', title: 't', routing: { mode: 'group', groupId: 'g1' } }) as Promise<unknown>;
+    case 'hub:retryDispatch': {
+      // pending 外派行（group 路由）——resolveTarget 链经 listGroups 上抛 hub 错误
+      vi.mocked(getTask).mockReturnValueOnce(
+        mkTaskRow({ id: 'T-100', title: 't', workspaceId: 'ws-9', routing: { mode: 'group', groupId: 'g1' } }),
+      );
+      vi.mocked(listWorkspaces).mockReturnValueOnce([mkWorkspace('ws-9', 'ws')]);
+      return h(null, { taskId: 'T-100' }) as Promise<unknown>;
+    }
+    default:
+      throw new Error(`CODED_RPC_CHANNELS 出现未映射通道: ${channel}`);
+  }
+}
+
+/** workspace/crud.ts Workspace 最小行（retryDispatch 的 workspaceNameOf 分支） */
+function mkWorkspace(id: string, name: string): Workspace {
+  return {
+    id, name, description: '', directoryPath: '/d/ws', gitInitialized: false,
+    createdAt: '2026-10-29T00:00:00Z', ownerId: 'owner', iconEmoji: '',
+    defaultAgentInstanceId: null,
+  };
+}
+
+/** delegation-sync.test.ts mkRow 同款（通道锁 retryDispatch 分支所需的最小 TaskRow） */
+function mkTaskRow(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title'>): TaskRow {
+  return {
+    workspaceId: 'ws-1', description: '', status: 'pending',
+    sourceSessionId: null, sourceMessageId: null, creatorUserId: 'owner',
+    executionSessionId: null, assigneeAgentId: null, targetTeamId: null,
+    targetSessionId: null, recurrenceParentId: null, priority: 0,
+    scheduledAt: null, recurrenceRule: null, deadlineAt: null,
+    queuePosition: null, runtimeInstanceId: null, estimatedTokens: null,
+    actualTokens: null, toolCallsUsed: 0, errorMessage: null,
+    createdAt: 1000, updatedAt: 1000, startedAt: null, completedAt: null,
+    groupId: null, pinnedAt: null, archivedAt: null,
+    routing: { mode: 'local' }, delegationId: null, parentTaskId: null,
+    ...partial,
+  };
+}
+
+describe('hub IPC coded 错误契约（M4.1——RpcRemoteError code 编入 `[code] 原文` 前缀）', () => {
+  it('通道清单锁：全部 RPC 承载通道 RpcRemoteError → 前缀 rejection（漏迁即红）', async () => {
+    registerHubIpc();
+    for (const channel of CODED_RPC_CHANNELS) {
+      vi.mocked(manager.hubRequest).mockRejectedValueOnce(new RpcRemoteError('node_offline', '目标节点不在线'));
+      await expect(invokeChannel(channel), `${channel} 未走 coded`).rejects.toThrow('[node_offline] 目标节点不在线');
+    }
+  });
+
+  it('coded 双路径：普通 Error 不加前缀原样抛（人话链路零变化）', async () => {
+    registerHubIpc();
+    for (const channel of CODED_RPC_CHANNELS) {
+      vi.mocked(manager.hubRequest).mockRejectedValueOnce(new Error('hub 未连接，请稍后重试'));
+      await expect(invokeChannel(channel), `${channel} 意外加了前缀`).rejects.toThrow('hub 未连接，请稍后重试');
+    }
+  });
+
+  it('routingPrecheck 边界：hub 错误在预检内降级空组清单（不抛——预检不可炸弹窗），不适用前缀断言', async () => {
+    registerHubIpc();
+    vi.mocked(manager.hubRequest).mockRejectedValueOnce(new RpcRemoteError('unauthorized', '凭证已失效'));
+    const out = await handlers.get('hub:routingPrecheck')!(null, { workspaceName: 'ws' });
+    expect(out).toEqual({ mirrored: false, groups: [] });
+  });
+
+  it('双侧 fixture 等值锁（renderer RPC_ERROR_ROUNDTRIP_FIXTURES 单源）：coded 编码 → parseRpcErrorCode 解码逐字段往返', async () => {
+    registerHubIpc();
+    for (const { code, message } of RPC_ERROR_ROUNDTRIP_FIXTURES) {
+      vi.mocked(manager.hubRequest).mockRejectedValueOnce(new RpcRemoteError(code, message));
+      await expect(handlers.get('hub:taskAnswer')!(null, { taskId: 'tk-fx', decision: 'approve' }))
+        .rejects.toThrow(`[${code}] ${message}`);
+      expect(parseRpcErrorCode(new Error(`[${code}] ${message}`))).toEqual({ code, message });
+    }
   });
 });
