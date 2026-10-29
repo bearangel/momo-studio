@@ -22,6 +22,7 @@ import { X } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import type { PermissionTier, RoutingPrecheckResult, TaskCreateBatchResult, TaskRouting, WorkspaceAgentMember } from '../../ipc/types';
 import { serializeRecurrence, type RecurrencePreset } from '../../lib/recurrence';
+import { rpcErrorMessage } from '../../lib/rpc-error';
 import { useGroupStore } from '../../stores/group.store';
 import { useTaskStore } from '../../stores/task.store';
 import { Dialog } from '../ui/Dialog';
@@ -292,7 +293,8 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
         lastId = result.task.id;
         successCount += 1;
       } catch (err) {
-        failures.push({ line, message: (err as Error).message });
+        // hub 通道（M4.1 coded）：剥 `[code]` 传输前缀后入失败清单
+        failures.push({ line, message: rpcErrorMessage(err) });
       }
     }
     if (failures.length > 0) {
