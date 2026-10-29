@@ -6,6 +6,18 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 资源库「库 / 商店」分离（library-store-split）
+
+`2.1.0-alpha.45`。协议零改、hub 零改（studio 单侧）。设计见 `docs/specs/2026-10-29-library-store-split-design.md`（Momus OKAY 引用全过；P1 预览门禁过——`.omo/previews/library-store-split.html` 定值合同逐项落码）。
+
+- **库页纯本地**：`resource:list` 默认语义收窄为本地实体（builtin + custom + 已装远端出处条目；收窄单点 `library.ts` 出口过滤）；来源筛选三档（全部/系统预置/自定义，hub 档+计数退场）；未装远端条目退出库页——一条卡 = 一个本地实体，发布者「同物两卡」疑惑在 UI 层消解
+- **AddMenu 远端获取组**：四类型页「＋」菜单新增（hub 永远置顶 → 网络市场 → Smithery 仅 MCP，顺序预览定值+测试锁）；`ExternalMarketplacePopover` 组件退场（指引使命由真实菜单项接替）
+- **FetchDialog 三源同构弹窗**（新组件）：搜索 + 行内四态（安装/更新〔✓已装 vN + semver 判定〕/已装最新灰显/安装中进度〔hub 逐字节百分比〕）；hub 特殊态（未接入空态卡+去设置、降级重试卡）取代原库页三横幅；Smithery hosted 未部署不可装灰显、服务端分页搜索（300ms 防抖）+ 滚动加载更多
+- **弹窗远端通道**：复用/扩展 `resource:registryList`（hub 携 nodeName/total/revision + fresh 语义〔loadFresh 失败回落不写降级〕；marketplace 走 builtin 分支 catalog 快照；smithery provider 分页）；安装链复用 `resource:install` 各源分支（marketplace 补 catalog 反查兜底）
+- **回归锁**：候选列表三处（CapabilityTabs/AgentCreateWizard/MentionInput）+ 查重四处语义不变；已装卡徽标/更新角标/详情/发布入口零改
+- 测试：electron 5197 / renderer 3056 / e2e 新增 library-store-split 2 场景（mock hub 真安装链）
+- 票桶（oracle 建议后置）：hub 降级卡文案与快照展示张力（P2，改动须回预览门禁）；矩阵补行查重第 4 处；FetchDialog 用例名实；install 反查错误归因文案
+
 ## [未发布] — 节点互联 M4.3：委派依赖透传
 
 协议 minor **1.7.0**（hub **v0.3.0**）。设计见 momo-hub 仓 `docs/specs/2026-10-29-momo-hub-m4.3-delegation-deps.md`（Momus OKAY 含勘误：retryDispatch 闸 M3.3 已存在，真实缺口仅两入口）。
