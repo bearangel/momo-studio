@@ -7,6 +7,11 @@
 // fetchCatalog 失败时只丢 builtin+marketplace，custom/hub 仍正常返回。
 //
 // filter 支持按 type/source 过滤。filter.source 指定时短路不必要源（避免 fetchCatalog）。
+//
+// library-store-split（spec 2026-10-29 §2.4）：默认语义收窄为**本地实体**——
+// 只返回 installed=true 的行（builtin/custom/plugin 行恒 true；marketplace/
+// smithery/hub 只保留已装出处条目）。库页一条卡 = 一个本地实体，远端目录
+// 浏览职能迁 resource:registryList（弹窗通道），未装远端条目不再混入本列表。
 
 import { fetchCatalog } from '../marketplace/client';
 import { listInstalled as listInstalledSkills } from '../skill/zip-uploader';
@@ -145,6 +150,11 @@ export async function listResources(filter?: ResourceFilter): Promise<ResourceIt
   if (filter?.source) {
     items = items.filter((i) => i.source === filter.source);
   }
+
+  // library-store-split：收窄为本地实体——只保留已装行。builtin / custom /
+  // plugin 行恒 installed=true（天然通过）；marketplace / smithery / hub 的
+  // 未装目录条目在此剔除，远端浏览走 resource:registryList 弹窗通道。
+  items = items.filter((i) => i.installed);
 
   return items;
 }

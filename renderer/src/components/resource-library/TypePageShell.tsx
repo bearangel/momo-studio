@@ -1,13 +1,16 @@
 // renderer/src/components/resource-library/TypePageShell.tsx
-// 资源页公共骨架：单行工具栏（标题 + 搜索(flex) + 来源下拉(带计数) + 外部市场 +
-// AddMenu）+ 已安装卡片网格（2026-10-23 卡片化：流式网格 minmax(240px,1fr)，
-// 随详情面板拖宽/窗口缩放自动增减列）+ 右侧详情面板（可拖宽，280–560px，宽度持久化）。
-// 三页同构，type 参数驱动。P2.3 起恒「已安装」单态；2026-10-09 组③：
-// 工具栏改单行（原 chips 在窄窗折行 95px，走查 B10 方案 B）、来源筛选前端化
-// （下拉计数需全量数据）、详情面板 B8 方案 B 拖拽调宽、加载失败加重试按钮。
+// 资源页公共骨架：单行工具栏（标题 + 搜索(flex) + 来源下拉(带计数) + AddMenu）
+// + 已安装卡片网格（2026-10-23 卡片化：流式网格 minmax(240px,1fr)，随详情面板
+// 拖宽/窗口缩放自动增减列）+ 右侧详情面板（可拖宽，280–560px，宽度持久化）。
+// 四页同构，type 参数驱动。P2.3 起恒「已安装」单态；2026-10-09 组③：
+// 工具栏改单行、来源筛选前端化（下拉计数需全量数据）、详情面板拖拽调宽、
+// 加载失败加重试按钮。
+// library-store-split（spec 2026-10-29 §2.1）：库页收窄为纯本地实体——来源下拉
+// 只剩 全部/系统预置/自定义 三档；外部市场弹层与三条提示横幅（hub 未接入灰条 /
+// hub 降级黄条 / 市场降级黄条）随退场，语义迁 FetchDialog 特殊态；远端获取收进
+// AddMenu 远端组。
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { ExternalLink, TriangleAlert } from 'lucide-react';
-import type { BuiltinPresetPreview, DefinitionImpact, ResourceItem, ResourceSource, ResourceType } from '../../ipc/types';
+import type { BuiltinPresetPreview, DefinitionImpact, ResourceItem, ResourceType } from '../../ipc/types';
 import { ipc } from '../../ipc/client';
 import { useSessionStore } from '../../stores/session.store';
 import { useResourceStore } from '../../stores/resource.store';
@@ -21,7 +24,6 @@ import { Select } from '../ui/Select';
 import { Dialog } from '../ui/Dialog';
 import { AddMenu } from './AddMenu';
 import type { AddMenuItem } from './AddMenu';
-import { ExternalMarketplacePopover } from './ExternalMarketplacePopover';
 import { DanglingRefsCard } from './DanglingRefsCard';
 import { ResourceCard } from './ResourceCard';
 import { TYPE_ICON } from './type-icons';
@@ -29,16 +31,14 @@ import { ResourceDetail } from './ResourceDetail';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 
 /**
- * 来源下拉选项（组③ B10 方案 B）。marketplace / smithery 不设选项：P2.3 起 UI
- * 无网络安装入口，两源在新装实例永远 0 行——死入口只制造误导（走查 N4）。
- * 历史安装项计入「全部来源」总数，徽章保留来源标识。
- * M1 Task 14（T10 移交）：hub 页签入列——momo-hub 目录/已装行的浏览入口。
+ * 来源下拉选项（library-store-split 预览 §A 定值：仅本地三档）。
+ * marketplace / smithery / hub 已装条目计入「全部」总数（无专属档）；
+ * 未装远端条目不再进入库页（resource:list 收窄）。
  */
 const SOURCE_OPTIONS: ReadonlyArray<{ key: SourceOptionKey; label: string }> = [
-  { key: 'all', label: '全部来源' },
-  { key: 'builtin', label: '预置' },
+  { key: 'all', label: '全部' },
+  { key: 'builtin', label: '系统预置' },
   { key: 'custom', label: '自定义' },
-  { key: 'hub', label: 'momo-hub' },
 ];
 
 /** 来源计数形状（与 SOURCE_OPTIONS 的 key 一一对应；其余来源只计入 all） */
@@ -46,7 +46,6 @@ interface SourceCounts {
   all: number;
   builtin: number;
   custom: number;
-  hub: number;
 }
 
 type SourceOptionKey = keyof SourceCounts;
@@ -145,15 +144,14 @@ interface TypePageShellProps {
 
 export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPreset, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onTogglePlugin, onReloadPlugin, onForkPreset, onDisableAgent, onPublishToHub, onUnpublishFromHub }: TypePageShellProps) {
   const {
-    items, loading, error, installNotice, catalogDegraded, hubDegraded, hubUpdates, hubSeeded, sourceFilter, query,
+    items, loading, error, installNotice, hubUpdates, hubSeeded, sourceFilter, query,
     setSourceFilter, setQuery, deleteResource, load, loadCatalogStatus,
   } = useResourceStore();
   const setActiveView = useUiStore((s) => s.setActiveView);
-  // hub 接入态（M1 Task 14）：发布入口门控 + hub 页签引导条判定源；
-  // 快照未落地（null）按未知处理——不门控也不挂条（避免加载期误报）
+  // hub 接入态（发布入口门控；hubDegraded/hubNotEnrolled 的提示条已随
+  // library-store-split 退场——降级/未接入语义迁 FetchDialog 特殊态）
   const hubStatus = useHubStore((s) => s.status);
   const hubEnrolled = hubStatus !== null && hubStatus.configured && hubStatus.nodeId !== null;
-  const hubNotEnrolled = hubStatus !== null && !hubEnrolled;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<ResourceItem | null>(null);
   /** 插件卸载目标（keepData 双按钮弹窗，spec §7.2——与通用删除确认分流） */
@@ -296,12 +294,11 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
     setSourceFilter('all');
   };
 
-  // 来源计数（下拉选项标签；marketplace/smithery 只计入 all）
-  const counts: SourceCounts = { all: items.length, builtin: 0, custom: 0, hub: 0 };
+  // 来源计数（下拉选项标签；marketplace/smithery/hub 已装条目只计入 all）
+  const counts: SourceCounts = { all: items.length, builtin: 0, custom: 0 };
   for (const i of items) {
     if (i.source === 'builtin') counts.builtin += 1;
     else if (i.source === 'custom') counts.custom += 1;
-    else if (i.source === 'hub') counts.hub += 1;
   }
 
   // 详情数据：从「过滤后」列表解析——选中项被搜索/筛选排除时详情面板自动收起
@@ -322,7 +319,7 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
         <Select
           aria-label="来源筛选"
           value={sourceFilter}
-          onChange={(e) => setSourceFilter(e.target.value as ResourceSource | 'all')}
+          onChange={(e) => setSourceFilter(e.target.value as SourceOptionKey)}
           className="w-32 py-1.5 shrink-0"
         >
           {SOURCE_OPTIONS.map((o) => (
@@ -332,8 +329,6 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
           ))}
         </Select>
         <div className="flex items-center gap-2 shrink-0">
-          {/* 外部市场快捷打开（P2.3 spec §4） */}
-          <ExternalMarketplacePopover type={type} />
           <AddMenu label={ADD_LABEL[type]} items={addItems} />
         </div>
       </div>
@@ -354,45 +349,8 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
         </div>
       )}
 
-      {/* D9：市场目录降级细横幅——仅 agent 页（catalog 只影响 agent 预置目录的远程部分） */}
-      {catalogDegraded && type === 'agent' && (
-        <div
-          data-testid="catalog-degraded-notice"
-          className="mx-4 mt-2 px-3 py-1.5 rounded-md bg-status-warning-tint text-status-warning text-xs inline-flex items-center gap-1.5 self-start"
-        >
-          <TriangleAlert size={14} strokeWidth={1.75} aria-hidden />
-          网络目录暂时不可达（离线或网络受限），当前显示本地目录。
-        </div>
-      )}
-
-      {/* hub 页签提示条（M1 Task 14 / T10 移交）：未接入灰条（引导去设置）与
-          degraded 黄条互斥呈现——未接入时目录零网络拉取，degraded 不可信（F1） */}
-      {sourceFilter === 'hub' && hubNotEnrolled && (
-        <div
-          data-testid="hub-not-enrolled-notice"
-          className="mx-4 mt-2 px-3 py-1.5 rounded-md bg-surface-3 text-secondary text-xs inline-flex items-center gap-1.5 self-start"
-        >
-          未接入 momo-hub——
-          <button
-            type="button"
-            className="inline-flex items-center gap-0.5 font-medium text-accent-600 dark:text-accent-300 hover:underline"
-            onClick={() => setActiveView('settings')}
-          >
-            去设置
-            <ExternalLink size={12} strokeWidth={1.75} aria-hidden />
-          </button>
-          接入后可安装组内共享资源
-        </div>
-      )}
-      {sourceFilter === 'hub' && !hubNotEnrolled && hubDegraded && (
-        <div
-          data-testid="hub-degraded-notice"
-          className="mx-4 mt-2 px-3 py-1.5 rounded-md bg-status-warning-tint text-status-warning text-xs inline-flex items-center gap-1.5 self-start"
-        >
-          <TriangleAlert size={14} strokeWidth={1.75} aria-hidden />
-          hub 暂不可达（离线或网络受限），展示最近目录。
-        </div>
-      )}
+      {/* library-store-split：hub 未接入 / hub 降级 / 市场目录降级三条横幅已退场
+          （语义迁 FetchDialog 特殊态，spec §2.1） */}
 
       {/* MCP 悬空引用提示卡（spec §6.3）——仅 MCP 页挂载；空/null 静默不渲染 */}
       {type === 'mcp' && <DanglingRefsCard />}

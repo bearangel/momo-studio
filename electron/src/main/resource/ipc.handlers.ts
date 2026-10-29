@@ -47,6 +47,7 @@ import { randomUUID } from 'node:crypto';
 import { ipcMain, shell, app } from 'electron';
 import { logger } from '../logger';
 import { listResources, resolveResourceById } from './library';
+import { listMarketplaceResources } from './marketplace';
 import {
   parseResourceId,
   sourceLabel,
@@ -187,6 +188,19 @@ export function registerResourceHandlers(): void {
       // plugin 自 T12 起同链安装（plugin 域注册链 + 记账）
       if (hubParsed?.source === 'hub') {
         return installHubPackage(hubParsed.type, hubParsed.slug, hubInstallContext());
+      }
+      // marketplace 条目：library-store-split 起 listResources 收窄为本地实体，
+      // 未装条目查不到——获取弹窗「安装」按 id 反解进安装链（catalog 按 slug+type
+      // 反查原 MarketplaceItem，与下方已装分支同口径）
+      if (hubParsed?.source === 'marketplace') {
+        const catalog = await fetchCatalog();
+        const catalogItem = catalog.items.find(
+          (ci) => ci.slug === hubParsed.slug && ci.type === hubParsed.type && ci.downloadUrl,
+        );
+        if (!catalogItem) {
+          throw new Error(`marketplace catalog 中未找到 slug=${hubParsed.slug}`);
+        }
+        return installPackage(catalogItem);
       }
       throw new Error(`资源 ${id} 不存在`);
     }
@@ -442,11 +456,13 @@ export function registerResourceHandlers(): void {
     ];
   });
 
-  // resource:registryList — 按 provider 拉取注册表条目（P2 双轨 hub 唯一列表入口）。
-  // builtin 分支走现有 listResources({type, source:'marketplace'}) + 前端 catalog
-  // provider 同款过滤（name/description/slug 模糊）排序（未安装在前、已装垫底）——
-  // 本地全量目录无服务端分页，page 参数忽略、hasMore 恒 false；hub 分支委托对应
-  // provider（query / page 透传，各自带退避负缓存，失败返回 degraded 不抛错）。
+  // resource:registryList — 按 provider 拉取注册表条目（library-store-split 起
+  // 获取弹窗三源的唯一浏览通道）。builtin（=网络市场 catalog 快照）分支直连
+  // listMarketplaceResources（resource:list 已收窄为本地实体，不经其取目录）+
+  // 客户端过滤（name/description/slug 模糊）排序（未安装在前、已装垫底）——
+  // 本地全量目录无服务端分页，page 参数忽略、hasMore 恒 false；hub/smithery
+  // 分支委托对应 provider（query / page / opts 透传，各自带退避负缓存，失败
+  // 返回 degraded 不抛错；opts.fresh 供 hub 弹窗「刷新」入口走 loadFresh）。
   ipcMain.handle(
     'resource:registryList',
     async (
@@ -455,9 +471,11 @@ export function registerResourceHandlers(): void {
       type: ResourceType,
       query?: string,
       page?: number,
+      opts?: { fresh?: boolean },
     ) => {
       if (providerKey === 'builtin') {
-        const items = await listResources({ type, source: 'marketplace' });
+        const catalog = await fetchCatalog();
+        const items = listMarketplaceResources(catalog).filter((i) => i.type === type);
         const q = query?.trim().toLowerCase();
         const matched = q
           ? items.filter(
@@ -483,11 +501,12 @@ export function registerResourceHandlers(): void {
             })),
           degraded: false,
           hasMore: false,
+          total: items.length,
         };
       }
       const provider = HUB_PROVIDERS.find((p) => p.key === providerKey);
       if (!provider) throw new Error(`未知 registry provider: ${providerKey}`);
-      return provider.list(type, query, page);
+      return provider.list(type, query, page, opts);
     },
   );
 
