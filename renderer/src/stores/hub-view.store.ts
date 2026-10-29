@@ -17,6 +17,7 @@
 //   （boundary 铁律 5：路由目标用当前上下文，消 commonGroupId 多组任意取旧歧义）
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
+import { parseRpcErrorCode } from '../lib/rpc-error';
 import type {
   HubViewFileEntry, HubViewLocalTask, HubViewMessage, HubViewOverview, HubViewSessionSummary,
 } from '../ipc/types';
@@ -141,9 +142,32 @@ interface HubViewState {
   closeFilePreview(): void;
 }
 
-/** forbidden 等 hub 错误码 → 面板人话 */
+/**
+ * view 面错误码 → 人话（M4.1 code 优先）。码集以 hub 仓 remote-view.ts 实码核对：
+ * leader 侧可见 = forbidden / node_offline / internal / bad_request（hub 转发层）
+ * + 目标节点 res 透传（not_found / bad_request / unknown_method）。仅 node_offline
+ * 一义映射现有人话；forbidden 在 view 面两义（同组校验失败 / consent 关闭——
+ * hub 同码不同文），按码映射会错标，仍由子串判别区分；internal/bad_request/
+ * not_found 无既有人话，剥前缀原文呈现（与迁移前一致）。
+ */
+const VIEW_ERROR_TEXT_BY_CODE: Partial<Record<string, string>> = {
+  node_offline: '目标节点不在线——连接恢复后可重试',
+};
+
+/**
+ * view 面错误人话化（M4.1 code 优先，双保险回落）：
+ * 1) 带 `[code]` 前缀且码在映射表 → 直接人话（不依赖 hub 措辞）；
+ * 2) 无前缀（本地错误 / 旧 hub 1.x）/ 未知码 / forbidden 两义 → 剥前缀后走
+ *    既有子串匹配，子串对 hub 措辞的判别零变化（旧路径不删）。
+ * 人话文案逐字不变（锁既有 UI 文案测试）。
+ */
 export function humanizeViewError(err: unknown): string {
-  const msg = err instanceof Error ? err.message : String(err);
+  const coded = parseRpcErrorCode(err);
+  if (coded !== null) {
+    const byCode = VIEW_ERROR_TEXT_BY_CODE[coded.code];
+    if (byCode !== undefined) return byCode;
+  }
+  const msg = coded !== null ? coded.message : err instanceof Error ? err.message : String(err);
   if (msg.includes('已关闭本组查看')) return '对方节点关闭了本组查看——可在其「设置 → 节点互联」重新开启';
   if (msg.includes('不在线') || msg.includes('离线')) return '目标节点不在线——连接恢复后可重试';
   return msg;

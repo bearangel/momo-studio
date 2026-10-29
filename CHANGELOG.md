@@ -6,6 +6,19 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 节点互联 M4.1：错误契约统一
+
+studio 侧全量，**协议与 hub 仓零改动**。设计见 momo-hub 仓 `docs/specs/2026-10-29-momo-hub-m4.1-error-contract.md`（Momus OKAY）。
+
+- **electron 统一包裹**：`coded<T>` helper（RpcRemoteError → `Error(\`[${code}] ${message}\`)`，与 M3.1 taskAnswer 前缀格式逐字一致；非 RpcRemoteError 原样透传）——**22 通道全迁移**（group.*×6 / mirror / taskList/Delegate/Cancel/Answer / view.*×8 / submitRoutedTask / routingPrecheck / retryDispatch）；**通道清单锁**（注册面断言 + CODED_RPC_CHANNELS 循环锁配对，新增通道漏迁即红）
+- **ports 裁定**：dispatchSubmitPorts/redispatchPorts 内 delegate rejection 不包（一律吞落 dispatched:false，无 renderer 直抛消费面——死码；上抛路径已由通道级 coded 覆盖，测试锁定）
+- **renderer 单源解析**：`rpc-error.ts` `parseRpcErrorCode`（regex 从 DelegatedTaskCard 上提）+ `rpcErrorMessage`（展示剥前缀）——消费面统一（DelegatedTaskCard×3 / hub-view / hub-group×2 / hub-delegation×2 / hub-mirror / WorkgroupSidebar×2 / CreateTaskDialog）
+- **humanizeViewError code 优先**：以 hub 仓实码核对（forbidden/node_offline/internal/bad_request/not_found/unknown_method）——仅 node_offline 一义按码映射；**forbidden 两义（同组校验/consent 关闭 hub 同码不同文）剥前缀后子串判别**；无 code/未知码回落子串（双保险，人话文案逐字不变）
+- **资源协议**：全部 vitest 一律 `--maxWorkers=2 --minWorkers=1`（峰值内存受控 ≥84% 空闲）；sweep 保留项注释写明（HTTP 直传/本地通道/MirrorWizard wire 级三族）
+- 测试：electron 5173 / renderer 3023（新增通道清单锁 22×2 + humanize 四路径 + 双侧 fixture 等值锁）
+
+版本 `2.1.0-alpha.42`。
+
 ## [未发布] — 节点互联 M4.0：沉淀清偿批
 
 无新功能面。设计见 momo-hub 仓 `docs/specs/2026-10-29-momo-hub-m4.0-sediment.md`（Momus OKAY）。

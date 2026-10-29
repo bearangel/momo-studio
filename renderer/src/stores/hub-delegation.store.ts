@@ -14,6 +14,7 @@
 // - 向导态已随 DelegationWizard 退役删除（openWizard 等仅向导消费，零存量引用）
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
+import { rpcErrorMessage } from '../lib/rpc-error';
 import type {
   HubDelegationStatus,
   HubTaskProgressEvent,
@@ -120,7 +121,8 @@ export const useHubDelegationStore = create<HubDelegationState>((set) => {
       const { tasks } = await ipc.hub.taskList();
       set({ tasks, loading: false, error: null });
     } catch (err) {
-      set({ loading: false, error: err instanceof Error ? err.message : String(err) });
+      // hub 通道（M4.1 coded）：剥 `[code]` 传输前缀后呈现
+      set({ loading: false, error: rpcErrorMessage(err) });
     }
   };
 
@@ -174,7 +176,7 @@ export const useHubDelegationStore = create<HubDelegationState>((set) => {
       } catch (err) {
         // hub conflict（已终态）等：先重拉对账再呈现错误（hub-group 同款纪律）
         await refresh();
-        set({ error: err instanceof Error ? err.message : String(err) });
+        set({ error: rpcErrorMessage(err) });
         throw err;
       }
       await refresh();

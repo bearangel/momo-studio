@@ -20,6 +20,7 @@ import { useHubStore } from '../../stores/hub.store';
 import { useHubViewStore } from '../../stores/hub-view.store';
 import type { HubGroupInfo, HubGroupMember, HubTaskRecord } from '../../ipc/types';
 import { cn } from '../../lib/cn';
+import { rpcErrorMessage } from '../../lib/rpc-error';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
@@ -248,7 +249,8 @@ function CreateForm() {
       await create(groupName.trim());
       setGroupName('');
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : String(err));
+      // store 动作 rethrow 原始 rejection（保留错误身份）——展示层剥 `[code]` 前缀
+      setFormError(rpcErrorMessage(err));
     } finally {
       setSubmitting(false);
     }
@@ -290,7 +292,8 @@ function JoinForm() {
       await join(inviteCode.trim());
       setInviteCode('');
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : String(err));
+      // 同上：store rethrow 原始 rejection，展示层剥 `[code]` 前缀
+      setFormError(rpcErrorMessage(err));
     } finally {
       setSubmitting(false);
     }

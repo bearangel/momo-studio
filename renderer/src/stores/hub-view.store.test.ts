@@ -14,7 +14,7 @@
 // 最大 rowid），不做「方便测试」的简化——被测公式与真实 ASC LIMIT 截断的
 // 相互作用正是本 bug 的根因。
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { useHubViewStore, VIEW_PAGE_SIZE } from './hub-view.store';
+import { humanizeViewError, useHubViewStore, VIEW_PAGE_SIZE } from './hub-view.store';
 import type { HubViewMessage } from '../ipc/types';
 
 interface FakeEvent {
@@ -253,6 +253,35 @@ describe('错误路径（momo-test-rules #3：错误不吞）', () => {
     expect(useHubViewStore.getState().replay).toBeNull();
     expect(useHubViewStore.getState().error).toBe('对方节点关闭了本组查看——可在其「设置 → 节点互联」重新开启');
     expect(api.hub.viewSubscribe).not.toHaveBeenCalled();
+  });
+});
+
+// ── M4.1 humanizeViewError 双路径（code 优先 + 子串回落双保险）─────────────────
+describe('humanizeViewError（M4.1 错误契约）', () => {
+  it('code 驱动：[node_offline] 前缀 → 人话（措辞不含「不在线/离线」子串也命中——不再依赖 hub 措辞）', () => {
+    expect(humanizeViewError(new Error('[node_offline] 目标节点处理期间掉线了')))
+      .toBe('目标节点不在线——连接恢复后可重试');
+  });
+
+  it('forbidden 两义不入码表：consent 关闭文 → 开关人话；同组校验文 → 剥前缀原文（不错标）', () => {
+    expect(humanizeViewError(new Error('[forbidden] 目标节点已关闭本组查看')))
+      .toBe('对方节点关闭了本组查看——可在其「设置 → 节点互联」重新开启');
+    expect(humanizeViewError(new Error('[forbidden] 仅组长可远程查看目标节点（需与其同组）')))
+      .toBe('仅组长可远程查看目标节点（需与其同组）');
+  });
+
+  it('子串回落（双保险不删）：无前缀旧形态 → 既有子串匹配文案不变', () => {
+    expect(humanizeViewError(new Error('目标节点已关闭本组查看')))
+      .toBe('对方节点关闭了本组查看——可在其「设置 → 节点互联」重新开启');
+    expect(humanizeViewError(new Error('目标节点不在线')))
+      .toBe('目标节点不在线——连接恢复后可重试');
+  });
+
+  it('未知码 / 无既有人话的码：剥前缀原文呈现（与迁移前一致，前缀是传输编码非用户可读）', () => {
+    expect(humanizeViewError(new Error('[not_found] 工作空间不存在: ghost')))
+      .toBe('工作空间不存在: ghost');
+    expect(humanizeViewError(new Error('目录不存在或不可访问: ghost')))
+      .toBe('目录不存在或不可访问: ghost');
   });
 });
 

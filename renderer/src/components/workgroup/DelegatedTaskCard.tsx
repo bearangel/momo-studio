@@ -26,6 +26,7 @@ import { Ban, Bot, Check, CircleCheck, CircleHelp, CircleX, Lock, RefreshCw, Rot
 import { ipc } from '../../ipc/client';
 import { useHubStore } from '../../stores/hub.store';
 import { hubSupportsMinor } from '../../lib/hub-capability';
+import { parseRpcErrorCode, rpcErrorMessage } from '../../lib/rpc-error';
 import type {
   DelegationBoardResult,
   HubDelegationProgressEntry,
@@ -390,7 +391,8 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
       try {
         await ipc.hub.taskCancel({ taskId: delegationId });
       } catch (err) {
-        showToast(`取消失败: ${(err as Error).message}`);
+        // hub 通道（M4.1 coded）：剥 `[code]` 传输前缀后人话呈现
+        showToast(`取消失败: ${rpcErrorMessage(err)}`);
         return;
       }
     } else {
@@ -409,7 +411,8 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
       const r = await ipc.hub.retryDispatch({ taskId: task.id });
       showToast(r.dispatched ? `已派发给 ${nodeName(r.nodeId)}` : '暂无可用节点，任务保留待派发');
     } catch (err) {
-      showToast(`重派失败: ${(err as Error).message}`);
+      // hub 通道（M4.1 coded）：剥 `[code]` 传输前缀后人话呈现
+      showToast(`重派失败: ${rpcErrorMessage(err)}`);
       return;
     }
     board.refreshTasks();
@@ -420,6 +423,7 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
    * RpcRemoteError.code 编入 rejection message 前缀 `[code] 原文`（Electron IPC
    * 只保 message），版本过低三码（hub/worker 任一低于 1.3）给人话降级文案，
    * 其余剥前缀后原文 toast；stale 口径（worker 已无等待）单独提示。
+   * M4.1：前缀解析上提 lib/rpc-error.ts parseRpcErrorCode（单源，不再内联正则）。
    */
   const handleAnswer = async (decision: 'approve' | 'deny'): Promise<void> => {
     if (delegationId == null) return;
@@ -427,12 +431,11 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
     try {
       r = await ipc.hub.taskAnswer({ taskId: delegationId, decision });
     } catch (err) {
-      const raw = err instanceof Error ? err.message : String(err);
-      const coded = /^\[([a-z_]+)\] ([\s\S]*)$/.exec(raw);
-      if (coded !== null && ANSWER_VERSION_LOW_CODES.has(coded[1]!)) {
+      const coded = parseRpcErrorCode(err);
+      if (coded !== null && ANSWER_VERSION_LOW_CODES.has(coded.code)) {
         showToast('节点或 hub 版本过低，无法远程代答');
       } else {
-        showToast(`远程代答失败: ${coded !== null ? coded[2]! : raw}`);
+        showToast(`远程代答失败: ${coded !== null ? coded.message : err instanceof Error ? err.message : String(err)}`);
       }
       return;
     }
