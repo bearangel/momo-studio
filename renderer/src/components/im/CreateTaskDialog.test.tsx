@@ -886,7 +886,11 @@ describe('CreateTaskDialog — `::` 依赖提交链（M3.3）', () => {
     expect('dependsOn' in call).toBe(false);
   });
 
-  it('外派路径不解析 `::`：批量 remote 行原样为标题逐行提交（协议零改语义）', async () => {
+  // M3.3 锁死断言按 M4.3 语义升级（spec 2026-10-29 §2.3.2）：外派路径解析 `::`
+  // （建链后 blocked 派生，dispatch 受主进程闸管制）——断言改动两处：
+  //   ① 用例名「不解析」→「解析」；② title 期望 '远端行 :: T-1' → '远端行'
+  //   + 新增 dependsOn 期望 ['T-1']（本地路径断言零变化——上方 local 用例不动）
+  it('外派路径解析 `::`：批量 remote 行拆标题 + dependsOn 逐行提交（M4.3 语义升级）', async () => {
     render(
       <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
     );
@@ -898,8 +902,58 @@ describe('CreateTaskDialog — `::` 依赖提交链（M3.3）', () => {
     fireEvent.click(screen.getByRole('button', { name: '创建 1 个任务' }));
     await waitFor(() => expect(mockSubmitRoutedTask).toHaveBeenCalledTimes(1));
     expect(mockSubmitRoutedTask).toHaveBeenCalledWith(
-      expect.objectContaining({ title: '远端行 :: T-1' }),
+      expect.objectContaining({ title: '远端行', dependsOn: ['T-1'] }),
     );
     expect(mockTaskCreateBatch).not.toHaveBeenCalled();
+  });
+
+  it('外派批量行无 `::` 后缀 → submitRoutedTask payload 不含 dependsOn 键（零变化锁）', async () => {
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '批量' }));
+    fireEvent.click(await screen.findByRole('radio', { name: '组内调度' }));
+    fireEvent.change(screen.getByLabelText(/批量任务书/), {
+      target: { value: '普通远端行' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '创建 1 个任务' }));
+    await waitFor(() => expect(mockSubmitRoutedTask).toHaveBeenCalledTimes(1));
+    const call = mockSubmitRoutedTask.mock.calls[0]![0] as Record<string, unknown>;
+    expect(call.title).toBe('普通远端行');
+    expect('dependsOn' in call).toBe(false);
+  });
+
+  it('外派单任务标题带 `::` 后缀 → submitRoutedTask 携带拆分标题 + dependsOn（M4.3）', async () => {
+    const onCreated = vi.fn();
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={onCreated} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '组内调度' }));
+    fireEvent.change(screen.getByLabelText(/标题\*/), { target: { value: '外派部署 :: T-7,T-8' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
+    await waitFor(() => expect(mockSubmitRoutedTask).toHaveBeenCalledTimes(1));
+    expect(mockSubmitRoutedTask).toHaveBeenCalledWith(
+      expect.objectContaining({ title: '外派部署', dependsOn: ['T-7', 'T-8'] }),
+    );
+    expect(mockTaskCreate).not.toHaveBeenCalled();
+  });
+
+  it('外派单任务提交被拒（派发闸 blocked）→ rejection 不上抛，toast 人话回显（M4.3）', async () => {
+    const onCreated = vi.fn();
+    mockSubmitRoutedTask.mockReset().mockRejectedValueOnce(
+      new Error('任务存在未完成依赖（T-7），依赖完成前不可派发'),
+    ).mockResolvedValue({ task: { id: 'T-rem' }, dispatched: true, nodeId: 'node-a' });
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={onCreated} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '组内调度' }));
+    fireEvent.change(screen.getByLabelText(/标题\*/), { target: { value: '外派受阻 :: T-7' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
+    await waitFor(() => expect(showToastMock).toHaveBeenCalledTimes(1));
+    expect(showToastMock).toHaveBeenCalledWith(
+      expect.stringContaining('任务存在未完成依赖（T-7），依赖完成前不可派发'),
+    );
+    // 弹窗不关（行已建链保留待处理，用户可改行重试或去待派发卡重试）
+    expect(onCreated).not.toHaveBeenCalled();
   });
 });

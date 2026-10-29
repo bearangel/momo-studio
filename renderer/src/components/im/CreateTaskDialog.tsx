@@ -9,8 +9,9 @@
 //   - 提交分流：local → 本机批量走单 IPC task:createBatch（M3.3 替换逐行循环，
 //     per-item union 错误展示沿用既有 per-line UI）；单任务 local 走既有
 //     ipc.task.create（标题支持同款 `::` 依赖后缀）；group/node →
-//     ipc.hub.submitRoutedTask（hub 无批量/依赖通道，逐行循环保持——每次提交重跑调度，
-//     `::` 后缀在外派路径不解析，整行原样为标题）
+//     ipc.hub.submitRoutedTask（hub 无批量通道，逐行循环保持——每次提交重跑调度）。
+//     M4.3 起外派路径同样解析 `::` 后缀（M3.3 裁定翻转——建链后任务 blocked，
+//     派发受主进程闸管制：blocked 拒绝人话回显，依赖完成后待派发卡重试放行）
 //   - `::` 依赖行语法（M3.3 spec §2.2 最小面）：`标题 :: T-1,T-2` 双冒号+逗号分隔，
 //     可省略——无后缀行解析零变化（测试锁）；单任务模式用同输入框后缀语法，
 //     无新控件（P2 口径：纯输入语法扩展，无布局语言变化——spec 定稿授权）
@@ -189,16 +190,25 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
 
   const submitSingleRemote = async (): Promise<void> => {
     if (!workspaceName) return;
-    const result = await ipc.hub.submitRoutedTask({
-      workspaceId,
-      workspaceName,
-      title: title.trim(),
-      ...(description.trim() !== '' ? { description: description.trim() } : {}),
-      routing,
-      permissionTier,
-    });
-    onCreated(result.task.id);
-    onClose();
+    // M4.3：外派单任务同款 `::` 后缀解析（与本地单任务/批量同源 parseTaskLine）
+    const parsed = parseTaskLine(title.trim());
+    try {
+      const result = await ipc.hub.submitRoutedTask({
+        workspaceId,
+        workspaceName,
+        title: parsed.title,
+        ...(description.trim() !== '' ? { description: description.trim() } : {}),
+        ...(parsed.dependsOn.length > 0 ? { dependsOn: parsed.dependsOn } : {}),
+        routing,
+        permissionTier,
+      });
+      onCreated(result.task.id);
+      onClose();
+    } catch (err) {
+      // M4.3 派发闸拒绝（blocked 人话）/ 路由校验拒绝在此回显——此前该路径
+      // rejection 无兜底（unhandled，弹窗悬挂）；行已建链时任务保留待处理卡
+      showToast(`创建外派任务失败: ${(err as Error).message}`);
+    }
   };
 
   const submitSingleLocal = async (): Promise<void> => {
@@ -277,16 +287,19 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
     }
     // 外派路由批量：hub 无批量通道（spec 裁定协议零改），保持逐行顺序提交——
     // group 路由每次重跑 least-busy（依次派给空闲节点，S2 批量 hint）。
-    // per-line catch：单行失败不中断余行；`::` 后缀不解析，整行原样为标题
+    // M4.3：逐行 `::` 后缀解析（与本地批量同源 parseTaskLine）；blocked 行建链
+    // 后被主进程派发闸拒 → per-line 失败展示（行保留待处理，依赖完成后重试派发）
     let lastId = '';
     let successCount = 0;
     const failures: Array<{ line: string; message: string }> = [];
     for (const line of batchLines) {
+      const parsed = parseTaskLine(line);
       try {
         const result = await ipc.hub.submitRoutedTask({
           workspaceId,
           workspaceName,
-          title: line,
+          title: parsed.title,
+          ...(parsed.dependsOn.length > 0 ? { dependsOn: parsed.dependsOn } : {}),
           routing,
           permissionTier,
         });
