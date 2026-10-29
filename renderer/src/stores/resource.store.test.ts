@@ -697,3 +697,65 @@ describe('resource.store — 撤回事件消费（M3.4 §2.4）', () => {
     expect(useResourceStore.getState().hubUpdates).toEqual({ 'skill:gone-skill': '2.0.0' });
   });
 });
+
+// ── 发布事件消费（M3.0 验收 D1——resource.published → 刷新列表/来源计数派生源）──
+// 复现时序（验收报告 evidence/55 vs 63）：切页 remount 的首拉先于 hub 事件到达 →
+// items 停留旧快照；随后 resource.published 到达（主进程目录源已 applyPublishedEvent
+// upsert，IPC 数据面正确）——renderer 只记角标不重拉，列表与来源计数（items 派生，
+// TypePageShell）陈旧直到整页 reload。契约：事件到时触发 load，与撤回事件对称。
+
+describe('resource.store — 发布事件消费（M3.0 验收 D1）', () => {
+  const freshHubItem: ResourceItem = {
+    id: 'hub-agent-qa-m30', type: 'agent', source: 'hub', slug: 'qa-m30-agent',
+    name: '验收智能体', description: 'd', version: '1.0.0',
+    installed: false, installable: true, removable: false,
+  };
+
+  beforeEach(() => {
+    resourceList.mockReset().mockResolvedValue([] as ResourceItem[]);
+    resourceGetCatalogStatus.mockReset().mockResolvedValue({
+      degraded: false, hubNotEnrolled: false, sources: [],
+    });
+    publishedCb = undefined;
+  });
+
+  it('事件到达 → 重拉列表：items 反映主进程目录已 upsert 的新条目（计数派生源不陈旧）', async () => {
+    const dispose = useResourceStore.getState().initHubUpdates();
+    // 旧快照：remount 首拉先于事件到达（hub 0 条）
+    await useResourceStore.getState().load();
+    expect(useResourceStore.getState().items).toHaveLength(0);
+
+    // 主进程目录已含新条目（IPC 数据面正确）+ published 事件到达
+    resourceList.mockResolvedValue([freshHubItem]);
+    publishedCb?.({ slug: 'qa-m30-agent', type: 'agent', name: '验收智能体', version: '1.0.0', author: 'node-b', at: 1 });
+
+    await vi.waitFor(() => expect(useResourceStore.getState().items).toHaveLength(1));
+    expect(useResourceStore.getState().items[0]?.slug).toBe('qa-m30-agent');
+    dispose();
+  });
+
+  it('乱序低版事件不回退角标基线（FIX-2 不变），但列表仍刷新（取高与重拉互不影响）', async () => {
+    const dispose = useResourceStore.getState().initHubUpdates();
+    useResourceStore.setState({ hubUpdates: { 'agent:qa-m30-agent': '2.0.0' } });
+
+    resourceList.mockResolvedValue([freshHubItem]);
+    publishedCb?.({ slug: 'qa-m30-agent', type: 'agent', name: '验收智能体', version: '1.9.0', author: 'node-b', at: 2 });
+
+    // 角标基线不回退（FIX-2 既有契约——低版事件不抬基线）
+    expect(useResourceStore.getState().hubUpdates['agent:qa-m30-agent']).toBe('2.0.0');
+    // 列表照常刷新
+    await vi.waitFor(() => expect(useResourceStore.getState().items).toHaveLength(1));
+    dispose();
+  });
+
+  it('dispose 后事件不再触发刷新（解订阅语义——回调不可达）', async () => {
+    const dispose = useResourceStore.getState().initHubUpdates();
+    dispose();
+    const listCallsBefore = resourceList.mock.calls.length;
+
+    publishedCb?.({ slug: 'qa-m30-agent', type: 'agent', name: '验收智能体', version: '1.0.0', author: 'node-b', at: 3 });
+
+    expect(publishedCb).toBeUndefined();
+    expect(resourceList.mock.calls.length).toBe(listCallsBefore);
+  });
+});
