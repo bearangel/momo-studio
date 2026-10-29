@@ -899,8 +899,8 @@ test.describe.serial('hub 分发链 / readonly 即时拒 / 版本链（M2.3 Task
     expect(pub!.type).toBe('skill');
     expect(pub!.author).toBe('e2e-node-a');
 
-    // 记账面：hub 页签已装角标（installed_packages `hub:{slug}` 行 → v{version} · 已是最新）
-    await winA.getByLabel('来源筛选').selectOption('hub');
+    // 记账面：库页已装 hub 卡角标（installed_packages `hub:{slug}` 行 → v{version} · 已是最新）
+    // （断言迁移——library-store-split：来源下拉 hub 档退场，已装 hub 卡计「全部」直接可见）
     const hubCard = winA.getByTestId(`resource-card-hub-skill-${SKILL_SLUG}`);
     await expect(hubCard).toBeVisible({ timeout: 20000 });
     await expect(hubCard.getByText(`v${SKILL_PUBLISH_VERSION} · 已是最新`)).toBeVisible();
@@ -1066,13 +1066,23 @@ test.describe.serial('hub 分发链 / readonly 即时拒 / 版本链（M2.3 Task
 
     await winA!.getByRole('button', { name: '资源库', exact: true }).click();
     await winA!.getByRole('button', { name: 'Skill', exact: true }).click();
-    await winA!.getByLabel('来源筛选').selectOption('hub');
 
-    // 起点：目录预种子 v1.0.0 → 安装
+    // 起点：目录预种子 v1.0.0 → 经获取弹窗安装（断言迁移——library-store-split：
+    // 未装 hub 目录条目不入库页网格，安装入口迁「＋」菜单远端组 → FetchDialog）
+    await winA!.getByRole('button', { name: '添加技能' }).click();
+    await winA!.locator('[role="menu"]').getByText('从 momo-hub 获取…').click();
+    const fetchDlg = winA!.getByRole('dialog', { name: '从 momo-hub 获取技能' });
+    await expect(fetchDlg).toBeVisible({ timeout: 20000 });
+    const fetchRow = fetchDlg.getByTestId(`fetch-row-hub-skill-${CHAIN_SLUG}`);
+    await expect(fetchRow).toBeVisible({ timeout: 20000 });
+    await fetchRow.getByRole('button', { name: '安装', exact: true }).click();
+    await expect(winA!.getByTestId('install-notice')).toContainText(`已从 momo-hub 安装「${CHAIN_SLUG}」`, { timeout: 30000 });
+    await fetchDlg.getByRole('button', { name: '关闭' }).click();
+    await expect(fetchDlg).toBeHidden();
+
+    // 安装后库页出现已装 hub 卡（「全部」口径——收窄语义下已装行入库页）
     const chainCard = winA!.getByTestId(`resource-card-hub-skill-${CHAIN_SLUG}`);
     await expect(chainCard).toBeVisible({ timeout: 20000 });
-    await chainCard.getByRole('button', { name: '安装', exact: true }).click();
-    await expect(winA!.getByTestId('install-notice')).toContainText(`已从 momo-hub 安装「${CHAIN_SLUG}」`, { timeout: 30000 });
     await expect(chainCard.getByText('v1.0.0 · 已是最新')).toBeVisible({ timeout: 15000 });
     expect(downloadCount(CHAIN_SLUG, '1.0.0'), 'v1 归档应下载一次').toBe(1);
 

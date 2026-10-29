@@ -360,3 +360,63 @@ describe('T9: momo-hub provider 目录源', () => {
     expect(isTrustedDownloadUrl(`${hub.url}/resources/demo-agent/1.0.0/download`)).toBe(true);
   });
 });
+
+describe('library-store-split：provider list 弹窗扩展面', () => {
+  it('versionCount / revision / total 透出（行「N 个版本」+ 脚注「目录 N 项 · 修订 R」）', async () => {
+    hub = await startMockHub(
+      jsonResponder(200, { ...(catalogPayload() as Record<string, unknown>), revision: 23 }),
+    );
+    const source = createHubCatalogSource(resolverFor(hub.url));
+    const provider = createHubProvider(source);
+
+    const result = await provider.list('skill');
+
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]!.versionCount).toBe(2);
+    expect(result.revision).toBe(23);
+    expect(result.total).toBe(1);
+  });
+
+  it('total 是搜索前口径：query 过滤后 total 不变、entries 收窄', async () => {
+    hub = await startMockHub(jsonResponder(200, catalogPayload()));
+    const source = createHubCatalogSource(resolverFor(hub.url));
+    const provider = createHubProvider(source);
+
+    const result = await provider.list('agent', '不存在的关键词');
+
+    expect(result.entries).toHaveLength(0);
+    expect(result.total).toBe(1);
+  });
+
+  it('opts.fresh 绕 TTL 强制重拉（弹窗「刷新」入口——TTL 内仍发网络请求）', async () => {
+    hub = await startMockHub(jsonResponder(200, catalogPayload()));
+    const source = createHubCatalogSource(resolverFor(hub.url));
+    const provider = createHubProvider(source);
+
+    await provider.list('agent');
+    expect(hub.requests).toHaveLength(1);
+
+    // TTL 内普通 load 零网络；fresh 走 loadFresh 再拉一次
+    await provider.list('agent');
+    expect(hub.requests).toHaveLength(1);
+    await provider.list('agent', undefined, undefined, { fresh: true });
+    expect(hub.requests).toHaveLength(2);
+  });
+
+  it('fresh 拉取失败 → 回落快照不写降级（degraded=false，快照条目仍可用）', async () => {
+    // 同一 hub 的应答可翻转：首拉 200 建立 lastGood，随后 500 逼 loadFresh 失败
+    let respondOk = true;
+    hub = await startMockHub((req, res) => {
+      (respondOk ? jsonResponder(200, catalogPayload()) : jsonResponder(500, { error: 'boom' }))(req, res);
+    });
+    const source = createHubCatalogSource(resolverFor(hub.url));
+    const provider = createHubProvider(source);
+
+    await provider.list('agent');
+    respondOk = false;
+    const result = await provider.list('agent', undefined, undefined, { fresh: true });
+
+    expect(result.degraded).toBe(false);
+    expect(result.entries).toHaveLength(1);
+  });
+});

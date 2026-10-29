@@ -59,10 +59,17 @@ vi.mock('../../src/main/agent/crud', () => ({
   // P2.2 Task 5：卸载级联 helper——返回空名单（IPC 路由层只锁调用事实，
   // 真实级联语义由 tests/agent/crud-remove-mcp-refs.test.ts 真 DB 覆盖）
   removeMcpRefsFromAgents: vi.fn(() => []),
+  // library-store-split：registryList builtin 分支直连 listMarketplaceResources →
+  // fromCatalogItem 消费 listAgentDefinitions（builtin agent 启用态）——
+  // mock 须提供该导出（空表仿真）
+  listAgentDefinitions: vi.fn(() => []),
 }));
+// listInstalled 同因 fromCatalogItem 被消费（已装判定）——按用例覆写
+const { installerListInstalled } = vi.hoisted(() => ({ installerListInstalled: vi.fn() }));
 vi.mock('../../src/main/marketplace/installer', () => ({
   installPackage: vi.fn(),
   uninstallPackage: vi.fn(),
+  listInstalled: installerListInstalled,
 }));
 
 // P2 Task 4：hub provider 模块整体 mock（真实行为由 tests/resource/hub/* 覆盖）。
@@ -149,6 +156,7 @@ vi.mock('../../src/main/marketplace/client', () => ({
 import { ipcMain } from 'electron';
 import { registerResourceHandlers } from '../../src/main/resource/ipc.handlers';
 import { listResources, resolveResourceById } from '../../src/main/resource/library';
+import { fetchCatalog } from '../../src/main/marketplace/client';
 import { deleteRegistered, registerMcpDefinition } from '../../src/main/mcp/host-manager';
 import { deleteCustomSkill, uploadSkillZip } from '../../src/main/skill/zip-uploader';
 import {
@@ -434,25 +442,33 @@ describe('registerResourceHandlers', () => {
     expect(providers[2]!.types).toEqual(['agent', 'mcp', 'skill', 'plugin']);
   });
 
-  it('resource:registryList builtin 分支：marketplace 源 + 前端同款过滤排序映射（hasMore 恒 false）', async () => {
-    const items = [
-      {
-        id: 'marketplace-mcp-installed', type: 'mcp', source: 'marketplace', slug: 'installed',
-        name: '已装服务', description: 'd1', installed: true, installable: false,
-        marketplace: { author: 'a', readme: 'r', downloadUrl: '', checksum: '', verificationStatus: 'community', tags: ['t'], category: 'c1' },
-      },
-      {
-        id: 'marketplace-mcp-fs', type: 'mcp', source: 'marketplace', slug: 'fs-tool',
-        name: 'File System', description: '文件系统', installed: false, installable: true,
-        marketplace: { author: 'a', readme: 'r', downloadUrl: '', checksum: '', verificationStatus: 'community', tags: [], category: 'c2' },
-      },
-      {
-        id: 'marketplace-mcp-other', type: 'mcp', source: 'marketplace', slug: 'other',
-        name: 'Other', description: '无关条目', installed: false, installable: true,
-        marketplace: { author: 'a', readme: 'r', downloadUrl: '', checksum: '', verificationStatus: 'community', tags: [], category: 'c3' },
-      },
-    ];
-    (listResources as ReturnType<typeof vi.fn>).mockResolvedValueOnce(items);
+  it('resource:registryList builtin 分支：catalog 快照直连（断言迁移——library-store-split 起不经收窄后的 listResources）+ 过滤排序映射 + total', async () => {
+    const snapshot = {
+      version: '1.0',
+      updatedAt: '2026-10-29',
+      items: [
+        {
+          id: 'catalog-mcp-installed', type: 'mcp', slug: 'installed', name: '已装服务',
+          version: '1', author: 'a', description: 'd1', readme: 'r', tags: ['t'], category: 'c1',
+          iconEmoji: '', verificationStatus: 'community', downloadUrl: 'http://x/installed.zip', checksum: 'x', sizeBytes: 0, installCount: 0,
+        },
+        {
+          id: 'catalog-mcp-fs', type: 'mcp', slug: 'fs-tool', name: 'File System',
+          version: '2', author: 'a', description: '文件系统', readme: 'r', tags: [], category: 'c2',
+          iconEmoji: '', verificationStatus: 'community', downloadUrl: 'http://x/fs.zip', checksum: 'x', sizeBytes: 0, installCount: 0,
+        },
+        {
+          id: 'catalog-skill-other', type: 'skill', slug: 'other', name: 'Other',
+          version: '1', author: 'a', description: '无关类型', readme: 'r', tags: [], category: 'c3',
+          iconEmoji: '', verificationStatus: 'community', downloadUrl: 'http://x/other.zip', checksum: 'x', sizeBytes: 0, installCount: 0,
+        },
+      ],
+    };
+    (fetchCatalog as ReturnType<typeof vi.fn>).mockResolvedValueOnce(snapshot);
+    // 已装行：catalog-mcp-installed（fromCatalogItem 据此置 installed/installedVersion）
+    installerListInstalled.mockReturnValue([
+      { itemId: 'catalog-mcp-installed', itemType: 'mcp', version: '1', cachePath: '' },
+    ]);
     const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
     const listCall = calls.find((c: unknown[]) => c[0] === 'resource:registryList');
     const handler = listCall![1] as (
@@ -461,27 +477,33 @@ describe('registerResourceHandlers', () => {
       type: string,
       query?: string,
       page?: number,
-    ) => Promise<{ entries: Array<{ id: string; tags: string[]; category?: string }>; degraded: boolean; hasMore: boolean }>;
+    ) => Promise<{
+      entries: Array<{ id: string; tags: string[]; category?: string }>;
+      degraded: boolean; hasMore: boolean; total?: number;
+    }>;
     const result = await handler({}, 'builtin', 'mcp', 'file', 1);
-    expect(listResources).toHaveBeenCalledWith({ type: 'mcp', source: 'marketplace' });
+    expect(fetchCatalog).toHaveBeenCalled();
+    expect(listResources).not.toHaveBeenCalled();
     expect(result.degraded).toBe(false);
     // builtin 是本地全量目录，无服务端分页——page 参数被忽略且 hasMore 恒 false
     expect(result.hasMore).toBe(false);
-    // 「file」只命中 File System（name 模糊）；installed 排序垫底语义由下方无 query 用例覆盖
-    expect(result.entries.map((e) => e.id)).toEqual(['marketplace-mcp-fs']);
+    // total = 该类型目录快照总数（搜索前口径）
+    expect(result.total).toBe(2);
+    // 「file」只命中 File System（name 模糊）
+    expect(result.entries.map((e) => e.id)).toEqual(['marketplace-mcp-fs-tool']);
     expect(result.entries[0]!.tags).toEqual([]);
     expect(result.entries[0]!.category).toBe('c2');
 
-    // 无 query：全量返回且未安装在前、已安装垫底（与 renderer catalog provider 同语义）
-    (listResources as ReturnType<typeof vi.fn>).mockResolvedValueOnce(items);
+    // 无 query：全量返回且未安装在前、已装垫底（与 renderer catalog provider 同语义）
+    (fetchCatalog as ReturnType<typeof vi.fn>).mockResolvedValueOnce(snapshot);
     const all = await handler({}, 'builtin', 'mcp');
     expect(all.entries.map((e) => e.id)).toEqual([
-      'marketplace-mcp-fs', 'marketplace-mcp-other', 'marketplace-mcp-installed',
+      'marketplace-mcp-fs-tool', 'marketplace-mcp-installed',
     ]);
     expect(all.hasMore).toBe(false);
   });
 
-  it('resource:registryList hub 分支委托对应 provider.list（query / page 透传 + hasMore 透出）', async () => {
+  it('resource:registryList hub 分支委托对应 provider.list（query / page / opts 透传 + hasMore 透出）', async () => {
     smitheryList.mockResolvedValueOnce({ entries: [], degraded: false, hasMore: true });
     const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
     const listCall = calls.find((c: unknown[]) => c[0] === 'resource:registryList');
@@ -491,9 +513,10 @@ describe('registerResourceHandlers', () => {
       type: string,
       query?: string,
       page?: number,
+      opts?: { fresh?: boolean },
     ) => Promise<unknown>;
-    const result = await handler({}, 'smithery', 'mcp', 'weather', 2);
-    expect(smitheryList).toHaveBeenCalledWith('mcp', 'weather', 2);
+    const result = await handler({}, 'smithery', 'mcp', 'weather', 2, { fresh: true });
+    expect(smitheryList).toHaveBeenCalledWith('mcp', 'weather', 2, { fresh: true });
     expect(result).toEqual({ entries: [], degraded: false, hasMore: true });
   });
 
@@ -608,6 +631,27 @@ describe('registerResourceHandlers', () => {
       appVersion: '2.1.0-test',
       workspaceId: undefined,
     });
+  });
+
+  it('resource:install marketplace 未装条目（library 查不到）→ id 反解进安装链（library-store-split：获取弹窗安装主路径兜底）', async () => {
+    // 收窄后未装 marketplace 条目不在 library——resolve 返回 null，走 id 反解
+    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
+    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
+    await handler({}, 'marketplace-skill-remote');
+    // catalog 按 slug+type 反查原 MarketplaceItem 传入 installPackage（id 是 catalog id）
+    expect(installPackage).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'catalog-id-remote', type: 'skill', slug: 'remote' }),
+    );
+  });
+
+  it('resource:install marketplace 未装条目 catalog 反查不到 → 人话错误', async () => {
+    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
+    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
+    await expect(handler({}, 'marketplace-skill-nope')).rejects.toThrow(/未找到 slug=nope/);
   });
 
   it('resource:install 非 marketplace / 非 hub 源仍抛「不支持 install 操作」', async () => {

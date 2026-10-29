@@ -35,7 +35,7 @@ describe('AddMenu', () => {
     expect(screen.queryByText('手动配置…')).toBeNull();
   });
 
-  it('Esc 收起（组③补齐——与 ExternalMarketplacePopover 同语义）', () => {
+  it('Esc 收起（组③补齐）', () => {
     render(<AddMenu label="添加服务器" items={items} />);
     fireEvent.click(screen.getByRole('button', { name: '添加服务器' }));
     fireEvent.keyDown(document, { key: 'Escape' });
@@ -44,18 +44,18 @@ describe('AddMenu', () => {
 });
 
 describe('AddMenu - 菜单项图标（P2.3 Task 4）', () => {
-  it('带 icon 的菜单项渲染 lucide 图标（16px / stroke 1.75），无 icon 项不受影响', () => {
+  it('带 icon 的菜单项渲染 lucide 图标（15px / stroke 1.75），无 icon 项不受影响', () => {
     const mixedItems = [
       { key: 'wizard', title: '新建智能体…', onSelect: vi.fn() },
       { key: 'template', title: '从模板创建…', icon: Sparkles, onSelect: vi.fn() },
     ];
     render(<AddMenu label="新建 / 导入" items={mixedItems} />);
     fireEvent.click(screen.getByRole('button', { name: '新建 / 导入' }));
-    // 带 icon 项：lucide svg（class lucide-sparkles）随项渲染，尺寸 16
+    // 带 icon 项：lucide svg（class lucide-sparkles）随项渲染，尺寸 15
     const iconItem = screen.getByText('从模板创建…').closest('button');
     const svg = iconItem?.querySelector('svg.lucide-sparkles');
     expect(svg).toBeTruthy();
-    expect(svg?.getAttribute('width')).toBe('16');
+    expect(svg?.getAttribute('width')).toBe('15');
     expect(svg?.getAttribute('stroke-width')).toBe('1.75');
     // 无 icon 项：项内无 svg
     const plainItem = screen.getByText('新建智能体…').closest('button');
@@ -63,5 +63,20 @@ describe('AddMenu - 菜单项图标（P2.3 Task 4）', () => {
     // 图标不改变点击语义
     fireEvent.click(screen.getByText('从模板创建…'));
     expect(mixedItems[1]!.onSelect).toHaveBeenCalled();
+  });
+});
+
+describe('AddMenu - 分组分隔线（library-store-split §B）', () => {
+  it('separatorBefore 项之前渲染 1px 分隔线；未标记项不渲染', () => {
+    const items = [
+      { key: 'local', title: '本地项', onSelect: vi.fn() },
+      { key: 'remote', title: '远端项', separatorBefore: true, onSelect: vi.fn() },
+    ];
+    const { container } = render(<AddMenu label="添加服务器" items={items} />);
+    fireEvent.click(screen.getByRole('button', { name: '添加服务器' }));
+    const menu = container.querySelector('[role="menu"]');
+    expect(menu).not.toBeNull();
+    const separators = menu!.querySelectorAll(':scope > div > .h-px.bg-border-subtle');
+    expect(separators).toHaveLength(1);
   });
 });

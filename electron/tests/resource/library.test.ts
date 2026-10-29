@@ -15,7 +15,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { listResources, resolveResourceById } from '../../src/main/resource/library';
 import type { ResourceItem } from '../../src/main/resource/types';
-
 const mockCatalog = {
   version: '1.0', updatedAt: '2026-08-11',
   items: [
@@ -40,9 +39,14 @@ vi.mock('../../src/main/resource/custom', () => ({
   ]),
 }));
 
-// mock marketplace/installer.listInstalled（catalog-adapter 用到）
+// mock marketplace/installer.listInstalled（catalog-adapter 用到）。
+// listInstalled 返回值按用例覆写（installed_packages 记账行形态：
+// itemId = catalog 的 MarketplaceItem.id）
+const installerMocks = vi.hoisted(() => ({
+  listInstalled: vi.fn(),
+}));
 vi.mock('../../src/main/marketplace/installer', () => ({
-  listInstalled: vi.fn(() => []),
+  listInstalled: installerMocks.listInstalled,
   installPackage: vi.fn(),
   uninstallPackage: vi.fn(),
 }));
@@ -74,6 +78,8 @@ const { hubInstallMocks } = vi.hoisted(() => ({
 vi.mock('../../src/main/resource/hub-install', () => hubInstallMocks);
 
 beforeEach(() => {
+  installerMocks.listInstalled.mockReset();
+  installerMocks.listInstalled.mockReturnValue([]);
   skillZipMocks.listInstalled.mockReset();
   skillZipMocks.listInstalled.mockReturnValue([
     { slug: 'code-review', name: '代码审查', description: '预置审查技能', source: 'builtin', installedAt: null },
@@ -87,15 +93,20 @@ beforeEach(() => {
 });
 
 describe('listResources', () => {
-  it('合并三源：builtin + marketplace + custom', async () => {
+  it('合并三源：builtin + marketplace + custom（断言迁移——library-store-split：未装 marketplace 条目收窄后不入列）', async () => {
     const items = await listResources();
-    // 4 项 = 1 catalog builtin(agent) + 1 marketplace(skill) + 1 本地预置 builtin(skill)
-    //       + 1 custom(mcp)——本地预置并入 builtin 源（v2.11）
-    expect(items).toHaveLength(4);
-    expect(items.map((i) => i.source).sort()).toEqual(['builtin', 'builtin', 'custom', 'marketplace']);
+    // 3 项 = 1 catalog builtin(agent) + 1 本地预置 builtin(skill) + 1 custom(mcp)
+    // ——marketplace(skill remote) 未装（listInstalled 空），收窄语义下剔除
+    expect(items).toHaveLength(3);
+    expect(items.map((i) => i.source).sort()).toEqual(['builtin', 'builtin', 'custom']);
   });
 
   it('本地预置 skill 并入 builtin 源（catalog 优先去重，custom 源条目忽略）', async () => {
+    // marketplace 'remote' 记一笔已装（itemId=catalog id）——去重语义（catalog 优先）
+    // 与收窄语义（已装 marketplace 保留）同时被本用例锁住
+    installerMocks.listInstalled.mockReturnValue([
+      { itemId: 'marketplace-1', itemType: 'skill', version: '1', cachePath: '' },
+    ]);
     const skills = await listResources({ type: 'skill' });
     // code-review（本地预置）出现在 builtin 源，四态正确
     const local = skills.find((i) => i.slug === 'code-review');
@@ -109,12 +120,40 @@ describe('listResources', () => {
       removable: false,
       name: '代码审查',
     });
-    // slug='remote' 与 marketplace 同名——catalog 优先，本地条目丢弃，不重复
+    // slug='remote' 与 marketplace 同名——catalog 优先，本地条目丢弃，不重复；
+    // 已装 marketplace 行保留（installedVersion = 记账版本）
     const remotes = skills.filter((i) => i.slug === 'remote');
     expect(remotes).toHaveLength(1);
     expect(remotes[0]!.source).toBe('marketplace');
+    expect(remotes[0]!.installed).toBe(true);
+    expect(remotes[0]!.installedVersion).toBe('1');
     // listInstalled 的 custom 源条目不属于 builtin 合并面（custom 走 custom.ts，本测试其 mock 无 skill）
     expect(skills.some((i) => i.slug === 'my-upload')).toBe(false);
+  });
+
+  it('library-store-split 收窄：已装远端出处条目恒在，未装远端条目一律剔除', async () => {
+    installerMocks.listInstalled.mockReturnValue([
+      { itemId: 'marketplace-1', itemType: 'skill', version: '1', cachePath: '' },
+    ]);
+    hubInstallMocks.listHubCatalogResources.mockResolvedValue([
+      { id: 'hub-agent-installed', type: 'agent', source: 'hub', slug: 'h1', name: '已装 hub', description: 'd', installed: true, installable: false, removable: true, version: '1.0.0' },
+      { id: 'hub-agent-catalog-only', type: 'agent', source: 'hub', slug: 'h2', name: '未装 hub 目录项', description: 'd', installed: false, installable: true, removable: false, version: '1.0.0' },
+    ]);
+    hubInstallMocks.listHubInstalledResources.mockReturnValue([
+      { id: 'smithery-mcp-weather', type: 'mcp', source: 'smithery', slug: '@owner/weather', name: 'weather', description: 'd', installed: true, installable: false, removable: true },
+    ] as ResourceItem[]);
+
+    const items = await listResources();
+    // builtin（恒在）+ custom（恒在）
+    expect(items.some((i) => i.id === 'builtin-agent-pm')).toBe(true);
+    expect(items.some((i) => i.id === 'custom-mcp-github')).toBe(true);
+    // 已装远端出处条目保留
+    expect(items.some((i) => i.id === 'hub-agent-installed')).toBe(true);
+    expect(items.some((i) => i.id === 'smithery-mcp-weather')).toBe(true);
+    expect(items.some((i) => i.id === 'marketplace-skill-remote')).toBe(true);
+    // 未装远端条目剔除（hub 目录项 / marketplace catalog 项均不出现）
+    expect(items.some((i) => i.id === 'hub-agent-catalog-only')).toBe(false);
+    expect(items.every((i) => i.installed)).toBe(true);
   });
 
   it('filter.type 只返回对应类型', async () => {

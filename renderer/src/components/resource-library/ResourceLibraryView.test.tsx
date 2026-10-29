@@ -58,6 +58,8 @@ const mockApi = {
     onResourcePublished: hubOnResourcePublished,
     onResourceUnpublished: hubOnResourceUnpublished,
     unpublishResource: hubUnpublishResource,
+    // FetchDialog 订阅安装进度（library-store-split）
+    onInstallProgress: vi.fn(() => () => undefined),
   },
 };
 
@@ -120,14 +122,36 @@ describe('ResourceLibraryView（三页壳）', () => {
     expect(screen.getByRole('button', { name: '添加服务器' })).toBeTruthy();
   });
 
-  it('MCP 页下拉含三条本地路径，无「从网络获取」（P2.3 Task 1 单态）', () => {
+  it('MCP 页下拉：三条本地路径 + 远端组三项（hub 置顶 → 网络市场 → Smithery）；无「从网络获取」（断言迁移——library-store-split §2.2）', () => {
     render(<ResourceLibraryView />);
     fireEvent.click(screen.getByRole('button', { name: /MCP/ }));
     fireEvent.click(screen.getByRole('button', { name: '添加服务器' }));
     expect(screen.getByText('快速创建…')).toBeTruthy();
     expect(screen.getByText('导入 JSON…')).toBeTruthy();
     expect(screen.getByText('导入 DXT / MCPB 包')).toBeTruthy();
+    expect(screen.getByText('从 momo-hub 获取…')).toBeTruthy();
+    expect(screen.getByText('从网络市场获取…')).toBeTruthy();
+    expect(screen.getByText('从 Smithery 获取…')).toBeTruthy();
     expect(screen.queryByText('从网络获取…')).toBeNull();
+  });
+
+  it('点击远端组 hub 项 → FetchDialog 挂载（hub 源 × 当前类型页）；关闭卸载', async () => {
+    const registryList = vi.fn(async () => ({ entries: [], degraded: false, hasMore: false }));
+    (window as unknown as { api: Record<string, unknown> }).api = {
+      ...(window as unknown as { api: Record<string, unknown> }).api,
+      resource: {
+        ...((window as unknown as { api: { resource: Record<string, unknown> } }).api.resource),
+        registryList,
+      },
+    };
+    render(<ResourceLibraryView />);
+    fireEvent.click(screen.getByRole('button', { name: '新建 / 导入' }));
+    fireEvent.click(screen.getByText('从 momo-hub 获取…'));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.getAttribute('aria-label')).toBe('从 momo-hub 获取智能体');
+    await waitFor(() => expect(registryList).toHaveBeenCalledWith('hub', 'agent', undefined, 1, undefined));
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('持久化恢复上次激活页', () => {
@@ -200,12 +224,15 @@ describe('DXT/MCPB 导入入口', () => {
 // 收敛为：列表卡「启用」按钮（ResourceCard 按 builtin.agentEnabled 渲染）→
 // openPresetDialog（builtin-<slug> def 反查）→ EnablePresetDialog。
 describe('预置启用链路（菜单入口已删）', () => {
-  it('Agent 页「＋」菜单无「启用预置库」；仅剩新建智能体 / 导入 YAML 两项', () => {
+  it('Agent 页「＋」菜单无「启用预置库」；本地两项 + 远端组（hub / 网络市场）', () => {
     render(<ResourceLibraryView />);
     fireEvent.click(screen.getByRole('button', { name: '新建 / 导入' }));
     expect(screen.queryByText('启用预置库')).toBeNull();
     expect(screen.getByText('新建智能体…')).toBeTruthy();
     expect(screen.getByText('导入 YAML 文件…')).toBeTruthy();
+    expect(screen.getByText('从 momo-hub 获取…')).toBeTruthy();
+    expect(screen.getByText('从网络市场获取…')).toBeTruthy();
+    expect(screen.queryByText('从 Smithery 获取…')).toBeNull();
   });
 
   it('builtin agent 行「启用」→ def 反查（agent.list）→ EnablePresetDialog（enable 模式）', async () => {
