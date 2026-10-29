@@ -14,6 +14,7 @@
 // 且提示快照仍在 hub 存档可重试。
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
+import { rpcErrorMessage } from '../lib/rpc-error';
 import type {
   HubMirrorResultEvent,
   HubSnapshotBuildUploadResult,
@@ -161,13 +162,15 @@ export const useHubMirrorStore = create<HubMirrorState>((set, get) => {
         });
       }, MIRROR_RESULT_TIMEOUT_MS);
     } catch (err) {
-      // 第一段失败：hub 人话（node_offline/not_found/mirror_in_progress/网络）直呈
+      // 第一段失败：hub 人话（node_offline/not_found/mirror_in_progress/网络）直呈；
+      // M4.1 coded 后剥 `[code]` 传输前缀；result.code 维持 'first_stage'（MirrorWizard
+      // 标题分支消费该判别值，协议码不越权改写两段式结果域）
       set({
         execStatus: 'failed',
         result: {
           ok: false,
           code: 'first_stage',
-          message: err instanceof Error ? err.message : String(err),
+          message: rpcErrorMessage(err),
         },
       });
     }
@@ -234,6 +237,8 @@ export const useHubMirrorStore = create<HubMirrorState>((set, get) => {
           },
         });
       } catch (err) {
+        // snapshotBuildUpload 非 RPC 通道（本地构建 + HTTP 直传，错误不携协议码），
+        // 无 `[code]` 前缀可剥——M4.1 sweep 裁定保留原文（与 mirrorWorkspace 不同）
         set({
           buildStatus: 'error',
           buildError: err instanceof Error ? err.message : String(err),

@@ -90,6 +90,13 @@ describe('hub-group store 动作映射与重拉', () => {
     expect(mockApi.hub.groupList).toHaveBeenCalledTimes(1);
   });
 
+  it('M4.1 前缀剥除：RpcRemoteError 编码 `[code] 原文` rejection → error 呈现剥前缀人话，rethrow 保留原始前缀（错误身份不篡改）', async () => {
+    mockApi.hub.groupTransfer.mockRejectedValueOnce(new Error('[forbidden] 仅组长（leader）可执行该操作'));
+    await expect(useHubGroupStore.getState().transfer('g1', 'node-b'))
+      .rejects.toThrow('[forbidden] 仅组长（leader）可执行该操作');
+    expect(useHubGroupStore.getState().error).toBe('仅组长（leader）可执行该操作');
+  });
+
   it('列表拉取失败 → error 呈现（不吞错）；重试成功即清', async () => {
     mockApi.hub.groupList.mockRejectedValueOnce(new Error('hub 未连接，请稍后重试'));
     await useHubGroupStore.getState().load();

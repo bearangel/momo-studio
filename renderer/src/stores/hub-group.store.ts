@@ -15,6 +15,7 @@
 //   原样落 error 交面板呈现
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
+import { rpcErrorMessage } from '../lib/rpc-error';
 import type { HubGroupInfo } from '../ipc/types';
 
 interface HubGroupState {
@@ -68,7 +69,8 @@ export const useHubGroupStore = create<HubGroupState>((set) => {
       const { groups } = await ipc.hub.groupList();
       set({ groups, loading: false, error: null });
     } catch (err) {
-      set({ loading: false, error: err instanceof Error ? err.message : String(err) });
+      // hub 通道（M4.1 coded）：剥 `[code]` 传输前缀后呈现
+      set({ loading: false, error: rpcErrorMessage(err) });
     } finally {
       refreshing = false;
       if (rerunAfterRefresh) {
@@ -84,7 +86,7 @@ export const useHubGroupStore = create<HubGroupState>((set) => {
     } catch (err) {
       // 先重拉对账再呈现错误——refresh 成功分支清 error，顺序颠倒会覆盖错误呈现
       await refresh();
-      set({ error: err instanceof Error ? err.message : String(err) });
+      set({ error: rpcErrorMessage(err) });
       throw err;
     }
     await refresh();
