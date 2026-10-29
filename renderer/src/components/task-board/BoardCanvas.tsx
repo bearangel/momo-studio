@@ -55,7 +55,6 @@ import { Lane } from './Lane';
 import { useBoardDrop, dropConfirmContent } from './useBoardDrop';
 import { AssignTargetDialog } from './AssignTargetDialog';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
-import { Toast } from '../ui/Toast';
 
 /** PointerSensor 激活位移阈值（px）：小于该位移视为点击（选中卡片），不启动拖拽 */
 const DRAG_ACTIVATION_DISTANCE_PX = 5;
@@ -390,8 +389,6 @@ export function BoardCanvas({ tasks, groups, laneMode, selectedId, onSelect, wor
             ))}
           </div>
         )}
-        {/* DelegatedTaskCard 菜单动作（取消/重试/代答）toast 出口 */}
-        <Toast />
       </div>
     );
   }
@@ -470,8 +467,6 @@ export function BoardCanvas({ tasks, groups, laneMode, selectedId, onSelect, wor
           onCancel={drop.cancelAssign}
         />
       )}
-      {/* move 失败 toast:文案由主进程中文消息直出 */}
-      <Toast />
     </DndContext>
   );
 }

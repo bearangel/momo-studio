@@ -24,7 +24,7 @@ import { Button } from '../ui/Button';
 import { Checkbox } from '../ui/Checkbox';
 import { Input } from '../ui/Input';
 import { Select } from '../ui/Select';
-import { Toast, showToast } from '../ui/Toast';
+import { showToast } from '../ui/Toast';
 
 /** 状态下拉遍历序（task-status 词表单源，避免本文件另造清单漂移） */
 const ALL_STATUSES: TaskStatus[] = [
@@ -301,7 +301,6 @@ export function ArchivePanel({ open, onClose, workspaceId }: ArchivePanelProps) 
           </Select>
         </div>
       </Dialog>
-      <Toast />
     </>
   );
 }

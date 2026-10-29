@@ -15,9 +15,20 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { ArchivePanel } from './ArchivePanel';
+import { Toast } from '../ui/Toast';
 import { useTaskStore } from '../../stores/task.store';
 import { useGroupStore } from '../../stores/group.store';
 import type { GroupRow, TaskRow } from '../../ipc/types';
+
+/** 渲染面板 + Toast（M3.4 D1 起 toast 由 App 壳全局挂载，测试内模拟该挂载点） */
+function renderPanel(): void {
+  render(
+    <>
+      <ArchivePanel open onClose={() => undefined} workspaceId="ws-1" />
+      <Toast />
+    </>,
+  );
+}
 
 /** 归档时间基準（固定值保证断言稳定） */
 const T0 = 1_760_000_000_000;
@@ -113,7 +124,7 @@ describe('ArchivePanel', () => {
   });
 
   it('open 时按契约拉取归档任务 + 全量组，渲染归档行（短ID·标题/组名/状态徽标/归档时间）', async () => {
-    render(<ArchivePanel open onClose={() => undefined} workspaceId="ws-1" />);
+renderPanel();
 
     await waitFor(() => {
       expect(mockApi.task.list).toHaveBeenCalledWith({
@@ -140,12 +151,12 @@ describe('ArchivePanel', () => {
 
   it('空数据渲染空态文案', async () => {
     mockApi.task.list.mockResolvedValue([]);
-    render(<ArchivePanel open onClose={() => undefined} workspaceId="ws-1" />);
+renderPanel();
     expect(await screen.findByText('暂无归档任务')).toBeInTheDocument();
   });
 
   it('单条恢复：调 ipc.task.unarchive → 行消失、其余保留、store.tasks 追加恢复行', async () => {
-    render(<ArchivePanel open onClose={() => undefined} workspaceId="ws-1" />);
+renderPanel();
     await screen.findByText(/归档任务甲/);
 
     fireEvent.click(within(rowOf('归档任务甲')).getByRole('button', { name: '恢复' }));
@@ -162,7 +173,7 @@ describe('ArchivePanel', () => {
   });
 
   it('勾选两条 → 批量恢复按列表序逐条 unarchive，已选计数归零', async () => {
-    render(<ArchivePanel open onClose={() => undefined} workspaceId="ws-1" />);
+renderPanel();
     await screen.findByText(/归档任务甲/);
 
     fireEvent.click(within(rowOf('归档任务甲')).getByRole('checkbox'));
@@ -198,7 +209,7 @@ describe('ArchivePanel', () => {
       activeRows = [{ ...T_IN_G1_A, archivedAt: null }, { ...T_IN_G1_B, archivedAt: null }];
       return mkGroup({ ...GROUPS_ALL[0]!, archivedAt: null });
     });
-    render(<ArchivePanel open onClose={() => undefined} workspaceId="ws-1" />);
+renderPanel();
     await screen.findByText(/归档任务甲/);
 
     fireEvent.change(screen.getByLabelText('恢复整组'), { target: { value: 'g-1' } });
@@ -222,7 +233,7 @@ describe('ArchivePanel', () => {
 
   it('恢复整组失败：toast 提示且行保留（错误路径）', async () => {
     mockApi.taskGroup.unarchive.mockRejectedValue(new Error('组不存在'));
-    render(<ArchivePanel open onClose={() => undefined} workspaceId="ws-1" />);
+renderPanel();
     await screen.findByText(/归档任务甲/);
 
     fireEvent.change(screen.getByLabelText('恢复整组'), { target: { value: 'g-1' } });
@@ -236,7 +247,7 @@ describe('ArchivePanel', () => {
   });
 
   it('恢复整组候选只列「还有归档任务的已归档组」', async () => {
-    render(<ArchivePanel open onClose={() => undefined} workspaceId="ws-1" />);
+renderPanel();
     await screen.findByText(/归档任务甲/);
 
     const select = screen.getByLabelText('恢复整组') as HTMLSelectElement;
@@ -245,7 +256,7 @@ describe('ArchivePanel', () => {
   });
 
   it('过滤：搜索框命中标题、组 select、状态 select 三维 AND 叠加', async () => {
-    render(<ArchivePanel open onClose={() => undefined} workspaceId="ws-1" />);
+renderPanel();
     await screen.findByText(/归档任务甲/);
 
     // 搜索：只留「乙」
@@ -264,7 +275,7 @@ describe('ArchivePanel', () => {
 
   it('单条恢复失败：toast 提示且行保留', async () => {
     mockApi.task.unarchive.mockRejectedValue(new Error('任务不存在'));
-    render(<ArchivePanel open onClose={() => undefined} workspaceId="ws-1" />);
+renderPanel();
     await screen.findByText(/归档任务甲/);
 
     fireEvent.click(within(rowOf('归档任务甲')).getByRole('button', { name: '恢复' }));

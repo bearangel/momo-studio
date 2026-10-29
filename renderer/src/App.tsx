@@ -29,6 +29,7 @@ import { BrowserWaitReleasePrompt } from './components/workspace/BrowserWaitRele
 import { CenterPromptLayer } from './components/notices/CenterPromptLayer';
 import { BrowserCloseConfirmCard } from './components/notices/BrowserCloseConfirmCard';
 import { NoticeStack } from './components/notices/NoticeStack';
+import { Toast } from './components/ui/Toast';
 import { ipc } from './ipc/client';
 
 export function App() {
@@ -174,6 +175,10 @@ export function App() {
         <BrowserWaitReleasePrompt />
         <BrowserCloseConfirmCard />
       </CenterPromptLayer>
+      {/* Toast 全局唯一挂载点（M3.4 D1）：showToast 写模块级单例 store，多处挂载
+          会重复渲染同一条——故在 App 壳挂载一次，各视图（资源库/看板/会话…）只调
+          showToast 不再各自挂载；fixed 底部居中定位与挂载点 DOM 位置无关 */}
+      <Toast />
     </>
   );
 }
