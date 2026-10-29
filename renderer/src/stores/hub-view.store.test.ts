@@ -317,6 +317,25 @@ describe('M3.2 groupId 透传（铁律 5：路由目标用当前上下文）', (
     const last = vi.mocked(api.hub.viewWorkspace).mock.calls.at(-1)![0] as Record<string, unknown>;
     expect('groupId' in last).toBe(false);
   });
+
+  // M4.2 订阅链验证（spec §2.3）：subscribe/重订/退订三路全走 groupSeg——
+  // refreshReplay 的「先退订再重订」与 disconnectLive 显式断开也不例外
+  it('refreshReplay 重订与 disconnectLive 断开 → unsubscribe/subscribe 载荷一律携带 groupId', async () => {
+    wireFaithfulMessages({ events: [ev(1), ev(2)] });
+    useHubViewStore.getState().openPanel({
+      targetNodeId: 'node-b', targetName: 'studio-mini',
+      workspaces: [{ id: 'ws-1', name: 'product-dev' }], groupId: 'g-dev',
+    });
+    await vi.waitFor(() => expect(useHubViewStore.getState().overview).not.toBeNull());
+    await enterReplay(2);
+
+    await useHubViewStore.getState().refreshReplay();
+    expect(api.hub.viewUnsubscribe).toHaveBeenLastCalledWith({ targetNodeId: 'node-b', sessionId: 'sess-1', groupId: 'g-dev' });
+    expect(api.hub.viewSubscribe).toHaveBeenLastCalledWith({ targetNodeId: 'node-b', sessionId: 'sess-1', groupId: 'g-dev' });
+
+    await useHubViewStore.getState().disconnectLive();
+    expect(api.hub.viewUnsubscribe).toHaveBeenLastCalledWith({ targetNodeId: 'node-b', sessionId: 'sess-1', groupId: 'g-dev' });
+  });
 });
 
 describe('M3.2 openRemotePick 远端清单前置步', () => {

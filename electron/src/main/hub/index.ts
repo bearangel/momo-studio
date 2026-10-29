@@ -607,11 +607,17 @@ function startClient(
       // 工作组事件桥（M2b）：group.changed → hub:groupChanged（载荷挑字段，见桥内注释）
       bridgeGroupChanged(evt, broadcast);
       // view.appended（M2e T14 leader 侧）：hub 定向推的尾部增量 → 查看面板实时追加。
-      // 载荷挑字段（协议 ViewAppendedEvent 形状，异形载荷丢弃——presence 桥同款纪律）
+      // 载荷挑字段（协议 ViewAppendedEvent 形状，异形载荷丢弃——presence 桥同款纪律）。
+      // M4.2（1.6.0）：可选 groupId 透传——显式组订阅的锚定记录随推送带出（旧 hub
+      // 不发此键 → 载荷零变化；renderer 面板单开不按它分叉，类型面透传消费）
       if (evt.method === EVT.viewAppended) {
-        const p = evt.payload as { sessionId?: unknown; events?: unknown };
+        const p = evt.payload as { sessionId?: unknown; events?: unknown; groupId?: unknown };
         if (typeof p.sessionId === 'string' && Array.isArray(p.events)) {
-          broadcast('hub:viewAppended', { sessionId: p.sessionId, events: p.events });
+          broadcast('hub:viewAppended', {
+            sessionId: p.sessionId,
+            events: p.events,
+            ...(typeof p.groupId === 'string' ? { groupId: p.groupId } : {}),
+          });
         }
       }
     },
