@@ -49,7 +49,8 @@ function getSnapshot(): ToastEntry | null {
   return currentToast;
 }
 
-/** 底部居中通知条:消费方挂载一次,内容由 showToast 驱动 */
+/** 底部居中通知条:内容由 showToast 驱动;App 壳全局唯一挂载(M3.4 D1),
+ *  视图组件只调 showToast 不再各自挂载——单例 store 多处挂载会重复渲染同一条 */
 export function Toast(): ReactNode {
   const toast = useSyncExternalStore(subscribe, getSnapshot);
 

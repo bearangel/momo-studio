@@ -146,7 +146,11 @@ async function seedMember(wsId: string, id: string, name: string, opts: SeedDefO
 }
 
 /** installed_packages 落一条 hub 记账行（item_id = `hub:{slug}`，M1 §6.2 形态） */
-function seedHubAccounting(itemType: 'agent' | 'skill' | 'mcp' | 'plugin', slug: string): void {
+function seedHubAccounting(
+  itemType: 'agent' | 'skill' | 'mcp' | 'plugin',
+  slug: string,
+  version = '1.0.0',
+): void {
   getDb()
     .prepare(
       `INSERT INTO installed_packages (id, item_id, item_type, slug, version, cache_path, checksum)
@@ -157,7 +161,7 @@ function seedHubAccounting(itemType: 'agent' | 'skill' | 'mcp' | 'plugin', slug:
       `hub:${slug}`,
       itemType,
       slug,
-      '1.0.0',
+      version,
       path.join(tmpRoot, 'cache', slug),
       crypto.createHash('sha256').update(slug).digest('hex'),
     );
@@ -312,13 +316,14 @@ describe('buildWorkspaceSnapshot 清单全量', () => {
     // —— prefs ——
     expect(cfg.prefs.maxToolCalls).toBe(33);
 
-    // —— resources 补装清单：hub 记账四类各一席；builtin/无记账不占位 ——
+    // —— resources 补装清单：hub 记账四类各一席（B13：记账版本钉死——version
+    //     = 记账行 version 列，目标节点按该版本安装）；builtin/无记账不占位 ——
     expect(r.manifest.resources).toEqual(
       expect.arrayContaining([
-        { type: 'agent', slug: 'market-agent' },
-        { type: 'mcp', slug: 'hub-tools' },
-        { type: 'skill', slug: 'market-skill' },
-        { type: 'plugin', slug: 'hub-plugin' },
+        { type: 'agent', slug: 'market-agent', version: '1.0.0' },
+        { type: 'mcp', slug: 'hub-tools', version: '1.0.0' },
+        { type: 'skill', slug: 'market-skill', version: '1.0.0' },
+        { type: 'plugin', slug: 'hub-plugin', version: '1.0.0' },
       ]),
     );
     expect(r.manifest.resources).not.toContainEqual({ type: 'agent', slug: 'builtin-agent' });
@@ -454,8 +459,9 @@ describe('已发布 custom skill 走 hub 补装位（UC-P1-3）', () => {
 
     // slug 仍全量入清单（目标节点解析口径不变）
     expect(r.manifest.config.skills).toEqual(expect.arrayContaining(['pub-skill', 'keep-skill']));
-    // 已发布 → 占 resources 补装位（全新目标节点经 installResources 从 hub 落装并记账 hub:{slug}）
-    expect(r.manifest.resources).toContainEqual({ type: 'skill', slug: 'pub-skill' });
+    // 已发布 → 占 resources 补装位（B13：记账版本 1.0.0 钉死；全新目标节点经
+    // installResources 按该版本从 hub 落装并记账 hub:{slug}）
+    expect(r.manifest.resources).toContainEqual({ type: 'skill', slug: 'pub-skill', version: '1.0.0' });
     expect(r.manifest.resources).not.toContainEqual({ type: 'skill', slug: 'keep-skill' });
     // 不内嵌：归档无 skills/pub-skill/（双通道并存会让目标节点同 slug 两份分叉）
     const members = tarList(r.archivePath);
@@ -482,7 +488,7 @@ describe('已发布 custom skill 走 hub 补装位（UC-P1-3）', () => {
       expect.arrayContaining(['orphan-market-skill', 'accounted-market-skill', 'plain-custom-skill']),
     );
     // 有记账才占补装位；无记账 marketplace 不占（对 hub 仓发起安装必然失败）
-    expect(r.manifest.resources).toContainEqual({ type: 'skill', slug: 'accounted-market-skill' });
+    expect(r.manifest.resources).toContainEqual({ type: 'skill', slug: 'accounted-market-skill', version: '1.0.0' });
     expect(r.manifest.resources).not.toContainEqual({ type: 'skill', slug: 'orphan-market-skill' });
     // custom 无记账仍内嵌（回归锁）
     expect(tarList(r.archivePath)).toContain('skills/plain-custom-skill/SKILL.md');
@@ -513,11 +519,62 @@ describe('已发布 custom skill 走 hub 补装位（UC-P1-3）', () => {
     expect(skills.filter((s) => s === 'dup-skill')).toHaveLength(1);
     expect(skills.indexOf('dup-skill')).toBe(skills.indexOf('a-market') + 1);
     // resources 面零变化：collectSkills 内不去重，但 builder 收口处既有 type+slug 去重
-    // 仍只占一席（本改动不波及条数与顺序）
+    // 仍只占一席（B13：记账版本随行；本改动不波及条数与顺序）
     expect(r.manifest.resources.filter((x) => x.type === 'skill')).toEqual([
-      { type: 'skill', slug: 'dup-skill' },
+      { type: 'skill', slug: 'dup-skill', version: '1.0.0' },
     ]);
     expect(validateSnapshotManifest(r.manifest)).not.toBeNull();
+  });
+});
+
+// ── B13 记账版本三态（M3.4 §2.3.2——resources[].version 钉死语义）─────────
+
+describe('B13 记账版本三态（快照定型语义）', () => {
+  it('记账版本新（高于目录 latest 的形态同样成立）：ref.version = 记账行版本——不查目录、以记账为准（快照定型）', async () => {
+    const wsId = await mkWorkspace('B13 记账新空间');
+    seedMarketplaceSkillRow('b13-new-skill');
+    seedHubAccounting('skill', 'b13-new-skill', '2.5.0');
+
+    const r = await buildWorkspaceSnapshot(wsId);
+
+    // 快照定型语义：builder 只看记账面（无目录/latest 概念）——写记账版本，
+    // 目标节点按该版本安装（hub 目录 latest 即使更高也装钉死版）
+    expect(r.manifest.resources).toContainEqual({ type: 'skill', slug: 'b13-new-skill', version: '2.5.0' });
+    expect(validateSnapshotManifest(r.manifest)).not.toBeNull();
+  });
+
+  it('记账版本旧（低于目录 latest）：仍写记账版本——目标节点按旧版安装，不从 latest 升级', async () => {
+    const wsId = await mkWorkspace('B13 记账旧空间');
+    seedMarketplaceSkillRow('b13-old-skill');
+    seedHubAccounting('skill', 'b13-old-skill', '0.9.0');
+
+    const r = await buildWorkspaceSnapshot(wsId);
+
+    expect(r.manifest.resources).toContainEqual({ type: 'skill', slug: 'b13-old-skill', version: '0.9.0' });
+  });
+
+  it('记账行 version 空串（历史脏行兜底）→ ref 不带 version 键 = 旧 latest 语义（1.4 manifest 形态）', async () => {
+    const wsId = await mkWorkspace('B13 空版本空间');
+    seedMarketplaceSkillRow('b13-empty-skill');
+    seedHubAccounting('skill', 'b13-empty-skill', '');
+
+    const r = await buildWorkspaceSnapshot(wsId);
+
+    const ref = r.manifest.resources.find((x) => x.type === 'skill' && x.slug === 'b13-empty-skill');
+    expect(ref).toBeDefined();
+    expect('version' in ref!).toBe(false);
+    expect(validateSnapshotManifest(r.manifest)).not.toBeNull();
+  });
+
+  it('无记账 → 不占 resources 位（latest 兜底的极限形态：无引用即无版本面——既有锁回归）', async () => {
+    const wsId = await mkWorkspace('B13 无记账空间');
+    seedMarketplaceSkillRow('b13-orphan-skill');
+
+    const r = await buildWorkspaceSnapshot(wsId);
+
+    expect(r.manifest.resources).not.toContainEqual(
+      expect.objectContaining({ type: 'skill', slug: 'b13-orphan-skill' }),
+    );
   });
 });
 

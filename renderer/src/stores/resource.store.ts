@@ -31,6 +31,7 @@ import { hasKnownErrorPrefix } from '../lib/error-prefix';
 import type { ViewKey } from './ui.store';
 import type {
   HubResourcePublishedEvent,
+  HubResourceUnpublishedEvent,
   ResourceItem,
   ResourceFilter,
   ResourceType,
@@ -110,6 +111,10 @@ interface ResourceStore {
   /**
    * M1 Task 14：订阅 hub:resourcePublished（含本机与其他节点的发布），按
    * `${type}:${slug}` 记录最新版本到 hubUpdates。返回解订阅函数（View 卸载调用）。
+   * M3.4 §2.4：同挂 hub:resourceUnpublished 订阅——撤回事件清该 slug 的全部
+   * 角标键（事件载荷不带 type，键按 `:${slug}` 后缀匹配）+ 触发一次 load()
+   * 刷新目录（主进程目录源已剔除，renderer 列表源于 IPC 拉取——事件到时刷新
+   * 即可见；与 View 层下架成功路径的 load 幂等并存）。
    */
   initHubUpdates: () => () => void;
   /**
@@ -244,7 +249,7 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   },
 
   initHubUpdates: () => {
-    return ipc.hub.onResourcePublished((e: HubResourcePublishedEvent) => {
+    const offPublished = ipc.hub.onResourcePublished((e: HubResourcePublishedEvent) => {
       // FIX-2：hub 支持乱序发布、latest=semver max——事件只能把基线抬高。
       // 低版事件覆盖会让「可更新」指向旧版本，点更新实际装高版（错版本）。
       const key = `${e.type}:${e.slug}`;
@@ -252,6 +257,20 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
       if (current !== undefined && compareVersions(e.version, current) <= 0) return;
       set((s) => ({ hubUpdates: { ...s.hubUpdates, [key]: e.version } }));
     });
+    const offUnpublished = ipc.hub.onResourceUnpublished((e: HubResourceUnpublishedEvent) => {
+      // 撤回即时同步：清该 slug 的全部类型角标键 + 刷新一次目录（幂等——
+      // 目录已无此条目时 load 结果不变）
+      const suffix = `:${e.slug}`;
+      const next = Object.fromEntries(
+        Object.entries(get().hubUpdates).filter(([key]) => !key.endsWith(suffix)),
+      );
+      set({ hubUpdates: next });
+      void get().load();
+    });
+    return () => {
+      offPublished();
+      offUnpublished();
+    };
   },
 
   seedHubUpdates: (type, entries) => {

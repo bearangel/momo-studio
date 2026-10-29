@@ -30,6 +30,7 @@ import { GitImportDialog } from './GitImportDialog';
 import { InstallPluginZipDialog } from './InstallPluginZipDialog';
 import { RegisterPluginDirDialog } from './RegisterPluginDirDialog';
 import { PublishDialog } from './PublishDialog';
+import { showToast } from '../ui/Toast';
 import type { AgentDefinition, BuiltinPresetPreview, DefinitionImpact, McpConfigUpdateInput, ResourceItem, ResourceType } from '../../ipc/types';
 
 export function ResourceLibraryView() {
@@ -157,6 +158,21 @@ export function ResourceLibraryView() {
     void installResource(itemId);
   };
 
+  // 从 momo-hub 下架（M3.4 §2.4 B12）：armed-confirm 已在卡面完成，此处只执行——
+  // 成功 toast + 刷新目录（主进程事件也会触发一次 load，幂等）；失败人话 toast
+  //（404 → 「资源不存在或已撤回」——UC-6）
+  const handleUnpublishFromHub = (item: ResourceItem): void => {
+    void ipc.hub
+      .unpublishResource({ slug: item.slug })
+      .then(() => {
+        showToast(`已从 momo-hub 下架「${item.slug}」（已安装节点不受影响）`);
+        void load();
+      })
+      .catch((err: unknown) => {
+        showToast(err instanceof Error ? err.message : String(err));
+      });
+  };
+
   const closePresetDialog = (): void => {
     setPresetTarget(null);
     void load();
@@ -249,6 +265,7 @@ export function ResourceLibraryView() {
         onForkPreset={handleForkPreset}
         onDisableAgent={handleDisablePreset}
         onPublishToHub={(item) => setPublishTarget(item)}
+        onUnpublishFromHub={handleUnpublishFromHub}
       />
 
       {/* 弹窗组（Task 10/12/13 的新弹窗接线后追加在此） */}

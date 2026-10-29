@@ -195,18 +195,24 @@ export function assertSnapshotRedline(
 // hub 记账反查（installed_packages `hub:{slug}` 前缀——M1 §6.2 零 schema 记账）
 // ──────────────────────────────────────────────────────────────────────────
 
-/** hub 记账面：item_type → slug 集（含 plugin 反查键 = 插件 id）。 */
+/** hub 记账面：item_type → slug → 记账版本（含 plugin 反查键 = 插件 id）。
+ *  版本空串视为「无版本信息」（历史脏行兜底）——versionOf 返回 undefined。 */
 class HubAccounting {
-  private byType = new Map<string, Set<string>>();
+  private byType = new Map<string, Map<string, string>>();
 
-  add(type: string, slug: string): void {
-    const set = this.byType.get(type) ?? new Set<string>();
-    set.add(slug);
-    this.byType.set(type, set);
+  add(type: string, slug: string, version: string): void {
+    const bySlug = this.byType.get(type) ?? new Map<string, string>();
+    bySlug.set(slug, version);
+    this.byType.set(type, bySlug);
   }
 
   has(type: string, slug: string): boolean {
     return this.byType.get(type)?.has(slug) === true;
+  }
+
+  versionOf(type: string, slug: string): string | undefined {
+    const v = this.byType.get(type)?.get(slug);
+    return v !== undefined && v !== '' ? v : undefined;
   }
 }
 
@@ -214,10 +220,18 @@ function loadHubAccounting(): HubAccounting {
   // 查询单点收口（M2.3 T5 件2 / M2.4 T5 抽到 accounting.ts）：hub 记账面 SQL 统一走
   // loadHubAccountingSet（契约见其 JSDoc）——此前本模块私有同款查询，两处漂移风险
   const acc = new HubAccounting();
-  for (const [type, slugs] of loadHubAccountingSet()) {
-    for (const slug of slugs) acc.add(type, slug);
+  for (const [type, bySlug] of loadHubAccountingSet()) {
+    for (const [slug, version] of bySlug) acc.add(type, slug, version);
   }
   return acc;
+}
+
+/** 记账命中的引用条目（B13 快照定型语义）：记账版本在场则钉死 version——目标
+ *  节点按该版本安装/升级，而非 hub 目录 latest；记账行无版本信息（空串）不带
+ *  version 字段 = 旧 latest 语义（1.4 manifest 形态，消费端零变化）。 */
+function resourceRef(type: 'agent' | 'mcp' | 'skill' | 'plugin', slug: string, acc: HubAccounting): SnapshotResourceRef {
+  const version = acc.versionOf(type, slug);
+  return { type, slug, ...(version !== undefined ? { version } : {}) };
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -261,7 +275,7 @@ function splitAgentMember(
     return { member: { name: def.name, customDefinition: yaml }, resource: null };
   }
   if (!def.slug) return { member: { name: def.name }, resource: null };
-  const resource = acc.has('agent', def.slug) ? { type: 'agent' as const, slug: def.slug } : null;
+  const resource = acc.has('agent', def.slug) ? resourceRef('agent', def.slug, acc) : null;
   return { member: { name: def.name, slug: def.slug }, resource };
 }
 
@@ -279,7 +293,7 @@ function collectMcpEnabled(acc: HubAccounting): {
     if (!m.enabled || m.transport !== 'stdio' || m.url || m.source === 'plugin') continue;
     mcpEnabled.push(m.name);
     if (acc.has('mcp', m.name)) {
-      resources.push({ type: 'mcp', slug: m.name });
+      resources.push(resourceRef('mcp', m.name, acc));
     } else if (m.source === 'marketplace') {
       logger.warn('MCP 无 hub 记账（纯 marketplace 目录来源），目标节点可能无法解析', {
         name: m.name,
@@ -316,7 +330,7 @@ function collectSkills(acc: HubAccounting): {
       skills.push(s.slug);
     }
     if (acc.has('skill', s.slug)) {
-      resources.push({ type: 'skill', slug: s.slug });
+      resources.push(resourceRef('skill', s.slug, acc));
     } else if (s.source === 'custom') {
       embeddedDirs.push({ slug: s.slug, dir: path.join(getSkillsDir(), s.slug) });
     } else if (s.source === 'marketplace') {
@@ -346,7 +360,7 @@ function collectPlugins(workspaceId: string, acc: HubAccounting): {
     // 插件记账键：item_id = `hub:{插件id}`（安装侧 manifest.id === 目录 slug 锚定）
     if (acc.has('plugin', p.id)) {
       pluginsEnabled.push({ pluginId: p.id, slug: p.id });
-      resources.push({ type: 'plugin', slug: p.id });
+      resources.push(resourceRef('plugin', p.id, acc));
     } else {
       excludedPlugins.push(p.id);
       logger.warn('插件无 hub 记账（zip/dev 来源），不入快照启用清单', {

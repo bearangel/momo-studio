@@ -2723,6 +2723,18 @@ export interface HubResourcePublishedEvent {
   at: number;
 }
 
+/**
+ * hub:resourceUnpublished 推送载荷（协议 ResourceUnpublishedEvent 镜像——
+ * M3.4 §2.4 B12：撤回成功后 hub 广播全部在线节点；目录即刻不可见，已安装
+ * 节点不受影响，历史版本下载保留）。by = 执行撤回的节点名。
+ */
+export interface HubResourceUnpublishedEvent {
+  slug: string;
+  by: string;
+  /** 撤回时刻（ms） */
+  at: number;
+}
+
 /** hub:publishResource 入参的发布面元数据（全部可选——缺省由主进程从本地定义回填） */
 export interface HubPublishMeta {
   name?: string;
@@ -3153,6 +3165,13 @@ export interface HubApiSurface {
   forget(): Promise<void>;
   /** 发布本地资源到 momo-hub（四类；非 online / C3 越界 / hub 错误码均以人话 rejection 抛出） */
   publishResource(input: HubPublishResourceInput): Promise<HubPublishResult>;
+  /**
+   * 从 momo-hub 下架资源（M3.4 §2.4 B12）：目录即刻不可见，已安装节点不受影响；
+   * 404（资源不存在或已撤回）/ 未接入 / 连接失效均以人话 rejection 抛出（toast 消费）
+   */
+  unpublishResource(input: { slug: string }): Promise<void>;
+  /** resource.unpublished 推送订阅（撤回即时同步：store 清角标键 + 刷新目录） */
+  onResourceUnpublished(callback: (e: HubResourceUnpublishedEvent) => void): () => void;
   /** 工作组列表（仅自己所在的组；成员在线态由 hub presence 融合） */
   groupList(): Promise<HubGroupListResult>;
   /** 创建组（创建者即 leader） */

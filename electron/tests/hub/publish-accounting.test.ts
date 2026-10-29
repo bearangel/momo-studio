@@ -95,6 +95,21 @@ describe('recordPublishAccounting（四类发布回填 hub 记账）', () => {
     }
   });
 
+  it('loadHubAccountingSet 版本面（M3.4 B13）：type → slug → 记账行 version 列（含空串脏行照实透传；marketplace 行不入集）', () => {
+    recordPublishAccounting('skill', 'ver-skill', '2.5.0', 'a');
+    recordPublishAccounting('agent', 'ver-agent', '1.2.3', 'b');
+    // 历史脏行兜底形态：version 空串照实入集（builder 据此不带 version 字段）
+    seedRow('dirty-1', hubPackageItemId('ver-dirty'), 'mcp', 'ver-dirty', '', '');
+    // marketplace 本地行（无 hub: 前缀）不入集
+    seedRow('mkt-2', 'mkt-plain', 'skill', 'plain', '9.9.9', '');
+
+    const acc = loadHubAccountingSet();
+    expect(acc.get('skill')?.get('ver-skill')).toBe('2.5.0');
+    expect(acc.get('agent')?.get('ver-agent')).toBe('1.2.3');
+    expect(acc.get('mcp')?.get('ver-dirty')).toBe('');
+    expect(acc.get('skill')?.has('plain')).toBe(false);
+  });
+
   it('幂等升版：同 slug 同类型重复回填（升版本）单行更新不叠行', () => {
     for (const type of TYPES) {
       recordPublishAccounting(type, 'up-slug', '1.0.0', 'a');
@@ -207,7 +222,6 @@ describe('recordPublishAccounting（四类发布回填 hub 记账）', () => {
     const accSet = loadHubAccountingSet().get('skill') ?? new Set<string>();
     expect(accSet.has('superpowers')).toBe(true);
     expect(accSet.size).toBe(1);
-
     // 卸载方向一：卸 hub 行 → marketplace 行与缓存目录原样
     uninstallHubPackage('skill', 'superpowers');
     expect(rowsOf(hubPackageItemId('superpowers'), 'skill')).toHaveLength(0);

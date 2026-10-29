@@ -139,9 +139,11 @@ interface TypePageShellProps {
   onDisableAgent?: (id: string) => void;
   /** 发布到 momo-hub 入口（M2.2 Task 2 起 canPublishToHub 门控：custom 四类型 + marketplace 已装 skill）；PublishDialog 挂在 View 层 */
   onPublishToHub?: (item: ResourceItem) => void;
+  /** 从 momo-hub 下架入口（M3.4 §2.4）：仅 hub 来源卡渲染（门控在 ResourceCard）；toast 反馈在 View 层 */
+  onUnpublishFromHub?: (item: ResourceItem) => void;
 }
 
-export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPreset, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onTogglePlugin, onReloadPlugin, onForkPreset, onDisableAgent, onPublishToHub }: TypePageShellProps) {
+export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPreset, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onTogglePlugin, onReloadPlugin, onForkPreset, onDisableAgent, onPublishToHub, onUnpublishFromHub }: TypePageShellProps) {
   const {
     items, loading, error, installNotice, catalogDegraded, hubDegraded, hubUpdates, hubSeeded, sourceFilter, query,
     setSourceFilter, setQuery, deleteResource, load, loadCatalogStatus,
@@ -443,6 +445,7 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
                   onDisable={onDisableAgent}
                   onTogglePlugin={onTogglePlugin}
                   onPublishToHub={onPublishToHub}
+                  onUnpublishFromHub={onUnpublishFromHub}
                   hubEnrolled={hubEnrolled}
                   hubUpdates={hubUpdates}
                   hubSeeded={hubSeeded[item.type] === true}

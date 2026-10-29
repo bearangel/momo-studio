@@ -235,6 +235,12 @@ export interface InstallHubOptions {
   /** 安装作用域工作空间（plugin 链 enablement 单行落此 ws；缺省报错——与
    *  本地安装同语义：无作用域不装） */
   workspaceId?: string;
+  /**
+   * B13 钉死版本（镜像补装链专用——快照 manifest resources[].version 透传）：
+   * 在场时目标版本 = 该值而非目录 latest。仅带 version 的 manifest 触发升级
+   * （M2.3「不升级旧版」边界由此打开）；手动安装不传，latest 语义零变化。
+   */
+  pinnedVersion?: string;
 }
 
 /** installHubPackage 返回（renderer types.d.ts HubInstallResult 有镜像）：
@@ -264,6 +270,22 @@ export class HubCatalogStaleError extends Error {
     super(message);
     // 保持原型链（ES5 目标下继承内置 Error 的常规修正；本项目 target 较新，
     // 此行冗余但零副作用——instanceof 判定在两侧运行时均可靠）
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
+ * 钉死版本不可得专用错误（M3.4 B13）：manifest 钉死的 version 在 hub 目录
+ * versions 全集中不存在、或下载端点 404（版本行不存在/已撤回/blob 缺失）时抛。
+ * 语义：**该 pinned 版本无法取得**——镜像补装链按 instanceof 识别并跳过该
+ * 资源（记 unresolvedRefs，不中止整体——沿 HubCatalogStaleError 的软失败模式，
+ * spec §2.3「404 → 记 unresolvedRefs 不中止」）。
+ */
+export class HubPinnedVersionUnavailableError extends Error {
+  override readonly name = 'HubPinnedVersionUnavailableError';
+
+  constructor(message: string) {
+    super(message);
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
@@ -425,12 +447,36 @@ function makePhaseEmitter(type: ResourceType, slug: string): InstallPhaseListene
   };
 }
 
+/**
+ * 钉死版本探测（B13）：目录 meta 只带 latest 的 checksum——钉死版本的权威
+ * 校验和在下载端点响应头 X-Checksum-Sha256（hub blob 内容寻址单源，逐版本）。
+ * 轻量探测（headers 到手即取消 body，不落盘不耗流量）拿校验和；非 2xx /
+ * 头缺失 / 网络异常 → null（调用方映射 HubPinnedVersionUnavailableError——
+ * 「该 pinned 版本无法取得」软失败，与网络不可达的 stale 语义同走跳过路径）。
+ */
+async function probePinnedChecksum(
+  pinnedUrl: string,
+  headers: Record<string, string> | undefined,
+): Promise<string | null> {
+  let res: Response;
+  try {
+    res = await fetch(pinnedUrl, { headers, signal: AbortSignal.timeout(10_000) });
+  } catch {
+    return null;
+  }
+  // body 立即取消（undici 流式取消——只取响应头，不消费载荷）
+  await res.body?.cancel().catch(() => undefined);
+  if (!res.ok) return null;
+  const checksum = res.headers.get('x-checksum-sha256');
+  return checksum && checksum !== '' ? checksum : null;
+}
+
 export async function installHubPackage(
   type: ResourceType,
   slug: string,
   opts?: InstallHubOptions,
 ): Promise<HubInstallOutcome> {
-  const { item, stale, enrolled } = await findHubMarketplaceItem(type, slug);
+  const { item, meta, stale, enrolled, hubUrl } = await findHubMarketplaceItem(type, slug);
   // 判定矩阵（M2.4 T1，顺序：enrolled → stale → item → 已装行 → cmp）：
   //   ① !enrolled            → 现状「未找到条目」文案（不改）
   //   ② enrolled && !stale && !item → 现状「可能已下架」文案（不改）
@@ -438,6 +484,10 @@ export async function installHubPackage(
   //   ④ stale && item && 未装 → 照常安装（回落快照的下载链是真闸门）
   //   ⑤ stale && item && 已装 && cmp<=0 → 无法确认最新版本（禁止 alreadyLatest）
   //   ⑥ !stale && item       → 现状（cmp<=0 alreadyLatest 如实 / cmp>0 装新版）
+  // M3.4 B13：pinnedVersion 在场时 cmp 目标 = 钉死版本而非目录 latest——
+  // 已装 ≥ pinned → alreadyLatest（零动作）；已装 < pinned → 升级到 pinned。
+  // **镜像升级语义**：M2.3「不升级旧版」边界由此打开，且仅带 version 的 manifest
+  // 触发（pinnedVersion 缺省 = 旧 latest 语义，全部存量行为零变化）。
   if (!enrolled) {
     throw new Error(
       `momo-hub 目录中未找到 ${type} 条目「${slug}」（可能尚未接入 hub、hub 离线或该条目已下架）`,
@@ -453,15 +503,18 @@ export async function installHubPackage(
       `momo-hub 目录中未找到 ${type} 条目「${slug}」（可能尚未接入 hub、hub 离线或该条目已下架）`,
     );
   }
-  // 已装判定 semver 化（M2.3 T2 D3-2）：fresh 目录版本 ≤ 已装记账版本 →
+  const pinned = opts?.pinnedVersion;
+  const targetVersion = pinned ?? item.version;
+  // 已装判定 semver 化（M2.3 T2 D3-2）：目标版本 ≤ 已装记账版本 →
   // 如实返回「已是最新」零动作（缺段容忍：'1.0' == '1.0.0' 同样命中，不重装）；
   // 乱序/旧目录低版本不降级；版本前进才继续走安装链。
   const installedRow = listInstalled().find(
     (p) => p.itemId === hubPackageItemId(slug) && p.itemType === type,
   );
-  if (installedRow && compareVersions(item.version, installedRow.version) <= 0) {
+  if (installedRow && compareVersions(targetVersion, installedRow.version) <= 0) {
     // ⑤ 回落快照的「同版」不可信：hub 上可能已有新版——如实报「无法确认」，
     // 不得返回 alreadyLatest（否则卡面「可更新」角标与回执文案互相矛盾）。
+    // pinned 同守：目录回落时对已装 ≥ pinned 也不下结论，软失败留给镜像链跳过。
     if (stale) {
       throw new HubCatalogStaleError(
         '无法确认 momo-hub 上的最新版本（网络不可用），请稍后重试',
@@ -470,11 +523,30 @@ export async function installHubPackage(
     return { cachePath: installedRow.cachePath, alreadyLatest: true, version: installedRow.version };
   }
   const headers = await hubAuthHeaders();
+  // 钉死版本条目改写（B13）：version/downloadUrl/checksum 三点换为 pinned 口径——
+  // versions 全集预检（版本行不存在 → 软失败错误）+ 下载端点探测拿逐版本权威
+  // checksum（plugin 链强制 sha256 校验，目录 meta 的 latest checksum 不可用于旧版）。
+  let installItem = item;
+  if (pinned !== undefined && pinned !== item.version) {
+    if (!meta?.versions.includes(pinned)) {
+      throw new HubPinnedVersionUnavailableError(
+        `momo-hub 目录中 ${type}「${slug}」无版本 ${pinned}（版本行不存在或已撤回），无法按快照钉死版本安装`,
+      );
+    }
+    const pinnedUrl = `${hubUrl}/resources/${slug}/${pinned}/download`;
+    const checksum = await probePinnedChecksum(pinnedUrl, headers);
+    if (checksum === null) {
+      throw new HubPinnedVersionUnavailableError(
+        `momo-hub 资源「${slug}」版本 ${pinned} 下载不可得（404 或网络异常），无法按快照钉死版本安装`,
+      );
+    }
+    installItem = { ...item, version: pinned, checksum, downloadUrl: pinnedUrl };
+  }
   const onProgress = makePhaseEmitter(type, slug);
   try {
-    if (item.type === 'plugin') {
+    if (installItem.type === 'plugin') {
       const rec = await installPluginHubArchive(
-        item,
+        installItem,
         opts?.appVersion ?? '999.0.0',
         opts?.workspaceId ?? '',
         headers,
@@ -497,16 +569,23 @@ export async function installHubPackage(
         slug,
         rec.version,
         resolvePluginInstalledDir(rec.id, rec.version),
-        item.checksum,
+        installItem.checksum,
       );
       // done 拍在记账落库后（契约：done = 安装+记账全部完成）
       emitProgress({ stage: 'done', type, slug });
       return { cachePath: resolvePluginInstalledDir(rec.id, rec.version) };
     }
-    const result = await installPackage(item, undefined, headers, onProgress);
+    const result = await installPackage(installItem, undefined, headers, onProgress);
     emitProgress({ stage: 'done', type, slug });
     return result;
   } catch (err) {
+    // 钉死模式下的下载 404（探测后到下载之间的极窄竞态——版本行被撤等）：
+    // 转软失败错误，镜像链据此跳过不中止（spec §2.3「下载 404 → 记 unresolvedRefs」）
+    if (pinned !== undefined && err instanceof Error && /HTTP 404/.test(err.message)) {
+      throw new HubPinnedVersionUnavailableError(
+        `momo-hub 资源「${slug}」版本 ${pinned} 下载失败（404），无法按快照钉死版本安装`,
+      );
+    }
     // 失败终止拍：人话 message 随事件透传（worker 侧 UI 直接展示）；错误原样上抛
     emitProgress({
       stage: 'failed',

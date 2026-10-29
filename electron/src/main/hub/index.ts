@@ -14,6 +14,10 @@ import {
   registerTrustedDownloadOrigin,
   unregisterTrustedDownloadOrigin,
 } from '../marketplace/installer';
+import {
+  applyHubPublishedEventToCatalog,
+  applyHubUnpublishedEventToCatalog,
+} from '../resource/hub/momo-hub';
 import { EVT, type EventEnvelope, type RequestEnvelope, type ResponseEnvelope, type RpcErrorPayload } from './protocol';
 import { MIRROR_WIRE, type MirrorApplyPayload, type MirrorApplyOutcome } from './mirror-wire';
 import { applyMirrorSnapshot } from './mirror-applier';
@@ -538,11 +542,38 @@ function startClient(
         if (presenceSeed) presenceSeed = presenceSeed.filter((n) => n.nodeId !== p.nodeId);
       } else if (evt.method === EVT.resourcePublished) {
         // 发布成功广播（spec §3.3/§5）——六字段显式挑出（协议 ResourcePublishedEvent 形状，
-        // 不透传整个 payload 防信封杂字段渗入 renderer 契约）
-        const p = evt.payload as { slug: string; type: string; name: string; version: string; author: string; at: number };
-        broadcast('hub:resourcePublished', {
-          slug: p.slug, type: p.type, name: p.name, version: p.version, author: p.author, at: p.at,
-        });
+        // 不透传整个 payload 防信封杂字段渗入 renderer 契约；异形载荷整条丢弃——
+        // 目录缓存是持久消费面，垃圾不得入库，广播与合流同闸）。B10（M3.4 §2.3）：
+        // 同事件即时合并进主进程目录源（cache/lastGood upsert）——消「新发布最长
+        // 5min（TTL 盲窗）不可见」；全量拉取仍为权威路径，事件只做即时性。
+        const p = evt.payload as {
+          slug?: unknown; type?: unknown; name?: unknown; version?: unknown; author?: unknown; at?: unknown;
+        } | null;
+        if (
+          p !== null && typeof p === 'object' &&
+          typeof p.slug === 'string' && typeof p.name === 'string' &&
+          typeof p.version === 'string' && typeof p.author === 'string' && typeof p.at === 'number' &&
+          (p.type === 'agent' || p.type === 'mcp' || p.type === 'skill' || p.type === 'plugin')
+        ) {
+          broadcast('hub:resourcePublished', {
+            slug: p.slug, type: p.type, name: p.name, version: p.version, author: p.author, at: p.at,
+          });
+          applyHubPublishedEventToCatalog({
+            slug: p.slug, type: p.type, name: p.name, version: p.version, author: p.author, at: p.at,
+          });
+        }
+      } else if (evt.method === EVT.resourceUnpublished) {
+        // 撤回广播（M3.4 §2.3 B12，协议 1.5.0）：三字段挑出（ResourceUnpublishedEvent
+        // 形状，异形整条丢弃——同上纪律）→ 桥 renderer（hub:resourceUnpublished：
+        // renderer store 清角标键 + 刷新目录）+ B10 目录源剔除（撤回即时不可见）。
+        const p = evt.payload as { slug?: unknown; by?: unknown; at?: unknown } | null;
+        if (
+          p !== null && typeof p === 'object' &&
+          typeof p.slug === 'string' && typeof p.by === 'string' && typeof p.at === 'number'
+        ) {
+          broadcast('hub:resourceUnpublished', { slug: p.slug, by: p.by, at: p.at });
+          applyHubUnpublishedEventToCatalog({ slug: p.slug, by: p.by, at: p.at });
+        }
       } else if (evt.method === EVT.workspaceMirrored) {
         // 镜像完成组内广播（spec §3.2——组内皆可见谁被镜像到什么版本）。
         // RM-M21-7：广播同时累积镜像登记表（同组×同节点×同空间覆盖 snapshot_id）——

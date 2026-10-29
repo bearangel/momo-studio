@@ -52,7 +52,7 @@ vi.mock('../../src/main/logger', () => ({
 }));
 
 import { applyMirrorSnapshot } from '../../src/main/hub/mirror-applier';
-import { HubCatalogStaleError } from '../../src/main/resource/hub-install';
+import { HubCatalogStaleError, HubPinnedVersionUnavailableError } from '../../src/main/resource/hub-install';
 import { buildWorkspaceSnapshot } from '../../src/main/hub/snapshot-builder';
 import { agentManifestYaml } from '../../src/main/hub/publish';
 import type { MirrorApplierDeps } from '../../src/main/hub/mirror-applier';
@@ -569,6 +569,133 @@ describe('applyMirrorSnapshot 补装 stale 目录（M2.4 T1）', () => {
     // 中止语义：配置零写入（prefs 保持原值），stale 的软失败不掩盖真失败
     expect(getGlobalSettings().maxToolCalls).toBe(50);
     expect(listMembers(wsId).map((m) => m.agentName)).toEqual(['旧成员']);
+  });
+});
+
+// ── 5c. B13 钉死版本补装（M3.4 §2.3——resources[].version 镜像升级语义）───
+
+describe('applyMirrorSnapshot 钉死版本补装（B13）', () => {
+  /** 记录 pinned 参数的安装链替身（调用序 + 收到的钉死版本一并入账） */
+  function makePinnedDeps(archive: ArchiveFixture, opts: { unavailableOn?: string } = {}): MirrorApplierDeps & {
+    installLog: string[];
+  } {
+    const installLog: string[] = [];
+    const deps: MirrorApplierDeps & { installLog: string[] } = {
+      installLog,
+      fetchSnapshotArchive: async () => ({ bytes: archive.bytes, checksum: archive.checksum }),
+      installResource: async (type, slug, _workspaceId, pinnedVersion) => {
+        installLog.push(pinnedVersion === undefined ? `${type}/${slug}` : `${type}/${slug}@${pinnedVersion}`);
+        if (opts.unavailableOn === `${type}/${slug}`) {
+          throw new HubPinnedVersionUnavailableError(
+            `momo-hub 目录中 ${type}「${slug}」无版本 ${pinnedVersion}（版本行不存在或已撤回）`,
+          );
+        }
+        if (type === 'agent') {
+          saveAgentDefinition({
+            id: `def-${slug}`,
+            name: slug,
+            slug,
+            version: pinnedVersion ?? '1.0.0',
+            runtime: 'declarative',
+            systemPrompt: `你是 ${slug}`,
+            defaultTools: [],
+            source: 'marketplace',
+            description: '',
+            iconEmoji: '🤖',
+            defaultMcps: [],
+            defaultSkills: [],
+            workspaceId: null,
+            modelProviderId: null,
+            modelName: 'glm-5.3',
+          });
+        }
+      },
+    };
+    return deps;
+  }
+
+  function seedAccounting(itemType: 'agent' | 'skill' | 'mcp' | 'plugin', slug: string, version: string): void {
+    getDb()
+      .prepare(
+        `INSERT INTO installed_packages (id, item_id, item_type, slug, version, cache_path, checksum)
+         VALUES (?, ?, ?, ?, ?, '', '')`,
+      )
+      .run(randomUUID(), `hub:${slug}`, itemType, slug, version);
+  }
+
+  it('fresh（未装）+ version 在场 → installResource 收到 pinnedVersion，按钉死版安装', async () => {
+    const manifest = baseManifest({
+      resources: [{ type: 'agent', slug: 'pinned-agent', version: '1.5.0' }],
+    });
+    const archive = await makeArchive(manifest);
+    const deps = makePinnedDeps(archive);
+
+    const outcome = await applyMirrorSnapshot(applyPayload({ confirm: true }), deps);
+    expect(outcome.ok).toBe(true);
+    expect(deps.installLog).toEqual(['agent/pinned-agent@1.5.0']);
+    expect(outcome.ok && outcome.appliedResources).toEqual(['agent/pinned-agent']);
+  });
+
+  it('钉死版本不可得（HubPinnedVersionUnavailableError）→ 跳过入 unresolvedRefs，不中止其余资源', async () => {
+    const manifest = baseManifest({
+      resources: [
+        { type: 'agent', slug: 'ok-agent' },
+        { type: 'skill', slug: 'gone-skill', version: '0.9.0' },
+      ],
+    });
+    const archive = await makeArchive(manifest);
+    const deps = makePinnedDeps(archive, { unavailableOn: 'skill/gone-skill' });
+
+    const outcome = await applyMirrorSnapshot(applyPayload({ confirm: true }), deps);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(deps.installLog).toEqual(['agent/ok-agent', 'skill/gone-skill@0.9.0']);
+    expect(outcome.appliedResources).toEqual(['agent/ok-agent']);
+    // 沿 stale 跳过模式：软失败原因进 unresolvedRefs（含钉死版本定位）
+    expect(outcome.unresolvedRefs).toEqual([
+      'skill:gone-skill（钉死版本 0.9.0 不存在或已撤回，已跳过）',
+    ]);
+  });
+
+  it('记账 1.0.0 < pinned 1.5.0 → 升级调用（M2.3「不升级旧版」边界打开——仅带 version 的 manifest 触发）', async () => {
+    seedAccounting('skill', 'up-skill', '1.0.0');
+    const manifest = baseManifest({
+      resources: [{ type: 'skill', slug: 'up-skill', version: '1.5.0' }],
+    });
+    const archive = await makeArchive(manifest);
+    const deps = makePinnedDeps(archive);
+
+    const outcome = await applyMirrorSnapshot(applyPayload({ confirm: true }), deps);
+    expect(outcome.ok).toBe(true);
+    expect(deps.installLog).toEqual(['skill/up-skill@1.5.0']);
+  });
+
+  it('记账 2.0.0 ≥ pinned 1.5.0 → 跳过（alreadyLatest 语义——installResource 零调用）', async () => {
+    seedAccounting('skill', 'ahead-skill', '2.0.0');
+    const manifest = baseManifest({
+      resources: [{ type: 'skill', slug: 'ahead-skill', version: '1.5.0' }],
+    });
+    const archive = await makeArchive(manifest);
+    const deps = makePinnedDeps(archive);
+
+    const outcome = await applyMirrorSnapshot(applyPayload({ confirm: true }), deps);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(deps.installLog).toEqual([]);
+    expect(outcome.appliedResources).toEqual([]);
+  });
+
+  it('记账在场但 manifest 无 version → 旧跳过语义零变化（回归锁）', async () => {
+    seedAccounting('skill', 'legacy-skill', '1.0.0');
+    const manifest = baseManifest({
+      resources: [{ type: 'skill', slug: 'legacy-skill' }],
+    });
+    const archive = await makeArchive(manifest);
+    const deps = makePinnedDeps(archive);
+
+    const outcome = await applyMirrorSnapshot(applyPayload({ confirm: true }), deps);
+    expect(outcome.ok).toBe(true);
+    expect(deps.installLog).toEqual([]);
   });
 });
 

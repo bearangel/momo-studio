@@ -19,13 +19,20 @@
 // （路径部分保留 catalog 给的 /resources/{slug}/{version}/download）——不盲信
 // catalog 的绝对地址（catalog 由发布方自报，其 host 不可信）。
 
-import { validateHubCatalog, type HubCatalog, type HubResourceMeta } from '../../hub/protocol';
+import {
+  validateHubCatalog,
+  type HubCatalog,
+  type HubResourceMeta,
+  type ResourcePublishedEvent,
+  type ResourceUnpublishedEvent,
+} from '../../hub/protocol';
 import { hubGetStatus } from '../../hub';
 import { getDeviceToken } from '../../hub/creds';
 import { logger } from '../../logger';
 import { registerTrustedDownloadOrigin } from '../../marketplace/installer';
 import type { MarketplaceItem } from '../../marketplace/types';
 import { fromCatalogItem } from '../catalog-adapter';
+import { compareVersions } from '../version-compare';
 import type { ResourceItem, ResourceType } from '../types';
 import type { HubEntry, HubListResult, HubProvider } from './types';
 
@@ -41,8 +48,9 @@ const DEFAULT_TIMEOUT_MS = 3000;
 /** hub 资源类型 → marketplace 可安装类型（plugin 自 T12 起接通安装链） */
 export type HubMarketplaceType = 'agent' | 'mcp' | 'skill' | 'plugin';
 
-/** 空目录（未接入 / 首拉失败且无 lastGood 时的占位） */
-const EMPTY_CATALOG: HubCatalog = { version: '0', updatedAt: '', items: [] };
+/** 空目录（未接入 / 首拉失败且无 lastGood 时的占位；revision=0——1.5.0 起必填，
+ *  0 = 旧 hub（1.4）缺省归一值，语义见 HubCatalog.revision 注释） */
+const EMPTY_CATALOG: HubCatalog = { version: '0', revision: 0, updatedAt: '', items: [] };
 
 /** hub 上下文——studio 自身配置的 hub 基址 + device token */
 export interface HubContext {
@@ -88,6 +96,18 @@ export interface HubCatalogSource {
    * 语义不破；回落的已知快照 downloadUrl 指向同 hub，下载链是真闸门）。
    */
   loadFresh(): Promise<HubCatalogLoad>;
+  /**
+   * B10 增量合并（M3.4 §2.3）：resource.published 事件 → upsert 进 cache 与
+   * lastGood 的 items（消 5min TTL 盲窗——发布即时可见）。**只做即时性**：
+   * 全量拉取（TTL 到期 / loadFresh）仍是权威路径，事件合并不伪造 revision、
+   * 不写退避/降级态；乱序（unpublished 先到）由幂等终态 + 全量拉取自愈。
+   */
+  applyPublishedEvent(evt: ResourcePublishedEvent): void;
+  /**
+   * B10 增量剔除（M3.4 §2.3）：resource.unpublished 事件 → 从 cache 与
+   * lastGood 的 items 中剔除该 slug（撤回即时不可见；幂等——已不在场为 no-op）。
+   */
+  applyUnpublishedEvent(evt: ResourceUnpublishedEvent): void;
   /** 当前是否降级（resource:getCatalogStatus 消费） */
   isDegraded(): boolean;
   /** 测试用：清缓存/退避/降级态 */
@@ -349,9 +369,77 @@ export function createHubCatalogSource(
     }
   }
 
+  // ── B10 事件增量合并（M3.4 §2.3）：只改 items，不动 TTL/退避/degraded，
+  //    revision 保持缓存原值（事件不带修订号，不伪造）。幂等终态：upsert/剔除
+  //    按 slug 收敛，重复事件与乱序由最后一次操作 + 全量拉取自愈。──
+  function upsertPublished(target: HubCatalog, evt: ResourcePublishedEvent): HubCatalog {
+    const existing = target.items.find((m) => m.type === evt.type && m.slug === evt.slug);
+    let item: HubResourceMeta;
+    if (existing) {
+      // 已在场：merge 事件已知字段（name/author/版本面），描述等长字段保留缓存值
+      const versions = existing.versions.includes(evt.version)
+        ? existing.versions
+        // 新版本插入 semver 降序位（hub 不变量 versions[0] = latest）
+        : [...existing.versions, evt.version].sort((a, b) => compareVersions(b, a));
+      item = {
+        ...existing,
+        name: evt.name,
+        author: evt.author,
+        version: versions[0] ?? evt.version,
+        publishedAt: evt.at,
+        versions,
+      };
+    } else {
+      // 全新条目：展示级占位（事件只带六字段）——浏览链可见即可；安装链走
+      // loadFresh 拿全量 meta，占位条目永不进下载/校验链（downloadUrl 按 hub
+      // 固定布局拼路径段，基址由 toMarketplaceItem 的 RM1-12 重写补上）
+      item = {
+        slug: evt.slug,
+        type: evt.type,
+        name: evt.name,
+        version: evt.version,
+        author: evt.author,
+        description: '',
+        readme: '',
+        tags: [],
+        category: '',
+        iconEmoji: '',
+        verificationStatus: 'unverified',
+        downloadUrl: `/resources/${evt.slug}/${evt.version}/download`,
+        checksum: '',
+        sizeBytes: 0,
+        publishedAt: evt.at,
+        versions: [evt.version],
+      };
+    }
+    const items = [
+      ...target.items.filter((m) => !(m.type === evt.type && m.slug === evt.slug)),
+      item,
+    ];
+    return { ...target, items };
+  }
+
+  function removeUnpublished(target: HubCatalog, slug: string): HubCatalog {
+    // 按 slug 终态剔除（hub 撤回即目录不可见；事件载荷不带 type，slug 单维）
+    if (!target.items.some((m) => m.slug === slug)) return target;
+    return { ...target, items: target.items.filter((m) => m.slug !== slug) };
+  }
+
+  function applyPublishedEvent(evt: ResourcePublishedEvent): void {
+    if (cache) cache = { ...cache, catalog: upsertPublished(cache.catalog, evt) };
+    if (lastGoodCatalog) lastGoodCatalog = upsertPublished(lastGoodCatalog, evt);
+  }
+
+  function applyUnpublishedEvent(evt: ResourceUnpublishedEvent): void {
+    if (cache) cache = { ...cache, catalog: removeUnpublished(cache.catalog, evt.slug) };
+    if (lastGoodCatalog) lastGoodCatalog = removeUnpublished(lastGoodCatalog, evt.slug);
+  }
+
   return {
     load,
     loadFresh,
+    applyPublishedEvent,
+    applyUnpublishedEvent,
     isDegraded: () => degraded,
     resetForTest: () => {
       cache = null;
@@ -372,14 +460,27 @@ export function createHubCatalogSource(
 /** 生产单例（HubManager 配置 + keychain 凭证） */
 const defaultSource = createHubCatalogSource(() => contextResolver());
 
+/**
+ * B10（M3.4 §2.3）：hub 事件 → 生产目录源增量合并。消费面 = hub/index.ts
+ * onEvent 桥（resource.published / resource.unpublished 两分支）——事件到达
+ * 即刻更新默认源的 cache/lastGood，消「新发布最长 5min（TTL）不可见」盲窗。
+ * 全量拉取仍为权威路径（事件只做即时性，分工见 HubCatalogSource 接口注释）。
+ */
+export function applyHubPublishedEventToCatalog(evt: ResourcePublishedEvent): void {
+  defaultSource.applyPublishedEvent(evt);
+}
+
+/** B10：撤回事件 → 生产目录源剔除（同上——hub/index.ts onEvent 消费）。 */
+export function applyHubUnpublishedEventToCatalog(evt: ResourceUnpublishedEvent): void {
+  defaultSource.applyUnpublishedEvent(evt);
+}
+
 /** hub 目录当前是否降级——resource:getCatalogStatus 聚合消费 */
 export function isHubCatalogDegraded(): boolean {
   return defaultSource.isDegraded();
 }
 
-/**
- * hub 是否未接入（配置缺失）——resource:getCatalogStatus 同步读取面（M2.5 终审
- * FIX-1）。事实源与 load() 的 notEnrolled 判定同源：hubGetStatus().configured。
+/** hub 是否未接入（resource:getCatalogStatus 同步读取面——M2.5 终审 FIX-1）。事实源与 load() 的 notEnrolled 判定同源：hubGetStatus().configured。
  * 同步判定（hubGetStatus 读 HubManager 内存配置），不新增 RPC、不依赖目录是否
  * 已拉取——冷启动首帧即可如实回答，renderer 播种门控据此拒绝建基线。
  */
@@ -410,18 +511,26 @@ export async function listHubMarketplaceItems(type?: ResourceType): Promise<Mark
  *
  * M2.4 T1：交回 item + 本次载入是否回落（stale）+ 接入态（enrolled）——
  * 安装链按「enrolled → stale → item」判定，回落快照不得冒充 hub 最新目录。
- * hubUrl 为 null（未接入）时 item=null。
+ * hubUrl 为 null（未接入）时 item=null。M3.4 B13 增返 hubUrl（非 null 时非空）
+ * 与 meta（原始目录条目——MarketplaceItem 不带 versions 数组，钉死链的版本
+ * 全集预检消费 meta.versions）。
  */
 export async function findHubMarketplaceItem(
   type: ResourceType,
   slug: string,
-): Promise<{ item: MarketplaceItem | null; stale: boolean; enrolled: boolean }> {
+): Promise<{
+  item: MarketplaceItem | null;
+  meta: HubResourceMeta | null;
+  stale: boolean;
+  enrolled: boolean;
+  hubUrl: string | null;
+}> {
   const { catalog, hubUrl, stale, notEnrolled } = await defaultSource.loadFresh();
   const enrolled = !notEnrolled;
-  if (!hubUrl) return { item: null, stale, enrolled };
+  if (!hubUrl) return { item: null, meta: null, stale, enrolled, hubUrl: null };
   const meta = catalog.items.find((m) => m.type === type && m.slug === slug);
-  if (!meta || !isMarketplaceType(meta.type)) return { item: null, stale, enrolled };
-  return { item: toMarketplaceItem(meta, hubUrl), stale, enrolled };
+  if (!meta || !isMarketplaceType(meta.type)) return { item: null, meta: null, stale, enrolled, hubUrl };
+  return { item: toMarketplaceItem(meta, hubUrl), meta, stale, enrolled, hubUrl };
 }
 
 /** MarketplaceItem → HubEntry（registryList 消费面——与 smithery 同构） */
@@ -483,3 +592,56 @@ export function createHubProvider(source: HubCatalogSource): HubProvider {
 
 /** 生产 provider（挂 HUB_PROVIDERS 注册表） */
 export const hubProvider: HubProvider = createHubProvider(defaultSource);
+
+// ──────────────────────────────────────────────────────────────────────────
+// 撤回客户端（M3.4 §2.3.4 / B12）
+// ──────────────────────────────────────────────────────────────────────────
+
+/** unpublish 注入缝：HTTP 边界 mock 只收窄在此（业务逻辑全真实——momo-test-rules） */
+export interface UnpublishDeps {
+  fetchImpl?: (
+    url: string,
+    init: { method: string; headers: Record<string, string>; body: string },
+  ) => Promise<{ status: number }>;
+}
+
+/**
+ * 从 momo-hub 下架资源（B12 撤回，hub v0.1.9 POST /resources/unpublish）：
+ * 目录即刻不可见（墓碑），**已安装节点不受影响**、历史版本下载端点保留
+ * （roadmap 裁定）。信任模型与 publish 对称（Bearer，任何注册节点）。
+ * 语义：200 = 下架成功（幂等——已撤回再撤同 200）；404 = 资源不存在或已撤回。
+ */
+export async function unpublishHubResource(slug: string, deps: UnpublishDeps = {}): Promise<void> {
+  const ctx = await resolveHubContext();
+  if (!ctx) {
+    throw new Error('hub 未接入，无法下架资源（请先在设置中接入 momo-hub）');
+  }
+  if (!ctx.deviceToken) {
+    throw new Error('连接已失效，请重新接入 hub（本地缺少 device token）');
+  }
+  const fetchImpl =
+    deps.fetchImpl ??
+    (async (url: string, init: { method: string; headers: Record<string, string>; body: string }) =>
+      fetch(url, init));
+  let res: { status: number };
+  try {
+    res = await fetchImpl(`${ctx.hubUrl}/resources/unpublish`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${ctx.deviceToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ slug }),
+    });
+  } catch {
+    throw new Error('无法连接 hub（网络不可达或服务未启动）');
+  }
+  if (res.status === 200 || res.status === 204) return;
+  if (res.status === 404) {
+    throw new Error('资源不存在或已撤回');
+  }
+  if (res.status === 401) {
+    throw new Error('连接已失效，请重新接入 hub（设置 → 节点互联）');
+  }
+  throw new Error(`hub 响应异常: HTTP ${res.status}`);
+}

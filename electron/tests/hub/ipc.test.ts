@@ -38,11 +38,19 @@ vi.mock('../../src/main/resource/hub-install', () => ({
   recordPublishAccountingSafe: vi.fn(),
 }));
 
+// 撤回客户端只锁接线（slug 透传）——HTTP 矩阵在 tests/resource/hub-unpublish.test.ts。
+// importOriginal 保留其余导出（momo-hub 被安装链等传递依赖消费，整体 mock 会破面）
+vi.mock('../../src/main/resource/hub/momo-hub', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/resource/hub/momo-hub')>();
+  return { ...actual, unpublishHubResource: vi.fn(async (slug: string) => `${slug} 已下架`) };
+});
+
 import { registerHubIpc } from '../../src/main/hub/ipc.handlers';
 import * as manager from '../../src/main/hub/index';
 import { publishToHub } from '../../src/main/hub/publish';
 import { RpcRemoteError } from '../../src/main/hub/client';
 import { recordPublishAccountingSafe } from '../../src/main/resource/hub-install';
+import { unpublishHubResource } from '../../src/main/resource/hub/momo-hub';
 
 const GROUP_CHANNELS = ['hub:groupCreate', 'hub:groupInvite', 'hub:groupJoin', 'hub:groupLeave', 'hub:groupList', 'hub:groupTransfer'];
 const MIRROR_CHANNELS = ['hub:snapshotBuildUpload', 'hub:mirrorWorkspace', 'hub:mirrorRegistry'];
@@ -61,7 +69,7 @@ const VIEW_CHANNELS = [
 beforeEach(() => { handlers.clear(); vi.clearAllMocks(); });
 
 describe('hub IPC 接线', () => {
-  it('注册三十八通道（M2.5 T3 增 hub:getNodes；M3.1 增 hub:taskAnswer；M3.2 增 viewWorkspaces/viewFiles）；getStatus 透传 manager', async () => {
+  it('注册三十九通道（M2.5 T3 增 hub:getNodes；M3.1 增 hub:taskAnswer；M3.2 增 viewWorkspaces/viewFiles；M3.4 增 hub:unpublishResource）；getStatus 透传 manager', async () => {
     registerHubIpc();
     expect([...handlers.keys()].sort()).toEqual([
       ...GROUP_CHANNELS,
@@ -72,7 +80,7 @@ describe('hub IPC 接线', () => {
       ...ROUTING_CHANNELS,
       ...BOARD_CHANNELS,
       ...VIEW_CHANNELS,
-      'hub:configure', 'hub:enroll', 'hub:forget', 'hub:getStatus', 'hub:publishResource', 'hub:getNodes',
+      'hub:configure', 'hub:enroll', 'hub:forget', 'hub:getStatus', 'hub:publishResource', 'hub:unpublishResource', 'hub:getNodes',
     ].sort());
     expect(await handlers.get('hub:getStatus')!()).toEqual(await manager.hubGetStatus());
   });
@@ -117,6 +125,12 @@ describe('hub IPC 接线', () => {
       expect(recordPublishAccountingSafe).toHaveBeenLastCalledWith(type, `${type}-1`, '1.0.0', 'c');
     }
     expect(recordPublishAccountingSafe).toHaveBeenCalledTimes(4);
+  });
+
+  it('unpublishResource 透传 unpublishHubResource（slug 入参原样；M3.4 §2.3.4）', async () => {
+    registerHubIpc();
+    await handlers.get('hub:unpublishResource')!(null, { slug: 'gone-skill' });
+    expect(unpublishHubResource).toHaveBeenCalledWith('gone-skill');
   });
 
   it('委派设置两通道：get 透传 hubGetDelegationSettings；set 透传入参并回传归一化值', async () => {
