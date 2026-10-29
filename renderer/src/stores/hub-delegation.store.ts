@@ -8,6 +8,10 @@
 // - 进度流：task.progress 500ms 批合并（同窗多拍并为一条增量——count/excerpt 取末拍、
 //   lastSeq 取最大）；终态到达即冲刷在途批，末条增量不丢
 // - 取消：taskCancel 成功 → 本机落 cancelled + 重拉对账（hub 无 cancelled 推送）
+// - M4.2（协议 1.6.0）组归属：taskList 拉取带选中组 groupId 过滤（WorkgroupView
+//   上下文经 setGroupFilter 传入——铁律 5；null=无选中组不携带过滤，全组聚合
+//   现状零变化）+ 组名映射缓存（group.list 投影，groupId→groupName——委派板
+//   组徽标消费；init 拉取 / group.changed 推送 / 看板 provider 回写三路保鲜）
 // - 消费方（T5 后）：工作组侧栏负载徽标 / 监控台节点卡在跑行；M2.1 T8/T9 起新建
 //   弹窗与看板融合接手「创建委派」入口与任务全生命周期展示（prompts/agentSlugs/
 //   streams 等展示态为其预留，本任务保留不删——最小退役裁定）
@@ -17,6 +21,7 @@ import { ipc } from '../ipc/client';
 import { rpcErrorMessage } from '../lib/rpc-error';
 import type {
   HubDelegationStatus,
+  HubGroupInfo,
   HubTaskProgressEvent,
   HubTaskRecord,
   HubTaskTerminalEvent,
@@ -48,11 +53,18 @@ interface HubDelegationState {
   reasons: Record<string, string>;
   /** 等待确认标志（taskId → kind waiting-input 拍；恢复拍/终态清除——监控台在跑行 T12 徽标） */
   waiting: Record<string, boolean>;
+  /** 组名映射缓存（M4.2：groupId → groupName——委派板组徽标名解析；缺失降级短码） */
+  groupNames: Record<string, string>;
+  /** 选中组过滤（M4.2 铁律 5：WorkgroupView 上下文传入；null=无选中组 → taskList
+   *  不带过滤全组聚合（现状）；TaskRecord.groupId 旧 hub 缺席与过滤互不门控） */
+  groupIdFilter: string | null;
 
   /** 挂载时调用：订阅四推送 + 拉取；返回解订阅函数 */
   init(): () => void;
   load(): Promise<void>;
   cancel(taskId: string): Promise<void>;
+  /** 更新选中组过滤（值变化才重拉——WorkgroupView 组切换即时生效） */
+  setGroupFilter(groupId: string | null): void;
 }
 
 /** 进度批合并窗口（与目标侧节流窗同值——展示侧再合并一次，覆盖直转连拍） */
@@ -114,15 +126,54 @@ function clearWaiting(taskId: string): void {
   useHubDelegationStore.setState((s) => ({ waiting: { ...s.waiting, [taskId]: false } }));
 }
 
+/**
+ * 组名映射缓存回写（M4.2）：store init 的 group.list 拉取、group.changed 推送
+ * 刷新、看板 provider 的 group.list 结果就近回写——三路共用同一缓存，委派板
+ * 组徽标不依赖工作组视图挂载顺序。
+ */
+export function cacheDelegationGroupNames(groups: HubGroupInfo[]): void {
+  const names: Record<string, string> = {};
+  for (const g of groups) names[g.groupId] = g.groupName;
+  useHubDelegationStore.setState({ groupNames: names });
+}
+
 export const useHubDelegationStore = create<HubDelegationState>((set) => {
+  // 重入护栏（hub-group.store 同款）：在途期间新到的刷新请求不丢弃——标记补拉
+  // 一次。末次补拉取最新 groupIdFilter，组切换与在途拉取并发时不让旧过滤应答
+  // 覆盖新过滤结果（双拉竞态）
+  let refreshing = false;
+  let rerunAfterRefresh = false;
+
+  /** 组名缓存尽力拉取：失败保留旧缓存（徽标降级短码呈现，不落 store.error） */
+  const refreshGroupNames = (): void => {
+    void ipc.hub.groupList().then(
+      (r) => cacheDelegationGroupNames(r.groups),
+      () => undefined,
+    );
+  };
+
   const refresh = async (): Promise<void> => {
+    if (refreshing) {
+      rerunAfterRefresh = true;
+      return;
+    }
+    refreshing = true;
     set({ loading: true });
+    // M4.2 组过滤：选中组在场才携带（协议 TaskListReq.groupId?——缺省=所在全部
+    // 组聚合）；null → 无参调用（旧调用形状零变化）
+    const { groupIdFilter } = useHubDelegationStore.getState();
     try {
-      const { tasks } = await ipc.hub.taskList();
+      const { tasks } = await ipc.hub.taskList(groupIdFilter !== null ? { groupId: groupIdFilter } : undefined);
       set({ tasks, loading: false, error: null });
     } catch (err) {
       // hub 通道（M4.1 coded）：剥 `[code]` 传输前缀后呈现
       set({ loading: false, error: rpcErrorMessage(err) });
+    } finally {
+      refreshing = false;
+      if (rerunAfterRefresh) {
+        rerunAfterRefresh = false;
+        void refresh();
+      }
     }
   };
 
@@ -136,6 +187,8 @@ export const useHubDelegationStore = create<HubDelegationState>((set) => {
     sessionIds: {},
     reasons: {},
     waiting: {},
+    groupNames: {},
+    groupIdFilter: null,
 
     init() {
       const disposers = [
@@ -162,12 +215,21 @@ export const useHubDelegationStore = create<HubDelegationState>((set) => {
           patchTask(evt.taskId, { status: 'interrupted', updatedAt: Date.now() });
           clearWaiting(evt.taskId);
         }),
+        // 组名缓存随组变化刷新（创建/入组/退组——徽标名不悬空；只刷名不刷任务）
+        ipc.hub.onGroupChanged(() => refreshGroupNames()),
       ];
+      refreshGroupNames();
       void refresh();
       return () => disposers.forEach((d) => d());
     },
 
     load: refresh,
+
+    setGroupFilter(groupId) {
+      if (useHubDelegationStore.getState().groupIdFilter === groupId) return;
+      set({ groupIdFilter: groupId });
+      void refresh();
+    },
 
     async cancel(taskId) {
       try {

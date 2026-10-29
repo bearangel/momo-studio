@@ -38,6 +38,7 @@ export function WorkgroupView() {
   const refresh = useHubStore((s) => s.refresh);
   const initGroups = useHubGroupStore((s) => s.init);
   const initDelegations = useHubDelegationStore((s) => s.init);
+  const setDelegationGroupFilter = useHubDelegationStore((s) => s.setGroupFilter);
   const viewOpen = useHubViewStore((s) => s.open);
   const viewPicking = useHubViewStore((s) => s.picking);
   const openViewPanel = useHubViewStore((s) => s.openPanel);
@@ -57,6 +58,18 @@ export function WorkgroupView() {
       disposeDelegations();
     };
   }, [online, initGroups, initDelegations]);
+
+  // M4.2 委派板组过滤（铁律 5——与 handleOpenView 同一选中组推导）：监控台当前
+  // 组（手选组在场 → 手选；否则第一组；无组 null）传入委派 store，taskList 带
+  // groupId 过滤；无组（null）不携带——全组聚合现状零变化。组切换即时重拉
+  // （store 侧值变化才拉，与 init 首拉并发走重入护栏取末次过滤）
+  const groups = useHubGroupStore((s) => s.groups);
+  const selectedGroupId = useHubGroupStore((s) => s.selectedGroupId);
+  const effectiveGroupId = effectiveSelectedGroup(groups, selectedGroupId)?.groupId ?? null;
+  useEffect(() => {
+    if (!online) return;
+    setDelegationGroupFilter(effectiveGroupId);
+  }, [online, effectiveGroupId, setDelegationGroupFilter]);
 
   // T4 查看链路入口：NodeCard「查看」→ S3b 选择器（store picking 前置步）。
   // M3.2（协议 1.4.0）数据源切换：hub 支持 minor 4 时走远端空间清单

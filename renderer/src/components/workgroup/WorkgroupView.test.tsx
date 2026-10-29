@@ -11,6 +11,9 @@
 // - T4 查看链路：节点卡「查看」→ ViewPickerDialog（S3b）→ 选中空间后主区整体切
 //   RemoteViewPane（S4 四页签）→「退出查看」回监控态；非组长节点卡查看禁用
 //   （M2 leader-only 迁移语义）
+// - M4.2 组过滤接线：选中组（effectiveSelectedGroup——手选缺省回落第一组，与
+//   监控台同推导）传入委派 store → taskList 带 groupId；无组不携带（全组聚合
+//   现状）；组切换即时重拉
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { WorkgroupView } from './WorkgroupView';
@@ -137,6 +140,9 @@ beforeEach(() => {
     agentSlugs: {},
     sessionIds: {},
     reasons: {},
+    waiting: {},
+    groupNames: {},
+    groupIdFilter: null,
   });
   useHubViewStore.setState({
     open: false, picking: false,
@@ -262,6 +268,33 @@ describe('WorkgroupView', () => {
 });
 
 describe('WorkgroupView 查看链路（T4：S3b 选择器 + S4 全宽查看态）', () => {
+  it('M4.2 组过滤接线：组落地 → taskList 带选中组 groupId（缺省回落第一组，与监控台同推导）；手选切换即时重拉', async () => {
+    const GROUP_OPS: HubGroupInfo = {
+      groupId: 'g-ops',
+      groupName: 'ops-team',
+      leaderNodeId: SELF_ID,
+      members: [{ nodeId: SELF_ID, name: 'mac-main', online: true }],
+    };
+    api.hub.groupList.mockResolvedValue({ groups: [GROUP_DEV] });
+    api.hub.taskList.mockResolvedValue({ tasks: [] });
+    render(<WorkgroupView />);
+    // 组清单落地 → 生效选中组 = 第一组（手选缺省回落）→ 委派过滤生效
+    await waitFor(() => expect(api.hub.taskList).toHaveBeenLastCalledWith({ groupId: 'g-dev' }));
+    expect(useHubDelegationStore.getState().groupIdFilter).toBe('g-dev');
+
+    // 手选另一组 → 过滤切换即时重拉（铁律 5：当前上下文，非配置默认值）
+    useHubGroupStore.setState({ groups: [GROUP_DEV, GROUP_OPS], selectedGroupId: 'g-ops' });
+    await waitFor(() => expect(api.hub.taskList).toHaveBeenLastCalledWith({ groupId: 'g-ops' }));
+    expect(useHubDelegationStore.getState().groupIdFilter).toBe('g-ops');
+  });
+
+  it('M4.2 组过滤接线：无组 → taskList 无参调用（全组聚合现状零变化）', async () => {
+    render(<WorkgroupView />);
+    await waitFor(() => expect(api.hub.taskList).toHaveBeenCalled());
+    expect(api.hub.taskList).toHaveBeenLastCalledWith(undefined);
+    expect(useHubDelegationStore.getState().groupIdFilter).toBeNull();
+  });
+
   it('节点卡「查看」→ 选择器弹窗 → 选中空间后主区整体切 RemoteViewPane →「退出查看」回监控态', async () => {
     api.hub.groupList.mockResolvedValue({ groups: [GROUP_DEV] });
     render(<WorkgroupView />);
