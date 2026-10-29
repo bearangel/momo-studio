@@ -6,6 +6,19 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 节点互联 M4.3：委派依赖透传
+
+协议 minor **1.7.0**（hub **v0.3.0**）。设计见 momo-hub 仓 `docs/specs/2026-10-29-momo-hub-m4.3-delegation-deps.md`（Momus OKAY 含勘误：retryDispatch 闸 M3.3 已存在，真实缺口仅两入口）。
+
+- **leader 侧派发闸（核心）**：`submitRoutedTask` + `hub:taskDelegate` 直通道两新闸（blocked 拒绝，文案 `dependency-gate.ts` 单源——抽自 M3.3 retryDispatch 既有闸并改引，逐字一致测试锁）；retryDispatch 既有闸补锁不加闸；**入口清单锁**（运行时 grep 全树 TASK_RPC.delegate 发送点 = 三文件均须含闸锚，第四入口即红）；ad-hoc 无本地行委派缺省放行（防御性 taskId? 闸面）
+- **外派行 `::` 解析启用**（M3.3 裁定翻转）：单任务+批量外派同源 parseTaskLine 拆标题+dependsOn；主进程 createRemoteTask 走 insertTaskWithRelations（存在/环检测/插边与 task.create 同事务单源）；submitSingleRemote 补 catch→toast（此前 rejection 无兜底致弹窗悬挂）
+- **brief 透传**：DelegationTask.dependsOn?（协议 1.7.0，≤50 项/项 ≤128 字符，透传不校验存在性——leader 本地 id 对 hub 无意义）；hub parse 白名单三格（缺省/在场/非法整包拒 400）；worker 零消费双点注释锚定；委派卡依赖摘要 M3.3 已有（零改动复核 58 绿）
+- **e2e 场景 6**：外派派发闸全链（受阻行 blocked 角标+拒绝 toast+零委派 → 解锁行委派+mock 捕获 dependsOn 透传 → 依赖完成重试派发放行）
+- 测试：hub 307 / electron 5189 / renderer 3041 / e2e 23P+1S（全程 maxWorkers=2）
+- 已知既有 flake 记录（非本票）：view-server 批上限用例 insertEvent 随机 seq 生日碰撞 ~3%，建议另票 seq 自增
+
+版本 `2.1.0-alpha.44`。hub 侧 `v0.3.0`（tag = `10b1a72`）。
+
 ## [未发布] — 节点互联 M4.2：多组终态
 
 协议 minor **1.6.0**（hub **v0.2.0**，版本号与协议对齐）。设计见 momo-hub 仓 `docs/specs/2026-10-29-momo-hub-m4.2-multigroup-final.md`（Momus OKAY）。

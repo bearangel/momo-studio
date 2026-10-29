@@ -17,6 +17,7 @@
 import { pickWorker } from './dispatch-scheduler';
 import { isTaskRouting, type TaskRouting } from './task-routing';
 import type { PermissionTier } from './run-policy';
+import { blockedDispatchError } from '../task/dependency-gate';
 import type { TaskRow } from '../storage/tasks/repo';
 
 /**
@@ -38,6 +39,12 @@ export interface SubmitRoutedTaskInput {
   routing: TaskRouting;
   /** 缺省 'confirm'（执行端确认）；T10 档位选择器接入后显式透传 */
   permissionTier?: PermissionTier;
+  /**
+   * M4.3 外派行 `::` 依赖语法：解析出的直接依赖 id 列表（CreateTaskDialog
+   * 外派路径带出）。落库走 insertTaskWithRelations（存在 + 环检测单源）；
+   * 建链后行 blocked 派生 → 派发闸管制（blocked 不 delegate）
+   */
+  dependsOn?: string[];
 }
 
 export interface SubmitRoutedTaskResult {
@@ -49,15 +56,24 @@ export interface SubmitRoutedTaskResult {
   nodeId: string | null;
 }
 
-/** 既有委派管道载荷（TASK_RPC.delegate 请求体；permissionTier 为向后兼容扩展字段） */
+/** 既有委派管道载荷（TASK_RPC.delegate 请求体；permissionTier / dependsOn 为向后兼容扩展字段） */
 export interface DelegationTaskBrief {
   groupId: string;
   targetNodeId: string;
   workspaceName: string;
-  task: { title: string; prompt: string; permissionTier: PermissionTier };
+  task: {
+    title: string;
+    prompt: string;
+    permissionTier: PermissionTier;
+    /**
+     * M4.3 协议 1.7.0：leader 本地依赖 id 清单——纯透传（展示/审计），hub 不
+     * 校验存在性、worker 零消费（语义裁定 spec §2.1）；缺省不带键（1.6 兼容）
+     */
+    dependsOn?: string[];
+  };
 }
 
-/** 外派行落库入参（wiring 侧做分组三重校验后 insertTask） */
+/** 外派行落库入参（wiring 侧做分组三重校验后 insertTaskWithRelations） */
 export interface RemoteCreateInput {
   workspaceId: string;
   title: string;
@@ -65,6 +81,8 @@ export interface RemoteCreateInput {
   groupId?: string;
   status: 'pending';
   routing: TaskRouting;
+  /** M4.3：外派行 `::` 建链（同事务插边——存在 + 环检测在 relations 单源） */
+  dependsOn?: string[];
 }
 
 /**
@@ -93,8 +111,13 @@ export interface DispatchSubmitPorts {
   delegate(brief: DelegationTaskBrief): Promise<{ taskId: string }>;
   /** local 模式：既有本地创建（draft 落库 + notifyExecutor） */
   createLocalTask(input: SubmitRoutedTaskInput): TaskRow;
-  /** group/node 模式：外派行落库（pending + routing 保留） */
+  /** group/node 模式：外派行落库（pending + routing 保留 + dependsOn 建链） */
   createRemoteTask(input: RemoteCreateInput): TaskRow;
+  /**
+   * M4.3 派发闸数据源：M3.3 blocked 派生单源（deriveBlockedBy——仅 completed
+   * 解锁）；返回未完成直接依赖 id 列表，空 = 不阻塞
+   */
+  deriveBlockedBy(taskId: string): string[];
   /** 委派成功后回写 tasks 行 delegation_id + 已解析目标 routing（D5：group
    *  变体带上调度解析的 targetNodeId——外派卡节点徽标持久源） */
   updateDelegationLink(taskId: string, delegationId: string, routing: TaskRouting): void;
@@ -122,7 +145,8 @@ export async function submitRoutedTask(
   }
 
   const targetNodeId = await resolveRemoteTarget(input.routing, input.workspaceName, ports);
-  // 行先落库再派发：外派前先有账，发送失败不丢单（RM-M21-5 手动重试面）
+  // 行先落库再派发：外派前先有账，发送失败不丢单（RM-M21-5 手动重试面）；
+  // M4.3：dependsOn 随行建链（存在 + 环检测在 relations 单源）
   const task = ports.createRemoteTask({
     workspaceId: input.workspaceId,
     title: input.title,
@@ -130,7 +154,15 @@ export async function submitRoutedTask(
     ...(input.groupId !== undefined ? { groupId: input.groupId } : {}),
     status: 'pending',
     routing: input.routing,
+    ...(input.dependsOn !== undefined && input.dependsOn.length > 0
+      ? { dependsOn: input.dependsOn }
+      : {}),
   });
+  // M4.3 派发闸（spec §2.3.1 核心）：建链后 blocked 派生 → 拒绝委派。行保留
+  // pending 待处理（建链账不回滚——重试入口在待派发卡，依赖完成后放行）；
+  // 文案单源 task/dependency-gate.ts（与 retryDispatch 闸逐字同源）
+  const unmetDeps = ports.deriveBlockedBy(task.id);
+  if (unmetDeps.length > 0) throw blockedDispatchError(unmetDeps);
   // 无候选：行照落待处理（routing 保留、delegationId 空），不轮询（RM-M21-5）
   if (targetNodeId === null) {
     return { task, dispatched: false, nodeId: null };
@@ -144,6 +176,10 @@ export async function submitRoutedTask(
         title: input.title,
         prompt: input.description?.trim() || input.title,
         permissionTier: input.permissionTier ?? 'confirm',
+        // M4.3 协议 1.7.0：依赖元数据随任务书透传（hub 不校验存在性——展示/审计）
+        ...(input.dependsOn !== undefined && input.dependsOn.length > 0
+          ? { dependsOn: input.dependsOn }
+          : {}),
       },
     });
     // D5：已解析目标随 delegation_id 一并回写行（group 变体补 targetNodeId；

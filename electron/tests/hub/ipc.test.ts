@@ -37,6 +37,10 @@ vi.mock('../../src/main/storage/tasks/repo', () => ({
   updateTask: vi.fn(),
   getTask: vi.fn(() => null),
 }));
+// M4.3 taskDelegate 派发闸数据源（同为 DB 边界）：缺省空 Map = 不阻塞（真源形状）
+vi.mock('../../src/main/storage/tasks/dependencies-repo', () => ({
+  deriveBlockedBy: vi.fn(() => new Map<string, string[]>()),
+}));
 vi.mock('../../src/main/workspace/crud', () => ({
   listWorkspaces: vi.fn(() => []),
 }));
@@ -65,6 +69,7 @@ import { RpcRemoteError } from '../../src/main/hub/client';
 import { recordPublishAccountingSafe } from '../../src/main/resource/hub-install';
 import { unpublishHubResource } from '../../src/main/resource/hub/momo-hub';
 import { getTask } from '../../src/main/storage/tasks/repo';
+import { deriveBlockedBy } from '../../src/main/storage/tasks/dependencies-repo';
 import { listWorkspaces } from '../../src/main/workspace/crud';
 import type { TaskRow } from '../../src/main/storage/tasks/repo';
 import type { Workspace } from '../../src/main/workspace/types';
@@ -253,6 +258,31 @@ describe('hub IPC 委派 leader 侧三通道（M2e T12）', () => {
       targetNodeId: 'n2',
       workspaceName: 'product-dev',
       task: { title: '重构登录', prompt: '请重构登录模块。', agentSlug: 'coder' },
+    }, undefined);
+  });
+
+  it('taskDelegate M4.3 派发闸：taskId 在场且 blocked → 人话拒绝（与 retryDispatch 逐字同源），零 RPC；taskId 缺省 / 依赖完成 → 放行透传', async () => {
+    registerHubIpc();
+    // blocked：拒绝文案单源（blockedDispatchError——delegation-sync E-1 锁同串）
+    vi.mocked(deriveBlockedBy).mockReturnValueOnce(new Map([['T-100', ['T-007']]]));
+    await expect(handlers.get('hub:taskDelegate')!(null, {
+      groupId: 'g1', targetNodeId: 'n2', workspaceName: 'product-dev',
+      title: '外派被阻塞', prompt: 'x', taskId: 'T-100',
+    })).rejects.toThrow('任务存在未完成依赖（T-007），依赖完成前不可派发');
+    expect(manager.hubRequest).not.toHaveBeenCalled();
+
+    // 依赖完成（派生空）→ 放行：taskId 仅闸用，不渗入 RPC 载荷
+    vi.mocked(manager.hubRequest).mockResolvedValueOnce({ taskId: 'tk-9' });
+    const out = await handlers.get('hub:taskDelegate')!(null, {
+      groupId: 'g1', targetNodeId: 'n2', workspaceName: 'product-dev',
+      title: '外派已解锁', prompt: 'x', taskId: 'T-100',
+    });
+    expect(out).toEqual({ taskId: 'tk-9' });
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('task.delegate', {
+      groupId: 'g1',
+      targetNodeId: 'n2',
+      workspaceName: 'product-dev',
+      task: { title: '外派已解锁', prompt: 'x' },
     }, undefined);
   });
 

@@ -160,6 +160,12 @@ export interface SubmitRoutedTaskInput {
   groupId?: string;
   routing: TaskRouting;
   permissionTier?: PermissionTier;
+  /**
+   * M4.3 外派行 `::` 依赖语法：解析出的直接依赖 id 列表。建链落库
+   * （insertTaskWithRelations 单源）后行 blocked 派生 → 派发闸管制
+   * （blocked 不 delegate，行保留待处理）；缺省不带键（无依赖零变化）
+   */
+  dependsOn?: string[];
 }
 
 /** hub:submitRoutedTask 返回（dispatched=false = 留待处理：无候选或发送瞬断） */
@@ -2987,6 +2993,12 @@ export interface HubTaskDelegateInput {
   title: string;
   prompt: string;
   agentSlug?: string;
+  /**
+   * M4.3 派发闸：关联本地任务 id——在场则主进程 blocked 派生拒绝（与
+   * retryDispatch 闸同文案单源）；无本地行的 ad-hoc 委派不携带（缺省放行）。
+   * 仅闸用，不渗入 RPC 载荷
+   */
+  taskId?: string;
 }
 
 export interface HubTaskDelegateResult {

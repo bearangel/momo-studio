@@ -15,6 +15,12 @@
 //      assigned → in_progress → completed）→ B 角标消失（C 仍在——正负双控）
 //   5. 批量 5 行含 1 行坏依赖（引用不存在 T-999）→ 4 成 1 败 per-line 错误
 //      （toast 摘要含坏行原文 + 「依赖任务 T-999 不存在」）+ 4 张新卡落板
+//   6. M4.3 外派派发闸全链（mock hub 最小面——hello/ping/group.*/task.*，结构沿
+//      hub-distribution.spec mock hub 裁剪）：外派批量两行（受阻行 :: T-B 未完成 /
+//      解锁行 :: T-A 已完成）→ 受阻行建链落板 blocked + 提交 toast 人话拒绝
+//      「任务存在未完成依赖（T-002），依赖完成前不可派发」+ 解锁行即刻委派
+//      （mock hub 捕获 task.dependsOn 透传）→ B 完成（evaluate 状态机链）→
+//      受阻行卡右键「重试派发」→ toast「已派发给」（retryDispatch 闸放行）
 //
 // 触达深度标注（如实记录）：
 //   - 建链 / 角标 / DAG / 批量部分成功：全真实 UI 面（CreateTaskDialog 批量语法 →
@@ -28,12 +34,18 @@
 //     同模板同源（lifecycle.ts 单点），此处不重复构造。
 //   - A 完成：evaluate IPC（状态机合法链），卡片操作路径（拖拽入已完成列）因
 //     零几何约束不采用——两侧同走 transitionTaskStatus 单点。
+//   - 场景 6：外派提交链全真实 UI（CreateTaskDialog 外派 `::` 解析 →
+//     hub:submitRoutedTask → 建链 → 闸拒绝 per-line toast）；hub 侧为 mock
+//     （真实 hub 链背书 = tests/hub 单测 + hub-distribution e2e——本场景锁闸语义，
+//     不重复锁 hub 行为）；重试派发走真实卡菜单 → hub:retryDispatch。
 //
 // 运行（同既有 e2e 惯例，需先 build 双 workspace）：
 //   npx pnpm@9.0.0 build && npx pnpm@9.0.0 e2e tests/e2e/task-dependencies.spec.ts
 import { test, expect, _electron as electron } from '@playwright/test';
 import type { ElectronApplication, Page } from '@playwright/test';
 import { createRequire } from 'node:module';
+import http from 'node:http';
+import type { AddressInfo, IncomingMessage } from 'node:http';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -54,7 +66,7 @@ function formatTaskId(seq: number): string {
   return `T-${String(seq).padStart(3, '0')}`;
 }
 
-/** evaluate 专用：renderer window.api 的任务/工作空间最小面（preload 同形状） */
+/** evaluate 专用：renderer window.api 的任务/工作空间/hub 最小面（preload 同形状） */
 type WinApi = {
   api: {
     workspace: { list(): Promise<Array<{ id: string; name: string }>> };
@@ -63,6 +75,11 @@ type WinApi = {
       update(id: string, patch: Record<string, unknown>): Promise<void>;
       transition(id: string, to: string): Promise<unknown>;
       start(id: string, opts?: Record<string, unknown>): Promise<unknown>;
+    };
+    hub: {
+      getStatus(): Promise<{ state: string }>;
+      enroll(input: { hubUrl: string; enrollmentToken: string; nodeName: string }): Promise<unknown>;
+      groupCreate(input: { groupName: string }): Promise<{ groupId: string }>;
     };
   };
 };
@@ -135,6 +152,191 @@ function boardCard(win: Page, title: string) {
   return win.locator('button').filter({ hasText: title }).first();
 }
 
+// ── 场景 6 mock hub（最小面——结构沿 hub-distribution.spec 裁剪）─────────────
+
+/**
+ * mock hub 协议版本——必须与 momo-hub pin 对齐（pin v0.3.0 → 协议 1.7.0）。
+ * ⚠️ 协议升级（pin bump）时必须与 electron/tests/hub/protocol-pin.test.ts
+ * 同步更新本常量，否则 hello 协商失败（major 不匹配即拒连）。
+ */
+const HUB_PROTO_VER = '1.7.0';
+/** mock 组内虚构在线成员（未真实 enroll——pickWorker 候选造数；委派下发 mock 吞掉） */
+const WORKER_NODE_ID = 'node-e2e-w';
+const WORKER_NODE_NAME = 'e2e-node-w';
+
+interface WsLike {
+  send(data: string): void;
+  close(): void;
+  terminate(): void;
+  on(event: 'message', cb: (data: unknown) => void): void;
+  on(event: 'close', cb: () => void): void;
+  on(event: 'error', cb: (err: Error) => void): void;
+}
+
+const mockHub = {
+  server: null as http.Server | null,
+  baseUrl: '',
+  /** deviceToken → 节点名（/enroll 登记） */
+  nodes: new Map<string, { nodeId: string; nodeName: string }>(),
+  /** nodeId → 活跃 ws 连接 */
+  conns: new Map<string, WsLike>(),
+  allSockets: new Set<WsLike>(),
+  /** 工作组账本（group.create 登记：self + 虚构 worker 成员） */
+  groups: [] as Array<{
+    groupId: string; groupName: string;
+    members: Array<{ nodeId: string; name: string; online: boolean }>;
+  }>,
+  /** task.delegate 收包捕获（brief 透传断言面：title → task.dependsOn 在场性） */
+  delegateRequests: [] as Array<{ title: string; dependsOn?: string[] }>,
+};
+
+function mockReplyReq(sock: WsLike, req: { id: string; method: string }, ok: boolean, payload: unknown): void {
+  sock.send(JSON.stringify({ v: 1, kind: 'res', id: req.id, method: req.method, ok, payload }));
+}
+
+function mockBroadcastEvt(method: string, payload: unknown): void {
+  const env = JSON.stringify({ v: 1, kind: 'evt', method, payload });
+  for (const sock of mockHub.allSockets) {
+    try { sock.send(env); } catch { /* 连接半关——忽略 */ }
+  }
+}
+
+/** WS 控制面消息处理（hello/ping/group 族与 task 族——其余方法 ok 容忍） */
+function handleMockWsMessage(sock: WsLike, raw: unknown, selfNodeId: string): void {
+  let env: { kind?: string; id?: string; method?: string; payload?: unknown };
+  try {
+    env = JSON.parse(String(raw)) as { kind?: string; id?: string; method?: string; payload?: unknown };
+  } catch {
+    return;
+  }
+  if (env.kind !== 'req' || typeof env.method !== 'string') return;
+  const req = { id: env.id ?? '', method: env.method };
+  const payload = (env.payload ?? {}) as Record<string, unknown>;
+  switch (env.method) {
+    case 'hello':
+      mockReplyReq(sock, req, true, {
+        hubId: 'e2e-deps-hub-mock',
+        protoVer: HUB_PROTO_VER,
+        serverTime: Date.now(),
+        onlineNodes: [],
+      });
+      return;
+    case 'ping':
+      mockReplyReq(sock, req, true, { ts: (payload as { ts?: number }).ts ?? Date.now(), serverTime: Date.now() });
+      return;
+    case 'group.create': {
+      const groupId = `g-e2e-deps-${mockHub.groups.length + 1}`;
+      const self = [...mockHub.nodes.values()].find((n) => n.nodeId === selfNodeId);
+      mockHub.groups.push({
+        groupId,
+        groupName: String(payload.groupName ?? 'e2e 依赖组'),
+        members: [
+          { nodeId: selfNodeId, name: self?.nodeName ?? selfNodeId, online: true },
+          // 虚构 worker：在线未镜像登记前的占位候选（mirroredBy 只造 worker 侧）
+          { nodeId: WORKER_NODE_ID, name: WORKER_NODE_NAME, online: true },
+        ],
+      });
+      mockReplyReq(sock, req, true, { groupId, nodeId: selfNodeId });
+      return;
+    }
+    case 'group.list':
+      mockReplyReq(sock, req, true, {
+        groups: mockHub.groups.filter((g) => g.members.some((m) => m.nodeId === selfNodeId)),
+      });
+      return;
+    case 'task.list':
+      mockReplyReq(sock, req, true, { tasks: [] });
+      return;
+    case 'task.delegate': {
+      // 记账 + 应答（不下发 task.assigned——本场景无真实 worker，只锁 leader 侧链）
+      const task = (payload.task ?? {}) as { title?: unknown; dependsOn?: unknown };
+      mockHub.delegateRequests.push({
+        title: typeof task.title === 'string' ? task.title : '',
+        dependsOn: Array.isArray(task.dependsOn) ? (task.dependsOn as string[]) : undefined,
+      });
+      mockReplyReq(sock, req, true, { taskId: `task-hub-${mockHub.delegateRequests.length}` });
+      return;
+    }
+    default:
+      mockReplyReq(sock, req, true, { ok: true });
+      return;
+  }
+}
+
+/** 起 mock hub（HTTP /enroll + /ws 控制面） */
+async function startMockHub(): Promise<void> {
+  const { WebSocketServer } = electronRequire('ws') as {
+    WebSocketServer: new (opts: { noServer: boolean }) => {
+      on(event: 'connection', cb: (sock: WsLike, req: IncomingMessage) => void): void;
+      handleUpgrade(req: IncomingMessage, socket: unknown, head: Buffer, cb: (sock: WsLike) => void): void;
+    };
+  };
+  const wss = new WebSocketServer({ noServer: true });
+  let nodeSeq = 0;
+
+  const server = http.createServer((req, res) => {
+    const url = (req.url ?? '').split('?')[0]!;
+    if (url === '/enroll' && req.method === 'POST') {
+      let body = '';
+      req.on('data', (c: Buffer) => { body += c.toString('utf8'); });
+      req.on('end', () => {
+        nodeSeq += 1;
+        const nodeId = `node-e2e-leader-${nodeSeq}`;
+        const deviceToken = `tok-e2e-${nodeSeq}`;
+        const nodeName = (JSON.parse(body) as { nodeName?: string }).nodeName ?? nodeId;
+        mockHub.nodes.set(deviceToken, { nodeId, nodeName });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ nodeId, deviceToken }));
+      });
+      return;
+    }
+    res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: 'not_found' }));
+  });
+
+  server.on('upgrade', (req, socket, head) => {
+    if ((req.url ?? '').split('?')[0] !== '/ws') {
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (sock) => {
+      const auth = req.headers.authorization;
+      const nodeId = typeof auth === 'string' && auth.startsWith('Bearer ')
+        ? (mockHub.nodes.get(auth.slice('Bearer '.length))?.nodeId ?? '')
+        : '';
+      if (nodeId !== '') mockHub.conns.set(nodeId, sock);
+      mockHub.allSockets.add(sock);
+      sock.on('message', (raw) => handleMockWsMessage(sock, raw, nodeId));
+      sock.on('close', () => {
+        mockHub.allSockets.delete(sock);
+        for (const [id, s] of mockHub.conns) if (s === sock) mockHub.conns.delete(id);
+      });
+      sock.on('error', () => { /* close 兜底清理 */ });
+    });
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.on('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const addr = server.address() as AddressInfo;
+      mockHub.baseUrl = `http://127.0.0.1:${addr.port}`;
+      resolve();
+    });
+  });
+  mockHub.server = server;
+}
+
+/** evaluate 直调 hub.enroll + 轮询等已连接（WS hello 成功） */
+async function enrollViaEvaluate(win: Page, nodeName: string): Promise<void> {
+  await win.evaluate(async ([hubUrl, name]) => {
+    const w = window as unknown as WinApi;
+    await w.api.hub.enroll({ hubUrl, enrollmentToken: 'e2e-deps-token', nodeName: name });
+  }, [mockHub.baseUrl, nodeName] as const);
+  await expect
+    .poll(async () => (await win.evaluate(() => (window as unknown as WinApi).api.hub.getStatus())).state, { timeout: 20000 })
+    .toBe('online');
+}
+
 test.describe.serial('任务依赖链（M3.3 沉淀：批量建链 / blocked 角标 / 双闸拒绝 / DAG / 解锁）', () => {
   let app: ElectronApplication | null = null;
   let win: Page | null = null;
@@ -147,6 +349,10 @@ test.describe.serial('任务依赖链（M3.3 沉淀：批量建链 / blocked 角
 
   test.afterAll(async () => {
     await app?.close().catch(() => undefined);
+    for (const sock of mockHub.allSockets) {
+      try { sock.terminate(); } catch { /* 已关 */ }
+    }
+    mockHub.server?.close();
     fs.rmSync(tmpUserData, { recursive: true, force: true });
   });
 
@@ -322,5 +528,82 @@ test.describe.serial('任务依赖链（M3.3 沉淀：批量建链 / blocked 角
     const toast = win!.getByTestId('ui-toast');
     await expect(toast).toContainText('1 个任务创建失败', { timeout: 10000 });
     await expect(toast).toContainText(`「${badLine}」依赖任务 ${BAD_DEP_ID} 不存在`);
+  });
+
+  test('场景6 M4.3 外派派发闸：blocked 提交被拒 toast 人话 → 依赖完成 → 重试派发成功', async () => {
+    test.setTimeout(240_000);
+    expect(win, '依赖场景1的实例').not.toBeNull();
+
+    await startMockHub();
+    await enrollViaEvaluate(win!, 'e2e-node-leader');
+    const { groupId } = await win!.evaluate(() =>
+      (window as unknown as WinApi).api.hub.groupCreate({ groupName: 'e2e 依赖外派组' }));
+    // 镜像登记造数（pickWorker 候选 = online ∧ mirroredBy——只造虚构 worker）：
+    // 组内广播 workspace.mirrored → 主进程累积登记表 → 弹窗预检 mirrored=true
+    mockBroadcastEvt('workspace.mirrored', {
+      groupId,
+      targetNodeId: WORKER_NODE_ID,
+      workspaceName: WS_NAME,
+      snapshotId: 'snap-e2e-deps-1',
+      appliedResources: [],
+    });
+
+    // 外派批量两行：受阻行依赖 T-B（未完成）→ 建链落板 blocked + 派发被拒人话；
+    // 解锁行依赖 T-A（场景4 已完成）→ 闸放行即刻委派（brief 透传 dependsOn）
+    const blockedLine = `外派受阻行 :: ${idB}`;
+    const unlockedLine = `外派解锁行 :: ${idA}`;
+    await win!.getByRole('button', { name: '新建任务' }).first().click();
+    const dlg = win!.getByRole('dialog').filter({
+      has: win!.getByRole('radiogroup', { name: '创建模式' }),
+    });
+    await expect(dlg).toBeVisible();
+    await dlg.getByRole('radio', { name: '批量' }).click();
+    await dlg.getByRole('radio', { name: '组内调度' }).click();
+    await dlg.locator('#create-task-batch').fill(`${blockedLine}\n${unlockedLine}`);
+    await dlg.getByRole('button', { name: '创建 2 个任务', exact: true }).click();
+    await expect(dlg).toBeHidden({ timeout: 15000 });
+    await win!.keyboard.press('Escape');
+    await expect(win!.getByRole('dialog', { name: '任务详情' })).toBeHidden({ timeout: 10000 });
+
+    // 闸拒绝 toast（per-line 摘要——文案单源与 retryDispatch 闸逐字一致）
+    const toast = win!.getByTestId('ui-toast');
+    await expect(toast).toContainText('1 个任务创建失败', { timeout: 10000 });
+    await expect(toast).toContainText(
+      `「${blockedLine}」任务存在未完成依赖（${idB}），依赖完成前不可派发`,
+    );
+
+    // 受阻行建链落板（行保留——M4.3 闸语义：建链账不回滚）+ blocked 角标
+    const blockedCard = boardCard(win!, '外派受阻行');
+    await expect(blockedCard).toBeVisible({ timeout: 15000 });
+    await expect(blockedCard.locator('span[title^="等待依赖完成"]')).toHaveAttribute(
+      'title',
+      `等待依赖完成：${idB}`,
+    );
+
+    // 解锁行即刻委派：mock hub 捕获 task.delegate 载荷 dependsOn 透传（协议 1.7.0）
+    await expect
+      .poll(() => mockHub.delegateRequests.filter((r) => r.title === '外派解锁行').length, { timeout: 10000 })
+      .toBe(1);
+    expect(mockHub.delegateRequests.find((r) => r.title === '外派解锁行')?.dependsOn).toEqual([idA]);
+    // 受阻行零委派（闸在 delegate 之前）
+    expect(mockHub.delegateRequests.find((r) => r.title === '外派受阻行')).toBeUndefined();
+
+    // B 完成（场景4 同款状态机合法链）→ 受阻行解锁
+    await win!.evaluate(async (id) => {
+      const w = window as unknown as WinApi;
+      await w.api.task.update(id, { scheduledAt: Date.now() + 3600_000 });
+      await w.api.task.transition(id, 'assigned');
+      await w.api.task.transition(id, 'in_progress');
+      await w.api.task.transition(id, 'completed');
+    }, idB);
+
+    // 重试派发（真实卡菜单 → hub:retryDispatch）：闸放行 → 已派发 toast
+    await blockedCard.click({ button: 'right' });
+    const menu = win!.getByRole('list', { name: '任务菜单 外派受阻行' });
+    await menu.getByRole('button', { name: '重试派发' }).click();
+    await expect(toast).toContainText('已派发给', { timeout: 15000 });
+    await expect
+      .poll(() => mockHub.delegateRequests.filter((r) => r.title === '外派受阻行').length, { timeout: 10000 })
+      .toBe(1);
   });
 });

@@ -266,8 +266,12 @@ function ensureDelegationRunner(nodeId: string | null): DelegationRunner {
   return delegationRunner;
 }
 
-/** 派单载荷挑字段（协议 TaskAssignedEvent 形状，异形键丢弃——与 presence 桥同款纪律） */
-function parseTaskAssigned(payload: unknown): AssignedTaskEvent | null {
+/**
+ * 派单载荷挑字段（协议 TaskAssignedEvent 形状，异形键丢弃——与 presence 桥同款纪律）。
+ * export 仅供测试锚定（tests/hub/manager.test.ts parseTaskAssigned 面——M4.3
+ * dependsOn 剥除的运行时锁），生产调用方仍限本模块 startClient。
+ */
+export function parseTaskAssigned(payload: unknown): AssignedTaskEvent | null {
   if (typeof payload !== 'object' || payload === null) return null;
   const p = payload as {
     taskId?: unknown; workspaceName?: unknown; byNode?: unknown; task?: unknown;
@@ -286,7 +290,9 @@ function parseTaskAssigned(payload: unknown): AssignedTaskEvent | null {
       prompt: t.prompt,
       ...(typeof t.agentSlug === 'string' ? { agentSlug: t.agentSlug } : {}),
       // T10 协议未知容忍：hub 1.2.0 剥离 permissionTier（白名单重建），合法值才拾取
-      // （normalizeTier 兜底收敛 confirm）；hub 升级透传后直接消费
+      // （normalizeTier 兜底收敛 confirm）；hub 升级透传后直接消费。
+      // M4.3：dependsOn（1.7.0）在此刻意丢弃——worker 零消费（语义裁定见
+      // delegation-runner.AssignedTaskEvent 注释：leader 本地 id，跨节点无意义）
       ...(isPermissionTier(t.permissionTier) ? { permissionTier: t.permissionTier } : {}),
     },
   };
