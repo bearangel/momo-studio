@@ -6,6 +6,16 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 节点互联 M4.2：多组终态
+
+协议 minor **1.6.0**（hub **v0.2.0**，版本号与协议对齐）。设计见 momo-hub 仓 `docs/specs/2026-10-29-momo-hub-m4.2-multigroup-final.md`（Momus OKAY）。
+
+- **协议 1.6.0**：`ViewAppendedEvent`/订阅链增可选 `groupId?`（**订阅记录仅显式值落锚**——旧订阅者逐字节零变化，复检回落动态推导）；`TaskRecord` 增可选 `groupId?`（delegations.group_id 既有列投影零迁移）；**METHOD_REQUIRED_MINOR 零登记**（纯可选字段）；裁定记录：**presence 保持全局**（节点发现跨组需求，关闭该项）、resource 面组化与 M4.4 治理同域
+- **hub**：订阅组锚定复检双路径（记录值 isLeaderOf+isMember / 缺省 commonGroupId 动态推导——防组长转移后漏扇出）；tail 推送透传记录 groupId；task.list 恒带 group_id 投影（hub 301 tests +4）
+- **studio**：pin v0.2.0 + 变体锁；委派板**组徽标**（Users 图标 + 组名缓存三路保鲜，名缺失降级短码，旧 hub 零渲染，仅 leader 分支——worker「来自」徽标已表达来源）；`taskList` **选中组过滤**（effectiveSelectedGroup 上下文——与监控台同推导，无组=全组聚合双态锁；重入护栏防组切换旧应答覆盖）；viewAppended 桥 groupId 透传（electron 5179 / renderer 3038，+21 测试，全程 maxWorkers=2）
+
+版本 `2.1.0-alpha.43`。hub 侧 `v0.2.0`（tag = `40fc5a6`）。
+
 ## [未发布] — 节点互联 M4.1：错误契约统一
 
 studio 侧全量，**协议与 hub 仓零改动**。设计见 momo-hub 仓 `docs/specs/2026-10-29-momo-hub-m4.1-error-contract.md`（Momus OKAY）。
