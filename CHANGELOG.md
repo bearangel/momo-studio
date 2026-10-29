@@ -6,6 +6,18 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 节点互联 M4.0：沉淀清偿批
+
+无新功能面。设计见 momo-hub 仓 `docs/specs/2026-10-29-momo-hub-m4.0-sediment.md`（Momus OKAY）。
+
+- **C6 票桶清偿**：D1（P3）修复——资源库 hub 来源计数不随目录发布事件更新，根因 `onResourcePublished` 只记角标不重拉列表（与撤回事件不对称），对称化 `void get().load()` + FIX-2 早退改条件 set（取高与重拉互不影响）+ 回归锁三例；ArchivePanel.test 缩进对齐（M3.4 oracle 遗留观察）；pullNodes 只增不删维持 M2.5 A6 设计边界（关闭）
+- **C5 e2e 沉淀一（新 `task-dependencies.spec.ts`，5 场景单实例）**：M3.3 依赖链入回归——批量 `::` 建链/blocked 角标悬停/双闸拒绝人话含 T-id（UI 面抽屉 + IPC 面 task:start 双通道）/DAG 分层只读/A 完成解锁正负双控/批量 4 成 1 败 per-line 展示；零拖拽零几何依赖
+- **C5 e2e 沉淀二（`hub-distribution.spec.ts` 场景 7/8，多实例）**：M3.1 HITL 代答入回归——mock hub 增 `task.answer` 处理 + hello protoVer 1.5.0（常量锚定 protocol-pin 同步义务）；主链 A 委派→B 真实收派（task.assigned→委派会话→首拍 running 落行）→waiting 拍→批准两段确认→「已远程批准」+ answered 留痕 + hub 收包对账；版本门控负例 hello 1.2.0→代答菜单零出现；mock 边界四条文件头如实锚定（真实链背书=M3.1 真机验收）
+- **裁定记录**：M3.4 撤回/目录 e2e 不做（mock HTTP 面失真——tombstone/revision/事件时序；单测 297/5169 + 真机验收已锁）；keychain 验收残留 18 条分域键已清理（裸名未动）
+- 验证：electron 5169 / renderer 3012 / e2e 全量 22 passed + 1 既有 skip（零 testIgnore）
+
+版本 `2.1.0-alpha.41`。
+
 ## [未发布] — 节点互联 M3.4：资源生命周期与版本对齐（M3 收官）
 
 协议 minor **1.5.0**（全可选字段/事件，无新 RPC 无门槛登记；hub v0.1.9：`SnapshotResourceRef.version?` + `HubCatalog.revision` + `resource.unpublished` 事件 + `POST /resources/unpublish` + catalog 墓碑过滤）。设计见 momo-hub 仓 `docs/specs/2026-10-29-momo-hub-m3.4-resource-lifecycle.md`。
