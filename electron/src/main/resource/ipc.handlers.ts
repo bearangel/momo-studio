@@ -1,6 +1,6 @@
 // electron/src/main/resource/ipc.handlers.ts
 //
-// 资源库 IPC handler 注册。20 个 resource 通道 + 1 个 misc 通道：
+// 资源库 IPC handler 注册。22 个 resource 通道 + 1 个 misc 通道：
 //   - resource:list         统一列表（filter 可选）
 //   - resource:getDetail    按 id 查详情
 //   - resource:install      marketplace 资源安装（封装现有 installPackage）
@@ -77,6 +77,7 @@ import { HUB_PROVIDERS } from './hub';
 import { isSmitheryDegraded } from './hub/smithery';
 import { getHubCatalogOwnership, isHubCatalogDegraded, isHubNotEnrolled } from './hub/momo-hub';
 import { scanHubCoexistIssues } from './hub/ownership';
+import { cleanupPluginDups, scanPluginDupIssues } from './plugin-dedup';
 import { installPackage, uninstallPackage } from '../marketplace/installer';
 import { fetchCatalog, isCatalogDegraded } from '../marketplace/client';
 import { deleteRegistered, registerMcpDefinition } from '../mcp/host-manager';
@@ -590,6 +591,26 @@ export function registerResourceHandlers(): void {
   // resource:hubCoexistScan — 存量并存扫描（M5.0 §7.5 清理小票）：hub 装记账 ×
   // 本地 custom 实体同 slug 并存清单。一次扫描非阻断，设置页 hub 面板消费。
   ipcMain.handle('resource:hubCoexistScan', () => scanHubCoexistIssues());
+
+  // resource:pluginDupScan — 插件×本地副本重复清单（M5.1 §1.1 库页提示条
+  // 数据源）：插件已提供同名的 custom 本地副本。空数组 = 无重复（提示条不渲染）。
+  ipcMain.handle('resource:pluginDupScan', () => scanPluginDupIssues());
+
+  // resource:pluginDupCleanup — 一键清理插件重复的本地副本（M5.1 §1.1）：
+  // 逐条重扫描校验后删除（skill=fs 目录+.sha256 / mcp/agent=DB custom 行），
+  // 部分失败续删逐条报错（failures 逐行携带原因）。
+  ipcMain.handle(
+    'resource:pluginDupCleanup',
+    async (_evt, targets: Array<{ type: 'skill' | 'mcp' | 'agent'; slug: string }>) => {
+      if (!Array.isArray(targets)) throw new Error('清理目标清单非法（须为数组）');
+      for (const t of targets) {
+        if (!t || (t.type !== 'skill' && t.type !== 'mcp' && t.type !== 'agent') || typeof t.slug !== 'string') {
+          throw new Error('清理目标条目非法（须为 {type: skill|mcp|agent, slug}）');
+        }
+      }
+      return cleanupPluginDups(targets);
+    },
+  );
 
   // resource:listBuiltinPresets — 预置清单只读（P2.3 spec §5）。本地直读
   // resources/agents/*.yaml（agent/builtin.ts 现有解析链），零网络——刻意不走

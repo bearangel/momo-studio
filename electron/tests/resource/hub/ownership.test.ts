@@ -28,12 +28,15 @@ import {
 } from '../../../src/main/resource/hub-install';
 import {
   assertNoLocalSlugConflict,
+  findLocalSlugEntity,
   hasLocalSlugEntity,
   scanHubCoexistIssues,
 } from '../../../src/main/resource/hub/ownership';
 import { saveAgentDefinition } from '../../../src/main/agent/crud';
 import { registerMcpDefinition } from '../../../src/main/mcp/host-manager';
 import { createHubConfigStore } from '../../../src/main/hub/config-store';
+import { upsertPlugin } from '../../../src/main/plugin/registry';
+import { getHubCatalogOwnership } from '../../../src/main/resource/hub/momo-hub';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-ownership-test-${Date.now()}`);
 const fetchSpy = vi.fn();
@@ -120,6 +123,85 @@ describe('hasLocalSlugEntity（自有实体判定原子）', () => {
   });
 });
 
+describe('M5.1 §1.3 安装拦截扩 plugin 源（findLocalSlugEntity 三类型）', () => {
+  /** dev 源插件提供技能 <slug>（listAllPluginSkills 真实扫描链） */
+  function seedPluginSkill(pluginId: string, slug: string): void {
+    const root = path.join(tmpRoot, 'plugins', pluginId);
+    fs.mkdirSync(path.join(root, 'skills', slug), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, 'skills', slug, 'SKILL.md'),
+      `---\nname: ${slug}\ndescription: 插件技能\n---\n`,
+    );
+    const manifest = JSON.stringify({
+      id: pluginId, name: pluginId, version: '1.0.0', description: '',
+      components: { skills: './skills' },
+    });
+    fs.writeFileSync(path.join(root, 'momo-plugin.json'), manifest);
+    upsertPlugin({
+      id: pluginId, version: '1.0.0', manifestJson: manifest, state: 'active',
+      source: 'dev', sourcePath: root, installedAt: new Date().toISOString(),
+    });
+  }
+
+  it('plugin skill 在场 → hasLocalSlugEntity true（origin=plugin + pluginId）', () => {
+    seedPluginSkill('superpowers', 'plug-skill');
+    expect(hasLocalSlugEntity('skill', 'plug-skill')).toBe(true);
+    expect(findLocalSlugEntity('skill', 'plug-skill')).toEqual({
+      origin: 'plugin', pluginId: 'superpowers',
+    });
+  });
+
+  it('plugin mcp 在场（source=plugin 行）→ true（origin=plugin + pluginId）', () => {
+    registerMcpDefinition({
+      id: `plugin-plug-a-mcp`, name: 'plug-mcp', version: '1.0.0', transport: 'stdio',
+      command: 'npx', args: ['x'], source: 'plugin', pluginId: 'plug-a',
+    });
+    expect(findLocalSlugEntity('mcp', 'plug-mcp')).toEqual({
+      origin: 'plugin', pluginId: 'plug-a',
+    });
+  });
+
+  it('plugin agent def 在场（source=plugin，id=plugin:<pid>:<slug>）→ true', () => {
+    saveAgentDefinition({
+      id: 'plugin:plug-a:plug-agent', name: 'n', slug: 'plug-agent', version: '1.0.0',
+      runtime: 'declarative', systemPrompt: 'p', defaultTools: [], source: 'plugin',
+      description: 'd', iconEmoji: '', defaultMcps: [], defaultSkills: [],
+      workspaceId: null, modelProviderId: null, modelName: 'm',
+    });
+    expect(findLocalSlugEntity('agent', 'plug-agent')).toEqual({
+      origin: 'plugin', pluginId: 'plug-a',
+    });
+  });
+
+  it('hub 安装遇插件同名 → HubSlugConflictError 人话「插件 … 已提供同名技能…」零网络', async () => {
+    seedPluginSkill('superpowers', 'plug-skill');
+    await expect(installHubPackage('skill', 'plug-skill')).rejects.toThrow(
+      '插件 superpowers 已提供同名技能「plug-skill」，无需安装副本',
+    );
+    await expect(installHubPackage('skill', 'plug-skill')).rejects.toBeInstanceOf(HubSlugConflictError);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('plugin agent 同名 → 人话类型标签「智能体」', async () => {
+    saveAgentDefinition({
+      id: 'plugin:plug-a:plug-agent2', name: 'n', slug: 'plug-agent2', version: '1.0.0',
+      runtime: 'declarative', systemPrompt: 'p', defaultTools: [], source: 'plugin',
+      description: 'd', iconEmoji: '', defaultMcps: [], defaultSkills: [],
+      workspaceId: null, modelProviderId: null, modelName: 'm',
+    });
+    await expect(installHubPackage('agent', 'plug-agent2')).rejects.toThrow(
+      '插件 plug-a 已提供同名智能体「plug-agent2」，无需安装副本',
+    );
+  });
+
+  it('custom 命中维持 M5.0 原文案（回归锁——插件扩展不改既有口径）', () => {
+    seedCustomSkill('legacy-skill');
+    expect(() => assertNoLocalSlugConflict('skill', 'legacy-skill')).toThrow(
+      '本地已有同名自定义资源（skill「legacy-skill」）；如需安装请先删除或改名本地版本',
+    );
+  });
+});
+
 describe('installHubPackage 源头拦截（M5.0 §7.5）', () => {
   it('custom skill 在场无记账 → HubSlugConflictError 人话拒装（零网络——拦截先于目录拉取）', async () => {
     seedCustomSkill('clash-skill');
@@ -199,5 +281,18 @@ describe('scanHubCoexistIssues（存量并存小票）', () => {
     seedCustomSkill('direct-skill');
     expect(() => assertNoLocalSlugConflict('skill', 'direct-skill')).toThrow(HubSlugConflictError);
     expect(() => assertNoLocalSlugConflict('skill', 'absent-skill')).not.toThrow();
+  });
+});
+
+describe('M5.1 §1.4 徽标版本源锁（HubOwnershipEntry.version = hub 目录 latest）', () => {
+  it('归属快照 entries 携目录条目 latest 版本——「已发布 vN」的 N 与本地版本无关', async () => {
+    stubOwnershipCatalog([
+      { ...catalogItem('badge-skill', 'node-self'), version: '2.3.0' },
+    ]);
+    const r = await getHubCatalogOwnership();
+    expect(r.notEnrolled).toBe(false);
+    const entry = r.entries.find((e) => e.slug === 'badge-skill');
+    expect(entry?.version).toBe('2.3.0');
+    expect(entry?.ownerNodeId).toBe('node-self');
   });
 });

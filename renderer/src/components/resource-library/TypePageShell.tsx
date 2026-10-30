@@ -10,6 +10,7 @@
 // hub 降级黄条 / 市场降级黄条）随退场，语义迁 FetchDialog 特殊态；远端获取收进
 // AddMenu 远端组。
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { AlertTriangle } from 'lucide-react';
 import type { BuiltinPresetPreview, DefinitionImpact, ResourceItem, ResourceType } from '../../ipc/types';
 import { ipc } from '../../ipc/client';
 import { useSessionStore } from '../../stores/session.store';
@@ -146,7 +147,7 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
   const {
     items, loading, error, installNotice, hubUpdates, hubSeeded, sourceFilter, query,
     setSourceFilter, setQuery, deleteResource, load, loadCatalogStatus, loadHubOwnership,
-    hubOwnership, hubOwnershipKnown, hubSelfNodeId,
+    hubOwnership, hubOwnershipKnown, hubSelfNodeId, pluginDups, loadPluginDups, cleanupPluginDups,
   } = useResourceStore();
   const setActiveView = useUiStore((s) => s.setActiveView);
   // hub 接入态（发布入口门控；hubDegraded/hubNotEnrolled 的提示条已随
@@ -157,6 +158,8 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
   const [pendingDelete, setPendingDelete] = useState<ResourceItem | null>(null);
   /** 插件卸载目标（keepData 双按钮弹窗，spec §7.2——与通用删除确认分流） */
   const [pendingPluginDelete, setPendingPluginDelete] = useState<ResourceItem | null>(null);
+  /** M5.1：一键清理进行中（防双击重复提交） */
+  const [dupCleaning, setDupCleaning] = useState(false);
   /** agent 删除的影响面（披露式级联确认文案）；null = 非 agent 或预查失败回落通用文案 */
   const [deleteImpact, setDeleteImpact] = useState<DefinitionImpact | null>(null);
   const [detailWidth, setDetailWidth] = useState<number>(readInitialDetailWidth);
@@ -168,7 +171,9 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
   useEffect(() => {
     void loadCatalogStatus();
     if (!hubOwnershipKnown) void loadHubOwnership();
-  }, [loadCatalogStatus, loadHubOwnership, hubOwnershipKnown]);
+    // M5.1：插件重复清单同拍拉取（页顶提示条数据源；type 变化重拉——per-type 过滤前置）
+    void loadPluginDups();
+  }, [loadCatalogStatus, loadHubOwnership, hubOwnershipKnown, loadPluginDups, type]);
 
   // ── 详情面板拖宽（组③ B8 方案 B）：手柄在面板左缘，鼠标左移 = 变宽 ──────
   const widthRef = useRef(detailWidth);
@@ -351,6 +356,35 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
           })()}
         </div>
       )}
+
+      {/* M5.1 §1.1：插件×本地副本重复提示条（有重复才渲染——resource:list 已
+          归并隐藏 custom 副本行，此处提示存量并给一键清理入口；清理仅用户触发） */}
+      {(() => {
+        const dups = pluginDups.filter((d) => d.type === type);
+        if (dups.length === 0) return null;
+        return (
+          <div
+            data-testid="plugin-dup-banner"
+            className="mx-4 mt-3 px-3 py-2 rounded-md border border-subtle bg-status-warning-tint text-status-warning text-sm inline-flex items-center gap-2 self-start"
+          >
+            <AlertTriangle size={16} strokeWidth={1.75} aria-hidden className="shrink-0" />
+            <span>检测到 {dups.length} 个与插件重复的本地副本</span>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={dupCleaning}
+              onClick={() => {
+                setDupCleaning(true);
+                void cleanupPluginDups(dups.map(({ type: t, slug }) => ({ type: t, slug }))).finally(
+                  () => setDupCleaning(false),
+                );
+              }}
+            >
+              {dupCleaning ? '清理中…' : '一键清理'}
+            </Button>
+          </div>
+        );
+      })()}
 
       {/* library-store-split：hub 未接入 / hub 降级 / 市场目录降级三条横幅已退场
           （语义迁 FetchDialog 特殊态，spec §2.1） */}

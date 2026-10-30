@@ -36,6 +36,13 @@
 //      源头拦截（本地同名自定义实体 → 拒装人话，零下载）。mock hub 目录/事件
 //      携 ownerNodeId，/resources/publish 实装领地判定（他节点 403 携 owner_name）。
 //
+// M5.1 追加（spec 2026-10-30 §1——插件×本地副本去重 + 发布版本回写）：
+//   10.（并入场1）发布回写：发布 v1.0.1 → 本地 custom skill 行 version=hub 发布
+//      版本（SKILL.md frontmatter 回写，spec §1.2）
+//   11. 导入拦截：dev 插件提供技能 → zip 导入同名 → 拒 + 人话（spec §1.3）
+//   12. 提示条→清理：custom 副本 → Skill 页「检测到 1 个」提示条 → 一键清理 →
+//      提示条消失 + custom 卡不输出（归并隐藏）+ 插件卡保留（spec §1.1）
+//
 // T3 mock 边界（如实记录——真实链背书 = M3.1 真机验收 + tests/hub 单测）：
 //   ① waiting 拍合成：真实产生点 = worker runner L1b（sessionWaiting 检测写授权
 //      等待登记后自发 task.report kind='waiting-input'，hub 转发 leader）——e2e
@@ -953,6 +960,23 @@ test.describe.serial('hub 分发链 / readonly 即时拒 / 版本链（M2.3 Task
     // 收摊：关闭发布对话框（成功态「关闭」钮——防遮罩拦截后续场景点击）
     await dlg.getByRole('button', { name: '关闭' }).click();
     await expect(dlg).toBeHidden();
+
+    // M5.1 场景10 发布版本回写：SKILL.md frontmatter 落发布版本——custom 行
+    // version 与 hub 发布态同源（「本地是本体」收口，spec 2026-10-30 §1.2）
+    const wb = await winA.evaluate(async ([skillName, pubVer]) => {
+      const w = window as unknown as {
+        api: {
+          resource: {
+            list(filter: { type: string; source: string }): Promise<
+              Array<{ slug: string; version?: string }>
+            >;
+          };
+        };
+      };
+      const customs = await w.api.resource.list({ type: 'skill', source: 'custom' });
+      return customs.find((i) => i.slug === skillName)?.version ?? null;
+    }, [SKILL_SLUG, SKILL_PUBLISH_VERSION] as const);
+    expect(wb, '发布后 custom skill 行 version 应=hub 发布版本').toBe(SKILL_PUBLISH_VERSION);
   });
 
   test('场景2 manifest 携带：镜像向导 S2 构建上传 → Skill 补装计数 ≥1', async () => {
@@ -1505,5 +1529,109 @@ test.describe.serial('hub 分发链 / readonly 即时拒 / 版本链（M2.3 Task
     expect(downloadCount(OWN_SLUG, '1.1.0'), '冲突拦截不得产生下载').toBe(0);
     await fetchDlgB.getByRole('button', { name: '关闭' }).click();
     await expect(fetchDlgB).toBeHidden();
+  });
+
+  // M5.1 追加（spec 2026-10-30 §1.1/§1.3——插件×本地副本去重）：
+  //   11. 导入拦截：dev 插件提供技能 e2e-dup-skill → zip 导入同名 → 拒 +
+  //      人话「插件 … 已提供技能 …，无需导入副本」零写入
+  //   12. 提示条→清理：custom 副本（createSkill 造成——spec 拦截面只含 zip 导入）
+  //      → Skill 页提示条「检测到 1 个」→ 一键清理 → 提示条消失 + custom 卡
+  //      不输出（归并）+ 插件卡保留 + 重复清单空
+  test('场景11+12 M5.1 插件重复：zip 导入拒 + 提示条一键清理', async () => {
+    test.setTimeout(240_000);
+    expect(winA, '依赖场景1的实例 A').not.toBeNull();
+
+    const PLUGIN_ID = 'e2e-dup-plugin';
+    const DUP_SLUG = 'e2e-dup-skill';
+
+    // fixture：dev 插件（提供同名技能）+ custom 本地副本（表单创建路径）
+    const pluginDir = path.join(tmpRoot, 'dup-plugin');
+    fs.mkdirSync(path.join(pluginDir, 'skills', DUP_SLUG), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, 'skills', DUP_SLUG, 'SKILL.md'),
+      `---\nname: ${DUP_SLUG}\ndescription: 插件技能\n---\n\n插件正文。\n`,
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, 'momo-plugin.json'),
+      JSON.stringify({
+        id: PLUGIN_ID, name: PLUGIN_ID, version: '1.0.0',
+        description: 'M5.1 e2e dedup fixture', components: { skills: './skills' },
+      }),
+    );
+    await winA!.evaluate(async ([dir, skillName]) => {
+      const w = window as unknown as {
+        api: {
+          plugin: { installDevDir(d: string): Promise<unknown> };
+          resource: {
+            createSkill(input: { name: string; description: string; body: string }): Promise<unknown>;
+          };
+        };
+      };
+      await w.api.plugin.installDevDir(dir);
+      await w.api.resource.createSkill({
+        name: skillName, description: '重复本地副本', body: '# dup\n本地副本正文。',
+      });
+    }, [pluginDir, DUP_SLUG] as const);
+
+    // ── 场景11：zip 导入遇插件同名 → 拒 + 人话（UploadSkillDialog 红字直出）──
+    const AdmZipCtor = electronRequire('adm-zip') as new () => {
+      addFile(name: string, data: Buffer): void;
+      toBuffer(): Buffer;
+    };
+    const zip = new AdmZipCtor();
+    zip.addFile(`${DUP_SLUG}/SKILL.md`, Buffer.from(`---\nname: ${DUP_SLUG}\ndescription: dup\n---\n# dup\n`));
+    const zipPath = path.join(tmpRoot, `${DUP_SLUG}.zip`);
+    fs.writeFileSync(zipPath, zip.toBuffer());
+
+    await winA!.getByRole('button', { name: '资源库', exact: true }).click();
+    await winA!.getByRole('button', { name: 'Skill', exact: true }).click();
+    await winA!.getByRole('button', { name: '添加技能' }).click();
+    await winA!.locator('[role="menu"]').getByText('导入 zip 包…').click();
+    const upDlg = winA!.getByRole('dialog', { name: '上传自定义 Skill' });
+    await upDlg.locator('input[aria-label="选择文件"]').setInputFiles(zipPath);
+    await upDlg.getByRole('button', { name: '上传', exact: true }).click();
+    await expect(upDlg.getByText(`插件 ${PLUGIN_ID} 已提供技能 ${DUP_SLUG}，无需导入副本`)).toBeVisible({
+      timeout: 15000,
+    });
+    await upDlg.getByRole('button', { name: '取消' }).click();
+    await expect(upDlg).toBeHidden();
+
+    // ── 场景12：提示条 → 一键清理 → custom 卡不输出（归并）+ 插件卡保留 ──
+    // 切页重进触发 load + pluginDupScan（store 刷新沿页面生命周期）。「智能体」
+    // 与活动栏视图钮同名——getByLabel('资源类型') nav 收窄到库页侧栏
+    const typeNav = winA!.getByLabel('资源类型');
+    await typeNav.getByRole('button', { name: '智能体' }).click();
+    await typeNav.getByRole('button', { name: 'Skill' }).click();
+    const banner = winA!.getByTestId('plugin-dup-banner');
+    await expect(banner).toBeVisible({ timeout: 20000 });
+    await expect(banner.getByText('检测到 1 个与插件重复的本地副本')).toBeVisible();
+    // 归并面：插件卡在场，custom 副本卡不输出（隐藏非删除）
+    const pluginCard = winA!.getByTestId(`resource-card-plugin-skill-${DUP_SLUG}`);
+    await expect(pluginCard).toBeVisible({ timeout: 20000 });
+    await expect(winA!.getByTestId(`resource-card-custom-skill-${DUP_SLUG}`)).toHaveCount(0);
+
+    await banner.getByRole('button', { name: '一键清理' }).click();
+    await expect(banner).toBeHidden({ timeout: 20000 });
+    await expect(pluginCard, '清理后插件卡保留').toBeVisible();
+    await expect(winA!.getByText(/已清理 1 个与插件重复的本地副本/)).toBeVisible();
+
+    // 结构化复核：custom 源无该 slug（副本已删）+ 重复清单空（提示条不回弹）
+    const after = await winA!.evaluate(async ([skillName]) => {
+      const w = window as unknown as {
+        api: {
+          resource: {
+            list(filter: { type: string; source: string }): Promise<Array<{ slug: string }>>;
+            pluginDupScan(): Promise<Array<{ slug: string }>>;
+          };
+        };
+      };
+      const customs = await w.api.resource.list({ type: 'skill', source: 'custom' });
+      return {
+        hasCustom: customs.some((i) => i.slug === skillName),
+        dups: await w.api.resource.pluginDupScan(),
+      };
+    }, [DUP_SLUG] as const);
+    expect(after.hasCustom, 'custom 副本应已删除').toBe(false);
+    expect(after.dups).toEqual([]);
   });
 });

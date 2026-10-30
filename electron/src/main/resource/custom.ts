@@ -102,6 +102,8 @@ export function listCustomResources(workspaceId?: string): ResourceItem[] {
   }
 
   // 2. Skill：用户 zip 上传的 skill（source='custom'，有 .sha256 标记）
+  // M5.1：version / skillFrontmatter 透出 frontmatter 版本（发布版本回写后
+  // 本地卡版本与 hub 发布态同源——详情面板「version:」行与发布弹窗预填消费）
   for (const skill of listInstalledSkills().filter((s) => s.source === 'custom')) {
     result.push({
       id: buildResourceId('custom', 'skill', skill.slug),
@@ -110,11 +112,15 @@ export function listCustomResources(workspaceId?: string): ResourceItem[] {
       slug: skill.slug,
       name: skill.name,
       description: skill.description,
+      ...(skill.version !== undefined ? { version: skill.version } : {}),
       installed: true,
       installable: false,
       removable: true,
       custom: {
         installedAt: skill.installedAt ?? new Date().toISOString(),
+        ...(skill.version !== undefined
+          ? { skillFrontmatter: { name: skill.name, version: skill.version } }
+          : {}),
       },
     });
   }

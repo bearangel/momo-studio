@@ -38,6 +38,9 @@ import type {
   HubInstallResult,
   HubCatalogOwnership,
   HubCoexistIssue,
+  PluginDupIssue,
+  PluginDupTarget,
+  PluginDupCleanupResult,
   TaskRow,
   TaskCreateBatchResult,
   UploadedSkill,
@@ -536,6 +539,10 @@ const api: ApiSurface = {
     hubCatalogOwnership: () => invoke<HubCatalogOwnership>('resource:hubCatalogOwnership'),
     // M5.0 §7.5：存量并存扫描（设置页 hub 面板清理小票）
     hubCoexistScan: () => invoke<HubCoexistIssue[]>('resource:hubCoexistScan'),
+    // M5.1 §1.1：插件×本地副本重复清单（库页提示条）+ 一键清理（部分失败续删）
+    pluginDupScan: () => invoke<PluginDupIssue[]>('resource:pluginDupScan'),
+    pluginDupCleanup: (targets: PluginDupTarget[]) =>
+      invoke<PluginDupCleanupResult>('resource:pluginDupCleanup', targets),
   },
   task: {
     create: (input) => invoke<TaskRow>('task:create', input),

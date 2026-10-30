@@ -217,8 +217,10 @@ interface ResolvedSkillRef {
  *  marketplace 装面的 cache_path 是版本化路径（…/<slug>/<version>，basename 是
  *  版本号——loader.ts parseSkillMd 的同款例外纪律），slug 语义来源是该行 slug 列
  *  （= collectSkills 反查键 skill_definitions.slug，与 hub:{slug} 记账键同口径）；
- *  custom/builtin 形态目录名即 slug。 */
-function resolveSkillCachePath(ref: string): ResolvedSkillRef | null {
+ *  custom/builtin 形态目录名即 slug。
+ *  M5.1 起导出：发布版本回写（publish-writeback）复用同一定位，保证「发布打包
+ *  的 SKILL.md」与「回写的 SKILL.md」是同一份（定位口径单源）。 */
+export function resolveSkillCachePath(ref: string): ResolvedSkillRef | null {
   try {
     const row = getDb()
       .prepare('SELECT slug, cache_path FROM skill_definitions WHERE slug = ?')

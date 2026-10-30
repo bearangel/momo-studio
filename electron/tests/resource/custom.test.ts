@@ -157,6 +157,27 @@ describe('listCustomResources', () => {
     expect(skill.id).toBe('custom-skill-xlsx');
   });
 
+  it('M5.1：skill frontmatter version 透出（version + custom.skillFrontmatter——发布回写后本地卡版本与 hub 发布态同源）', async () => {
+    const { listInstalled } = await import('../../src/main/skill/zip-uploader');
+    (listInstalled as ReturnType<typeof vi.fn>).mockReturnValueOnce([
+      {
+        slug: 'wb-skill', name: 'wb-skill', description: '回写后',
+        source: 'custom', installedAt: '2026-10-30T00:00:00Z', version: '1.0.1',
+      },
+    ]);
+    const items = listCustomResources();
+    const skill = items.find((i) => i.type === 'skill')!;
+    expect(skill.version).toBe('1.0.1');
+    expect(skill.custom?.skillFrontmatter).toEqual({ name: 'wb-skill', version: '1.0.1' });
+  });
+
+  it('M5.1：frontmatter 无 version 的 skill 行不带 version / skillFrontmatter（既有语义零变化）', () => {
+    const items = listCustomResources();
+    const skill = items.find((i) => i.type === 'skill')!;
+    expect(skill.version).toBeUndefined();
+    expect(skill.custom?.skillFrontmatter).toBeUndefined();
+  });
+
   it('Agent custom 项含 agentSystemPromptHash + installedAt', () => {
     const items = listCustomResources();
     const agent = items.find((i) => i.type === 'agent')!;

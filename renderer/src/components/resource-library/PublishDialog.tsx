@@ -177,6 +177,21 @@ export function PublishDialog({ item, onClose }: Props) {
             <div className="text-xs text-tertiary">
               {result.slug} · {formatSize(result.sizeBytes)} · 组内节点已可在「hub」页签安装
             </div>
+            {/* M5.1 §1.2 版本回写回执：失败不推翻发布——警示行如实披露；plugin
+                zip 装源 skipped 提示「插件本体由插件包管理，版本未回写」 */}
+            {result.versionWriteback && !result.versionWriteback.written && (
+              <div
+                data-testid="writeback-notice"
+                className="flex items-start gap-2 rounded-md bg-status-warning-tint px-3 py-2 text-left text-status-warning"
+              >
+                <AlertTriangle size={14} strokeWidth={1.75} aria-hidden className="mt-0.5 shrink-0" />
+                <span className="text-[13px]">
+                  {result.versionWriteback.skipped
+                    ? result.versionWriteback.notice
+                    : `发布成功但版本回写失败：${result.versionWriteback.error ?? '未知原因'}`}
+                </span>
+              </div>
+            )}
           </div>
         ) : (
           <>

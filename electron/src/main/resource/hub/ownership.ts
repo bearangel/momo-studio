@@ -11,10 +11,12 @@
 //     hub 装记账 + 本地 custom 实体同 slug 并存：owner=本机引导删 hub 副本，
 //     异物提示可保留
 //
-// 判定口径（消费面矩阵 §5）：
-//   - 「自有实体」= custom/marketplace 源本地实体（agent 定义 / mcp 注册行 /
-//     skill 已装清单 / plugins 注册行）；builtin 不算——hub 装另起 marketplace
-//     行，异源并存是 P2-4 既有语义
+// 判定口径（消费面矩阵 §5 + M5.1 §1.3）：
+//   - 「自有实体」= custom/marketplace/plugin 源本地实体（agent 定义 / mcp
+//     注册行 / skill 已装清单 / 插件 skills 目录 / plugins 注册行）；builtin
+//     不算——hub 装另起 marketplace 行，异源并存是 P2-4 既有语义。M5.1 起
+//     plugin 源纳入（findLocalSlugEntity 单源）——hub 安装遇插件同名同口径拦
+//     （人话「插件已提供同名…」）
 //   - 「hub 装记账」= installed_packages `hub:{slug}` 同 type 行且 cache_path !== ''
 //     （发布记账回填行恒 cache_path=''——recordPublishAccounting 语义；空串/非空
 //     是「发布过」与「从 hub 装过」的唯一判别锚，一义一名）
@@ -24,30 +26,69 @@
 import { listAgentDefinitions } from '../../agent/agent-queries';
 import { listRegistered } from '../../mcp/host-manager';
 import { listInstalled as listInstalledSkills } from '../../skill/zip-uploader';
+import { listAllPluginSkills } from '../../plugin/assembly';
 import { getPlugin } from '../../plugin/registry';
 import { listInstalled } from '../../marketplace/installer';
 import { getHubCatalogOwnership, hubPackageItemId } from './momo-hub';
 import { HubSlugConflictError } from '../hub-install';
 import type { ResourceType } from '../types';
 
-/** 本地同 type+slug 自有实体（custom/marketplace 源）在场判定 */
-export function hasLocalSlugEntity(type: ResourceType, slug: string): boolean {
+/** 本地同 type+slug 自有实体命中（origin 区分 custom/marketplace 与 plugin 源） */
+export interface LocalSlugEntity {
+  origin: 'custom' | 'marketplace' | 'plugin';
+  /** origin='plugin' 时提供同名能力的插件 id（人话文案消费） */
+  pluginId?: string;
+}
+
+/**
+ * 本地同 type+slug 自有实体查找（M5.1 §1.3 扩 plugin 源——hub 安装遇插件
+ * 同名同口径拦截）。plugin 源：skill=插件 skills 目录扫描 / mcp=source='plugin'
+ * 注册行 / agent=source='plugin' 定义（def.slug 对齐）；plugin 类型本体沿
+ * plugins 表行判定（zip 装与 hub 装物理同行，见模块头）。
+ */
+export function findLocalSlugEntity(type: ResourceType, slug: string): LocalSlugEntity | null {
   switch (type) {
-    case 'agent':
-      return listAgentDefinitions().some(
+    case 'agent': {
+      const defs = listAgentDefinitions().filter(
         (d) => d.slug === slug && (d.source === 'custom' || d.source === 'marketplace'),
       );
-    case 'mcp':
-      return listRegistered().some(
+      if (defs.length > 0) return { origin: defs[0]!.source as 'custom' | 'marketplace' };
+      const pluginDef = listAgentDefinitions().find(
+        (d) => d.slug === slug && d.source === 'plugin',
+      );
+      if (pluginDef) {
+        // plugin agent def.id 形如 plugin:<pluginId>:<slug>（agent-sync 落库约定）
+        const pluginId = pluginDef.id.split(':')[1] ?? '';
+        if (pluginId !== '') return { origin: 'plugin', pluginId };
+      }
+      return null;
+    }
+    case 'mcp': {
+      const rows = listRegistered().filter(
         (m) => m.name === slug && (m.source === 'custom' || m.source === 'marketplace'),
       );
-    case 'skill':
-      return listInstalledSkills().some(
+      if (rows.length > 0) return { origin: rows[0]!.source as 'custom' | 'marketplace' };
+      const pluginMcp = listRegistered().find((m) => m.name === slug && m.source === 'plugin');
+      if (pluginMcp?.pluginId) return { origin: 'plugin', pluginId: pluginMcp.pluginId };
+      return null;
+    }
+    case 'skill': {
+      const rows = listInstalledSkills().filter(
         (s) => s.slug === slug && (s.source === 'custom' || s.source === 'marketplace'),
       );
+      if (rows.length > 0) return { origin: rows[0]!.source as 'custom' | 'marketplace' };
+      const pluginSkill = listAllPluginSkills().find((s) => s.slug === slug);
+      if (pluginSkill) return { origin: 'plugin', pluginId: pluginSkill.pluginId };
+      return null;
+    }
     case 'plugin':
-      return getPlugin(slug) !== null;
+      return getPlugin(slug) !== null ? { origin: 'custom' } : null;
   }
+}
+
+/** 本地同 type+slug 自有实体（custom/marketplace/plugin 源）在场判定（布尔包装） */
+export function hasLocalSlugEntity(type: ResourceType, slug: string): boolean {
+  return findLocalSlugEntity(type, slug) !== null;
 }
 
 /** hub 装记账命中（`hub:{slug}` 同 type 行且 cache_path 非空 = 真从 hub 装过） */
@@ -57,17 +98,32 @@ export function isHubInstallAccounted(type: ResourceType, slug: string): boolean
   );
 }
 
+/** 拦截人话的类型中文标签（plugin 命中分支文案消费） */
+const TYPE_LABELS: Record<ResourceType, string> = {
+  agent: '智能体',
+  mcp: 'MCP',
+  skill: '技能',
+  plugin: '插件',
+};
+
 /**
- * 安装链 slug 冲突拦截（spec §7.5）：本地自有实体在场且非 hub 装记账 → 抛
- * HubSlugConflictError。存量并存（custom + 旧 hub 装记账）不拦——更新合法，
- * 清理由扫描小票引导。
+ * 安装链 slug 冲突拦截（spec §7.5 + M5.1 §1.3 扩 plugin 源）：本地自有实体
+ * 在场且非 hub 装记账 → 抛 HubSlugConflictError。plugin 源命中给人话「插件
+ * 已提供同名…」；custom/marketplace 命中维持 M5.0 原文案（既有测试锁）。
+ * 存量并存（custom + 旧 hub 装记账）不拦——更新合法，清理由扫描小票引导。
  */
 export function assertNoLocalSlugConflict(type: ResourceType, slug: string): void {
-  if (hasLocalSlugEntity(type, slug) && !isHubInstallAccounted(type, slug)) {
+  const entity = findLocalSlugEntity(type, slug);
+  if (entity === null) return;
+  if (isHubInstallAccounted(type, slug)) return;
+  if (entity.origin === 'plugin' && entity.pluginId !== undefined) {
     throw new HubSlugConflictError(
-      `本地已有同名自定义资源（${type}「${slug}」）；如需安装请先删除或改名本地版本`,
+      `插件 ${entity.pluginId} 已提供同名${TYPE_LABELS[type]}「${slug}」，无需安装副本`,
     );
   }
+  throw new HubSlugConflictError(
+    `本地已有同名自定义资源（${type}「${slug}」）；如需安装请先删除或改名本地版本`,
+  );
 }
 
 /** 并存小票行（resource:hubCoexistScan 返回——renderer HubSettingsPanel 消费） */
