@@ -3,7 +3,8 @@
 // listResources：统一五源（builtin/custom/marketplace/smithery/hub）资源列表的主入口。
 // 内部一次 fetchCatalog（远程优先 + 本地回退），按 downloadUrl 分流到 builtin/marketplace，
 // 再合并 custom（DB/fs 同步读）、smithery（已装 MCP）与 hub（momo-hub 目录项，
-// installed_packages 的 `hub:` 前缀记账判定已装）。
+// installed_packages 的 `hub:` 前缀记账且 cache_path 非空〔真实安装〕判定已装——
+// 发布记账行不算，M5.2）。
 // fetchCatalog 失败时只丢 builtin+marketplace，custom/hub 仍正常返回。
 //
 // filter 支持按 type/source 过滤。filter.source 指定时短路不必要源（避免 fetchCatalog）。

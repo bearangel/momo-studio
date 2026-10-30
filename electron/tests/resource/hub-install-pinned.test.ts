@@ -172,8 +172,18 @@ async function startMockHub(): Promise<http.Server> {
   return server;
 }
 
-/** 直插 hub 已装记账行（已装版本判定源） */
+/** 直插 hub 已装记账行（已装版本判定源——M5.2 起须真实安装形态：cache_path 非空） */
 function seedInstalled(slug: string, version: string): void {
+  getDb()
+    .prepare(
+      `INSERT INTO installed_packages (id, item_id, item_type, slug, version, cache_path, checksum)
+       VALUES (?, ?, 'agent', ?, ?, ?, '')`,
+    )
+    .run(crypto.randomUUID(), hubPackageItemId(slug), slug, version, `/cache/hub/${slug}/${version}`);
+}
+
+/** 直插发布记账行（cache_path=''——M5.2：不算已装，安装链不得据此报 alreadyLatest） */
+function seedPublishAccounting(slug: string, version: string): void {
   getDb()
     .prepare(
       `INSERT INTO installed_packages (id, item_id, item_type, slug, version, cache_path, checksum)
@@ -269,6 +279,20 @@ describe('installHubPackage 钉死版本（B13）', () => {
     expect(outcome.version).toBe('2.0.0');
     expect(downloadRequests()).toEqual([]);
     expect(installedVersion('pin-ahead')).toBe('2.0.0');
+  });
+
+  it('M5.2 回归锁：仅发布记账行（cache_path 空）在场 → 不得报 alreadyLatest，必须真实下载安装', async () => {
+    registerVersions('pin-pubacc', ['1.0.0', '2.0.0']);
+    seedPublishAccounting('pin-pubacc', '2.0.0');
+
+    const outcome = await installHubPackage('agent', 'pin-pubacc');
+
+    expect(outcome.alreadyLatest).toBeUndefined();
+    expect(downloadRequests()).toEqual(['/resources/pin-pubacc/2.0.0/download']);
+    const row = getDb()
+      .prepare('SELECT cache_path FROM installed_packages WHERE item_id = ?')
+      .get(hubPackageItemId('pin-pubacc')) as { cache_path: string } | undefined;
+    expect(row?.cache_path).not.toBe('');
   });
 
   it('对照：无 pinned → latest 语义不变（装 2.0.0，即使目录同时有旧版）', async () => {
