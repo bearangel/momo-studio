@@ -6,6 +6,17 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — M5.0 资源归属权威（slug 领地制 + 源头拦截）
+
+`2.1.0-alpha.46`。协议 minor **1.8.0**（hub **v0.4.0**）。设计见 momo-hub 仓 `docs/specs/2026-10-30-momo-hub-m5.0-resource-ownership.md`（Momus OKAY；图文设计页经用户逐项裁定——含发布钮按归属隐藏、源头拦截两项用户裁定）。
+
+- **hub v0.4.0**：db v8 `resources.owner_node_id`（NULL=开放认领）；领地规则——新 slug 发布即认领、**author 定死 owner 名**（「最近发布者覆盖」旧 bug 消灭）、无主原子认领（条件 UPDATE 并发互斥）、非 owner **403 `not_owner`**（携 owner_name，**先于 409**——越权者不探知版本存在）；unpublish 翻转 **owner-only**（M4.4 裁关闭前提失效重评）；**hello 同步改名**（可选 nodeName：未占用→同事务刷名+author / 撞名→name_conflict 拒绝，治同址改名 hub 无感知旧瑕疵）；catalog/事件携带 `ownerNodeId`（全可选安全降级）；307→332 测试
+- **studio 五处变化**：①「已发布 vN → momo-hub」徽标（`resolveHubOwnership` 三态单源 own/other/unknown，lastGood 滞留合理）②403 人话（publish/unpublish 双落，体异形兜底）③非 owner 隐藏下架钮 ④非 owner 隐藏「发布到 hub」钮（覆盖 custom 四类 + marketplace 已装 skill；不可达保留 403 兜底）⑤**源头拦截**——FetchDialog own 行免装改显「你的发布 · 本地 v / 已发布 v」、`installHubPackage` 前置 slug 冲突拦截（builtin 不拦/hub 装记账豁免不误伤自更新/mirror 链软失败跳过留痕）、设置页存量并存清理小票（own 引导删/异物可保留）
+- **顺带修两处既有缺陷**（e2e 全链暴露）：事件桥白名单剥 `ownerNodeId` 契约字段（透传+双面锁）；resource.store 切类型页竞态「skill 页渲染 agent 卡」（loadSeq 序号守卫 last-write-wins）
+- **hello 4404 人话**：「该名称已被其他节点使用」
+- 测试：electron 5197→5221 / renderer 3056→3084 / e2e hub-distribution 场景 9（发布→他节点 403+钮收敛→原主新版→徽标→own 行免装→安装被拦零下载全链）
+- 票桶（oracle 非阻塞）：FetchDialog 与卡面 selfNodeId 双通道瞬时分叉（均安全降级）；hub 装记账残缺态理论拦截洞（超票范围）
+
 ## [未发布] — 资源库「库 / 商店」分离（library-store-split）
 
 `2.1.0-alpha.45`。协议零改、hub 零改（studio 单侧）。设计见 `docs/specs/2026-10-29-library-store-split-design.md`（Momus OKAY 引用全过；P1 预览门禁过——`.omo/previews/library-store-split.html` 定值合同逐项落码）。
