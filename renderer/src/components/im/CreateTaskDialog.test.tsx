@@ -24,13 +24,13 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CreateTaskDialog, parseTaskLine } from './CreateTaskDialog';
 import { useGroupStore } from '../../stores/group.store';
 import { useTaskStore } from '../../stores/task.store';
-import type { GroupRow, RoutingPrecheckResult } from '../../ipc/types';
+import type { GroupRow, RoutingPrecheckResult, Team, Workspace, WorkspaceAgentMember } from '../../ipc/types';
 
 // vi.hoisted 保证 mock fn 在 vi.mock 工厂（会被提升到文件顶部）执行时已存在，
 // 同时能在每个 test 内通过 mockResolvedValueOnce 精确控制返回值。
 const {
   mockTaskCreate, mockTaskCreateBatch, mockListAssignments, mockTeamList, mockSessionList, mockTaskGroupList,
-  mockRoutingPrecheck, mockSubmitRoutedTask, mockGetDelegationSettings, showToastMock,
+  mockRoutingPrecheck, mockSubmitRoutedTask, mockGetDelegationSettings, mockWorkspaceList, showToastMock,
 } = vi.hoisted(() => ({
   mockTaskCreate: vi.fn(),
   mockTaskCreateBatch: vi.fn(),
@@ -41,6 +41,7 @@ const {
   mockRoutingPrecheck: vi.fn(),
   mockSubmitRoutedTask: vi.fn(),
   mockGetDelegationSettings: vi.fn().mockResolvedValue({ acceptTasks: true, maxConcurrent: 2, hitlTimeoutMinutes: 15 }),
+  mockWorkspaceList: vi.fn(),
   showToastMock: vi.fn(),
 }));
 
@@ -51,6 +52,7 @@ vi.mock('../../ipc/client', () => ({
     team: { list: mockTeamList },
     session: { list: mockSessionList },
     taskGroup: { list: mockTaskGroupList },
+    workspace: { list: mockWorkspaceList },
     hub: {
       routingPrecheck: mockRoutingPrecheck,
       submitRoutedTask: mockSubmitRoutedTask,
@@ -955,5 +957,319 @@ describe('CreateTaskDialog — `::` 依赖提交链（M3.3）', () => {
     );
     // 弹窗不关（行已建链保留待处理，用户可改行重试或去待派发卡重试）
     expect(onCreated).not.toHaveBeenCalled();
+  });
+});
+
+// ═══ M5.3 X3：外派「执行方式」——团队协作 + 预检（spec §5.4/§5.5，预览定值清单为合同）═══
+// Mock 口径：workspace.list / agent.listMembers 仿真真实 IPC 形状（Team / Workspace /
+// WorkspaceAgentMember 全字段），listMembers 按 wsId 分流当前 ws 与镜像 ws。
+function mkMember(instanceId: string, agentName: string, workspaceId = 'ws1'): WorkspaceAgentMember {
+  return {
+    instanceId,
+    workspaceId,
+    agentDefinitionId: `def-${agentName}`,
+    agentUserId: `user-${agentName}`,
+    agentName,
+    iconEmoji: '',
+    hasApiKeyOverride: false,
+    lastRunning: false,
+    createdAt: '2026-10-01T00:00:00.000Z',
+  };
+}
+
+function mkTeam(): Team {
+  return {
+    id: 'team-t1',
+    workspaceId: 'ws1',
+    name: '研发突击队',
+    iconEmoji: '',
+    leaderInstanceId: 'inst-coder',
+    members: [
+      mkMember('inst-coder', 'coder'),
+      mkMember('inst-tester', 'tester'),
+      mkMember('inst-docs', 'docs-writer'),
+    ],
+    createdAt: '2026-10-30T00:00:00.000Z',
+  };
+}
+
+function mkWorkspace(partial: Partial<Workspace> & Pick<Workspace, 'id' | 'name'>): Workspace {
+  return {
+    description: '',
+    directoryPath: '/tmp/mirror',
+    gitInitialized: false,
+    createdAt: '2026-10-01T00:00:00.000Z',
+    ownerId: 'owner',
+    iconEmoji: '',
+    defaultAgentInstanceId: null,
+    ...partial,
+  };
+}
+
+describe('CreateTaskDialog — 外派团队执行（M5.3 X3）', () => {
+  beforeEach(() => {
+    mockTaskCreate.mockReset().mockResolvedValue({ id: 'T-100' });
+    mockTaskCreateBatch.mockReset().mockResolvedValue({ results: [{ ok: true, task: { id: 'T-100' } }] });
+    mockListAssignments.mockReset().mockResolvedValue([]);
+    mockTeamList.mockReset().mockResolvedValue([mkTeam()]);
+    mockSessionList.mockReset().mockResolvedValue([]);
+    mockTaskGroupList.mockReset().mockResolvedValue([]);
+    mockRoutingPrecheck.mockReset().mockResolvedValue(precheckFixture());
+    mockSubmitRoutedTask.mockReset().mockResolvedValue({ task: { id: 'T-rem' }, dispatched: true, nodeId: 'node-a' });
+    // 默认无本地镜像（覆盖未知态）；用例按需覆写
+    mockWorkspaceList.mockReset().mockResolvedValue([]);
+    useGroupStore.setState({ groups: [], loading: false, error: null, currentWorkspaceId: null, selectedGroupId: null });
+    useTaskStore.setState({ tasks: [], selectedTaskId: null, loading: false, error: null, currentWorkspaceId: null, pendingMoveCount: 0, dragging: false });
+  });
+
+  /** 进入外派单任务 + 团队协作 + 选中夹具团队（组内调度口径） */
+  async function openTeamGroupDialog(): Promise<void> {
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '组内调度' }));
+    fireEvent.click(screen.getByRole('radio', { name: '团队协作' }));
+    fireEvent.change(await screen.findByLabelText('团队'), { target: { value: 'team-t1' } });
+  }
+
+  /** 进入外派单任务 + 指定节点（node-a）+ 团队协作 + 选中夹具团队 */
+  async function openTeamNodeDialog(): Promise<void> {
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '指定节点' }));
+    fireEvent.change(await screen.findByLabelText('目标成员'), { target: { value: 'node-a' } });
+    fireEvent.click(screen.getByRole('radio', { name: '团队协作' }));
+    fireEvent.change(await screen.findByLabelText('团队'), { target: { value: 'team-t1' } });
+  }
+
+  it('X3-1. 外派默认单 agent：执行方式 seg 在场（单 agent 选中）+ hint；无团队下拉无预检注', async () => {
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '组内调度' }));
+    expect(screen.getByRole('radiogroup', { name: '执行方式' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: '单 agent' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: '团队协作' })).toHaveAttribute('aria-checked', 'false');
+    expect(
+      screen.getByText('任务落到目标节点后由单个 agent 处理（默认 agent，或按 agent 指定）'),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText('团队')).not.toBeInTheDocument();
+    expect(screen.queryByText(/镜像/)).not.toBeInTheDocument();
+  });
+
+  it('X3-2a. 切团队协作：团队下拉在场 + leader chip 文案（leader 名经 leaderInstanceId 匹配）', async () => {
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '组内调度' }));
+    fireEvent.click(screen.getByRole('radio', { name: '团队协作' }));
+    const sel = await screen.findByLabelText('团队');
+    expect((sel as HTMLSelectElement).value).toBe('');
+    await screen.findByRole('option', { name: '研发突击队' });
+    fireEvent.change(sel, { target: { value: 'team-t1' } });
+    expect(await screen.findByText('leader：coder · 提交时展开为成员名单快照')).toBeInTheDocument();
+  });
+
+  it('X3-2b. 团队列表为空 → option 暂无团队话术 + 标题已填仍不可提交', async () => {
+    mockTeamList.mockResolvedValue([]);
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '组内调度' }));
+    fireEvent.click(screen.getByRole('radio', { name: '团队协作' }));
+    const sel = (await screen.findByLabelText('团队')) as HTMLSelectElement;
+    expect(sel.selectedOptions[0]?.textContent).toBe('暂无团队（≥2 成员的团队才可协作）');
+    fireEvent.change(screen.getByLabelText(/标题\*/), { target: { value: '想协作' } });
+    expect(screen.getByRole('button', { name: '创建任务' })).toBeDisabled();
+  });
+
+  it('X3-3a. 指定节点 × 镜像全覆盖 → 绿字 N 名成员；不拦提交', async () => {
+    mockWorkspaceList.mockResolvedValue([mkWorkspace({ id: 'mirror-ws', name: 'dev-ws' })]);
+    // 真实 IPC 恒返回 Promise（裸数组 .then 即崩——保真度口径）
+    mockListAssignments.mockImplementation((wsId: string) =>
+      Promise.resolve(
+        wsId === 'mirror-ws'
+          ? [
+              mkMember('inst-coder', 'coder', 'mirror-ws'),
+              mkMember('inst-tester', 'tester', 'mirror-ws'),
+              mkMember('inst-docs', 'docs-writer', 'mirror-ws'),
+            ]
+          : [],
+      ),
+    );
+    await openTeamNodeDialog();
+    expect(await screen.findByText('✓ 3 名成员在目标节点镜像中全部可解析')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/标题\*/), { target: { value: '团队外派' } });
+    expect(screen.getByRole('button', { name: '创建任务' })).toBeEnabled();
+  });
+
+  it('X3-3b. 指定节点 × 镜像缺 2 名成员 → 黄字含名单（不拦提交）', async () => {
+    mockWorkspaceList.mockResolvedValue([mkWorkspace({ id: 'mirror-ws', name: 'dev-ws' })]);
+    mockListAssignments.mockImplementation((wsId: string) =>
+      Promise.resolve(wsId === 'mirror-ws' ? [mkMember('inst-coder', 'coder', 'mirror-ws')] : []),
+    );
+    await openTeamNodeDialog();
+    expect(
+      await screen.findByText(
+        '目标节点镜像缺 2 名成员：tester、docs-writer——若对方本地也无这些 agent，任务将被拒收（保留待处理可重试）',
+      ),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/标题\*/), { target: { value: '缺员外派' } });
+    expect(screen.getByRole('button', { name: '创建任务' })).toBeEnabled();
+  });
+
+  it('X3-3c. 指定节点 × 本地无同名镜像 → 黄字含空间名（覆盖未知态）', async () => {
+    await openTeamNodeDialog();
+    expect(
+      await screen.findByText('本地无 dev-ws 镜像，无法预检成员覆盖——目标节点若未镜像将被拒收'),
+    ).toBeInTheDocument();
+  });
+
+  it('X3-4a. 组内调度 × 落后节点 → 黄字含节点名与协议版本', async () => {
+    mockRoutingPrecheck.mockResolvedValue(
+      precheckFixture({
+        nodeCaps: [
+          { nodeId: 'node-a', name: 'office-mac', protoVer: '1.9.0' },
+          { nodeId: 'node-b', name: 'lab-node', protoVer: '1.8.0' },
+        ],
+      }),
+    );
+    await openTeamGroupDialog();
+    expect(
+      await screen.findByText(
+        '组内 1 个节点版本过旧（lab-node·协议 1.8.0），团队任务不会派给它；全员落后时提交将被拒',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('X3-4b. nodeCaps 整体缺席（旧 hub/离线）→ 兜底黄字', async () => {
+    await openTeamGroupDialog();
+    expect(await screen.findByText('无法获取组内节点版本，若含旧节点任务将被拒')).toBeInTheDocument();
+  });
+
+  it('X3-4c. 组内全员达标 → 无黄字；绿字仅指定节点口径（组内不出绿字）', async () => {
+    mockRoutingPrecheck.mockResolvedValue(
+      precheckFixture({
+        nodeCaps: [
+          { nodeId: 'node-a', name: 'office-mac', protoVer: '1.9.0' },
+          { nodeId: 'node-b', name: 'lab-node', protoVer: '1.9.1' },
+        ],
+      }),
+    );
+    await openTeamGroupDialog();
+    // chip 在场 = 团队已选（预检计算已跑）后断言无注
+    await screen.findByText('leader：coder · 提交时展开为成员名单快照');
+    expect(screen.queryByText(/版本过旧/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/全部可解析/)).not.toBeInTheDocument();
+  });
+
+  it('X3-5a. 团队协作 + 已选团队 → submitRoutedTask 载荷带 teamId（routing/档位不变）', async () => {
+    const onCreated = vi.fn();
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={onCreated} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '组内调度' }));
+    fireEvent.click(screen.getByRole('radio', { name: '团队协作' }));
+    fireEvent.change(await screen.findByLabelText('团队'), { target: { value: 'team-t1' } });
+    fireEvent.change(screen.getByLabelText(/标题\*/), { target: { value: '突击任务' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
+    await waitFor(() => expect(mockSubmitRoutedTask).toHaveBeenCalledTimes(1));
+    expect(mockSubmitRoutedTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: '突击任务',
+        teamId: 'team-t1',
+        routing: { mode: 'group', groupId: 'g1' },
+        permissionTier: 'confirm',
+      }),
+    );
+    expect(onCreated).toHaveBeenCalledWith('T-rem');
+  });
+
+  it('X3-5b. 单 agent 默认 → submitRoutedTask payload 不含 teamId 键（零变化回归）', async () => {
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '组内调度' }));
+    fireEvent.change(screen.getByLabelText(/标题\*/), { target: { value: '单干任务' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
+    await waitFor(() => expect(mockSubmitRoutedTask).toHaveBeenCalledTimes(1));
+    const call = mockSubmitRoutedTask.mock.calls[0]![0] as Record<string, unknown>;
+    expect('teamId' in call).toBe(false);
+  });
+
+  it('X3-5c. 团队协作未选团队 → 按钮禁用，选中后恢复（targetMissing 口径并入）', async () => {
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '组内调度' }));
+    fireEvent.click(screen.getByRole('radio', { name: '团队协作' }));
+    fireEvent.change(screen.getByLabelText(/标题\*/), { target: { value: '等选团队' } });
+    expect(screen.getByRole('button', { name: '创建任务' })).toBeDisabled();
+    fireEvent.change(await screen.findByLabelText('团队'), { target: { value: 'team-t1' } });
+    expect(screen.getByRole('button', { name: '创建任务' })).toBeEnabled();
+  });
+
+  it('X3-5d. 团队态切回单 agent → 团队下拉/预检区消失 + payload 不带 teamId', async () => {
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '组内调度' }));
+    fireEvent.click(screen.getByRole('radio', { name: '团队协作' }));
+    fireEvent.change(await screen.findByLabelText('团队'), { target: { value: 'team-t1' } });
+    await screen.findByText('leader：coder · 提交时展开为成员名单快照');
+    fireEvent.click(screen.getByRole('radio', { name: '单 agent' }));
+    expect(screen.queryByLabelText('团队')).not.toBeInTheDocument();
+    expect(screen.queryByText(/leader：/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/版本过旧/)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/标题\*/), { target: { value: '切回单干' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
+    await waitFor(() => expect(mockSubmitRoutedTask).toHaveBeenCalledTimes(1));
+    const call = mockSubmitRoutedTask.mock.calls[0]![0] as Record<string, unknown>;
+    expect('teamId' in call).toBe(false);
+  });
+
+  it('X3-6. routing 指定↔组内切换 → 预检实时重算（覆盖绿字 ↔ 落后黄字）', async () => {
+    mockRoutingPrecheck.mockResolvedValue(
+      precheckFixture({
+        nodeCaps: [
+          { nodeId: 'node-a', name: 'office-mac', protoVer: '1.9.0' },
+          { nodeId: 'node-b', name: 'lab-node', protoVer: '1.8.0' },
+        ],
+      }),
+    );
+    mockWorkspaceList.mockResolvedValue([mkWorkspace({ id: 'mirror-ws', name: 'dev-ws' })]);
+    mockListAssignments.mockImplementation((wsId: string) =>
+      Promise.resolve(
+        wsId === 'mirror-ws'
+          ? [
+              mkMember('inst-coder', 'coder', 'mirror-ws'),
+              mkMember('inst-tester', 'tester', 'mirror-ws'),
+              mkMember('inst-docs', 'docs-writer', 'mirror-ws'),
+            ]
+          : [],
+      ),
+    );
+    await openTeamNodeDialog();
+    expect(await screen.findByText('✓ 3 名成员在目标节点镜像中全部可解析')).toBeInTheDocument();
+    // 切组内调度：同一团队态换版本口径预检（绿字退场，落后黄字进场）
+    fireEvent.click(screen.getByRole('radio', { name: '组内调度' }));
+    expect(
+      await screen.findByText(
+        '组内 1 个节点版本过旧（lab-node·协议 1.8.0），团队任务不会派给它；全员落后时提交将被拒',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/全部可解析/)).not.toBeInTheDocument();
+  });
+
+  it('X3-7. 批量模式不渲染执行方式区（现状不变）', async () => {
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '批量' }));
+    fireEvent.click(await screen.findByRole('radio', { name: '组内调度' }));
+    expect(screen.queryByRole('radiogroup', { name: '执行方式' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: '单 agent' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: '团队协作' })).not.toBeInTheDocument();
   });
 });
