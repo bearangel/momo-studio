@@ -32,6 +32,8 @@ class FakeServer extends EventEmitter {
    * 真实 hub 自 M0 T6 起随 hello 下发 onlineNodes 快照；置 null 可仿真字段缺失。
    */
   helloPayload: Record<string, unknown> | null = null;
+  /** hello 拒绝应答的载荷覆盖（null = 默认 proto_version_mismatch） */
+  failPayload: Record<string, unknown> | null = null;
   /** 回放 hello 应答；mutate 为 true 时回放失败应答 */
   replyHello(fail = false): void {
     this.on('to-server', (raw: string, sock: FakeSocket) => {
@@ -43,7 +45,7 @@ class FakeServer extends EventEmitter {
         ?? { hubId: 'hub', protoVer: PROTOCOL_VERSION, serverTime: 0, onlineNodes: [] };
       const res = JSON.stringify(ok
         ? { v: 1, kind: 'res', id: env.id, method: RPC.hello, ok: true, payload }
-        : { v: 1, kind: 'res', id: env.id, method: RPC.hello, ok: false, payload: { code: 'proto_version_mismatch', message: 'hub=2.0.0' } });
+        : { v: 1, kind: 'res', id: env.id, method: RPC.hello, ok: false, payload: this.failPayload ?? { code: 'proto_version_mismatch', message: 'hub=2.0.0' } });
       // 回包经微任务投递——真实 hub 走网络往返，绝不在 send() 同栈内同步回包
       queueMicrotask(() => sock.emit('message', res));
       // hub 侧主动断开（真实 hub：版本不匹配即 socket.close(4402)）——断开事件可能晚于客户端重连
@@ -195,6 +197,40 @@ describe('HubClient 心跳与事件', () => {
     client.start();
     await flushMicrotasks();
     expect(errors.some((e) => e?.includes('hub=2.0.0'))).toBe(true);
+    client.stop();
+  });
+
+  it('hello 被拒（name_conflict）→ lastError 覆写人话「该名称已被其他节点使用」+ code 透传（M5.0 §5）', async () => {
+    const { factory, server } = makeFactory();
+    server.failPayload = { code: 'name_conflict', message: 'node name taken' };
+    server.replyHello(true);
+    const seen: Array<{ err?: string; code?: string }> = [];
+    const client = createHubClient({
+      url: 'ws://x/ws', nodeName: 'a', deviceToken: 't',
+      onStateChange: (_s, err, code) => seen.push({ err, code }), onEvent: () => undefined, ws: factory,
+      backoffBaseMs: 100,
+    });
+    client.start();
+    await flushMicrotasks();
+    // hub 原文（node name taken）不透出——本地单源文案覆写
+    expect(seen.some((s) => s.err === '该名称已被其他节点使用' && s.code === 'name_conflict')).toBe(true);
+    client.stop();
+  });
+
+  it('close 4404（无结构化 res）→ 同人话 + name_conflict code（关码兜底路径）', async () => {
+    const { factory, server } = makeFactory();
+    // 不 replyHello——hub 直接关连接（4404）不发 res 的兜底路径
+    const seen: Array<{ err?: string; code?: string }> = [];
+    const client = createHubClient({
+      url: 'ws://x/ws', nodeName: 'a', deviceToken: 't',
+      onStateChange: (_s, err, code) => seen.push({ err, code }), onEvent: () => undefined, ws: factory,
+      backoffBaseMs: 100,
+    });
+    client.start();
+    await flushMicrotasks();
+    server.sockets[0]!.emit('close', 4404, Buffer.from('name_conflict'));
+    await flushMicrotasks();
+    expect(seen.some((s) => s.err === '该名称已被其他节点使用' && s.code === 'name_conflict')).toBe(true);
     client.stop();
   });
 

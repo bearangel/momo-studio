@@ -552,20 +552,26 @@ function startClient(
         // 目录缓存是持久消费面，垃圾不得入库，广播与合流同闸）。B10（M3.4 §2.3）：
         // 同事件即时合并进主进程目录源（cache/lastGood upsert）——消「新发布最长
         // 5min（TTL 盲窗）不可见」；全量拉取仍为权威路径，事件只做即时性。
+        // M5.0（协议 1.8.0）：ownerNodeId 可选携带——目录增量合并保留归属
+        // （徽标/按钮收敛判定输入），缺省不带键（旧 hub 事件零变化）。
         const p = evt.payload as {
           slug?: unknown; type?: unknown; name?: unknown; version?: unknown; author?: unknown; at?: unknown;
+          ownerNodeId?: unknown;
         } | null;
         if (
           p !== null && typeof p === 'object' &&
           typeof p.slug === 'string' && typeof p.name === 'string' &&
           typeof p.version === 'string' && typeof p.author === 'string' && typeof p.at === 'number' &&
+          (p.ownerNodeId === undefined || typeof p.ownerNodeId === 'string') &&
           (p.type === 'agent' || p.type === 'mcp' || p.type === 'skill' || p.type === 'plugin')
         ) {
           broadcast('hub:resourcePublished', {
             slug: p.slug, type: p.type, name: p.name, version: p.version, author: p.author, at: p.at,
+            ...(p.ownerNodeId !== undefined ? { ownerNodeId: p.ownerNodeId } : {}),
           });
           applyHubPublishedEventToCatalog({
             slug: p.slug, type: p.type, name: p.name, version: p.version, author: p.author, at: p.at,
+            ...(p.ownerNodeId !== undefined ? { ownerNodeId: p.ownerNodeId } : {}),
           });
         }
       } else if (evt.method === EVT.resourceUnpublished) {

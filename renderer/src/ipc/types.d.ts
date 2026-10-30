@@ -1240,6 +1240,40 @@ export interface HubInstallResult {
 }
 
 /**
+ * M5.0：resource:hubCatalogOwnership 返回的目录条目归属行（与 electron 端
+ * resource/hub/momo-hub.ts 的 getHubCatalogOwnership 对齐——跨进程独立定义，
+ * 仅结构对齐）。ownerNodeId 缺省不带键 = 无主 / 旧 hub（判 unknown，安全降级）。
+ */
+export interface HubOwnershipEntry {
+  type: 'agent' | 'mcp' | 'skill' | 'plugin';
+  slug: string;
+  /** 目录 latest 版本（「已发布 vN」徽标消费） */
+  version: string;
+  ownerNodeId?: string;
+}
+
+/** M5.0：resource:hubCatalogOwnership 返回（归属快照——徽标/按钮收敛判定输入） */
+export interface HubCatalogOwnership {
+  notEnrolled: boolean;
+  /** 本机节点 id；未接入为 null（全部判 unknown） */
+  selfNodeId: string | null;
+  entries: HubOwnershipEntry[];
+}
+
+/**
+ * M5.0 §7.5：resource:hubCoexistScan 返回的并存小票行（与 electron 端
+ * resource/hub/ownership.ts 的 HubCoexistIssue 对齐）。ownedBySelf=true →
+ * 引导删 hub 副本；false → 异物提示可保留。
+ */
+export interface HubCoexistIssue {
+  type: ResourceType;
+  slug: string;
+  /** hub 装记账版本（hub 副本版本） */
+  hubVersion: string;
+  ownedBySelf: boolean;
+}
+
+/**
  * P2.1 Task 5：DXT / MCPB 本地包 user_config 字段描述（resource:parseMcpBundle
  * 返回 userConfigSchema 的元素）。与 electron 端 mcp/bundle-import.ts 的
  * BundleConfigField 对齐（跨进程独立定义，仅结构对齐）。
@@ -1287,6 +1321,9 @@ export interface RegistryListEntry {
   item: ResourceItem;
   /** library-store-split：hub 目录 meta.versions 数量（弹窗行「N 个版本」元信息） */
   versionCount?: number;
+  /** M5.0 归属投影（hub 目录 meta.ownerNodeId 透传——own 行免装判定输入）；
+   *  无主/旧 hub 不带键（协议 1.8.0 可选字段，仅 hub 源携带） */
+  ownerNodeId?: string;
 }
 
 /**
@@ -2557,6 +2594,17 @@ export interface ApiSurface {
       hubNotEnrolled: boolean;
       sources?: Array<{ source: 'marketplace' | 'hub'; degraded: boolean }>;
     }>;
+    /**
+     * M5.0 §7.1/§7.3/§7.4：hub 目录归属快照——「已发布」徽标与发布/下架按钮
+     * 收敛的判定输入。主进程走目录源 load()（TTL/lastGood 语义——不可达时
+     * 归属滞留合理）。未接入返回 notEnrolled=true + 空清单（判 unknown）。
+     */
+    hubCatalogOwnership(): Promise<HubCatalogOwnership>;
+    /**
+     * M5.0 §7.5 存量清理小票：hub 装记账 × 本地 custom 实体同 slug 并存清单
+     * （一次扫描非阻断——设置页 hub 面板消费；空数组 = 无并存）。
+     */
+    hubCoexistScan(): Promise<HubCoexistIssue[]>;
   };
   task: TaskApiSurface;
   /** 看板重构 Task 7：任务组通道面（taskGroup:*，groups.ipc.handlers.ts） */
@@ -2743,6 +2791,9 @@ export interface HubResourcePublishedEvent {
   author: string;
   /** 发布时刻（ms） */
   at: number;
+  /** M5.0（协议 1.8.0）：归属节点 id——发布即认领/owner 放行的当前权威；
+   *  缺省不带键（旧 hub 事件零变化）。主进程目录增量合并保留（归属快照数据源） */
+  ownerNodeId?: string;
 }
 
 /**

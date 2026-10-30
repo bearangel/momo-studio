@@ -75,7 +75,8 @@ import {
 } from './mcp-config';
 import { HUB_PROVIDERS } from './hub';
 import { isSmitheryDegraded } from './hub/smithery';
-import { isHubCatalogDegraded, isHubNotEnrolled } from './hub/momo-hub';
+import { getHubCatalogOwnership, isHubCatalogDegraded, isHubNotEnrolled } from './hub/momo-hub';
+import { scanHubCoexistIssues } from './hub/ownership';
 import { installPackage, uninstallPackage } from '../marketplace/installer';
 import { fetchCatalog, isCatalogDegraded } from '../marketplace/client';
 import { deleteRegistered, registerMcpDefinition } from '../mcp/host-manager';
@@ -580,6 +581,15 @@ export function registerResourceHandlers(): void {
       { source: 'hub' as const, degraded: isHubCatalogDegraded() },
     ],
   }));
+
+  // resource:hubCatalogOwnership — hub 目录归属快照（M5.0 §7.1/§7.3/§7.4）：
+  // 徽标/发布钮/下架钮归属收敛的判定输入。走目录源 load()（TTL/lastGood 语义
+  // ——不可达时归属滞留合理，spec §7.1 明言）。
+  ipcMain.handle('resource:hubCatalogOwnership', () => getHubCatalogOwnership());
+
+  // resource:hubCoexistScan — 存量并存扫描（M5.0 §7.5 清理小票）：hub 装记账 ×
+  // 本地 custom 实体同 slug 并存清单。一次扫描非阻断，设置页 hub 面板消费。
+  ipcMain.handle('resource:hubCoexistScan', () => scanHubCoexistIssues());
 
   // resource:listBuiltinPresets — 预置清单只读（P2.3 spec §5）。本地直读
   // resources/agents/*.yaml（agent/builtin.ts 现有解析链），零网络——刻意不走

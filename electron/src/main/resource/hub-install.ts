@@ -42,6 +42,7 @@ import {
   listHubMarketplaceItems,
   resolveHubContext,
 } from './hub/momo-hub';
+import { assertNoLocalSlugConflict } from './hub/ownership';
 import { compareVersions } from './version-compare';
 
 const SMITHERY_BASE = 'https://registry.smithery.ai';
@@ -291,6 +292,22 @@ export class HubPinnedVersionUnavailableError extends Error {
 }
 
 /**
+ * 本地 slug 冲突专用错误（M5.0 §7.5 源头拦截）：本地同 type+slug 自有实体
+ * （custom/marketplace 源）在场且非 hub 装记账时抛——消「自定义 + hub 版」并存。
+ * 手动安装链：rejection message 即人话（renderer toast 直出）；镜像补装链按
+ * instanceof 识别并跳过该资源（软失败，记 unresolvedRefs 不中止整体——沿
+ * stale/pinned 同款模式：目标已有本地版本是既成事实，静默保留 + 回执留痕）。
+ */
+export class HubSlugConflictError extends Error {
+  override readonly name = 'HubSlugConflictError';
+
+  constructor(message: string) {
+    super(message);
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
  * hub 下载链鉴权头（D1）：hub spec §3.1 三个资源端点全部 Bearer 鉴权，目录拉取
  * 与包下载必须同凭证。token 与目录源共用 resolveHubContext（生产 = keychain
  * deviceToken；测试注入 mock 上下文同缝生效）；无凭证（未接入 / keychain 空）
@@ -476,6 +493,10 @@ export async function installHubPackage(
   slug: string,
   opts?: InstallHubOptions,
 ): Promise<HubInstallOutcome> {
+  // M5.0 §7.5 源头拦截（先于目录拉取——冲突是本地事实，不依赖 hub 可达）：
+  // 本地自有实体在场且非 hub 装记账 → 拒装。存量并存（custom + hub 装记账）
+  // 不拦——更新合法，清理由扫描小票引导。
+  assertNoLocalSlugConflict(type, slug);
   const { item, meta, stale, enrolled, hubUrl } = await findHubMarketplaceItem(type, slug);
   // 判定矩阵（M2.4 T1，顺序：enrolled → stale → item → 已装行 → cmp）：
   //   ① !enrolled            → 现状「未找到条目」文案（不改）

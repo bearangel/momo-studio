@@ -43,3 +43,29 @@ describe('canPublishToHub 门控矩阵（M2.2 Task 2）', () => {
     }
   });
 });
+
+// M5.0 归属三态矩阵（spec 2026-10-30 §7，矩阵 2026-10-30-m5.0-ownership-studio.md）：
+// own → 徽标；other → 发布/下架钮不渲染；unknown（无条目/无字段/未接入）→ 按钮保留。
+import { resolveHubOwnership } from './publish-entry';
+
+describe('resolveHubOwnership 三态矩阵（M5.0）', () => {
+  it('ownerNodeId = 本机 → own（「已发布」徽标）', () => {
+    expect(resolveHubOwnership({ ownerNodeId: 'n1' }, 'n1')).toBe('own');
+  });
+
+  it('ownerNodeId 在场且 ≠ 本机 → other（发布/下架钮不渲染）', () => {
+    expect(resolveHubOwnership({ ownerNodeId: 'n2' }, 'n1')).toBe('other');
+  });
+
+  it('目录无此条目（ownership undefined）→ unknown（hub 不可达/新装本地，按钮保留）', () => {
+    expect(resolveHubOwnership(undefined, 'n1')).toBe('unknown');
+  });
+
+  it('无字段（无主 / 旧 hub <1.8 目录不带键）→ unknown（安全降级，403 兜底）', () => {
+    expect(resolveHubOwnership({}, 'n1')).toBe('unknown');
+  });
+
+  it('未接入（selfNodeId null）→ unknown（含 owner 在场也不判——无本机身份可比）', () => {
+    expect(resolveHubOwnership({ ownerNodeId: 'n1' }, null)).toBe('unknown');
+  });
+});

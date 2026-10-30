@@ -16,13 +16,15 @@
 // - 换址入口（D1，已接入态）：身份区次级按钮「修改 hub 地址」→ 确认弹窗（改地址 + 断开告警）
 //   → 调 configure → 落到换址引导态
 import { useEffect, useState } from 'react';
-import { FolderOpen, Network, RefreshCw, Trash2, Users } from 'lucide-react';
+import { CircleAlert, FolderOpen, Network, RefreshCw, Trash2, Users } from 'lucide-react';
 import { useHubEnroll } from '../../hooks/use-hub-enroll';
 import { useHubStore } from '../../stores/hub.store';
 import { useUiStore } from '../../stores/ui.store';
 import { ipc } from '../../ipc/client';
+import { showToast } from '../ui/Toast';
 import type {
-  HubConnectionState, HubDelegationSettings, HubStatus, HubViewSettings, HubWorkspaceDirView,
+  HubCoexistIssue, HubConnectionState, HubDelegationSettings, HubStatus, HubViewSettings,
+  HubWorkspaceDirView,
 } from '../../ipc/types';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
@@ -285,6 +287,80 @@ const CONN_META: Record<HubConnectionState, { label: string; text: string; dot: 
   connecting: { label: '连接中', text: 'text-status-warning', dot: 'bg-status-warning' },
   disconnected: { label: '未连接', text: 'text-tertiary', dot: 'bg-disabled' },
 };
+
+const COEXIST_TYPE_LABEL: Record<HubCoexistIssue['type'], string> = {
+  agent: '智能体',
+  mcp: 'MCP',
+  skill: '技能',
+  plugin: '插件',
+};
+
+/**
+ * 存量并存清理小票（M5.0 §7.5）：hub 装记账 × 本地 custom 实体同 slug 并存的
+ * 一次扫描清单——owner=本机引导删 hub 副本、异物提示可保留。轻交互非阻断：
+ * 无并存不渲染；扫描失败静默（下次挂载重扫）。
+ */
+function CoexistSection() {
+  const [issues, setIssues] = useState<HubCoexistIssue[] | null>(null);
+
+  const rescan = (): void => {
+    void ipc.resource
+      .hubCoexistScan()
+      .then(setIssues)
+      .catch(() => setIssues(null));
+  };
+
+  useEffect(rescan, []);
+
+  if (issues === null || issues.length === 0) return null;
+
+  const removeHubCopy = (issue: HubCoexistIssue): void => {
+    void ipc.resource
+      .delete(`hub-${issue.type}-${issue.slug}`)
+      .then(() => {
+        showToast(`已删除 hub 副本「${issue.slug}」（本地自定义版本保留）`);
+        rescan();
+      })
+      .catch((err: unknown) => {
+        showToast(err instanceof Error ? err.message : String(err));
+      });
+  };
+
+  return (
+    <div data-testid="hub-coexist-card" className="flex flex-col gap-2">
+      <div className="flex items-center gap-1.5 text-sm font-medium text-primary">
+        <CircleAlert size={16} strokeWidth={1.75} aria-hidden className="text-status-warning" />
+        本地与 hub 副本并存（{issues.length}）
+      </div>
+      <ul className="divide-y divide-subtle rounded-lg border border-subtle bg-surface-1">
+        {issues.map((issue) => (
+          <li
+            key={`${issue.type}:${issue.slug}`}
+            data-testid={`hub-coexist-row-${issue.type}-${issue.slug}`}
+            className="flex min-h-9 flex-wrap items-center gap-2 px-3 py-2 text-[13px]"
+          >
+            <span className="text-secondary">
+              {COEXIST_TYPE_LABEL[issue.type]} <code className="text-xs">{issue.slug}</code>
+              <span className="ml-1.5 text-xs text-tertiary">hub v{issue.hubVersion}</span>
+            </span>
+            {issue.ownedBySelf ? (
+              <span className="ml-auto flex items-center gap-2">
+                <span className="text-xs text-tertiary">你的发布——建议删除 hub 副本，保留本地版本</span>
+                <Button variant="secondary" size="sm" onClick={() => removeHubCopy(issue)}>
+                  删除 hub 副本
+                </Button>
+              </span>
+            ) : (
+              <span className="ml-auto text-xs text-tertiary">
+                来自其他节点——与本地自定义版本同名，可保留
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 function ConnBadge({ state }: { state: HubConnectionState }) {
   const meta = CONN_META[state];
@@ -601,6 +677,8 @@ function EnrolledView({ status }: { status: HubStatus }) {
       </div>
 
       <WorkspaceDirSection />
+
+      <CoexistSection />
 
       <DelegationSection />
 

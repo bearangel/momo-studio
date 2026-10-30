@@ -33,12 +33,14 @@ interface MockHub {
   url: string;
   requests: Array<{ method: string; url: string; auth: string | undefined; body: string }>;
   setStatus: (status: number) => void;
+  setReply: (status: number, body: unknown) => void;
   close: () => Promise<void>;
 }
 
 async function startMockHub(): Promise<MockHub> {
   const requests: MockHub['requests'] = [];
-  let unpublishStatus = 200;
+  let replyStatus = 200;
+  let replyBody: unknown = null;
   const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', (chunk) => { body += chunk; });
@@ -51,8 +53,8 @@ async function startMockHub(): Promise<MockHub> {
         return;
       }
       if (req.url === '/resources/unpublish') {
-        res.writeHead(unpublishStatus, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: unpublishStatus === 200 }));
+        res.writeHead(replyStatus, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(replyBody ?? { ok: replyStatus === 200 }));
         return;
       }
       res.writeHead(404);
@@ -64,7 +66,8 @@ async function startMockHub(): Promise<MockHub> {
   return {
     url: `http://127.0.0.1:${addr.port}`,
     requests,
-    setStatus: (s) => { unpublishStatus = s; },
+    setStatus: (s) => { replyStatus = s; replyBody = null; },
+    setReply: (s, b) => { replyStatus = s; replyBody = b; },
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections();
@@ -138,6 +141,26 @@ describe('unpublishHubResource（B12 撤回客户端）', () => {
     __setHubContextResolverForTest(async () => ({ hubUrl: hub!.url, deviceToken: AUTH_TOKEN }));
 
     await expect(unpublishHubResource('demo-skill')).rejects.toThrow('hub 响应异常: HTTP 500');
+  });
+
+  it('403 not_owner（携 owner_name）→ 「该资源属于节点 X，无法下架」（M5.0 §7.2）', async () => {
+    hub = await startMockHub();
+    hub.setReply(403, { error: 'not_owner', owner_name: 'studio-a' });
+    __setHubContextResolverForTest(async () => ({ hubUrl: hub!.url, deviceToken: AUTH_TOKEN }));
+
+    await expect(unpublishHubResource('demo-skill')).rejects.toThrow(
+      '该资源属于节点 studio-a，无法下架',
+    );
+  });
+
+  it('403 体异形（无 owner_name）→ 兜底「其他节点，无法下架」', async () => {
+    hub = await startMockHub();
+    hub.setReply(403, { error: 'not_owner' });
+    __setHubContextResolverForTest(async () => ({ hubUrl: hub!.url, deviceToken: AUTH_TOKEN }));
+
+    await expect(unpublishHubResource('demo-skill')).rejects.toThrow(
+      '该资源属于节点 其他节点，无法下架',
+    );
   });
 
   it('网络不可达 → 「无法连接 hub」', async () => {

@@ -145,7 +145,8 @@ interface TypePageShellProps {
 export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPreset, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onTogglePlugin, onReloadPlugin, onForkPreset, onDisableAgent, onPublishToHub, onUnpublishFromHub }: TypePageShellProps) {
   const {
     items, loading, error, installNotice, hubUpdates, hubSeeded, sourceFilter, query,
-    setSourceFilter, setQuery, deleteResource, load, loadCatalogStatus,
+    setSourceFilter, setQuery, deleteResource, load, loadCatalogStatus, loadHubOwnership,
+    hubOwnership, hubOwnershipKnown, hubSelfNodeId,
   } = useResourceStore();
   const setActiveView = useUiStore((s) => s.setActiveView);
   // hub 接入态（发布入口门控；hubDegraded/hubNotEnrolled 的提示条已随
@@ -162,10 +163,12 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
   const Icon = TYPE_ICON[type];
 
   // D9：catalog 只影响 agent 预置目录的远程部分——agent 页探测 marketplace 降级；
-  // M1 Task 14 起 hub 页签可从任意类型页进入，hub 目录降级态（hubDegraded）同探
+  // M1 Task 14 起 hub 页签可从任意类型页进入，hub 目录降级态（hubDegraded）同探。
+  // M5.0：归属快照同拍拉取（徽标/发布钮/下架钮收敛判定输入）。
   useEffect(() => {
     void loadCatalogStatus();
-  }, [loadCatalogStatus]);
+    if (!hubOwnershipKnown) void loadHubOwnership();
+  }, [loadCatalogStatus, loadHubOwnership, hubOwnershipKnown]);
 
   // ── 详情面板拖宽（组③ B8 方案 B）：手柄在面板左缘，鼠标左移 = 变宽 ──────
   const widthRef = useRef(detailWidth);
@@ -407,6 +410,8 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
                   hubEnrolled={hubEnrolled}
                   hubUpdates={hubUpdates}
                   hubSeeded={hubSeeded[item.type] === true}
+                  hubOwnership={hubOwnership[`${item.type}:${item.slug}`]}
+                  hubSelfNodeId={hubSelfNodeId}
                 />
               ))}
             </div>
@@ -442,6 +447,8 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
               onDisable={onDisableAgent}
               onPublishToHub={onPublishToHub}
               hubEnrolled={hubEnrolled}
+              hubOwnership={hubOwnership[`${selected.type}:${selected.slug}`]}
+              hubSelfNodeId={hubSelfNodeId}
             />
           </div>
         )}

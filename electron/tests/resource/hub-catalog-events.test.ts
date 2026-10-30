@@ -149,6 +149,44 @@ describe('B10：applyPublishedEvent（published 即时可见）', () => {
     expect(entry!.checksum).toBe('');
   });
 
+  it('M5.0 ownerNodeId 保留：新 slug / 在场升版两分支均随事件入缓存（归属快照数据源）', async () => {
+    hub = await startMockHub(catalog([
+      item('demo-skill', '1.0.0', { ownerNodeId: 'node-old' }),
+    ], 7));
+    const source = createHubCatalogSource(resolverFor(hub.url));
+    await source.load();
+
+    // 新 slug：事件携归属 → 占位条目带 ownerNodeId
+    source.applyPublishedEvent({
+      slug: 'claimed-skill', type: 'skill', name: '新认领', version: '1.0.0',
+      author: 'node-a', at: 1_700_000_100_000, ownerNodeId: 'node-a',
+    });
+    // 在场升版：认领翻转（owner 变更随事件刷新为当前权威）
+    source.applyPublishedEvent({
+      slug: 'demo-skill', type: 'skill', name: '演示', version: '2.0.0',
+      author: 'node-b', at: 1_700_000_200_000, ownerNodeId: 'node-b',
+    });
+
+    const merged = await source.load();
+    const fresh = merged.catalog.items.find((m) => m.slug === 'claimed-skill');
+    expect(fresh?.ownerNodeId).toBe('node-a');
+    const existing = merged.catalog.items.find((m) => m.slug === 'demo-skill');
+    expect(existing?.ownerNodeId).toBe('node-b');
+  });
+
+  it('M5.0 缺省不带键：事件无 ownerNodeId → 合并产物无该键（旧 hub 事件零变化）', async () => {
+    hub = await startMockHub(catalog([item('demo-skill', '1.0.0')], 7));
+    const source = createHubCatalogSource(resolverFor(hub.url));
+    await source.load();
+    source.applyPublishedEvent({
+      slug: 'demo-skill', type: 'skill', name: '演示', version: '2.0.0',
+      author: 'node-b', at: 1_700_000_200_000,
+    });
+    const merged = await source.load();
+    const existing = merged.catalog.items.find((m) => m.slug === 'demo-skill');
+    expect('ownerNodeId' in existing!).toBe(false);
+  });
+
   it('在场 slug 升版本 → 缓存条目版本面更新（version/versions 降序插入，长字段保留缓存值）', async () => {
     hub = await startMockHub(catalog([
       item('demo-skill', '1.0.0', { description: '目录描述', versions: ['1.0.0'] }),

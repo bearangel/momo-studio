@@ -512,3 +512,49 @@ describe('ResourceDetail 发布到 hub 入口（M1 Task 14 + M2.2 Task 2：custo
     expect(screen.queryByText(/未接入 momo-hub/)).toBeNull();
   });
 });
+
+// ── M5.0 归属三态（spec 2026-10-30 §7.1/§7.4）：own 徽标 + other 收敛发布钮/引导条 ──
+describe('ResourceDetail 归属三态（M5.0）', () => {
+  const noop = (): void => undefined;
+  const customSkill = (): ResourceItem =>
+    baseItem({
+      id: 'custom-skill-mine', source: 'custom', type: 'skill', slug: 'mine',
+      name: '我的技能', installed: true, removable: true, version: '1.0.0',
+    });
+
+  it('own → 状态段「已发布 vN → momo-hub」徽标 + 发布钮保留', () => {
+    render(
+      <ResourceDetail
+        item={customSkill()} onClose={noop} hubEnrolled onPublishToHub={noop}
+        hubOwnership={{ ownerNodeId: 'node-self', version: '2.0.0' }} hubSelfNodeId="node-self"
+      />,
+    );
+    const badge = screen.getByTestId('hub-published-badge');
+    expect(badge).toHaveTextContent('已发布 v2.0.0 → momo-hub');
+    expect(screen.getByRole('button', { name: /发布到 hub/ })).toBeTruthy();
+  });
+
+  it('other → 发布钮与未接入引导条均不渲染（他节点领地——钮没了引导条不得残留）', () => {
+    useUiStore.setState({ activeView: 'im' });
+    render(
+      <ResourceDetail
+        item={customSkill()} onClose={noop} hubEnrolled={false} onPublishToHub={noop}
+        hubOwnership={{ ownerNodeId: 'node-b', version: '2.0.0' }} hubSelfNodeId="node-self"
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /发布到 hub/ })).toBeNull();
+    expect(screen.queryByTestId('hub-publish-guide')).toBeNull();
+    expect(screen.queryByTestId('hub-published-badge')).toBeNull();
+  });
+
+  it('unknown（无归属行）→ 发布钮保留 + 无徽标（安全降级）', () => {
+    render(
+      <ResourceDetail
+        item={customSkill()} onClose={noop} hubEnrolled onPublishToHub={noop}
+        hubOwnership={undefined} hubSelfNodeId="node-self"
+      />,
+    );
+    expect(screen.getByRole('button', { name: /发布到 hub/ })).toBeTruthy();
+    expect(screen.queryByTestId('hub-published-badge')).toBeNull();
+  });
+});

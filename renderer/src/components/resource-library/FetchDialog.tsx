@@ -10,9 +10,10 @@
 // needsConfig 两态在弹窗内渲染 schema 表单 → installSmitheryRemote 二段安装。
 import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { CloudOff, RotateCw, TriangleAlert, X } from 'lucide-react';
+import { Check, CloudOff, RotateCw, TriangleAlert, X } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { compareVersions } from '../../lib/version-compare';
+import { useHubStore } from '../../stores/hub.store';
 import { useResourceStore } from '../../stores/resource.store';
 import { useUiStore } from '../../stores/ui.store';
 import { Button } from '../ui/Button';
@@ -67,6 +68,8 @@ export function FetchDialog({ source, type, onClose }: Props) {
   const providerKey = FETCH_PROVIDER_KEY[source];
   const SourceIcon = FETCH_SOURCE_ICON[source];
   const items = useResourceStore((s) => s.items);
+  // M5.0 本机节点 id（own 行免装判定输入；未接入 null → 无 own 行）
+  const selfNodeId = useHubStore((s) => s.status?.nodeId ?? null);
 
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -399,6 +402,12 @@ export function FetchDialog({ source, type, onClose }: Props) {
               const state = rowState(entry);
               const local = installedVersions.get(localKey(entry));
               const busy = installing?.id === entry.item.id;
+              // M5.0 §7.5 own 行免装：目录条目归属=本机 → 版本流恒为 本地→hub，
+              // 不渲染安装/更新，改显「✓ 你的发布 · 本地 v{local} · 已发布 v{remote}」
+              const ownPublish =
+                source === 'hub' &&
+                entry.ownerNodeId !== undefined &&
+                entry.ownerNodeId === selfNodeId;
               return (
                 <div
                   key={entry.id}
@@ -429,6 +438,18 @@ export function FetchDialog({ source, type, onClose }: Props) {
                     )}
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-1">
+                    {ownPublish ? (
+                      <span
+                        data-testid="fetch-own-publish"
+                        className="inline-flex items-center gap-1 text-[11.5px] text-status-success"
+                      >
+                        <Check size={12} strokeWidth={1.75} aria-hidden />
+                        你的发布
+                        {local !== undefined && local !== '' && ` · 本地 v${local}`}
+                        {entry.version !== undefined && ` · 已发布 v${entry.version}`}
+                      </span>
+                    ) : (
+                      <>
                     {state === 'install' && (
                       <button
                         type="button"
@@ -457,6 +478,8 @@ export function FetchDialog({ source, type, onClose }: Props) {
                     )}
                     {state === 'latest' && local !== undefined && (
                       <span className="text-[11.5px] text-disabled">✓ 已装 v{local} · 最新</span>
+                    )}
+                      </>
                     )}
                   </div>
                 </div>

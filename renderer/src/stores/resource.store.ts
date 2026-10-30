@@ -32,6 +32,7 @@ import type { ViewKey } from './ui.store';
 import type {
   HubResourcePublishedEvent,
   HubResourceUnpublishedEvent,
+  HubOwnershipEntry,
   ResourceItem,
   ResourceFilter,
   ResourceType,
@@ -84,6 +85,15 @@ interface ResourceStore {
    * 仅在 hub 源可信（sources[hub].degraded===false）的 load 成功后置 true。
    */
   hubSeeded: Record<string, boolean>;
+  /**
+   * M5.0：hub 目录归属快照（key `${type}:${slug}` → 目录条目）。徽标/发布钮/
+   * 下架钮收敛的判定输入；hubOwnershipKnown=false 时消费方判 unknown（保留按钮）。
+   */
+  hubOwnership: Record<string, HubOwnershipEntry>;
+  /** M5.0：归属快照是否已成功拉取（未接入/失败 → false，判 unknown 安全降级） */
+  hubOwnershipKnown: boolean;
+  /** M5.0：本机节点 id（hubCatalogOwnership.selfNodeId 透传；未接入 null） */
+  hubSelfNodeId: string | null;
   /** 当前 type tab，'all' = 不限 */
   typeFilter: ResourceFilter['type'] | 'all';
   /** 当前 source tab，'all' = 不限 */
@@ -126,6 +136,12 @@ interface ResourceStore {
    */
   seedHubUpdates: (type: ResourceType, entries: Array<{ slug: string; version: string }>) => void;
   /**
+   * M5.0：拉取 hub 目录归属快照（徽标/发布钮/下架钮收敛判定输入）。失败静默
+   * 置 unknown（hubOwnershipKnown=false——按钮保留，403 兜底）；发布/撤回事件
+   * 与 load 后自动重拉（幂等）。
+   */
+  loadHubOwnership: () => Promise<void>;
+  /**
    * 组⑤：MCP 启停——写库 + 禁用时断开运行实例；成功横幅 + 列表刷新，
    * 失败落 error 字段（红色横幅）。name 为 MCP 注册名（item.slug）。
    */
@@ -143,6 +159,9 @@ interface ResourceStore {
   installResource: (id: string) => Promise<boolean | SmitheryInstallResult>;
 }
 
+/** load 序号（过期响应丢弃——见 load 内注释） */
+let loadSeq = 0;
+
 export const useResourceStore = create<ResourceStore>((set, get) => ({
   items: [],
   loading: false,
@@ -154,12 +173,19 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   hubNotEnrolled: false,
   hubUpdates: {},
   hubSeeded: {},
+  hubOwnership: {},
+  hubOwnershipKnown: false,
+  hubSelfNodeId: null,
   typeFilter: 'all',
   sourceFilter: 'all',
   query: '',
   activeType: 'agent',
 
   load: async () => {
+    // 过期响应丢弃（2026-10-30 e2e 实锤）：切类型页会连发 load（agent 页冷挂载
+    // 慢查询 + 切 skill 快查询），晚到的旧响应若照写 items 会出现「skill 页渲染
+    // agent 卡」的错页驻留——序号守卫，只有最新一次 load 的结果可落地。
+    const seq = ++loadSeq;
     set({ loading: true, error: null });
     try {
       // 来源筛选在前端做（计数需要全量）——IPC filter 只下发 type 维度；
@@ -170,6 +196,7 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
       const wsId = useWorkspaceStore.getState().activeWorkspaceId;
       if (wsId) filter.workspaceId = wsId;
       const items = await ipc.resource.list(filter);
+      if (seq !== loadSeq) return;
       set({ items, loading: false });
       // M2.5 T1（A1）：列表成功后按 hub 源健康度播种更新基线——重启/离线/带外
       // 目录变更后不再只依赖 resource.published 事件。degraded 为真时完全不动
@@ -193,6 +220,7 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
         get().seedHubUpdates(t, entries);
       }
     } catch (err) {
+      if (seq !== loadSeq) return;
       set({ error: (err as Error).message, loading: false });
     }
   },
@@ -250,6 +278,22 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
     }
   },
 
+  loadHubOwnership: async () => {
+    try {
+      const r = await ipc.resource.hubCatalogOwnership();
+      set({
+        hubOwnership: Object.fromEntries(
+          r.entries.map((e) => [`${e.type}:${e.slug}`, e]),
+        ),
+        hubOwnershipKnown: !r.notEnrolled,
+        hubSelfNodeId: r.selfNodeId,
+      });
+    } catch {
+      // 查询失败 = 归属未知——整体判 unknown（按钮保留，发布尝试 403 兜底）
+      set({ hubOwnership: {}, hubOwnershipKnown: false, hubSelfNodeId: null });
+    }
+  },
+
   initHubUpdates: () => {
     const offPublished = ipc.hub.onResourcePublished((e: HubResourcePublishedEvent) => {
       // FIX-2：hub 支持乱序发布、latest=semver max——事件只能把基线抬高。
@@ -263,17 +307,20 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
       // applyPublishedEvent），renderer 列表/来源计数源于 IPC 拉取——事件到时不
       // 重拉则计数停留上次 load 快照（切页 remount 首拉与事件到达存在竞态，真机
       // 上首拉先到即陈旧到 reload）。与 onResourceUnpublished 同模式：load 幂等。
+      // M5.0：归属随发布事件变化（发布即认领）——归属快照一并重拉。
       void get().load();
+      void get().loadHubOwnership();
     });
     const offUnpublished = ipc.hub.onResourceUnpublished((e: HubResourceUnpublishedEvent) => {
       // 撤回即时同步：清该 slug 的全部类型角标键 + 刷新一次目录（幂等——
-      // 目录已无此条目时 load 结果不变）
+      // 目录已无此条目时 load 结果不变）；M5.0 归属快照同刷（条目已撤出目录）
       const suffix = `:${e.slug}`;
       const next = Object.fromEntries(
         Object.entries(get().hubUpdates).filter(([key]) => !key.endsWith(suffix)),
       );
       set({ hubUpdates: next });
       void get().load();
+      void get().loadHubOwnership();
     });
     return () => {
       offPublished();

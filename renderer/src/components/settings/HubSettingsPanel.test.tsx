@@ -14,7 +14,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { HubSettingsPanel } from './HubSettingsPanel';
 import { useHubStore } from '../../stores/hub.store';
 import { useUiStore } from '../../stores/ui.store';
-import type { HubNodePresenceEvent, HubStateChangedEvent, HubStatus } from '../../ipc/types';
+import type { HubCoexistIssue, HubNodePresenceEvent, HubStateChangedEvent, HubStatus } from '../../ipc/types';
 
 // 推送回调捕获——mock 订阅时截下回调供测试手动派发（仿真主进程 webContents.send）
 let stateChangedCb: ((e: HubStateChangedEvent) => void) | undefined;
@@ -69,6 +69,11 @@ const api = {
     })),
   },
   dialog: { pickDirectory: vi.fn() },
+  // M5.0 并存清理小票（CoexistSection 消费）：默认空清单（区段不渲染）
+  resource: {
+    hubCoexistScan: vi.fn(async (): Promise<HubCoexistIssue[]> => []),
+    delete: vi.fn(async () => undefined),
+  },
 };
 
 const UNENROLLED: HubStatus = {
@@ -615,5 +620,51 @@ describe('HubSettingsPanel 协议诊断（M3.0-P2）', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('无法连接 hub');
     expect(screen.queryByText('hub 协议版本不兼容，请升级 hub 或客户端')).not.toBeInTheDocument();
+  });
+});
+
+// ── M5.0 §7.5 存量并存清理小票：owner=本机引导删 hub 副本；异物提示可保留 ──
+describe('HubSettingsPanel 并存清理小票（M5.0）', () => {
+  it('空清单 → 区段不渲染（轻交互——无并存不打扰）', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
+    render(<HubSettingsPanel />);
+    await screen.findByText('工作目录');
+    expect(screen.queryByTestId('hub-coexist-card')).not.toBeInTheDocument();
+  });
+
+  it('own 并存行 → 引导文案 + 「删除 hub 副本」→ resource.delete(hub-{type}-{slug}) 后重扫', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
+    api.resource.hubCoexistScan.mockResolvedValueOnce([
+      { type: 'skill', slug: 'my-skill', hubVersion: '1.2.0', ownedBySelf: true },
+    ]).mockResolvedValueOnce([]);
+    render(<HubSettingsPanel />);
+
+    const row = await screen.findByTestId('hub-coexist-row-skill-my-skill');
+    expect(row).toHaveTextContent('你的发布');
+    expect(row).toHaveTextContent('hub v1.2.0');
+    fireEvent.click(screen.getByRole('button', { name: '删除 hub 副本' }));
+    await waitFor(() => expect(api.resource.delete).toHaveBeenCalledWith('hub-skill-my-skill'));
+    await waitFor(() => expect(api.resource.hubCoexistScan).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByTestId('hub-coexist-card')).not.toBeInTheDocument());
+  });
+
+  it('异物并存行 → 「可保留」提示，无删除按钮', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
+    api.resource.hubCoexistScan.mockResolvedValueOnce([
+      { type: 'agent', slug: 'alien-agent', hubVersion: '2.0.0', ownedBySelf: false },
+    ]);
+    render(<HubSettingsPanel />);
+    const row = await screen.findByTestId('hub-coexist-row-agent-alien-agent');
+    expect(row).toHaveTextContent('来自其他节点');
+    expect(row).toHaveTextContent('可保留');
+    expect(screen.queryByRole('button', { name: '删除 hub 副本' })).not.toBeInTheDocument();
+  });
+
+  it('扫描失败 → 静默不渲染（非阻断——下次挂载重扫）', async () => {
+    api.hub.getStatus.mockResolvedValue(ENROLLED_ONLINE);
+    api.resource.hubCoexistScan.mockRejectedValueOnce(new Error('boom'));
+    render(<HubSettingsPanel />);
+    await screen.findByText('工作目录');
+    expect(screen.queryByTestId('hub-coexist-card')).not.toBeInTheDocument();
   });
 });

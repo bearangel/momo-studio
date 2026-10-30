@@ -36,7 +36,7 @@ import { Badge } from '../ui/Badge';
 import type { BadgeTone } from '../ui/Badge';
 import { MarkdownBody } from '../im/MarkdownBody';
 import { SourceBadge } from './SourceBadge';
-import { canPublishToHub } from './publish-entry';
+import { canPublishToHub, resolveHubOwnership, type HubSlugOwnership } from './publish-entry';
 
 interface Props {
   item: ResourceItem;
@@ -67,6 +67,10 @@ interface Props {
   onPublishToHub?: (item: ResourceItem) => void;
   /** hub 是否已接入——false 时发布入口禁用 + 引导条（去设置链接） */
   hubEnrolled?: boolean;
+  /** M5.0 目录归属行（同 type+slug 条目；undefined = 目录无此条目/归属未知） */
+  hubOwnership?: HubSlugOwnership & { version: string };
+  /** M5.0 本机节点 id（null = 未接入 → 归属判 unknown，按钮保留） */
+  hubSelfNodeId?: string | null;
 }
 
 /** 资源类型兜底图标（item.iconEmoji 优先——用户数据照渲染） */
@@ -134,8 +138,12 @@ function PathCode({ path }: { path: string }): React.JSX.Element {
   );
 }
 
-export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onEnable, onConfigure, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onTogglePlugin, onReloadPlugin, onForkPreset, onDisable, onPublishToHub, hubEnrolled }: Props) {
+export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onEnable, onConfigure, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onTogglePlugin, onReloadPlugin, onForkPreset, onDisable, onPublishToHub, hubEnrolled, hubOwnership, hubSelfNodeId }: Props) {
   const setActiveView = useUiStore((s) => s.setActiveView);
+  // M5.0 归属三态：'other' → 发布钮/引导条不渲染；'own' + custom → 「已发布」徽标
+  const ownershipState = resolveHubOwnership(hubOwnership, hubSelfNodeId ?? null);
+  const publishedToHub =
+    item.source === 'custom' && ownershipState === 'own' ? hubOwnership?.version : undefined;
   // 插件组件清单（spec 2026-10-21 §9②）：面板打开即拉；item 切换重拉
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const [pluginDetail, setPluginDetail] = useState<PluginDetail | Error | null>(null);
@@ -282,6 +290,16 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
             {item.pluginDisabled && <Badge tone="warning">插件已停用</Badge>}
             {/* dev 源插件目录缺失降级态（读路径自愈：目录恢复即消） */}
             {item.plugin?.state === 'missing' && <Badge tone="warning">目录缺失</Badge>}
+            {/* M5.0 §7.1「已发布」徽标：custom + 目录归属=本机（与卡面同款形态） */}
+            {publishedToHub !== undefined && (
+              <span
+                data-testid="hub-published-badge"
+                className="inline-flex items-center gap-1 whitespace-nowrap text-xs text-status-success"
+              >
+                <Check size={12} strokeWidth={1.75} aria-hidden />
+                已发布 v{publishedToHub} → momo-hub
+              </span>
+            )}
           </div>
         </section>
 
@@ -589,8 +607,9 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
             重载
           </Button>
         )}
-        {/* 发布到 momo-hub：canPublishToHub 单点门控（custom 四类型 + marketplace 已装 skill——M2.2 Task 2）；未接入禁用（引导条承接跳设置） */}
-        {canPublishToHub(item) && onPublishToHub && (
+        {/* 发布到 momo-hub：canPublishToHub 单点门控（custom 四类型 + marketplace 已装 skill——M2.2 Task 2）；
+            M5.0 §7.4：归属='other'（他节点领地）不渲染；未接入禁用（引导条承接跳设置） */}
+        {canPublishToHub(item) && ownershipState !== 'other' && onPublishToHub && (
           <Button
             size="sm"
             variant="secondary"
@@ -630,8 +649,8 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
         )}
         </div>
         {/* 未接入引导条（M1 Task 14 / T10 移交形态）：灰条 + 去设置链接——与 hub 页签引导条同款；
-            gating 与发布按钮同源（canPublishToHub），marketplace 已装 skill 同样承接 */}
-        {canPublishToHub(item) && onPublishToHub && !hubEnrolled && (
+            gating 与发布按钮同源（canPublishToHub + 非 other——他节点领地钮已不渲染，引导条随行） */}
+        {canPublishToHub(item) && ownershipState !== 'other' && onPublishToHub && !hubEnrolled && (
           <p data-testid="hub-publish-guide" className="self-start inline-flex items-center gap-1 rounded-md bg-surface-3 px-3 py-1.5 text-xs text-secondary">
             未接入 momo-hub——
             <button

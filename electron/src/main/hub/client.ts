@@ -12,6 +12,15 @@ import {
 export type HubConnectionState = 'disconnected' | 'connecting' | 'online';
 
 /**
+ * hello 改名撞名（M5.0 §5）人话：hub hello 拒绝（res code name_conflict）与
+ * 专用关码 close 4404 两路共用——「该名称已被其他节点使用」。落 lastError
+ * 由设置面板直读展示。
+ */
+const NAME_CONFLICT_MESSAGE = '该名称已被其他节点使用';
+/** hub hello 拒绝后的专用关码（hub §5——proto_version_mismatch 的 44xx 关码族同款） */
+const CLOSE_CODE_NAME_CONFLICT = 4404;
+
+/**
  * hub 拒绝的 RPC 应答错误（M3.0-P2）：在 Error 之上携带协议错误码（code），
  * message 逐字保留 hub 人话原文（既有消费方读 message 的行为零变化）。
  * code 取自 RpcErrorPayload.code；载荷异形（无非字符串 code）时兜底 'internal'。
@@ -254,9 +263,12 @@ export function createHubClient(opts: HubClientOpts): HubClient {
         // hello 被拒（如版本不匹配）——记错误与协议错误码 → 关闭被拒连接 → 按退避重连。
         // 顺序要紧：先摘除当前连接身份（sock = null），其后 hub 发来的 close 事件
         // 会被身份守卫拦下、不重复调度重连（否则一条被拒连接会连出两条新连接）。
+        // name_conflict（M5.0 改名撞名）：hub 原文人话不可读，本地覆写单源文案。
         const rejectPayload = res.payload as { message?: unknown; code?: unknown } | null;
-        lastError = (typeof rejectPayload?.message === 'string' ? rejectPayload.message : undefined) ?? 'hello 被拒';
         lastErrorCode = typeof rejectPayload?.code === 'string' ? rejectPayload.code : undefined;
+        lastError = lastErrorCode === 'name_conflict'
+          ? NAME_CONFLICT_MESSAGE
+          : (typeof rejectPayload?.message === 'string' ? rejectPayload.message : undefined) ?? 'hello 被拒';
         clearSocketTimers();
         if (clearCurrentTimers === clearSocketTimers) clearCurrentTimers = null;
         setState('connecting', lastError, lastErrorCode);
@@ -269,10 +281,16 @@ export function createHubClient(opts: HubClientOpts): HubClient {
       // 非本端发起的 res（mirror.result 两段式第二段，id=mirrorId）——透出给消费面
       opts.onUnsolicitedRes?.(res);
     });
-    s.on('close', () => {
+    s.on('close', (code) => {
       // 身份守卫：过期连接（已被新连接取代）的 close 不清计时器、不改状态、不调度重连
       if (sock !== s) return;
       sock = null;
+      // 4404 专用关码（M5.0 改名撞名——hub 可能未及/无需结构化 res 即关连接）：
+      // 与 hello res name_conflict 同文案；res 先到时两路幂等（同文案同 code）。
+      if (code === CLOSE_CODE_NAME_CONFLICT) {
+        lastError = NAME_CONFLICT_MESSAGE;
+        lastErrorCode = 'name_conflict';
+      }
       // 断开 → 协商版本作废（M3.0-P2：未连接即未知，先清再广播）
       hubProtoVer = null;
       if (clearCurrentTimers === clearSocketTimers) clearCurrentTimers = null;

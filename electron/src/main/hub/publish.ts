@@ -12,7 +12,8 @@
 //
 // 上传契约（hub 端 T6 /resources/publish）：multipart，**manifest part 必须先于
 // package part**（hub 流式收包依赖定序）；Bearer deviceToken 鉴权；错误映射人话：
-//   409→该版本已存在 / 413→超过 200MB 上限 / 401→连接已失效请重新接入 /
+//   403→该资源属于节点 X，无法发布新版（M5.0 not_owner）/ 409→该版本已存在 /
+//   413→超过 200MB 上限 / 401→连接已失效请重新接入 /
 //   网络异常→无法连接 hub / 其余非 201→hub 响应异常带状态码。
 //
 // C3 范围守卫：agent 仅 source='custom'（marketplace/builtin/plugin 拒绝）；
@@ -41,6 +42,7 @@ import { isValidNpmPackageName } from '../marketplace/types';
 import { resolveTmpDir } from '../paths';
 import { hubGetStatus } from './index';
 import { getDeviceToken } from './creds';
+import { humanizeNotOwner, parseOwnerName } from './http-errors';
 import {
   isValidHubSlug,
   isValidHubVersion,
@@ -507,6 +509,11 @@ async function uploadPackage(
     return { slug: body.slug, version: body.version, checksum: body.checksum, sizeBytes: body.sizeBytes };
   }
   // 错误映射人话（UI 直接展示；语义与 hub 端 T6 错误码一一对应）
+  if (response.status === 403) {
+    // M5.0 领地制（协议 1.8.0）：非 owner 发布 → 错误体 {error:'not_owner', owner_name}
+    const body = await response.json().catch(() => null);
+    throw new Error(humanizeNotOwner('发布新版', parseOwnerName(body)));
+  }
   if (response.status === 409) {
     throw new Error('该版本已存在：hub 上同 slug+版本已发布（版本不可变），请升版本号后重试');
   }

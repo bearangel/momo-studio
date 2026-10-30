@@ -43,7 +43,7 @@ import { listPlugins, getPlugin, isPluginEnabled, setPluginEnabled } from '../pl
 import { updateGlobalSettings, getGlobalSettings } from '../settings/crud';
 import { assertSafeTarMembers } from '../plugin/installer';
 import { resolveTmpDir } from '../paths';
-import { HubCatalogStaleError, HubPinnedVersionUnavailableError, installHubPackage } from '../resource/hub-install';
+import { HubCatalogStaleError, HubPinnedVersionUnavailableError, HubSlugConflictError, installHubPackage } from '../resource/hub-install';
 import { installPackage } from '../marketplace/installer';
 import { readBundledCatalog } from '../marketplace/client';
 import type { MarketplaceItem } from '../marketplace/types';
@@ -438,15 +438,20 @@ async function installResources(
     try {
       await installResource(r.type, r.slug, workspaceId, r.version);
     } catch (err) {
-      // 只吞软失败错误：目录不可达（HubCatalogStaleError）与钉死版本不可得
-      // （HubPinnedVersionUnavailableError——版本行不存在/下载 404）均跳过该
-      // 资源（软失败，reason 进回执 unresolvedRefs）；其余失败照旧整体中止。
+      // 只吞软失败错误：目录不可达（HubCatalogStaleError）、钉死版本不可得
+      // （HubPinnedVersionUnavailableError）与本地 slug 冲突（HubSlugConflictError
+      // ——M5.0 源头拦截：目标已有本地自定义版本，静默保留 + 回执留痕）均跳过
+      // 该资源（软失败，reason 进回执 unresolvedRefs）；其余失败照旧整体中止。
       if (err instanceof HubCatalogStaleError) {
         skipped.push(`${r.type}:${r.slug}（无法获取 hub 最新目录，已跳过）`);
         continue;
       }
       if (err instanceof HubPinnedVersionUnavailableError) {
         skipped.push(`${r.type}:${r.slug}（钉死版本 ${r.version} 不存在或已撤回，已跳过）`);
+        continue;
+      }
+      if (err instanceof HubSlugConflictError) {
+        skipped.push(`${r.type}:${r.slug}（本地已有同名自定义资源，保留本地版本，已跳过）`);
         continue;
       }
       throw err;
