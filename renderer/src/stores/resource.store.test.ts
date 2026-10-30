@@ -12,13 +12,18 @@
 // 注：view 层的端到端测试见 ResourceLibraryView.test.tsx；本文件锁 store 层契约。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useResourceStore } from './resource.store';
-import type { ResourceItem } from '../ipc/types';
+import type { HubOwnershipEntry, ResourceItem } from '../ipc/types';
 
 const resourceList = vi.fn();
 const resourceInstall = vi.fn();
 const resourceSetMcpEnabled = vi.fn();
 const pluginSetEnabled = vi.fn();
 const resourceGetCatalogStatus = vi.fn();
+// M5.0：归属快照通道（loadHubOwnership 消费；缺省未接入态——各用例按需覆写）
+const resourceHubCatalogOwnership = vi.fn(
+  async (): Promise<{ notEnrolled: boolean; selfNodeId: string | null; entries: HubOwnershipEntry[] }> =>
+    ({ notEnrolled: true, selfNodeId: null, entries: [] }),
+);
 // M1 Task 14：hub 发布事件订阅（onResourcePublished 回调捕获）
 let publishedCb: ((e: { slug: string; type: string; name: string; version: string; author: string; at: number }) => void) | undefined;
 const hubOnResourcePublished = vi.fn((cb: (e: { slug: string; type: string; name: string; version: string; author: string; at: number }) => void) => {
@@ -39,6 +44,7 @@ const mockApi = {
     install: resourceInstall,
     setMcpEnabled: resourceSetMcpEnabled,
     getCatalogStatus: resourceGetCatalogStatus,
+    hubCatalogOwnership: resourceHubCatalogOwnership,
   },
   plugin: {
     setEnabled: pluginSetEnabled,
@@ -757,5 +763,91 @@ describe('resource.store — 发布事件消费（M3.0 验收 D1）', () => {
 
     expect(publishedCb).toBeUndefined();
     expect(resourceList.mock.calls.length).toBe(listCallsBefore);
+  });
+});
+
+// ── M5.0 归属快照：loadHubOwnership 成功/失败 + 发布/撤回事件触发重拉 ──
+describe('loadHubOwnership（M5.0 归属快照）', () => {
+  const hubCatalogOwnership = resourceHubCatalogOwnership;
+  const ownershipSnap = {
+    notEnrolled: false,
+    selfNodeId: 'node-self',
+    entries: [
+      { type: 'skill' as const, slug: 'mine', version: '1.0.0', ownerNodeId: 'node-self' },
+      { type: 'skill' as const, slug: 'other', version: '2.0.0', ownerNodeId: 'node-b' },
+      { type: 'skill' as const, slug: 'free', version: '0.1.0' },
+    ],
+  };
+
+  beforeEach(() => {
+    hubCatalogOwnership.mockReset().mockResolvedValue(ownershipSnap);
+  });
+
+  it('成功 → entries 按 `${type}:${slug}` 建表 + selfNodeId 透传', async () => {
+    await useResourceStore.getState().loadHubOwnership();
+    const s = useResourceStore.getState();
+    expect(s.hubOwnershipKnown).toBe(true);
+    expect(s.hubSelfNodeId).toBe('node-self');
+    expect(s.hubOwnership['skill:mine']).toEqual({ type: 'skill', slug: 'mine', version: '1.0.0', ownerNodeId: 'node-self' });
+    // 无主条目（无 ownerNodeId 键）原样入表——消费方判 unknown
+    expect('ownerNodeId' in s.hubOwnership['skill:free']!).toBe(false);
+  });
+
+  it('失败 → 整体判 unknown（清表 + known=false + nodeId null——按钮保留 403 兜底）', async () => {
+    hubCatalogOwnership.mockRejectedValueOnce(new Error('通道未就绪'));
+    await useResourceStore.getState().loadHubOwnership();
+    const s = useResourceStore.getState();
+    expect(s.hubOwnership).toEqual({});
+    expect(s.hubOwnershipKnown).toBe(false);
+    expect(s.hubSelfNodeId).toBeNull();
+  });
+
+  it('未接入（notEnrolled=true）→ known=false + 空表（判 unknown 安全降级）', async () => {
+    hubCatalogOwnership.mockResolvedValueOnce({ notEnrolled: true, selfNodeId: null, entries: [] });
+    await useResourceStore.getState().loadHubOwnership();
+    const s = useResourceStore.getState();
+    expect(s.hubOwnershipKnown).toBe(false);
+    expect(s.hubSelfNodeId).toBeNull();
+  });
+
+  it('resource.published / resource.unpublished 事件 → 归属快照重拉（幂等）', async () => {
+    const dispose = useResourceStore.getState().initHubUpdates();
+    publishedCb?.({ slug: 'mine', type: 'skill', name: 'n', version: '1.1.0', author: 'a', at: 1 });
+    await vi.waitFor(() => expect(hubCatalogOwnership).toHaveBeenCalled());
+    unpublishedCb?.({ slug: 'mine', by: 'a', at: 2 });
+    await vi.waitFor(() => expect(hubCatalogOwnership).toHaveBeenCalledTimes(2));
+    dispose();
+  });
+});
+
+// ── 过期响应丢弃（2026-10-30 e2e 实锤：skill 页渲染 agent 卡的错页驻留）──
+describe('load 过期响应丢弃', () => {
+  it('晚到的旧 type 查询结果不得覆盖新查询（切页竞态守卫）', async () => {
+    // agent 查询慢（挂起）、skill 查询快——模拟冷挂载 agent 慢查询 + 切 skill 快查询
+    let resolveAgent: ((items: ResourceItem[]) => void) | undefined;
+    resourceList.mockImplementation(async (filter?: { type?: string }) => {
+      if (filter?.type === 'agent') {
+        return new Promise<ResourceItem[]>((resolve) => { resolveAgent = resolve; });
+      }
+      return [{
+        id: 'custom-skill-fast', type: 'skill', source: 'custom', slug: 'fast', name: '快查技能',
+        description: 'd', installed: true, installable: false, removable: true,
+      }];
+    });
+
+    useResourceStore.setState({ typeFilter: 'agent' });
+    const p1 = useResourceStore.getState().load(); // agent（挂起中）
+    useResourceStore.setState({ typeFilter: 'skill' });
+    const p2 = useResourceStore.getState().load(); // skill（先回）
+    await p2;
+    resolveAgent?.([{
+      id: 'custom-agent-slow', type: 'agent', source: 'custom', slug: 'slow', name: '慢查智能体',
+      description: 'd', installed: true, installable: false, removable: true,
+    }]);
+    await p1;
+
+    const items = useResourceStore.getState().items;
+    expect(items.map((i) => i.type)).toEqual(['skill']);
+    expect(useResourceStore.getState().loading).toBe(false);
   });
 });

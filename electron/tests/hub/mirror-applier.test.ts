@@ -52,7 +52,7 @@ vi.mock('../../src/main/logger', () => ({
 }));
 
 import { applyMirrorSnapshot } from '../../src/main/hub/mirror-applier';
-import { HubCatalogStaleError, HubPinnedVersionUnavailableError } from '../../src/main/resource/hub-install';
+import { HubCatalogStaleError, HubPinnedVersionUnavailableError, HubSlugConflictError } from '../../src/main/resource/hub-install';
 import { buildWorkspaceSnapshot } from '../../src/main/hub/snapshot-builder';
 import { agentManifestYaml } from '../../src/main/hub/publish';
 import type { MirrorApplierDeps } from '../../src/main/hub/mirror-applier';
@@ -543,6 +543,38 @@ describe('applyMirrorSnapshot 补装 stale 目录（M2.4 T1）', () => {
     expect(listAgentDefinitions().some((d) => d.slug === 'ok-first')).toBe(true);
     expect(listAgentDefinitions().some((d) => d.slug === 'ok-second')).toBe(true);
     // 配置落库未被 stale 跳过阻断（工作空间已是目标态）
+    expect(listWorkspaces().some((w) => w.id === wsId)).toBe(true);
+  });
+
+  it('本地 slug 冲突（HubSlugConflictError）→ 同款软失败：跳过入 unresolvedRefs，其余资源继续（M5.0 §7.5）', async () => {
+    const wsId = await mkWorkspace('prod-dev');
+    const manifest = baseManifest({
+      resources: [
+        { type: 'agent', slug: 'ok-first' },
+        { type: 'skill', slug: 'clash-skill' },
+        { type: 'agent', slug: 'ok-second' },
+      ],
+    });
+    const archive = await makeArchive(manifest);
+    const deps = makeDeps(archive);
+    const base = deps.installResource!;
+    deps.installResource = async (type, slug, workspaceId) => {
+      if (`${type}/${slug}` === 'skill/clash-skill') {
+        deps.installLog.push(`${type}/${slug}`);
+        throw new HubSlugConflictError(
+          '本地已有同名自定义资源（skill「clash-skill」）；如需安装请先删除或改名本地版本',
+        );
+      }
+      await base(type, slug, workspaceId);
+    };
+
+    const outcome = await applyMirrorSnapshot(applyPayload({ confirm: true }), deps);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.appliedResources).toEqual(['agent/ok-first', 'agent/ok-second']);
+    expect(outcome.unresolvedRefs).toEqual([
+      'skill:clash-skill（本地已有同名自定义资源，保留本地版本，已跳过）',
+    ]);
     expect(listWorkspaces().some((w) => w.id === wsId)).toBe(true);
   });
 

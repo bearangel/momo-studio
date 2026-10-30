@@ -731,3 +731,111 @@ describe('ResourceCard 下架入口（M3.4 §2.4）', () => {
     expect(btn.getAttribute('title')).toContain('未接入 momo-hub');
   });
 });
+
+// ── M5.0 归属收敛（spec 2026-10-30 §7.1/§7.3/§7.4，矩阵 2026-10-30-m5.0-ownership-studio.md）──
+describe('ResourceCard 归属三态（own 徽标 / other 隐藏钮 / unknown 保留）', () => {
+  const OWN = { ownerNodeId: 'node-self', version: '2.0.0' };
+  const OTHER = { ownerNodeId: 'node-b', version: '2.0.0' };
+
+  it('custom 卡 + own → 「已发布 vN → momo-hub」徽标（lucide Check + success 态）', () => {
+    render(
+      <ResourceCard
+        item={mkItem({ id: 'custom-skill-mine', type: 'skill', source: 'custom', slug: 'mine', name: '我的技能' })}
+        selected={false} onSelect={noop} hubOwnership={OWN} hubSelfNodeId="node-self"
+      />,
+    );
+    const badge = screen.getByTestId('hub-published-badge');
+    expect(badge).toHaveTextContent('已发布 v2.0.0 → momo-hub');
+    expect(badge).toHaveClass('text-status-success');
+  });
+
+  it('custom 卡 + own → 发布钮仍在（本人权威可发新版）', () => {
+    render(
+      <ResourceCard
+        item={mkItem({ id: 'custom-skill-mine', type: 'skill', source: 'custom', slug: 'mine', name: '我的技能' })}
+        selected={false} onSelect={noop} hubEnrolled onPublishToHub={noop}
+        hubOwnership={OWN} hubSelfNodeId="node-self"
+      />,
+    );
+    expect(screen.getByRole('button', { name: '发布到 hub' })).toBeTruthy();
+  });
+
+  it('custom 卡 + other → 发布钮不渲染且无徽标（他节点领地——发了也 403）', () => {
+    render(
+      <ResourceCard
+        item={mkItem({ id: 'custom-skill-x', type: 'skill', source: 'custom', slug: 'x', name: '同 名 技 能' })}
+        selected={false} onSelect={noop} hubEnrolled onPublishToHub={noop}
+        hubOwnership={OTHER} hubSelfNodeId="node-self"
+      />,
+    );
+    expect(screen.queryByRole('button', { name: '发布到 hub' })).toBeNull();
+    expect(screen.queryByTestId('hub-published-badge')).toBeNull();
+  });
+
+  it('marketplace 已装 skill + other → 发布钮不渲染（扩面同受归属收敛）', () => {
+    render(
+      <ResourceCard
+        item={mkItem({
+          id: 'marketplace-skill-taken', type: 'skill', source: 'marketplace',
+          slug: 'taken', name: '被占技能', installed: true, installable: false, removable: true,
+        })}
+        selected={false} onSelect={noop} hubEnrolled onPublishToHub={noop}
+        hubOwnership={OTHER} hubSelfNodeId="node-self"
+      />,
+    );
+    expect(screen.queryByRole('button', { name: '发布到 hub' })).toBeNull();
+  });
+
+  it('unknown（无归属快照 / hub 不可达）→ 发布钮保留（发布尝试兜底，403 人话接住）', () => {
+    render(
+      <ResourceCard
+        item={mkItem({ id: 'custom-skill-unk', type: 'skill', source: 'custom', slug: 'unk', name: '未知技能' })}
+        selected={false} onSelect={noop} hubEnrolled onPublishToHub={noop}
+        hubOwnership={undefined} hubSelfNodeId="node-self"
+      />,
+    );
+    expect(screen.getByRole('button', { name: '发布到 hub' })).toBeTruthy();
+  });
+
+  it('未接入（hubSelfNodeId null）→ 归属判 unknown：发布钮保留', () => {
+    render(
+      <ResourceCard
+        item={mkItem({ id: 'custom-skill-nc', type: 'skill', source: 'custom', slug: 'nc', name: '未接技能' })}
+        selected={false} onSelect={noop} hubEnrolled={false} onPublishToHub={noop}
+        hubOwnership={OTHER} hubSelfNodeId={null}
+      />,
+    );
+    expect(screen.getByRole('button', { name: '发布到 hub' })).toBeTruthy();
+  });
+
+  it('hub 卡 + other → 下架钮不渲染（现状可见可点点了才 403 → 直接收敛）', () => {
+    render(
+      <ResourceCard
+        item={mkItem({
+          id: 'hub-skill-taken', type: 'skill', source: 'hub', slug: 'taken',
+          name: '他方资源', installed: true, installable: false, removable: true, version: '1.0.0',
+        })}
+        selected={false} onSelect={noop} hubEnrolled onUnpublishFromHub={noop}
+        hubOwnership={OTHER} hubSelfNodeId="node-self"
+      />,
+    );
+    expect(screen.queryByTestId('unpublish-arm')).toBeNull();
+  });
+
+  it('hub 卡 + own / unknown → 下架钮保留（owner 可下架；无字段/不可达点击兜底）', () => {
+    const mk = (ownership: { ownerNodeId?: string; version: string } | undefined) => (
+      <ResourceCard
+        item={mkItem({
+          id: 'hub-skill-mine', type: 'skill', source: 'hub', slug: 'mine',
+          name: '已发布资源', installed: true, installable: false, removable: true, version: '1.0.0',
+        })}
+        selected={false} onSelect={noop} hubEnrolled onUnpublishFromHub={noop}
+        hubOwnership={ownership} hubSelfNodeId="node-self"
+      />
+    );
+    const { rerender } = render(mk(OWN));
+    expect(screen.getByTestId('unpublish-arm')).toBeTruthy();
+    rerender(mk(undefined));
+    expect(screen.getByTestId('unpublish-arm')).toBeTruthy();
+  });
+});

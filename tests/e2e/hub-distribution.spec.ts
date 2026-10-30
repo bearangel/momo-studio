@@ -29,6 +29,13 @@
 //   8. 版本门控负例：低版本节点（hello 回 1.2.0，major 同可连接）同构 waiting 卡
 //      → 右键菜单无代答项（hubSupportsMinor(ver,3) false——版本过低菜单不出现）
 //
+// M5.0 X2 追加（spec 2026-10-30 §7——资源归属 studio 从票，场景9）：
+//   9. 归属全链：A 发布认领 → B 同 slug 发布（直连 API）403 not_owner 人话 +
+//      B custom 卡发布钮收敛不渲染 → A 原主新版 v1.1.0 → A 卡「已发布」徽标 →
+//      A 获取弹窗 own 行免装（你的发布 · 本地 v · 已发布 v）→ B 安装被
+//      源头拦截（本地同名自定义实体 → 拒装人话，零下载）。mock hub 目录/事件
+//      携 ownerNodeId，/resources/publish 实装领地判定（他节点 403 携 owner_name）。
+//
 // T3 mock 边界（如实记录——真实链背书 = M3.1 真机验收 + tests/hub 单测）：
 //   ① waiting 拍合成：真实产生点 = worker runner L1b（sessionWaiting 检测写授权
 //      等待登记后自发 task.report kind='waiting-input'，hub 转发 leader）——e2e
@@ -52,8 +59,10 @@
 //                                                 + resource.published/task.assigned 下发
 //                                                 + mirror.apply 定向 req（收 mirror.receipt res）
 //                                                 + task.report res 捕获（id=taskId）
-//       GET  /resources/catalog                   → HubCatalog（latest=semver max、versions 降序）
-//       POST /resources/publish                   → multipart(manifest+package) 收包即记 201
+//       GET  /resources/catalog                   → HubCatalog（latest=semver max、versions 降序、
+//                                                 M5.0 条目携 ownerNodeId）
+//       POST /resources/publish                   → multipart(manifest+package) 收包即记 201；
+//                                                 M5.0 领地判定——他节点领地 403 not_owner 携 owner_name
 //       GET  /resources/{slug}/{version}/download → 归档字节（计数按 slug@version）
 //       POST /workspaces/snapshots                → multipart(manifest+payload) 201
 //       GET  /workspaces/snapshots/{id}/download  → payload + X-Checksum-Sha256
@@ -98,12 +107,12 @@ const INVITE_CODE = 'e2e-invite';
 // ── M4.0 T3（HITL 远程代答）常量 ────────────────────────────────────────────
 
 /**
- * mock hub 协议版本——必须与 momo-hub pin 对齐（pin v0.1.9 → 协议 1.5.0）。
+ * mock hub 协议版本——必须与 momo-hub pin 对齐（pin v0.4.0 → 协议 1.8.0）。
  * ⚠️ 协议升级（pin bump）时必须与 electron/tests/hub/protocol-pin.test.ts
  * 同步更新本常量，否则 hubSupportsMinor(3) 代答门控与真实 pin 漂移
  * （场景7 正例门控 / 场景8 负例门控的前提）。
  */
-const HUB_PROTO_VER = '1.5.0';
+const HUB_PROTO_VER = '1.8.0';
 /** 低版本负例节点名：hello 回 1.2.0（major 同 → 客户端可连接，minor 3 < 代答门控） */
 const LOW_NODE_NAME = 'e2e-node-low';
 const LOW_HUB_PROTO_VER = '1.2.0';
@@ -158,8 +167,8 @@ function semverCompare(a: string, b: string): number {
 const hub = {
   server: null as HttpServer | null,
   baseUrl: '',
-  /** slug → 资源（type + 全版本） */
-  resources: new Map<string, { type: string; versions: Map<string, VersionRec> }>(),
+  /** slug → 资源（type + 归属 + 全版本）——M5.0：ownerNodeId 领地判定输入 */
+  resources: new Map<string, { type: string; ownerNodeId?: string; versions: Map<string, VersionRec> }>(),
   /** snapshotId → 存档 */
   snapshots: new Map<string, { bytes: Buffer; checksum: string; workspaceName: string }>(),
   /** POST /resources/publish 收包记录（manifest part 解析面） */
@@ -201,13 +210,16 @@ function downloadCount(slug: string, version: string): number {
   return hub.downloads.get(`${slug}@${version}`) ?? 0;
 }
 
-/** hub 侧登记一个资源版本（预种子 / 用例内升版共用；broadcast=true 时向全部在线节点发 resource.published） */
+/** hub 侧登记一个资源版本（预种子 / 用例内升版共用；broadcast=true 时向全部在线节点发 resource.published。
+ *  M5.0 领地制：owner 在场时沿用（owner 放行语义）；缺省 = 首发认领为该 owner。事件携 ownerNodeId。 */
 function hubPublishVersion(rec: {
   slug: string; type: string; name: string; version: string; author: string;
   description: string; readme: string; tags: string[]; category: string; iconEmoji: string;
   bytes: Buffer;
+  ownerNodeId?: string;
 }, broadcast: boolean): void {
   const entry = hub.resources.get(rec.slug) ?? { type: rec.type, versions: new Map<string, VersionRec>() };
+  const ownerNodeId = entry.ownerNodeId ?? rec.ownerNodeId;
   const manifest: Record<string, unknown> = {
     slug: rec.slug, type: rec.type, name: rec.name, version: rec.version, author: rec.author,
     description: rec.description, readme: rec.readme, tags: rec.tags, category: rec.category,
@@ -221,14 +233,16 @@ function hubPublishVersion(rec: {
     sizeBytes: rec.bytes.length,
     publishedAt: Date.now(),
   });
-  hub.resources.set(rec.slug, entry);
+  hub.resources.set(rec.slug, { ...entry, ...(ownerNodeId !== undefined ? { ownerNodeId } : {}) });
   if (!broadcast) return;
   broadcastEvt('resource.published', {
     slug: rec.slug, type: rec.type, name: rec.name, version: rec.version, author: rec.author, at: Date.now(),
+    ...(ownerNodeId !== undefined ? { ownerNodeId } : {}),
   });
 }
 
-/** 目录装配：latest = versions 全集 semver max（hub v0.1.5 语义），versions 降序 */
+/** 目录装配：latest = versions 全集 semver max（hub v0.1.5 语义），versions 降序；
+ *  M5.0：条目投影 ownerNodeId（无主不带键——协议 1.8.0 可选字段） */
 function buildCatalog(): Record<string, unknown> {
   const items = [...hub.resources.entries()].map(([slug, entry]) => {
     const versions = [...entry.versions.values()].sort((a, b) => semverCompare(b.version, a.version));
@@ -251,6 +265,7 @@ function buildCatalog(): Record<string, unknown> {
       sizeBytes: latest.sizeBytes,
       publishedAt: latest.publishedAt,
       versions: versions.map((v) => v.version),
+      ...(entry.ownerNodeId !== undefined ? { ownerNodeId: entry.ownerNodeId } : {}),
     };
   });
   return { version: '1', updatedAt: new Date().toISOString(), items };
@@ -636,6 +651,7 @@ async function startMockHub(): Promise<void> {
     }
 
     if (url === '/resources/publish' && method === 'POST') {
+      const publisherNodeId = bearerNode(req)!;
       const body = await readBody(req);
       const parts = parseMultipart(body, req.headers['content-type'] ?? '');
       const manifestPart = parts.find((p) => p.name === 'manifest');
@@ -648,6 +664,16 @@ async function startMockHub(): Promise<void> {
         slug: string; type: string; name: string; version: string; author: string;
         description: string; readme: string; tags?: string[]; category?: string; iconEmoji?: string;
       };
+      // M5.0 领地制（hub §3 ③.5）：他节点领地 → 403 not_owner（携 owner_name，
+      // 先于 409 version_exists）；新 slug 认领为发布者
+      const territory = hub.resources.get(manifest.slug);
+      if (territory?.ownerNodeId !== undefined && territory.ownerNodeId !== publisherNodeId) {
+        sendJson(res, 403, {
+          error: 'not_owner',
+          owner_name: nodeNameOf(territory.ownerNodeId) ?? 'unknown',
+        });
+        return;
+      }
       hubPublishVersion(
         {
           slug: manifest.slug, type: manifest.type, name: manifest.name, version: manifest.version,
@@ -655,6 +681,7 @@ async function startMockHub(): Promise<void> {
           tags: Array.isArray(manifest.tags) ? manifest.tags : [],
           category: manifest.category ?? '', iconEmoji: manifest.iconEmoji ?? '📦',
           bytes: packagePart.data,
+          ownerNodeId: publisherNodeId,
         },
         true,
       );
@@ -1368,5 +1395,115 @@ test.describe.serial('hub 分发链 / readonly 即时拒 / 版本链（M2.3 Task
     await expect(winC.getByTestId('cancel-arm')).toBeVisible({ timeout: 10000 });
     await expect(winC.getByTestId('approve-arm'), '版本过低不应出现「批准节点写入」').toHaveCount(0);
     await expect(winC.getByTestId('deny-arm'), '版本过低不应出现「拒绝节点写入」').toHaveCount(0);
+  });
+
+  // ── M5.0 X2（spec 2026-10-30 §7）：归属全链——发布认领 → 他节点 403 人话 +
+  //    发布钮收敛 → 原主新版 → 「已发布」徽标 → own 行免装 → 安装冲突拦截 ──
+  test('场景9 归属全链：认领 → B 403/钮收敛 → A 新版+徽标 → own 行免装 → B 装被拦', async () => {
+    test.setTimeout(300_000);
+    expect(winA, '依赖场景1的实例 A').not.toBeNull();
+    expect(winBHitl, '依赖场景3的实例 B').not.toBeNull();
+    const OWN_SLUG = 'e2e-own-skill';
+
+    // A 种 custom skill 并发布 v1.0.0（首发认领——mock hub 记 owner=A）
+    await winA!.evaluate(async (skillName) => {
+      const w = window as unknown as {
+        api: { resource: { createSkill(input: { name: string; description: string; body: string }): Promise<unknown> } };
+      };
+      await w.api.resource.createSkill({
+        name: skillName,
+        description: 'M5.0 归属 e2e fixture',
+        body: '# own skill\n归属全链回归。',
+      });
+    }, OWN_SLUG);
+    await winA!.getByRole('button', { name: '资源库', exact: true }).click();
+    await winA!.getByRole('button', { name: 'Skill', exact: true }).click();
+    await winA!.getByTestId(`resource-card-custom-skill-${OWN_SLUG}`).getByRole('button', { name: '发布到 hub' }).click();
+    const pubDlgA = winA!.getByRole('dialog');
+    await pubDlgA.getByLabel('版本').fill('1.0.0');
+    await pubDlgA.getByRole('button', { name: '发布', exact: true }).click();
+    await expect(pubDlgA.getByText('已发布 v1.0.0')).toBeVisible({ timeout: 30000 });
+    await pubDlgA.getByRole('button', { name: '关闭' }).click();
+
+    // mock hub 领地面：条目 ownerNodeId = A 的 nodeId（首发认领）
+    const nodeA = await waitForNodeConn('e2e-node-a');
+    expect(hub.resources.get(OWN_SLUG)?.ownerNodeId).toBe(nodeA);
+
+    // B 种同 slug custom skill（本地实体在场——安装冲突拦截的靶）
+    await winBHitl!.evaluate(async (skillName) => {
+      const w = window as unknown as {
+        api: { resource: { createSkill(input: { name: string; description: string; body: string }): Promise<unknown> } };
+      };
+      await w.api.resource.createSkill({
+        name: skillName,
+        description: 'B 侧同名 skill（归属 403 + 冲突拦截 fixture）',
+        body: '# b side\n同名本地版本。',
+      });
+    }, OWN_SLUG);
+
+    // B 面收敛：归属快照携 owner=A ≠ B → custom 卡「发布到 hub」不渲染（§7.4）
+    await winBHitl!.getByRole('button', { name: '资源库', exact: true }).click();
+    // B 首次进资源库（冷挂载）——Skill 点击可能在侧栏重挂载窗口丢失，heading 门 + 重试自愈
+    await expect(async () => {
+      const heading = winBHitl!.getByRole('heading', { name: '技能' });
+      if (await heading.isVisible().catch(() => false)) return;
+      await winBHitl!.getByRole('button', { name: 'Skill', exact: true }).click();
+      await expect(heading).toBeVisible({ timeout: 5000 });
+    }).toPass({ timeout: 30000 });
+    const bCard = winBHitl!.getByTestId(`resource-card-custom-skill-${OWN_SLUG}`);
+    await expect(bCard).toBeVisible({ timeout: 20000 });
+    await expect(bCard.getByRole('button', { name: '发布到 hub' }), '非 owner 发布钮应收敛不渲染').toHaveCount(0);
+
+    // B 直连发布（防御层——旧客户端/直连 API 面）：403 not_owner 人话（§7.2）
+    const bErr = await winBHitl!.evaluate(async ([skillName]) => {
+      const w = window as unknown as {
+        api: { hub: { publishResource(input: { type: 'skill'; ref: string; meta?: { version?: string } }): Promise<unknown> } };
+      };
+      try {
+        await w.api.hub.publishResource({ type: 'skill', ref: skillName, meta: { version: '9.9.9' } });
+        return null;
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+    }, [OWN_SLUG] as const);
+    expect(bErr).toContain('该资源属于节点 e2e-node-a，无法发布新版');
+    // 领地未被越权写破：9.9.9 不存在，latest 仍 1.0.0
+    expect(hub.resources.get(OWN_SLUG)?.versions.has('9.9.9')).toBe(false);
+
+    // A 原主发新版 v1.1.0（owner 放行）→ A custom 卡「已发布」徽标（§7.1）
+    await winA!.getByTestId(`resource-card-custom-skill-${OWN_SLUG}`).getByRole('button', { name: '发布到 hub' }).click();
+    const pubDlgA2 = winA!.getByRole('dialog');
+    await pubDlgA2.getByLabel('版本').fill('1.1.0');
+    await pubDlgA2.getByRole('button', { name: '发布', exact: true }).click();
+    await expect(pubDlgA2.getByText('已发布 v1.1.0')).toBeVisible({ timeout: 30000 });
+    await pubDlgA2.getByRole('button', { name: '关闭' }).click();
+    const aCard = winA!.getByTestId(`resource-card-custom-skill-${OWN_SLUG}`);
+    await expect(aCard.getByTestId('hub-published-badge')).toBeVisible({ timeout: 20000 });
+    await expect(aCard.getByTestId('hub-published-badge')).toContainText('已发布 v1.1.0 → momo-hub');
+
+    // A own 行免装（§7.5①）：获取弹窗行改显「你的发布 · 本地 v… · 已发布 v…」
+    await winA!.getByRole('button', { name: '添加技能' }).click();
+    await winA!.locator('[role="menu"]').getByText('从 momo-hub 获取…').click();
+    const fetchDlgA = winA!.getByRole('dialog', { name: '从 momo-hub 获取技能' });
+    const ownRow = fetchDlgA.getByTestId(`fetch-row-hub-skill-${OWN_SLUG}`);
+    await expect(ownRow).toBeVisible({ timeout: 20000 });
+    await expect(ownRow.getByTestId('fetch-own-publish')).toContainText('你的发布');
+    await expect(ownRow.getByTestId('fetch-own-publish')).toContainText('已发布 v1.1.0');
+    await expect(ownRow.getByRole('button', { name: '安装', exact: true }), 'own 行不得渲染安装钮').toHaveCount(0);
+    await fetchDlgA.getByRole('button', { name: '关闭' }).click();
+    await expect(fetchDlgA).toBeHidden();
+
+    // B 安装冲突拦截（§7.5②）：本地 custom 实体在场 → 拒装人话
+    await winBHitl!.getByRole('button', { name: '添加技能' }).click();
+    await winBHitl!.locator('[role="menu"]').getByText('从 momo-hub 获取…').click();
+    const fetchDlgB = winBHitl!.getByRole('dialog', { name: '从 momo-hub 获取技能' });
+    const bRow = fetchDlgB.getByTestId(`fetch-row-hub-skill-${OWN_SLUG}`);
+    await expect(bRow).toBeVisible({ timeout: 20000 });
+    await bRow.getByRole('button', { name: '安装', exact: true }).click();
+    await expect(fetchDlgB.getByText(/本地已有同名自定义资源/)).toBeVisible({ timeout: 30000 });
+    // 拦截面：零下载（未进下载链）
+    expect(downloadCount(OWN_SLUG, '1.1.0'), '冲突拦截不得产生下载').toBe(0);
+    await fetchDlgB.getByRole('button', { name: '关闭' }).click();
+    await expect(fetchDlgB).toBeHidden();
   });
 });

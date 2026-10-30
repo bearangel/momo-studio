@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { FetchDialog } from './FetchDialog';
 import { useResourceStore } from '../../stores/resource.store';
+import { useHubStore } from '../../stores/hub.store';
 import { useUiStore } from '../../stores/ui.store';
 import type { RegistryListEntry, ResourceItem, ResourceType } from '../../ipc/types';
 
@@ -155,6 +156,10 @@ describe('FetchDialog — hub 正常态（预览 §C）', () => {
     fireEvent.click(await screen.findByRole('button', { name: '安装' }));
 
     await waitFor(() => expect(installMock).toHaveBeenCalledWith('hub-agent-kanban'));
+    // 等安装链收尾（store 落横幅）——fire-and-forget 的 handleInstall 若不在此
+    // 等待，continuation 会漂进后续用例覆盖其 installNotice（跨用例竞态，曾致
+    // smithery needsConfig 用例间歇失败）
+    await waitFor(() => expect(useResourceStore.getState().installNotice).toBeTruthy());
   });
 
   it('客户端过滤：搜索词在名称/描述/slug 内模糊命中（目录快照不重发 IPC）', async () => {
@@ -197,6 +202,8 @@ describe('FetchDialog — hub 正常态（预览 §C）', () => {
     const bar = await screen.findByTestId('fetch-installing');
     expect(bar.textContent).toContain('正在安装「任务看板同步」…');
     expect(bar.textContent).toContain('62%');
+    // install mock 50ms 后 resolve——等安装链收尾防 continuation 漂移进后续用例
+    await waitFor(() => expect(useResourceStore.getState().installNotice).toBeTruthy());
   });
 });
 
@@ -324,7 +331,6 @@ describe('FetchDialog — smithery 变体（仅 MCP）', () => {
     });
     render(<FetchDialog source="smithery" type="mcp" onClose={vi.fn()} />);
     fireEvent.click(await screen.findByRole('button', { name: '安装' }));
-
     const formTitle = await screen.findByText('配置「context7」');
     expect(formTitle).toBeTruthy();
     const form = formTitle.parentElement as HTMLElement;
@@ -414,5 +420,76 @@ describe('FetchDialog — 失败路径', () => {
     await screen.findByText('任务看板同步');
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+// ── M5.0 §7.5 own 行免装（spec 2026-10-30：owner=本机 → 不渲染安装/更新，
+//    改显「✓ 你的发布 · 本地 v{local} · 已发布 v{remote}」——版本流恒为 本地→hub）──
+describe('FetchDialog — own 行免装（M5.0）', () => {
+  function enrolled(nodeId: string): void {
+    useHubStore.setState({
+      status: {
+        configured: true, state: 'online', hubUrl: 'https://hub.test', nodeName: '本机',
+        nodeId, lastError: null, lastErrorCode: null, hubProtoVer: '1.8.0',
+      },
+    });
+  }
+
+  it('owner=本机 + 本地已装 → 「你的发布 · 本地 v… · 已发布 v…」，无安装/更新钮', async () => {
+    enrolled('node-self');
+    useResourceStore.setState({
+      items: [{
+        ...installedHubItem('my-skill', '1.0.0'),
+        id: 'hub-skill-my-skill', type: 'skill' as const,
+      }],
+    });
+    mockRegistryResult({
+      entries: [hubEntry({
+        id: 'hub-skill-my-skill', slug: 'my-skill', name: '我的发布', version: '1.2.0',
+        type: 'skill', ownerNodeId: 'node-self',
+      })],
+    });
+    render(<FetchDialog source="hub" type="skill" onClose={vi.fn()} />);
+
+    const own = await screen.findByTestId('fetch-own-publish');
+    expect(own).toHaveTextContent('你的发布');
+    expect(own).toHaveTextContent('本地 v1.0.0');
+    expect(own).toHaveTextContent('已发布 v1.2.0');
+    expect(screen.queryByRole('button', { name: '安装' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '更新' })).toBeNull();
+  });
+
+  it('owner=本机 + 本地缺（发布后删本地）→ 仍免装，只显「你的发布 · 已发布 v…」', async () => {
+    enrolled('node-self');
+    useResourceStore.setState({ items: [] });
+    mockRegistryResult({
+      entries: [hubEntry({
+        id: 'hub-skill-gone', slug: 'gone', name: '远端孤本', version: '2.0.0',
+        type: 'skill', ownerNodeId: 'node-self',
+      })],
+    });
+    render(<FetchDialog source="hub" type="skill" onClose={vi.fn()} />);
+
+    const own = await screen.findByTestId('fetch-own-publish');
+    expect(own).toHaveTextContent('已发布 v2.0.0');
+    expect(own.textContent).not.toContain('本地 v');
+    expect(screen.queryByRole('button', { name: '安装' })).toBeNull();
+  });
+
+  it('owner=他节点 / 无字段（旧 hub）→ 正常安装钮（回归锁——收敛仅对 own 行）', async () => {
+    enrolled('node-self');
+    useResourceStore.setState({ items: [] });
+    mockRegistryResult({
+      entries: [
+        hubEntry({ id: 'hub-skill-other', slug: 'other', name: '他方技能', version: '1.0.0', type: 'skill', ownerNodeId: 'node-b' }),
+        hubEntry({ id: 'hub-skill-legacy', slug: 'legacy', name: '旧目录技能', version: '1.0.0', type: 'skill' }),
+      ],
+    });
+    render(<FetchDialog source="hub" type="skill" onClose={vi.fn()} />);
+
+    const rowOther = await screen.findByTestId('fetch-row-hub-skill-other');
+    expect(within(rowOther).getByRole('button', { name: '安装' })).toBeTruthy();
+    expect(within(screen.getByTestId('fetch-row-hub-skill-legacy')).getByRole('button', { name: '安装' })).toBeTruthy();
+    expect(screen.queryByTestId('fetch-own-publish')).toBeNull();
   });
 });

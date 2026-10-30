@@ -443,6 +443,26 @@ describe('publishToHub', () => {
     await expect(publishToHub({ type: 'skill', ref: 'auth-skill' }, deps)).rejects.toThrow(/连接已失效.*重新接入/);
   });
 
+  it('403 not_owner（携 owner_name）→ 「该资源属于节点 X，无法发布新版」（M5.0 §7.2）', async () => {
+    await goOnline();
+    seedCustomSkill('notmine-skill');
+    const deps: PublishDeps = {
+      fetchImpl: async () => res(403, { error: 'not_owner', owner_name: 'studio-b' }),
+    };
+    await expect(publishToHub({ type: 'skill', ref: 'notmine-skill' }, deps)).rejects.toThrow(
+      '该资源属于节点 studio-b，无法发布新版',
+    );
+  });
+
+  it('403 not_owner（体异形无 owner_name）→ 兜底「其他节点」不裸抛状态码', async () => {
+    await goOnline();
+    seedCustomSkill('notmine2-skill');
+    const deps: PublishDeps = { fetchImpl: async () => res(403, null) };
+    await expect(publishToHub({ type: 'skill', ref: 'notmine2-skill' }, deps)).rejects.toThrow(
+      '该资源属于节点 其他节点，无法发布新版',
+    );
+  });
+
   it('网络异常（fetch 抛错）→ 无法连接 hub', async () => {
     await goOnline();
     seedCustomSkill('net-skill');
@@ -574,6 +594,19 @@ describe('IPC 接线与推送链', () => {
     expect(m.sent).toContainEqual({
       channel: 'hub:resourcePublished',
       payload: { slug: 's1', type: 'skill', name: '技能', version: '1.0.0', author: 'peer', at: 123 },
+    });
+  });
+
+  it('resource.published 携 ownerNodeId（M5.0 1.8.0）→ 广播载荷保留归属（目录合并面锁在 hub-catalog-events）', async () => {
+    await goOnline();
+    m.sent.length = 0;
+    m.clients[m.clients.length - 1]!.opts.onEvent({
+      v: 1, kind: 'evt', method: EVT.resourcePublished,
+      payload: { slug: 's2', type: 'skill', name: '归属技能', version: '2.0.0', author: 'peer', at: 456, ownerNodeId: 'node-x' },
+    });
+    expect(m.sent).toContainEqual({
+      channel: 'hub:resourcePublished',
+      payload: { slug: 's2', type: 'skill', name: '归属技能', version: '2.0.0', author: 'peer', at: 456, ownerNodeId: 'node-x' },
     });
   });
 });
