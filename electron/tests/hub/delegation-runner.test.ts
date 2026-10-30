@@ -28,11 +28,18 @@ import { createHubDelegationStore } from '../../src/main/hub/delegation-store';
 interface CallLog {
   /** 全局顺序日志（tag 化）——首拍 running 必发先于 startTurn 的次序断言用 */
   order: string[];
-  createdSessions: Array<{ workspaceId: string; title: string; memberInstanceId: string }>;
-  startedTurns: Array<{ sessionId: string; body: string }>;
+  createdSessions: Array<{
+    workspaceId: string;
+    title: string;
+    memberInstanceId?: string;
+    members?: Array<{ instanceId: string; isLeader: boolean }>;
+  }>;
+  startedTurns: Array<{ sessionId: string; body: string; mentionedInstanceIds?: string[] }>;
   stoppedSessions: string[];
   reports: Array<{ taskId: string; payload: TaskReportPayload }>;
   resolvedAgents: Array<{ workspaceId: string; agentSlug: string | undefined }>;
+  /** M5.3 团队成员按名解析记录（逐名调用序 + 名单） */
+  resolvedAgentsByName: Array<{ workspaceId: string; agentName: string }>;
   /** T10 权限档位预配调用记录（调用序锁：createSession → applyRunPolicy → startTurn） */
   appliedPolicies: Array<{ sessionId: string; tier: string }>;
   /** T11 超时 steer 注入记录（调用序锁：applyRunPolicy(readonly) → injectSteer） */
@@ -55,6 +62,7 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
   setInterrupted: (tasks: Array<{ taskId: string; title: string; workspaceName: string }>) => void;
   setWorkspace: (name: string, id: string) => void;
   setAgent: (slug: string | undefined, instanceId: string) => void;
+  setAgentByName: (name: string, instanceId: string) => void;
   setStartTurnFailures: (attemptsWithin: number) => void;
 } {
   const db = new Database(':memory:');
@@ -64,12 +72,13 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
 
   const log: CallLog = {
     order: [], createdSessions: [], startedTurns: [], stoppedSessions: [],
-    reports: [], resolvedAgents: [], appliedPolicies: [], injectedSteers: [], continuations: 0,
+    reports: [], resolvedAgents: [], resolvedAgentsByName: [], appliedPolicies: [], injectedSteers: [], continuations: 0,
   };
 
   // 可变测试台状态
   const workspaces = new Map<string, string>();           // name → id
   const agents = new Map<string, string>();               // slug|'__default__' → instanceId
+  const agentsByName = new Map<string, string>();         // M5.3：agentName → instanceId
   const tailQueue = new Map<string, DelegationTail[]>();  // sessionId → 待消费尾部增量
   const watchers = new Map<string, (t: TurnTerminal) => void>();
   const waitingStates = new Map<string, WaitingState>();  // sessionId → sessionWaiting 返回（缺省 null=不支持）
@@ -88,6 +97,10 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
       log.resolvedAgents.push({ workspaceId, agentSlug });
       if (agentSlug !== undefined) return agents.get(agentSlug) ?? null;
       return agents.get('__default__') ?? null;
+    },
+    resolveAgentInstanceByName: (workspaceId, agentName) => {
+      log.resolvedAgentsByName.push({ workspaceId, agentName });
+      return agentsByName.get(agentName) ?? null;
     },
     createDelegatedSession: (input) => {
       log.createdSessions.push(input);
@@ -149,6 +162,7 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
     setInterrupted: (tasks) => { interrupted = tasks; },
     setWorkspace: (name, id) => { workspaces.set(name, id); },
     setAgent: (slug, instanceId) => { agents.set(slug ?? '__default__', instanceId); },
+    setAgentByName: (name, instanceId) => { agentsByName.set(name, instanceId); },
     setStartTurnFailures: (within) => { startTurnFailWithin = within; },
   };
 }
@@ -242,6 +256,146 @@ describe('前置三拒', () => {
 });
 
 // ── 委派会话（MC1）与首拍 wire 交接 ─────────────────────────────────────────
+
+// ── M5.3 团队外派分支（spec §5.3 接收端） ───────────────────────────────────
+
+describe('团队外派接收（team 段）', () => {
+  function teamEvt(
+    taskId: string,
+    members: Array<{ name: string; isLeader: boolean }>,
+    overrides?: Partial<AssignedTaskEvent>,
+  ): AssignedTaskEvent {
+    return {
+      taskId,
+      workspaceName: 'ws-a',
+      task: { title: '团队任务', prompt: '协作完成团队任务。', team: { members } },
+      byNode: 'node-leader',
+      ...overrides,
+    };
+  }
+
+  it('全解析 → 多成员建会（members/leader 标记正确）+ 首回合 mention leader + 首拍 running', async () => {
+    const h = makeHarness();
+    h.setWorkspace('ws-a', 'ws-id-1');
+    h.setAgentByName('PM', 'inst-pm');
+    h.setAgentByName('Coder', 'inst-coder');
+    h.setAgentByName('QA', 'inst-qa');
+
+    await h.runner.handleAssigned(teamEvt('t1', [
+      { name: 'Coder', isLeader: false },
+      { name: 'PM', isLeader: true },
+      { name: 'QA', isLeader: false },
+    ]));
+
+    // 多成员建会：members 快照全量透传（leader 标记保序）——不带 memberInstanceId
+    expect(h.log.createdSessions).toEqual([{
+      workspaceId: 'ws-id-1',
+      title: '团队任务',
+      members: [
+        { instanceId: 'inst-coder', isLeader: false },
+        { instanceId: 'inst-pm', isLeader: true },
+        { instanceId: 'inst-qa', isLeader: false },
+      ],
+    }]);
+    // 首回合显式 mention leader（与本地 executor sendKickoff 同机制）
+    expect(h.log.startedTurns).toHaveLength(1);
+    expect(h.log.startedTurns[0]!.mentionedInstanceIds).toEqual(['inst-pm']);
+    // 逐名解析：名单顺序逐个调用
+    expect(h.log.resolvedAgentsByName.map((r) => r.agentName)).toEqual(['Coder', 'PM', 'QA']);
+    // 单 agent 解析端口不被 team 路径消费
+    expect(h.log.resolvedAgents).toHaveLength(0);
+    // 账本 running + 首拍 running 必发
+    expect(h.store.get('t1')?.state).toBe('running');
+    expect(h.log.reports.some((r) => r.taskId === 't1' && r.payload.status === 'running')).toBe(true);
+  });
+
+  it('缺一名 → decline 人话名单（缺失者入列、在场者不列）+ 不建会不落账', async () => {
+    const h = makeHarness();
+    h.setWorkspace('ws-a', 'ws-id-1');
+    h.setAgentByName('PM', 'inst-pm');
+    h.setAgentByName('QA', 'inst-qa');
+
+    await h.runner.handleAssigned(teamEvt('t1', [
+      { name: 'PM', isLeader: true },
+      { name: 'Coder', isLeader: false },
+      { name: 'QA', isLeader: false },
+    ]));
+
+    const r = h.log.reports[0]!;
+    expect(r.payload.status).toBe('failed');
+    expect(r.payload.reason).toBe(
+      'declined:团队成员无法解析: Coder（工作空间 ws-a 无这些 agent）——请先镜像工作空间或改派',
+    );
+    expect(h.log.createdSessions).toHaveLength(0);
+    expect(h.store.get('t1')).toBeNull();
+  });
+
+  it('缺多名 → 名单逗号分隔全列', async () => {
+    const h = makeHarness();
+    h.setWorkspace('ws-a', 'ws-id-1');
+    h.setAgentByName('PM', 'inst-pm');
+
+    await h.runner.handleAssigned(teamEvt('t1', [
+      { name: 'PM', isLeader: true },
+      { name: 'Coder', isLeader: false },
+      { name: 'QA', isLeader: false },
+    ]));
+
+    expect(h.log.reports[0]!.payload.reason).toBe(
+      'declined:团队成员无法解析: Coder, QA（工作空间 ws-a 无这些 agent）——请先镜像工作空间或改派',
+    );
+  });
+
+  it('leader 解析成功但成员失败 → 仍 decline（leader 单独在场无意义，不缩编）', async () => {
+    const h = makeHarness();
+    h.setWorkspace('ws-a', 'ws-id-1');
+    h.setAgentByName('PM', 'inst-pm');
+
+    await h.runner.handleAssigned(teamEvt('t1', [
+      { name: 'PM', isLeader: true },
+      { name: 'Coder', isLeader: false },
+    ]));
+
+    expect(h.log.createdSessions).toHaveLength(0);
+    expect(h.log.reports[0]!.payload.reason).toContain('Coder');
+    expect(h.log.reports[0]!.payload.reason).not.toContain('PM（');
+  });
+
+  it('团队段非法（单成员 / 双 leader）→ decline 非法附因（hub 校验的纵深防御）', async () => {
+    const h = makeHarness();
+    h.setWorkspace('ws-a', 'ws-id-1');
+    h.setAgentByName('PM', 'inst-pm');
+    h.setAgentByName('Coder', 'inst-coder');
+
+    await h.runner.handleAssigned(teamEvt('t1', [{ name: 'PM', isLeader: true }]));
+    expect(h.log.reports[0]!.payload.reason).toContain('团队段非法');
+    expect(h.log.createdSessions).toHaveLength(0);
+
+    h.log.reports.length = 0;
+    await h.runner.handleAssigned(teamEvt('t2', [
+      { name: 'PM', isLeader: true },
+      { name: 'Coder', isLeader: true },
+    ]));
+    expect(h.log.reports[0]!.payload.reason).toContain('团队段非法');
+    expect(h.log.createdSessions).toHaveLength(0);
+  });
+
+  it('无 team 段旧 payload → 单 agent 路径零变化（memberInstanceId 形状 + 无 mention）', async () => {
+    const h = makeHarness();
+    h.setWorkspace('ws-a', 'ws-id-1');
+    h.setAgent('coder', 'inst-coder');
+
+    await h.runner.handleAssigned(assignedEvt('t1', {
+      task: { title: '单 agent 任务', prompt: '单独执行。', agentSlug: 'coder' },
+    }));
+
+    expect(h.log.createdSessions).toEqual([
+      { workspaceId: 'ws-id-1', title: '单 agent 任务', memberInstanceId: 'inst-coder' },
+    ]);
+    expect(h.log.startedTurns[0]!.mentionedInstanceIds).toBeUndefined();
+    expect(h.log.resolvedAgentsByName).toHaveLength(0);
+  });
+});
 
 describe('委派会话与首拍上报', () => {
   it('建会（标题=任务书、成员=解析 agent）→ 账本 running → 首拍 running 必发且先于执行；excerpt 恒非空', async () => {

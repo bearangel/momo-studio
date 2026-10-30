@@ -58,8 +58,24 @@ export interface DelegationRunPorts {
   findWorkspaceByName(name: string): { id: string; name: string } | null;
   /** agentSlug 匹配工作空间成员；缺省→工作空间默认 agent；均无 → null */
   resolveAgentInstance(workspaceId: string, agentSlug: string | undefined): string | null;
-  /** 建委派会话（MC1：普通 collab 会话 + 标题=任务书摘要）→ 返回 sessionId */
-  createDelegatedSession(input: { workspaceId: string; title: string; memberInstanceId: string }): string;
+  /**
+   * M5.3 团队成员按名解析：目标 ws 成员表按 agentName 匹配（镜像成员以
+   * agentName 为键——与快照 team.members 名单对齐口径）；无 → null。
+   * 与 resolveAgentInstance 的 slug 解析并列（单 agent 路径不消费本端口）。
+   */
+  resolveAgentInstanceByName(workspaceId: string, agentName: string): string | null;
+  /**
+   * 建委派会话（MC1：普通 collab 会话 + 标题=任务书摘要）→ 返回 sessionId。
+   * M5.3 多成员版：members 在场（团队外派）→ kind='task_execution' 多成员会话
+   * （成员全入 session_members、恰一名 leader is_leader=1）；缺省单成员路径
+   * （memberInstanceId）形状与行为零变化。
+   */
+  createDelegatedSession(input: {
+    workspaceId: string;
+    title: string;
+    memberInstanceId?: string;
+    members?: Array<{ instanceId: string; isLeader: boolean }>;
+  }): string;
   /**
    * L0 权限档位预配（T10 契约签名）：createDelegatedSession 后、startTurn 前调用。
    * 三档语义单源在 run-policy.ts（readonly=零写授权+prompt 只读约束段 /
@@ -74,8 +90,10 @@ export interface DelegationRunPorts {
   sessionWaiting(sessionId: string): { waiting: boolean; summary: string } | null;
   /** L1 超时保守指令注入（T11）：活跃流期间注入当前回合（steer 分流语义） */
   injectSteer(sessionId: string, body: string): void;
-  /** 执行一个回合（首拍后注入任务书 prompt；续传时注入续跑指令） */
-  startTurn(input: { sessionId: string; body: string }): Promise<void>;
+  /** 执行一个回合（首拍后注入任务书 prompt；续传时注入续跑指令）。
+   *  M5.3：mentionedInstanceIds 在场时显式路由接待目标（多成员团队外派首回合
+   *  mention leader——参照本地 executor sendKickoff 机制；单成员路径缺省不带） */
+  startTurn(input: { sessionId: string; body: string; mentionedInstanceIds?: string[] }): Promise<void>;
   /** 会话级急停（既有取消入口 RouterService.stopAll） */
   stopSession(sessionId: string): void;
   /** 回合终态订阅 → 返回解订阅函数 */
@@ -328,7 +346,12 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
     }
   };
 
-  const startRun = async (evt: AssignedTaskEvent, sessionId: string, record: DelegationRecord): Promise<void> => {
+  const startRun = async (
+    evt: AssignedTaskEvent,
+    sessionId: string,
+    record: DelegationRecord,
+    kickoffMentions?: string[],
+  ): Promise<void> => {
     const tier = normalizeTier(evt.task.permissionTier);
     const run: ActiveRun = {
       taskId: evt.taskId,
@@ -352,8 +375,15 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
     });
     if (!firstOk) run.pendingBeat = { lastSeq: 0, excerpt: run.promptExcerpt };
     try {
-      // T10：readonly 档任务书前只读约束段（composeTurnBody 单源）；sandbox/confirm 原文
-      await ports.startTurn({ sessionId, body: composeTurnBody(tier, evt.task.prompt) });
+      // T10：readonly 档任务书前只读约束段（composeTurnBody 单源）；sandbox/confirm 原文。
+      // M5.3 团队外派：kickoffMentions=[leaderInstanceId] 显式路由接待（多成员会话
+      // 不带 mention 时虽可经 is_leader 兜底落到 leader，显式 mention 与本地任务
+      // kickoff 同机制——语义单源不依赖兜底）
+      await ports.startTurn({
+        sessionId,
+        body: composeTurnBody(tier, evt.task.prompt),
+        ...(kickoffMentions !== undefined ? { mentionedInstanceIds: kickoffMentions } : {}),
+      });
     } catch (err) {
       logger.warn('委派回合启动失败', {
         taskId: evt.taskId,
@@ -417,21 +447,60 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
         await decline(evt.taskId, `工作空间不存在:${evt.workspaceName}`);
         return;
       }
-      const instanceId = ports.resolveAgentInstance(ws.id, evt.task.agentSlug);
-      if (!instanceId) {
-        await decline(
-          evt.taskId,
-          evt.task.agentSlug
-            ? `工作空间内未找到 agent（slug=${evt.task.agentSlug}）`
-            : '工作空间未配置默认 agent',
-        );
-        return;
+      // M5.3 团队外派分支（spec §5.3）：team 段在场 → 逐名解析（镜像/本地成员表
+      // 按 agentName 匹配——与快照 team.members 名单对齐口径），任一失败 decline
+      // 人话名单（裁定 3：不静默降级/缩编）；全部解析 → kind='task_execution'
+      // 多成员会话 + 首回合 mention leader（dispatch 注入由 buildDispatchSnapshot
+      // 按会话成员快照自然成立，零新增机制）。单 agent 路径（agentSlug/缺省）零变化。
+      let kickoffMentions: string[] | undefined;
+      let sessionId: string;
+      if (evt.task.team) {
+        const team = evt.task.team;
+        const leaderCount = team.members.filter((m) => m.isLeader).length;
+        if (team.members.length < 2 || leaderCount !== 1) {
+          await decline(
+            evt.taskId,
+            `团队段非法（成员 ${team.members.length} 名、leader ${leaderCount} 名——须 2..8 名成员且恰一名 leader）`,
+          );
+          return;
+        }
+        const missing: string[] = [];
+        const resolved: Array<{ instanceId: string; isLeader: boolean }> = [];
+        for (const m of team.members) {
+          const instanceId = ports.resolveAgentInstanceByName(ws.id, m.name);
+          if (!instanceId) missing.push(m.name);
+          else resolved.push({ instanceId, isLeader: m.isLeader });
+        }
+        if (missing.length > 0) {
+          await decline(
+            evt.taskId,
+            `团队成员无法解析: ${missing.join(', ')}（工作空间 ${evt.workspaceName} 无这些 agent）——请先镜像工作空间或改派`,
+          );
+          return;
+        }
+        sessionId = ports.createDelegatedSession({
+          workspaceId: ws.id,
+          title: evt.task.title,
+          members: resolved,
+        });
+        kickoffMentions = [resolved.find((m) => m.isLeader)!.instanceId];
+      } else {
+        const instanceId = ports.resolveAgentInstance(ws.id, evt.task.agentSlug);
+        if (!instanceId) {
+          await decline(
+            evt.taskId,
+            evt.task.agentSlug
+              ? `工作空间内未找到 agent（slug=${evt.task.agentSlug}）`
+              : '工作空间未配置默认 agent',
+          );
+          return;
+        }
+        sessionId = ports.createDelegatedSession({
+          workspaceId: ws.id,
+          title: evt.task.title,
+          memberInstanceId: instanceId,
+        });
       }
-      const sessionId = ports.createDelegatedSession({
-        workspaceId: ws.id,
-        title: evt.task.title,
-        memberInstanceId: instanceId,
-      });
       // T10 档位预配：createSession 后、startTurn（startRun 内）前——授权面先于回合注入
       ports.applyRunPolicy(sessionId, normalizeTier(evt.task.permissionTier));
       // P2-1：readonly 档位产物落地标记（write-blocked 漏斗即时拒判据）；sandbox/confirm 显式清标（幂等）
@@ -447,7 +516,7 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
         state: 'running',
         createdAt: now,
         updatedAt: now,
-      });
+      }, kickoffMentions);
       ensureTimer();
     },
 

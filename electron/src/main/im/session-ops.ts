@@ -188,11 +188,14 @@ export function createQuickSession(workspaceId: string): SessionRow {
  * - target members → 建会临时组队（spec 2026-10-22 §5.1）：多选 + 主 agent，
  *   去重后校验成员集合法性并按 is_leader 快照写入
  * - title 留空（null/空白）→ 占位标题 + title_auto=1；用户命名 → title_auto=0
+ * - opts.kind：会话 kind 覆写（缺省 'chat'）——M5.3 外派团队执行会话用
+ *   'task_execution'（与本地任务执行会话同 kind 口径）
  */
 export function createCollabSession(
   workspaceId: string,
   title: string | null,
   target: CollabTarget,
+  opts?: { kind?: SessionRow['kind'] },
 ): SessionRow {
   const ws = getWorkspace(workspaceId);
   if (!ws) throw new Error(`未找到 workspace: ${workspaceId}`);
@@ -231,7 +234,7 @@ export function createCollabSession(
     workspaceId,
     title: userTitle ?? PLACEHOLDER_TITLE,
     titleAuto: userTitle === null,
-    kind: 'chat',
+    kind: opts?.kind ?? 'chat',
     members,
     sessionType: 'collab',
   });

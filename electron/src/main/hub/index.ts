@@ -277,7 +277,7 @@ export function parseTaskAssigned(payload: unknown): AssignedTaskEvent | null {
     taskId?: unknown; workspaceName?: unknown; byNode?: unknown; task?: unknown;
   };
   const t = p.task as
-    | { title?: unknown; prompt?: unknown; agentSlug?: unknown; permissionTier?: unknown }
+    | { title?: unknown; prompt?: unknown; agentSlug?: unknown; permissionTier?: unknown; team?: unknown }
     | undefined;
   if (typeof p.taskId !== 'string' || typeof p.workspaceName !== 'string' || typeof p.byNode !== 'string') return null;
   if (!t || typeof t.title !== 'string' || typeof t.prompt !== 'string') return null;
@@ -291,11 +291,26 @@ export function parseTaskAssigned(payload: unknown): AssignedTaskEvent | null {
       ...(typeof t.agentSlug === 'string' ? { agentSlug: t.agentSlug } : {}),
       // T10 协议未知容忍：hub 1.2.0 剥离 permissionTier（白名单重建），合法值才拾取
       // （normalizeTier 兜底收敛 confirm）；hub 升级透传后直接消费。
-      // M4.3：dependsOn（1.7.0）在此刻意丢弃——worker 零消费（语义裁定见
-      // delegation-runner.AssignedTaskEvent 注释：leader 本地 id，跨节点无意义）
       ...(isPermissionTier(t.permissionTier) ? { permissionTier: t.permissionTier } : {}),
+      // M5.3（1.9.0）：team 段形状合法才透传（hub 侧已按 2..8 名/恰一 leader 校验
+      // ——此处异形键丢弃纪律与 permissionTier 同款，坏形状回落单 agent 路径
+      // 由 runner 侧 team 缺席语义兜住）；dependsOn 刻意不透传（worker 零消费）
+      ...(isDelegationTeam(t.team) ? { team: t.team } : {}),
     },
   };
+}
+
+/** team 段形状守卫：members 数组且每项 { name: string; isLeader: boolean } */
+function isDelegationTeam(raw: unknown): raw is { members: Array<{ name: string; isLeader: boolean }> } {
+  if (typeof raw !== 'object' || raw === null) return false;
+  const members = (raw as { members?: unknown }).members;
+  if (!Array.isArray(members) || members.length === 0) return false;
+  return members.every(
+    (m) =>
+      typeof m === 'object' && m !== null &&
+      typeof (m as { name?: unknown }).name === 'string' && (m as { name: string }).name.length > 0 &&
+      typeof (m as { isLeader?: unknown }).isLeader === 'boolean',
+  );
 }
 
 function broadcast(channel: string, payload: unknown): void {

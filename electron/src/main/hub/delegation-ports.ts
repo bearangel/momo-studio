@@ -171,6 +171,15 @@ export function resolveAgentInstanceProduct(workspaceId: string, agentSlug: stri
 }
 
 /**
+ * M5.3 团队成员按名解析：目标 ws 成员表按 agentName 匹配（镜像成员以 agentName
+ * 为键——外派 team.members 名单与快照名同口径）；无 → null。
+ * 导出供真 DB 回归锁直测（delegation-ports-session.test）。
+ */
+export function resolveAgentInstanceByNameProduct(workspaceId: string, agentName: string): string | null {
+  return listMembers(workspaceId).find((m) => m.agentName === agentName)?.instanceId ?? null;
+}
+
+/**
  * L0 权限档位生产接线（T10）：接既有写授权管理器（sandbox/write-grant.ts——授权卡
  * sandbox:grantWrite / sandbox:denyWrite 同一 API 面，不新造权限子系统）。三档映射
  * 单源 run-policy.planRunPolicy：
@@ -234,12 +243,25 @@ export function wireDelegationRunnerPorts(opts: WireDelegationPortsOpts): Delega
       return listWorkspaces().find((w) => w.name === name) ?? null;
     },
     resolveAgentInstance: resolveAgentInstanceProduct,
+    resolveAgentInstanceByName: resolveAgentInstanceByNameProduct,
     applyRunPolicy: applyRunPolicyProduct,
     createDelegatedSession(input) {
+      // M5.3 多成员版（团队外派）：members 在场 → kind='task_execution' 多成员
+      // collab 会话（createCollabSession members 目标：去重 + leader 越集 +
+      // 成员存在性校验 + is_leader 快照写入——与本地建会临时组队同链路）
+      if (input.members) {
+        const leader = input.members.find((m) => m.isLeader);
+        if (!leader) throw new Error('团队委派建会缺少 leader（runner 侧已校验恰一名——不可达防御）');
+        return createCollabSession(input.workspaceId, input.title, {
+          type: 'members',
+          instanceIds: input.members.map((m) => m.instanceId),
+          leaderInstanceId: leader.instanceId,
+        }, { kind: 'task_execution' }).id;
+      }
       // MC1：普通 collab 会话（单 agent 目标 is_leader=1）+ 标题=任务书摘要
       return createCollabSession(input.workspaceId, input.title, {
         type: 'agent',
-        instanceId: input.memberInstanceId,
+        instanceId: input.memberInstanceId!,
       }).id;
     },
     startTurn: async (input) => {
@@ -253,6 +275,11 @@ export function wireDelegationRunnerPorts(opts: WireDelegationPortsOpts): Delega
         sessionId: input.sessionId,
         body: input.body,
         systemKickoff: true,
+        // M5.3 团队外派首回合：mention leader 显式路由接待（pickRoutingTarget
+        // mention 优先——与本地 executor sendKickoff 同机制接入 delegated 链路）
+        ...(input.mentionedInstanceIds !== undefined
+          ? { mentionedInstanceIds: input.mentionedInstanceIds }
+          : {}),
       });
     },
     injectSteer: (sessionId, body) => {
