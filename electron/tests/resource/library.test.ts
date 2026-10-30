@@ -105,7 +105,7 @@ describe('listResources', () => {
     // marketplace 'remote' 记一笔已装（itemId=catalog id）——去重语义（catalog 优先）
     // 与收窄语义（已装 marketplace 保留）同时被本用例锁住
     installerMocks.listInstalled.mockReturnValue([
-      { itemId: 'marketplace-1', itemType: 'skill', version: '1', cachePath: '' },
+      { itemId: 'marketplace-1', itemType: 'skill', version: '1', cachePath: '/cache/marketplace-1' },
     ]);
     const skills = await listResources({ type: 'skill' });
     // code-review（本地预置）出现在 builtin 源，四态正确
@@ -133,7 +133,7 @@ describe('listResources', () => {
 
   it('library-store-split 收窄：已装远端出处条目恒在，未装远端条目一律剔除', async () => {
     installerMocks.listInstalled.mockReturnValue([
-      { itemId: 'marketplace-1', itemType: 'skill', version: '1', cachePath: '' },
+      { itemId: 'marketplace-1', itemType: 'skill', version: '1', cachePath: '/cache/marketplace-1' },
     ]);
     hubInstallMocks.listHubCatalogResources.mockResolvedValue([
       { id: 'hub-agent-installed', type: 'agent', source: 'hub', slug: 'h1', name: '已装 hub', description: 'd', installed: true, installable: false, removable: true, version: '1.0.0' },

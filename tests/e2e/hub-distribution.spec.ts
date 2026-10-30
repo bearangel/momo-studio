@@ -4,8 +4,8 @@
 //
 // 被测链路（六场景）：
 //   1. 发布→记账：custom skill 经资源库「发布到 hub」→ hub multipart 收包 →
-//      installed_packages 落 `hub:{slug}` 记账 → 资源库 hub 页签已装角标
-//      （v{version} · 已是最新——发布记账 M2.2 §2.1 四类泛化 + D7 锚点）
+//      installed_packages 落 `hub:{slug}` 发布记账（M5.2 起记账≠已装：库页零
+//      hub 卡，仅 custom 本体卡「已发布」徽标——用户实测双卡回归锁）
 //   2. manifest 携带：镜像向导 S2 构建+上传 → 快照 manifest.resources 携带已发布
 //      skill（记账反查，UC-P1-3 分发闭环裁定）→ S2「Skill 清单（补装 + 内嵌）」
 //      计数 1 补装 + 0 内嵌
@@ -889,7 +889,7 @@ test.describe.serial('hub 分发链 / readonly 即时拒 / 版本链（M2.3 Task
     fs.rmSync(denyFile, { force: true });
   });
 
-  test('场景1 发布→记账：custom skill 发布 → hub 收包 → hub:{slug} 记账 + 已装角标', async () => {
+  test('场景1 发布→记账：custom skill 发布 → hub 收包 → 库页零 hub 卡（M5.2 发布记账≠已装）', async () => {
     test.setTimeout(240_000);
     appA = await launchApp(userA);
     winA = await appA.firstWindow();
@@ -933,13 +933,13 @@ test.describe.serial('hub 分发链 / readonly 即时拒 / 版本链（M2.3 Task
     expect(pub!.type).toBe('skill');
     expect(pub!.author).toBe('e2e-node-a');
 
-    // 记账面：库页已装 hub 卡角标（installed_packages `hub:{slug}` 行 → v{version} · 已是最新）
-    // （断言迁移——library-store-split：来源下拉 hub 档退场，已装 hub 卡计「全部」直接可见）
-    const hubCard = winA.getByTestId(`resource-card-hub-skill-${SKILL_SLUG}`);
-    await expect(hubCard).toBeVisible({ timeout: 20000 });
-    await expect(hubCard.getByText(`v${SKILL_PUBLISH_VERSION} · 已是最新`)).toBeVisible();
+    // M5.2 断言迁移（用户实测回归锁）：发布记账（cache_path 空）≠ 已装——
+    // 发布后库页不得出现第二张 hub 卡，只有 custom 本体卡（带「已发布」徽标）
+    await expect(winA.getByTestId(`resource-card-hub-skill-${SKILL_SLUG}`)).toHaveCount(0);
+    await expect(customCard).toBeVisible();
+    await expect(customCard.getByText(/已发布 v/)).toBeVisible();
 
-    // 结构化复核：resource:list hub 源映射记账行（installed + installedVersion）
+    // 结构化复核：hub 源列表不映射发布记账行（installed 判定只认真安装）
     const row = await winA.evaluate(async ([slug, type]) => {
       const w = window as unknown as {
         api: {
@@ -953,9 +953,7 @@ test.describe.serial('hub 分发链 / readonly 即时拒 / 版本链（M2.3 Task
       const items = await w.api.resource.list({ type, source: 'hub' });
       return items.find((i) => i.slug === slug) ?? null;
     }, [SKILL_SLUG, 'skill'] as const);
-    expect(row, 'hub 源列表应含已发布 skill（记账反查）').not.toBeNull();
-    expect(row!.installed).toBe(true);
-    expect(row!.installedVersion).toBe(SKILL_PUBLISH_VERSION);
+    expect(row, '发布记账不得产出 hub 源条目').toBeNull();
 
     // 收摊：关闭发布对话框（成功态「关闭」钮——防遮罩拦截后续场景点击）
     await dlg.getByRole('button', { name: '关闭' }).click();

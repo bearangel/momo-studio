@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { PublishDialog } from './PublishDialog';
 import { useHubStore } from '../../stores/hub.store';
+import { useResourceStore } from '../../stores/resource.store';
 import type { HubPublishResult, HubStatus, ResourceItem } from '../../ipc/types';
 
 const publishResourceMock = vi.fn();
@@ -94,6 +95,26 @@ describe('PublishDialog · 表单态', () => {
     // footer：左 ghost 取消 → 右 primary 发布（TeamDialog 先例次序）
     expect(screen.getByRole('button', { name: '取消' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '发布' })).toBeTruthy();
+  });
+
+  it('M5.2：hub 已有版本 → 冲突红字 + 禁用发布 + 建议版本（下架后历史保留不可复用）', () => {
+    useResourceStore.setState({
+      hubOwnership: {
+        'agent:def-123': { type: 'agent', slug: 'def-123', version: '1.0.2', versions: ['1.0.2', '1.0.1', '1.0.0'] },
+      },
+      hubOwnershipKnown: true,
+    });
+    try {
+      render(<PublishDialog item={mkItem({ version: '1.0.1' })} onClose={vi.fn()} />);
+      const conflict = screen.getByTestId('publish-version-conflict');
+      expect(conflict.textContent).toContain('hub 已有版本');
+      expect(conflict.textContent).toContain('1.0.0');
+      expect(conflict.textContent).toContain('建议 v1.0.3');
+      const publishBtn = screen.getByRole('button', { name: /发布/ }) as HTMLButtonElement;
+      expect(publishBtn.disabled).toBe(true);
+    } finally {
+      useResourceStore.setState({ hubOwnership: {}, hubOwnershipKnown: false });
+    }
   });
 
   it('version 缺失时预填 1.0.0（custom skill frontmatter 版本优先于兜底）', () => {

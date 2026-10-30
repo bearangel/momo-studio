@@ -13,9 +13,9 @@
 //   3. 跨类型不牵连（T15a-F1）：DELETE 带 item_type——同 slug 异类行不动
 //   4. Safe 壳：DB 故障注入只 warn 不抛（发布回执不翻转——§2.1 硬化）；裸函数仍上抛
 //   5. 卸载竞态：卸载后立即重发回填零残留零幽灵
-//   6. 同类型双源共存：marketplace 已装行 + hub 回填行并存——hub 页签不双卡、
-//      卸载不互删（两个方向）
-//   7. cache_path 约定：回填行 cache_path=''——卸载链 rm 空串无操作，不误伤真实目录
+//   6. 同类型双源共存：marketplace 已装行 + hub 回填行并存——M5.2 起发布记账
+//      ≠ 已装（零 hub 卡）；卸载不互删（两个方向）
+//   7. cache_path 约定：回填行 cache_path=''——既是「无目录可清」也是「非安装」
 //   8. ipc 接线在 tests/hub/ipc.test.ts（mock 层四类型断言）
 //
 // DB 隔离沿用仓库既定模式：AP_USER_DATA_DIR 指向临时目录 + runMigrations() +
@@ -209,13 +209,11 @@ describe('recordPublishAccounting（四类发布回填 hub 记账）', () => {
     expect(rowsOf('skill-superpowers', 'skill')).toHaveLength(1);
     expect(rowsOf(hubPackageItemId('superpowers'), 'skill')).toHaveLength(1);
 
-    // hub 页签不双卡：listHubCatalogResources 只出一张 hub 卡，marketplace 行不泄漏
-    //（未接入 hub → 目录空 → 兜底行路径；marketplace 行因无 hub: 前缀被跳过）
+    // M5.2 语义翻转：发布记账（cache_path 空）≠ 已装——零 hub 卡
+    // （旧语义「记账即已装」是用户实测「创建→发布双卡」的根因）
     const hubView = await listHubCatalogResources('skill');
     const cards = hubView.filter((r) => r.slug === 'superpowers');
-    expect(cards).toHaveLength(1);
-    expect(cards[0]?.source).toBe('hub');
-    expect(cards[0]?.installed).toBe(true);
+    expect(cards).toHaveLength(0);
 
     // hub 链读取面（M2.3 T5 件2——直接消费 accounting 导出的 loadHubAccountingSet，
     // 导出契约在此锁死）：hub: 前缀行入集，marketplace 行不入集（不污染、不双计）
@@ -316,7 +314,7 @@ describe('recordPublishAccounting（四类发布回填 hub 记账）', () => {
           iconEmoji: '🧪',
           verificationStatus: 'unverified',
           downloadUrl: '/resources/superpowers/2.5.0/download',
-          checksum: '',
+          checksum: 'a'.repeat(64),
           sizeBytes: 1024,
           publishedAt: 1_700_000_000_000,
           versions: ['2.5.0'],
@@ -347,14 +345,14 @@ describe('recordPublishAccounting（四类发布回填 hub 记账）', () => {
       seedRow('mkt-c', 'skill-superpowers', 'skill', 'superpowers', '1.0.0', mktCache);
       recordPublishAccounting('skill', 'superpowers', '2.0.0', 'hub-sum');
 
-      // hub 页签单卡（catalog 在场路径）：目录卡唯一——记账行被 catalogSlugs 去重，
-      // 兜底行不叠加第二张；已装锚定回填记账版本（installedVersion D7 锚点）
+      // hub 页签单卡（catalog 在场路径）：目录卡唯一（兜底行因 M5.2 记账≠已装不再产出）；
+      // 发布记账不置已装——卡按未装呈现（installable），不属于安装态
       const hubView = await listHubCatalogResources('skill');
       const cards = hubView.filter((r) => r.slug === 'superpowers');
       expect(cards).toHaveLength(1);
       expect(cards[0]?.source).toBe('hub');
-      expect(cards[0]?.installed).toBe(true);
-      expect(cards[0]?.installedVersion).toBe('2.0.0');
+      expect(cards[0]?.installed).toBe(false);
+      expect(cards[0]?.installedVersion).toBeUndefined();
 
       // 本地页签独立卡不受牵连：marketplace 页签按自身目录出卡（source=marketplace），
       // hub 侧去重/记账不泄漏进本地视图

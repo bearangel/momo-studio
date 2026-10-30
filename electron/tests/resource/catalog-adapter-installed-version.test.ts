@@ -38,6 +38,14 @@ const BUILTIN_ITEM: MarketplaceItem = { ...HUB_ITEM, id: 'builtin-x', slug: 'x',
 function recordInstalled(itemId: string, itemType: string, slug: string, version: string): void {
   getDb().prepare(
     `INSERT INTO installed_packages (id, item_id, item_type, slug, version, cache_path, checksum)
+     VALUES (?, ?, ?, ?, ?, ?, '')`,
+  ).run(randomUUID(), itemId, itemType, slug, version, `/cache/${itemType}/${slug}/${version}`);
+}
+
+/** 发布记账行（cache_path=''，M5.2：不算已装——不得在库页产出 hub 卡） */
+function recordPublishAccounting(itemId: string, itemType: string, slug: string, version: string): void {
+  getDb().prepare(
+    `INSERT INTO installed_packages (id, item_id, item_type, slug, version, cache_path, checksum)
      VALUES (?, ?, ?, ?, ?, '', '')`,
   ).run(randomUUID(), itemId, itemType, slug, version);
 }
@@ -75,6 +83,14 @@ describe('fromCatalogItem — installedVersion 透出（D7 角标锚点数据面
     const r = fromCatalogItem(HUB_ITEM, 'hub');
     expect(r.installed).toBe(false);
     expect(r.installedVersion).toBeUndefined();
+  });
+
+  it('M5.2：hub 发布记账（cache_path 空）≠ 已装——不产出 hub 卡（创建→发布双卡回归锁）', () => {
+    recordPublishAccounting('hub:meeting', 'agent', 'meeting', '1.2.0');
+    const r = fromCatalogItem(HUB_ITEM, 'hub');
+    expect(r.installed).toBe(false);
+    expect(r.installedVersion).toBeUndefined();
+    expect(r.installable).toBe(true);
   });
 
   it('builtin 源 → installedVersion 恒 undefined（无记账行语义）', () => {

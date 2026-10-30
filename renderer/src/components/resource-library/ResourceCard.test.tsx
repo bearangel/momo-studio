@@ -655,7 +655,7 @@ describe('ResourceCard 下架入口（M3.4 §2.4）', () => {
     name: '演示技能', installed: false, installable: true, removable: false,
   });
 
-  it('hub 来源卡渲染「下架」钮；确认文案（aria/title）含 slug 与「已安装节点不受影响」', () => {
+  it('hub 来源卡渲染「下架」钮；确认文案（aria/title）含 slug、历史保留与「已安装节点不受影响」', () => {
     render(
       <ResourceCard
         item={hubItem} selected={false} onSelect={noop}
@@ -664,8 +664,8 @@ describe('ResourceCard 下架入口（M3.4 §2.4）', () => {
     );
     // accessible name 被 aria-label 覆盖（确认文案常驻可读屏）——按 testid 定位后断言文案
     const btn = screen.getByTestId('unpublish-arm');
-    expect(btn.getAttribute('title')).toBe('从 momo-hub 下架 demo-skill——目录中不再可见，已安装节点不受影响');
-    expect(btn.getAttribute('aria-label')).toBe('从 momo-hub 下架 demo-skill——目录中不再可见，已安装节点不受影响');
+    expect(btn.getAttribute('title')).toBe('从 momo-hub 下架 demo-skill——目录中不再可见；历史版本保留、版本号不可复用；已安装节点不受影响');
+    expect(btn.getAttribute('aria-label')).toBe('从 momo-hub 下架 demo-skill——目录中不再可见；历史版本保留、版本号不可复用；已安装节点不受影响');
   });
 
   it('消费面矩阵：builtin / custom / marketplace 卡零渲染（且不传回调也不渲染 hub 卡按钮）', () => {
