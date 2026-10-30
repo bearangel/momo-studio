@@ -6,6 +6,19 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — M5.3 外派团队执行 + 镜像模型自动配平
+
+`2.1.0-alpha.49`。hub v0.5.0（协议 1.8.0 → **1.9.0**，先行发版 tag 已推）。来源：用户真机验收——外派任务只有单 agent 快速会话形态，复杂任务需要团队；镜像 agent 无 LLM 配置需目标节点逐一手配。设计 spec：`docs/specs/2026-10-30-m5.3-delegation-team-mirror-model-design.md`（三问三裁定 + Momus OKAY + P1 预览获批）。
+
+- **F1 外派团队执行**：新建任务外派分支（组内调度/指定节点）新增「执行方式」——单 agent（默认，零变化）/ 团队协作。团队 = 派发时刻成员名单快照（`team.members` 随任务书，与 agentSlug 互斥）；接收端逐名解析、任一缺失 decline + 人话名单（不静默换班）；全解析建多成员执行会话（leader `is_leader` + 首回合 mention leader）——leader 的 `dispatch:<slug>` 子 agent 工具由既有会话快照机制自然注入，本地团队协作原语跨节点复用
+- **版本门双层**：hub 权威门（task.delegate 目标节点协议 <1.9.0 拒 `node_unsupported`）+ studio 派发闸（指定节点早失败拒 / 组内调度 least-busy 候选池排除旧节点、池空拒列名）——旧版 studio 物理接不到团队任务（旧端会忽略 team 字段静默按单 agent 跑，正是裁定禁止的行为）
+- **团队重派不退化**：外派行落 `targetTeamId`，retryDispatch 重建 team 段（快照=派发时刻定型）；团队已解散 → 转 failed 人话（oracle 级裁定兑现：静默换班零容忍）
+- **F2 镜像模型自动配平**：快照每 agent 成员携 `modelBinding {providerName, platform, modelName}`（零 key 红线延续）；目标侧 def **只补空**四级链（同名 provider 含模型 → 同 platform 含模型 → 目标 defaultChatModel → 保持未配置）——镜像后 agent 开箱能跑，只需节点首配 provider；D4 自愈①（已配置不覆盖）语义保持
+- **预检防呆（不拦提交）**：指定节点成员覆盖预检（本地镜像按名核验，绿字全解/黄字列缺失/黄字无镜像）；组内协议落后节点黄字提示；nodeCaps 随 routingPrecheck 下发
+- UI 预览定值 8 条合同全落（P1 门禁：`.omo/previews/m5.3-delegation-team.html` 获批后落码）
+- 测试：electron **5303** / renderer **3110** / e2e hub-distribution **13/13**（新场景 13-15：团队外派全链含 dispatch 注入断言 / 成员缺失拒收 / F2 配平只补空）；协议 pin 锁 v0.5.0
+- 票桶：批量模式团队选项；临时多选组队；agent 自判复杂度 escalation；F2 存量追溯配平；retryDispatch 快照与首派时点差异（重派取当前快照，已按快照语义接受）
+
 ## [未发布] — M5.2 热修：发布记账≠已装 + 发布版本预检 + 下架语义
 
 `2.1.0-alpha.48`。协议零改、hub 零改（studio 单侧）。来源：用户真机实测两问（创建→发布后库页出现自定义+hub 双卡；下架重建后版本被迫从 1.0.2 起）。
