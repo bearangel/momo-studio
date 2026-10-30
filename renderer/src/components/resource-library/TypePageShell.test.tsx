@@ -26,6 +26,9 @@ const danglingMcpRefsMock = vi.fn();
 const deleteMock = vi.fn();
 // D9：agent 页挂载时经 store.loadCatalogStatus 拉目录健康状态
 const getCatalogStatusMock = vi.fn();
+// M5.1：插件重复提示条两通道（store.loadPluginDups / cleanupPluginDups）
+const pluginDupScanMock = vi.fn();
+const pluginDupCleanupMock = vi.fn();
 
 const pluginGetDetailMock = vi.fn();
 
@@ -35,6 +38,8 @@ const mockApi = {
     danglingMcpRefs: danglingMcpRefsMock,
     delete: deleteMock,
     getCatalogStatus: getCatalogStatusMock,
+    pluginDupScan: pluginDupScanMock,
+    pluginDupCleanup: pluginDupCleanupMock,
   },
   plugin: {
     getDetail: pluginGetDetailMock,
@@ -64,6 +69,10 @@ beforeEach(() => {
   deleteMock.mockResolvedValue(undefined);
   getCatalogStatusMock.mockReset();
   getCatalogStatusMock.mockResolvedValue({ degraded: false });
+  pluginDupScanMock.mockReset();
+  pluginDupScanMock.mockResolvedValue([]);
+  pluginDupCleanupMock.mockReset();
+  pluginDupCleanupMock.mockResolvedValue({ deleted: [], failures: [] });
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
   localStorage.clear();
 
@@ -71,7 +80,7 @@ beforeEach(() => {
     items: [], loading: false, error: null, installNotice: null,
     catalogDegraded: false, hubDegraded: false, hubUpdates: {},
     typeFilter: 'mcp', sourceFilter: 'all', query: '',
-    activeType: 'mcp',
+    activeType: 'mcp', pluginDups: [],
   });
   useHubStore.setState({ status: null, nodes: [], loadError: null });
   useUiStore.setState({ activeView: 'marketplace' });
@@ -705,5 +714,71 @@ describe('TypePageShell - hub 档与提示条退场（library-store-split §2.1�
     expect(screen.queryByTestId('hub-degraded-notice')).toBeNull();
     expect(screen.queryByText(/接入后可安装组内共享资源/)).toBeNull();
     expect(screen.queryByText(/hub 暂不可达/)).toBeNull();
+  });
+});
+
+// ── M5.1 §1.1：插件×本地副本重复提示条（有重复才渲染 + 一键清理）──
+describe('TypePageShell - 插件重复提示条（M5.1）', () => {
+  const dupMcp = { type: 'mcp' as const, slug: 'dup-1', name: 'dup-1', pluginId: 'plug-a' };
+
+  it('有重复 → 提示条渲染 + N 计数（per-type 过滤，异类型不计入）', async () => {
+    // mount 副作用 loadPluginDups 会重拉覆盖种子态——scan 回声同清单（消除竞态）
+    pluginDupScanMock.mockResolvedValueOnce([
+      dupMcp,
+      { type: 'mcp', slug: 'dup-2', name: 'dup-2', pluginId: 'plug-a' },
+      { type: 'skill', slug: 'dup-s', name: 'dup-s', pluginId: 'plug-a' }, // 异类型不计入 MCP 页
+    ]);
+    useResourceStore.setState({
+      pluginDups: [dupMcp],
+      items: [{ ...itemA }], sourceFilter: 'all', query: '',
+    });
+    render(<TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />);
+    const banner = await screen.findByTestId('plugin-dup-banner');
+    expect(within(banner).getByText('检测到 2 个与插件重复的本地副本')).toBeTruthy();
+    expect(within(banner).getByRole('button', { name: '一键清理' })).toBeTruthy();
+  });
+
+  it('无重复 → 提示条不渲染', async () => {
+    useResourceStore.setState({ pluginDups: [], items: [{ ...itemA }], sourceFilter: 'all', query: '' });
+    render(<TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />);
+    // 等 mount 副作用落定（pluginDupScan 已回空）再断言不渲染
+    await waitFor(() => expect(pluginDupScanMock).toHaveBeenCalled());
+    expect(screen.queryByTestId('plugin-dup-banner')).toBeNull();
+  });
+
+  it('一键清理 → 调 pluginDupCleanup（当前页类型目标）→ 成功横幅 + 刷新列表与重复清单', async () => {
+    const before = listMock.mock.calls.length;
+    pluginDupScanMock.mockResolvedValueOnce([dupMcp]); // mount 拉取
+    pluginDupScanMock.mockResolvedValueOnce([]); // 清理后重拉（提示条消失）
+    useResourceStore.setState({
+      pluginDups: [dupMcp],
+      items: [{ ...itemA }], sourceFilter: 'all', query: '',
+    });
+    pluginDupCleanupMock.mockResolvedValueOnce({
+      deleted: [{ type: 'mcp', slug: 'dup-1' }], failures: [],
+    });
+    render(<TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: '一键清理' }));
+
+    await waitFor(() => expect(pluginDupCleanupMock).toHaveBeenCalledWith([{ type: 'mcp', slug: 'dup-1' }]));
+    // 刷新：resource.list 重拉 + pluginDupScan 重拉（提示条随之消失）
+    await waitFor(() => expect(listMock.mock.calls.length).toBeGreaterThan(before));
+    await waitFor(() => expect(useResourceStore.getState().pluginDups).toEqual([]));
+    expect(await screen.findByText(/已清理 1 个与插件重复的本地副本/)).toBeTruthy();
+    expect(screen.queryByTestId('plugin-dup-banner')).toBeNull();
+  });
+
+  it('部分失败 → failures 明细落 error 红条（续删语义如实披露）', async () => {
+    pluginDupScanMock.mockResolvedValueOnce([dupMcp]); // mount 拉取（清理后不再断言清单态）
+    useResourceStore.setState({
+      pluginDups: [dupMcp],
+      items: [{ ...itemA }], sourceFilter: 'all', query: '',
+    });
+    pluginDupCleanupMock.mockResolvedValueOnce({
+      deleted: [], failures: [{ type: 'mcp', slug: 'bad-1', reason: '目录不可写' }],
+    });
+    render(<TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: '一键清理' }));
+    expect(await screen.findByText(/清理部分失败：bad-1（目录不可写）/)).toBeTruthy();
   });
 });

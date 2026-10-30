@@ -1274,6 +1274,52 @@ export interface HubCoexistIssue {
 }
 
 /**
+ * M5.1 §1.1：resource:pluginDupScan 返回的插件重复行（与 electron 端
+ * resource/plugin-dedup.ts 的 PluginDupIssue 对齐）——库页提示条数据源，
+ * 「检测到 N 个与插件重复的本地副本 · 一键清理」。
+ */
+export interface PluginDupIssue {
+  type: 'skill' | 'mcp' | 'agent';
+  /** custom 行资源 slug（skill=slug / mcp=注册名 / agent=def.id）——清理入参键 */
+  slug: string;
+  /** custom 行展示名 */
+  name: string;
+  /** 提供同名能力的插件 id */
+  pluginId: string;
+}
+
+/** M5.1 §1.1：resource:pluginDupCleanup 入参（与 PluginDupIssue 同键） */
+export interface PluginDupTarget {
+  type: 'skill' | 'mcp' | 'agent';
+  slug: string;
+}
+
+/**
+ * M5.1 §1.1：resource:pluginDupCleanup 返回——部分失败续删逐条报错
+ * （deleted + failures 并集即全部请求目标）。
+ */
+export interface PluginDupCleanupResult {
+  deleted: PluginDupTarget[];
+  failures: Array<PluginDupTarget & { reason: string }>;
+}
+
+/**
+ * M5.1 §1.2：hub:publishResource 回执的版本回写段（与 electron 端
+ * hub/publish-writeback.ts 的 VersionWritebackOutcome 对齐）。written=false
+ * 且非 skipped → renderer toast「发布成功但版本回写失败：{error}」。
+ */
+export interface VersionWritebackOutcome {
+  /** true = 已写回本地定义 */
+  written: boolean;
+  /** true = 目标本体不由本地管理（plugin zip 装源），有意跳过 */
+  skipped?: boolean;
+  /** skipped/警示的回执提示文案（renderer 直出） */
+  notice?: string;
+  /** written=false 且非 skipped 时的失败原因 */
+  error?: string;
+}
+
+/**
  * P2.1 Task 5：DXT / MCPB 本地包 user_config 字段描述（resource:parseMcpBundle
  * 返回 userConfigSchema 的元素）。与 electron 端 mcp/bundle-import.ts 的
  * BundleConfigField 对齐（跨进程独立定义，仅结构对齐）。
@@ -2605,6 +2651,17 @@ export interface ApiSurface {
      * （一次扫描非阻断——设置页 hub 面板消费；空数组 = 无并存）。
      */
     hubCoexistScan(): Promise<HubCoexistIssue[]>;
+    /**
+     * M5.1 §1.1 插件×本地副本重复清单（库页提示条数据源）：插件已提供同名的
+     * custom 本地副本（隐藏非删除——resource:list 已归并不输出，本通道供
+     * 「检测到 N 个 · 一键清理」提示条；空数组 = 无重复不渲染）。
+     */
+    pluginDupScan(): Promise<PluginDupIssue[]>;
+    /**
+     * M5.1 §1.1 一键清理插件重复的本地副本：逐条重扫描校验后删除（skill=fs
+     * 目录+.sha256 / mcp/agent=DB custom 行），部分失败续删逐条报错。
+     */
+    pluginDupCleanup(targets: PluginDupTarget[]): Promise<PluginDupCleanupResult>;
   };
   task: TaskApiSurface;
   /** 看板重构 Task 7：任务组通道面（taskGroup:*，groups.ipc.handlers.ts） */
@@ -2835,6 +2892,8 @@ export interface HubPublishResult {
   version: string;
   checksum: string;
   sizeBytes: number;
+  /** M5.1 §1.2：版本回写本地定义结果（失败不推翻发布——renderer 警示消费） */
+  versionWriteback?: VersionWritebackOutcome;
 }
 
 /** hub:configure 入参（hub 地址 + 本节点名） */

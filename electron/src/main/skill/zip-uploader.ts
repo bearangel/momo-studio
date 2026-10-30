@@ -28,6 +28,7 @@ import { load as yamlLoad } from 'js-yaml';
 import { resolveSkillsDir } from '../paths';
 import { logger } from '../logger';
 import { getDb } from '../storage/db';
+import { listAllPluginSkills } from '../plugin/assembly';
 
 /** 已安装 skill 的对外展示结构（listInstalled 返回） */
 export interface InstalledSkill {
@@ -38,6 +39,8 @@ export interface InstalledSkill {
   source: 'builtin' | 'marketplace' | 'custom';
   /** 安装时间 ISO 字符串；builtin 为 null */
   installedAt: string | null;
+  /** frontmatter version（M5.1：发布版本回写后本地卡版本与 hub 发布态同源）；缺省无 */
+  version?: string;
 }
 
 /**
@@ -56,10 +59,11 @@ export function getSkillsDir(): string {
   return resolveSkillsDir();
 }
 
-/** frontmatter 最小结构（zip-uploader 只关心 name/description） */
+/** frontmatter 最小结构（zip-uploader 只关心 name/description/version） */
 interface SkillFrontmatter {
   name?: string;
   description?: string;
+  version?: string;
 }
 
 /** 匹配 --- 包围的 YAML frontmatter（兼容 \n 与 \r\n 行尾） */
@@ -178,6 +182,13 @@ export function uploadSkillZip(buffer: Buffer, filename: string): UploadedSkill[
     // slug 合法性：空串 / 含 `..` / 含路径分隔符 → 抛错（路径防御前置）
     if (!slug || slug.includes('..') || slug.includes('/') || slug.includes('\\')) {
       throw new Error(`非法 slug：${slug || '(空)'}`);
+    }
+
+    // M5.1 §1.3 导入拦截：插件已提供同名 slug → 拒绝导入副本（与 hub 安装
+    // 拦截同口径——插件行优先，本地副本经库页提示条一键清理消化）
+    const pluginOwner = listAllPluginSkills().find((s) => s.slug === slug);
+    if (pluginOwner) {
+      throw new Error(`插件 ${pluginOwner.pluginId} 已提供技能 ${slug}，无需导入副本`);
     }
 
     const targetDir = path.join(skillsDir, slug);
@@ -327,12 +338,14 @@ export function listInstalled(): InstalledSkill[] {
       const skillMdPath = path.join(skillsDir, entry.name, 'SKILL.md');
       let name = entry.name;
       let description = '';
+      let version: string | undefined;
       if (fs.existsSync(skillMdPath)) {
         try {
           const md = fs.readFileSync(skillMdPath, 'utf-8');
           const front = parseFrontmatter(md);
           if (front.name) name = front.name;
           if (front.description) description = front.description;
+          if (front.version) version = front.version;
         } catch {
           // 解析失败用 dir name 兜底
         }
@@ -343,6 +356,7 @@ export function listInstalled(): InstalledSkill[] {
         description,
         source: 'custom',
         installedAt: fs.statSync(hashFile).mtime.toISOString(),
+        ...(version !== undefined ? { version } : {}),
       });
     }
   }

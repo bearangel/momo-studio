@@ -29,6 +29,7 @@ import {
   listInstalled,
 } from '../../src/main/skill/zip-uploader';
 import { runMigrations, closeDb } from '../../src/main/storage/db';
+import { upsertPlugin } from '../../src/main/plugin/registry';
 
 let tmpRoot: string;
 let skillsDir: string;
@@ -269,6 +270,43 @@ describe('skill zip 上传 — 错误场景', () => {
     const zip = new AdmZip();
     zip.addFile('__MACOSX/SKILL.md', Buffer.from('hidden'));
     expect(() => uploadSkillZip(zip.toBuffer(), 'meta.zip')).toThrow(/SKILL\.md/);
+  });
+});
+
+describe('skill zip 上传 — M5.1 §1.3 导入拦截（插件同名 slug）', () => {
+  /** dev 源插件提供技能 <slug>（listAllPluginSkills 真实扫描链） */
+  function seedPluginSkill(pluginId: string, slug: string): void {
+    const root = path.join(tmpRoot, 'plugins', pluginId);
+    fs.mkdirSync(path.join(root, 'skills', slug), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, 'skills', slug, 'SKILL.md'),
+      `---\nname: ${slug}\ndescription: 插件技能\n---\n`,
+    );
+    const manifest = JSON.stringify({
+      id: pluginId, name: pluginId, version: '1.0.0', description: '',
+      components: { skills: './skills' },
+    });
+    fs.writeFileSync(path.join(root, 'momo-plugin.json'), manifest);
+    upsertPlugin({
+      id: pluginId, version: '1.0.0', manifestJson: manifest, state: 'active',
+      source: 'dev', sourcePath: root, installedAt: new Date().toISOString(),
+    });
+  }
+
+  it('插件已提供同名 slug → 拒绝 + 人话「插件 {id} 已提供技能 {slug}，无需导入副本」', () => {
+    seedPluginSkill('superpowers', 'brainstorming');
+    expect(() => uploadSkillZip(makeSkillZip('brainstorming', '副本'), 'brainstorming.zip')).toThrow(
+      '插件 superpowers 已提供技能 brainstorming，无需导入副本',
+    );
+    // 拒绝 = 零写入（本地副本目录不落盘）
+    expect(fs.existsSync(path.join(skillsDir, 'brainstorming'))).toBe(false);
+  });
+
+  it('无插件同名 → 照常导入（拦截不误伤正常上传）', () => {
+    seedPluginSkill('superpowers', 'brainstorming');
+    const result = uploadSkillZip(makeSkillZip('my-own-skill', '正常'), 'my-own-skill.zip');
+    expect(result).toHaveLength(1);
+    expect(fs.existsSync(path.join(skillsDir, 'my-own-skill', 'SKILL.md'))).toBe(true);
   });
 });
 

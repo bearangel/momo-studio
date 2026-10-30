@@ -20,6 +20,7 @@ import { listMarketplaceResources } from './marketplace';
 import { listCustomResources } from './custom';
 import { listHubCatalogResources, listHubInstalledResources } from './hub-install';
 import { listPluginResourceRows } from '../plugin/resources';
+import { dedupePluginLocalCopies } from './plugin-dedup';
 import {
   buildResourceId,
   parseResourceId,
@@ -155,6 +156,11 @@ export async function listResources(filter?: ResourceFilter): Promise<ResourceIt
   // plugin 行恒 installed=true（天然通过）；marketplace / smithery / hub 的
   // 未装目录条目在此剔除，远端浏览走 resource:registryList 弹窗通道。
   items = items.filter((i) => i.installed);
+
+  // M5.1 插件优先归并（spec 2026-10-30 §1.1，installed 收窄同层）：插件行在场
+  // 时同 type+slug 的 custom 本地副本行不输出（隐藏非删除——清理走
+  // resource:pluginDupScan / pluginDupCleanup 提示条一键清理）。
+  items = dedupePluginLocalCopies(items);
 
   return items;
 }

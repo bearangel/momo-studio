@@ -33,6 +33,8 @@ import type {
   HubResourcePublishedEvent,
   HubResourceUnpublishedEvent,
   HubOwnershipEntry,
+  PluginDupIssue,
+  PluginDupTarget,
   ResourceItem,
   ResourceFilter,
   ResourceType,
@@ -101,6 +103,13 @@ interface ResourceStore {
   /** 搜索关键词（前端过滤，无 IPC） */
   query: string;
 
+  /**
+   * M5.1 §1.1：插件×本地副本重复清单（pluginDupScan）——库页提示条数据源。
+   * resource:list 已归并隐藏 custom 副本行，本清单独立拉取（TypePageShell 挂载
+   * /清理后刷新）；失败静默空数组（提示条不渲染，非阻断）。
+   */
+  pluginDups: PluginDupIssue[];
+
   /** 资源库重设计：当前激活的资源页类型（无 'all'——三页结构） */
   activeType: ResourceType;
 
@@ -142,6 +151,15 @@ interface ResourceStore {
    */
   loadHubOwnership: () => Promise<void>;
   /**
+   * M5.1：拉取插件×本地副本重复清单（提示条数据源）。失败静默空（非阻断）。
+   */
+  loadPluginDups: () => Promise<void>;
+  /**
+   * M5.1：一键清理插件重复的本地副本——部分失败续删（failures 明细落 error
+   * 红条），全成功落 installNotice 横幅；两条路径都刷新列表 + 重复清单。
+   */
+  cleanupPluginDups: (targets: PluginDupTarget[]) => Promise<void>;
+  /**
    * 组⑤：MCP 启停——写库 + 禁用时断开运行实例；成功横幅 + 列表刷新，
    * 失败落 error 字段（红色横幅）。name 为 MCP 注册名（item.slug）。
    */
@@ -179,6 +197,7 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   typeFilter: 'all',
   sourceFilter: 'all',
   query: '',
+  pluginDups: [],
   activeType: 'agent',
 
   load: async () => {
@@ -291,6 +310,39 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
     } catch {
       // 查询失败 = 归属未知——整体判 unknown（按钮保留，发布尝试 403 兜底）
       set({ hubOwnership: {}, hubOwnershipKnown: false, hubSelfNodeId: null });
+    }
+  },
+
+  loadPluginDups: async () => {
+    try {
+      set({ pluginDups: await ipc.resource.pluginDupScan() });
+    } catch {
+      // 查询失败静默空——提示条不渲染（非阻断，下次挂载/清理后重拉）
+      set({ pluginDups: [] });
+    }
+  },
+
+  cleanupPluginDups: async (targets) => {
+    set({ error: null });
+    let result;
+    try {
+      result = await ipc.resource.pluginDupCleanup(targets);
+    } catch (err) {
+      // 通道失败 = 零数据变化，无需刷新——错误直接落红条
+      set({ error: `清理失败：${(err as Error).message}` });
+      return;
+    }
+    // 先刷新再落反馈：load() 开头会清 error（过期响应丢弃语义），后置写入才留得住
+    await get().load();
+    await get().loadPluginDups();
+    if (result.failures.length > 0) {
+      set({
+        error: `清理部分失败：${result.failures
+          .map((f) => `${f.slug}（${f.reason}）`)
+          .join('、')}`,
+      });
+    } else {
+      set({ installNotice: `已清理 ${result.deleted.length} 个与插件重复的本地副本` });
     }
   },
 
