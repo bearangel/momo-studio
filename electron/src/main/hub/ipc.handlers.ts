@@ -2,7 +2,7 @@
 import { ipcMain } from 'electron';
 import {
   hubConfigure, hubDelegationBoard, hubEnroll, hubForget, hubGetDelegationSettings, hubGetPresenceNodes,
-  hubGetStatus,
+  hubGetStatus, hubProtoVer,
   hubGetViewSettings, hubGetWorkspaceDirSettings, hubListMirrorRegistry, hubLocalWaiting,
   hubMarkDelegationCancelled, hubRequest,
   hubSetDelegationSettings, hubSetViewSettings, hubSetWorkspaceDirSettings, replayPresenceSeed,
@@ -27,6 +27,7 @@ import { blockedDispatchError } from '../task/dependency-gate';
 import { deriveBlockedBy } from '../storage/tasks/dependencies-repo';
 import { updateTask, getTask } from '../storage/tasks/repo';
 import { listWorkspaces } from '../workspace/crud';
+import { listTeams } from '../agent/team';
 import { recordPublishAccountingSafe } from '../resource/hub-install';
 import { writebackPublishedVersionSafe } from './publish-writeback';
 
@@ -187,6 +188,21 @@ export function registerHubIpc(): void {
   // node 直发）+ 预检概要（弹窗「执行位置」区数据源）。编排见 dispatch-submit.ts。
   const dispatchSubmitPorts: DispatchSubmitPorts = {
     listGroups: async () => (await groups.list()).groups,
+    // M5.3 团队快照展开：listTeams 当前成员 + leader 标记（name=agentName——外派
+    // team 段名单与镜像按名对齐同口径）；派发时刻快照定型（在途调组票桶）
+    getTeamSnapshot: (workspaceId, teamId) => {
+      const team = listTeams(workspaceId).find((t) => t.id === teamId);
+      if (!team) return null;
+      return {
+        name: team.name,
+        members: team.members.map((m) => ({
+          agentName: m.agentName,
+          isLeader: m.instanceId === team.leaderInstanceId,
+        })),
+      };
+    },
+    // M5.3 hub 闸数据源：协商协议版本直读（client 版本管道——无副作用单点）
+    hubProtoVer: () => hubProtoVer(),
     listDelegations: async (groupId) =>
       (await hubRequest<{ tasks: Array<{ taskId: string; targetNodeId: string; status: string }> }>(
         TASK_RPC.list,
@@ -221,6 +237,8 @@ export function registerHubIpc(): void {
           description: input.description,
           groupId: input.groupId,
           routing: input.routing,
+          // M5.3：团队指向随外派行落库（retryDispatch 重建 team 段的依据）
+          targetTeamId: input.targetTeamId ?? null,
         },
         { dependsOn: input.dependsOn ?? [] },
       );
@@ -244,7 +262,11 @@ export function registerHubIpc(): void {
   const redispatchPorts: RedispatchPorts = {
     getTask: (taskId) => getTask(taskId),
     workspaceNameOf: (workspaceId) => listWorkspaces().find((w) => w.id === workspaceId)?.name ?? null,
-    resolveTarget: (routing, workspaceName) => resolveRemoteTarget(routing, workspaceName, dispatchSubmitPorts),
+    resolveTarget: (routing, workspaceName, opts) =>
+      // M5.3：团队重派走与首派同一版本闸（resolveRemoteTarget opts.team 透传）
+      resolveRemoteTarget(routing, workspaceName, dispatchSubmitPorts, opts),
+    // M5.3 团队重派：与首派同一快照展开端口（listTeams 当前成员 + leader）
+    getTeamSnapshot: (workspaceId, teamId) => dispatchSubmitPorts.getTeamSnapshot(workspaceId, teamId),
     // 同上：delegate rejection 被 retryDispatch 吞掉（dispatched=false 留待处理），不包
     delegate: (brief) => hubRequest(TASK_RPC.delegate, brief, undefined),
     updateTask: (taskId, patch) => {

@@ -36,7 +36,7 @@ import { listMembers, addMember, removeMember, generateAgentUserId, saveAgentDef
 import { listAgentDefinitions, getAgentDefinition } from '../agent/agent-queries';
 import { parseAgentManifest } from '../agent/manifest-parser';
 import { listTeams, createTeam, deleteTeam } from '../agent/team';
-import { listProviders, getProvider, updateProvider } from '../agent/provider-crud';
+import { listProviders, getProvider, updateProvider, listProviderModels, type ModelProvider } from '../agent/provider-crud';
 import { listRegistered, setMcpEnabledDefinition } from '../mcp/host-manager';
 import { listInstalled, getSkillsDir } from '../skill/zip-uploader';
 import { listPlugins, getPlugin, isPluginEnabled, setPluginEnabled } from '../plugin/registry';
@@ -59,7 +59,7 @@ import {
   type SnapshotManifest,
 } from './protocol';
 import type { MirrorApplyOutcome, MirrorApplyPayload } from './mirror-wire';
-import { extractModelBinding, type SnapshotModelBinding } from './snapshot-model-binding';
+import { extractModelBinding, extractMemberModelBindings, type SnapshotModelBinding, type SnapshotMemberModelBinding } from './snapshot-model-binding';
 import { extractDefaultAgent } from './snapshot-default-agent';
 import { loadHubAccountingSet } from './accounting';
 
@@ -144,10 +144,75 @@ function listTarMembers(archivePath: string): string[] {
     .filter((l) => l !== '' && !l.endsWith('/'));
 }
 
-/** 快照归档 → {manifest, stageDir, modelBinding, defaultAgent}（解包到临时目录；
- *  调用方负责清理 stageDir）。modelBinding/defaultAgent 从**原始** manifest.json
- *  提取（pin 版 validateSnapshotManifest 按「未知容忍（剥除）」会剥掉两可选段
- *  ——snapshot-model-binding / snapshot-default-agent 补位纪律）。 */
+/**
+ * M5.3 F2 四级配平链（spec §6.2，只补空）：def 落地后 !modelProviderId 时按序对齐
+ * 目标 provider 面——①同名 provider 且 provider_models 含 modelName → 绑；②同
+ * platform 且含 modelName → 绑；③目标 defaultChatModel 存在且 provider 行在 → 绑；
+ * ④保持未配置（spawn 人话报错兜底）。同名/同 platform 多候选：isDefault 优先、
+ * 次创建序取首。模型名精确匹配（大小写敏感）；不写 provider 表、不增补
+ * provider_models 条目；existing.modelProviderId 非空一律不动（D4 自愈① 保持）。
+ */
+function balanceMemberModelBinding(
+  defId: string,
+  memberName: string,
+  binding: SnapshotMemberModelBinding | undefined,
+): void {
+  if (binding === undefined) return;
+  const def = getAgentDefinition(defId);
+  if (!def || def.modelProviderId) return; // 只补空：目标已配（或 D4 自愈① 保留值）不动
+  const pickBy = (pred: (p: ModelProvider) => boolean): ModelProvider | null => {
+    const candidates = listProviders()
+      .filter(pred)
+      .filter((p) => listProviderModels(p.id).some((m) => m.modelId === binding.modelName));
+    if (candidates.length === 0) return null;
+    candidates.sort(
+      (a, b) =>
+        (b.isDefault ? 1 : 0) - (a.isDefault ? 1 : 0) || a.createdAt.localeCompare(b.createdAt),
+    );
+    return candidates[0]!;
+  };
+  const byName = pickBy((p) => p.name === binding.providerName);
+  if (byName) {
+    updateAgentDefinition({ id: defId, modelProviderId: byName.id, modelName: binding.modelName });
+    logger.info('镜像成员模型配平：链①同名 provider 命中', {
+      agent: memberName,
+      provider: byName.name,
+      model: binding.modelName,
+    });
+    return;
+  }
+  const byPlatform = pickBy((p) => p.platform === binding.platform);
+  if (byPlatform) {
+    updateAgentDefinition({ id: defId, modelProviderId: byPlatform.id, modelName: binding.modelName });
+    logger.info('镜像成员模型配平：链②同 platform 命中', {
+      agent: memberName,
+      provider: byPlatform.name,
+      model: binding.modelName,
+    });
+    return;
+  }
+  const dcm = getGlobalSettings().defaultChatModel;
+  if (dcm && getProvider(dcm.providerId)) {
+    updateAgentDefinition({ id: defId, modelProviderId: dcm.providerId, modelName: dcm.modelId });
+    logger.info('镜像成员模型配平：链③全局默认模型命中', {
+      agent: memberName,
+      providerId: dcm.providerId,
+      model: dcm.modelId,
+    });
+    return;
+  }
+  logger.info('镜像成员模型配平：四级全 miss，保持未配置（spawn 时人话报错兜底）', {
+    agent: memberName,
+    providerName: binding.providerName,
+    model: binding.modelName,
+  });
+}
+
+/** 快照归档 → {manifest, stageDir, modelBinding, defaultAgent, memberModelBindings}
+ *  （解包到临时目录；调用方负责清理 stageDir）。modelBinding/defaultAgent/
+ *  memberModelBindings 从**原始** manifest.json 提取（pin 版 validateSnapshotManifest
+ *  按「未知容忍（剥除）」会剥掉可选段——snapshot-model-binding / snapshot-default-agent
+ *  补位纪律）。 */
 async function extractSnapshot(
   bytes: Buffer,
   expectedChecksum: string,
@@ -156,6 +221,7 @@ async function extractSnapshot(
   stageDir: string;
   modelBinding: SnapshotModelBinding | null;
   defaultAgent: string | null;
+  memberModelBindings: Map<string, SnapshotMemberModelBinding>;
 }> {
   const stageDir = fs.mkdtempSync(path.join(resolveTmpDir(), 'ws-apply-'));
   const archivePath = path.join(stageDir, 'snapshot.tar.gz');
@@ -192,6 +258,7 @@ async function extractSnapshot(
       stageDir: unpack,
       modelBinding: extractModelBinding(rawConfig),
       defaultAgent: extractDefaultAgent(rawConfig),
+      memberModelBindings: extractMemberModelBindings(rawConfig),
     };
   } finally {
     fs.rmSync(archivePath, { force: true });
@@ -465,13 +532,16 @@ async function installResources(
  *  defaultAgent（D2 可选段）：按名对齐重建成员后回写目标默认位——委派
  *  resolveAgentInstance 无 agentSlug 兜底链的数据前提；段缺省不动目标默认位
  *  （replace 重建成员后旧默认 instanceId 已悬空，resolveAgentInstance 自行
- *  判在册性回 null，死指针惰性）。 */
+ *  判在册性回 null，死指针惰性）。
+ *  memberModelBindings（M5.3 F2 可选段）：member 名 → 模型绑定——def 落地后
+ *  只补空四级配平（balanceMemberModelBinding，spec §6.2）。 */
 async function applyConfig(
   workspaceId: string,
   manifest: SnapshotManifest,
   stageDir: string,
   modelBinding: SnapshotModelBinding | null,
   defaultAgent: string | null,
+  memberModelBindings: Map<string, SnapshotMemberModelBinding>,
 ): Promise<string[]> {
   const unresolved: string[] = [];
   const cfg = manifest.config;
@@ -531,6 +601,9 @@ async function applyConfig(
     }
     if (addedDefIds.has(defId)) continue; // 同定义多名（防御）：只入一次成员
     addedDefIds.add(defId);
+    // M5.3 F2：def 落地（新建/复用）后只补空配平（每 def 一次——绑定在 def 级，
+    // 与成员加入成败无关；成员名取该 def 首个对应名）
+    balanceMemberModelBinding(defId, m.name, memberModelBindings.get(m.name));
     try {
       const member = await addMember(workspaceId, defId, generateAgentUserId(m.slug ?? m.name));
       instanceByName.set(m.name, member.instanceId);
@@ -745,6 +818,7 @@ export async function applyMirrorSnapshot(
       stageDir: string;
       modelBinding: SnapshotModelBinding | null;
       defaultAgent: string | null;
+      memberModelBindings: Map<string, SnapshotMemberModelBinding>;
     };
     try {
       const { bytes, checksum } = await fetchSnapshotArchive(payload.snapshotId);
@@ -754,6 +828,7 @@ export async function applyMirrorSnapshot(
         stageDir: extracted.stageDir,
         modelBinding: extracted.modelBinding,
         defaultAgent: extracted.defaultAgent,
+        memberModelBindings: extracted.memberModelBindings,
       };
       stageRoot = path.dirname(extracted.stageDir);
     } catch (err) {
@@ -799,14 +874,15 @@ export async function applyMirrorSnapshot(
       };
     }
 
-    // 4. 后配置落库（七子段 + modelBinding/defaultAgent 可选段整体替换；
-    //    软失败引用入 unresolvedRefs——stale 跳过的资源同列其中，协议零变更）
+    // 4. 后配置落库（七子段 + modelBinding/defaultAgent/memberModelBindings 可选段
+    //    整体替换；软失败引用入 unresolvedRefs——stale 跳过的资源同列其中，协议零变更）
     const configUnresolved = await applyConfig(
       workspaceId,
       manifest,
       stageDir,
       fetched.modelBinding,
       fetched.defaultAgent,
+      fetched.memberModelBindings,
     );
     const unresolvedRefs = [...staleSkipped, ...configUnresolved];
 

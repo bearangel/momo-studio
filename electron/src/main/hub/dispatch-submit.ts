@@ -19,6 +19,8 @@ import { isTaskRouting, type TaskRouting } from './task-routing';
 import type { PermissionTier } from './run-policy';
 import { blockedDispatchError } from '../task/dependency-gate';
 import type { TaskRow } from '../storage/tasks/repo';
+import { TEAM_DELEGATION_REQUIRED_MINOR } from './protocol';
+import { logger } from '../logger';
 
 /**
  * HITL 权限档位（T10 起单源迁移至 run-policy.ts——三档运行时语义在该模块；
@@ -45,6 +47,12 @@ export interface SubmitRoutedTaskInput {
    * 建链后行 blocked 派生 → 派发闸管制（blocked 不 delegate）
    */
   dependsOn?: string[];
+  /**
+   * M5.3 团队派发：本地团队 id（renderer X3 团队下拉带出）。提交时主进程展开为
+   * 成员名单快照（name=agentName，与镜像快照名对齐口径）随载荷 team 段（不带
+   * agentSlug——协议互斥）；单 agent 路径缺省不带键（零变化）。批量链路不提供。
+   */
+  teamId?: string;
 }
 
 export interface SubmitRoutedTaskResult {
@@ -70,6 +78,11 @@ export interface DelegationTaskBrief {
      * 校验存在性、worker 零消费（语义裁定 spec §2.1）；缺省不带键（1.6 兼容）
      */
     dependsOn?: string[];
+    /**
+     * M5.3 协议 1.9.0：外派团队段——成员名单快照（name=agent 定义名，恰一名
+     * isLeader）；与 agentSlug 互斥（同场 hub 整包拒）；缺省不带键（1.8 兼容）
+     */
+    team?: { members: Array<{ name: string; isLeader: boolean }> };
   };
 }
 
@@ -83,6 +96,12 @@ export interface RemoteCreateInput {
   routing: TaskRouting;
   /** M4.3：外派行 `::` 建链（同事务插边——存在 + 环检测在 relations 单源） */
   dependsOn?: string[];
+  /**
+   * M5.3：团队外派行的本地团队指向（tasks.target_team_id 列复用——外派行恒
+   * pending，executor/starter 按状态门控不消费该列；重派 retryDispatch 据此
+   * 重建 team 段，防「重派团队任务静默退化为单 agent 载荷」）。单 agent 缺省
+   */
+  targetTeamId?: string;
 }
 
 /**
@@ -93,14 +112,30 @@ export interface RemoteCreateInput {
  *   - createRemoteTask / updateDelegationLink → storage/tasks/repo
  */
 export interface DispatchSubmitPorts {
-  /** 本节点所在组清单（presence 融合后的成员在线态） */
+  /** 本节点所在组清单（presence 融合后的成员在线态；protoVer 为 1.9.0 起在线
+   *  成员携带的协议版本——M5.3 派发闸 / nodeCaps 数据源，离线成员缺省不带） */
   listGroups(): Promise<
     Array<{
       groupId: string;
       groupName: string;
-      members: Array<{ nodeId: string; name: string; online: boolean }>;
+      members: Array<{ nodeId: string; name: string; online: boolean; protoVer?: string }>;
     }>
   >;
+  /**
+   * M5.3 团队快照展开：本地团队当前成员 + leader 标记（name=agentName——外派
+   * team 段名单与镜像按名对齐同口径）。团队不存在/已解散 → null（提交时人话拒）。
+   */
+  getTeamSnapshot(
+    workspaceId: string,
+    teamId: string,
+  ): { name: string; members: Array<{ agentName: string; isLeader: boolean }> } | null;
+  /**
+   * 当前连接协商到的 hub 协议版本（client.hubProtoVer——M3.0-P2 版本管道）；
+   * 未连接/未协商为 null。团队派发 hub 闸数据源（静默换班第 4 处：旧 hub 白名单
+   * 剥 team 段 → 目标按默认 agent 单跑而 A 侧自显成功——节点 presence 数据无法
+   * 揭示 hub 自身过旧，故先于节点闸校验 hub 协商版本）
+   */
+  hubProtoVer(): string | null;
   /** 组内委派账本（runningCount 数据源） */
   listDelegations(groupId: string): Promise<Array<{ taskId: string; targetNodeId: string; status: string }>>;
   /** 镜像登记表（按工作空间名过滤） */
@@ -127,6 +162,52 @@ export interface DispatchSubmitPorts {
 const ACTIVE_DELEGATION = new Set(['pending', 'running', 'interrupted']);
 
 /**
+ * protoVer minor 解析（'1.9.0' → 9；缺省/异形 → null）。M5.3 派发闸按
+ * minor 与 TEAM_DELEGATION_REQUIRED_MINOR（协议包单源）比对；缺省视为旧——
+ * 在线但不带 protoVer 的成员即旧版 studio（1.9.0 起在线成员恒带）。
+ */
+function protoVerMinor(v: string | undefined): number | null {
+  if (v === undefined) return null;
+  const m = /^(\d+)\.(\d+)(?:\.\d+)?$/.exec(v.trim());
+  if (!m) return null;
+  return Number(m[2]);
+}
+
+/** 节点是否支持团队派发（minor ≥ 协议包门槛；缺省/异形视为旧） */
+export function supportsTeamDelegation(protoVer: string | undefined): boolean {
+  const minor = protoVerMinor(protoVer);
+  return minor !== null && minor >= TEAM_DELEGATION_REQUIRED_MINOR;
+}
+
+/** 版本门人话（文案口径对齐 hub node_unsupported：含节点名与对方版本） */
+function nodeTooOldMessage(nodeName: string, protoVer: string | undefined): string {
+  return `目标节点 ${nodeName} 版本过旧（协议 ${protoVer ?? '未知'}），不支持团队派发——需对方升级到 v0.5.0+`;
+}
+
+/**
+ * M5.3 团队快照展开：teamId → 成员名单 payload（name=agentName + leader 标记）。
+ * 提交时早失败（零落库零派发）：团队不存在/形态不满足 hub 校验锚点（2..8 名、
+ * 恰一名 leader）→ 人话 throw。导出供 delegation-sync.retryDispatch 复用
+ * （重派即新派发——展开当前快照，与首派同构单源）。
+ */
+export function expandTeamPayload(
+  input: { workspaceId: string; workspaceName: string; teamId: string },
+  ports: Pick<DispatchSubmitPorts, 'getTeamSnapshot'>,
+): { members: Array<{ name: string; isLeader: boolean }> } {
+  const snap = ports.getTeamSnapshot(input.workspaceId, input.teamId);
+  if (!snap) {
+    throw new Error(`团队不存在或已解散: ${input.teamId}（工作空间 ${input.workspaceName}）`);
+  }
+  const leaderCount = snap.members.filter((m) => m.isLeader).length;
+  if (snap.members.length < 2 || snap.members.length > 8 || leaderCount !== 1) {
+    throw new Error(
+      `团队 ${snap.name} 形态不满足团队派发（当前 ${snap.members.length} 名成员、${leaderCount} 名 leader——须 2..8 名且恰一名 leader）`,
+    );
+  }
+  return { members: snap.members.map((m) => ({ name: m.agentName, isLeader: m.isLeader })) };
+}
+
+/**
  * 路由提交主链。routing 异形人话拒绝（与 task.create IPC 同哲学：想外派被静默
  * 降级本机，错误更晚更贵）；组不存在 / 非成员目标同样响亮拒绝（零落库零派发）。
  */
@@ -144,7 +225,17 @@ export async function submitRoutedTask(
     return { task, dispatched: false, nodeId: null };
   }
 
-  const targetNodeId = await resolveRemoteTarget(input.routing, input.workspaceName, ports);
+  // M5.3 团队展开（提交时早失败——团队不存在/形态非法零落库零派发）
+  const teamPayload =
+    input.teamId !== undefined
+      ? expandTeamPayload(
+          { workspaceId: input.workspaceId, workspaceName: input.workspaceName, teamId: input.teamId },
+          ports,
+        )
+      : undefined;
+  const targetNodeId = await resolveRemoteTarget(input.routing, input.workspaceName, ports, {
+    team: teamPayload !== undefined,
+  });
   // 行先落库再派发：外派前先有账，发送失败不丢单（RM-M21-5 手动重试面）；
   // M4.3：dependsOn 随行建链（存在 + 环检测在 relations 单源）
   const task = ports.createRemoteTask({
@@ -157,6 +248,9 @@ export async function submitRoutedTask(
     ...(input.dependsOn !== undefined && input.dependsOn.length > 0
       ? { dependsOn: input.dependsOn }
       : {}),
+    // M5.3：团队指向随行落库（重派重建 team 段的依据——expandTeamPayload 已
+    // 在上方 throw，走到此处 teamId 必为有效团队）
+    ...(input.teamId !== undefined ? { targetTeamId: input.teamId } : {}),
   });
   // M4.3 派发闸（spec §2.3.1 核心）：建链后 blocked 派生 → 拒绝委派。行保留
   // pending 待处理（建链账不回滚——重试入口在待派发卡，依赖完成后放行）；
@@ -180,6 +274,9 @@ export async function submitRoutedTask(
         ...(input.dependsOn !== undefined && input.dependsOn.length > 0
           ? { dependsOn: input.dependsOn }
           : {}),
+        // M5.3 协议 1.9.0：团队段随任务书透传（不带 agentSlug——协议互斥；
+        // 单 agent 路径缺省不带键，1.8 载荷零变化）
+        ...(teamPayload !== undefined ? { team: teamPayload } : {}),
       },
     });
     // D5：已解析目标随 delegation_id 一并回写行（group 变体补 targetNodeId；
@@ -188,9 +285,15 @@ export async function submitRoutedTask(
       input.routing.mode === 'group' ? { ...input.routing, targetNodeId } : input.routing;
     ports.updateDelegationLink(task.id, delegationId, resolvedRouting);
     return { task: { ...task, delegationId }, dispatched: true, nodeId: targetNodeId };
-  } catch {
+  } catch (err) {
     // 瞬断（node_offline / 网络抖动）：行保留待处理，不向上抛——弹窗提交不该
-    // 因单节点瞬断整体失败；重试入口在待派发卡（T9）
+    // 因单节点瞬断整体失败；重试入口在待派发卡（T9）。防静默死路纪律：拒因
+    // 落 warn 留痕（taskId + 原文——hub node_unsupported 等永久拒因可据此排查）
+    logger.warn('外派委派失败（行保留待处理）', {
+      taskId: task.id,
+      targetNodeId,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return { task, dispatched: false, nodeId: null };
   }
 }
@@ -199,12 +302,29 @@ export async function submitRoutedTask(
  * 外派目标解析：node 模式锁定直发（成员身份校验）；group 模式组装 T7 DispatchInput
  * 走 pickWorker（无候选返回 null → 调用方落待处理）。
  * 导出供 delegation-sync.retryDispatch 复用（T9 重派单点——调度逻辑单源）。
+ *
+ * M5.3 派发闸（opts.team=true 时生效，早失败零落库）：
+ *   - 指定节点：在线成员 protoVer（缺省视为旧）minor < 门槛 → 人话拒（含节点名
+ *     与对方版本）；离线成员无 protoVer 可查——不在此闸拦（hub 兜底 node_offline/
+ *     node_unsupported）
+ *   - 组内调度：least-busy 候选池额外排除协议过旧节点；本可有候选（在线∧已镜像）
+ *     但全被版本排除 → 人话拒并列全部落后节点名；无候选（本就无在线/镜像）→
+ *     维持 null 留待处理（既有语义零变化）
  */
 export async function resolveRemoteTarget(
   routing: Exclude<TaskRouting, { mode: 'local' }>,
   workspaceName: string,
   ports: DispatchSubmitPorts,
+  opts?: { team?: boolean },
 ): Promise<string | null> {
+  // M5.3 hub 闸（先于节点闸——指定节点离线时节点闸无 protoVer 可查会放行，
+  // 而旧 hub 白名单剥 team 段的静默换班只有 hub 协商版本能揭示；组内调度同因
+  // 前移：旧 hub 不回 group.list protoVer → 池空文案误导为节点问题）
+  if (opts?.team === true && !supportsTeamDelegation(ports.hubProtoVer() ?? undefined)) {
+    throw new Error(
+      `hub 服务器协议过旧（${ports.hubProtoVer() ?? '未知'}，需 1.${TEAM_DELEGATION_REQUIRED_MINOR}.0 及以上），不支持团队派发——请先升级 momo-hub 到 v0.5.0+`,
+    );
+  }
   const groups = await ports.listGroups();
   const group = groups.find((g) => g.groupId === routing.groupId);
   if (!group) {
@@ -217,6 +337,9 @@ export async function resolveRemoteTarget(
         `指定节点 ${routing.targetNodeId} 不是工作组 ${group.groupName}（${group.groupId}）的成员`,
       );
     }
+    if (opts?.team === true && member.online && !supportsTeamDelegation(member.protoVer)) {
+      throw new Error(nodeTooOldMessage(member.name, member.protoVer));
+    }
     return routing.targetNodeId;
   }
   const delegations = await ports.listDelegations(routing.groupId);
@@ -228,19 +351,42 @@ export async function resolveRemoteTarget(
   const mirroredBy = new Set(
     ports.listMirrorRegistry(workspaceName).map((r) => r.targetNodeId),
   );
-  return pickWorker({
-    groupId: routing.groupId,
-    workspaceName,
-    // DispatchInput 契约：members 为 presence 过滤后的在线成员（pickWorker 自带
-    // online 复核，此处过滤是契约遵守而非冗余）
-    members: group.members
-      .filter((m) => m.online)
-      .map((m) => ({
+  const onlineMembers = group.members.filter((m) => m.online);
+  if (opts?.team === true) {
+    // 版本排除前的真实候选池（在线 ∧ 已镜像——pickWorker 语义同款）
+    const baseCandidates = onlineMembers.filter((m) => mirroredBy.has(m.nodeId));
+    const eligible = baseCandidates.filter((m) => supportsTeamDelegation(m.protoVer));
+    if (eligible.length === 0 && baseCandidates.length > 0) {
+      const laggards = baseCandidates
+        .filter((m) => !supportsTeamDelegation(m.protoVer))
+        .map((m) => m.name);
+      throw new Error(
+        `组内候选节点协议均过旧（${laggards.join('、')}），不支持团队派发——需对方升级到 v0.5.0+`,
+      );
+    }
+    return pickWorker({
+      groupId: routing.groupId,
+      workspaceName,
+      members: eligible.map((m) => ({
         nodeId: m.nodeId,
         name: m.name,
         online: m.online,
         runningCount: runningCount.get(m.nodeId) ?? 0,
       })),
+      mirroredBy,
+    });
+  }
+  return pickWorker({
+    groupId: routing.groupId,
+    workspaceName,
+    // DispatchInput 契约：members 为 presence 过滤后的在线成员（pickWorker 自带
+    // online 复核，此处过滤是契约遵守而非冗余）
+    members: onlineMembers.map((m) => ({
+      nodeId: m.nodeId,
+      name: m.name,
+      online: m.online,
+      runningCount: runningCount.get(m.nodeId) ?? 0,
+    })),
     mirroredBy,
   });
 }
@@ -269,6 +415,12 @@ export interface RoutingPrecheckResult {
   /** 本空间是否有任何镜像登记（Review Focus #1 守门信号：false → 弹窗仅「本机」） */
   mirrored: boolean;
   groups: RoutingGroupSummary[];
+  /**
+   * M5.3 节点能力面：组内在线成员的协议版本（group.list protoVer 派生，跨组按
+   * nodeId 去重）——renderer 预检黄字/派发闸 UI（X3）数据源。运行时恒携带；
+   * renderer 侧 types.d.ts 对应字段为可选（旧 fixture 兼容，消费面 X3 另行接线）
+   */
+  nodeCaps: Array<{ nodeId: string; name: string; protoVer: string }>;
 }
 
 /**
@@ -288,6 +440,17 @@ export async function routingPrecheck(
   } catch {
     // hub 不可达：组信息缺失 → 组内调度/指定节点无数据可显，降级空清单（不抛）
   }
+  // nodeCaps：在线成员携带的 protoVer（1.9.0 起在线恒带；离线/旧节点不带），
+  // 跨组同 nodeId 去重（首见保留——节点能力与组无关）
+  const nodeCaps: Array<{ nodeId: string; name: string; protoVer: string }> = [];
+  const seenNodes = new Set<string>();
+  for (const g of groups) {
+    for (const m of g.members) {
+      if (!m.online || typeof m.protoVer !== 'string' || seenNodes.has(m.nodeId)) continue;
+      seenNodes.add(m.nodeId);
+      nodeCaps.push({ nodeId: m.nodeId, name: m.name, protoVer: m.protoVer });
+    }
+  }
   return {
     mirrored: mirroredNodes.size > 0,
     groups: groups.map((g) => {
@@ -305,5 +468,6 @@ export async function routingPrecheck(
         members,
       };
     }),
+    nodeCaps,
   };
 }

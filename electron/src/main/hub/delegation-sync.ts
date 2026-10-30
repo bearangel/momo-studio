@@ -26,6 +26,7 @@ import type { Database } from 'better-sqlite3';
 import type { DelegationStatus } from './protocol';
 import type { DelegationRecord, HubDelegationStore } from './delegation-store';
 import type { PermissionTier, DelegationTaskBrief } from './dispatch-submit';
+import { expandTeamPayload } from './dispatch-submit';
 import type { TaskRouting } from './task-routing';
 import type { TaskRow, TaskStatus } from '../storage/tasks/repo';
 import { isTerminal } from '../storage/tasks/state-machine';
@@ -349,11 +350,22 @@ export interface RedispatchPorts {
   getTask(taskId: string): TaskRow | null;
   /** workspaceId → 工作空间名（委派载荷 workspaceName） */
   workspaceNameOf(workspaceId: string): string | null;
-  /** 目标解析（group=pickWorker least-busy / node=锁定直发；null=无候选） */
+  /** 目标解析（group=pickWorker least-busy / node=锁定直发；null=无候选）；
+   *  opts.team=true 时走 M5.3 版本门（指定节点拒/组内排除——与首派同闸） */
   resolveTarget(
     routing: Exclude<TaskRouting, { mode: 'local' }>,
     workspaceName: string,
+    opts?: { team?: boolean },
   ): Promise<string | null>;
+  /**
+   * M5.3 团队快照展开（与 DispatchSubmitPorts.getTeamSnapshot 同形）：重派行带
+   * targetTeamId 时重建 team 段——防「重派团队任务静默退化为单 agent 载荷」
+   * （spec §3 裁定 3：不静默换班）。团队不存在/已解散 → null
+   */
+  getTeamSnapshot(
+    workspaceId: string,
+    teamId: string,
+  ): { name: string; members: Array<{ agentName: string; isLeader: boolean }> } | null;
   /** 既有委派管道（leader-only；目标离线即拒 node_offline） */
   delegate(brief: DelegationTaskBrief): Promise<{ taskId: string }>;
   updateTask(id: string, patch: Partial<TaskRow>): void;
@@ -372,6 +384,12 @@ export interface RetryDispatchResult {
  * 回落）或 failed（失败重派）；其余态人话拒。链路：复位行（pending/清 error/清旧
  * delegation_id）→ 解析目标 → 无候选留待处理不轮询（RM-M21-5）→ 派发瞬断同样
  * 留待处理（重试入口回到本函数）→ 成功回写新 delegation_id。
+ *
+ * M5.3 团队重派（spec §3 裁定 3——不静默换班）：行带 targetTeamId → 重新展开
+ * 当前团队快照重建 team 段（重派即新派发，快照语义=派发时刻定型）+ 版本闸随
+ * resolveTarget({team:true}) 与首派同构；团队已解散/形态失效 → 不派，行转
+ * failed 人话（永久性失败，对齐 executor validateTarget 的「目标团队已解散」
+ * 风格——非瞬断不落待处理轮询）。单 agent 行（targetTeamId 空）零变化。
  */
 export async function retryDispatch(
   taskId: string,
@@ -396,10 +414,39 @@ export async function retryDispatch(
   if (!workspaceName) {
     throw new Error(`任务 ${taskId} 的工作空间已不存在，无法重派`);
   }
+  // M5.3 团队展开先于复位（错误路径零副作用——解散/形态失效不闪 pending）：
+  // 展开失败均为永久性失败 → 行转 failed 人话，不派不分流
+  let teamPayload: { members: Array<{ name: string; isLeader: boolean }> } | undefined;
+  if (row.targetTeamId !== null) {
+    if (ports.getTeamSnapshot(row.workspaceId, row.targetTeamId) === null) {
+      ports.updateTask(taskId, {
+        status: 'failed',
+        errorMessage: '目标团队已解散，无法重派（原派发：团队协作）',
+        completedAt: ports.now(),
+      });
+      return { dispatched: false, nodeId: null, delegationId: null };
+    }
+    try {
+      teamPayload = expandTeamPayload(
+        { workspaceId: row.workspaceId, workspaceName, teamId: row.targetTeamId },
+        ports,
+      );
+    } catch (err) {
+      // 形态失效（成员 <2 / >8 / leader 数 ≠1——展开单源人话）
+      ports.updateTask(taskId, {
+        status: 'failed',
+        errorMessage: `目标团队已解散，无法重派（原派发：团队协作）——${(err as Error).message}`,
+        completedAt: ports.now(),
+      });
+      return { dispatched: false, nodeId: null, delegationId: null };
+    }
+  }
   // 复位先行：旧 delegation_id 属旧账本行，重派=换 id（一义一名，禁续用）
   ports.updateTask(taskId, { status: 'pending', errorMessage: null, delegationId: null });
 
-  const targetNodeId = await ports.resolveTarget(row.routing, workspaceName);
+  const targetNodeId = await ports.resolveTarget(row.routing, workspaceName, {
+    team: teamPayload !== undefined,
+  });
   if (targetNodeId === null) {
     return { dispatched: false, nodeId: null, delegationId: null }; // 无候选：留待处理
   }
@@ -412,6 +459,8 @@ export async function retryDispatch(
         title: row.title,
         prompt: row.description.trim() !== '' ? row.description : row.title,
         permissionTier,
+        // M5.3：team 段随重派载荷重建（不带 agentSlug——协议互斥）
+        ...(teamPayload !== undefined ? { team: teamPayload } : {}),
       },
     });
     // D5：重派同样回写已解析目标（group 变体换新 targetNodeId）

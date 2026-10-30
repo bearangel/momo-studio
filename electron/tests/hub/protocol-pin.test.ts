@@ -9,8 +9,8 @@
 // 纯透传不校验存在性），PROTOCOL_VERSION 对齐；M5.0 pin bump v0.4.0——协议
 // 1.8.0：HubResourceMeta.ownerNodeId? / ResourcePublishedEvent.ownerNodeId? /
 // hello nodeName? 语义注释 + 错误码 name_conflict（403 not_owner 为 HTTP 端点
-// 错误体扩展，不走 ws 错误码表），PROTOCOL_VERSION 对齐——锁七件事：
-// ① pin 生效：node_modules 实装 momo-hub-protocol 版本 = pin 目标（0.4.0）——
+// 错误体扩展，不走 ws 错误码表），PROTOCOL_VERSION 对齐——锁八件事：
+// ① pin 生效：node_modules 实装 momo-hub-protocol 版本 = pin 目标（0.5.0）——
 //    防「lockfile-only 更新后未 install」/「pin 漂移」两类事故（构建新鲜度红线）
 // ② v0.1.5 语义目录样本（hub 乱序发布产物，形状锚自 hub 仓 resources-latest-semver.test.ts
 //    与裁定书 §1 curl 实录）过 validateHubCatalog——生产消费链（momo-hub.ts load）同校验器
@@ -31,6 +31,12 @@
 //    name_conflict 登记（hello 改名撞名——studio client.ts 人话覆写消费）；
 //    ResourcePublishedEvent.ownerNodeId? 在场合法（studio 目录增量合并保留——
 //    momo-hub.ts upsertPublished 消费）
+// ⑧ 1.9.0 三面（M5.3 §5.1/§5.4）：DelegationTask.team? 变体锁——在场合法
+//    （接收端多成员建会）且缺省不带键（1.8 载荷向后兼容——单 agent 路径零变化）；
+//    TEAM_DELEGATION_REQUIRED_MINOR 常量（studio 派发闸与 hub 权威门禁共用的
+//    门槛 minor——勿硬编码）；GroupMember.protoVer? 在线成员可选携带（离线
+//    不带键，routingPrecheck nodeCaps 数据源）；team 段形状校验在 hub 侧
+//    （hub 仓 delegations.test.ts 锁死——studio 侧纯类型面，不重复运行时锁）
 // 版本 introspection 直读包内 package.json：单入口规则（protocol.ts）约束的是协议符号
 // import；此处是 pin 锁定断言，目的不同，不走协议面。
 import { readFileSync } from 'node:fs';
@@ -40,9 +46,11 @@ import {
   EVT,
   PROTOCOL_VERSION,
   RPC_ERROR_CODES,
+  TEAM_DELEGATION_REQUIRED_MINOR,
   validateHubCatalog,
   validateSnapshotManifest,
   type DelegationTask,
+  type GroupMember,
   type HubCatalog,
   type TaskRecord,
   type ViewAppendedEvent,
@@ -100,9 +108,9 @@ function manifestSample(resources: unknown): unknown {
   };
 }
 
-describe('hub pin v0.4.0（M5.0）', () => {
-  it('pin 生效：实装 momo-hub-protocol 版本 = 0.4.0（electron/package.json #v0.4.0）', () => {
-    expect(pkg.version).toBe('0.4.0');
+describe('hub pin v0.5.0（M5.3）', () => {
+  it('pin 生效：实装 momo-hub-protocol 版本 = 0.5.0（electron/package.json #v0.5.0）', () => {
+    expect(pkg.version).toBe('0.5.0');
   });
 
   it('v0.1.5 语义目录样本过 validateHubCatalog（生产消费链同校验器）', () => {
@@ -246,10 +254,7 @@ describe('hub pin v0.4.0（M5.0）', () => {
   });
 
   describe('1.8.0：HubResourceMeta.ownerNodeId? 变体锁（M5.0 资源归属）', () => {
-    it('协议版本对齐：PROTOCOL_VERSION = 1.8.0（归属投影 + name_conflict）', () => {
-      expect(PROTOCOL_VERSION).toBe('1.8.0');
-    });
-
+    // 协议版本对齐断言随 pin bump 迁移至 1.9.0 describe（每次 bump 单点所有权）
     it('在场 → validateHubCatalog round-trip 保留（徽标/按钮收敛判定输入）', () => {
       const sample = semverCatalogSample();
       sample.items[0]!.ownerNodeId = 'node-owner-1';
@@ -274,6 +279,38 @@ describe('hub pin v0.4.0（M5.0）', () => {
       // RPC_ERROR_CODES 为协议包导出的合法错误码表（name_conflict 只增不改义）
       const codes = RPC_ERROR_CODES as readonly string[];
       expect(codes).toContain('name_conflict');
+    });
+  });
+
+  describe('1.9.0：DelegationTask.team? / TEAM_DELEGATION_REQUIRED_MINOR / GroupMember.protoVer?（M5.3 外派团队）', () => {
+    it('协议版本对齐：PROTOCOL_VERSION = 1.9.0（team 段 + 版本门）', () => {
+      expect(PROTOCOL_VERSION).toBe('1.9.0');
+    });
+
+    it('team 在场合法（接收端 handleAssigned 多成员建会分支的消费面）', () => {
+      const t: DelegationTask = {
+        title: '联调登录链路',
+        prompt: '按任务书执行联调',
+        team: { members: [{ name: 'PM', isLeader: true }, { name: 'Coder', isLeader: false }] },
+      };
+      expect(t.team?.members).toHaveLength(2);
+      expect(t.team?.members[0]?.isLeader).toBe(true);
+    });
+
+    it('team 缺省合法且不带键（1.8 载荷向后兼容——单 agent 外派零变化）', () => {
+      const t: DelegationTask = { title: '联调登录链路', prompt: '按任务书执行联调' };
+      expect('team' in t).toBe(false);
+    });
+
+    it('TEAM_DELEGATION_REQUIRED_MINOR = 9（派发闸门槛单源——studio 闸与 hub 门禁共用，勿硬编码）', () => {
+      expect(TEAM_DELEGATION_REQUIRED_MINOR).toBe(9);
+    });
+
+    it('GroupMember.protoVer 在线携带 / 离线缺省合法（nodeCaps 数据源——两形状都不得崩）', () => {
+      const online: GroupMember = { nodeId: 'node-a', name: 'office-mac', online: true, protoVer: '1.9.0' };
+      expect(online.protoVer).toBe('1.9.0');
+      const offlineLegacy: GroupMember = { nodeId: 'node-b', name: 'lab-node', online: false };
+      expect('protoVer' in offlineLegacy).toBe(false);
     });
   });
 });

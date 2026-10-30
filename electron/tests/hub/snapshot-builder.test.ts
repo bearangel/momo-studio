@@ -27,7 +27,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeDb, getDb, runMigrations } from '../../src/main/storage/db';
 import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keychain';
-import { saveAgentDefinition, addMember } from '../../src/main/agent/crud';
+import { saveAgentDefinition, addMember, updateAgentDefinition } from '../../src/main/agent/crud';
 import { createTeam } from '../../src/main/agent/team';
 import { createProvider } from '../../src/main/agent/provider-crud';
 import { parseAgentManifest } from '../../src/main/agent/manifest-parser';
@@ -389,6 +389,59 @@ describe('modelBinding 可选段（D4）', () => {
     expect(logger.warn).toHaveBeenCalledWith(
       'defaultChatModel 引用的 provider 不存在，快照不发模型绑定段',
       expect.objectContaining({ providerId: 'ghost-provider-id' }),
+    );
+  });
+});
+
+describe('成员 modelBinding 段（M5.3 F2）', () => {
+  it('源 def 已配（modelProviderId+modelName+provider 行在）→ 成员条目带段（providerName/platform/modelName）+ 归档原样 + pin 校验兼容', async () => {
+    const wsId = await mkWorkspace('成员绑定空间');
+    const p = await createProvider({
+      name: '智谱开放平台', baseUrl: 'https://open.bigmodel.cn/api/paas',
+      apiKey: 'sk-member-key-value-abcdef', platform: 'openai',
+    });
+    const inst = await seedMember(wsId, 'def-coder', '代码手');
+    void inst;
+    updateAgentDefinition({ id: 'def-coder', modelProviderId: p.id, modelName: 'glm-5.3' });
+    // 对照成员：未配置 → 不带段
+    await seedMember(wsId, 'def-bare', '裸装手');
+
+    const built = await buildWorkspaceSnapshot(wsId);
+
+    const members = built.manifest.config.agentMembers;
+    const coder = members.find((m) => m.name === '代码手')!;
+    expect(coder.modelBinding).toEqual({
+      providerName: '智谱开放平台', platform: 'openai', modelName: 'glm-5.3',
+    });
+    const bare = members.find((m) => m.name === '裸装手')!;
+    expect('modelBinding' in bare).toBe(false);
+    // 归档内 manifest.json 原样含段（hub 中转不经 pin 剥除——applier 从 raw 提取的前提）
+    const manifestText = tarRead(built.archivePath, 'manifest.json');
+    expect(manifestText).toContain('"modelBinding"');
+    expect(manifestText).toContain('"providerName"');
+    // pin 校验器成员条目未知字段容忍（剥除不拒）——校验产物无该键（剥除证明）
+    const parsed = validateSnapshotManifest(built.manifest);
+    expect(parsed).not.toBeNull();
+    expect('modelBinding' in parsed!.config.agentMembers[0]!).toBe(false);
+  });
+
+  it('源 def 未配置（modelProviderId NULL）→ 全部成员不带段（旧形态零变化）', async () => {
+    const wsId = await mkWorkspace('未配成员空间');
+    await seedMember(wsId, 'def-a', '甲');
+    await seedMember(wsId, 'def-b', '乙');
+    const built = await buildWorkspaceSnapshot(wsId);
+    expect(built.manifest.config.agentMembers.every((m) => !('modelBinding' in m))).toBe(true);
+  });
+
+  it('源 def 绑定悬空 provider（行已删）→ 该成员不带段 + warn 留痕', async () => {
+    const wsId = await mkWorkspace('悬空成员空间');
+    await seedMember(wsId, 'def-ghost', '幽灵手');
+    updateAgentDefinition({ id: 'def-ghost', modelProviderId: 'ghost-provider-id', modelName: 'glm-5.3' });
+    const built = await buildWorkspaceSnapshot(wsId);
+    expect(built.manifest.config.agentMembers.every((m) => !('modelBinding' in m))).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(
+      '成员模型绑定引用的 provider 不存在（ghost 绑定），快照不发该成员 modelBinding 段',
+      expect.objectContaining({ modelProviderId: 'ghost-provider-id' }),
     );
   });
 });

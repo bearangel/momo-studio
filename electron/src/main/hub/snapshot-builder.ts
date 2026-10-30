@@ -71,15 +71,25 @@ import {
   type SnapshotResourceRef,
   type SnapshotTeam,
 } from './protocol';
-import type { SnapshotConfigWithModelBinding, SnapshotModelBinding } from './snapshot-model-binding';
+import type { SnapshotConfigWithModelBinding, SnapshotModelBinding, SnapshotMemberModelBinding } from './snapshot-model-binding';
 import type { SnapshotConfigWithDefaultAgent } from './snapshot-default-agent';
+
+/** 构建侧成员条目：pin SnapshotAgentMember + F2 modelBinding 可选段
+ *  （pin 校验器成员条目白名单无此键——段只经原始 manifest.json 送达目标） */
+export type SnapshotMemberWithModelBinding = SnapshotAgentMember & {
+  modelBinding?: SnapshotMemberModelBinding;
+};
 
 /** 构建产物：manifest（自检已过 validateSnapshotManifest）+ tar.gz 归档 + sha256。 */
 export interface WorkspaceSnapshotResult {
-  /** config 为 pin 七子段 + modelBinding/defaultAgent 可选段（D4/D2——段结构
-   *  与 hub 存档字节一致；pin 校验器对两段未知容忍剥除，应用侧从原始
-   *  manifest.json 提取） */
-  manifest: SnapshotManifest & { config: SnapshotConfigWithModelBinding & SnapshotConfigWithDefaultAgent };
+  /** config 为 pin 七子段 + modelBinding/defaultAgent/成员 modelBinding 可选段
+   *  （D4/D2/M5.3 F2——段结构与 hub 存档字节一致；pin 校验器对可选段未知容忍
+   *  剥除，应用侧从原始 manifest.json 提取） */
+  manifest: Omit<SnapshotManifest, 'config'> & {
+    config: Omit<SnapshotConfigWithModelBinding & SnapshotConfigWithDefaultAgent, 'agentMembers'> & {
+      agentMembers: SnapshotMemberWithModelBinding[];
+    };
+  };
   /** 临时归档路径（resolveTmpDir 下），归调用方管理——上传后清理（对齐 publish 纪律） */
   archivePath: string;
   /** 归档文件 sha256（hex）——上传流的信息性回执对照（hub 端以自算值为权威，C6） */
@@ -250,6 +260,25 @@ function snapshotVersion(): string {
 }
 
 /**
+ * M5.3 F2：成员级模型绑定收集——源 def 有 modelProviderId 时经 getProvider 解析
+ * name/platform + def.modelName（provider 行悬空/modelName 空 → 不带段，warn 可见）。
+ * 段挂 member 条目（三态行同构：引用行与 custom 行一致）；pin 校验器对成员条目
+ * 未知字段剥除——段只经原始 manifest.json 送达目标（全局 modelBinding 段同款纪律）。
+ */
+function memberModelBindingOf(def: AgentDefinition): SnapshotMemberModelBinding | undefined {
+  if (!def.modelProviderId || !def.modelName) return undefined;
+  const provider = getProvider(def.modelProviderId);
+  if (!provider) {
+    logger.warn('成员模型绑定引用的 provider 不存在（ghost 绑定），快照不发该成员 modelBinding 段', {
+      agent: def.name,
+      modelProviderId: def.modelProviderId,
+    });
+    return undefined;
+  }
+  return { providerName: provider.name, platform: provider.platform, modelName: def.modelName };
+}
+
+/**
  * 成员定义 → 快照成员（引用/内嵌分流）：
  *   custom          → customDefinition 内嵌（agentManifestYaml；先过 parseAgentManifest
  *                     反序列化校验——历史脏定义〔空 prompt/坏 slug 等 YAML 不可逆形态〕
@@ -261,8 +290,9 @@ function splitAgentMember(
   def: AgentDefinition | null,
   fallbackName: string,
   acc: HubAccounting,
-): { member: SnapshotAgentMember; resource: SnapshotResourceRef | null } {
+): { member: SnapshotAgentMember & { modelBinding?: SnapshotMemberModelBinding }; resource: SnapshotResourceRef | null } {
   if (!def) return { member: { name: fallbackName }, resource: null }; // 并发删除防御：引用键悬空退化为名字行
+  const modelBinding = memberModelBindingOf(def);
   if (def.source === 'custom') {
     const yaml = agentManifestYaml(def);
     try {
@@ -272,11 +302,14 @@ function splitAgentMember(
         `agent 定义「${def.name}」为历史脏定义（YAML 内嵌反序列化校验失败），拒绝入快照: ${(err as Error).message}`,
       );
     }
-    return { member: { name: def.name, customDefinition: yaml }, resource: null };
+    return { member: { name: def.name, customDefinition: yaml, ...(modelBinding !== undefined ? { modelBinding } : {}) }, resource: null };
   }
-  if (!def.slug) return { member: { name: def.name }, resource: null };
+  if (!def.slug) return { member: { name: def.name, ...(modelBinding !== undefined ? { modelBinding } : {}) }, resource: null };
   const resource = acc.has('agent', def.slug) ? resourceRef('agent', def.slug, acc) : null;
-  return { member: { name: def.name, slug: def.slug }, resource };
+  return {
+    member: { name: def.name, slug: def.slug, ...(modelBinding !== undefined ? { modelBinding } : {}) },
+    resource,
+  };
 }
 
 /** MCP 启用清单：enabled && stdio && 无 url && 非 plugin 来源（红线 + 重建语义双闸）。
@@ -454,7 +487,7 @@ export async function buildWorkspaceSnapshot(workspaceId: string): Promise<Works
 
   // 1+2. 成员（引用/内嵌分流）与团队（leader/members 以 agent 名对齐——T8 按名重建）
   const nameByInstance = new Map<string, string>();
-  const agentMembers: SnapshotAgentMember[] = [];
+  const agentMembers: SnapshotMemberWithModelBinding[] = [];
   const resourceRefs: SnapshotResourceRef[] = [];
   for (const m of listMembers(workspaceId)) {
     nameByInstance.set(m.instanceId, m.agentName);
