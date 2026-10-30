@@ -43,6 +43,18 @@
 //   12. 提示条→清理：custom 副本 → Skill 页「检测到 1 个」提示条 → 一键清理 →
 //      提示条消失 + custom 卡不输出（归并隐藏）+ 插件卡保留（spec §1.1）
 //
+// M5.3 追加（spec 2026-10-30 §5/§6/§8——团队外派 + 镜像模型配平）：
+//   13. 团队外派全链：A（团队 leader+成员，成员名与 B 侧可对齐）以「团队协作 ×
+//      指定节点 B」submitRoutedTask → hub 校验透传 team 段 → B 建多成员执行
+//      会话（session_members=2、leader is_leader=1）+ kickoff mention 落 leader
+//      （mock LLM 请求 system=leader prompt 证接待路由）+ leader 注入 dispatch
+//      工具（tools 含 dispatch:<成员slug>）
+//   14. 成员缺失拒收：A 团队含 B 无同名 agent 的成员 → B decline 人话名单
+//      （task.report failed reason 含缺失成员名，不建会话）+ A 行保留待处理
+//   15. F2 镜像模型配平：B 预置同名 provider+model → A 重镜像 → B 侧空壳 def
+//      链①配平（model_provider_id 非空命中同名 provider）+ B 侧已配置 def
+//      不被覆盖（D4 自愈① 只补空）
+//
 // T3 mock 边界（如实记录——真实链背书 = M3.1 真机验收 + tests/hub 单测）：
 //   ① waiting 拍合成：真实产生点 = worker runner L1b（sessionWaiting 检测写授权
 //      等待登记后自发 task.report kind='waiting-input'，hub 转发 leader）——e2e
@@ -114,17 +126,37 @@ const INVITE_CODE = 'e2e-invite';
 // ── M4.0 T3（HITL 远程代答）常量 ────────────────────────────────────────────
 
 /**
- * mock hub 协议版本——必须与 momo-hub pin 对齐（pin v0.4.0 → 协议 1.8.0）。
+ * mock hub 协议版本——必须与 momo-hub pin 对齐（pin v0.5.0 → 协议 1.9.0）。
  * ⚠️ 协议升级（pin bump）时必须与 electron/tests/hub/protocol-pin.test.ts
- * 同步更新本常量，否则 hubSupportsMinor(3) 代答门控与真实 pin 漂移
- * （场景7 正例门控 / 场景8 负例门控的前提）。
+ * 同步更新本常量，否则 hubSupportsMinor(3) 代答门控、M5.3 团队派发版本门
+ * （TEAM_DELEGATION_REQUIRED_MINOR=9）与真实 pin 漂移（场景 7/8/13 门控前提）。
  */
-const HUB_PROTO_VER = '1.8.0';
+const HUB_PROTO_VER = '1.9.0';
 /** 低版本负例节点名：hello 回 1.2.0（major 同 → 客户端可连接，minor 3 < 代答门控） */
 const LOW_NODE_NAME = 'e2e-node-low';
 const LOW_HUB_PROTO_VER = '1.2.0';
 const HITL_WS_NAME = 'e2e-hitl-low-ws';
 const HITL_TASK_TITLE = 'e2e HITL 代答任务';
+
+// ── M5.3（团队外派 + F2 配平）常量 ──────────────────────────────────────────
+
+const TEAM_TASK_TITLE = 'e2e 团队外派任务';
+const MISSING_TASK_TITLE = 'e2e 缺员团队任务';
+/** A/B 两侧同名的团队两端成员（名=agentName 对齐键；slug 两端一致——场景 15
+ *  重镜像 def 复用与 D4 自愈① 断言的前提） */
+const TEAM_LEADER_NAME = '团队长甲';
+const TEAM_LEADER_SLUG = 'e2e-team-leader';
+const TEAM_MEMBER_NAME = '团队成员乙';
+const TEAM_MEMBER_SLUG = 'e2e-team-member';
+/** 场景 14 缺失成员：A 在册、B 无同名 agent */
+const GHOST_MEMBER_NAME = '幽灵手';
+const GHOST_MEMBER_SLUG = 'e2e-ghost-member';
+const TEAM_A_NAME = 'e2e 攻坚组';
+const TEAM_MISSING_NAME = 'e2e 缺员组';
+/** A 侧 provider 名（场景 4 已建）——快照 modelBinding.providerName 与 B 侧预置同名 provider 对齐键 */
+const SHARED_PROVIDER_NAME = 'E2E Mock LLM';
+const SHARED_MODEL = 'e2e-mock-model';
+const MIRROR_F2_ID = 'mirror-e2e-f2';
 
 const runId = `${Date.now()}-${process.pid}`;
 const tmpRoot = path.join(os.tmpdir(), `momo-hub-dist-e2e-${runId}`);
@@ -184,8 +216,8 @@ const hub = {
   snapshotUploads: [] as Array<{ workspaceName: string; version: string; resources: number }>,
   /** 下载计数：`${slug}@${version}` → 次数 */
   downloads: new Map<string, number>(),
-  /** task.report 上报捕获：taskId → payloads */
-  taskReports: new Map<string, Array<{ status: string; progress?: { kind?: string; excerpt?: string } }>>(),
+  /** task.report 上报捕获：taskId → payloads（sessionId/reason 供 B 侧会话与 decline 文案断言取回） */
+  taskReports: new Map<string, Array<{ status: string; sessionId?: string; reason?: string; progress?: { kind?: string; excerpt?: string } }>>(),
   /** mirror.apply 回执捕获：mirrorId(=req id) → {ok, payload} */
   mirrorReceipts: new Map<string, { ok: boolean; payload: Record<string, unknown> }>(),
   /** 已定向下发的 mirror.apply req id 集（res 回捕对账） */
@@ -211,6 +243,16 @@ const hub = {
   progressForwarded: new Set<string>(),
   /** 委派 taskId 序号（task-hub-N） */
   taskSeq: 0,
+  /** M5.3：task.delegate 收包记录（A 侧 team 段展开形状断言面） */
+  delegateRequests: [] as Array<{
+    taskId: string;
+    title: string;
+    team?: { members: Array<{ name: string; isLeader: boolean }> };
+    hasAgentSlug: boolean;
+  }>,
+  /** M5.3：mock LLM 请求记录（system=首条 system 消息、tools=工具名表——
+   *  B 侧 leader 接待路由与 dispatch 工具注入的断言面） */
+  llmRequests: [] as Array<{ stream: boolean; system: string; tools: string[] }>,
 };
 
 function downloadCount(slug: string, version: string): number {
@@ -415,9 +457,9 @@ function handleWsMessage(sock: WsLike, raw: unknown, selfNodeId: string): void {
   // ── res 信封：studio 主动上行面（task.report；mirror.apply 的回执）──
   if (env.kind === 'res' && typeof env.id === 'string' && typeof env.method === 'string') {
     if (env.method === 'task.report') {
-      const payload = (env.payload ?? {}) as { status?: string; sessionId?: string; progress?: { kind?: string; excerpt?: string; lastSeq?: number } };
+      const payload = (env.payload ?? {}) as { status?: string; sessionId?: string; reason?: string; progress?: { kind?: string; excerpt?: string; lastSeq?: number } };
       const q = hub.taskReports.get(env.id) ?? [];
-      q.push({ status: payload.status ?? 'unknown', progress: payload.progress });
+      q.push({ status: payload.status ?? 'unknown', sessionId: payload.sessionId, reason: payload.reason, progress: payload.progress });
       hub.taskReports.set(env.id, q);
       // M4.0 T3：真实 hub 将 worker 上报转发 leader（task.progress 事件）。
       // mock 边界④（见文件头）：只转发首拍——后续拍抑制，防 hold 剧本零星
@@ -482,8 +524,15 @@ function handleWsMessage(sock: WsLike, raw: unknown, selfNodeId: string): void {
     case 'group.list':
       // M4.0 T3 收紧为节点视角（真实 hub 语义：只回请求节点所在的组）——
       // 之前全量返回会让多组节点的 RunRoutingField 默认选中首组（别人的组）
+      // M5.3：在线成员携带 protoVer（真实 hub v0.5.0 语义——studio 派发闸
+      // 版本门与 routingPrecheck nodeCaps 的数据源；离线成员不带键）
       replyReq(sock, req, true, {
-        groups: hub.groups.filter((g) => g.members.some((m) => m.nodeId === selfNodeId)),
+        groups: hub.groups
+          .filter((g) => g.members.some((m) => m.nodeId === selfNodeId))
+          .map((g) => ({
+            ...g,
+            members: g.members.map((m) => ({ ...m, ...(m.online ? { protoVer: HUB_PROTO_VER } : {}) })),
+          })),
       });
       return;
     case 'group.invite':
@@ -515,12 +564,42 @@ function handleWsMessage(sock: WsLike, raw: unknown, selfNodeId: string): void {
       // M4.0 T3 升级：记账 + 定向 task.assigned 下发 worker（TaskAssignedEvent
       // 形状 + permissionTier 容错扩展字段——协议 1.2.0 起向后兼容）；低版本
       // 负例 leader 不下发（场景8 无 worker 参与，只锁 leader 菜单门控）
+      // M5.3：team 段校验（对齐真实 hub v0.5.0 parseDelegationTask——非法整包
+      // 拒 bad_request、与 agentSlug 互斥）+ 记账透传到 task.assigned
+      const task = (payload.task ?? {}) as {
+        title?: unknown; prompt?: unknown; permissionTier?: unknown; agentSlug?: unknown;
+        team?: { members?: unknown };
+      };
+      const teamMembers = task.team?.members;
+      const teamValid =
+        teamMembers === undefined
+          ? true
+          : Array.isArray(teamMembers) && teamMembers.length >= 2 && teamMembers.length <= 8 &&
+            teamMembers.every(
+              (x) =>
+                typeof x === 'object' && x !== null &&
+                typeof (x as { name?: unknown }).name === 'string' &&
+                (x as { name: string }).name.length > 0 && (x as { name: string }).name.length <= 64 &&
+                typeof (x as { isLeader?: unknown }).isLeader === 'boolean',
+            ) &&
+            teamMembers.filter((x) => (x as { isLeader?: unknown }).isLeader === true).length === 1;
+      if (!teamValid || (task.team !== undefined && task.agentSlug !== undefined)) {
+        replyReq(sock, req, false, { code: 'bad_request', message: 'team 段非法（2..8 名成员恰一 leader）或与 agentSlug 互斥' });
+        return;
+      }
       hub.taskSeq += 1;
       const taskId = `task-hub-${hub.taskSeq}`;
       const targetNodeId = typeof payload.targetNodeId === 'string' ? payload.targetNodeId : '';
       const workspaceName = typeof payload.workspaceName === 'string' ? payload.workspaceName : '';
       hub.delegations.set(taskId, { leaderNodeId: selfNodeId, workerNodeId: targetNodeId, workspaceName });
-      const task = (payload.task ?? {}) as { title?: unknown; prompt?: unknown; permissionTier?: unknown };
+      hub.delegateRequests.push({
+        taskId,
+        title: typeof task.title === 'string' ? task.title : '',
+        ...(task.team !== undefined
+          ? { team: { members: teamMembers as Array<{ name: string; isLeader: boolean }> } }
+          : {}),
+        hasAgentSlug: task.agentSlug !== undefined,
+      });
       const workerIsLeaderTarget = nodeNameOf(selfNodeId) === LOW_NODE_NAME;
       if (!workerIsLeaderTarget && targetNodeId !== '') {
         sendToNode(targetNodeId, {
@@ -534,6 +613,7 @@ function handleWsMessage(sock: WsLike, raw: unknown, selfNodeId: string): void {
               title: typeof task.title === 'string' ? task.title : 'e2e 委派任务',
               prompt: typeof task.prompt === 'string' ? task.prompt : 'e2e 委派任务书',
               ...(task.permissionTier !== undefined ? { permissionTier: task.permissionTier } : {}),
+              ...(task.team !== undefined ? { team: task.team } : {}),
             },
             byNode: selfNodeId,
           },
@@ -594,7 +674,18 @@ async function startMockHub(): Promise<void> {
 
     // ---- mock LLM（OpenAI 兼容；provider baseUrl 指向 {hub}/v1）----
     if (url === '/v1/chat/completions' && method === 'POST') {
-      const body = JSON.parse((await readBody(req)).toString('utf-8')) as { stream?: boolean };
+      const body = JSON.parse((await readBody(req)).toString('utf-8')) as {
+        stream?: boolean;
+        messages?: Array<{ role?: string; content?: string }>;
+        tools?: Array<{ function?: { name?: string } }>;
+      };
+      // M5.3：请求记录（system/tools 断言面——B 侧 leader 接待路由与 dispatch
+      // 注入的可观测面；两路（流式/非流式）都记）
+      hub.llmRequests.push({
+        stream: body.stream === true,
+        system: (body.messages ?? []).find((m) => m.role === 'system')?.content ?? '',
+        tools: (body.tools ?? []).map((t) => t.function?.name ?? ''),
+      });
       if (body.stream !== true) {
         // 非流式（会话命名等杂项）——极简 JSON
         sendJson(res, 200, { choices: [{ message: { content: '委派任务' }, finish_reason: 'stop' }] });
@@ -1631,5 +1722,390 @@ test.describe.serial('hub 分发链 / readonly 即时拒 / 版本链（M2.3 Task
     }, [DUP_SLUG] as const);
     expect(after.hasCustom, 'custom 副本应已删除').toBe(false);
     expect(after.dups).toEqual([]);
+  });
+
+  // ── M5.3（spec 2026-10-30 §5.3/§7/§6）：团队外派全链 / 成员缺失拒收 / F2 配平 ──
+
+  test('场景13 团队外派全链：团队协作×指定节点 B → B 多成员执行会话 + kickoff mention leader + dispatch 注入', async () => {
+    test.setTimeout(300_000);
+    expect(winA, '依赖场景1的实例 A').not.toBeNull();
+    expect(winBHitl, '依赖场景3/7 的实例 B').not.toBeNull();
+
+    // A 侧 fixture：两个团队成员（绑 A 的 provider——场景 15 快照 modelBinding 的
+    // 源）+ 团队（leader=团队长甲）
+    await winA!.evaluate(async ([llmBase, wsName]) => {
+      const w = window as unknown as {
+        api: {
+          workspace: { list(): Promise<Array<{ id: string; name: string }>> };
+          provider: {
+            list(): Promise<Array<{ id: string; name: string }>>;
+            create(input: Record<string, unknown>): Promise<{ id: string }>;
+          };
+          agent: {
+            createCustom(input: Record<string, unknown>): Promise<{ id: string }>;
+            assign(workspaceId: string, defId: string, agentUserId: string): Promise<{ instanceId: string }>;
+          };
+          team: {
+            create(workspaceId: string, input: {
+              name: string; iconEmoji?: string; memberInstanceIds: string[]; leaderInstanceId: string;
+            }): Promise<unknown>;
+          };
+        };
+      };
+      const ws = (await w.api.workspace.list()).find((x) => x.name === wsName);
+      if (!ws) throw new Error('A 工作空间不存在');
+      const prov = (await w.api.provider.list()).find((p) => p.name === 'E2E Mock LLM') ??
+        await w.api.provider.create({
+          name: 'E2E Mock LLM', baseUrl: llmBase, apiKey: 'e2e-mock-key',
+          defaultModel: 'e2e-mock-model', platform: 'openai',
+        });
+      const leader = await w.api.agent.createCustom({
+        name: '团队长甲', slug: 'e2e-team-leader', description: 'team delegation leader fixture',
+        systemPrompt: '你是 e2e 团队长（leader 接待），负责任务分解与派发。', scope: 'global',
+        modelProviderId: prov.id, modelName: 'e2e-mock-model',
+      });
+      const member = await w.api.agent.createCustom({
+        name: '团队成员乙', slug: 'e2e-team-member', description: 'team delegation member fixture',
+        systemPrompt: '你是 e2e 团队成员，执行 leader 派发的子任务。', scope: 'global',
+        modelProviderId: prov.id, modelName: 'e2e-mock-model',
+      });
+      const lm = await w.api.agent.assign(ws.id, leader.id, 'agent-e2e-team-leader-01');
+      const mm = await w.api.agent.assign(ws.id, member.id, 'agent-e2e-team-member-01');
+      await w.api.team.create(ws.id, {
+        name: 'e2e 攻坚组', iconEmoji: '🎯',
+        memberInstanceIds: [lm.instanceId, mm.instanceId], leaderInstanceId: lm.instanceId,
+      });
+    }, [`${hub.baseUrl}/v1`, WS_NAME] as const);
+
+    // B 侧 fixture：同名成员对齐（解析键=agentName）。leader 绑 B 的 HITL
+    // provider（可 spawn——场景 15「已配置不被覆盖」靶）；成员走 createFromYaml
+    // 空壳 def（YAML 不带模型绑定——场景 15「只补空配平」靶；多成员会话只有
+    // leader 被 kickoff spawn，成员无配置不阻断）
+    await winBHitl!.evaluate(async ([wsName]) => {
+      const w = window as unknown as {
+        api: {
+          workspace: { list(): Promise<Array<{ id: string; name: string }>> };
+          provider: {
+            list(): Promise<Array<{ id: string; name: string }>>;
+            create(input: Record<string, unknown>): Promise<{ id: string }>;
+          };
+          agent: {
+            createCustom(input: Record<string, unknown>): Promise<{ id: string }>;
+            createFromYaml(yaml: string): Promise<{ id: string; slug: string }>;
+            assign(workspaceId: string, defId: string, agentUserId: string): Promise<{ instanceId: string }>;
+          };
+        };
+      };
+      const ws = (await w.api.workspace.list()).find((x) => x.name === wsName);
+      if (!ws) throw new Error('B 镜像工作空间不存在（依赖场景3）');
+      const hitl = (await w.api.provider.list()).find((p) => p.name === 'E2E HITL Mock LLM') ??
+        await w.api.provider.create({
+          name: 'E2E HITL Mock LLM', baseUrl: 'http://127.0.0.1:1/v1', apiKey: 'e2e-hitl-key',
+          defaultModel: 'e2e-hitl-model', platform: 'openai',
+        });
+      const leader = await w.api.agent.createCustom({
+        name: '团队长甲', slug: 'e2e-team-leader', description: 'B side team leader fixture',
+        systemPrompt: '你是 e2e 团队长（leader 接待），负责任务分解与派发。', scope: 'global',
+        modelProviderId: hitl.id, modelName: 'e2e-hitl-model',
+      });
+      const memberYaml = [
+        'apiVersion: v1',
+        'kind: AgentDefinition',
+        'metadata:',
+        '  name: 团队成员乙',
+        '  slug: e2e-team-member',
+        '  version: 1.0.0',
+        '  description: B side hollow member fixture',
+        'spec:',
+        '  type: standalone',
+        '  runtime: declarative',
+        '  declarative:',
+        '    systemPrompt: "你是 e2e 团队成员，执行 leader 派发的子任务。"',
+        '    model:',
+        '      provider: openai',
+        '      model: e2e-hollow-model',
+      ].join('\n');
+      const member = await w.api.agent.createFromYaml(memberYaml);
+      await w.api.agent.assign(ws.id, leader.id, 'agent-e2e-team-leader-b1');
+      await w.api.agent.assign(ws.id, member.id, 'agent-e2e-team-member-b1');
+    }, [WS_NAME] as const);
+
+    // B 回合剧本：final-text（leader 接待后干净收尾——running→done 全链可见）
+    hub.llmScript = ['final-text'];
+    const llmBaseIdx = hub.llmRequests.length;
+
+    // A 看板建任务：指定节点 B × 团队协作 × e2e 攻坚组
+    await winA!.getByRole('button', { name: '看板', exact: true }).click();
+    await winA!.getByRole('button', { name: '新建任务' }).first().click();
+    const dlg = winA!.getByRole('dialog').filter({
+      has: winA!.getByRole('radiogroup', { name: '创建模式' }),
+    });
+    await expect(dlg).toBeVisible();
+    await dlg.getByLabel('标题*').fill(TEAM_TASK_TITLE);
+    await dlg.getByRole('radio', { name: '指定节点' }).click();
+    // A 多组（分发组 + HITL 组）——指定节点模式显式切组（B 只在 HITL 组）
+    await dlg.getByLabel('工作组').selectOption({ label: 'e2e HITL 组' });
+    await dlg.getByLabel('目标成员').selectOption({ label: 'e2e-node-b' });
+    await dlg.getByRole('radio', { name: '团队协作' }).click();
+    await dlg.getByLabel('团队').selectOption({ label: TEAM_A_NAME });
+    await dlg.getByRole('button', { name: '创建任务', exact: true }).click();
+    await expect(dlg).toBeHidden({ timeout: 30000 });
+    await winA!.keyboard.press('Escape');
+    await expect(winA!.getByRole('dialog', { name: '任务详情' })).toBeHidden({ timeout: 10000 });
+
+    // mock hub 记账面：team 段展开形状（name=agentName + leader 标记；不带 agentSlug）
+    await expect
+      .poll(() => hub.delegateRequests.some((r) => r.title === TEAM_TASK_TITLE), {
+        timeout: 30000, intervals: [1000], message: 'mock hub 应收到团队 task.delegate',
+      })
+      .toBe(true);
+    const teamReq = hub.delegateRequests.find((r) => r.title === TEAM_TASK_TITLE)!;
+    expect(teamReq.team?.members).toEqual([
+      { name: TEAM_LEADER_NAME, isLeader: true },
+      { name: TEAM_MEMBER_NAME, isLeader: false },
+    ]);
+    expect(teamReq.hasAgentSlug, 'team 与 agentSlug 互斥——载荷不得带 agentSlug').toBe(false);
+
+    // B 真实收派链：running 首拍（多成员会话建立 + 回合启动）→ done 终态
+    const teamTaskId = teamReq.taskId;
+    await expect
+      .poll(() => (hub.taskReports.get(teamTaskId) ?? []).some((r) => r.status === 'running'), {
+        timeout: 180_000, intervals: [1500], message: 'B 侧应上报首拍 running（真实收派链）',
+      })
+      .toBe(true);
+    await expect
+      .poll(() => (hub.taskReports.get(teamTaskId) ?? []).some((r) => r.status === 'done' || r.status === 'failed'), {
+        timeout: 120_000, intervals: [1500], message: 'B 侧回合应终态收尾',
+      })
+      .toBe(true);
+
+    // B 侧会话面：session_members 成员数=2、恰一 leader（is_leader=1）=团队长甲、
+    // kind=task_execution（委派执行会话口径）
+    const bSessionId = (hub.taskReports.get(teamTaskId) ?? []).find((r) => r.sessionId)?.sessionId;
+    expect(bSessionId, 'running 上报应携带委派会话 sessionId').toBeDefined();
+    const bSession = await winBHitl!.evaluate(async (sessionId) => {
+      const w = window as unknown as {
+        api: { session: { get(id: string): Promise<{ session: { kind: string }; members: Array<{ agentName: string; isLeader: boolean }> }> } };
+      };
+      return w.api.session.get(sessionId);
+    }, bSessionId!);
+    expect(bSession.members).toHaveLength(2);
+    const leaders = bSession.members.filter((m) => m.isLeader);
+    expect(leaders).toHaveLength(1);
+    expect(leaders[0]!.agentName).toBe(TEAM_LEADER_NAME);
+    expect(bSession.session.kind, '委派团队会话 kind=task_execution（spec §5.3）').toBe('task_execution');
+
+    // kickoff mention 落 leader（可观测面=mock LLM 请求：首流式请求 system 为
+    // leader 的 systemPrompt——mention 优先路由；错发成员则 system 为成员 prompt）
+    // + leader 注入 dispatch 工具（tools 含 dispatch:<成员slug>——会话成员>1 且
+    // is_leader 的 buildDispatchSnapshot 自然成立）
+    const teamTurns = hub.llmRequests.slice(llmBaseIdx).filter((r) => r.stream);
+    expect(teamTurns.length, 'B 侧应有 leader 回合流式请求').toBeGreaterThan(0);
+    expect(teamTurns[0]!.system, 'kickoff 应 mention 路由 leader（system=leader prompt）').toContain('团队长（leader 接待）');
+    expect(teamTurns[0]!.system).not.toContain('团队成员，执行');
+    expect(teamTurns[0]!.tools, 'leader 应注入 dispatch 工具（成员快照派发面）').toContain(`dispatch:${TEAM_MEMBER_SLUG}`);
+
+    // A 侧账本正常：行落库 + delegationId 记账（mock 不转发终态事件——行停 pending 属 mock 边界④）
+    const aRow = await winA!.evaluate(async ([wsId, title]) => {
+      const w = window as unknown as {
+        api: { task: { list(opts: { workspaceId: string }): Promise<Array<{ title: string; delegationId: string | null }>> } };
+      };
+      const rows = await w.api.task.list({ workspaceId: wsId });
+      return rows.find((r) => r.title === title) ?? null;
+    }, [(await winA!.evaluate(async (wsName) => {
+      const w = window as unknown as { api: { workspace: { list(): Promise<Array<{ id: string; name: string }>> } } };
+      return (await w.api.workspace.list()).find((x) => x.name === wsName)!.id;
+    }, WS_NAME)), TEAM_TASK_TITLE] as const);
+    expect(aRow, 'A 侧任务行应落库').not.toBeNull();
+    expect(aRow!.delegationId, 'A 侧行应回写 delegation_id（派发记账）').toBe(teamTaskId);
+  });
+
+  test('场景14 成员缺失拒收：团队含 B 无同名 agent → declined 人话名单 + A 行保留待处理', async () => {
+    test.setTimeout(240_000);
+    expect(winA, '依赖场景1的实例 A').not.toBeNull();
+    expect(winBHitl, '依赖场景3的实例 B').not.toBeNull();
+
+    // A 侧 fixture：缺员团队（幽灵长甲 leader + 幽灵手成员——两名 B 侧均无同名 agent）
+    await winA!.evaluate(async ([llmBase, wsName]) => {
+      const w = window as unknown as {
+        api: {
+          workspace: { list(): Promise<Array<{ id: string; name: string }>> };
+          provider: {
+            list(): Promise<Array<{ id: string; name: string }>>;
+            create(input: Record<string, unknown>): Promise<{ id: string }>;
+          };
+          agent: {
+            createCustom(input: Record<string, unknown>): Promise<{ id: string }>;
+            assign(workspaceId: string, defId: string, agentUserId: string): Promise<{ instanceId: string }>;
+          };
+          team: {
+            create(workspaceId: string, input: {
+              name: string; iconEmoji?: string; memberInstanceIds: string[]; leaderInstanceId: string;
+            }): Promise<unknown>;
+          };
+        };
+      };
+      const ws = (await w.api.workspace.list()).find((x) => x.name === wsName);
+      if (!ws) throw new Error('A 工作空间不存在');
+      const prov = (await w.api.provider.list()).find((p) => p.name === 'E2E Mock LLM') ??
+        await w.api.provider.create({
+          name: 'E2E Mock LLM', baseUrl: llmBase, apiKey: 'e2e-mock-key',
+          defaultModel: 'e2e-mock-model', platform: 'openai',
+        });
+      const leader = await w.api.agent.createCustom({
+        name: '幽灵长甲', slug: 'e2e-ghost-leader', description: 'missing member leader fixture',
+        systemPrompt: '你是 e2e 幽灵长。', scope: 'global',
+        modelProviderId: prov.id, modelName: 'e2e-mock-model',
+      });
+      const ghost = await w.api.agent.createCustom({
+        name: '幽灵手', slug: 'e2e-ghost-member', description: 'missing member fixture（B 侧无同名）',
+        systemPrompt: '你是 e2e 幽灵手。', scope: 'global',
+        modelProviderId: prov.id, modelName: 'e2e-mock-model',
+      });
+      // 独立 leader+成员两名 B 侧均无同名——decline 名单应全列（spec §5.3 裁定 3）
+      const lm = await w.api.agent.assign(ws.id, leader.id, 'agent-e2e-ghost-leader-01');
+      const gm = await w.api.agent.assign(ws.id, ghost.id, 'agent-e2e-ghost-member-01');
+      await w.api.team.create(ws.id, {
+        name: 'e2e 缺员组', iconEmoji: '👻',
+        memberInstanceIds: [lm.instanceId, gm.instanceId], leaderInstanceId: lm.instanceId,
+      });
+    }, [`${hub.baseUrl}/v1`, WS_NAME] as const);
+
+    // A 看板：指定节点 B × 团队协作 × e2e 缺员组（leader=幽灵长甲，成员=幽灵手——两名 B 均无）
+    await winA!.getByRole('button', { name: '看板', exact: true }).click();
+    await winA!.getByRole('button', { name: '新建任务' }).first().click();
+    const dlg = winA!.getByRole('dialog').filter({
+      has: winA!.getByRole('radiogroup', { name: '创建模式' }),
+    });
+    await expect(dlg).toBeVisible();
+    await dlg.getByLabel('标题*').fill(MISSING_TASK_TITLE);
+    await dlg.getByRole('radio', { name: '指定节点' }).click();
+    await dlg.getByLabel('工作组').selectOption({ label: 'e2e HITL 组' });
+    await dlg.getByLabel('目标成员').selectOption({ label: 'e2e-node-b' });
+    await dlg.getByRole('radio', { name: '团队协作' }).click();
+    await dlg.getByLabel('团队').selectOption({ label: TEAM_MISSING_NAME });
+    await dlg.getByRole('button', { name: '创建任务', exact: true }).click();
+    await expect(dlg).toBeHidden({ timeout: 30000 });
+    await winA!.keyboard.press('Escape');
+    await expect(winA!.getByRole('dialog', { name: '任务详情' })).toBeHidden({ timeout: 10000 });
+
+    // B 侧拒收：task.report failed + decline 人话名单（含缺失成员名）
+    const missingReq = hub.delegateRequests.find((r) => r.title === MISSING_TASK_TITLE);
+    expect(missingReq, '缺员团队派发应记账').toBeDefined();
+    expect(missingReq!.team?.members.map((m) => m.name)).toEqual(['幽灵长甲', '幽灵手']);
+    await expect
+      .poll(
+        () => (hub.taskReports.get(missingReq!.taskId) ?? []).some((r) => r.status === 'failed'), {
+          timeout: 120_000, intervals: [1500], message: 'B 侧应 decline 上报 failed',
+        },
+      )
+      .toBe(true);
+    const declined = (hub.taskReports.get(missingReq!.taskId) ?? []).find((r) => r.status === 'failed')!;
+    expect(declined.reason ?? '', 'decline 人话名单应含缺失成员').toContain('declined:团队成员无法解析');
+    expect(declined.reason ?? '').toContain('幽灵长甲, 幽灵手');
+    expect(declined.reason ?? '').toContain(WS_NAME);
+    expect(declined.reason ?? '').toContain('请先镜像工作空间或改派');
+    // 拒收路径不建会话（failed 拍无 sessionId）
+    expect(declined.sessionId).toBeUndefined();
+
+    // A 侧行保留待处理：pending + delegationId 在（mock 不转发 failed 事件——
+    // RM-M21-5 重试入口在待派发卡；重派链已由单测 delegation-sync.test 锁）
+    const aWsId = await winA!.evaluate(async (wsName) => {
+      const w = window as unknown as { api: { workspace: { list(): Promise<Array<{ id: string; name: string }>> } } };
+      return (await w.api.workspace.list()).find((x) => x.name === wsName)!.id;
+    }, WS_NAME);
+    const aRow = await winA!.evaluate(async ([wsId, title]) => {
+      const w = window as unknown as {
+        api: { task: { list(opts: { workspaceId: string }): Promise<Array<{ title: string; status: string; delegationId: string | null }>> } };
+      };
+      const rows = await w.api.task.list({ workspaceId: wsId });
+      return rows.find((r) => r.title === title) ?? null;
+    }, [aWsId, MISSING_TASK_TITLE] as const);
+    expect(aRow, 'A 侧任务行应落库').not.toBeNull();
+    expect(aRow!.status).toBe('pending');
+    expect(aRow!.delegationId).toBe(missingReq!.taskId);
+  });
+
+  test('场景15 F2 镜像模型配平：B 预置同名 provider+model → 重镜像 → 空壳配平链① + 已配置不动', async () => {
+    test.setTimeout(300_000);
+    expect(winA, '依赖场景1的实例 A（团队成员已配模型——场景13 造数）').not.toBeNull();
+    expect(winBHitl, '依赖场景3的实例 B').not.toBeNull();
+
+    // B 预置同名 provider（链①对齐键）+ provider_models 含同名模型（场景 13 的
+    // 空壳 def「团队成员乙」与已配置 def「团队长甲」均为断言靶）
+    const bProv = await winBHitl!.evaluate(async ([llmBase]) => {
+      const w = window as unknown as {
+        api: {
+          provider: {
+            list(): Promise<Array<{ id: string; name: string }>>;
+            create(input: Record<string, unknown>): Promise<{ id: string }>;
+            addModel(id: string, modelId: string): Promise<unknown>;
+          };
+        };
+      };
+      const found = (await w.api.provider.list()).find((p) => p.name === 'E2E Mock LLM');
+      const mock = found ?? await w.api.provider.create({
+        name: 'E2E Mock LLM', baseUrl: llmBase, apiKey: 'e2e-f2-key',
+        defaultModel: 'e2e-mock-model', platform: 'openai',
+      });
+      await w.api.provider.addModel(mock.id, 'e2e-mock-model');
+      const hitl = (await w.api.provider.list()).find((p) => p.name === 'E2E HITL Mock LLM');
+      return { mockId: mock.id, hitlId: hitl?.id ?? null };
+    }, [`${hub.baseUrl}/v1`] as const);
+    expect(bProv.hitlId, 'B 侧 HITL provider 应在场（场景7 造数）').not.toBeNull();
+
+    // A 上传新快照（成员 modelBinding 段=场景 13 绑定的 A 侧 provider）→ mock hub 存档
+    const aWsId = await winA!.evaluate(async (wsName) => {
+      const w = window as unknown as { api: { workspace: { list(): Promise<Array<{ id: string; name: string }>> } } };
+      return (await w.api.workspace.list()).find((x) => x.name === wsName)!.id;
+    }, WS_NAME);
+    const built = await winA!.evaluate(async (wsId) => {
+      const w = window as unknown as {
+        api: { hub: { snapshotBuildUpload(input: { workspaceId: string }): Promise<{ snapshotId: string }> } };
+      };
+      return w.api.hub.snapshotBuildUpload({ workspaceId: wsId });
+    }, aWsId);
+    expect(built.snapshotId, '快照应上传成功').toBeTruthy();
+    const snapshotId = built.snapshotId;
+
+    // mock 直发 mirror.apply 到 B（confirm=true——B 已有同名工作空间，场景3 产物）
+    const nodeB = await waitForNodeConn('e2e-node-b');
+    hub.pendingMirrors.add(MIRROR_F2_ID);
+    const sent = sendToNode(nodeB, {
+      v: 1,
+      kind: 'req',
+      id: MIRROR_F2_ID,
+      method: 'mirror.apply',
+      payload: { mirrorId: MIRROR_F2_ID, snapshotId, workspaceName: WS_NAME, strategy: 'replace', confirm: true },
+    });
+    expect(sent, 'mirror.apply 应送达实例 B').toBe(true);
+    await expect
+      .poll(() => hub.mirrorReceipts.has(MIRROR_F2_ID), { timeout: 180_000, intervals: [1500], message: '应收到 mirror.receipt' })
+      .toBe(true);
+    const receipt = hub.mirrorReceipts.get(MIRROR_F2_ID)!;
+    expect(receipt.ok, `镜像应成功应用（payload: ${JSON.stringify(receipt.payload)}）`).toBe(true);
+
+    // 配平面：空壳 def（团队成员乙——B 侧 YAML 造、无绑定）→ 链①同名 provider
+    // 命中（B 预置 'E2E Mock LLM' 且 provider_models 含 e2e-mock-model）
+    const defs = await winBHitl!.evaluate(async () => {
+      const w = window as unknown as {
+        api: { agent: { list(): Promise<Array<{ slug: string; modelProviderId: string | null; modelName: string }>> } };
+      };
+      return w.api.agent.list();
+    });
+    const hollow = defs.find((d) => d.slug === TEAM_MEMBER_SLUG);
+    expect(hollow, 'B 侧团队成员乙 def 应在场（重镜像复用）').toBeDefined();
+    expect(hollow!.modelProviderId, '空壳 def 应配平到 B 同名 provider（链①）').toBe(bProv.mockId);
+    expect(hollow!.modelName).toBe(SHARED_MODEL);
+
+    // 只补空：已配置 def（团队长甲——B 手设 HITL provider）不被 A 侧绑定覆盖
+    const configured = defs.find((d) => d.slug === TEAM_LEADER_SLUG);
+    expect(configured, 'B 侧团队长甲 def 应在场（重镜像复用）').toBeDefined();
+    expect(configured!.modelProviderId, '已配置 def 不得被覆盖（D4 自愈① 只补空）').toBe(bProv.hitlId);
+    expect(configured!.modelName).toBe('e2e-hitl-model');
+
+    // 配平软失败面：回执不得出现 modelBinding:* unresolved（链①命中即闭合）
+    const unresolved = (receipt.payload['unresolvedRefs'] as string[] | undefined) ?? [];
+    expect(unresolved.filter((u) => u.startsWith('modelBinding:'))).toEqual([]);
   });
 });
