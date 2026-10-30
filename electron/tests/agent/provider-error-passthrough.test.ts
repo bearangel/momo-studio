@@ -268,6 +268,8 @@ function makeRunnerHarness(): {
     settings: () => settings.read(),
     findWorkspaceByName: (name) => (name === 'ws-a' ? { id: 'ws-1', name } : null),
     resolveAgentInstance: () => 'inst-default',
+    // M5.3 新端口：本用例单 agent 路径不触发按名解析——缺省 null 桩
+    resolveAgentInstanceByName: () => null,
     createDelegatedSession: () => 'sess-1',
     applyRunPolicy: () => undefined,
     sessionWaiting: () => null,

@@ -61,7 +61,7 @@ interface PortOverrides {
   groups?: Array<{
     groupId: string;
     groupName: string;
-    members: Array<{ nodeId: string; name: string; online: boolean }>;
+    members: Array<{ nodeId: string; name: string; online: boolean; protoVer?: string }>;
   }>;
   delegations?: Array<{ taskId: string; targetNodeId: string; status: string }>;
   registry?: Array<{ groupId: string; targetNodeId: string; workspaceName: string }>;
@@ -69,6 +69,8 @@ interface PortOverrides {
   delegateError?: Error;
   /** M4.3 派发闸数据源 fake：taskId → 未完成依赖 id 列表（缺省恒空 = 不阻塞） */
   blockedBy?: Record<string, string[]>;
+  /** M5.3 团队快照 fake：teamId → 快照；缺省 null（团队不存在） */
+  teamSnapshot?: { name: string; members: Array<{ agentName: string; isLeader: boolean }> };
 }
 
 // 返回类型刻意不注解：保留 vi.fn() 的 Mock 推断（.mock/.mockRejectedValue 可达），
@@ -76,6 +78,11 @@ interface PortOverrides {
 function makePorts(overrides: PortOverrides = {}) {
   return {
     listGroups: vi.fn().mockResolvedValue(overrides.groups ?? []),
+    getTeamSnapshot: vi
+      .fn()
+      .mockImplementation((_workspaceId: string, teamId: string) =>
+        teamId === 'team-1' ? (overrides.teamSnapshot ?? null) : null,
+      ),
     listDelegations: vi.fn().mockResolvedValue(overrides.delegations ?? []),
     listMirrorRegistry: vi
       .fn()
@@ -416,6 +423,200 @@ describe('submitRoutedTask — M4.3 依赖建链与派发闸', () => {
   });
 });
 
+// ── submitRoutedTask — M5.3 团队派发（teamId 展开 + 版本门） ─────────────────
+
+/** 新协议组：node-a/node-b 在线且 1.9.0+；node-old 在线但 1.8.0；node-silent 在线不带 protoVer（视为旧） */
+function protoGroup() {
+  return [
+    {
+      groupId: 'g1',
+      groupName: 'dev-team',
+      members: [
+        { nodeId: 'node-a', name: 'office-mac', online: true, protoVer: '1.9.0' },
+        { nodeId: 'node-b', name: 'lab-node', online: true, protoVer: '1.10.2' },
+        { nodeId: 'node-old', name: 'legacy-box', online: true, protoVer: '1.8.0' },
+        { nodeId: 'node-silent', name: 'quiet-box', online: true },
+        { nodeId: 'node-off', name: 'sleepy', online: false },
+      ],
+    },
+  ];
+}
+
+function protoRegistry() {
+  return ['node-a', 'node-b', 'node-old', 'node-silent', 'node-off'].map((nodeId) => ({
+    groupId: 'g1',
+    targetNodeId: nodeId,
+    workspaceName: 'ws-main',
+  }));
+}
+
+const teamSnap = {
+  name: '攻坚组',
+  members: [
+    { agentName: 'PM', isLeader: true },
+    { agentName: 'Coder', isLeader: false },
+  ],
+};
+
+describe('submitRoutedTask — M5.3 团队派发', () => {
+  it('teamId 展开：payload 带 team 段（name=agentName + leader 标记）且不带 agentSlug 键；落库/回写照常', async () => {
+    const ports = makePorts({
+      groups: protoGroup(),
+      registry: protoRegistry(),
+      teamSnapshot: teamSnap,
+    });
+    const result = await submitRoutedTask(
+      { ...baseInput({ mode: 'group', groupId: 'g1' }), teamId: 'team-1' },
+      ports,
+    );
+
+    expect(result.dispatched).toBe(true);
+    const brief = (ports.delegate as ReturnType<typeof vi.fn>).mock.calls[0]![0] as DelegationTaskBrief;
+    expect(brief.task.team).toEqual({
+      members: [
+        { name: 'PM', isLeader: true },
+        { name: 'Coder', isLeader: false },
+      ],
+    });
+    // agentSlug 互斥：team 在场时载荷不得带 agentSlug 键
+    expect('agentSlug' in brief.task).toBe(false);
+    expect(ports.getTeamSnapshot).toHaveBeenCalledWith('ws1', 'team-1');
+  });
+
+  it('无 teamId：载荷零变化（不带 team 键——1.8 载荷回归锁）', async () => {
+    const ports = makePorts({ groups: protoGroup(), registry: protoRegistry() });
+    await submitRoutedTask(baseInput({ mode: 'group', groupId: 'g1' }), ports);
+    const brief = (ports.delegate as ReturnType<typeof vi.fn>).mock.calls[0]![0] as DelegationTaskBrief;
+    expect('team' in brief.task).toBe(false);
+    expect(ports.getTeamSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('团队不存在 / 形态非法（单成员、双 leader）→ 提交时人话拒，零落库零派发', async () => {
+    const ports = makePorts({ groups: protoGroup(), registry: protoRegistry() });
+    await expect(
+      submitRoutedTask({ ...baseInput({ mode: 'group', groupId: 'g1' }), teamId: 'team-x' }, ports),
+    ).rejects.toThrow('团队不存在或已解散');
+    expect(ports.createRemoteTask).not.toHaveBeenCalled();
+    expect(ports.delegate).not.toHaveBeenCalled();
+
+    const oneMember = makePorts({
+      groups: protoGroup(),
+      registry: protoRegistry(),
+      teamSnapshot: { name: '独行侠', members: [{ agentName: 'PM', isLeader: true }] },
+    });
+    await expect(
+      submitRoutedTask({ ...baseInput({ mode: 'group', groupId: 'g1' }), teamId: 'team-1' }, oneMember),
+    ).rejects.toThrow('形态不满足团队派发');
+
+    const twoLeaders = makePorts({
+      groups: protoGroup(),
+      registry: protoRegistry(),
+      teamSnapshot: {
+        name: '双头组',
+        members: [
+          { agentName: 'PM', isLeader: true },
+          { agentName: 'Coder', isLeader: true },
+        ],
+      },
+    });
+    await expect(
+      submitRoutedTask({ ...baseInput({ mode: 'group', groupId: 'g1' }), teamId: 'team-1' }, twoLeaders),
+    ).rejects.toThrow('恰一名 leader');
+  });
+
+  it('指定节点协议过旧（1.8.0 / 在线但不带 protoVer）→ 人话拒（含节点名与对方版本），零落库零派发', async () => {
+    const ports = makePorts({ groups: protoGroup(), registry: protoRegistry(), teamSnapshot: teamSnap });
+    await expect(
+      submitRoutedTask(
+        { ...baseInput({ mode: 'node', groupId: 'g1', targetNodeId: 'node-old' }), teamId: 'team-1' },
+        ports,
+      ),
+    ).rejects.toThrow('目标节点 legacy-box 版本过旧（协议 1.8.0），不支持团队派发——需对方升级到 v0.5.0+');
+    expect(ports.createRemoteTask).not.toHaveBeenCalled();
+    expect(ports.delegate).not.toHaveBeenCalled();
+
+    const silent = makePorts({ groups: protoGroup(), registry: protoRegistry(), teamSnapshot: teamSnap });
+    await expect(
+      submitRoutedTask(
+        { ...baseInput({ mode: 'node', groupId: 'g1', targetNodeId: 'node-silent' }), teamId: 'team-1' },
+        silent,
+      ),
+    ).rejects.toThrow('协议 未知');
+  });
+
+  it('指定节点离线 → 不走版本闸（无 protoVer 可查，hub 兜底）——直发照常', async () => {
+    const ports = makePorts({ groups: protoGroup(), registry: protoRegistry(), teamSnapshot: teamSnap });
+    const result = await submitRoutedTask(
+      { ...baseInput({ mode: 'node', groupId: 'g1', targetNodeId: 'node-off' }), teamId: 'team-1' },
+      ports,
+    );
+    expect(result.dispatched).toBe(true);
+    expect(result.nodeId).toBe('node-off');
+  });
+
+  it('指定节点新协议（1.9.0+）→ 放行直发', async () => {
+    const ports = makePorts({ groups: protoGroup(), registry: protoRegistry(), teamSnapshot: teamSnap });
+    const result = await submitRoutedTask(
+      { ...baseInput({ mode: 'node', groupId: 'g1', targetNodeId: 'node-b' }), teamId: 'team-1' },
+      ports,
+    );
+    expect(result.dispatched).toBe(true);
+    expect(result.nodeId).toBe('node-b');
+  });
+
+  it('组内调度：候选池排除旧协议节点（least-busy 在新节点中选）', async () => {
+    // node-a(1.9.0) 活跃 2、node-b(1.10.2) 活跃 0、node-old/node-silent 旧——只可在 a/b 中选 b
+    const ports = makePorts({
+      groups: protoGroup(),
+      registry: protoRegistry(),
+      teamSnapshot: teamSnap,
+      delegations: [
+        { taskId: 'd1', targetNodeId: 'node-a', status: 'running' },
+        { taskId: 'd2', targetNodeId: 'node-a', status: 'pending' },
+      ],
+    });
+    const result = await submitRoutedTask(
+      { ...baseInput({ mode: 'group', groupId: 'g1' }), teamId: 'team-1' },
+      ports,
+    );
+    expect(result.dispatched).toBe(true);
+    expect(result.nodeId).toBe('node-b');
+  });
+
+  it('组内调度：候选（在线∧已镜像）全被版本排除 → 拒并列全部落后节点名', async () => {
+    const groups = [
+      {
+        groupId: 'g1',
+        groupName: 'dev-team',
+        members: [
+          { nodeId: 'node-old', name: 'legacy-box', online: true, protoVer: '1.8.0' },
+          { nodeId: 'node-silent', name: 'quiet-box', online: true },
+        ],
+      },
+    ];
+    const ports = makePorts({
+      groups,
+      registry: protoRegistry(),
+      teamSnapshot: teamSnap,
+    });
+    await expect(
+      submitRoutedTask({ ...baseInput({ mode: 'group', groupId: 'g1' }), teamId: 'team-1' }, ports),
+    ).rejects.toThrow('组内候选节点协议均过旧（legacy-box、quiet-box），不支持团队派发——需对方升级到 v0.5.0+');
+    expect(ports.createRemoteTask).not.toHaveBeenCalled();
+    expect(ports.delegate).not.toHaveBeenCalled();
+  });
+
+  it('组内调度：本就无候选（无镜像登记）→ 维持留待处理（不误报版本过旧）', async () => {
+    const ports = makePorts({ groups: protoGroup(), registry: [], teamSnapshot: teamSnap });
+    const result = await submitRoutedTask(
+      { ...baseInput({ mode: 'group', groupId: 'g1' }), teamId: 'team-1' },
+      ports,
+    );
+    expect(result.dispatched).toBe(false);
+    expect(result.task.delegationId).toBeNull();
+  });
+});
+
 // ── routingPrecheck ────────────────────────────────────────────────────────
 
 describe('routingPrecheck — 预检概要', () => {
@@ -455,5 +656,29 @@ describe('routingPrecheck — 预检概要', () => {
     const result = await routingPrecheck('ws-main', ports);
     expect(result.groups).toEqual([]);
     expect(result.mirrored).toBe(true); // 本地登记表仍可信
+  });
+
+  it('14. M5.3 nodeCaps：在线成员 protoVer 派生、离线/未上报不带、跨组同 nodeId 去重', async () => {
+    const groups = [
+      ...protoGroup(),
+      {
+        groupId: 'g2',
+        groupName: 'ops-team',
+        members: [
+          { nodeId: 'node-a', name: 'office-mac-别名', online: true, protoVer: '1.9.1' },
+          { nodeId: 'node-off', name: 'sleepy', online: false, protoVer: '1.9.0' },
+        ],
+      },
+    ];
+    const ports = makePorts({ groups, registry: protoRegistry() });
+    const result = await routingPrecheck('ws-main', ports);
+
+    // 在线且带 protoVer 的成员进 nodeCaps；离线（node-off）不带；node-silent 在线
+    // 但无 protoVer 不进；node-a 跨组去重（首见保留 g1 的 1.9.0）
+    expect(result.nodeCaps).toEqual([
+      { nodeId: 'node-a', name: 'office-mac', protoVer: '1.9.0' },
+      { nodeId: 'node-b', name: 'lab-node', protoVer: '1.10.2' },
+      { nodeId: 'node-old', name: 'legacy-box', protoVer: '1.8.0' },
+    ]);
   });
 });

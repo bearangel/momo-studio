@@ -490,7 +490,7 @@ describe('hub IPC coded 错误契约（M4.1——RpcRemoteError code 编入 `[co
     registerHubIpc();
     vi.mocked(manager.hubRequest).mockRejectedValueOnce(new RpcRemoteError('unauthorized', '凭证已失效'));
     const out = await handlers.get('hub:routingPrecheck')!(null, { workspaceName: 'ws' });
-    expect(out).toEqual({ mirrored: false, groups: [] });
+    expect(out).toEqual({ mirrored: false, groups: [], nodeCaps: [] });
   });
 
   it('双侧 fixture 等值锁（renderer RPC_ERROR_ROUNDTRIP_FIXTURES 单源）：coded 编码 → parseRpcErrorCode 解码逐字段往返', async () => {

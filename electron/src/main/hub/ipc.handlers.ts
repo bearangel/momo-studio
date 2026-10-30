@@ -27,6 +27,7 @@ import { blockedDispatchError } from '../task/dependency-gate';
 import { deriveBlockedBy } from '../storage/tasks/dependencies-repo';
 import { updateTask, getTask } from '../storage/tasks/repo';
 import { listWorkspaces } from '../workspace/crud';
+import { listTeams } from '../agent/team';
 import { recordPublishAccountingSafe } from '../resource/hub-install';
 import { writebackPublishedVersionSafe } from './publish-writeback';
 
@@ -187,6 +188,19 @@ export function registerHubIpc(): void {
   // node 直发）+ 预检概要（弹窗「执行位置」区数据源）。编排见 dispatch-submit.ts。
   const dispatchSubmitPorts: DispatchSubmitPorts = {
     listGroups: async () => (await groups.list()).groups,
+    // M5.3 团队快照展开：listTeams 当前成员 + leader 标记（name=agentName——外派
+    // team 段名单与镜像按名对齐同口径）；派发时刻快照定型（在途调组票桶）
+    getTeamSnapshot: (workspaceId, teamId) => {
+      const team = listTeams(workspaceId).find((t) => t.id === teamId);
+      if (!team) return null;
+      return {
+        name: team.name,
+        members: team.members.map((m) => ({
+          agentName: m.agentName,
+          isLeader: m.instanceId === team.leaderInstanceId,
+        })),
+      };
+    },
     listDelegations: async (groupId) =>
       (await hubRequest<{ tasks: Array<{ taskId: string; targetNodeId: string; status: string }> }>(
         TASK_RPC.list,

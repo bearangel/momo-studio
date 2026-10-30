@@ -166,6 +166,12 @@ export interface SubmitRoutedTaskInput {
    * （blocked 不 delegate，行保留待处理）；缺省不带键（无依赖零变化）
    */
   dependsOn?: string[];
+  /**
+   * M5.3 团队派发：本地团队 id（X3 团队下拉带出）。主进程提交时展开为成员名单
+   * 快照随载荷 team 段（name=agentName，不带 agentSlug——协议互斥）；缺省不带键
+   * （单 agent 路径零变化）。批量链路不提供
+   */
+  teamId?: string;
 }
 
 /** hub:submitRoutedTask 返回（dispatched=false = 留待处理：无候选或发送瞬断） */
@@ -196,6 +202,12 @@ export interface RoutingGroupSummary {
 export interface RoutingPrecheckResult {
   mirrored: boolean;
   groups: RoutingGroupSummary[];
+  /**
+   * M5.3 节点能力面：组内在线成员协议版本（nodeId 去重）——预检黄字/派发闸 UI
+   * （X3 另行接线）数据源。主进程运行时恒携带；此声明为可选（既有 fixture
+   * 兼容），X3 消费面落地后转必选
+   */
+  nodeCaps?: Array<{ nodeId: string; name: string; protoVer: string }>;
 }
 
 /**

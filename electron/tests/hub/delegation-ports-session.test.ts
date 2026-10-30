@@ -131,9 +131,8 @@ describe('resolveAgentInstanceByNameProduct（M5.3 按名解析）', () => {
 describe('createDelegatedSession 多成员版（M5.3 团队外派建会）', () => {
   it('members 在场 → kind=task_execution 多成员会话：成员全入 session_members、恰 leader is_leader=1', async () => {
     const wsId = await seedWorkspace('ws-a', ['PM', 'Coder', 'QA']);
-    const [pm, coder, qa] = ['PM', 'Coder', 'QA'].map(
-      (n) => resolveAgentInstanceByNameProduct(wsId, n)!,
-    );
+    const ids = ['PM', 'Coder', 'QA'].map((n) => resolveAgentInstanceByNameProduct(wsId, n)!);
+    const [pm, coder, qa] = [ids[0]!, ids[1]!, ids[2]!];
 
     const sessionId = ports().createDelegatedSession({
       workspaceId: wsId,
