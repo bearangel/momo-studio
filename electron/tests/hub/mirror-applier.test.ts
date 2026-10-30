@@ -28,7 +28,7 @@ import { closeDb, getDb, runMigrations } from '../../src/main/storage/db';
 import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keychain';
 import { saveAgentDefinition, addMember, updateAgentDefinition } from '../../src/main/agent/crud';
 import { createTeam } from '../../src/main/agent/team';
-import { createProvider, listProviders, providerApiKeyRef } from '../../src/main/agent/provider-crud';
+import { createProvider, listProviders, providerApiKeyRef, upsertProviderModel } from '../../src/main/agent/provider-crud';
 import { registerMcpDefinition, setMcpEnabledDefinition, listRegistered } from '../../src/main/mcp/host-manager';
 import { upsertPlugin, setPluginEnabled, isPluginEnabled } from '../../src/main/plugin/registry';
 import { createWorkspace, listWorkspaces, getWorkspace, setDefaultAgent } from '../../src/main/workspace/crud';
@@ -36,7 +36,7 @@ import { getGlobalSettings, updateGlobalSettings } from '../../src/main/settings
 import { listInstalled } from '../../src/main/skill/zip-uploader';
 import { listMembers, getAgentDefinition, listAgentDefinitions } from '../../src/main/agent/agent-queries';
 import { listTeams } from '../../src/main/agent/team';
-import type { SnapshotModelBinding } from '../../src/main/hub/snapshot-model-binding';
+import type { SnapshotModelBinding, SnapshotMemberModelBinding } from '../../src/main/hub/snapshot-model-binding';
 
 // 进程边界替身（snapshot-builder.test.ts 同款——applier → hub-install → momo-hub 链）
 vi.mock('electron', () => ({
@@ -85,13 +85,19 @@ afterEach(() => {
 
 // ── 快照归档构造（真实 tar——生产解包路径的同款输入）───────────────────────
 
-interface ArchiveFixture { bytes: Buffer; checksum: string; manifest: SnapshotManifest }
+interface ArchiveFixture { bytes: Buffer; checksum: string; manifest: SnapshotManifest | ManifestWithOptionalSegments }
 
 /** manifest + 可选附加文件（relPath → content）→ tar.gz 字节 + sha256。
- *  入参放宽：可携带 modelBinding / defaultAgent 可选段（pin 类型尚未含段——
- *  补位纪律同源）。 */
+ *  入参放宽：可携带 modelBinding / defaultAgent / 成员级 modelBinding 可选段
+ *  （pin 类型尚未含段——补位纪律同源）。 */
 type ManifestWithOptionalSegments = Omit<SnapshotManifest, 'config'> & {
-  config: SnapshotManifest['config'] & { modelBinding?: SnapshotModelBinding; defaultAgent?: string };
+  config: Omit<SnapshotManifest['config'], 'agentMembers'> & {
+    agentMembers?: Array<SnapshotManifest['config']['agentMembers'][number] & {
+      modelBinding?: SnapshotMemberModelBinding;
+    }>;
+    modelBinding?: SnapshotModelBinding;
+    defaultAgent?: string;
+  };
 };
 
 async function makeArchive(
@@ -120,8 +126,11 @@ async function makeArchive(
 function baseManifest(overrides?: {
   workspaceName?: string;
   resources?: SnapshotManifest['resources'];
-  /** modelBinding / defaultAgent 可选段——pin 类型补位（snapshot-model-binding.ts 同源） */
-  config?: Partial<SnapshotManifest['config']> & {
+  /** modelBinding / defaultAgent / 成员级 modelBinding 可选段——pin 类型补位（snapshot-model-binding.ts 同源） */
+  config?: Partial<Omit<SnapshotManifest['config'], 'agentMembers'>> & {
+    agentMembers?: Array<SnapshotManifest['config']['agentMembers'][number] & {
+      modelBinding?: SnapshotMemberModelBinding;
+    }>;
     modelBinding?: SnapshotModelBinding;
     defaultAgent?: string;
   };
@@ -1084,6 +1093,215 @@ describe('契约：buildWorkspaceSnapshot 产出 → applyMirrorSnapshot 消费'
     expect(rebuiltMember?.agentName).toBe('契约甲');
     expect(getAgentDefinition(rebuiltMember!.agentDefinitionId)?.slug).toBe('pact-a');
 
+    fs.rmSync(built.archivePath, { force: true });
+  });
+});
+
+// ── M5.3 F2：成员模型配平链（spec §6.2——只补空，四级） ────────────────────
+
+describe('applyMirrorSnapshot 成员模型配平（M5.3 F2）', () => {
+  /** 带 modelBinding 的 custom 成员 manifest（新建直落路径） */
+  function memberManifest(memberName: string, binding: SnapshotMemberModelBinding) {
+    return baseManifest({
+      config: {
+        agentMembers: [
+          { name: memberName, customDefinition: customYaml(memberName, 'balance-coder'), modelBinding: binding },
+        ],
+      },
+    });
+  }
+
+  /** 直接改 provider 行 created_at（创建序排序的确定性夹具控制） */
+  function backdateProvider(providerId: string, createdAt: string): void {
+    getDb().prepare('UPDATE model_providers SET created_at = ? WHERE id = ?').run(createdAt, providerId);
+  }
+
+  function defOfSlug(slug: string) {
+    return listAgentDefinitions().find((d) => d.slug === slug);
+  }
+
+  it('链①同名 provider 命中：name 相同且 provider_models 含 modelName → 绑定该 provider', async () => {
+    const p = await createProvider({
+      name: '智谱开放平台', baseUrl: 'https://open.bigmodel.cn/api/paas',
+      apiKey: 'sk-f2-key-111111111', platform: 'openai',
+    });
+    upsertProviderModel(p.id, 'glm-5.3');
+
+    const archive = await makeArchive(memberManifest('配平手', {
+      providerName: '智谱开放平台', platform: 'openai', modelName: 'glm-5.3',
+    }));
+    const outcome = await applyMirrorSnapshot(applyPayload({}), makeDeps(archive));
+    expect(outcome.ok).toBe(true);
+
+    const def = defOfSlug('balance-coder');
+    expect(def?.modelProviderId).toBe(p.id);
+    expect(def?.modelName).toBe('glm-5.3');
+  });
+
+  it('配平排序（经链②多候选）：isDefault 优先胜出（创建序在后也胜）', async () => {
+    // schema 现实：model_providers.name UNIQUE——同名多候选不可达；排序语义经链②
+    //（同 platform 多候选合法存在）锁定，pickBy 排序与链①同一段代码
+    const pLater = await createProvider({
+      name: '通道乙', baseUrl: 'https://later.example/v1',
+      apiKey: 'sk-f2-key-222222222', platform: 'openai', isDefault: true,
+    });
+    const pEarlier = await createProvider({
+      name: '通道甲', baseUrl: 'https://earlier.example/v1',
+      apiKey: 'sk-f2-key-333333333', platform: 'openai',
+    });
+    upsertProviderModel(pLater.id, 'glm-5.3');
+    upsertProviderModel(pEarlier.id, 'glm-5.3');
+    backdateProvider(pEarlier.id, '2026-01-01T00:00:00.000Z');
+    backdateProvider(pLater.id, '2026-02-01T00:00:00.000Z');
+
+    const archive = await makeArchive(memberManifest('优先手', {
+      providerName: '目标没有的名字', platform: 'openai', modelName: 'glm-5.3',
+    }));
+    await applyMirrorSnapshot(applyPayload({}), makeDeps(archive));
+    expect(defOfSlug('balance-coder')?.modelProviderId).toBe(pLater.id);
+  });
+
+  it('配平排序（经链②多候选）：全非 default → 创建序早者胜出', async () => {
+    const pEarlier = await createProvider({
+      name: '无标供甲', baseUrl: 'https://e5.example/v1', apiKey: 'sk-f2-key-444444444', platform: 'openai',
+    });
+    const pLater = await createProvider({
+      name: '无标供乙', baseUrl: 'https://l6.example/v1', apiKey: 'sk-f2-key-555555555', platform: 'openai',
+    });
+    upsertProviderModel(pEarlier.id, 'glm-5.3');
+    upsertProviderModel(pLater.id, 'glm-5.3');
+    backdateProvider(pEarlier.id, '2026-03-01T00:00:00.000Z');
+    backdateProvider(pLater.id, '2026-04-01T00:00:00.000Z');
+
+    const archive = await makeArchive(memberManifest('序胜手', {
+      providerName: '目标没有的名字', platform: 'openai', modelName: 'glm-5.3',
+    }));
+    await applyMirrorSnapshot(applyPayload({}), makeDeps(archive));
+    expect(defOfSlug('balance-coder')?.modelProviderId).toBe(pEarlier.id);
+  });
+
+  it('链②同 platform 命中：无同名（或同名无该模型）→ 同 platform 且含 modelName → 绑定', async () => {
+    const samePlatform = await createProvider({
+      name: '备用通道', baseUrl: 'https://fallback.example/v1',
+      apiKey: 'sk-f2-key-777777777', platform: 'anthropic',
+    });
+    upsertProviderModel(samePlatform.id, 'claude-x');
+    // 同名 provider 在场但缺该模型——链①不得命中，落到链②
+    const sameNameNoModel = await createProvider({
+      name: '智谱开放平台', baseUrl: 'https://zhipu.example/v1',
+      apiKey: 'sk-f2-key-888888888', platform: 'anthropic',
+    });
+    void sameNameNoModel;
+
+    const archive = await makeArchive(memberManifest('兜底手', {
+      providerName: '智谱开放平台', platform: 'anthropic', modelName: 'claude-x',
+    }));
+    const outcome = await applyMirrorSnapshot(applyPayload({}), makeDeps(archive));
+    expect(outcome.ok).toBe(true);
+    expect(defOfSlug('balance-coder')?.modelProviderId).toBe(samePlatform.id);
+  });
+
+  it('链③全局默认命中：①②全 miss → defaultChatModel 存在且 provider 行在 → 绑定（modelName 取默认值）', async () => {
+    const dcmProvider = await createProvider({
+      name: '全局默认供', baseUrl: 'https://default.example/v1',
+      apiKey: 'sk-f2-key-999999999', platform: 'openai',
+    });
+    updateGlobalSettings({ defaultChatModel: { providerId: dcmProvider.id, modelId: 'glm-4.5' } });
+
+    const archive = await makeArchive(memberManifest('默认手', {
+      providerName: '不存在的供', platform: 'anthropic', modelName: 'claude-x',
+    }));
+    const outcome = await applyMirrorSnapshot(applyPayload({}), makeDeps(archive));
+    expect(outcome.ok).toBe(true);
+    const def = defOfSlug('balance-coder');
+    expect(def?.modelProviderId).toBe(dcmProvider.id);
+    expect(def?.modelName).toBe('glm-4.5'); // 链③绑 defaultChatModel 的 modelId（非段内名）
+  });
+
+  it('链④全 miss：无匹配 provider 且无 defaultChatModel → 保持未配置（spawn 人话报错兜底）', async () => {
+    const archive = await makeArchive(memberManifest('空手', {
+      providerName: '不存在的供', platform: 'anthropic', modelName: 'claude-x',
+    }));
+    const outcome = await applyMirrorSnapshot(applyPayload({}), makeDeps(archive));
+    expect(outcome.ok).toBe(true);
+    const def = defOfSlug('balance-coder');
+    expect(def?.modelProviderId).toBeNull();
+    expect(def?.modelName).toBe('glm-5.3'); // YAML 原值不动
+  });
+
+  it('只补空：目标 def 已配 modelProviderId（D4 自愈① 保留值）→ 段在场也不动', async () => {
+    const preset = await createProvider({
+      name: '本机已配供', baseUrl: 'https://preset.example/v1',
+      apiKey: 'sk-f2-key-aaaaaaaaaa', platform: 'openai',
+    });
+    upsertProviderModel(preset.id, 'glm-5.3');
+    // 预置同 slug 定义且已配绑定（重镜像复用路径）
+    saveAgentDefinition({
+      id: 'def-preset-coder', name: '既配手', slug: 'balance-coder', version: '1.0.0',
+      runtime: 'declarative', systemPrompt: '你是 既配手', defaultTools: [], source: 'custom',
+      description: '', iconEmoji: '🤖', defaultMcps: [], defaultSkills: [],
+      workspaceId: null, modelProviderId: preset.id, modelName: 'glm-5.3',
+    });
+    const other = await createProvider({
+      name: '智谱开放平台', baseUrl: 'https://zhipu2.example/v1',
+      apiKey: 'sk-f2-key-bbbbbbbbbb', platform: 'openai',
+    });
+    upsertProviderModel(other.id, 'glm-5.3');
+
+    const archive = await makeArchive(memberManifest('既配手', {
+      providerName: '智谱开放平台', platform: 'openai', modelName: 'glm-5.3',
+    }));
+    const outcome = await applyMirrorSnapshot(applyPayload({ confirm: true }), makeDeps(archive));
+    expect(outcome.ok).toBe(true);
+    // 既有绑定保持（不覆盖为段内同名 provider）
+    const def = defOfSlug('balance-coder');
+    expect(def?.modelProviderId).toBe(preset.id);
+  });
+
+  it('成员无段（旧快照）→ 零触碰：def 保持未配置（既有行为回归锁）', async () => {
+    const archive = await makeArchive(baseManifest({
+      config: { agentMembers: [{ name: '裸手', customDefinition: customYaml('裸手', 'balance-coder') }] },
+    }));
+    const outcome = await applyMirrorSnapshot(applyPayload({}), makeDeps(archive));
+    expect(outcome.ok).toBe(true);
+    expect(defOfSlug('balance-coder')?.modelProviderId).toBeNull();
+  });
+
+  it('回路契约：builder 产出段 → applier 链①配平闭合（源配置跨节点可跑）', async () => {
+    // 源：成员带绑定 → 真实 buildWorkspaceSnapshot 归档
+    const srcId = await mkWorkspace('配平契约空间');
+    const srcProvider = await createProvider({
+      name: '契约智谱', baseUrl: 'https://pact-zhipu.example/v1',
+      apiKey: 'sk-f2-key-contract1', platform: 'openai',
+    });
+    const inst = await seedCustomMember(srcId, '配平甲', 'pact-balance');
+    void inst;
+    updateAgentDefinition({ id: 'def-pact-balance', modelProviderId: srcProvider.id, modelName: 'glm-5.3' });
+    const built = await buildWorkspaceSnapshot(srcId);
+    const member = built.manifest.config.agentMembers.find((m) => m.name === '配平甲');
+    expect(member?.modelBinding).toEqual({ providerName: '契约智谱', platform: 'openai', modelName: 'glm-5.3' });
+
+    // 目标：同库换名空间（新落）+ 同名 provider（不同 id）含该模型 → 链①闭合。
+    // schema：model_providers.name UNIQUE——真实跨节点是两个库，此处删源行再建同名
+    // 行模拟「目标节点自己的同名 provider」；同步清 def 既有绑定模拟「目标节点
+    // 该 def 尚未配置」（真实目标节点 def 表无此行/为空——只补空链路的前提）
+    getDb().prepare('DELETE FROM model_providers WHERE id = ?').run(srcProvider.id);
+    // updateAgentDefinition 不支持清空绑定（modelProviderId?: string）——夹具直改列
+    getDb().prepare('UPDATE agent_definitions SET model_provider_id = NULL WHERE id = ?').run('def-pact-balance');
+    const targetProvider = await createProvider({
+      name: '契约智谱', baseUrl: 'https://target-zhipu.example/v1',
+      apiKey: 'sk-f2-key-contract2', platform: 'openai',
+    });
+    upsertProviderModel(targetProvider.id, 'glm-5.3');
+    const deps: MirrorApplierDeps = {
+      fetchSnapshotArchive: async () => ({ bytes: fs.readFileSync(built.archivePath), checksum: built.checksum }),
+      installResource: async () => undefined,
+    };
+    const outcome = await applyMirrorSnapshot(applyPayload({ workspaceName: '配平契约空间-目标' }), deps);
+    expect(outcome.ok).toBe(true);
+    const def = defOfSlug('pact-balance');
+    expect(def?.modelProviderId).toBe(targetProvider.id);
+    expect(def?.modelName).toBe('glm-5.3');
     fs.rmSync(built.archivePath, { force: true });
   });
 });
