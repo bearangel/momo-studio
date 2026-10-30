@@ -59,3 +59,16 @@ export function compareVersions(a: string, b: string): number {
   if (vb.pre === null) return -1;
   return comparePrerelease(va.pre, vb.pre);
 }
+
+/** 全版本号列表 → 建议下一版本（semver 最高者 patch+1；空列表给 1.0.0）。
+ *  M5.2：发布对话框版本冲突时的建议值（hub 已有版本不可复用）。 */
+export function suggestNextVersion(versions: string[]): string {
+  if (versions.length === 0) return '1.0.0';
+  const max = versions.reduce((a, b) => (compareVersions(a, b) >= 0 ? a : b));
+  const core = max.split('+')[0]!.split('-')[0]!;
+  const parts = core.split('.');
+  const major = Number(parts[0]) || 0;
+  const minor = Number(parts[1]) || 0;
+  const patch = (Number(parts[2]) || 0) + 1;
+  return `${major}.${minor}.${patch}`;
+}

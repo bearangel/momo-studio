@@ -94,7 +94,7 @@ export function ResourceCard({
   const ownershipState = resolveHubOwnership(hubOwnership, hubSelfNodeId ?? null);
   const canUnpublishFromHub =
     item.source === 'hub' && onUnpublishFromHub !== undefined && ownershipState !== 'other';
-  const unpublishTitle = `从 momo-hub 下架 ${item.slug}——目录中不再可见，已安装节点不受影响`;
+  const unpublishTitle = `从 momo-hub 下架 ${item.slug}——目录中不再可见；历史版本保留、版本号不可复用；已安装节点不受影响`;
   // M5.0 §7.1「已发布」徽标：custom 卡 + 目录归属=本机 → 版本流恒为 本地→hub
   const publishedToHub =
     item.source === 'custom' && ownershipState === 'own' ? hubOwnership?.version : undefined;

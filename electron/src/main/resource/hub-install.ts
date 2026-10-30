@@ -189,6 +189,8 @@ export async function listHubCatalogResources(type?: ResourceType): Promise<Reso
   const catalogSlugs = new Set(visible.map((i) => i.slug));
   for (const row of listInstalled()) {
     if (!row.itemId.startsWith(HUB_ITEM_ID_PREFIX)) continue;
+    // M5.2：发布记账（cachePath='') 不是安装——不得产出「已装」兜底卡
+    if (row.cachePath === '') continue;
     const slug = row.itemId.slice(HUB_ITEM_ID_PREFIX.length);
     if (catalogSlugs.has(slug)) continue;
     if (
