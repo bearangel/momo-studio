@@ -45,9 +45,12 @@ vi.mock('../../src/main/workspace/crud', () => ({
   listWorkspaces: vi.fn(() => []),
 }));
 
-// publishToHub 只锁接线（透传入参）——打包/上传矩阵在 publish.test.ts
+// publishToHub 只锁接线（透传入参）——打包/上传矩阵在 publish.test.ts。
+// M5.1：publish-writeback 复用 publish 的 resolveSkillCachePath——mock 面同步
+// 补该导出（返回 null = skill 定位失败 → 回写 written:false 不推翻发布回执）
 vi.mock('../../src/main/hub/publish', () => ({
   publishToHub: vi.fn(async (input: { type: string; ref: string }) => ({ slug: input.ref, version: '1.0.0', checksum: 'c', sizeBytes: 1 })),
+  resolveSkillCachePath: vi.fn(() => null),
 }));
 
 // 发布回填记账只锁接线（四类统一调 Safe 壳）——DB 行为矩阵在 publish-accounting.test.ts
@@ -137,11 +140,16 @@ describe('hub IPC 接线', () => {
     expect(manager.replayPresenceSeed).toHaveBeenCalledTimes(1);
   });
 
-  it('publishResource 透传 publishToHub（入参原样 + 回执透传）', async () => {
+  it('publishResource 透传 publishToHub（入参原样 + 回执透传 + M5.1 版本回写段）', async () => {
     registerHubIpc();
     const out = await handlers.get('hub:publishResource')!(null, { type: 'skill', ref: 's1', meta: { name: 'N' } });
     expect(publishToHub).toHaveBeenCalledWith({ type: 'skill', ref: 's1', meta: { name: 'N' } });
-    expect(out).toEqual({ slug: 's1', version: '1.0.0', checksum: 'c', sizeBytes: 1 });
+    // M5.1：回执扩 versionWriteback 段——回写失败（mock 定位 null）不推翻发布，
+    // 四字段原样透传 + written:false + error 携带失败原因
+    expect(out).toEqual({
+      slug: 's1', version: '1.0.0', checksum: 'c', sizeBytes: 1,
+      versionWriteback: { written: false, error: 'skill 不存在: s1' },
+    });
   });
 
   it('publishResource 四类型发布各触发记账回填（Safe 壳透传 type/slug/version/checksum）', async () => {

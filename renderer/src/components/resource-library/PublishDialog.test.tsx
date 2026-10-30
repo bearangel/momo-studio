@@ -270,3 +270,43 @@ describe('PublishDialog · 进行态 / 成功态 / 失败态', () => {
     expect(screen.queryByText('已连接')).toBeNull();
   });
 });
+
+// ── M5.1 §1.2：版本回写回执（成功态内警示行——失败不推翻发布）──
+describe('PublishDialog · 版本回写回执（M5.1）', () => {
+  it('回写失败 → 成功态仍收束 + 警示行「发布成功但版本回写失败：{原因}」', async () => {
+    const ctl = controlledPublish();
+    render(<PublishDialog item={mkItem({})} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: '发布' }));
+    ctl.resolve({
+      slug: 'code-reviewer', version: '1.2.0', checksum: 'abc', sizeBytes: 2048,
+      versionWriteback: { written: false, error: 'SKILL.md 只读' },
+    });
+    await waitFor(() => expect(screen.getByText('已发布 v1.2.0')).toBeTruthy());
+    expect(screen.getByTestId('writeback-notice').textContent).toBe('发布成功但版本回写失败：SKILL.md 只读');
+  });
+
+  it('plugin zip 装源 skipped → 提示「插件本体由插件包管理，版本未回写」', async () => {
+    const ctl = controlledPublish();
+    render(<PublishDialog item={mkItem({})} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: '发布' }));
+    ctl.resolve({
+      slug: 'code-reviewer', version: '1.2.0', checksum: 'abc', sizeBytes: 2048,
+      versionWriteback: { written: false, skipped: true, notice: '插件本体由插件包管理，版本未回写' },
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('writeback-notice').textContent).toBe('插件本体由插件包管理，版本未回写'),
+    );
+  });
+
+  it('回写成功 / 旧回执无 versionWriteback 段 → 无警示行（既有语义零变化）', async () => {
+    const ctl = controlledPublish();
+    render(<PublishDialog item={mkItem({})} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: '发布' }));
+    ctl.resolve({
+      slug: 'code-reviewer', version: '1.2.0', checksum: 'abc', sizeBytes: 2048,
+      versionWriteback: { written: true },
+    });
+    await waitFor(() => expect(screen.getByText('已发布 v1.2.0')).toBeTruthy());
+    expect(screen.queryByTestId('writeback-notice')).toBeNull();
+  });
+});

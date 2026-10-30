@@ -28,6 +28,7 @@ import { deriveBlockedBy } from '../storage/tasks/dependencies-repo';
 import { updateTask, getTask } from '../storage/tasks/repo';
 import { listWorkspaces } from '../workspace/crud';
 import { recordPublishAccountingSafe } from '../resource/hub-install';
+import { writebackPublishedVersionSafe } from './publish-writeback';
 
 // 组管理客户端单点：绑定 hubRequest（IPC 面复用同一实例；纯函数集，无状态）
 const groups = createGroupClient((method, payload, timeoutMs) => hubRequest(method, payload, timeoutMs));
@@ -65,7 +66,14 @@ export function registerHubIpc(): void {
     // 判定①都以 `hub:{slug}` 记账为源——缺行即分发断链。Safe 壳：记账失败不
     // 翻转发布回执（hub 上传已成功，缺行下次升版发布可自愈）
     recordPublishAccountingSafe(input.type, result.slug, result.version, result.checksum);
-    return result;
+    // M5.1 §1.2 发布版本回写本地定义：Safe 壳失败不推翻发布（回执带警示，
+    // renderer toast「发布成功但版本回写失败：{原因}」）
+    const versionWriteback = writebackPublishedVersionSafe(
+      input.type,
+      input.ref,
+      result.version,
+    );
+    return { ...result, versionWriteback };
   });
   // 撤回（M3.4 §2.3.4 / B12）：hub 来源资源卡「下架」入口——HTTP Bearer 直连
   // （与 publish 同信任模型）；404/未接入等以人话 rejection 抛出（renderer toast）
