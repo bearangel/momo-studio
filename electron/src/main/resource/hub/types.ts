@@ -18,6 +18,9 @@ export interface HubEntry {
   item: ResourceItem;
   /** library-store-split：hub 目录 meta.versions 数量（弹窗行「N 个版本」元信息） */
   versionCount?: number;
+  /** M5.0 归属投影（meta.ownerNodeId 透传——弹窗 own 行免装判定输入）；
+   *  无主/旧 hub 不带键（协议 1.8.0 可选字段语义） */
+  ownerNodeId?: string;
 }
 
 export interface HubListResult {

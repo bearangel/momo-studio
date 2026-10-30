@@ -21,7 +21,7 @@ import { Badge } from '../ui/Badge';
 import { SourceBadge } from './SourceBadge';
 import { Switch } from '../ui/Switch';
 import { TYPE_ICON } from './type-icons';
-import { canPublishToHub } from './publish-entry';
+import { canPublishToHub, resolveHubOwnership, type HubSlugOwnership } from './publish-entry';
 import { useArmedConfirm } from '../workgroup/useArmedConfirm';
 
 interface ResourceCardProps {
@@ -57,6 +57,10 @@ interface ResourceCardProps {
   hubUpdates?: Record<string, string>;
   /** 该类型是否已成功拉取过 hub 目录（三态：未播种且无事件时不显示「已是最新」） */
   hubSeeded?: boolean;
+  /** M5.0 目录归属行（同 type+slug 条目；undefined = 目录无此条目/归属未知） */
+  hubOwnership?: HubSlugOwnership & { version: string };
+  /** M5.0 本机节点 id（null = 未接入 → 归属判 unknown，按钮保留） */
+  hubSelfNodeId?: string | null;
 }
 
 /** 网格焦点移动：pick 基于全量卡片数组、当前索引与「当前行的列数」给出目标卡。
@@ -78,14 +82,22 @@ function moveFocus(
 
 export function ResourceCard({
   item, selected, onSelect, onInstall, onDelete, onEnable, onEdit, onConfigure, onDisable, onTogglePlugin,
-  onPublishToHub, onUnpublishFromHub, hubEnrolled, hubUpdates, hubSeeded,
+  onPublishToHub, onUnpublishFromHub, hubEnrolled, hubUpdates, hubSeeded, hubOwnership, hubSelfNodeId,
 }: ResourceCardProps) {
   const TypeIcon = TYPE_ICON[item.type];
   // 下架两步确认（M3.4 §2.4）：uninstall 模板臂态——首击 arm（3s 窗口），臂态内
   // 再击才执行；到期/disarm 双回落（useArmedConfirm 单源）
   const unpublishConfirm = useArmedConfirm();
-  const canUnpublishFromHub = item.source === 'hub' && onUnpublishFromHub !== undefined;
+  // M5.0 归属三态（resolveHubOwnership 单源）：'other' → 下架/发布钮不渲染
+  // （他节点领地——现状可见可点点了才 403）；'unknown'（无字段/目录无此条目/
+  // 未接入/不可达）→ 保留（发布尝试兜底，403 人话接住）。
+  const ownershipState = resolveHubOwnership(hubOwnership, hubSelfNodeId ?? null);
+  const canUnpublishFromHub =
+    item.source === 'hub' && onUnpublishFromHub !== undefined && ownershipState !== 'other';
   const unpublishTitle = `从 momo-hub 下架 ${item.slug}——目录中不再可见，已安装节点不受影响`;
+  // M5.0 §7.1「已发布」徽标：custom 卡 + 目录归属=本机 → 版本流恒为 本地→hub
+  const publishedToHub =
+    item.source === 'custom' && ownershipState === 'own' ? hubOwnership?.version : undefined;
   // hub 可更新角标判定（M1 Task 14 + D7 修正 + M2.3 T2 D3-4 semver 化）：
   // 已装 hub 资源 + 事件版本 semver **前进**（compareVersions > 0）才可更新。
   // 锚点 = installedVersion（installed_packages 记账版）?? version——目录先行 +
@@ -227,6 +239,18 @@ export function ResourceCard({
           )
         )}
 
+        {/* M5.0 §7.1「已发布」徽标（custom 卡 + 目录归属=本机）：与「已启用」标记
+            同族——lucide Check + 状态色 token，纯文案不占徽标 */}
+        {publishedToHub !== undefined && (
+          <span
+            data-testid="hub-published-badge"
+            className="inline-flex items-center gap-1 whitespace-nowrap text-xs text-status-success"
+          >
+            <Check size={12} strokeWidth={1.75} aria-hidden />
+            已发布 v{publishedToHub} → momo-hub
+          </span>
+        )}
+
         {/* ── 右：操作簇 ───────────────────────────────────────────── */}
         <span className="flex gap-1 items-center ml-auto shrink-0">
           {/* 插件启停开关（spec 2026-10-21 §9①） */}
@@ -259,8 +283,8 @@ export function ResourceCard({
             </button>
           )}
           {/* 发布到 hub：canPublishToHub 单点门控（custom 四类型 + marketplace 已装 skill——M2.2 Task 2 开放）；
-              未接入禁用 + title 引导（M1 Task 14） */}
-          {canPublishToHub(item) && onPublishToHub && (
+              M5.0 §7.4：归属='other'（他节点领地）不渲染；未接入禁用 + title 引导（M1 Task 14） */}
+          {canPublishToHub(item) && ownershipState !== 'other' && onPublishToHub && (
             <button
               type="button"
               disabled={!hubEnrolled}

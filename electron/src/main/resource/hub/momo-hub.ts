@@ -28,6 +28,7 @@ import {
 } from '../../hub/protocol';
 import { hubGetStatus } from '../../hub';
 import { getDeviceToken } from '../../hub/creds';
+import { humanizeNotOwner, parseOwnerName } from '../../hub/http-errors';
 import { logger } from '../../logger';
 import { registerTrustedDownloadOrigin } from '../../marketplace/installer';
 import type { MarketplaceItem } from '../../marketplace/types';
@@ -376,7 +377,8 @@ export function createHubCatalogSource(
     const existing = target.items.find((m) => m.type === evt.type && m.slug === evt.slug);
     let item: HubResourceMeta;
     if (existing) {
-      // 已在场：merge 事件已知字段（name/author/版本面），描述等长字段保留缓存值
+      // 已在场：merge 事件已知字段（name/author/版本面/归属——M5.0 发布即认领或
+      // owner 放行，事件 ownerNodeId 恒为当前权威），描述等长字段保留缓存值
       const versions = existing.versions.includes(evt.version)
         ? existing.versions
         // 新版本插入 semver 降序位（hub 不变量 versions[0] = latest）
@@ -388,9 +390,10 @@ export function createHubCatalogSource(
         version: versions[0] ?? evt.version,
         publishedAt: evt.at,
         versions,
+        ...(evt.ownerNodeId !== undefined ? { ownerNodeId: evt.ownerNodeId } : {}),
       };
     } else {
-      // 全新条目：展示级占位（事件只带六字段）——浏览链可见即可；安装链走
+      // 全新条目：展示级占位（事件只带六字段 + 可选归属）——浏览链可见即可；安装链走
       // loadFresh 拿全量 meta，占位条目永不进下载/校验链（downloadUrl 按 hub
       // 固定布局拼路径段，基址由 toMarketplaceItem 的 RM1-12 重写补上）
       item = {
@@ -410,6 +413,7 @@ export function createHubCatalogSource(
         sizeBytes: 0,
         publishedAt: evt.at,
         versions: [evt.version],
+        ...(evt.ownerNodeId !== undefined ? { ownerNodeId: evt.ownerNodeId } : {}),
       };
     }
     const items = [
@@ -488,6 +492,39 @@ export function isHubNotEnrolled(): boolean {
   return !hubGetStatus().configured;
 }
 
+/**
+ * hub 目录归属快照（M5.0 §7.1/§7.3/§7.4——resource:hubCatalogOwnership 消费）：
+ * 全目录条目的 ownerNodeId + latest 版本 + 本机 nodeId。走 load()（TTL/退避/
+ * lastGood 既有语义）——hub 不可达时 lastGood 携带归属，徽标滞留合理（spec 明言）。
+ * 未接入返回 notEnrolled=true + 空清单（renderer 全部判 unknown，按钮保留）。
+ */
+export async function getHubCatalogOwnership(): Promise<{
+  notEnrolled: boolean;
+  /** 本机节点 id（hub 配置行——与 hubGetStatus().nodeId 同源）；未接入为 null */
+  selfNodeId: string | null;
+  /** 目录条目归属清单（type+slug 唯一）：ownerNodeId 缺省不带键（无主/旧 hub） */
+  entries: Array<{ type: HubMarketplaceType; slug: string; version: string; ownerNodeId?: string }>;
+}> {
+  const status = hubGetStatus();
+  const selfNodeId = status.configured ? status.nodeId : null;
+  const { catalog, notEnrolled } = await defaultSource.load();
+  if (notEnrolled || selfNodeId === null) {
+    return { notEnrolled: true, selfNodeId: null, entries: [] };
+  }
+  return {
+    notEnrolled: false,
+    selfNodeId,
+    entries: catalog.items
+      .filter((m) => isMarketplaceType(m.type))
+      .map((m) => ({
+        type: m.type as HubMarketplaceType,
+        slug: m.slug,
+        version: m.version,
+        ...(m.ownerNodeId !== undefined ? { ownerNodeId: m.ownerNodeId } : {}),
+      })),
+  };
+}
+
 /** hub 原始元数据（含 versions 数组——T9 仅透传，版本比较语义留 T10/T14） */
 export async function listHubResourceMetas(type?: HubMarketplaceType): Promise<HubResourceMeta[]> {
   const { catalog } = await defaultSource.load();
@@ -550,11 +587,16 @@ function toHubEntry(item: MarketplaceItem): HubEntry {
 
 /**
  * HubResourceMeta → HubEntry（library-store-split 弹窗行）：携带 versionCount
- * （meta.versions 数量——「N 个版本」元信息）。item 仍经 toMarketplaceItem →
+ * （meta.versions 数量——「N 个版本」元信息）与 ownerNodeId（M5.0 归属投影——
+ * 弹窗 own 行免装判定输入；旧 hub/无主不带键）。item 仍经 toMarketplaceItem →
  * fromCatalogItem 生成（与安装链 / 库页已装行同源，零形状分叉）。
  */
 function toHubEntryFromMeta(meta: HubResourceMeta, hubUrl: string): HubEntry {
-  return { ...toHubEntry(toMarketplaceItem(meta, hubUrl)), versionCount: meta.versions.length };
+  return {
+    ...toHubEntry(toMarketplaceItem(meta, hubUrl)),
+    versionCount: meta.versions.length,
+    ...(meta.ownerNodeId !== undefined ? { ownerNodeId: meta.ownerNodeId } : {}),
+  };
 }
 
 /** 关键词匹配（name/description/slug/tags——与 marketplace searchItems 同口径） */
@@ -611,18 +653,21 @@ export const hubProvider: HubProvider = createHubProvider(defaultSource);
 // 撤回客户端（M3.4 §2.3.4 / B12）
 // ──────────────────────────────────────────────────────────────────────────
 
-/** unpublish 注入缝：HTTP 边界 mock 只收窄在此（业务逻辑全真实——momo-test-rules） */
+/** unpublish 注入缝：HTTP 边界 mock 只收窄在此（业务逻辑全真实——momo-test-rules）。
+ *  json 可选：403 not_owner 错误体（M5.0）解析 owner_name 用；生产 fetch Response
+ *  恒有 json——缺省仅影响 403 分支的携名文案（兜底「其他节点」）。 */
 export interface UnpublishDeps {
   fetchImpl?: (
     url: string,
     init: { method: string; headers: Record<string, string>; body: string },
-  ) => Promise<{ status: number }>;
+  ) => Promise<{ status: number; json?(): Promise<unknown> }>;
 }
 
 /**
  * 从 momo-hub 下架资源（B12 撤回，hub v0.1.9 POST /resources/unpublish）：
  * 目录即刻不可见（墓碑），**已安装节点不受影响**、历史版本下载端点保留
- * （roadmap 裁定）。信任模型与 publish 对称（Bearer，任何注册节点）。
+ * （roadmap 裁定）。信任模型与 publish 对称（Bearer）；M5.0 起翻转为
+ * owner-only（非 owner 403 not_owner 携 owner_name——人话经 http-errors 单源）。
  * 语义：200 = 下架成功（幂等——已撤回再撤同 200）；404 = 资源不存在或已撤回。
  */
 export async function unpublishHubResource(slug: string, deps: UnpublishDeps = {}): Promise<void> {
@@ -637,7 +682,7 @@ export async function unpublishHubResource(slug: string, deps: UnpublishDeps = {
     deps.fetchImpl ??
     (async (url: string, init: { method: string; headers: Record<string, string>; body: string }) =>
       fetch(url, init));
-  let res: { status: number };
+  let res: { status: number; json?(): Promise<unknown> };
   try {
     res = await fetchImpl(`${ctx.hubUrl}/resources/unpublish`, {
       method: 'POST',
@@ -651,6 +696,10 @@ export async function unpublishHubResource(slug: string, deps: UnpublishDeps = {
     throw new Error('无法连接 hub（网络不可达或服务未启动）');
   }
   if (res.status === 200 || res.status === 204) return;
+  if (res.status === 403) {
+    const body = res.json ? await res.json().catch(() => null) : null;
+    throw new Error(humanizeNotOwner('下架', parseOwnerName(body)));
+  }
   if (res.status === 404) {
     throw new Error('资源不存在或已撤回');
   }

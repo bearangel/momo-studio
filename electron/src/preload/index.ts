@@ -36,6 +36,8 @@ import type {
   SkillCreateInput,
   SmitheryInstallResult,
   HubInstallResult,
+  HubCatalogOwnership,
+  HubCoexistIssue,
   TaskRow,
   TaskCreateBatchResult,
   UploadedSkill,
@@ -530,6 +532,10 @@ const api: ApiSurface = {
         hubNotEnrolled: boolean;
         sources?: Array<{ source: 'marketplace' | 'hub'; degraded: boolean }>;
       }>('resource:getCatalogStatus'),
+    // M5.0：hub 目录归属快照（徽标/发布钮/下架钮收敛判定输入）
+    hubCatalogOwnership: () => invoke<HubCatalogOwnership>('resource:hubCatalogOwnership'),
+    // M5.0 §7.5：存量并存扫描（设置页 hub 面板清理小票）
+    hubCoexistScan: () => invoke<HubCoexistIssue[]>('resource:hubCoexistScan'),
   },
   task: {
     create: (input) => invoke<TaskRow>('task:create', input),
