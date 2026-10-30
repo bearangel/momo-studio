@@ -95,6 +95,12 @@ export interface RemoteCreateInput {
   routing: TaskRouting;
   /** M4.3：外派行 `::` 建链（同事务插边——存在 + 环检测在 relations 单源） */
   dependsOn?: string[];
+  /**
+   * M5.3：团队外派行的本地团队指向（tasks.target_team_id 列复用——外派行恒
+   * pending，executor/starter 按状态门控不消费该列；重派 retryDispatch 据此
+   * 重建 team 段，防「重派团队任务静默退化为单 agent 载荷」）。单 agent 缺省
+   */
+  targetTeamId?: string;
 }
 
 /**
@@ -173,13 +179,14 @@ function nodeTooOldMessage(nodeName: string, protoVer: string | undefined): stri
 /**
  * M5.3 团队快照展开：teamId → 成员名单 payload（name=agentName + leader 标记）。
  * 提交时早失败（零落库零派发）：团队不存在/形态不满足 hub 校验锚点（2..8 名、
- * 恰一名 leader）→ 人话 throw。
+ * 恰一名 leader）→ 人话 throw。导出供 delegation-sync.retryDispatch 复用
+ * （重派即新派发——展开当前快照，与首派同构单源）。
  */
-function expandTeamPayload(
-  input: SubmitRoutedTaskInput,
+export function expandTeamPayload(
+  input: { workspaceId: string; workspaceName: string; teamId: string },
   ports: Pick<DispatchSubmitPorts, 'getTeamSnapshot'>,
 ): { members: Array<{ name: string; isLeader: boolean }> } {
-  const snap = ports.getTeamSnapshot(input.workspaceId, input.teamId!);
+  const snap = ports.getTeamSnapshot(input.workspaceId, input.teamId);
   if (!snap) {
     throw new Error(`团队不存在或已解散: ${input.teamId}（工作空间 ${input.workspaceName}）`);
   }
@@ -211,7 +218,13 @@ export async function submitRoutedTask(
   }
 
   // M5.3 团队展开（提交时早失败——团队不存在/形态非法零落库零派发）
-  const teamPayload = input.teamId !== undefined ? expandTeamPayload(input, ports) : undefined;
+  const teamPayload =
+    input.teamId !== undefined
+      ? expandTeamPayload(
+          { workspaceId: input.workspaceId, workspaceName: input.workspaceName, teamId: input.teamId },
+          ports,
+        )
+      : undefined;
   const targetNodeId = await resolveRemoteTarget(input.routing, input.workspaceName, ports, {
     team: teamPayload !== undefined,
   });
@@ -227,6 +240,9 @@ export async function submitRoutedTask(
     ...(input.dependsOn !== undefined && input.dependsOn.length > 0
       ? { dependsOn: input.dependsOn }
       : {}),
+    // M5.3：团队指向随行落库（重派重建 team 段的依据——expandTeamPayload 已
+    // 在上方 throw，走到此处 teamId 必为有效团队）
+    ...(input.teamId !== undefined ? { targetTeamId: input.teamId } : {}),
   });
   // M4.3 派发闸（spec §2.3.1 核心）：建链后 blocked 派生 → 拒绝委派。行保留
   // pending 待处理（建链账不回滚——重试入口在待派发卡，依赖完成后放行）；

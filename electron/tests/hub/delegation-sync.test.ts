@@ -431,22 +431,39 @@ interface RedispatchWorld {
   rows: Map<string, TaskRow>;
   updates: Array<{ id: string; patch: Partial<TaskRow> }>;
   delegateCalls: Array<{ targetNodeId: string }>;
+  /** M5.3：完整 brief（team 段重建断言） */
+  delegateBriefs: Array<import('../../src/main/hub/dispatch-submit').DelegationTaskBrief>;
+  /** M5.3：resolveTarget 收到的 opts（版本闸 team 标志透传断言） */
+  resolveCalls: Array<{ team?: boolean } | undefined>;
   ports: RedispatchPorts;
 }
 
 function makeRedispatchWorld(
   row: TaskRow,
-  opts: { target?: string | null; delegateError?: Error } = {},
+  opts: {
+    target?: string | null;
+    delegateError?: Error;
+    /** M5.3 团队快照 fake：teamId → 快照；缺省 team-1 命中（单 agent 行不消费） */
+    teamSnapshot?: { name: string; members: Array<{ agentName: string; isLeader: boolean }> } | null;
+  } = {},
 ): RedispatchWorld {
   const rows = new Map<string, TaskRow>([[row.id, row]]);
   const updates: Array<{ id: string; patch: Partial<TaskRow> }> = [];
   const delegateCalls: Array<{ targetNodeId: string }> = [];
+  const delegateBriefs: Array<import('../../src/main/hub/dispatch-submit').DelegationTaskBrief> = [];
+  const resolveCalls: Array<{ team?: boolean } | undefined> = [];
   const ports: RedispatchPorts = {
     getTask: (id) => rows.get(id) ?? null,
     workspaceNameOf: (workspaceId) => (workspaceId === 'ws-1' ? 'dev-ws' : null),
-    resolveTarget: async () => opts.target === undefined ? 'node-b' : opts.target,
+    resolveTarget: async (routing, _workspaceName, resolveOpts) => {
+      resolveCalls.push(resolveOpts);
+      return opts.target === undefined ? 'node-b' : opts.target;
+    },
+    getTeamSnapshot: (_workspaceId, teamId) =>
+      teamId === 'team-1' ? (opts.teamSnapshot === undefined ? teamSnapFixture() : opts.teamSnapshot) : null,
     delegate: async (brief) => {
       delegateCalls.push({ targetNodeId: brief.targetNodeId });
+      delegateBriefs.push(brief);
       if (opts.delegateError) throw opts.delegateError;
       return { taskId: 'hub-new-id' };
     },
@@ -457,7 +474,18 @@ function makeRedispatchWorld(
     },
     now: () => NOW,
   };
-  return { rows, updates, delegateCalls, ports };
+  return { rows, updates, delegateCalls, delegateBriefs, resolveCalls, ports };
+}
+
+/** M5.3 团队快照 fixture：两名成员恰一 leader */
+function teamSnapFixture(): { name: string; members: Array<{ agentName: string; isLeader: boolean }> } {
+  return {
+    name: '攻坚组',
+    members: [
+      { agentName: 'PM', isLeader: true },
+      { agentName: 'Coder', isLeader: false },
+    ],
+  };
 }
 
 describe('delegation-sync — retryDispatch', () => {
@@ -505,6 +533,80 @@ describe('delegation-sync — retryDispatch', () => {
 
     const missing = makeRedispatchWorld(delegatedRow());
     await expect(retryDispatch('T-404', missing.ports)).rejects.toThrow('任务 T-404 不存在');
+  });
+});
+
+// ── Part C-M5.3：retryDispatch 团队重派（targetTeamId 重建 team 段） ────────
+
+describe('delegation-sync — retryDispatch 团队重派（M5.3）', () => {
+  it('CM-1. 行带 targetTeamId → 重派载荷带 team 段（当前快照展开）+ 版本闸 team 标志透传', async () => {
+    const row = delegatedRow({ status: 'failed', delegationId: 'hub-old-id', targetTeamId: 'team-1' });
+    const w = makeRedispatchWorld(row);
+    const result = await retryDispatch('T-100', w.ports);
+
+    expect(result).toEqual({ dispatched: true, nodeId: 'node-b', delegationId: 'hub-new-id' });
+    // team 段按当前快照重建（name=agentName + leader 标记）；不带 agentSlug 键
+    expect(w.delegateBriefs).toHaveLength(1);
+    expect(w.delegateBriefs[0]!.task.team).toEqual({
+      members: [
+        { name: 'PM', isLeader: true },
+        { name: 'Coder', isLeader: false },
+      ],
+    });
+    expect('agentSlug' in w.delegateBriefs[0]!.task).toBe(false);
+    // 版本闸与首派同构：resolveTarget 收到 {team:true}
+    expect(w.resolveCalls).toEqual([{ team: true }]);
+  });
+
+  it('CM-2. 团队已解散（快照 null）→ 不派不分流，行转 failed 人话（不闪 pending）', async () => {
+    const row = delegatedRow({ status: 'pending', delegationId: null, targetTeamId: 'team-gone' });
+    const w = makeRedispatchWorld(row);
+    const result = await retryDispatch('T-100', w.ports);
+
+    expect(result).toEqual({ dispatched: false, nodeId: null, delegationId: null });
+    expect(w.delegateCalls).toHaveLength(0);
+    // 唯一一次 update 即终态 failed（复位 update 不得先行——错误路径零副作用）
+    expect(w.updates).toEqual([
+      {
+        id: 'T-100',
+        patch: {
+          status: 'failed',
+          errorMessage: '目标团队已解散，无法重派（原派发：团队协作）',
+          completedAt: NOW,
+        },
+      },
+    ]);
+    expect(w.rows.get('T-100')!.status).toBe('failed');
+  });
+
+  it('CM-3. 团队形态失效（单成员）→ 同 failed 人话（附展开单源附因），不派', async () => {
+    const row = delegatedRow({ status: 'failed', targetTeamId: 'team-1' });
+    const w = makeRedispatchWorld(row, {
+      teamSnapshot: { name: '独行侠', members: [{ agentName: 'PM', isLeader: true }] },
+    });
+    const result = await retryDispatch('T-100', w.ports);
+
+    expect(result.dispatched).toBe(false);
+    expect(w.delegateCalls).toHaveLength(0);
+    const patch = w.updates[0]!.patch;
+    expect(patch.status).toBe('failed');
+    expect(patch.errorMessage).toContain('目标团队已解散，无法重派（原派发：团队协作）');
+    expect(patch.errorMessage).toContain('形态不满足团队派发');
+  });
+
+  it('CM-4. 单 agent 行（targetTeamId 空）重派零变化：无 team 键、无 team 闸、brief 形状同旧', async () => {
+    const row = delegatedRow({ status: 'failed', delegationId: 'hub-old-id' });
+    const w = makeRedispatchWorld(row);
+    const result = await retryDispatch('T-100', w.ports);
+
+    expect(result).toEqual({ dispatched: true, nodeId: 'node-b', delegationId: 'hub-new-id' });
+    expect('team' in w.delegateBriefs[0]!.task).toBe(false);
+    expect(w.resolveCalls).toEqual([{ team: false }]); // 闸不启用（team:false 与缺省等价）
+    expect(w.delegateBriefs[0]!.task).toEqual({
+      title: '批量重命名 legacy API 端点',
+      prompt: '批量重命名 legacy API 端点',
+      permissionTier: 'confirm',
+    });
   });
 });
 

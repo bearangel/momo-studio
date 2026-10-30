@@ -235,6 +235,8 @@ export function registerHubIpc(): void {
           description: input.description,
           groupId: input.groupId,
           routing: input.routing,
+          // M5.3：团队指向随外派行落库（retryDispatch 重建 team 段的依据）
+          targetTeamId: input.targetTeamId ?? null,
         },
         { dependsOn: input.dependsOn ?? [] },
       );
@@ -258,7 +260,11 @@ export function registerHubIpc(): void {
   const redispatchPorts: RedispatchPorts = {
     getTask: (taskId) => getTask(taskId),
     workspaceNameOf: (workspaceId) => listWorkspaces().find((w) => w.id === workspaceId)?.name ?? null,
-    resolveTarget: (routing, workspaceName) => resolveRemoteTarget(routing, workspaceName, dispatchSubmitPorts),
+    resolveTarget: (routing, workspaceName, opts) =>
+      // M5.3：团队重派走与首派同一版本闸（resolveRemoteTarget opts.team 透传）
+      resolveRemoteTarget(routing, workspaceName, dispatchSubmitPorts, opts),
+    // M5.3 团队重派：与首派同一快照展开端口（listTeams 当前成员 + leader）
+    getTeamSnapshot: (workspaceId, teamId) => dispatchSubmitPorts.getTeamSnapshot(workspaceId, teamId),
     // 同上：delegate rejection 被 retryDispatch 吞掉（dispatched=false 留待处理），不包
     delegate: (brief) => hubRequest(TASK_RPC.delegate, brief, undefined),
     updateTask: (taskId, patch) => {

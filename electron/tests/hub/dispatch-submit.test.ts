@@ -483,6 +483,23 @@ describe('submitRoutedTask — M5.3 团队派发', () => {
     expect(ports.getTeamSnapshot).toHaveBeenCalledWith('ws1', 'team-1');
   });
 
+  it('团队指向随行落库：createRemoteTask 收 targetTeamId（重派重建 team 段的依据）；单 agent 行不带', async () => {
+    const ports = makePorts({
+      groups: protoGroup(),
+      registry: protoRegistry(),
+      teamSnapshot: teamSnap,
+    });
+    await submitRoutedTask({ ...baseInput({ mode: 'group', groupId: 'g1' }), teamId: 'team-1' }, ports);
+    expect(ports.createRemoteTask).toHaveBeenCalledWith(
+      expect.objectContaining({ targetTeamId: 'team-1' }),
+    );
+
+    const solo = makePorts({ groups: protoGroup(), registry: protoRegistry() });
+    await submitRoutedTask(baseInput({ mode: 'group', groupId: 'g1' }), solo);
+    const soloArg = (solo.createRemoteTask as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Record<string, unknown>;
+    expect('targetTeamId' in soloArg).toBe(false);
+  });
+
   it('无 teamId：载荷零变化（不带 team 键——1.8 载荷回归锁）', async () => {
     const ports = makePorts({ groups: protoGroup(), registry: protoRegistry() });
     await submitRoutedTask(baseInput({ mode: 'group', groupId: 'g1' }), ports);
