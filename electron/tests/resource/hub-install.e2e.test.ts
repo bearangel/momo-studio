@@ -583,7 +583,7 @@ describe('T10 e2e：resource:list 并入 hub 已装项 + 五源并列', () => {
     getDb()
       .prepare(
         `INSERT INTO installed_packages (id, item_id, item_type, slug, version, cache_path, checksum)
-         VALUES ('e2e-mp-row', 'mcp-remote-demo', 'mcp', 'remote-demo', '1.0.0', '', '')`,
+         VALUES ('e2e-mp-row', 'mcp-remote-demo', 'mcp', 'remote-demo', '1.0.0', '/cache/e2e-mp-row', '')`,
       )
       .run();
 

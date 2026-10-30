@@ -7,7 +7,7 @@
 // hub 侧原始表：momo-hub/packages/hub/tests/resources-latest-semver.test.ts ⑥。
 
 import { describe, expect, it } from 'vitest';
-import { compareVersions } from './version-compare';
+import { compareVersions, suggestNextVersion } from './version-compare';
 
 describe('compareVersions（renderer 镜像）— 与 electron 单源同表对齐', () => {
   it('数值段比较（非字典序）', () => {
@@ -50,5 +50,19 @@ describe('compareVersions（renderer 镜像）— 与 electron 单源同表对�
     expect(compareVersions('', '0.0.0')).toBe(0);
     expect(compareVersions('', '1.0.0')).toBeLessThan(0);
     expect(compareVersions('1.0.0', '')).toBeGreaterThan(0);
+  });
+});
+
+describe('suggestNextVersion（M5.2 发布版本冲突建议值）', () => {
+  it('空列表 → 1.0.0', () => {
+    expect(suggestNextVersion([])).toBe('1.0.0');
+  });
+  it('取 semver 最高者 patch+1（非最后写入者）', () => {
+    expect(suggestNextVersion(['1.0.0', '1.0.2', '1.0.1'])).toBe('1.0.3');
+    expect(suggestNextVersion(['0.9.0', '1.2.9'])).toBe('1.2.10');
+  });
+  it('预发布/build 元数据不参与 patch 段', () => {
+    expect(suggestNextVersion(['1.0.0-alpha.3'])).toBe('1.0.1');
+    expect(suggestNextVersion(['2.3.4+build.9'])).toBe('2.3.5');
   });
 });

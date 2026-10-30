@@ -6,6 +6,16 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — M5.2 热修：发布记账≠已装 + 发布版本预检 + 下架语义
+
+`2.1.0-alpha.48`。协议零改、hub 零改（studio 单侧）。来源：用户真机实测两问（创建→发布后库页出现自定义+hub 双卡；下架重建后版本被迫从 1.0.2 起）。
+
+- **发布记账≠已装（RC 双卡根因）**：`hub:{slug}` 记账行只有 cache_path 非空（真实安装）才判已装——catalog-adapter 已装判定、hub 兜底循环、installHubPackage alreadyLatest 判定三处收口（oracle 终审抓出第三处漏网：发布记账可让「零下载」冒充「已是最新」，已修+回归锁）；发布后库页只剩 custom 本体卡（带「已发布 vN」徽标）
+- **发布版本预检**：归属快照携全版本号（`HubOwnershipEntry.versions`，目录已带零协议变更）→ 发布对话框冲突版本红字 + 禁用提交 + 建议 next patch（「hub 已有版本 1.0.0 / 1.0.1（不可复用）—— 建议 v1.0.2」），不再靠 409 瞎猜
+- **下架语义人话**：下架确认与回执补「历史版本保留、版本号不可复用」（下架=墓碑非删除，版本不可变是设计裁定）
+- 测试：electron 5260→5261（含新回归锁）/ renderer 3095 / e2e hub-distribution 10/10（场景1 断言迁移为「库页零 hub 卡」真锁用户场景；另修三处测试 fixture 失真——cachePath 空串冒充已装、mock 目录 checksum 非法致静默降级）
+- 票桶：发布记账以空 cachePath 覆盖同 slug 真实安装行（存量并存态下已装态变静默未装）；旧 hub 无 ownerNodeId + 本地副本已删的窄路径 409 文案补位
+
 ## [未发布] — M5.1 热修：插件×本地副本去重 + 发布版本回写
 
 `2.1.0-alpha.47`。协议零改、hub 零改（studio 单侧）。设计见 `docs/specs/2026-10-30-m5.1-plugin-dedup-version-writeback.md`（Momus OKAY；来源=用户真机验收三根因实证，见 `.omo/feature-matrices/2026-10-30-m5.1-hotfix.md` §0）。

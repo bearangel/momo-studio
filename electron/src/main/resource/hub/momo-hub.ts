@@ -503,7 +503,14 @@ export async function getHubCatalogOwnership(): Promise<{
   /** 本机节点 id（hub 配置行——与 hubGetStatus().nodeId 同源）；未接入为 null */
   selfNodeId: string | null;
   /** 目录条目归属清单（type+slug 唯一）：ownerNodeId 缺省不带键（无主/旧 hub） */
-  entries: Array<{ type: HubMarketplaceType; slug: string; version: string; ownerNodeId?: string }>;
+  entries: Array<{
+    type: HubMarketplaceType;
+    slug: string;
+    version: string;
+    /** 全版本号（semver 降序；M5.2 发布对话框版本预检消费——不可复用判定） */
+    versions: string[];
+    ownerNodeId?: string;
+  }>;
 }> {
   const status = hubGetStatus();
   const selfNodeId = status.configured ? status.nodeId : null;
@@ -520,6 +527,7 @@ export async function getHubCatalogOwnership(): Promise<{
         type: m.type as HubMarketplaceType,
         slug: m.slug,
         version: m.version,
+        versions: m.versions,
         ...(m.ownerNodeId !== undefined ? { ownerNodeId: m.ownerNodeId } : {}),
       })),
   };

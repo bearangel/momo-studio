@@ -18,6 +18,8 @@ import { useState, type FormEvent } from 'react';
 import { AlertTriangle, Check, RefreshCw, Upload } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useHubStore } from '../../stores/hub.store';
+import { useResourceStore } from '../../stores/resource.store';
+import { suggestNextVersion } from '../../lib/version-compare';
 import type { HubConnectionState, HubPublishResult, ResourceItem } from '../../ipc/types';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
@@ -69,7 +71,14 @@ export function PublishDialog({ item, onClose }: Props) {
   const [result, setResult] = useState<HubPublishResult | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const valid = name.trim() !== '' && VERSION_RE.test(version.trim());
+  // M5.2：hub 已有版本不可复用（下架仅墓碑、历史版本保留）——表单内预检，
+  // 冲突版本直接禁用提交并给出建议值，不再让用户靠 409 瞎猜
+  const ownership = useResourceStore((s) => s.hubOwnership);
+  const existingVersions = ownership[`${item.type}:${item.slug}`]?.versions ?? [];
+  const trimmedVersion = version.trim();
+  const versionConflict = existingVersions.includes(trimmedVersion);
+  const suggestedVersion = versionConflict ? suggestNextVersion(existingVersions) : null;
+  const valid = name.trim() !== '' && VERSION_RE.test(trimmedVersion) && !versionConflict;
   const meta = hubStatus ? STATUS_META[hubStatus.state] : null;
 
   const submit = (e?: FormEvent): void => {
@@ -165,7 +174,14 @@ export function PublishDialog({ item, onClose }: Props) {
                 value={version}
                 onChange={(e) => setVersion(e.target.value)}
               />
-              <span className="text-xs text-tertiary">重试前可在此直接改版本号</span>
+              {versionConflict ? (
+                <span data-testid="publish-version-conflict" className="text-xs text-status-error">
+                  hub 已有版本 {existingVersions.slice(0, 5).join(' / ')}（不可复用）
+                  {suggestedVersion ? ` —— 建议 v${suggestedVersion}` : ''}
+                </span>
+              ) : (
+                <span className="text-xs text-tertiary">重试前可在此直接改版本号</span>
+              )}
             </div>
           </>
         ) : phase === 'success' && result ? (
@@ -217,7 +233,14 @@ export function PublishDialog({ item, onClose }: Props) {
                   disabled={locked}
                   onChange={(e) => setVersion(e.target.value)}
                 />
-                <span className="text-xs text-tertiary">仅数字 / 字母 / 点 / 加减号（hub 白名单）</span>
+                {versionConflict ? (
+                  <span data-testid="publish-version-conflict" className="text-xs text-status-error">
+                    hub 已有版本 {existingVersions.slice(0, 5).join(' / ')}（不可复用）
+                    {suggestedVersion ? ` —— 建议 v${suggestedVersion}` : ''}
+                  </span>
+                ) : (
+                  <span className="text-xs text-tertiary">仅数字 / 字母 / 点 / 加减号（hub 白名单）</span>
+                )}
               </div>
               <div className="flex flex-col gap-1">
                 <label htmlFor="publish-category" className="text-sm text-secondary">

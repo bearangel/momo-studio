@@ -467,7 +467,7 @@ describe('registerResourceHandlers', () => {
     (fetchCatalog as ReturnType<typeof vi.fn>).mockResolvedValueOnce(snapshot);
     // 已装行：catalog-mcp-installed（fromCatalogItem 据此置 installed/installedVersion）
     installerListInstalled.mockReturnValue([
-      { itemId: 'catalog-mcp-installed', itemType: 'mcp', version: '1', cachePath: '' },
+      { itemId: 'catalog-mcp-installed', itemType: 'mcp', version: '1', cachePath: '/cache/catalog-mcp-installed' },
     ]);
     const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
     const listCall = calls.find((c: unknown[]) => c[0] === 'resource:registryList');

@@ -44,7 +44,9 @@ export function fromCatalogItem(item: MarketplaceItem, source: ResourceSource): 
   const installedRow =
     source === 'builtin'
       ? undefined
-      : listMarketplaceInstalled().find((p) => p.itemId === item.id);
+      // M5.2：只有真实安装（cachePath 非空）才算已装——发布记账行（cachePath='')
+      // 不是安装，旧判定让它把「创建→发布」的资源在库页顶出第二张 hub 卡
+      : listMarketplaceInstalled().find((p) => p.itemId === item.id && p.cachePath !== '');
   const installed = source === 'builtin' ? true : installedRow !== undefined;
 
   // 预设启用态（spec 2026-09-22 §6）：仅 builtin agent 计算——按 slug 匹配

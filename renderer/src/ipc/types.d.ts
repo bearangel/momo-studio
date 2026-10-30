@@ -1249,6 +1249,8 @@ export interface HubOwnershipEntry {
   slug: string;
   /** 目录 latest 版本（「已发布 vN」徽标消费） */
   version: string;
+  /** 全版本号（semver 降序；M5.2 发布对话框版本预检——已存在版本不可复用） */
+  versions?: string[];
   ownerNodeId?: string;
 }
 

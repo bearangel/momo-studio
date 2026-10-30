@@ -173,8 +173,9 @@ export function listHubInstalledResources(type?: ResourceType): ResourceItem[] {
  * momo-hub 目录项 → ResourceItem（source='hub'）——资源库第五源的并入面。
  *
  * 安装态口径与 marketplace 同款（catalog-adapter.fromCatalogItem）：
- * installed_packages.item_id = `hub:{slug}` 命中即视为已装 → installable /
- * removable 随之翻转。目录不可达（未接入 / 离线降级）时，已装但目录已无的条目
+ * installed_packages.item_id = `hub:{slug}` 且 cache_path 非空（真实安装）才视为
+ * 已装 → installable / removable 随之翻转；发布记账行（cache_path=''）不算已装
+ * （M5.2——「创建→发布」不得在库页顶出第二张 hub 卡）。目录不可达（未接入 / 离线降级）时，已装但目录已无的条目
  * 走本地缓存形态兜底——installed_packages 行自带 slug/version/type，不依赖
  * 网络仍可见、可卸载。
  */
@@ -189,6 +190,8 @@ export async function listHubCatalogResources(type?: ResourceType): Promise<Reso
   const catalogSlugs = new Set(visible.map((i) => i.slug));
   for (const row of listInstalled()) {
     if (!row.itemId.startsWith(HUB_ITEM_ID_PREFIX)) continue;
+    // M5.2：发布记账（cachePath='') 不是安装——不得产出「已装」兜底卡
+    if (row.cachePath === '') continue;
     const slug = row.itemId.slice(HUB_ITEM_ID_PREFIX.length);
     if (catalogSlugs.has(slug)) continue;
     if (
@@ -530,7 +533,7 @@ export async function installHubPackage(
   // 如实返回「已是最新」零动作（缺段容忍：'1.0' == '1.0.0' 同样命中，不重装）；
   // 乱序/旧目录低版本不降级；版本前进才继续走安装链。
   const installedRow = listInstalled().find(
-    (p) => p.itemId === hubPackageItemId(slug) && p.itemType === type,
+    (p) => p.itemId === hubPackageItemId(slug) && p.itemType === type && p.cachePath !== '',
   );
   if (installedRow && compareVersions(targetVersion, installedRow.version) <= 0) {
     // ⑤ 回落快照的「同版」不可信：hub 上可能已有新版——如实报「无法确认」，

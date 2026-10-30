@@ -169,7 +169,7 @@ export function ResourceLibraryView() {
     void ipc.hub
       .unpublishResource({ slug: item.slug })
       .then(() => {
-        showToast(`已从 momo-hub 下架「${item.slug}」（已安装节点不受影响）`);
+        showToast(`已从 momo-hub 下架「${item.slug}」（历史版本保留、版本号不可复用；已安装节点不受影响）`);
         void load();
       })
       .catch((err: unknown) => {
