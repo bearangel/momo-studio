@@ -819,7 +819,7 @@ describe('parseTaskAssigned 挑字段面', () => {
     });
   });
 
-  it('task.team 异形（members 非数组 / 成员缺 isLeader）→ 丢弃不透传（不崩不误建会）', () => {
+  it('task.team 异形（members 非数组 / 成员缺 isLeader）→ 打 teamInvalid 标记不透传原文（runner 据此 decline——不再回落单 agent）', () => {
     const base = {
       taskId: 'T-100',
       workspaceName: 'dev',
@@ -831,6 +831,7 @@ describe('parseTaskAssigned 挑字段面', () => {
     });
     expect(bad1).not.toBeNull();
     expect('team' in bad1!.task).toBe(false);
+    expect(bad1!.task.teamInvalid).toBe(true);
 
     const bad2 = manager.parseTaskAssigned({
       ...base,
@@ -838,5 +839,18 @@ describe('parseTaskAssigned 挑字段面', () => {
     });
     expect(bad2).not.toBeNull();
     expect('team' in bad2!.task).toBe(false);
+    expect(bad2!.task.teamInvalid).toBe(true);
+  });
+
+  it('task.team 缺省 → 不带 teamInvalid 键（单 agent 载荷零变化回归锁）', () => {
+    const evt = manager.parseTaskAssigned({
+      taskId: 'T-100',
+      workspaceName: 'dev',
+      byNode: 'node-leader',
+      task: { title: 't', prompt: 'p' },
+    });
+    expect(evt).not.toBeNull();
+    expect('teamInvalid' in evt!.task).toBe(false);
+    expect('team' in evt!.task).toBe(false);
   });
 });

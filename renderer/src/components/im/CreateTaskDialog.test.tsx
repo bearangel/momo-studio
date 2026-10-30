@@ -21,7 +21,7 @@
 // 返回形状与 types.d.ts 契约对齐。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { CreateTaskDialog, parseTaskLine } from './CreateTaskDialog';
+import { CreateTaskDialog, parseTaskLine, TEAM_DELEGATION_REQUIRED_MINOR } from './CreateTaskDialog';
 import { useGroupStore } from '../../stores/group.store';
 import { useTaskStore } from '../../stores/task.store';
 import type { GroupRow, RoutingPrecheckResult, Team, Workspace, WorkspaceAgentMember } from '../../ipc/types';
@@ -963,6 +963,13 @@ describe('CreateTaskDialog — `::` 依赖提交链（M3.3）', () => {
 // ═══ M5.3 X3：外派「执行方式」——团队协作 + 预检（spec §5.4/§5.5，预览定值清单为合同）═══
 // Mock 口径：workspace.list / agent.listMembers 仿真真实 IPC 形状（Team / Workspace /
 // WorkspaceAgentMember 全字段），listMembers 按 wsId 分流当前 ws 与镜像 ws。
+
+// 常量机械锁（对齐 electron/tests/hub/protocol-pin.test.ts 做法）：renderer 双写的
+// 协议门槛 minor 必须与协议包单源一致——漂移即红（黄字预检与提交闸口径不漂移的前提）
+it('TEAM_DELEGATION_REQUIRED_MINOR 双写锚定协议包单源（momo-hub-protocol v0.5.0 = 9）', () => {
+  expect(TEAM_DELEGATION_REQUIRED_MINOR).toBe(9);
+});
+
 function mkMember(instanceId: string, agentName: string, workspaceId = 'ws1'): WorkspaceAgentMember {
   return {
     instanceId,

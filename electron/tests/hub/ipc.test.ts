@@ -27,6 +27,8 @@ vi.mock('../../src/main/hub/index', () => ({
   hubDelegationBoard: vi.fn(() => ({ progress: {}, received: [] })),
   hubMarkDelegationCancelled: vi.fn(),
   hubListMirrorRegistry: vi.fn(() => []),
+  // M5.3 hub 闸数据源（dispatchSubmitPorts 消费——非团队路径不触发；mock 1.9.0 放行）
+  hubProtoVer: vi.fn(() => '1.9.0'),
 }));
 
 // 本地 DB 边界（momo-test-rules #5：DB 属进程边界可 mock）：retryDispatch /

@@ -20,6 +20,7 @@ import type { PermissionTier } from './run-policy';
 import { blockedDispatchError } from '../task/dependency-gate';
 import type { TaskRow } from '../storage/tasks/repo';
 import { TEAM_DELEGATION_REQUIRED_MINOR } from './protocol';
+import { logger } from '../logger';
 
 /**
  * HITL 权限档位（T10 起单源迁移至 run-policy.ts——三档运行时语义在该模块；
@@ -128,6 +129,13 @@ export interface DispatchSubmitPorts {
     workspaceId: string,
     teamId: string,
   ): { name: string; members: Array<{ agentName: string; isLeader: boolean }> } | null;
+  /**
+   * 当前连接协商到的 hub 协议版本（client.hubProtoVer——M3.0-P2 版本管道）；
+   * 未连接/未协商为 null。团队派发 hub 闸数据源（静默换班第 4 处：旧 hub 白名单
+   * 剥 team 段 → 目标按默认 agent 单跑而 A 侧自显成功——节点 presence 数据无法
+   * 揭示 hub 自身过旧，故先于节点闸校验 hub 协商版本）
+   */
+  hubProtoVer(): string | null;
   /** 组内委派账本（runningCount 数据源） */
   listDelegations(groupId: string): Promise<Array<{ taskId: string; targetNodeId: string; status: string }>>;
   /** 镜像登记表（按工作空间名过滤） */
@@ -277,9 +285,15 @@ export async function submitRoutedTask(
       input.routing.mode === 'group' ? { ...input.routing, targetNodeId } : input.routing;
     ports.updateDelegationLink(task.id, delegationId, resolvedRouting);
     return { task: { ...task, delegationId }, dispatched: true, nodeId: targetNodeId };
-  } catch {
+  } catch (err) {
     // 瞬断（node_offline / 网络抖动）：行保留待处理，不向上抛——弹窗提交不该
-    // 因单节点瞬断整体失败；重试入口在待派发卡（T9）
+    // 因单节点瞬断整体失败；重试入口在待派发卡（T9）。防静默死路纪律：拒因
+    // 落 warn 留痕（taskId + 原文——hub node_unsupported 等永久拒因可据此排查）
+    logger.warn('外派委派失败（行保留待处理）', {
+      taskId: task.id,
+      targetNodeId,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return { task, dispatched: false, nodeId: null };
   }
 }
@@ -303,6 +317,14 @@ export async function resolveRemoteTarget(
   ports: DispatchSubmitPorts,
   opts?: { team?: boolean },
 ): Promise<string | null> {
+  // M5.3 hub 闸（先于节点闸——指定节点离线时节点闸无 protoVer 可查会放行，
+  // 而旧 hub 白名单剥 team 段的静默换班只有 hub 协商版本能揭示；组内调度同因
+  // 前移：旧 hub 不回 group.list protoVer → 池空文案误导为节点问题）
+  if (opts?.team === true && !supportsTeamDelegation(ports.hubProtoVer() ?? undefined)) {
+    throw new Error(
+      `hub 服务器协议过旧（${ports.hubProtoVer() ?? '未知'}，需 1.${TEAM_DELEGATION_REQUIRED_MINOR}.0 及以上），不支持团队派发——请先升级 momo-hub 到 v0.5.0+`,
+    );
+  }
   const groups = await ports.listGroups();
   const group = groups.find((g) => g.groupId === routing.groupId);
   if (!group) {

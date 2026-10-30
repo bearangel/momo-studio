@@ -92,9 +92,10 @@ type MirrorCoverage = { status: 'idle' } | { status: 'none' } | { status: 'ok'; 
 /**
  * 团队派发协议门槛 minor（与 electron 侧 momo-hub-protocol
  * TEAM_DELEGATION_REQUIRED_MINOR=9 单源对齐；hub 协议 1.9.0 起认 team 段。
- * renderer 不依赖该包，此处双写并锚定单源——升级协议时两处同步）。
+ * renderer 不依赖该包，此处双写并锚定单源——升级协议时两处同步；
+ * export 供 CreateTaskDialog.test 机械锁（===9 对齐 electron pin test 防漂移）。
  */
-const TEAM_DELEGATION_REQUIRED_MINOR = 9;
+export const TEAM_DELEGATION_REQUIRED_MINOR = 9;
 
 /** 节点是否支持团队派发（minor ≥ 门槛；缺省/空/异形视为旧——与主进程
  *  dispatch-submit.ts supportsTeamDelegation 同口径，黄字预检与提交闸不漂移） */

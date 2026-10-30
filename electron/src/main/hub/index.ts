@@ -292,10 +292,11 @@ export function parseTaskAssigned(payload: unknown): AssignedTaskEvent | null {
       // T10 协议未知容忍：hub 1.2.0 剥离 permissionTier（白名单重建），合法值才拾取
       // （normalizeTier 兜底收敛 confirm）；hub 升级透传后直接消费。
       ...(isPermissionTier(t.permissionTier) ? { permissionTier: t.permissionTier } : {}),
-      // M5.3（1.9.0）：team 段形状合法才透传（hub 侧已按 2..8 名/恰一 leader 校验
-      // ——此处异形键丢弃纪律与 permissionTier 同款，坏形状回落单 agent 路径
-      // 由 runner 侧 team 缺席语义兜住）；dependsOn 刻意不透传（worker 零消费）
+      // M5.3（1.9.0）：team 段形状合法才透传（hub 侧已按 2..8 名/恰一 leader 校验）；
+      // 形态非法（深度防御面：异构 hub/损坏载荷）不再回落单 agent——回落=静默换班，
+      // 打 teamInvalid 标记交 runner decline（dependsOn 刻意不透传：worker 零消费）
       ...(isDelegationTeam(t.team) ? { team: t.team } : {}),
+      ...(t.team !== undefined && !isDelegationTeam(t.team) ? { teamInvalid: true } : {}),
     },
   };
 }
@@ -329,6 +330,14 @@ export function hubGetStatus(): HubStatus {
     lastErrorCode,
     hubProtoVer: client?.hubProtoVer() ?? null,
   };
+}
+
+/**
+ * 当前连接协商到的 hub 协议版本直读（M3.0-P2 版本管道；未连接为 null）。
+ * M5.3 团队派发 hub 闸数据源（dispatch-submit——静默换班第 4 处闭合）。
+ */
+export function hubProtoVer(): string | null {
+  return client?.hubProtoVer() ?? null;
 }
 
 /**

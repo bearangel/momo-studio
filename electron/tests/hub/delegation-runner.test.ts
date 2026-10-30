@@ -380,6 +380,29 @@ describe('团队外派接收（team 段）', () => {
     expect(h.log.createdSessions).toHaveLength(0);
   });
 
+  it('team 段形态非法（teamInvalid 标记——异构 hub/损坏载荷）→ decline 深度防御文案，不回落单 agent', async () => {
+    const h = makeHarness();
+    h.setWorkspace('ws-a', 'ws-id-1');
+    h.setAgent(undefined, 'inst-default');
+
+    await h.runner.handleAssigned(assignedEvt('t1', {
+      task: {
+        title: '坏形状团队任务',
+        prompt: 'p',
+        teamInvalid: true,
+      } as AssignedTaskEvent['task'],
+    }));
+
+    const r = h.log.reports[0]!;
+    expect(r.payload.status).toBe('failed');
+    expect(r.payload.reason).toBe('declined:任务书 team 段形态非法（深度防御拒收）');
+    // 不回落单 agent：未走 resolveAgentInstance/建会路径
+    expect(h.log.resolvedAgents).toHaveLength(0);
+    expect(h.log.resolvedAgentsByName).toHaveLength(0);
+    expect(h.log.createdSessions).toHaveLength(0);
+    expect(h.store.get('t1')).toBeNull();
+  });
+
   it('无 team 段旧 payload → 单 agent 路径零变化（memberInstanceId 形状 + 无 mention）', async () => {
     const h = makeHarness();
     h.setWorkspace('ws-a', 'ws-id-1');

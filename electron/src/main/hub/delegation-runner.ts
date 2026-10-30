@@ -36,7 +36,12 @@ setWriteDeniedBroadcaster(broadcastWriteGrantDenied);
  * 若 worker 按其拦截将制造跨节点不可解析的假闸（leader 本地 id 对 worker 无意义）。
  */
 export type AssignedTaskEvent = Omit<TaskAssignedEvent, 'task'> & {
-  task: TaskAssignedEvent['task'] & { permissionTier?: PermissionTier };
+  task: TaskAssignedEvent['task'] & {
+    permissionTier?: PermissionTier;
+    /** M5.3 深度防御：team 段在场但形态非法（parseTaskAssigned 打标）——
+     *  runner 按此 decline，不再回落单 agent（静默换班防线） */
+    teamInvalid?: true;
+  };
 };
 
 /** 回合终态（watchTurn 回调载荷——映射 messages.status 终态语义） */
@@ -445,6 +450,12 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
       const ws = ports.findWorkspaceByName(evt.workspaceName);
       if (!ws) {
         await decline(evt.taskId, `工作空间不存在:${evt.workspaceName}`);
+        return;
+      }
+      // M5.3 深度防御拒收：team 段在场但形态非法（异构 hub/损坏载荷）——
+      // 回落单 agent = 静默换班，decline 人话（先于 team 正常分支与单 agent 分支）
+      if (evt.task.teamInvalid === true) {
+        await decline(evt.taskId, '任务书 team 段形态非法（深度防御拒收）');
         return;
       }
       // M5.3 团队外派分支（spec §5.3）：team 段在场 → 逐名解析（镜像/本地成员表

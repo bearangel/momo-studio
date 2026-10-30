@@ -2,7 +2,7 @@
 import { ipcMain } from 'electron';
 import {
   hubConfigure, hubDelegationBoard, hubEnroll, hubForget, hubGetDelegationSettings, hubGetPresenceNodes,
-  hubGetStatus,
+  hubGetStatus, hubProtoVer,
   hubGetViewSettings, hubGetWorkspaceDirSettings, hubListMirrorRegistry, hubLocalWaiting,
   hubMarkDelegationCancelled, hubRequest,
   hubSetDelegationSettings, hubSetViewSettings, hubSetWorkspaceDirSettings, replayPresenceSeed,
@@ -201,6 +201,8 @@ export function registerHubIpc(): void {
         })),
       };
     },
+    // M5.3 hub 闸数据源：协商协议版本直读（client 版本管道——无副作用单点）
+    hubProtoVer: () => hubProtoVer(),
     listDelegations: async (groupId) =>
       (await hubRequest<{ tasks: Array<{ taskId: string; targetNodeId: string; status: string }> }>(
         TASK_RPC.list,

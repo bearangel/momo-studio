@@ -71,6 +71,8 @@ interface PortOverrides {
   blockedBy?: Record<string, string[]>;
   /** M5.3 团队快照 fake：teamId → 快照；缺省 null（团队不存在） */
   teamSnapshot?: { name: string; members: Array<{ agentName: string; isLeader: boolean }> };
+  /** M5.3 hub 协商版本 fake（hub 闸——缺省 1.9.0 放行，既有团队用例不受闸影响） */
+  hubProtoVer?: string | null;
 }
 
 // 返回类型刻意不注解：保留 vi.fn() 的 Mock 推断（.mock/.mockRejectedValue 可达），
@@ -78,6 +80,7 @@ interface PortOverrides {
 function makePorts(overrides: PortOverrides = {}) {
   return {
     listGroups: vi.fn().mockResolvedValue(overrides.groups ?? []),
+    hubProtoVer: vi.fn().mockReturnValue(overrides.hubProtoVer === undefined ? '1.9.0' : overrides.hubProtoVer),
     getTeamSnapshot: vi
       .fn()
       .mockImplementation((_workspaceId: string, teamId: string) =>
@@ -483,8 +486,7 @@ describe('submitRoutedTask — M5.3 团队派发', () => {
     expect(ports.getTeamSnapshot).toHaveBeenCalledWith('ws1', 'team-1');
   });
 
-  it('团队指向随行落库：createRemoteTask 收 targetTeamId（重派重建 team 段的依据）；单 agent 行不带', async () => {
-    const ports = makePorts({
+  it('团队指向随行落库：createRemoteTask 收 targetTeamId（重派重建 team 段的依据）；单 agent 行不带', async () => {    const ports = makePorts({
       groups: protoGroup(),
       registry: protoRegistry(),
       teamSnapshot: teamSnap,
@@ -631,6 +633,58 @@ describe('submitRoutedTask — M5.3 团队派发', () => {
     );
     expect(result.dispatched).toBe(false);
     expect(result.task.delegationId).toBeNull();
+  });
+
+  // ── M5.3 终审必修 1：hub 版本闸（静默换班第 4 处——旧 hub 白名单剥 team 段） ──
+
+  it('hub 协商 1.8.0（v0.4.0 服务器）× 团队 → 人话拒（先于节点闸，文案含升级指引与门槛）', async () => {
+    const ports = makePorts({
+      groups: protoGroup(),
+      registry: protoRegistry(),
+      teamSnapshot: teamSnap,
+      hubProtoVer: '1.8.0',
+    });
+    await expect(
+      submitRoutedTask({ ...baseInput({ mode: 'node', groupId: 'g1', targetNodeId: 'node-b' }), teamId: 'team-1' }, ports),
+    ).rejects.toThrow(
+      'hub 服务器协议过旧（1.8.0，需 1.9.0 及以上），不支持团队派发——请先升级 momo-hub 到 v0.5.0+',
+    );
+    expect(ports.createRemoteTask).not.toHaveBeenCalled();
+    expect(ports.delegate).not.toHaveBeenCalled();
+  });
+
+  it('hub 无协商版本（未连接过）× 团队 → 按旧拒（文案「未知」）', async () => {
+    const ports = makePorts({
+      groups: protoGroup(),
+      registry: protoRegistry(),
+      teamSnapshot: teamSnap,
+      hubProtoVer: null,
+    });
+    await expect(
+      submitRoutedTask({ ...baseInput({ mode: 'group', groupId: 'g1' }), teamId: 'team-1' }, ports),
+    ).rejects.toThrow('hub 服务器协议过旧（未知，需 1.9.0 及以上），不支持团队派发——请先升级 momo-hub 到 v0.5.0+');
+  });
+
+  it('hub 协商 1.9.0 × 团队 → 放行（既有团队用例组即证——此处显式锁组内路径不因闸误拒）', async () => {
+    const ports = makePorts({
+      groups: protoGroup(),
+      registry: protoRegistry(),
+      teamSnapshot: teamSnap,
+      hubProtoVer: '1.9.0',
+    });
+    const result = await submitRoutedTask(
+      { ...baseInput({ mode: 'group', groupId: 'g1' }), teamId: 'team-1' },
+      ports,
+    );
+    expect(result.dispatched).toBe(true);
+    expect(result.nodeId).toBe('node-a'); // 无负载差异 → 首候选
+  });
+
+  it('hub 闸只对团队生效：单 agent 路径在 1.8.0/无协商下零变化（不消费 hubProtoVer）', async () => {
+    const ports = makePorts({ groups: protoGroup(), registry: protoRegistry(), hubProtoVer: '1.8.0' });
+    const result = await submitRoutedTask(baseInput({ mode: 'node', groupId: 'g1', targetNodeId: 'node-b' }), ports);
+    expect(result.dispatched).toBe(true);
+    expect(ports.hubProtoVer).not.toHaveBeenCalled();
   });
 });
 
