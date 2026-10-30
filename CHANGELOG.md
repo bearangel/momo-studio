@@ -6,6 +6,18 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — M5.1 热修：插件×本地副本去重 + 发布版本回写
+
+`2.1.0-alpha.47`。协议零改、hub 零改（studio 单侧）。设计见 `docs/specs/2026-10-30-m5.1-plugin-dedup-version-writeback.md`（Momus OKAY；来源=用户真机验收三根因实证，见 `.omo/feature-matrices/2026-10-30-m5.1-hotfix.md` §0）。
+
+- **插件优先归并（RC1）**：`listResources` 出口同 type+slug 插件行在场 → custom 本地副本行不输出（隐藏非删除，skill/mcp/agent 三类型）；builtin×custom 不归并（fork 语义，负例锁）——治「superpowers 插件 15 技能 × 本地 11 副本 = 面板 11 组双卡」
+- **重复提示条 + 一键清理**：库页检测重复 → 顶部条「检测到 N 个与插件重复的本地副本 · 一键清理」；批删逐条**重扫描校验**（不信任 renderer 清单，TOCTOU 防护）+ 部分失败续删逐条报错；仅用户触发（新 IPC `resource:pluginDupScan/pluginDupCleanup`）
+- **发布版本回写（RC2）**：发布 201 后版本写回本地定义——skill=SKILL.md frontmatter 原子写（保注释/字段序/正文，嵌套 version 键不误伤，`.sha256` 同步刷新）、agent/mcp=DB UPDATE、plugin dev 源写 manifest / zip 源 skipped 人话；回写失败不推翻发布（toast 警示）——治「发布 1.0.1 本地恒显 1.0.0」
+- **导入/安装双向拦截（RC1 预防）**：zip 导入遇插件同名 slug 拒+人话（零写入）；`assertNoLocalSlugConflict` 扩 plugin 源（hub 安装+mirror 链同口径；「更新自己已装 hub 资源」豁免完好）
+- **oracle 终审必修项兑现**：frontmatter 替换串改 replacer 函数（`$&`/`$$` 等特殊模式展开会整块腐败 SKILL.md——实测复现，含回归锁）
+- 测试：electron 5221→5259 / renderer 3084→3091 / e2e hub-distribution 10 场景（新增：发布新版本地版本同源 / 导入插件同名拒 / 提示条清理全链）
+- 票桶：`split(':')[1]` plugin-slug 提取双点收敛；隐藏行陈旧态删除报错文案；mirror 落盘副本清理后镜像记账自愈边缘
+
 ## [未发布] — M5.0 资源归属权威（slug 领地制 + 源头拦截）
 
 `2.1.0-alpha.46`。协议 minor **1.8.0**（hub **v0.4.0**）。设计见 momo-hub 仓 `docs/specs/2026-10-30-momo-hub-m5.0-resource-ownership.md`（Momus OKAY；图文设计页经用户逐项裁定——含发布钮按归属隐藏、源头拦截两项用户裁定）。
