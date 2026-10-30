@@ -254,10 +254,7 @@ describe('hub pin v0.5.0（M5.3）', () => {
   });
 
   describe('1.8.0：HubResourceMeta.ownerNodeId? 变体锁（M5.0 资源归属）', () => {
-    it('协议版本对齐：PROTOCOL_VERSION = 1.8.0（归属投影 + name_conflict）', () => {
-      expect(PROTOCOL_VERSION).toBe('1.8.0');
-    });
-
+    // 协议版本对齐断言随 pin bump 迁移至 1.9.0 describe（每次 bump 单点所有权）
     it('在场 → validateHubCatalog round-trip 保留（徽标/按钮收敛判定输入）', () => {
       const sample = semverCatalogSample();
       sample.items[0]!.ownerNodeId = 'node-owner-1';
