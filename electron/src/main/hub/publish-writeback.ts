@@ -48,7 +48,10 @@ export function upsertSkillFrontmatterVersion(md: string, version: string): stri
   // 定界符 --- 与行尾原样保留（整块 = m[0]，只置换 yamlText 段）
   if (/^version:[ \t]*.*$/m.test(yamlText)) {
     const next = yamlText.replace(/^version:[ \t]*.*$/m, `version: ${version}`);
-    const rewritten = m[0].replace(yamlText, next);
+    // replacer 函数绕过替换串特殊模式（$&/$`/$'/$$ 会被 String.replace 展开导致
+    // frontmatter 整块自我复制腐败——oracle M5.1 终审实测复现，此处替换串含原
+    // frontmatter 全文，必经此防）
+    const rewritten = m[0].replace(yamlText, () => next);
     return md.slice(0, blockStart) + rewritten + md.slice(blockStart + m[0].length);
   }
   // 无 version 行 → 紧跟开档 --- 之后插入（首个字段之前，可见性最好）

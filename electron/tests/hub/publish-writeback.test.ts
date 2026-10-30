@@ -86,6 +86,12 @@ describe('upsertSkillFrontmatterVersion（frontmatter 字符串手术单元面�
     const out = upsertSkillFrontmatterVersion(md, '1.0.2');
     expect(out).toBe(`---\r\nname: s\r\nversion: 1.0.2\r\n---\r\n\r\n正文。\r\n`);
   });
+
+  it('frontmatter 含 $& / $` / $\' / $$ 替换串特殊模式 → 不被展开腐败（oracle M5.1 终审回归锁）', () => {
+    const md = `---\nname: s\ndescription: "use $& and $$ and $' tricks"\nversion: 1.0.0\n---\n\n正文。\n`;
+    const out = upsertSkillFrontmatterVersion(md, '1.0.1');
+    expect(out).toBe(`---\nname: s\ndescription: "use $& and $$ and $' tricks"\nversion: 1.0.1\n---\n\n正文。\n`);
+  });
 });
 
 describe('回写三通道（writebackPublishedVersion）', () => {
