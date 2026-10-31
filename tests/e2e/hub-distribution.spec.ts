@@ -1897,13 +1897,14 @@ test.describe.serial('hub 分发链 / readonly 即时拒 / 版本链（M2.3 Task
 
     // kickoff mention 落 leader（可观测面=mock LLM 请求：首流式请求 system 为
     // leader 的 systemPrompt——mention 优先路由；错发成员则 system 为成员 prompt）
-    // + leader 注入 dispatch 工具（tools 含 dispatch:<成员slug>——会话成员>1 且
-    // is_leader 的 buildDispatchSnapshot 自然成立）
+    // + leader 注入 dispatch 工具（tools 含 wire 名 dispatch_<成员slug>——会话成员>1
+    // 且 is_leader 的 buildDispatchSnapshot 自然成立；provider 层对 dispatch:<slug>
+    // 冒号名出站消毒为下划线 wire 名，供应商工具名契约 ^[a-zA-Z0-9_-]+$）
     const teamTurns = hub.llmRequests.slice(llmBaseIdx).filter((r) => r.stream);
     expect(teamTurns.length, 'B 侧应有 leader 回合流式请求').toBeGreaterThan(0);
     expect(teamTurns[0]!.system, 'kickoff 应 mention 路由 leader（system=leader prompt）').toContain('团队长（leader 接待）');
     expect(teamTurns[0]!.system).not.toContain('团队成员，执行');
-    expect(teamTurns[0]!.tools, 'leader 应注入 dispatch 工具（成员快照派发面）').toContain(`dispatch:${TEAM_MEMBER_SLUG}`);
+    expect(teamTurns[0]!.tools, 'leader 应注入 dispatch 工具（wire 名，成员快照派发面）').toContain(`dispatch_${TEAM_MEMBER_SLUG}`);
 
     // A 侧账本正常：行落库 + delegationId 记账（mock 不转发终态事件——行停 pending 属 mock 边界④）
     const aRow = await winA!.evaluate(async ([wsId, title]) => {
