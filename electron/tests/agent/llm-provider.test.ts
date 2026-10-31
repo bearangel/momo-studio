@@ -5,7 +5,7 @@
 //   2. Anthropic provider 请求格式（URL / x-api-key / system 顶层字段）
 //   3. API 错误时抛出含状态码的异常
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createLLMProvider } from '../../src/main/agent/llm-provider';
 import { resolveMaxTokensParam } from '../../src/main/llm/model-catalog';
 
@@ -583,5 +583,189 @@ describe('llm-provider LLMMessage.images 双平台映射（T3 / spec §7）', ()
       { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAA' } },
       { type: 'text', text: '看图' },
     ]);
+  });
+});
+
+// === D2 流空闲看门狗（验收报告 2026-10-31：死 socket 挂死 17min+ 无数据层看门狗）===
+
+describe('流空闲看门狗（D2）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** 死 SSE 响应：建连成功（ok + event-stream 头）但 body 永不下发永不关闭——死 socket 语义 */
+  function deadSseResponse(): Response {
+    const stream = new ReadableStream<Uint8Array>({
+      start() {
+        /* 永不 enqueue、永不 close */
+      },
+    });
+    return new Response(stream, { headers: { 'content-type': 'text/event-stream' } });
+  }
+
+  it('OpenAI 流：120s 无任何字节 → StreamIdleTimeout 类型化错误（不再永久挂死）', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn(async () => deadSseResponse()));
+    try {
+      const provider = createLLMProvider({ provider: 'openai', model: 'test-m' }, 'k');
+      const iter = provider.chatStream([{ role: 'user', content: '写个长文' }], undefined, new AbortController().signal);
+      const p = (async () => {
+        for await (const d of iter) {
+          void d; // 死流不应产出任何 delta
+        }
+      })();
+      const expectIdle = expect(p).rejects.toMatchObject({
+        name: 'StreamIdleTimeout',
+        message: expect.stringContaining('流空闲超时'),
+      });
+      await vi.advanceTimersByTimeAsync(120_000);
+      await expectIdle;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('Anthropic 流：同款死流 → StreamIdleTimeout（两方言统一执法）', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn(async () => deadSseResponse()));
+    try {
+      const provider = createLLMProvider({ provider: 'anthropic', model: 'claude-test' }, 'k');
+      const iter = provider.chatStream([{ role: 'user', content: '写个长文' }], undefined, new AbortController().signal);
+      const p = (async () => {
+        for await (const d of iter) {
+          void d;
+        }
+      })();
+      const expectIdle = expect(p).rejects.toMatchObject({ name: 'StreamIdleTimeout' });
+      await vi.advanceTimersByTimeAsync(120_000);
+      await expectIdle;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('活性重置：字节持续到达不误杀，静默后才计时（keep-alive ping 同样算活性）', async () => {
+    vi.useFakeTimers();
+    const enc = new TextEncoder();
+    // t=0 下发一条 thinking delta，随后静默——重置语义的判定样本
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(enc.encode('data: {"choices":[{"delta":{"reasoning_content":"先想一下"}}]}\n\n'));
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(stream, { headers: { 'content-type': 'text/event-stream' } })),
+    );
+    try {
+      const provider = createLLMProvider({ provider: 'openai', model: 'test-m' }, 'k');
+      const iter = provider.chatStream([{ role: 'user', content: 'hi' }], undefined, new AbortController().signal);
+      const seen: string[] = [];
+      const p = (async () => {
+        for await (const d of iter) {
+          if (d.type === 'thinking') seen.push(d.content);
+        }
+      })();
+      await vi.advanceTimersByTimeAsync(0); // 冲微任务：首 delta 已产出且已 reset
+      expect(seen).toEqual(['先想一下']);
+      // 距最后字节 119s：不误杀
+      await vi.advanceTimersByTimeAsync(119_000);
+      expect(seen).toEqual(['先想一下']);
+      // 距最后字节 120s+：判死
+      const expectIdle = expect(p).rejects.toMatchObject({ name: 'StreamIdleTimeout' });
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expectIdle;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('正常收尾：流结束即解除看门狗（收尾后 130s 无迟到火情/无 unhandledRejection）', async () => {
+    vi.useFakeTimers();
+    const enc = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(enc.encode('data: [DONE]\n\n'));
+        c.close();
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(stream, { headers: { 'content-type': 'text/event-stream' } })),
+    );
+    try {
+      const provider = createLLMProvider({ provider: 'openai', model: 'test-m' }, 'k');
+      const iter = provider.chatStream([{ role: 'user', content: 'hi' }], undefined, new AbortController().signal);
+      const got: string[] = [];
+      for await (const d of iter) {
+        got.push(d.type);
+      }
+      expect(got).toEqual(['done']); // [DONE] 不产内容 delta，仅终结
+      await vi.advanceTimersByTimeAsync(130_000); // 迟到火情会以 unhandledRejection 炸测试进程
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// === Oracle MUST FIX 回归锁（2026-10-31 终审）：chat() 的 signal 必须真透传 fetch ===
+// 此前 mock 边界在 createLLMProvider 工厂层（plan-generator.test.ts），mock 比
+// 真实现更保真——signal 死参数全绿漏网。本例 mock 只落 fetch 网络边界。
+
+describe('chat() signal 真透传（fetch 边界）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('caller abort → chat() 以 AbortError reject（底层 fetch 收到同一 signal 并被中断）', async () => {
+    const ctrl = new AbortController();
+    let fetchGotSignal: AbortSignal | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(((_url: unknown, init?: RequestInit) => {
+        fetchGotSignal = init?.signal;
+        // 死等实现：唯一出路是 init.signal abort——若 chat() 未透传，本用例挂死超时红
+        return new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            const e = new Error('This operation was aborted');
+            e.name = 'AbortError';
+            reject(e);
+          });
+        });
+      }) as typeof fetch),
+    );
+    const provider = createLLMProvider({ provider: 'openai', model: 'm' }, 'k');
+    const p = provider.chat([{ role: 'user', content: 'hi' }], undefined, ctrl.signal);
+    const expectAbort = expect(p).rejects.toMatchObject({ name: 'AbortError' });
+    // fetchWithRetry 内部经 AbortSignal.any 合流——init.signal 是合并信号（非原对象），
+    // 身份断言用 instanceof + 传导语义：若 chat() 未透传，fetch mock 收不到 signal，
+    // 永不 reject → 本用例挂死超时红（即 Oracle 抓到的死参数形态）
+    expect(fetchGotSignal).toBeInstanceOf(AbortSignal);
+    ctrl.abort();
+    await expectAbort;
+  });
+
+  it('Anthropic chat() 同款透传', async () => {
+    const ctrl = new AbortController();
+    let fetchGotSignal: AbortSignal | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(((_url: unknown, init?: RequestInit) => {
+        fetchGotSignal = init?.signal;
+        return new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            const e = new Error('This operation was aborted');
+            e.name = 'AbortError';
+            reject(e);
+          });
+        });
+      }) as typeof fetch),
+    );
+    const provider = createLLMProvider({ provider: 'anthropic', model: 'claude' }, 'k');
+    const p = provider.chat([{ role: 'user', content: 'hi' }], undefined, ctrl.signal);
+    const expectAbort = expect(p).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetchGotSignal).toBeInstanceOf(AbortSignal);
+    ctrl.abort();
+    await expectAbort;
   });
 });

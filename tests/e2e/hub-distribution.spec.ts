@@ -701,6 +701,29 @@ async function startMockHub(): Promise<void> {
         setTimeout(() => res.end(), 300_000);
         return;
       }
+      if (step === 'dead-think') {
+        // D3（验收报告 2026-10-31 T14/T15）：死流剧本——一条 thinking delta 后
+        // 挂起不收尾（无 FIN/RST 的 socket 黑洞语义，300s 安全阀同 hold）
+        res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8' });
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: '开始深度思考大任务……' } }] })}\n\n`);
+        setTimeout(() => res.end(), 300_000);
+        return;
+      }
+      if (step === 'leader-dispatch-member') {
+        // D3 场景 16：leader 回合派发（工具名用 wire 形态 dispatch_<slug>——
+        // provider 层 codec 消毒后回映内部 dispatch:<slug>）
+        const args = JSON.stringify({ task: '写一个大文件' });
+        const chunks = [
+          { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_e2e_d3_dispatch', function: { name: 'dispatch_e2e-stop-member', arguments: '' } }] } }] },
+          { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: args } }] } }] },
+          { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+        ];
+        res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8' });
+        for (const c of chunks) res.write(`data: ${JSON.stringify(c)}\n\n`);
+        res.write('data: [DONE]\n\n');
+        res.end();
+        return;
+      }
       let chunks: Array<Record<string, unknown>>;
       if (step === 'deny-write') {
         const args = JSON.stringify({ command: `touch '${denyFile}'` });
@@ -2108,5 +2131,121 @@ test.describe.serial('hub 分发链 / readonly 即时拒 / 版本链（M2.3 Task
     // 配平软失败面：回执不得出现 modelBinding:* unresolved（链①命中即闭合）
     const unresolved = (receipt.payload['unresolvedRefs'] as string[] | undefined) ?? [];
     expect(unresolved.filter((u) => u.startsWith('modelBinding:'))).toEqual([]);
+  });
+
+  test('场景16 D3 止损全链：本地团队会话派发死流成员 → UI 点击子任务停止 → 秒级中断（真实 App + 真实子进程 + 真实 abort）', async () => {
+    test.setTimeout(240_000);
+    expect(winBHitl, '依赖场景3/7 的实例 B').not.toBeNull();
+
+    const D3_LEADER = 'D3 止损队长';
+    const D3_MEMBER = 'D3 死流成员';
+
+    // B 侧 fixture：mock LLM provider + leader/member 双 agent + 团队 + 本地协作会话
+    const d3SessionId = await winBHitl!.evaluate(async ([llmBase, wsName]) => {
+      const w = window as unknown as {
+        api: {
+          workspace: { list(): Promise<Array<{ id: string; name: string }>> };
+          provider: {
+            list(): Promise<Array<{ id: string; name: string }>>;
+            create(input: Record<string, unknown>): Promise<{ id: string }>;
+          };
+          agent: {
+            createCustom(input: Record<string, unknown>): Promise<{ id: string }>;
+            assign(workspaceId: string, defId: string, agentUserId: string): Promise<{ instanceId: string }>;
+          };
+          team: {
+            create(workspaceId: string, input: {
+              name: string; memberInstanceIds: string[]; leaderInstanceId: string;
+            }): Promise<{ id: string }>;
+          };
+          session: {
+            createCollab(workspaceId: string, title: string | undefined, target: { type: 'team'; teamId: string }): Promise<{ id: string }>;
+          };
+        };
+      };
+      const ws = (await w.api.workspace.list()).find((x) => x.name === wsName);
+      if (!ws) throw new Error('B 镜像工作空间不存在（依赖场景3）');
+      const prov = (await w.api.provider.list()).find((p) => p.name === 'E2E D3 Mock LLM') ??
+        await w.api.provider.create({
+          name: 'E2E D3 Mock LLM', baseUrl: llmBase, apiKey: 'e2e-d3-key',
+          defaultModel: 'e2e-mock-model', platform: 'openai',
+        });
+      const leader = await w.api.agent.createCustom({
+        name: 'D3 止损队长', slug: 'e2e-stop-leader', description: 'd3 stop leader fixture',
+        systemPrompt: '你是 D3 止损队长，负责派发。', scope: 'global',
+        modelProviderId: prov.id, modelName: 'e2e-mock-model',
+      });
+      const member = await w.api.agent.createCustom({
+        name: 'D3 死流成员', slug: 'e2e-stop-member', description: 'd3 dead-stream member fixture',
+        systemPrompt: '你是 D3 死流成员。', scope: 'global',
+        modelProviderId: prov.id, modelName: 'e2e-mock-model',
+      });
+      const lm = await w.api.agent.assign(ws.id, leader.id, 'agent-e2e-stop-leader-01');
+      const mm = await w.api.agent.assign(ws.id, member.id, 'agent-e2e-stop-member-01');
+      const team = await w.api.team.create(ws.id, {
+        name: 'e2e 止损组',
+        memberInstanceIds: [lm.instanceId, mm.instanceId], leaderInstanceId: lm.instanceId,
+      });
+      const sess = await w.api.session.createCollab(ws.id, 'D3 止损验证', { type: 'team', teamId: team.id });
+      return sess.id;
+    }, [`${hub.baseUrl}/v1`, WS_NAME] as const);
+
+    // 剧本：leader 派发 → 成员死流（thinking 后静默）→ leader 收到失败回执后收尾
+    hub.llmScript = ['leader-dispatch-member', 'dead-think', 'final-text'];
+    const d3Base = hub.llmRequests.length;
+
+    // B 切到该会话：先回会话导航（场景15 后 B 停在看板），再点会话行
+    await winBHitl!.getByRole('button', { name: '会话', exact: true }).click();
+    await winBHitl!.getByText('D3 止损验证').first().click();
+
+    // 发消息触发 leader 接待 → 派发 → 成员进入死流
+    await winBHitl!.evaluate(async (sessionId) => {
+      const w = window as unknown as {
+        api: { session: { send(sessionId: string, body: string): Promise<unknown> } };
+      };
+      await w.api.session.send(sessionId, '开始执行');
+    }, d3SessionId);
+
+    // 成员的死流 LLM 请求已到达（system 含成员 prompt 标记——证明子进程已 spawn
+    // 并阻塞在死流读循环中，而非尚未启动）
+    await expect
+      .poll(() => hub.llmRequests.slice(d3Base).some((r) => r.stream && r.system.includes('D3 死流成员')), {
+        timeout: 60_000, intervals: [1000], message: '成员子进程应发出死流 LLM 请求',
+      })
+      .toBe(true);
+
+    // DispatchChip 忙态（执行中）——停止按钮可见即证明 chip 在场且 isBusy
+    // 注意：getByRole name 默认子串匹配——chip 头行 div(role=button) 的可达名含
+    // 停止钮文案会先命中。用 aria-label 精确定位真按钮（只有 <button> 带）
+    const stopBtn = winBHitl!.locator(`button[aria-label="停止 ${D3_MEMBER} 的子任务"]`).first();
+    await expect(stopBtn).toBeVisible({ timeout: 30_000 });
+
+    // ── 被测动作：UI 点击子任务停止（真实 click → IPC → cancelChain → 广播 →
+    //    真实子进程 abort → 真实 fetch 中断）──
+    const t0 = Date.now();
+    await stopBtn.click();
+
+    // chip 离开忙态翻终态（≤15s——报告病理是 7 分钟无效）。中断经失败回执
+    // 落态：子流 abort → task_reply failed → chip 翻「失败」（或直见「已中断」）
+    let flipped = false;
+    for (let i = 0; i < 30 && !flipped; i++) {
+      await winBHitl!.waitForTimeout(500);
+      const text =
+        (await winBHitl!
+          .locator('div[role="button"][aria-expanded]', { hasText: D3_MEMBER })
+          .first()
+          .textContent()) ?? '';
+      flipped = text.includes('失败') || text.includes('已中断');
+    }
+    expect(flipped, '子任务停止应秒级生效：chip 离开执行中翻终态').toBe(true);
+    const elapsed = Date.now() - t0;
+    expect(elapsed, `止损耗时 ${elapsed}ms 应 < 15s`).toBeLessThan(15_000);
+
+    // leader 收到失败回执后收尾（final-text）——回合不悬死
+    await expect
+      .poll(() => hub.llmRequests.slice(d3Base).some((r) => r.stream && r.system.includes('D3 止损队长') && hub.llmRequests.indexOf(r) > d3Base + 1), {
+        timeout: 30_000, intervals: [1000], message: 'leader 应回执驱动第二回合（final-text）',
+      })
+      .toBe(true);
   });
 });

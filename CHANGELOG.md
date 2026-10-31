@@ -6,6 +6,18 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 可信执行包：D1 超时链 / D2 流看门狗 / D3 止损三层验证 / D8 派发透明化（+D12）
+
+`2.1.0-alpha.53`。来源：真实用户验收报告 `.omo/qa-reports/2026-10-31-game-designer-rpg/`（4.3h 首触体验，16 缺陷）。spec：`docs/specs/2026-10-31-execution-trust-package-design.md`。
+
+- **D1 方案生成超时链（P1）**：onboarding「AI 引导」在思考型模型上确定性 60s 超时×3 因齐修——①显式关思考（经 `resolveThinkingConfig` 同源方言解析链提取 `(modelName, provider)` 内核 `resolveThinkingDialect`，强制 mode='off'，zhipu toggle-effort 方言发 `thinking:{type:'disabled'}`；方案生成是白名单选择题无思考增益）；②`LLMProvider.chat()` 增可选 `signal` 透传 fetch（fetchWithRetry 既有 AbortSignal.any 合流），plan-generator 改 AbortController+setTimeout 真中断（旧 race 只丢弃结果，在途请求继续烧 token 且重试叠加）；③文案模型无关（「可重试或转手动配置」）；④超时落 main.log
+- **D2 流空闲看门狗（P1，全流统一）**：`chatStreamOpenAI/Anthropic` 读循环与空闲计时器竞速（任何字节到达即重置——SSE keep-alive ping 也算活性），`STREAM_IDLE_TIMEOUT_MS=120s` 零字节判死 → 类型化错误 `StreamIdleTimeout` → 既有错误路径：回合 failed → dispatch 链 settle failed → 失败回执送达（同步/bg/主会话/快速会话全部自动受益，一处机制无特判）。报告两次死 socket 挂死（17min/12min）从此钳制在 120s 内
+- **D3 子任务停止（P1）三层验证全绿不可复现**：五段插桩（cancelChain→广播→runners Map→activeTasks→子进程 abortListener）+ 真实 provider 死流反应单测 + cancelChain 入口单测 + e2e 场景 16（真实 App 真 UI 点击 → 真实子进程 → chip 秒级翻终态 + leader 回执收尾，2.2s）——链路完好。生产失效最可能是 D14 渲染主线程阻塞吞点击。防御纵深：三层回归锁 + D2 看门狗兜底 + D8 停滞可见。排查中揪出的真 bug：e2e 定位器子串匹配误点 chip 头行（Playwright getByRole name 默认子串——chip 头行可达名含停止钮文案，须 aria-label 精确定位）
+- **D8 dispatch 卡透明化（P2）**：`StreamState.lastEventAt`（仅实时事件批刷新且限 streaming 态——历史回放/用户展开不算活动，切走切回不洗掉挂死证据）；新组件 `LastActivity`（Activity 图标 11px/1.75 + 「活动 Ns/Nm 前」，>`STALL_WARN_MS`=30s 转 warning+呼吸闪烁 1.6s）；DispatchChip 头行（活动提示后、计时器前）+ InFlightPanel 行（第 N 轮后）；终态与等待授权行不渲染。预览合同 8 条定值逐项落码（`.omo/previews/execution-trust-dispatch-card.html` 已批）
+- **D12**：`dev.mjs` 剥离 argv 首个 `--`（pnpm 透传惯例曾致 `--remote-debugging-port/--user-data-dir` 被 Chromium 当位置参数静默失效、污染真实 profile）
+- **测试**：electron 全量 **5328 绿**（+11：D1×3 / D2×4 / D3×2 / Oracle 终审回归锁×2）；renderer 相关面 **520 绿**（+20）；e2e **14/14**（+场景 16）
+- **Oracle 终审**：抓出 1 个 MUST FIX——chat() 的 signal 参数在两个实现里未透传 fetchWithRetry（D1 真中断在真实路径是 no-op，且 mock 比真实现更保真导致全绿漏网——「绿但没测到真路径」典型案例）。修复 = signal 落第 3 参 opts（第 2 参会被内部 AbortSignal.any 合并信号覆写）+ fetch 边界回归锁 2 例；顺手修 PR#18 的 nameCodec 缩进残留
+
 ## [未发布] — 修复：冒号工具名 400（dispatch 工具名 wire 编解码）
 
 `2.1.0-alpha.52`。来源：用户 alpha.51 验收——团队外派后子节点 leader 模型调用 HTTP 400：`Invalid 'tools[19].function.name': string does not match pattern '^[a-zA-Z0-9_-]+$'`。

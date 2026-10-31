@@ -151,9 +151,14 @@ async function main() {
   }
 
   log('dev', `vite 就绪 (${VITE_URL}) + electron dist 就绪 → 启动 Electron`);
+  // D12（验收报告 2026-10-31）：pnpm 传参惯例把 `--` 透传进脚本 argv；原样转给
+  // Electron 会被 Chromium 当位置参数分隔符，其后开关（--remote-debugging-port /
+  // --user-data-dir）静默失效（曾致真实 profile 被污染）——剥离首个 `--` 再透传
+  const passthrough = process.argv.slice(2);
+  if (passthrough[0] === '--') passthrough.shift();
   spawnChild('electron', 'npx', [
     'pnpm@9.0.0', '--filter', './electron', 'exec', 'electron', '.',
-    ...process.argv.slice(2),
+    ...passthrough,
   ], {
     env: { ...process.env, VITE_DEV_SERVER_URL: VITE_URL },
   });

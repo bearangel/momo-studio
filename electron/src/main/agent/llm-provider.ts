@@ -59,7 +59,8 @@ export type StreamDelta =
 
 /** 统一 provider 接口 */
 export interface LLMProvider {
-  chat(messages: LLMMessage[], tools?: LLMToolDef[]): Promise<LLMResponse>;
+  /** 可选 signal：调用方限时（如 onboarding 60s）真中断底层请求——不是丢弃结果的 race */
+  chat(messages: LLMMessage[], tools?: LLMToolDef[], signal?: AbortSignal): Promise<LLMResponse>;
   /** 流式接口；signal 用于中断 */
   chatStream(
     messages: LLMMessage[],
@@ -111,6 +112,13 @@ class ToolNameCodec {
 
 /** 对 LLM API 的单次请求超时（毫秒）—— 复杂生成任务可能需要数分钟 */
 const LLM_REQUEST_TIMEOUT_MS = 300_000;
+
+/**
+ * 流空闲看门狗阈值（D2，验收报告 2026-10-31）：流式生成期 chunk 持续到达，
+ * 120s 零字节 = 死连接（socket 静默死亡无 FIN/RST，read 永不返回）——判死。
+ * SSE keep-alive ping 字节同样算活性（读循环按「任何 read 返回」重置）。
+ */
+export const STREAM_IDLE_TIMEOUT_MS = 120_000;
 
 /**
  * LLM 专用 undici Agent（2026-09-26 terminated P0）：Node 全局 fetch 的 undici
@@ -433,12 +441,12 @@ class OpenAIProvider implements LLMProvider {
     private maxTokensParam: 'max_tokens' | 'max_completion_tokens' = 'max_tokens',
   ) {}
 
-  async chat(messages: LLMMessage[], tools?: LLMToolDef[]): Promise<LLMResponse> {
+  async chat(messages: LLMMessage[], tools?: LLMToolDef[], signal?: AbortSignal): Promise<LLMResponse> {
     const apiUrl = this.baseUrl
       ? `${this.baseUrl}/chat/completions`
       : 'https://api.openai.com/v1/chat/completions';
-        const nameCodec = new ToolNameCodec(tools);
-const body: Record<string, unknown> = {
+    const nameCodec = new ToolNameCodec(tools);
+    const body: Record<string, unknown> = {
       model: this.model,
       messages: messages.map((m) => toOpenAIMessage(m, nameCodec)),
     };
@@ -464,7 +472,7 @@ const body: Record<string, unknown> = {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify(body),
-    });
+    }, ...(signal ? [{ signal }] : []));
 
     if (!response.ok) {
       const errText = await response.text();
@@ -518,13 +526,13 @@ class AnthropicProvider implements LLMProvider {
     private maxTokens?: number,
   ) {}
 
-  async chat(messages: LLMMessage[], tools?: LLMToolDef[]): Promise<LLMResponse> {
+  async chat(messages: LLMMessage[], tools?: LLMToolDef[], signal?: AbortSignal): Promise<LLMResponse> {
     // Anthropic 把 system 单独传，messages 只含 user/assistant
     const systemMsg = messages.find((m) => m.role === 'system');
     const conversationMessages = messages.filter((m) => m.role !== 'system');
 
-        const nameCodec = new ToolNameCodec(tools);
-const body: Record<string, unknown> = {
+    const nameCodec = new ToolNameCodec(tools);
+    const body: Record<string, unknown> = {
       model: this.model,
       // P0-3：配置值替换硬编码 4096（Anthropic max_tokens 必填——缺省回退旧值）
       max_tokens: this.maxTokens && this.maxTokens > 0 ? this.maxTokens : 4096,
@@ -551,7 +559,7 @@ const body: Record<string, unknown> = {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify(body),
-    });
+    }, ...(signal ? [{ signal }] : []));
 
     if (!response.ok) {
       const errText = await response.text();
@@ -669,10 +677,12 @@ async function* chatStreamOpenAI(
   let finishReason: 'stop' | 'tool_use' = 'stop';
 
   const abortPromise = buildAbortPromise(signal);
+  const idle = createIdleWatchdog(STREAM_IDLE_TIMEOUT_MS); // D2：死 socket 判死
 
   try {
     while (true) {
-      const { done, value } = await Promise.race([reader.read(), abortPromise]);
+      const { done, value } = await Promise.race([reader.read(), abortPromise, idle.promise]);
+      idle.reset(); // 任何字节到达即重置（keep-alive ping 同样算活性）
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
@@ -730,6 +740,7 @@ async function* chatStreamOpenAI(
       }
     }
   } finally {
+    idle.dispose(); // 收尾解除看门狗（迟到火情防护）
     reader.cancel().catch(() => {});
   }
 
@@ -829,10 +840,12 @@ async function* chatStreamAnthropic(
   let finishReason: 'stop' | 'tool_use' = 'stop';
 
   const abortPromise = buildAbortPromise(signal);
+  const idle = createIdleWatchdog(STREAM_IDLE_TIMEOUT_MS); // D2：死 socket 判死
 
   try {
     while (true) {
-      const { done, value } = await Promise.race([reader.read(), abortPromise]);
+      const { done, value } = await Promise.race([reader.read(), abortPromise, idle.promise]);
+      idle.reset(); // 任何字节到达即重置（keep-alive ping 同样算活性）
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
@@ -888,6 +901,7 @@ async function* chatStreamAnthropic(
       }
     }
   } finally {
+    idle.dispose(); // 收尾解除看门狗（迟到火情防护）
     reader.cancel().catch(() => {});
   }
 
@@ -908,6 +922,45 @@ async function* chatStreamAnthropic(
  * 构造一个在 signal abort 时 reject 的 promise，用于与 reader.read() 竞速实现中断。
  * 如果 signal 已 abort，promise 立即 reject。
  */
+/**
+ * 流空闲看门狗（D2）：读循环与本 promise 竞速——任何字节到达即 reset 重置计时；
+ * 超时 reject 类型化错误（name='StreamIdleTimeout'）→ 走既有错误路径：回合 failed →
+ * dispatch 链 settle failed → 失败回执送达（同步/bg 天然统一）。dispose 在流收尾
+ * （正常/异常皆然）调用清计时器；promise 预挂 no-op catch——竞速方退出后的迟到
+ * reject 不构成 unhandledRejection。
+ */
+function createIdleWatchdog(timeoutMs: number): {
+  promise: Promise<never>;
+  reset: () => void;
+  dispose: () => void;
+} {
+  let timer: NodeJS.Timeout | undefined;
+  let rejectFn: ((e: Error) => void) | undefined;
+  const promise = new Promise<never>((_, reject) => {
+    rejectFn = reject;
+  });
+  promise.catch(() => {}); // 迟到 reject 兜底（不炸进程）
+  const arm = (): void => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = setTimeout(() => {
+      const err = new Error(
+        `流空闲超时（${Math.round(timeoutMs / 1000)}s 无数据，疑似连接中断）`,
+      );
+      err.name = 'StreamIdleTimeout';
+      rejectFn?.(err);
+    }, timeoutMs);
+    timer.unref?.();
+  };
+  arm();
+  return {
+    promise,
+    reset: arm,
+    dispose: (): void => {
+      if (timer !== undefined) clearTimeout(timer);
+    },
+  };
+}
+
 function buildAbortPromise(signal: AbortSignal): Promise<never> {
   return new Promise<never>((_, reject) => {
     if (signal.aborted) {

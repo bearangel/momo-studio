@@ -3,20 +3,28 @@
 // plan-generator 测试（spec 2026-10-10 §6.1）：prompt 组装 / 围栏剥离 /
 // 4000 截断 / 静默修复一轮 / 两轮失败上抛 / provider 校验。
 // LLM 经 PlanDeps 注入 mock——保真边界在 LLMResponse 形状（momo-test-rules）。
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { setKeychainImpl } from '../../src/main/storage/keychain';
 import { setBuiltinAgentsDir } from '../../src/main/agent/builtin';
-import type { LLMResponse } from '../../src/main/agent/llm-provider';
+import { createLLMProvider, type LLMProvider, type LLMResponse } from '../../src/main/agent/llm-provider';
+import { logger } from '../../src/main/logger';
 import {
   generateOnboardingPlan,
   buildPlanPrompt,
   stripJsonFence,
   type PlanDeps,
 } from '../../src/main/onboarding/plan-generator';
+
+// D1 超时链测试：mock createLLMProvider 捕获 opts/signal（LLM 边界 mock，
+// 业务链路真实执行——momo-test-rules mock 收窄）
+vi.mock('../../src/main/agent/llm-provider', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/agent/llm-provider')>();
+  return { ...actual, createLLMProvider: vi.fn() };
+});
 
 const tmpRoot = path.join(os.tmpdir(), `onboarding-gen-${Date.now()}`);
 
@@ -190,5 +198,98 @@ describe('generateOnboardingPlan', () => {
     await generateOnboardingPlan({ ...baseInput, requirement: '长'.repeat(5000) }, deps);
     expect(seen.includes('长'.repeat(4000))).toBe(true);
     expect(seen.includes('长'.repeat(4001))).toBe(false);
+  });
+});
+
+describe('默认 LLM 链路（D1 超时链修复，验收报告 2026-10-31 D1）', () => {
+  const mockCreate = vi.mocked(createLLMProvider);
+  const glmInput = { requirement: '做游戏设计', providerId: 'prov-glm', modelId: 'glm-5.3-flash' };
+
+  /** 录制型 provider：chat 按脚本返回；chatStream 不会被调到（防御性提供） */
+  function recorderProvider(chatImpl: LLMProvider['chat']): LLMProvider {
+    return {
+      chat: chatImpl,
+      async *chatStream() {
+        yield { type: 'done' as const, finishReason: 'stop' as const };
+      },
+    };
+  }
+
+  beforeEach(() => {
+    mockCreate.mockReset();
+    // zhipu 预设供应商（真方言链：toggle-effort + GLM5 effort 型）
+    getDb()
+      .prepare(
+        `INSERT INTO model_providers (id, name, base_url, api_key_ref, default_model, is_default, created_at, platform, preset_key)
+         VALUES ('prov-glm', '智谱 GLM', 'https://open.bigmodel.cn/api/paas/v4', 'provider.prov-glm.api_key', NULL, 0, datetime('now'), 'openai', 'zhipu')`,
+      )
+      .run();
+    setKeychainImpl({
+      async getSecret(key: string) {
+        return key.startsWith('provider.') ? 'sk-test' : null;
+      },
+      async setSecret() {},
+      async deleteSecret() {},
+    });
+  });
+
+  it('显式关思考：经方言解析链传 mode=off（zhipu→toggle-effort 方言，方案生成是白名单选择题无思考增益）', async () => {
+    mockCreate.mockImplementation(() =>
+      recorderProvider(async () => llmReply(VALID_PLAN_JSON)),
+    );
+    await generateOnboardingPlan(glmInput);
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    const [, apiKey, opts] = mockCreate.mock.calls[0]!;
+    expect(apiKey).toBe('sk-test');
+    expect(opts?.thinking).toEqual({
+      wire: 'toggle-effort',
+      kind: 'effort',
+      mode: 'off',
+      effort: null,
+    });
+  });
+
+  it('chat 调用携带 AbortSignal（超时中断的唯一通路——不再靠丢弃结果的 race）', async () => {
+    let captured: unknown;
+    mockCreate.mockImplementation(() =>
+      recorderProvider(async (_m, _t, signal) => {
+        captured = signal;
+        return llmReply(VALID_PLAN_JSON);
+      }),
+    );
+    await generateOnboardingPlan(glmInput);
+    expect(captured).toBeInstanceOf(AbortSignal);
+  });
+
+  it('60s 超时 → 真 abort 底层请求 + 模型无关文案 + 日志落痕', async () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    let chatAborted = false;
+    try {
+      // 死等实现：唯一出路是被 signal abort——超时若只丢弃结果不中断，本用例挂死
+      mockCreate.mockImplementation(() =>
+        recorderProvider((_m, _t, signal) =>
+          // 保真：真实 fetch 在 signal abort 时 reject——mock 同形（momo-test-rules 铁律 1）
+          new Promise<LLMResponse>((_, reject) => {
+            signal?.addEventListener('abort', () => {
+              chatAborted = true;
+              reject(new Error('aborted-by-test'));
+            });
+          }),
+        ),
+      );
+      const p = generateOnboardingPlan(glmInput);
+      const expectTimeout = expect(p).rejects.toThrow('AI 生成超时（60 秒）');
+      await vi.advanceTimersByTimeAsync(60_000);
+      await expectTimeout;
+      expect(chatAborted, '超时必须真中断底层请求（abort 传导到 chat）').toBe(true);
+      expect(warnSpy).toHaveBeenCalled();
+      const err = await p.catch((e: unknown) => e);
+      expect(err instanceof Error && err.message.includes('转手动配置')).toBe(true);
+      expect(err instanceof Error && err.message.includes('flash')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+      warnSpy.mockRestore();
+    }
   });
 });
