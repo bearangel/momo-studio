@@ -44,6 +44,7 @@ vi.mock('../../src/main/logger', () => ({
 // 仅被 wireDelegationRunnerPorts 引用，被下面三端口覆盖——mock 防模块加载期副作用）
 vi.mock('../../src/main/im/session-service', () => ({
   sendUserMessage: vi.fn(async () => undefined),
+  broadcastSessionListChanged: vi.fn(),
 }));
 vi.mock('../../src/main/agent/router-bootstrap', () => ({
   getRouterService: vi.fn(() => null),

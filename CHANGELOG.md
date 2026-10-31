@@ -6,6 +6,14 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 修复：外派会话实时可见（接收端建会广播）
+
+`2.1.0-alpha.51`。来源：用户 alpha.50 验收——「派发任务到子节点，子节点对应的会话要切换界面才能刷新出来」。
+
+- **根因**：接收端 `createDelegatedSession`（delegation-ports 生产端口）建会落库后从不广播 `session:listChanged`——其余全部建会路径（executor K10 / task lifecycle / 资源导入 / 插件去重）都广播，唯独外派路径漏（单 agent 外派自 M2.x 起即如此，M5.3 团队外派同洞）。renderer 会话列表只能靠切视图重挂载兜底刷新
+- **修复**：外派建会（单 agent / 团队多成员同口径）落库即 `broadcastSessionListChanged()`——停留 IM 视图实时看到新执行会话；建会抛错不广播
+- **测试**：红测先行（广播缺失 2 例实锤）→ 修复转绿；m2-integration / delegation-ports 两个部分 mock 补齐 `broadcastSessionListChanged`（产品消费面扩张，mock 镜像同步）；tests/hub 535 绿 / electron 全量 5318 绿（1 例已知 flake 复跑消失）
+
 ## [未发布] — M5.3 补遗：批量外派团队协作 + 权限策略行布局修复
 
 `2.1.0-alpha.50`。来源：用户 alpha.49 验收两反馈——「为何只有单任务有团队？批量呢？」（原 spec 票桶项「批量行无法逐行指团队」论证不成立：整批统一团队即可，裁定落地）+「权限策略 UI 文本全部换行」（M2.1 T10 存量债）。

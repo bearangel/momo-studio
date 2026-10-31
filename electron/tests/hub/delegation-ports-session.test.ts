@@ -15,6 +15,7 @@ vi.mock('electron', () => ({
 }));
 vi.mock('../../src/main/im/session-service', () => ({
   sendUserMessage: vi.fn(async () => undefined),
+  broadcastSessionListChanged: vi.fn(),
 }));
 vi.mock('../../src/main/agent/router-bootstrap', () => ({
   getRouterService: vi.fn(() => null),
@@ -29,6 +30,7 @@ import { createWorkspace } from '../../src/main/workspace/crud';
 import { addMember, saveAgentDefinition } from '../../src/main/agent/crud';
 import type { AgentDefinition } from '../../src/main/agent/types';
 import { wireDelegationRunnerPorts, resolveAgentInstanceByNameProduct } from '../../src/main/hub/delegation-ports';
+import { broadcastSessionListChanged } from '../../src/main/im/session-service';
 
 let tmpRoot = '';
 const memStore = new Map<string, string>();
@@ -125,6 +127,46 @@ describe('resolveAgentInstanceByNameProduct（M5.3 按名解析）', () => {
     expect(resolveAgentInstanceByNameProduct(wsA, 'QA')).toBeNull();
     // 大小写敏感（精确匹配口径与镜像按名对齐一致）
     expect(resolveAgentInstanceByNameProduct(wsA, 'pm')).toBeNull();
+  });
+});
+
+describe('createDelegatedSession 会话列表广播（外派会话实时可见）', () => {
+  beforeEach(() => {
+    vi.mocked(broadcastSessionListChanged).mockClear();
+  });
+
+  it('单 agent 建会 → 广播 session:listChanged（否则停留 IM 视图看不到新会话，切走再切回才出现）', async () => {
+    const wsId = await seedWorkspace('ws-bcast', ['Solo']);
+    const solo = resolveAgentInstanceByNameProduct(wsId, 'Solo')!;
+    ports().createDelegatedSession({
+      workspaceId: wsId,
+      title: '单 agent 外派',
+      memberInstanceId: solo,
+    });
+    expect(broadcastSessionListChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('多成员建会 → 广播 session:listChanged（团队外派同口径）', async () => {
+    const wsId = await seedWorkspace('ws-bcast-t', ['L', 'M']);
+    const ids = ['L', 'M'].map((n) => resolveAgentInstanceByNameProduct(wsId, n)!);
+    ports().createDelegatedSession({
+      workspaceId: wsId,
+      title: '团队外派',
+      members: ids.map((id, i) => ({ instanceId: id, isLeader: i === 0 })),
+    });
+    expect(broadcastSessionListChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('建会抛错（成员越集等）→ 不广播', async () => {
+    const wsId = await seedWorkspace('ws-bcast-x', ['Solo']);
+    expect(() =>
+      ports().createDelegatedSession({
+        workspaceId: wsId,
+        title: '坏成员',
+        memberInstanceId: 'no-such-instance',
+      }),
+    ).toThrow();
+    expect(broadcastSessionListChanged).not.toHaveBeenCalled();
   });
 });
 
