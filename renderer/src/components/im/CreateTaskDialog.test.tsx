@@ -1269,14 +1269,58 @@ describe('CreateTaskDialog — 外派团队执行（M5.3 X3）', () => {
     expect(screen.queryByText(/全部可解析/)).not.toBeInTheDocument();
   });
 
-  it('X3-7. 批量模式不渲染执行方式区（现状不变）', async () => {
+  it('X3-7. 批量模式渲染执行方式区（2026-10-31 裁定翻转：整批统一团队）；本机路由不出场', async () => {
     render(
       <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
     );
     fireEvent.click(await screen.findByRole('radio', { name: '批量' }));
     fireEvent.click(await screen.findByRole('radio', { name: '组内调度' }));
+    expect(screen.getByRole('radiogroup', { name: '执行方式' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: '单 agent' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: '团队协作' })).toBeInTheDocument();
+    // 本机路由（remoteRouting=false）批量不出场——执行方式只随外派有意义
+    fireEvent.click(screen.getByRole('radio', { name: /本机/ }));
     expect(screen.queryByRole('radiogroup', { name: '执行方式' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('radio', { name: '单 agent' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('radio', { name: '团队协作' })).not.toBeInTheDocument();
+  });
+
+  it('X3-8. 批量团队协作 → 逐行 submitRoutedTask 均带 teamId（整批统一团队）；单 agent 批量零变化', async () => {
+    const onCreated = vi.fn();
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={onCreated} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '批量' }));
+    fireEvent.click(await screen.findByRole('radio', { name: '组内调度' }));
+    fireEvent.click(screen.getByRole('radio', { name: '团队协作' }));
+    fireEvent.change(await screen.findByLabelText('团队'), { target: { value: 'team-t1' } });
+    fireEvent.change(screen.getByLabelText(/批量任务书/), { target: { value: '行一\n行二\n行三' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建 3 个任务' }));
+    await waitFor(() => expect(mockSubmitRoutedTask).toHaveBeenCalledTimes(3));
+    for (const call of mockSubmitRoutedTask.mock.calls) {
+      const payload = call[0] as Record<string, unknown>;
+      expect(payload['teamId']).toBe('team-t1');
+      expect(payload['routing']).toEqual({ mode: 'group', groupId: 'g1' });
+    }
+    expect(onCreated).toHaveBeenCalled();
+
+    // 对照：单 agent 批量（切回）不带 teamId 键
+    mockSubmitRoutedTask.mockClear();
+    fireEvent.click(await screen.findByRole('radio', { name: '单 agent' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建 3 个任务' }));
+    await waitFor(() => expect(mockSubmitRoutedTask).toHaveBeenCalledTimes(3));
+    for (const call of mockSubmitRoutedTask.mock.calls) {
+      const payload = call[0] as Record<string, unknown>;
+      expect('teamId' in payload).toBe(false);
+    }
+  });
+
+  it('X3-9. 批量团队协作未选团队 → 按钮禁用（delegationTeamMissing 并入批量口径）', async () => {
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '批量' }));
+    fireEvent.click(await screen.findByRole('radio', { name: '组内调度' }));
+    fireEvent.click(screen.getByRole('radio', { name: '团队协作' }));
+    fireEvent.change(screen.getByLabelText(/批量任务书/), { target: { value: '行一' } });
+    expect(screen.getByRole('button', { name: '创建 1 个任务' })).toBeDisabled();
   });
 });

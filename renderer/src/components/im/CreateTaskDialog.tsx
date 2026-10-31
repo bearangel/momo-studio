@@ -22,7 +22,8 @@
 //     指定节点 → 成员覆盖预检（本地同名镜像成员名近似，绿/黄字）；组内调度 →
 //     协议落后节点黄字（routingPrecheck nodeCaps 数据源）。黄字一律不拦提交，
 //     协议门红字仅出现在主进程派发闸失败 toast；团队提交随载荷 teamId（主进程
-//     展开成员快照 + 版本闸）。批量模式不提供执行方式区（spec §5.2 票桶）
+//     展开成员快照 + 版本闸）。批量模式同款执行方式区（整批统一团队，逐行随载荷；
+//     用户 2026-10-31 裁定追加，覆盖原 spec 票桶「批量不提供」与预览条款 8）
 // v2.1：外壳收敛 Dialog 原子件；表单控件换 Input/Select；textarea 无原子件走 token 类。
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { TriangleAlert, Users, X } from 'lucide-react';
@@ -276,10 +277,11 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
 
   // team/session 已选类型但未选具体对象时不可提交（按钮禁用 + submit 双保险）；
   // M5.3：外派团队执行未选团队并入同口径
+  const delegationTeamMissing = remoteRouting && execMode === 'team' && delegationTeamId === '';
   const targetMissing =
     (targetKind === 'team' && !targetTeamId) ||
     (targetKind === 'session' && !targetSessionId) ||
-    (remoteRouting && execMode === 'team' && delegationTeamId === '');
+    delegationTeamMissing;
 
   const submitSingleRemote = async (): Promise<void> => {
     if (!workspaceName) return;
@@ -396,6 +398,8 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
           workspaceName,
           title: parsed.title,
           ...(parsed.dependsOn.length > 0 ? { dependsOn: parsed.dependsOn } : {}),
+          // M5.3 批量团队：整批统一团队，逐行随 teamId（主进程逐行展开快照 + 版本闸）
+          ...(execMode === 'team' && delegationTeamId !== '' ? { teamId: delegationTeamId } : {}),
           routing,
           permissionTier,
         });
@@ -425,7 +429,7 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
     e.preventDefault();
     if (submitting) return;
     if (mode === 'batch') {
-      if (batchCount === 0) return;
+      if (batchCount === 0 || delegationTeamMissing) return;
       setSubmitting(true);
       try {
         await submitBatch();
@@ -448,13 +452,14 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
   };
 
   const canSubmit =
-    mode === 'batch' ? batchCount > 0 : Boolean(title.trim()) && !targetMissing;
+    mode === 'batch' ? batchCount > 0 && !delegationTeamMissing : Boolean(title.trim()) && !targetMissing;
   const submitLabel =
     mode === 'batch' && batchCount > 0 ? `创建 ${batchCount} 个任务` : '创建任务';
 
   // ── M5.3 团队执行预检（spec §5.4：黄字一律不拦提交；协议门红字拒提交仅出现在
   // 主进程派发闸失败 toast，不在表单内）——预览定值清单条款 4/5/6 ──
   const selectedTeam = execMode === 'team' ? teams.find((t) => t.id === delegationTeamId) : undefined;
+
 
   const warnBar = (text: string): ReactNode => (
     <div className="flex items-start gap-1.5 rounded-md bg-status-warning-tint px-2.5 py-2 text-xs leading-relaxed text-status-warning">
@@ -507,6 +512,64 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
     }
     return null;
   })();
+
+  // ── M5.3 执行方式区（单/批共用）：权限档位之下、表单尾部（预览条款 7）；
+  //    批量分支同款渲染（用户 2026-10-31 裁定，覆盖原条款 8）──
+  const executionModeSection = (
+    <>
+<div className="flex flex-col gap-2.5">
+                <div className="flex items-center gap-2.5">
+                  <span className="text-sm text-secondary">执行方式</span>
+                  <Segmented
+                    options={[
+                      { value: 'agent', label: '单 agent' },
+                      { value: 'team', label: '团队协作' },
+                    ]}
+                    value={execMode}
+                    onChange={(v) => setExecMode(v)}
+                    aria-label="执行方式"
+                  />
+                </div>
+                {execMode === 'agent' ? (
+                  <p className="text-xs leading-relaxed text-tertiary">
+                    任务落到目标节点后由单个 agent 处理（默认 agent，或按 agent 指定）
+                  </p>
+                ) : (
+                  <>
+                    <Select
+                      label="团队"
+                      value={delegationTeamId}
+                      onChange={(e) => setDelegationTeamId(e.target.value)}
+                    >
+                      {teams.length === 0 ? (
+                        <option value="">暂无团队（≥2 成员的团队才可协作）</option>
+                      ) : (
+                        <>
+                          <option value="">请选择团队</option>
+                          {teams.map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.name}
+                            </option>
+                          ))}
+                        </>
+                      )}
+                    </Select>
+                    {selectedTeam && (
+                      <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-status-violet-tint px-2.5 py-0.5 text-xs text-status-violet">
+                        <Users size={14} strokeWidth={1.75} aria-hidden />
+                        {`leader：${
+                          selectedTeam.members.find(
+                            (m) => m.instanceId === selectedTeam.leaderInstanceId,
+                          )?.agentName ?? '未知'
+                        } · 提交时展开为成员名单快照`}
+                      </span>
+                    )}
+                    {teamPrecheckNote}
+                  </>
+                )}
+              </div>
+    </>
+  );
 
   return (
     <Dialog
@@ -575,6 +638,8 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
                 onPermissionTierChange={setPermissionTier}
               />
             )}
+            {/* M5.3：外派执行方式区（批量分支——整批统一团队，2026-10-31 裁定） */}
+            {routingAvailable && remoteRouting && executionModeSection}
           </>
         ) : (
           <>
@@ -604,61 +669,8 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
                 onPermissionTierChange={setPermissionTier}
               />
             )}
-            {/* M5.3 X3：外派「执行方式」——权限档位之下、表单尾部（预览定值条款 7）；
-                批量分支不渲染本区（条款 8） */}
-            {routingAvailable && remoteRouting && (
-              <div className="flex flex-col gap-2.5">
-                <div className="flex items-center gap-2.5">
-                  <span className="text-sm text-secondary">执行方式</span>
-                  <Segmented
-                    options={[
-                      { value: 'agent', label: '单 agent' },
-                      { value: 'team', label: '团队协作' },
-                    ]}
-                    value={execMode}
-                    onChange={(v) => setExecMode(v)}
-                    aria-label="执行方式"
-                  />
-                </div>
-                {execMode === 'agent' ? (
-                  <p className="text-xs leading-relaxed text-tertiary">
-                    任务落到目标节点后由单个 agent 处理（默认 agent，或按 agent 指定）
-                  </p>
-                ) : (
-                  <>
-                    <Select
-                      label="团队"
-                      value={delegationTeamId}
-                      onChange={(e) => setDelegationTeamId(e.target.value)}
-                    >
-                      {teams.length === 0 ? (
-                        <option value="">暂无团队（≥2 成员的团队才可协作）</option>
-                      ) : (
-                        <>
-                          <option value="">请选择团队</option>
-                          {teams.map((t) => (
-                            <option key={t.id} value={t.id}>
-                              {t.name}
-                            </option>
-                          ))}
-                        </>
-                      )}
-                    </Select>
-                    {selectedTeam && (
-                      <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-status-violet-tint px-2.5 py-0.5 text-xs text-status-violet">
-                        <Users size={14} strokeWidth={1.75} aria-hidden />
-                        {`leader：${
-                          selectedTeam.members.find(
-                            (m) => m.instanceId === selectedTeam.leaderInstanceId,
-                          )?.agentName ?? '未知'
-                        } · 提交时展开为成员名单快照`}
-                      </span>
-                    )}
-                    {teamPrecheckNote}
-                  </>
-                )}
-              </div>
-            )}
+            {/* M5.3：外派执行方式区（单任务分支） */}
+            {routingAvailable && remoteRouting && executionModeSection}
             {!remoteRouting && (
               <>
                 <Select
