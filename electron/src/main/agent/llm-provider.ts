@@ -445,8 +445,8 @@ class OpenAIProvider implements LLMProvider {
     const apiUrl = this.baseUrl
       ? `${this.baseUrl}/chat/completions`
       : 'https://api.openai.com/v1/chat/completions';
-        const nameCodec = new ToolNameCodec(tools);
-const body: Record<string, unknown> = {
+    const nameCodec = new ToolNameCodec(tools);
+    const body: Record<string, unknown> = {
       model: this.model,
       messages: messages.map((m) => toOpenAIMessage(m, nameCodec)),
     };
@@ -472,7 +472,7 @@ const body: Record<string, unknown> = {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify(body),
-    });
+    }, ...(signal ? [{ signal }] : []));
 
     if (!response.ok) {
       const errText = await response.text();
@@ -531,8 +531,8 @@ class AnthropicProvider implements LLMProvider {
     const systemMsg = messages.find((m) => m.role === 'system');
     const conversationMessages = messages.filter((m) => m.role !== 'system');
 
-        const nameCodec = new ToolNameCodec(tools);
-const body: Record<string, unknown> = {
+    const nameCodec = new ToolNameCodec(tools);
+    const body: Record<string, unknown> = {
       model: this.model,
       // P0-3：配置值替换硬编码 4096（Anthropic max_tokens 必填——缺省回退旧值）
       max_tokens: this.maxTokens && this.maxTokens > 0 ? this.maxTokens : 4096,
@@ -559,7 +559,7 @@ const body: Record<string, unknown> = {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify(body),
-    });
+    }, ...(signal ? [{ signal }] : []));
 
     if (!response.ok) {
       const errText = await response.text();

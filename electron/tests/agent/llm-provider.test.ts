@@ -707,3 +707,65 @@ describe('流空闲看门狗（D2）', () => {
     }
   });
 });
+
+// === Oracle MUST FIX 回归锁（2026-10-31 终审）：chat() 的 signal 必须真透传 fetch ===
+// 此前 mock 边界在 createLLMProvider 工厂层（plan-generator.test.ts），mock 比
+// 真实现更保真——signal 死参数全绿漏网。本例 mock 只落 fetch 网络边界。
+
+describe('chat() signal 真透传（fetch 边界）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('caller abort → chat() 以 AbortError reject（底层 fetch 收到同一 signal 并被中断）', async () => {
+    const ctrl = new AbortController();
+    let fetchGotSignal: AbortSignal | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(((_url: unknown, init?: RequestInit) => {
+        fetchGotSignal = init?.signal;
+        // 死等实现：唯一出路是 init.signal abort——若 chat() 未透传，本用例挂死超时红
+        return new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            const e = new Error('This operation was aborted');
+            e.name = 'AbortError';
+            reject(e);
+          });
+        });
+      }) as typeof fetch),
+    );
+    const provider = createLLMProvider({ provider: 'openai', model: 'm' }, 'k');
+    const p = provider.chat([{ role: 'user', content: 'hi' }], undefined, ctrl.signal);
+    const expectAbort = expect(p).rejects.toMatchObject({ name: 'AbortError' });
+    // fetchWithRetry 内部经 AbortSignal.any 合流——init.signal 是合并信号（非原对象），
+    // 身份断言用 instanceof + 传导语义：若 chat() 未透传，fetch mock 收不到 signal，
+    // 永不 reject → 本用例挂死超时红（即 Oracle 抓到的死参数形态）
+    expect(fetchGotSignal).toBeInstanceOf(AbortSignal);
+    ctrl.abort();
+    await expectAbort;
+  });
+
+  it('Anthropic chat() 同款透传', async () => {
+    const ctrl = new AbortController();
+    let fetchGotSignal: AbortSignal | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(((_url: unknown, init?: RequestInit) => {
+        fetchGotSignal = init?.signal;
+        return new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            const e = new Error('This operation was aborted');
+            e.name = 'AbortError';
+            reject(e);
+          });
+        });
+      }) as typeof fetch),
+    );
+    const provider = createLLMProvider({ provider: 'anthropic', model: 'claude' }, 'k');
+    const p = provider.chat([{ role: 'user', content: 'hi' }], undefined, ctrl.signal);
+    const expectAbort = expect(p).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetchGotSignal).toBeInstanceOf(AbortSignal);
+    ctrl.abort();
+    await expectAbort;
+  });
+});

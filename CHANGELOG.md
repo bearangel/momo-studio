@@ -15,7 +15,8 @@
 - **D3 子任务停止（P1）三层验证全绿不可复现**：五段插桩（cancelChain→广播→runners Map→activeTasks→子进程 abortListener）+ 真实 provider 死流反应单测 + cancelChain 入口单测 + e2e 场景 16（真实 App 真 UI 点击 → 真实子进程 → chip 秒级翻终态 + leader 回执收尾，2.2s）——链路完好。生产失效最可能是 D14 渲染主线程阻塞吞点击。防御纵深：三层回归锁 + D2 看门狗兜底 + D8 停滞可见。排查中揪出的真 bug：e2e 定位器子串匹配误点 chip 头行（Playwright getByRole name 默认子串——chip 头行可达名含停止钮文案，须 aria-label 精确定位）
 - **D8 dispatch 卡透明化（P2）**：`StreamState.lastEventAt`（仅实时事件批刷新且限 streaming 态——历史回放/用户展开不算活动，切走切回不洗掉挂死证据）；新组件 `LastActivity`（Activity 图标 11px/1.75 + 「活动 Ns/Nm 前」，>`STALL_WARN_MS`=30s 转 warning+呼吸闪烁 1.6s）；DispatchChip 头行（活动提示后、计时器前）+ InFlightPanel 行（第 N 轮后）；终态与等待授权行不渲染。预览合同 8 条定值逐项落码（`.omo/previews/execution-trust-dispatch-card.html` 已批）
 - **D12**：`dev.mjs` 剥离 argv 首个 `--`（pnpm 透传惯例曾致 `--remote-debugging-port/--user-data-dir` 被 Chromium 当位置参数静默失效、污染真实 profile）
-- **测试**：electron 全量 **5326 绿**（+9：D1×3 / D2×4 / D3×2）；renderer 相关面 **520 绿**（+20）；e2e **14/14**（+场景 16）
+- **测试**：electron 全量 **5328 绿**（+11：D1×3 / D2×4 / D3×2 / Oracle 终审回归锁×2）；renderer 相关面 **520 绿**（+20）；e2e **14/14**（+场景 16）
+- **Oracle 终审**：抓出 1 个 MUST FIX——chat() 的 signal 参数在两个实现里未透传 fetchWithRetry（D1 真中断在真实路径是 no-op，且 mock 比真实现更保真导致全绿漏网——「绿但没测到真路径」典型案例）。修复 = signal 落第 3 参 opts（第 2 参会被内部 AbortSignal.any 合并信号覆写）+ fetch 边界回归锁 2 例；顺手修 PR#18 的 nameCodec 缩进残留
 
 ## [未发布] — 修复：冒号工具名 400（dispatch 工具名 wire 编解码）
 
