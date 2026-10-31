@@ -5,7 +5,7 @@
 // 此前空数组也写入 streams（aggregateEvents([]) 默认 status='streaming'），
 // 重启后所有零事件消息（用户消息）被灌入幽灵流式状态，MessageBubble 把它们
 // 渲染成空的"流式中"气泡，用户消息文本完全不显示。
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useStreamStore } from './stream.store';
 import type { MessageEventRow } from '../ipc/types';
 
@@ -382,6 +382,98 @@ describe('hydrateFromEvents 按 seq 归并（2026-09-26 P0：截断水合抹掉�
   });
 });
 
+
+// === lastEventAt（D8 dispatch 卡透明化，2026-10-31）：按流记录「最后活动时间」===
+// 契约：仅实时事件批（applyEventBatch）刷新 lastEventAt 为 Date.now()——历史回放
+//（hydrateFromEvents）与用户触发展开（expand*）都不算活动、只保留既有值；流进入
+// 终态后不再刷新（停滞指示的数据源，17min 假死不可辨的修复件）。
+describe('stream.store：lastEventAt（D8 最后活动）', () => {
+  beforeEach(() => {
+    useStreamStore.getState().reset();
+  });
+
+  it('applyEventBatch 实时批 → lastEventAt 置为 Date.now()（首个批次即流开始活动）', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    useStreamStore.getState().applyEventBatch([
+      mkEvent('m-act', 0, 'text_delta', { delta: 'a' }),
+    ]);
+    expect(useStreamStore.getState().streams.get('m-act')?.lastEventAt).toBe(1_000_000);
+    vi.useRealTimers();
+  });
+
+  it('后续实时批持续刷新（新事件 = 新活动）', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    useStreamStore.getState().applyEventBatch([mkEvent('m-act', 0, 'text_delta', { delta: 'a' })]);
+    vi.setSystemTime(1_005_000);
+    useStreamStore.getState().applyEventBatch([mkEvent('m-act', 1, 'text_delta', { delta: 'b' })]);
+    expect(useStreamStore.getState().streams.get('m-act')?.lastEventAt).toBe(1_005_000);
+    vi.useRealTimers();
+  });
+
+  it('终态批次后不再更新：final 批保留此前 lastEventAt（终态后冻结）', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    useStreamStore.getState().applyEventBatch([mkEvent('m-act', 0, 'text_delta', { delta: 'a' })]);
+    vi.setSystemTime(1_020_000);
+    useStreamStore.getState().applyEventBatch([mkEvent('m-act', 1, 'final', { status: 'done' })]);
+    expect(useStreamStore.getState().streams.get('m-act')?.lastEventAt).toBe(1_000_000);
+    vi.useRealTimers();
+  });
+
+  it('终态后的迟到 delta 批不刷新 lastEventAt（final 后 status 保持终态）', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    useStreamStore.getState().applyEventBatch([mkEvent('m-act', 0, 'text_delta', { delta: 'a' })]);
+    vi.setSystemTime(1_020_000);
+    useStreamStore.getState().applyEventBatch([mkEvent('m-act', 1, 'final', { status: 'done' })]);
+    vi.setSystemTime(1_030_000);
+    useStreamStore.getState().applyEventBatch([mkEvent('m-act', 2, 'text_delta', { delta: '迟' })]);
+    expect(useStreamStore.getState().streams.get('m-act')?.status).toBe('done');
+    expect(useStreamStore.getState().streams.get('m-act')?.lastEventAt).toBe(1_000_000);
+    vi.useRealTimers();
+  });
+
+  it('hydrateFromEvents 历史回放不置 lastEventAt（重启回放不算实时活动）', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    useStreamStore.getState().hydrateFromEvents('m-hist', [
+      mkEvent('m-hist', 0, 'text_delta', { delta: '历史' }),
+      mkEvent('m-hist', 1, 'final', { status: 'done' }),
+    ]);
+    expect(useStreamStore.getState().streams.get('m-hist')?.lastEventAt).toBeUndefined();
+    vi.useRealTimers();
+  });
+
+  it('hydrateFromEvents 归并不洗掉实时积累的 lastEventAt（切走再切回场景）', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    useStreamStore.getState().applyEventBatch([mkEvent('m-live', 0, 'text_delta', { delta: 'a' })]);
+    vi.setSystemTime(2_000_000);
+    // 切回会话触发 getMessages 水合——实时值必须保留（挂死流指示不能因此消失）
+    useStreamStore.getState().hydrateFromEvents('m-live', [
+      mkEvent('m-live', 0, 'text_delta', { delta: 'a' }),
+    ]);
+    expect(useStreamStore.getState().streams.get('m-live')?.lastEventAt).toBe(1_000_000);
+    vi.useRealTimers();
+  });
+
+  it('expandThinking 用户触发展开不刷新 lastEventAt（展开不是 agent 活动）', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    useStreamStore.getState().hydrateFromEvents('m-exp', [
+      mkEvent('m-exp', 0, 'thinking_delta', { delta: '预览' }),
+      mkEvent('m-exp', 1_000_000_000, 'thinking_truncated', { fullChars: 8 }),
+    ]);
+    vi.setSystemTime(1_000_000);
+    useStreamStore.getState().applyEventBatch([mkEvent('m-exp', 1, 'text_delta', { delta: 'x' })]);
+    vi.setSystemTime(5_000_000);
+    useStreamStore.getState().expandThinking('m-exp', [{ seq: 0, delta: '全文' }]);
+    expect(useStreamStore.getState().streams.get('m-exp')?.lastEventAt).toBe(1_000_000);
+    vi.useRealTimers();
+  });
+});
 
 // ═══ 回归锁（spec 2026-10-03 §5.4）═══
 describe('stream.store：写拦截子串扫描防复活', () => {

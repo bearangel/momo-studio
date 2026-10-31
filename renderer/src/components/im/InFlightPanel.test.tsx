@@ -13,9 +13,11 @@
 // 列表数据用真实形状 InFlightChainView。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, within } from '@testing-library/react';
-import type { InFlightChainView } from '../../ipc/types';
+import type { InFlightChainView, ImMessage } from '../../ipc/types';
 import { InFlightPanel } from './InFlightPanel';
 import { useWriteGrantStore } from '../../stores/write-grant.store';
+import { useSessionStore } from '../../stores/session.store';
+import { useStreamStore, type StreamState } from '../../stores/stream.store';
 
 // IPC 边界 mock：window.api.dispatch 只含被测面（listInFlight / cancelChain）
 const listInFlightMock = vi.fn();
@@ -324,5 +326,179 @@ describe('InFlightPanel — 关闭态徽标刷新（P1-2）', () => {
     });
     // 挂载 1 次 + 打开即拉 1 次 + 2s 帧 1 次 = 3（10s 节拍下此处只会是 2）
     expect(listInFlightMock.mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+// === D8（2026-10-31 dispatch 卡透明化）：行内「活动 Ns 前」最后活动指示 ===
+// 契约（预览 execution-trust-dispatch-card.html 定值清单）：行内「第 N 轮」后渲染
+// 同款两态指示（tertiary 常态 / >STALL_WARN_MS warning 呼吸闪烁）；数据源
+// stream.store.lastEventAt（subStreamSessionId → messageId 反查）；「等待授权」
+// 行不叠加（已 warning 态）；子流无活动数据（消息未到/纯历史）不渲染。
+describe('InFlightPanel — 最后活动指示（D8）', () => {
+  /** 子 agent 消息行（streamSessionId 与 makeChain 默认 s-sub-1 对齐） */
+  function makeSubMessage(overrides: Partial<ImMessage> = {}): ImMessage {
+    return {
+      id: 'm-sub-1',
+      sessionId: 'sess-1',
+      sender: '@sub:server',
+      body: '',
+      eventType: 'm.room.message',
+      streamSessionId: 's-sub-1',
+      parentStreamSessionId: 's-pm-1',
+      segmentOf: null,
+      segmentIndex: null,
+      status: 'streaming',
+      source: 'local',
+      workspaceId: null,
+      taskId: null,
+      contextJson: null,
+      createdAt: 0,
+      updatedAt: 0,
+      ...overrides,
+    };
+  }
+
+  /** 子流 StreamState（仅 lastEventAt 相关面，其余字段与真实聚合输出同形） */
+  function makeSubStream(lastEventAt: number | undefined): StreamState {
+    return {
+      thinking: '',
+      text: '',
+      toolCalls: [],
+      todos: [],
+      dispatches: [],
+      status: 'streaming',
+      events: [],
+      segments: [],
+      messageId: 'm-sub-1',
+      startedAt: 0,
+      ...(lastEventAt !== undefined ? { lastEventAt } : {}),
+    };
+  }
+
+  /** 种入反查链：会话消息行 + streams 条目（缺省只种消息、无流） */
+  function seedSubStream(lastEventAt?: number, withMessage = true): void {
+    useSessionStore.setState({
+      messagesBySession: new Map(
+        withMessage ? [['sess-1', [makeSubMessage()]]] : [],
+      ),
+    });
+    useStreamStore.setState({
+      streams: new Map(lastEventAt !== undefined ? [['m-sub-1', makeSubStream(lastEventAt)]] : []),
+    });
+  }
+
+  beforeEach(() => {
+    useSessionStore.setState({ messagesBySession: new Map() });
+    useStreamStore.setState({ streams: new Map() });
+    useWriteGrantStore.getState().__resetForTest();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('活跃链（4s 前活动）→ 「第 N 轮」后渲染「活动 4s 前」tertiary 常态', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    seedSubStream(1_000_000 - 4_000);
+    listInFlightMock.mockResolvedValue([makeChain()]);
+
+    render(<InFlightPanel sessionId="sess-1" />);
+    await openPanel();
+
+    const round = screen.getByText('第 2 轮');
+    const el = screen.getByTestId('last-activity');
+    expect(el).toHaveTextContent('活动 4s 前');
+    expect(el).toHaveClass('text-tertiary');
+    // DOM 序：「第 N 轮」之后
+    expect(
+      round.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('停滞链（47s 无事件）→ warning 色 + font-medium + 图标呼吸闪烁', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    seedSubStream(1_000_000 - 47_000);
+    listInFlightMock.mockResolvedValue([makeChain()]);
+
+    render(<InFlightPanel sessionId="sess-1" />);
+    await openPanel();
+
+    const el = screen.getByTestId('last-activity');
+    expect(el).toHaveTextContent('活动 47s 前');
+    expect(el).toHaveClass('text-status-warning');
+    expect(el).toHaveClass('font-medium');
+    expect(el.querySelector('svg')).toHaveClass('momo-activity-blink');
+  });
+
+  it('等待授权行不叠加指示（已 warning 态，按契约排除）', async () => {
+    seedSubStream(1_000_000 - 4_000);
+    listInFlightMock.mockResolvedValue([makeChain()]);
+
+    render(<InFlightPanel sessionId="sess-1" />);
+    useWriteGrantStore.getState().receiveWriteBlocked({
+      sessionId: 'sess-1',
+      workspaceId: 'ws-1',
+      dirs: ['/ws/out'],
+      command: 'mkdir -p out',
+      streamSessionId: 's-sub-1',
+      sourceAgentName: 'coder',
+      sessionTitle: '团队功能与分工介绍',
+    });
+    await openPanel();
+
+    expect(screen.getByText('等待授权')).toBeInTheDocument();
+    expect(screen.queryByTestId('last-activity')).not.toBeInTheDocument();
+  });
+
+  it('子流无活动数据（纯历史水合 lastEventAt 缺失）→ 不渲染指示', async () => {
+    seedSubStream(undefined);
+    listInFlightMock.mockResolvedValue([makeChain()]);
+
+    render(<InFlightPanel sessionId="sess-1" />);
+    await openPanel();
+
+    expect(screen.getByText('第 2 轮')).toBeInTheDocument();
+    expect(screen.queryByTestId('last-activity')).not.toBeInTheDocument();
+  });
+
+  it('子消息未到（反查链断裂）→ 不渲染指示也不报错', async () => {
+    seedSubStream(1_000_000 - 4_000, false);
+    listInFlightMock.mockResolvedValue([makeChain()]);
+
+    render(<InFlightPanel sessionId="sess-1" />);
+    await openPanel();
+
+    expect(screen.getByText('码农')).toBeInTheDocument();
+    expect(screen.queryByTestId('last-activity')).not.toBeInTheDocument();
+  });
+
+  it('实时事件批刷新 lastEventAt → 指示随 store 更新（key selector 反查链生效）', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    seedSubStream(1_000_000 - 4_000);
+    listInFlightMock.mockResolvedValue([makeChain()]);
+
+    render(<InFlightPanel sessionId="sess-1" />);
+    await openPanel();
+    expect(screen.getByTestId('last-activity')).toHaveTextContent('活动 4s 前');
+
+    // 新事件批到达（生产语义：applyEventBatch 重聚合 + 刷 lastEventAt）
+    vi.setSystemTime(1_020_000);
+    useStreamStore
+      .getState()
+      .applyEventBatch([
+        {
+          id: 'e-live-1',
+          messageId: 'm-sub-1',
+          seq: 1,
+          eventType: 'text_delta',
+          payload: { delta: '进展' },
+          createdAt: 1_020_000,
+        },
+      ]);
+    await act(async () => {});
+    expect(screen.getByTestId('last-activity')).toHaveTextContent('活动 0s 前');
   });
 });

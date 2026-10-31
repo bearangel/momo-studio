@@ -44,6 +44,7 @@ import {
   getProviderPreset,
   getPresetModel,
   parseThinkingConfig,
+  type ReasoningCapability,
   type ThinkingRequest,
   type ThinkingWire,
 } from '../llm/provider-presets';
@@ -225,6 +226,25 @@ export async function resolveModelLimits(
 }
 
 /**
+ * 思维方言解析内核：模型级覆写 → 预设级 → platform 兜底（anthropic→anthropic-budget，
+ * openai→effort）。供无 AgentDefinition 的场景（onboarding 方案生成只持
+ * providerId+modelId）复用同一条解析链——禁止手拼方言（D1 修复：两端漂移源）。
+ */
+export function resolveThinkingDialect(
+  modelName: string,
+  provider: ModelProvider,
+): { wire: ThinkingWire; capability: ReasoningCapability } {
+  const preset = provider.presetKey ? getProviderPreset(provider.presetKey) : null;
+  const presetModel = preset?.models.find((m) => m.id === modelName) ?? null;
+  const wire: ThinkingWire =
+    presetModel?.thinkingWire ?? preset?.thinkingWire ??
+    (provider.platform === 'anthropic' ? 'anthropic-budget' : 'effort');
+  const capability =
+    presetModel?.reasoning ?? lookupReasoningCapability(provider.platform, modelName);
+  return { wire, capability };
+}
+
+/**
  * 思维配置 resolve（spec 2026-09-09-provider-presets §4，单点定型）：
  *   生效配置 = agent_definitions.thinking_json → provider_models.thinking_json → auto
  *   能力词汇表 = 预设模型表 → 正则目录 → none
@@ -235,13 +255,7 @@ export function resolveThinkingConfig(
   def: AgentDefinition,
   provider: ModelProvider,
 ): ThinkingRequest {
-  const preset = provider.presetKey ? getProviderPreset(provider.presetKey) : null;
-  const presetModel = preset?.models.find((m) => m.id === def.modelName) ?? null;
-  const wire: ThinkingWire =
-    presetModel?.thinkingWire ?? preset?.thinkingWire ??
-    (provider.platform === 'anthropic' ? 'anthropic-budget' : 'effort');
-  const capability =
-    presetModel?.reasoning ?? lookupReasoningCapability(provider.platform, def.modelName);
+  const { wire, capability } = resolveThinkingDialect(def.modelName, provider);
 
   const row = getDb()
     .prepare(

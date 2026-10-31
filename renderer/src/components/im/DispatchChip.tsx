@@ -6,6 +6,8 @@
 // B5：isBusy（executing/queued）头行提供链级停止按钮——直调
 // ipc.dispatch.cancelChain（by subStreamSessionId），取消后状态翻转由
 // abort_dispatch 广播 → 子流事件回流驱动（非本地乐观态）。
+// D8（2026-10-31）：isBusy 头行在活动提示与计时器之间渲染「活动 Ns 前」
+// 停滞指示（LastActivity，数据源 subStream.lastEventAt，>30s 转警示）。
 import { useEffect, useState, type KeyboardEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { Brain, ChevronDown, ChevronRight, CircleCheck, CircleSlash, CircleX, Clock, Loader2, PenLine, Send, ShieldQuestion, Square, Timer, Wrench } from 'lucide-react';
@@ -15,6 +17,7 @@ import { Avatar } from '../ui/Avatar';
 import { showToast } from '../ui/Toast';
 import { dispatchStatusStyle, type DispatchStatus } from '../../lib/task-status';
 import { SubAgentSection } from './SubAgentSection';
+import { LastActivity } from './LastActivity';
 import { useWriteGrantStore } from '../../stores/write-grant.store';
 
 export interface DispatchChild {
@@ -151,6 +154,10 @@ export function DispatchChip({ child, subStream, subMessageId }: DispatchChipPro
             <activity.icon size={11} strokeWidth={1.75} aria-hidden />
             {activity.text}
           </span>
+        )}
+        {/* D8：最后活动指示（停滞 >30s 转警示）——忙态且子流有实时活动数据才渲染 */}
+        {isBusy && subStream?.lastEventAt !== undefined && (
+          <LastActivity lastEventAt={subStream.lastEventAt} />
         )}
         {timerSince !== null && <ElapsedTimer since={timerSince} />}
         {isBusy && (

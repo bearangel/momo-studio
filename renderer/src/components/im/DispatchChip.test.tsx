@@ -13,12 +13,13 @@
 //     chip 展开；not_found → toast『子任务已结束』（cancelled 不弹）
 //
 // v2.1：emoji 字形 / inline hex 断言退役，按 tone class + lucide svg 语义断言。
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import type { StreamState } from '../../stores/stream.store';
 import { Toast, dismissToast } from '../ui/Toast';
 import type { DispatchChild } from './DispatchChip';
 import { DispatchChip } from './DispatchChip';
+import { STALL_WARN_MS } from './LastActivity';
 
 /** 构造 DispatchChild（默认 queued） */
 function makeChild(overrides: Partial<DispatchChild> = {}): DispatchChild {
@@ -424,5 +425,147 @@ describe('DispatchChip — 链级停止按钮', () => {
     // 冲刷 async onClick 的微任务链（mockResolvedValue 已决，宏任务边界后判定分支必已执行）
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByTestId('ui-toast')).not.toBeInTheDocument();
+  });
+});
+
+// === D8（2026-10-31 dispatch 卡透明化）：头行「活动 Ns 前」最后活动指示 ===
+// 契约（预览 execution-trust-dispatch-card.html 定值清单）：isBusy（executing/queued）
+// 且 subStream.lastEventAt 有值时渲染于活动提示之后、ElapsedTimer 之前；
+// <60s 显示秒、≥60s 显示 Nm；>STALL_WARN_MS 转 warning + font-medium + 图标呼吸
+// 闪烁；终态不渲染。数据源仅 stream.store（无新 IPC）。
+describe('DispatchChip — 最后活动指示（D8）', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('executing + 3s 前活动 → tertiary 常态「活动 3s 前」（whitespace-nowrap shrink-0）', () => {
+    render(
+      <DispatchChip
+        child={makeChild({ status: 'executing' })}
+        subStream={makeStream({ lastEventAt: 1_000_000 - 3_000 })}
+      />,
+    );
+    const el = screen.getByTestId('last-activity');
+    expect(el).toHaveTextContent('活动 3s 前');
+    expect(el).toHaveClass('text-tertiary');
+    expect(el).not.toHaveClass('text-status-warning');
+    expect(el).toHaveClass('whitespace-nowrap');
+    expect(el).toHaveClass('shrink-0');
+  });
+
+  it('位置：活动提示之后、ElapsedTimer 之前（头行 DOM 序）', () => {
+    render(
+      <DispatchChip
+        child={makeChild({ status: 'executing' })}
+        subStream={makeStream({
+          lastEventAt: 1_000_000 - 3_000,
+          segments: [{ kind: 'thinking', text: '正在分析' }],
+        })}
+      />,
+    );
+    const activity = screen.getByTestId('dispatch-activity');
+    const last = screen.getByTestId('last-activity');
+    const elapsed = screen.getByText(ELAPSED_TEXT);
+    const FOLLOWING = Node.DOCUMENT_POSITION_FOLLOWING;
+    expect(activity.compareDocumentPosition(last) & FOLLOWING).toBeTruthy();
+    expect(last.compareDocumentPosition(elapsed) & FOLLOWING).toBeTruthy();
+  });
+
+  it('1s 跳动重算：+1s 后「活动 3s 前」→「活动 4s 前」', () => {
+    render(
+      <DispatchChip
+        child={makeChild({ status: 'executing' })}
+        subStream={makeStream({ lastEventAt: 1_000_000 - 3_000 })}
+      />,
+    );
+    expect(screen.getByTestId('last-activity')).toHaveTextContent('活动 3s 前');
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(screen.getByTestId('last-activity')).toHaveTextContent('活动 4s 前');
+  });
+
+  it('停滞 47s（> STALL_WARN_MS）→ warning 色 + font-medium + 图标呼吸闪烁', () => {
+    render(
+      <DispatchChip
+        child={makeChild({ status: 'executing' })}
+        subStream={makeStream({ lastEventAt: 1_000_000 - 47_000 })}
+      />,
+    );
+    const el = screen.getByTestId('last-activity');
+    expect(el).toHaveTextContent('活动 47s 前');
+    expect(el).toHaveClass('text-status-warning');
+    expect(el).toHaveClass('font-medium');
+    expect(el).not.toHaveClass('text-tertiary');
+    expect(el.querySelector('svg')).toHaveClass('momo-activity-blink');
+  });
+
+  it(`阈值边界：恰 ${STALL_WARN_MS}ms 不警告，+1ms 即警告`, () => {
+    const { rerender } = render(
+      <DispatchChip
+        child={makeChild({ status: 'executing' })}
+        subStream={makeStream({ lastEventAt: 1_000_000 - STALL_WARN_MS })}
+      />,
+    );
+    expect(screen.getByTestId('last-activity')).toHaveClass('text-tertiary');
+    rerender(
+      <DispatchChip
+        child={makeChild({ status: 'executing' })}
+        subStream={makeStream({ lastEventAt: 1_000_000 - STALL_WARN_MS - 1 })}
+      />,
+    );
+    expect(screen.getByTestId('last-activity')).toHaveClass('text-status-warning');
+  });
+
+  it('≥60s 显示 Nm（125s 前 → 「活动 2m 前」）', () => {
+    render(
+      <DispatchChip
+        child={makeChild({ status: 'executing' })}
+        subStream={makeStream({ lastEventAt: 1_000_000 - 125_000 })}
+      />,
+    );
+    expect(screen.getByTestId('last-activity')).toHaveTextContent('活动 2m 前');
+  });
+
+  it('queued（isBusy）且子流已有活动 → 同样渲染指示', () => {
+    render(
+      <DispatchChip
+        child={makeChild({ status: 'queued' })}
+        subStream={makeStream({ lastEventAt: 1_000_000 - 3_000 })}
+      />,
+    );
+    expect(screen.getByTestId('last-activity')).toHaveTextContent('活动 3s 前');
+  });
+
+  it.each(['completed', 'failed', 'aborted', 'delegated'] as const)(
+    '%s（终态）不渲染活动指示',
+    (status) => {
+      render(
+        <DispatchChip
+          child={makeChild({ status })}
+          subStream={makeStream({ lastEventAt: 1_000_000 - 3_000 })}
+        />,
+      );
+      expect(screen.queryByTestId('last-activity')).not.toBeInTheDocument();
+    },
+  );
+
+  it('executing 无 subStream（派单空窗）→ 不渲染（无活动数据）', () => {
+    render(<DispatchChip child={makeChild({ status: 'executing' })} />);
+    expect(screen.queryByTestId('last-activity')).not.toBeInTheDocument();
+  });
+
+  it('executing 有 subStream 但 lastEventAt 缺失（纯历史水合）→ 不渲染', () => {
+    render(
+      <DispatchChip
+        child={makeChild({ status: 'executing' })}
+        subStream={makeStream({ lastEventAt: undefined })}
+      />,
+    );
+    expect(screen.queryByTestId('last-activity')).not.toBeInTheDocument();
   });
 });

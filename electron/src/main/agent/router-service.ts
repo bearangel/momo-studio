@@ -809,6 +809,7 @@ export class RouterService {
         : arg.subStreamSessionId !== undefined
           ? dispatchRegistry.findBySubStream(arg.subStreamSessionId)
           : undefined;
+
     if (!chain || chain.status !== 'in_flight') return { status: 'not_found' };
     dispatchRegistry.cancel(chain.taskId);
     if (chain.subStreamSessionId) this.broadcastAbortDispatch(chain.taskId, chain.subStreamSessionId);

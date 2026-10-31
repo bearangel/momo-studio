@@ -6,6 +6,9 @@
 // （测试保真边界在 LLMResponse 形状）。
 import type { LLMMessage, LLMResponse } from '../agent/llm-provider';
 import { createLLMProvider } from '../agent/llm-provider';
+import type { ThinkingRequest } from '../llm/provider-presets';
+import { resolveThinkingDialect } from '../agent/spawn-helpers';
+import { logger } from '../logger';
 import { getProvider, getProviderApiKey } from '../agent/provider-crud';
 import { listBuiltinPresetAgents, previewBuiltinPresetAgent } from '../agent/builtin';
 import { listRegistered } from '../mcp/host-manager';
@@ -118,23 +121,42 @@ export async function generateOnboardingPlan(
   const callLlm =
     deps?.callLlm ??
     (async (messages: LLMMessage[]): Promise<LLMResponse> => {
+      // D1（验收报告 2026-10-31）：显式关思考——经 resolveThinkingConfig 同源方言链
+      // 强制 mode='off'（方案生成是白名单选择题，思考零增益而耗时是主体——实测
+      // glm-5.3-flash 思考 58.8s）；60s 从「确定性命中」退化为真兜底
+      const dialect = resolveThinkingDialect(input.modelId, provider);
+      const thinking: ThinkingRequest = {
+        wire: dialect.wire,
+        kind: dialect.capability.kind,
+        mode: 'off',
+        effort: null,
+      };
       const llm = createLLMProvider(
         { provider: provider.platform, model: input.modelId, baseUrl: provider.baseUrl },
         apiKey,
+        { thinking },
       );
-      // 60s 外层 race：底层请求由模块级 300s 兜底终止，结果被丢弃即可
-      return Promise.race([
-        llm.chat(messages),
-        new Promise<LLMResponse>((_, reject) =>
-          setTimeout(
-            () =>
-              reject(
-                new Error('AI 生成超时（60s），建议换更快的模型（如 flash 档）后重试'),
-              ),
-            ONBOARDING_LLM_TIMEOUT_MS,
-          ),
-        ),
-      ]);
+      // 真中断：AbortController + setTimeout——超时即断底层连接（旧 race 只丢弃
+      // 结果，在途请求继续烧 token 且重试叠加）
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), ONBOARDING_LLM_TIMEOUT_MS);
+      try {
+        return await llm.chat(messages, undefined, ctrl.signal);
+      } catch (err) {
+        if (ctrl.signal.aborted) {
+          const seconds = Math.round(ONBOARDING_LLM_TIMEOUT_MS / 1000);
+          logger.warn('onboarding 方案生成超时（已真中断底层请求）', {
+            providerId: input.providerId,
+            model: input.modelId,
+            timeoutMs: ONBOARDING_LLM_TIMEOUT_MS,
+            cause: err instanceof Error ? err.message : String(err),
+          });
+          throw new Error(`AI 生成超时（${seconds} 秒），可重试或转手动配置（已完成步骤不丢失）`);
+        }
+        throw err;
+      } finally {
+        clearTimeout(timer);
+      }
     });
 
   const ctx: PlanPromptContext = {

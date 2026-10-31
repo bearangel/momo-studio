@@ -7,10 +7,15 @@
 //
 // 注：brief 骨架的徽标前景 text-status-error-foreground 在 token 表中不存在（会静默
 // 生成空样式），按 Button danger 既有惯例改为 text-inverse——唯一偏离 verbatim 处。
-import { useCallback, useEffect, useState } from 'react';
+// D8（2026-10-31）：行内「第 N 轮」后渲染「活动 Ns 前」停滞指示（LastActivity，
+// streamSessionId→messageId 反查 stream.store.lastEventAt；等待授权行不叠加）。
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Loader2, Square, Zap, ShieldQuestion } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useWriteGrantStore } from '../../stores/write-grant.store';
+import { useSessionStore } from '../../stores/session.store';
+import { useStreamStore } from '../../stores/stream.store';
+import { LastActivity } from './LastActivity';
 import type { InFlightChainView, WriteBlockedEvent } from '../../ipc/types';
 
 export function InFlightPanel({ sessionId }: { sessionId: string }) {
@@ -57,6 +62,39 @@ export function InFlightPanel({ sessionId }: { sessionId: string }) {
     clearWaiting(ev.streamSessionId ?? '');
   };
 
+  // D8 最后活动指示数据源：streamSessionId → messageId 反查（子 agent 消息行的
+  // streamSessionId 字段，AgentStreamBubble 同款反查链）→ streams Map 的 lastEventAt
+  const sessionMessages = useSessionStore((s) => s.messagesBySession.get(sessionId));
+  const messageIdByStreamId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const m of sessionMessages ?? []) {
+      if (m.streamSessionId) map.set(m.streamSessionId, m.id);
+    }
+    return map;
+  }, [sessionMessages]);
+  // key 形态 selector（P1-1 惯例）：tracked lastEventAt 无变化不重渲染面板
+  const lastEventAtKey = useStreamStore((s) => {
+    const parts: string[] = [];
+    for (const c of chains) {
+      const mid = c.subStreamSessionId != null ? messageIdByStreamId.get(c.subStreamSessionId) : undefined;
+      parts.push((mid !== undefined ? s.streams.get(mid)?.lastEventAt : undefined)?.toString() ?? '-');
+    }
+    return parts.join(',');
+  });
+  const lastEventAtByTaskId = useMemo(() => {
+    const streams = useStreamStore.getState().streams;
+    const map = new Map<string, number>();
+    for (const c of chains) {
+      if (c.subStreamSessionId == null) continue;
+      const mid = messageIdByStreamId.get(c.subStreamSessionId);
+      const lastEventAt = mid !== undefined ? streams.get(mid)?.lastEventAt : undefined;
+      if (lastEventAt !== undefined) map.set(c.taskId, lastEventAt);
+    }
+    return map;
+    // lastEventAtKey 门控：tracked 值无变化不重算（streams 非响应式读取）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chains, messageIdByStreamId, lastEventAtKey]);
+
   return (
     <div className="relative">
       <button
@@ -78,6 +116,7 @@ export function InFlightPanel({ sessionId }: { sessionId: string }) {
           {chains.map((c) => {
             const waiting = c.subStreamSessionId != null ? waitingByStream.get(c.subStreamSessionId) : undefined;
             const ev = waiting?.event;
+            const lastEventAt = lastEventAtByTaskId.get(c.taskId);
             return (
               <div key={c.taskId} className="flex items-center gap-1.5 rounded px-1 py-1 text-xs hover:bg-surface-active">
                 {ev !== undefined ? (
@@ -89,7 +128,11 @@ export function InFlightPanel({ sessionId }: { sessionId: string }) {
                 {ev !== undefined ? (
                   <span className="text-status-warning">等待授权</span>
                 ) : (
-                  <span className="text-tertiary">第 {c.round} 轮</span>
+                  <>
+                    <span className="text-tertiary">第 {c.round} 轮</span>
+                    {/* D8：最后活动指示——等待授权行不叠加（该分支已排除） */}
+                    {lastEventAt !== undefined && <LastActivity lastEventAt={lastEventAt} />}
+                  </>
                 )}
                 <span className="ml-auto text-tertiary">{Math.round((Date.now() - c.startedAt) / 60000)}m</span>
                 {ev !== undefined ? (

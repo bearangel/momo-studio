@@ -72,6 +72,13 @@ export interface StreamState extends AggregatedStream {
   botUserId?: string;
   /** A5 缺失字段补齐：从 message.parentStreamSessionId 推断 */
   parentStreamSessionId?: string;
+  /**
+   * D8（2026-10-31 dispatch 卡透明化）：该流最后一个实时事件的应用时刻。
+   * 仅 applyEventBatch（实时推送）刷新——历史回放（hydrateFromEvents）与用户
+   * 触发展开（expand*）只保留既有值、不算活动；流终态后冻结。
+   * dispatch 卡/在途面板的「活动 Ns 前」停滞指示数据源。
+   */
+  lastEventAt?: number;
 }
 
 interface StreamStoreState {
@@ -170,6 +177,11 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
           ...aggregated,
           messageId: msgId,
           startedAt: events[0]?.createdAt ?? Date.now(),
+          // D8 最后活动：实时批即活动；终态后冻结（保留此前值）
+          lastEventAt:
+            aggregated.status === 'streaming'
+              ? Date.now()
+              : state.streams.get(msgId)?.lastEventAt,
         });
       }
       return {
@@ -215,6 +227,8 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
         segments,
         messageId,
         startedAt: merged[0]?.createdAt ?? Date.now(),
+        // D8：历史回放不算实时活动——保留实时路径积累的值，不刷新
+        lastEventAt: state.streams.get(messageId)?.lastEventAt,
       });
       return { streams: newStreams };
     });
@@ -260,6 +274,8 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
         segments,
         messageId,
         startedAt: merged[0]?.createdAt ?? Date.now(),
+        // D8：用户触发展开不算 agent 活动——保留既有值
+        lastEventAt: state.streams.get(messageId)?.lastEventAt,
       });
       return { streams: newStreams };
     });
@@ -304,6 +320,8 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
         segments,
         messageId,
         startedAt: merged[0]?.createdAt ?? Date.now(),
+        // D8：用户触发展开不算 agent 活动——保留既有值
+        lastEventAt: state.streams.get(messageId)?.lastEventAt,
       });
       return { streams: newStreams };
     });
