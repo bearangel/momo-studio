@@ -8,7 +8,7 @@ import { getDb } from '../storage/db';
 import { listWorkspaces, getWorkspace } from '../workspace/crud';
 import { listMembers, getAgentDefinition } from '../agent/agent-queries';
 import { createCollabSession } from '../im/session-ops';
-import { sendUserMessage } from '../im/session-service';
+import { sendUserMessage, broadcastSessionListChanged } from '../im/session-service';
 import { getRouterService } from '../agent/router-bootstrap';
 import { getSession } from '../storage/sessions/repo';
 import { clearSessionGrants, grantWriteDirs } from '../sandbox/write-grant';
@@ -249,20 +249,25 @@ export function wireDelegationRunnerPorts(opts: WireDelegationPortsOpts): Delega
       // M5.3 多成员版（团队外派）：members 在场 → kind='task_execution' 多成员
       // collab 会话（createCollabSession members 目标：去重 + leader 越集 +
       // 成员存在性校验 + is_leader 快照写入——与本地建会临时组队同链路）
+      let sessionId: string;
       if (input.members) {
         const leader = input.members.find((m) => m.isLeader);
         if (!leader) throw new Error('团队委派建会缺少 leader（runner 侧已校验恰一名——不可达防御）');
-        return createCollabSession(input.workspaceId, input.title, {
+        sessionId = createCollabSession(input.workspaceId, input.title, {
           type: 'members',
           instanceIds: input.members.map((m) => m.instanceId),
           leaderInstanceId: leader.instanceId,
         }, { kind: 'task_execution' }).id;
+      } else {
+        // MC1：普通 collab 会话（单 agent 目标 is_leader=1）+ 标题=任务书摘要
+        sessionId = createCollabSession(input.workspaceId, input.title, {
+          type: 'agent',
+          instanceId: input.memberInstanceId!,
+        }).id;
       }
-      // MC1：普通 collab 会话（单 agent 目标 is_leader=1）+ 标题=任务书摘要
-      return createCollabSession(input.workspaceId, input.title, {
-        type: 'agent',
-        instanceId: input.memberInstanceId!,
-      }).id;
+      // 不可删：与 executor K10 同口径——外派建会不广播则 IM 视图看不到新会话（用户实测报障）
+      broadcastSessionListChanged();
+      return sessionId;
     },
     startTurn: async (input) => {
       // D6 boot 竞态守卫：RouterService lazy 启动前 sendUserMessage 会「路由目标已解析

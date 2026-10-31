@@ -24,6 +24,7 @@ vi.mock('../../src/main/im/session-ops', () => ({
 }));
 vi.mock('../../src/main/im/session-service', () => ({
   sendUserMessage: vi.fn(async () => undefined),
+  broadcastSessionListChanged: vi.fn(),
 }));
 vi.mock('../../src/main/agent/router-bootstrap', () => ({
   getRouterService: vi.fn(() => null),
