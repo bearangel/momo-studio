@@ -233,15 +233,17 @@ export function RunRoutingField({
         )}
       </div>
       {effectiveMode !== 'local' && (
-        <div className="flex items-center gap-2.5 pl-1 pt-0.5">
-          <span className="text-xs text-tertiary">权限策略</span>
-          <Segmented
-            aria-label="权限策略"
-            options={TIER_OPTIONS}
-            value={permissionTier}
-            onChange={onPermissionTierChange}
-          />
-          <span className="text-xs text-tertiary">{TIER_HINTS[permissionTier]}</span>
+        <div className="flex flex-col gap-1 pl-1 pt-0.5">
+          <div className="flex items-center gap-2.5">
+            <span className="shrink-0 text-xs text-tertiary">权限策略</span>
+            <Segmented
+              aria-label="权限策略"
+              options={TIER_OPTIONS}
+              value={permissionTier}
+              onChange={onPermissionTierChange}
+            />
+          </div>
+          <span className="text-xs leading-relaxed text-tertiary">{TIER_HINTS[permissionTier]}</span>
         </div>
       )}
     </div>

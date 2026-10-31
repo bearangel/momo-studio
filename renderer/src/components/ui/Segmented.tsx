@@ -68,7 +68,8 @@ export function Segmented<T extends string>({
             tabIndex={active ? 0 : -1}
             onClick={() => onChange(o.value)}
             className={cn(
-              'h-7 rounded px-3 text-[13px] font-medium transition-colors',
+              // 不可删：窄容器下逐字折行回归（M5.3 验收「只/读」竖排实锤）
+              'h-7 shrink-0 whitespace-nowrap rounded px-3 text-[13px] font-medium transition-colors',
               active
                 ? 'bg-surface-active text-accent-600 dark:text-accent-300'
                 : 'text-secondary hover:text-primary',
