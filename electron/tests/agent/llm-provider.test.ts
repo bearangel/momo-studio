@@ -17,6 +17,133 @@ beforeEach(() => {
   mockFetch.mockReset();
 });
 
+describe('llm-provider 工具名 wire 编解码（冒号工具名 400 修复）', () => {
+  // 用户实测：团队会话 leader 的 dispatch:<slug> 工具名含冒号，OpenAI 兼容网关
+  // （智谱）按 ^[a-zA-Z0-9_-]+$ 校验 tools[].function.name → 整请求 400。
+  // 契约：内部名保持 dispatch:<slug>（runtime/UI/存储零改动），provider 层
+  // 出站消毒（非法字符→下划线）、入站回映（wire 名→内部名）。
+
+  const COLON_TOOLS = [
+    { name: 'dispatch:coder', description: '调度子 agent', inputSchema: { type: 'object' } },
+    { name: 'dispatch_bg:writer', description: '后台派发', inputSchema: { type: 'object' } },
+    { name: 'read_file', description: '读文件', inputSchema: { type: 'object' } },
+  ];
+
+  it('OpenAI chat：请求 tools 名消毒（dispatch:coder → dispatch_coder）；响应 tool_call 名回映', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: '',
+            tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'dispatch_coder', arguments: '{"task":"干活"}' } }],
+          },
+          finish_reason: 'tool_calls',
+        }],
+      }),
+    });
+    const provider = createLLMProvider({ provider: 'openai', model: 'glm-5.3' }, 'k');
+    const result = await provider.chat([{ role: 'user', content: '派活' }], COLON_TOOLS);
+
+    const body = JSON.parse((mockFetch.mock.calls[0]![1] as { body: string }).body);
+    const names = (body.tools as Array<{ function: { name: string } }>).map((t) => t.function.name);
+    expect(names).toEqual(['dispatch_coder', 'dispatch_bg_writer', 'read_file']);
+    expect(result.toolCalls[0]!.name).toBe('dispatch:coder');
+  });
+
+  it('OpenAI chat：assistant 历史 toolCalls 回放同样消毒（对话续轮请求体合法）', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] }),
+    });
+    const provider = createLLMProvider({ provider: 'openai', model: 'glm-5.3' }, 'k');
+    await provider.chat(
+      [
+        { role: 'user', content: '派活' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'tc1', name: 'dispatch:coder', arguments: { task: 'x' } }] },
+        { role: 'tool', content: '结果', toolCallId: 'tc1' },
+        { role: 'user', content: '继续' },
+      ],
+      COLON_TOOLS,
+    );
+    const body = JSON.parse((mockFetch.mock.calls[0]![1] as { body: string }).body);
+    const echo = body.messages[1].tool_calls[0].function.name;
+    expect(echo).toBe('dispatch_coder');
+  });
+
+  it('Anthropic chat：tools 名消毒 + tool_use 名回映', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        content: [{ type: 'tool_use', id: 'tu1', name: 'dispatch_bg_writer', input: { task: '写' } }],
+        stop_reason: 'tool_use',
+      }),
+    });
+    const provider = createLLMProvider({ provider: 'anthropic', model: 'claude-x' }, 'k');
+    const result = await provider.chat([{ role: 'user', content: '后台派' }], COLON_TOOLS);
+
+    const body = JSON.parse((mockFetch.mock.calls[0]![1] as { body: string }).body);
+    const names = (body.tools as Array<{ name: string }>).map((t) => t.name);
+    expect(names).toEqual(['dispatch_coder', 'dispatch_bg_writer', 'read_file']);
+    expect(result.toolCalls[0]!.name).toBe('dispatch_bg:writer');
+  });
+
+  it('OpenAI 流式：请求消毒 + 累积 tool_use 回映', async () => {
+    const sse = [
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"tc1","function":{"name":"dispatch_coder","arguments":""}}]}}]}',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"task\":\"y\"}"}}]}}]}',
+      'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+      'data: [DONE]',
+    ].join('\n\n');
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: { get: () => 'text/event-stream' },
+      body: { getReader: () => new StringReader(sse) },
+    });
+    const provider = createLLMProvider({ provider: 'openai', model: 'glm-5.3' }, 'k');
+    const deltas: Array<{ type: string; toolCall?: { name: string } }> = [];
+    for await (const d of provider.chatStream([{ role: 'user', content: '派' }], COLON_TOOLS, new AbortController().signal)) {
+      deltas.push(d as { type: string; toolCall?: { name: string } });
+    }
+    const body = JSON.parse((mockFetch.mock.calls[0]![1] as { body: string }).body);
+    const names = (body.tools as Array<{ function: { name: string } }>).map((t) => t.function.name);
+    expect(names).toEqual(['dispatch_coder', 'dispatch_bg_writer', 'read_file']);
+    const tu = deltas.find((d) => d.type === 'tool_use');
+    expect(tu?.toolCall?.name).toBe('dispatch:coder');
+  });
+
+  it('回归锁：wire 合法名（read_file 等）出站字节不变', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] }),
+    });
+    const provider = createLLMProvider({ provider: 'openai', model: 'gpt-4o' }, 'k');
+    await provider.chat([{ role: 'user', content: 'hi' }], [
+      { name: 'read_file', description: 'd', inputSchema: { type: 'object' } },
+      { name: 'bash_exec-1', description: 'd', inputSchema: { type: 'object' } },
+    ]);
+    const body = JSON.parse((mockFetch.mock.calls[0]![1] as { body: string }).body);
+    expect(body.tools.map((t: { function: { name: string } }) => t.function.name)).toEqual(['read_file', 'bash_exec-1']);
+  });
+});
+
+/**
+ * 测试用 SSE reader：把整段字符串一次性交出（覆盖流式解析的最小 Reader 形状）。
+ * 放在文件尾（仅本 describe 消费，避免与既有 fetch mock 文件头 helper 命名冲突）。
+ */
+class StringReader {
+  private done = false;
+  constructor(private readonly s: string) {}
+  read(): Promise<{ done: boolean; value?: Uint8Array }> {
+    if (this.done) return Promise.resolve({ done: true });
+    this.done = true;
+    return Promise.resolve({ done: false, value: new TextEncoder().encode(this.s) });
+  }
+  cancel(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
 describe('llm-provider', () => {
   it('OpenAI provider 发送正确请求', async () => {
     mockFetch.mockResolvedValueOnce({

@@ -6,6 +6,15 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 修复：冒号工具名 400（dispatch 工具名 wire 编解码）
+
+`2.1.0-alpha.52`。来源：用户 alpha.51 验收——团队外派后子节点 leader 模型调用 HTTP 400：`Invalid 'tools[19].function.name': string does not match pattern '^[a-zA-Z0-9_-]+$'`。
+
+- **根因**：动态工具名 `dispatch:<slug>` / `dispatch_bg:<slug>` 含冒号，直接进 LLM 请求的 tools 数组——OpenAI 与 Anthropic 双平台工具名契约同为 `^[a-zA-Z0-9_-]+$`，严格校验的网关（智谱等）整请求 400 拒收。本地团队会话同 provider 同样会炸（历史测试全用 mock LLM 不校验所以从未暴露），非 M5.3 引入、被团队外派放大到用户面前
+- **修复（provider 层单点）**：llm-provider 新增请求级 `ToolNameCodec`——出站消毒（非法字符→下划线：`dispatch:coder`→`dispatch_coder`，覆盖 tools 定义与 assistant 历史 toolCalls 回放共 6 站点）+ 入站回映（响应 tool_call/tool_use 名→内部名，4 站点）；内部名（runtime 匹配 / UI chip / 存储）零改动；wire 合法名字节不变（回归锁）
+- **测试**：红测先行 5 用例（OpenAI/Anthropic × chat/流式 × 消毒/回映/历史回放/合法名回归）；electron 全量 **5317 绿**；e2e 13/13（场景 13 断言翻为 wire 名——穿过真实 App 锁住消毒契约）
+- 教训沉淀：ABI 摆渡方向表（Node 单测=137 / Electron e2e 与实跑=149）——本轮两次方向搞反浪费时间，已记台账
+
 ## [未发布] — 修复：外派会话实时可见（接收端建会广播）
 
 `2.1.0-alpha.51`。来源：用户 alpha.50 验收——「派发任务到子节点，子节点对应的会话要切换界面才能刷新出来」。

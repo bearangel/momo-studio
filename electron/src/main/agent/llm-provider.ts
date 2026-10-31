@@ -68,6 +68,47 @@ export interface LLMProvider {
   ): AsyncIterable<StreamDelta>;
 }
 
+/**
+ * 工具名 wire 编解码：OpenAI（tools[].function.name）与 Anthropic（tools[].name）
+ * 双平台的工具名契约同为 ^[a-zA-Z0-9_-]+$。内部动态工具名（dispatch:<slug> /
+ * dispatch_bg:<slug>）含冒号——直接出站会被供应商整请求 400 拒收（用户实测：
+ * 智谱网关 Invalid 'tools[N].function.name'）。内部名（runtime 匹配 / UI / 存储）
+ * 保持不变，仅在本层出站消毒、入站回映。
+ */
+const WIRE_TOOL_NAME_RE = /^[a-zA-Z0-9_-]+$/;
+
+/** 请求级编解码器：一次 chat/chatStream 构造一个，tools 面即回映表 */
+class ToolNameCodec {
+  private readonly wireToInternal = new Map<string, string>();
+
+  constructor(tools: LLMToolDef[] | undefined) {
+    for (const t of tools ?? []) {
+      let wire = WIRE_TOOL_NAME_RE.test(t.name) ? t.name : t.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+      // 消毒名与另一工具原生名撞车（理论态：原生名本就合法且恰等于他人消毒名）——
+      // 追加后缀保唯一，decode 靠本表所以无歧义
+      while (this.wireToInternal.has(wire) && this.wireToInternal.get(wire) !== t.name) {
+        wire = `${wire}_x`;
+      }
+      this.wireToInternal.set(wire, t.name);
+    }
+  }
+
+  /** 内部名 → wire 名（tools 定义与 assistant 历史 toolCalls 回放共用） */
+  encode(name: string): string {
+    if (WIRE_TOOL_NAME_RE.test(name)) return name;
+    for (const [wire, internal] of this.wireToInternal) {
+      if (internal === name) return wire;
+    }
+    // 不在本次 tools 面的历史名（工具已移除等）——无表可查，按同规则消毒兜底
+    return name.replace(/[^a-zA-Z0-9_-]/g, '_');
+  }
+
+  /** wire 名 → 内部名（响应 tool_call / tool_use 名回映；未知名透传） */
+  decode(name: string): string {
+    return this.wireToInternal.get(name) ?? name;
+  }
+}
+
 /** 对 LLM API 的单次请求超时（毫秒）—— 复杂生成任务可能需要数分钟 */
 const LLM_REQUEST_TIMEOUT_MS = 300_000;
 
@@ -271,7 +312,7 @@ function detectPlatform(baseUrl?: string): 'openai' | 'anthropic' {
 }
 
 /** 把统一 LLMMessage 映射为 OpenAI 的 messages 元素格式 */
-function toOpenAIMessage(m: LLMMessage): Record<string, unknown> {
+function toOpenAIMessage(m: LLMMessage, codec: ToolNameCodec): Record<string, unknown> {
   if (m.role === 'tool' && m.toolCallId) {
     return { role: 'tool', content: m.content, tool_call_id: m.toolCallId };
   }
@@ -282,7 +323,7 @@ function toOpenAIMessage(m: LLMMessage): Record<string, unknown> {
       tool_calls: m.toolCalls.map((tc) => ({
         id: tc.id,
         type: 'function',
-        function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+        function: { name: codec.encode(tc.name), arguments: JSON.stringify(tc.arguments) },
       })),
     };
   }
@@ -312,7 +353,7 @@ function toOpenAIMessage(m: LLMMessage): Record<string, unknown> {
  *
  * 提取为模块级函数，chat() 和 chatStream() 共用，避免流式路径丢失 toolCalls（M5 修复）。
  */
-function toAnthropicMessage(m: LLMMessage): Record<string, unknown> {
+function toAnthropicMessage(m: LLMMessage, codec: ToolNameCodec): Record<string, unknown> {
   if (m.role === 'tool') {
     return {
       role: 'user',
@@ -333,7 +374,7 @@ function toAnthropicMessage(m: LLMMessage): Record<string, unknown> {
         ...m.toolCalls.map((tc) => ({
           type: 'tool_use',
           id: tc.id,
-          name: tc.name,
+          name: codec.encode(tc.name),
           input: tc.arguments,
         })),
       ],
@@ -396,9 +437,10 @@ class OpenAIProvider implements LLMProvider {
     const apiUrl = this.baseUrl
       ? `${this.baseUrl}/chat/completions`
       : 'https://api.openai.com/v1/chat/completions';
-    const body: Record<string, unknown> = {
+        const nameCodec = new ToolNameCodec(tools);
+const body: Record<string, unknown> = {
       model: this.model,
-      messages: messages.map((m) => toOpenAIMessage(m)),
+      messages: messages.map((m) => toOpenAIMessage(m, nameCodec)),
     };
     if (this.maxTokens && this.maxTokens > 0) {
       body[this.maxTokensParam] = this.maxTokens;
@@ -407,7 +449,7 @@ class OpenAIProvider implements LLMProvider {
       body.tools = tools.map((t) => ({
         type: 'function',
         function: {
-          name: t.name,
+          name: nameCodec.encode(t.name),
           description: t.description,
           parameters: t.inputSchema,
         },
@@ -445,7 +487,7 @@ class OpenAIProvider implements LLMProvider {
     const choice = data.choices[0]!;
     const toolCalls: LLMToolCall[] = (choice.message.tool_calls ?? []).map((tc) => ({
       id: tc.id,
-      name: tc.function.name,
+      name: nameCodec.decode(tc.function.name),
       arguments: JSON.parse(tc.function.arguments) as Record<string, unknown>,
     }));
 
@@ -481,18 +523,19 @@ class AnthropicProvider implements LLMProvider {
     const systemMsg = messages.find((m) => m.role === 'system');
     const conversationMessages = messages.filter((m) => m.role !== 'system');
 
-    const body: Record<string, unknown> = {
+        const nameCodec = new ToolNameCodec(tools);
+const body: Record<string, unknown> = {
       model: this.model,
       // P0-3：配置值替换硬编码 4096（Anthropic max_tokens 必填——缺省回退旧值）
       max_tokens: this.maxTokens && this.maxTokens > 0 ? this.maxTokens : 4096,
-      messages: conversationMessages.map((m) => toAnthropicMessage(m)),
+      messages: conversationMessages.map((m) => toAnthropicMessage(m, nameCodec)),
     };
     if (systemMsg) {
       body.system = systemMsg.content;
     }
     if (tools && tools.length > 0) {
       body.tools = tools.map((t) => ({
-        name: t.name,
+        name: nameCodec.encode(t.name),
         description: t.description,
         input_schema: t.inputSchema,
       }));
@@ -530,7 +573,7 @@ class AnthropicProvider implements LLMProvider {
       content: textParts.join('\n'),
       toolCalls: toolUses.map((tu) => {
         const t = tu as { id: string; name: string; input: Record<string, unknown> };
-        return { id: t.id, name: t.name, arguments: t.input };
+        return { id: t.id, name: nameCodec.decode(t.name), arguments: t.input };
       }),
       finishReason: data.stop_reason === 'tool_use' ? 'tool_use' : 'stop',
     };
@@ -570,9 +613,10 @@ async function* chatStreamOpenAI(
   maxTokensParam: 'max_tokens' | 'max_completion_tokens' = 'max_tokens',
 ): AsyncIterable<StreamDelta> {
   const url = `${baseUrl ?? 'https://api.openai.com/v1'}/chat/completions`;
+  const nameCodec = new ToolNameCodec(tools);
   const body: Record<string, unknown> = {
     model,
-    messages: messages.map(toOpenAIMessage),
+    messages: messages.map((m) => toOpenAIMessage(m, nameCodec)),
     stream: true,
   };
   if (maxTokens && maxTokens > 0) {
@@ -581,7 +625,7 @@ async function* chatStreamOpenAI(
   if (tools && tools.length > 0) {
     body.tools = tools.map((t) => ({
       type: 'function',
-      function: { name: t.name, description: t.description, parameters: t.inputSchema },
+      function: { name: nameCodec.encode(t.name), description: t.description, parameters: t.inputSchema },
     }));
   }
   applyOpenAIThinking(body, thinking);
@@ -697,7 +741,7 @@ async function* chatStreamOpenAI(
     } catch {
       args = { _raw: tc.argsBuffer };
     }
-    yield { type: 'tool_use', toolCall: { id: tc.id, name: tc.name, arguments: args } };
+    yield { type: 'tool_use', toolCall: { id: tc.id, name: nameCodec.decode(tc.name), arguments: args } };
   }
 
   yield { type: 'done', finishReason };
@@ -721,6 +765,7 @@ async function* chatStreamAnthropic(
   maxTokens?: number,
 ): AsyncIterable<StreamDelta> {
   const url = `${baseUrl ?? 'https://api.anthropic.com'}/v1/messages`;
+  const nameCodec = new ToolNameCodec(tools);
   const body: Record<string, unknown> = {
     model,
     // P0-3：配置值替换硬编码 16384；开启 thinking 时由 applyAnthropicThinking
@@ -729,7 +774,7 @@ async function* chatStreamAnthropic(
     stream: true,
     messages: messages
       .filter((m) => m.role !== 'system')
-      .map(toAnthropicMessage),
+      .map((m) => toAnthropicMessage(m, nameCodec)),
   };
   const systemMsg = messages.find((m) => m.role === 'system');
   if (systemMsg) body.system = systemMsg.content;
@@ -739,7 +784,7 @@ async function* chatStreamAnthropic(
 
   if (tools && tools.length > 0) {
     body.tools = tools.map((t) => ({
-      name: t.name,
+      name: nameCodec.encode(t.name),
       description: t.description,
       input_schema: t.inputSchema,
     }));
@@ -853,7 +898,7 @@ async function* chatStreamAnthropic(
     } catch {
       args = { _raw: tc.argsBuffer };
     }
-    yield { type: 'tool_use', toolCall: { id: tc.id, name: tc.name, arguments: args } };
+    yield { type: 'tool_use', toolCall: { id: tc.id, name: nameCodec.decode(tc.name), arguments: args } };
   }
 
   yield { type: 'done', finishReason };
