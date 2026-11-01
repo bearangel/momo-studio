@@ -420,6 +420,8 @@ export function listTasks(opts: {
   archived?: 'exclude' | 'only' | 'all';
   /** 看板分组过滤；null = 只查未分组（group_id IS NULL） */
   groupId?: string | null;
+  /** D4（Oracle MUST FIX 1）：排除指定来源行——dispatch 簿记行不是「会话在途任务」/ 恢复候选 */
+  excludeOrigin?: string;
   orderBy?: 'priority' | 'scheduled_at' | 'created_at' | 'created_at_desc';
   limit?: number;
 }): TaskRow[] {
@@ -456,6 +458,10 @@ export function listTasks(opts: {
     const placeholders = opts.sourceMessageIds.map(() => '?').join(',');
     where.push(`source_message_id IN (${placeholders})`);
     params.push(...opts.sourceMessageIds);
+  }
+  if (opts.excludeOrigin !== undefined) {
+    where.push('origin <> ?');
+    params.push(opts.excludeOrigin);
   }
   const archivedMode = opts.archived ?? 'exclude';
   if (archivedMode === 'exclude') where.push('archived_at IS NULL');

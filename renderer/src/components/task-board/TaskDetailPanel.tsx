@@ -121,9 +121,12 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
   // 启动资格（2026-09-30 §4.2 收敛）：draft 且有委派目标——「启动」= move 入队
   // （executeMove 单点：目标校验/转 assigned/notify/保组原子）。pending 已随
   // 迁移 051 退役；assigned/session_queued 已在队列由 executor 管，不再显示
-  const canStart = task.status === 'draft' && hasTarget;
-  const canPause = task.status === 'in_progress';
-  const canResume = task.status === 'paused';
+  // D4（Oracle MUST FIX 2）：dispatch 簿记行由会话链管理，详情面板只读——
+  // 暂停/恢复/取消/启动全部隐藏（主进程 IPC 守卫是执法层，此处防挫败）
+  const dispatchReadOnly = task.origin === 'dispatch';
+  const canStart = task.status === 'draft' && hasTarget && !dispatchReadOnly;
+  const canPause = task.status === 'in_progress' && !dispatchReadOnly;
+  const canResume = task.status === 'paused' && !dispatchReadOnly;
 
   const runAction = (action: () => Promise<unknown>): void => {
     setActionError(null);
@@ -414,7 +417,7 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
               恢复
             </Button>
           )}
-          {!terminal && (
+          {!terminal && !dispatchReadOnly && (
             <Button variant="danger" onClick={handleCancel} className="flex-1">
               取消任务
             </Button>

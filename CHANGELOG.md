@@ -6,6 +6,16 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 账本与存储包：D4 dispatch 子任务入 tasks 账本 / D5 思考流全文并档
+
+`2.1.0-alpha.54`。来源：验收报告 D4/D5。spec：`docs/specs/2026-10-31-ledger-storage-package-design.md`（裁定：入账否决虚拟泳道；全文保留否决降采样/清理）。
+
+- **D4 子任务入账**：迁移 071 `tasks.origin`；`dispatch-task-ledger` 把 registry 生命周期单向投影为簿记行（register→in_progress/settle→completed|failed|paused〔needs_input 语义修正〕/cancel×4→cancelled/sweepDead→failed），看板·在途可见性·agent 三工具三处自动同源；executor 并发槽排除；boot 启动对账（in_progress 走 transition 保 plugin 事件、paused 越状态机 updateTask 权威复位）；**只读守卫九通道**（update/move/setPinned/archive/transition/cancel/resume/start/setRelations/unarchive——Oracle MUST FIX 2 扩展）+ 详情面板按钮隐藏 + 冲突检测/恢复卡排除（Oracle MUST FIX 1：`listTasks` 增 `excludeOrigin`——跑链会话提及 #T 不再误报冲突、preempt 不再 repo 级卡死簿记行）；时间戳补齐（startedAt/completedAt——Oracle P1-1）
+- **followup 断链修正（实施期实证）**：原设计 delete+reinsert 踩迁移 555 触发器（tasks 删除→挂链 messages.task_id 置 NULL）——首轮历史从重建器消失。改 updateTask 权威复位，orchestration-e2e 复绿上锁
+- **D5 思考流全文并档两段式**：①flush 同 message 连续 thinking_delta 游程合并单行（结构事件断游程）；②snapshotAtFinalize 前插 compactThinkingEventsInPlace（全事件序列归一防跨结构事件误拼；锚行保 id/seq、payload 全文、非锚删、单事务、幂等）；零 schema 零读路径改动，三态等价契约锁
+- **渲染层**：TaskRow.origin 双端扩列；BoardCard「编排」violet chip（预览 8 定值合同）+ dispatch 卡右键全只读；并发计数排除
+- **Oracle 终审**：2 MUST FIX（冲突检测误触发+守卫漏通道）+ 3 P1（时间戳/陈旧注释/reconcile 分行）全部修复
+
 ## [未发布] — 可信执行包：D1 超时链 / D2 流看门狗 / D3 止损三层验证 / D8 派发透明化（+D12）
 
 `2.1.0-alpha.53`。来源：真实用户验收报告 `.omo/qa-reports/2026-10-31-game-designer-rpg/`（4.3h 首触体验，16 缺陷）。spec：`docs/specs/2026-10-31-execution-trust-package-design.md`。

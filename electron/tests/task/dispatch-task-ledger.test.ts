@@ -2,7 +2,7 @@
 //
 // D4（验收报告 2026-10-31 T22）：dispatch 子任务入 tasks 账本——registry 的单向
 // 持久化投影。spec docs/specs/2026-10-31-ledger-storage-package-design.md §3。
-// 覆盖：行形状 / followup 删插 / settle 三态映射（needs_input→paused）/ cancel /
+// 覆盖：行形状 / followup 权威复位 / settle 三态映射（needs_input→paused）/ cancel /
 // sweepDead fail / 启动对账 / 写失败韧性（投影失败不断运行链）。
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -10,7 +10,7 @@ import path from 'node:path';
 import os from 'node:os';
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
-import { getTask } from '../../src/main/storage/tasks/repo';
+import { getTask, listTasks } from '../../src/main/storage/tasks/repo';
 import {
   ledgerInsertDispatch,
   ledgerSettleDispatch,
@@ -157,5 +157,26 @@ describe('D4 dispatch-task-ledger（registry → tasks 单向投影）', () => {
     expect(() => ledgerSettleDispatch('ghost', 'completed')).not.toThrow();
     expect(() => ledgerCancelDispatch('ghost')).not.toThrow();
     expect(() => ledgerFailDispatch('ghost', 'x')).not.toThrow();
+  });
+});
+
+describe('D4 excludeOrigin 过滤（Oracle MUST FIX 1 的 repo 面）', () => {
+  it('listTasks({executionSessionId, status:in_progress, excludeOrigin:dispatch}) 不回 dispatch 行——跑链会话冲突检测的消费形态', () => {
+    ledgerInsertDispatch(CHAIN); // executionSessionId=sess-d4, in_progress
+    getDb()
+      .prepare(
+        `INSERT INTO tasks (id, workspace_id, title, creator_user_id, status, execution_session_id, created_at, updated_at)
+         VALUES ('T-9100', 'ws', '用户执行室任务', '@o', 'in_progress', 'sess-d4', ?, ?)`,
+      )
+      .run(Date.now(), Date.now());
+    const rows = listTasks({
+      executionSessionId: 'sess-d4',
+      status: 'in_progress',
+      excludeOrigin: 'dispatch',
+    });
+    expect(rows.map((r) => r.id)).toEqual(['T-9100']);
+    // 不过滤则两行都在（对照组——排除确因 origin 生效）
+    const all = listTasks({ executionSessionId: 'sess-d4', status: 'in_progress' });
+    expect(all).toHaveLength(2);
   });
 });

@@ -217,6 +217,7 @@ export function registerTaskHandlers(): void {
   ipcMain.handle(
     'task:setRelations',
     async (_evt, input: { taskId: string } & TaskRelationsInput): Promise<TaskRow> => {
+      assertNotDispatchRow(input.taskId);
       const row = setTaskRelations(input);
       notifyExecutor();
       return row;
@@ -307,6 +308,7 @@ export function registerTaskHandlers(): void {
       to: TaskStatus,
       extraPatch?: Parameters<typeof transitionTaskStatus>[2],
     ): Promise<TaskRow> => {
+      assertNotDispatchRow(id);
       const row = transitionTaskStatus(id, to, extraPatch);
       if (to === 'paused' || to === 'cancelled') {
         abortTaskExecution(id);
@@ -317,6 +319,7 @@ export function registerTaskHandlers(): void {
   );
 
   ipcMain.handle('task:cancel', async (_evt, id: string): Promise<void> => {
+    assertNotDispatchRow(id);
     // 语义单点在 lifecycle.ts（cancelTask），move.ts 同源消费
     await cancelTask(id);
   });
@@ -355,6 +358,7 @@ export function registerTaskHandlers(): void {
   });
 
   ipcMain.handle('task:unarchive', async (_evt, id: string): Promise<TaskRow> => {
+    assertNotDispatchRow(id);
     updateTask(id, { archivedAt: null });
     return getTask(id)!;
   });
@@ -370,6 +374,7 @@ export function registerTaskHandlers(): void {
   ipcMain.handle(
     'task:resume',
     async (_evt, id: string): Promise<TaskRow & { streamSessionId?: string }> => {
+      assertNotDispatchRow(id);
       const before = getTask(id);
       if (!before) throw new Error(`task ${id} 不存在`);
 
@@ -403,6 +408,7 @@ export function registerTaskHandlers(): void {
       id: string,
       opts?: StartTaskOpts,
     ): Promise<{ executionSessionId: string; createdNewRoom: boolean }> => {
+      assertNotDispatchRow(id);
       // 语义单点在 lifecycle.ts（startTaskAndKickoff = K9 全语义：startTask +
       // 幂等判定 + kickoff 注入 + 失败转 failed + broadcast/notify），move.ts
       // 同源消费。IPC 返回形状保持两字段（renderer 契约不变）

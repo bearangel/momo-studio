@@ -193,7 +193,15 @@ export async function sendUserMessage(input: {
     try {
       const conflict = detectConflict(input.sessionId, input.body, {
         findInProgressTaskByRoom: (sessionId) =>
-          listTasks({ executionSessionId: sessionId, status: 'in_progress', limit: 1 })[0] ?? null,
+          // D4（Oracle MUST FIX 1）：dispatch 簿记行 executionSessionId=协作会话
+          // roomId——不过滤则跑链会话里提及任意 #T 任务即误报冲突，preempt 策略
+          // 下还会 repo 级改态把簿记行卡死在 paused
+          listTasks({
+            executionSessionId: sessionId,
+            status: 'in_progress',
+            excludeOrigin: 'dispatch',
+            limit: 1,
+          })[0] ?? null,
         getTask,
       });
       if (conflict && mainWindow && !mainWindow.isDestroyed()) {

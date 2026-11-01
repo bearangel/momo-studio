@@ -542,6 +542,11 @@ describe('D4 只读守卫：origin=dispatch 簿记行拒看板写通道', () => 
     ).rejects.toThrow(guardMsg);
     await expect(handlers.get('task:archive')!(undefined, d.id)).rejects.toThrow(guardMsg);
     await expect(handlers.get('task:setPinned')!(undefined, d.id, true)).rejects.toThrow(guardMsg);
+    await expect(
+      handlers.get('task:transition')!(undefined, d.id, 'paused'),
+    ).rejects.toThrow(guardMsg);
+    await expect(handlers.get('task:cancel')!(undefined, d.id)).rejects.toThrow(guardMsg);
+    await expect(handlers.get('task:resume')!(undefined, d.id)).rejects.toThrow(guardMsg);
     // 用户行走原路径（update 成功不抛只读错误）
     await handlers.get('task:update')!(undefined, u.id, { title: '改名' });
     expect(getTask(u.id)!.title).toBe('改名');

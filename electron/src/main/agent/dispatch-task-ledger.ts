@@ -23,7 +23,6 @@ export interface DispatchLedgerInput {
   pmAssignmentId: string;
   subAssignmentId: string;
   sessionId: string;
-  subStreamSessionId?: string;
 }
 
 /** settle outcome → tasks 状态映射（spec §3.2；needs_input→paused 是自审修正） */
@@ -44,7 +43,8 @@ function resolveWorkspaceId(subAssignmentId: string): string | null {
 /**
  * register 投影：直插 in_progress（绕开 draft→assigned 放行面——executor 只认
  * assigned/session_queued，天然隔离）。followup 链复用（同 taskId 下一轮派发）时
- * delete+reinsert：completed 终态不可逆转换，簿记行无自有依赖，删插最干净。
+ * updateTask 权威复位（completed 终态不可逆转换——registry 复用是权威重置；
+ * 禁 DELETE：迁移 555 触发器会把挂链 messages.task_id 置 NULL 断链）。
  */
 export function ledgerInsertDispatch(input: DispatchLedgerInput): void {
   try {
@@ -70,6 +70,8 @@ export function ledgerInsertDispatch(input: DispatchLedgerInput): void {
         status: 'in_progress',
         title: input.body.slice(0, 80),
         errorMessage: null,
+        startedAt: Date.now(),
+        completedAt: null, // 清上轮终态残值（updateTask 全字段直写）
       });
       return;
     }
@@ -84,6 +86,7 @@ export function ledgerInsertDispatch(input: DispatchLedgerInput): void {
       assigneeAgentId: input.subAssignmentId,
       executionSessionId: input.sessionId,
       sourceSessionId: input.sessionId,
+      startedAt: Date.now(),
     });
   } catch (err) {
     logger.warn('dispatch 账本投影失败（不影响运行链）', {
@@ -101,6 +104,7 @@ export function ledgerSettleDispatch(taskId: string, outcome: 'completed' | 'fai
     if (row.status === SETTLE_STATUS[outcome]) return; // 幂等（迟到重复钩子）
     transitionTaskStatus(taskId, SETTLE_STATUS[outcome], {
       ...(outcome === 'failed' && body ? { errorMessage: body.slice(0, 200) } : {}),
+      completedAt: Date.now(), // D4（Oracle P1-1）：终态时间戳——详情面板/统计消费
     });
   } catch (err) {
     logger.warn('dispatch 账本 settle 投影失败（不影响运行链）', {
@@ -117,7 +121,7 @@ export function ledgerCancelDispatch(taskId: string): void {
     const row = getTask(taskId);
     if (!row || row.origin !== 'dispatch') return;
     if (row.status === 'cancelled') return;
-    transitionTaskStatus(taskId, 'cancelled');
+    transitionTaskStatus(taskId, 'cancelled', { completedAt: Date.now() });
   } catch (err) {
     logger.warn('dispatch 账本 cancel 投影失败（不影响运行链）', {
       taskId,
@@ -132,7 +136,10 @@ export function ledgerFailDispatch(taskId: string, reason: string): void {
     const row = getTask(taskId);
     if (!row || row.origin !== 'dispatch') return;
     if (row.status === 'failed') return;
-    transitionTaskStatus(taskId, 'failed', { errorMessage: reason.slice(0, 200) });
+    transitionTaskStatus(taskId, 'failed', {
+      errorMessage: reason.slice(0, 200),
+      completedAt: Date.now(),
+    });
   } catch (err) {
     logger.warn('dispatch 账本判死投影失败（不影响运行链）', {
       taskId,
@@ -156,9 +163,23 @@ export function reconcileDispatchTasksAtBoot(): void {
     if (rows.length === 0) return;
     for (const r of rows) {
       try {
-        // paused→failed 越过状态机（paused 只许 in_progress/cancelled）——启动
-        // 对账是权威复位而非生命周期转换，直接 updateTask（spec §3.4 修正）
-        updateTask(r.id, { status: 'failed', errorMessage: '应用重启，编排链丢失' });
+        const t = getTask(r.id);
+        if (!t || t.origin !== 'dispatch') continue;
+        if (t.status === 'paused') {
+          // paused→failed 越过状态机（paused 只许 in_progress/cancelled）——启动
+          // 对账是权威复位而非生命周期转换，直接 updateTask（spec §3.4 修正）
+          updateTask(r.id, {
+            status: 'failed',
+            errorMessage: '应用重启，编排链丢失',
+            completedAt: Date.now(),
+          });
+        } else {
+          // in_progress→failed 合法转换——走 transitionTaskStatus 保 plugin 事件一致
+          transitionTaskStatus(r.id, 'failed', {
+            errorMessage: '应用重启，编排链丢失',
+            completedAt: Date.now(),
+          });
+        }
       } catch (err) {
         logger.warn('启动对账单行失败（继续其余行）', {
           taskId: r.id,

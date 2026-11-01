@@ -605,14 +605,13 @@ export class RouterService {
     }
 
     // D4 账本投影（spec 2026-10-31-ledger-storage-package §3.2）：registry → tasks
-    // 单向簿记（followup 复用 = 删插；失败只 warn 不断链）
+    // 单向簿记（followup 复用 = updateTask 权威复位；失败只 warn 不断链）
     ledgerInsertDispatch({
       taskId,
       body: typeof content.body === 'string' ? content.body : '',
       pmAssignmentId: dispatchFrom,
       subAssignmentId: assignmentId,
       sessionId: roomId,
-      ...(chainStreamId !== undefined ? { subStreamSessionId: chainStreamId } : {}),
     });
 
     const body = this.extractBody(content);
