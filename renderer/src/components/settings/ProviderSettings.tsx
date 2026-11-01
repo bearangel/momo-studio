@@ -159,8 +159,13 @@ function ProviderConfigCard({ provider, onSaved, onDeleted, onSetDefault }: {
       const key = apiKey || (await ipc.provider.getApiKey(provider.id)) || '';
       const models = await ipc.provider.listModels(provider.id);
       const model = models.find((m) => m.enabled)?.modelId ?? '';
-      const r = await ipc.provider.testConnection({ baseUrl, apiKey: key, model });
+      const r = await ipc.provider.testConnection({ baseUrl, apiKey: key, model, providerId: provider.id });
       setTestResult(r.ok ? { ok: true, text: '连接成功' } : { ok: false, text: r.error ?? '连接失败' });
+      if (r.ok) {
+        // D6：验证成功回写 last_verified_at 后刷新列表——「未验证」徽标即时消除
+        // （loadProviders 未解构进本卡作用域——store 直取，语义同构）
+        await useProviderStore.getState().loadProviders();
+      }
     } catch (e) {
       setTestResult({ ok: false, text: e instanceof Error ? e.message : String(e) });
     } finally {

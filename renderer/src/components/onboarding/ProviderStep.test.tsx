@@ -116,6 +116,22 @@ describe('ProviderStep', () => {
     expect(ctx.go).not.toHaveBeenCalled();
   });
 
+  it('D6：验证成功 → create 携带 verifiedAtCreation:true（此前漏传致设置页永显「未验证」）', async () => {
+    mockList.mockResolvedValue([]);
+    mockListPresets.mockResolvedValue(PRESETS);
+    mockListModels.mockResolvedValue(MODELS_P1);
+    mockTestConnection.mockResolvedValue({ ok: true });
+    mockCreate.mockResolvedValue({ ...EXISTING, id: 'p-new' });
+    const ctx = mkCtx();
+    render(<ProviderStep ctx={ctx} />);
+    // 预设卡进入表单（填 key 后验证——与既有成功路径用例同款前置）
+    fireEvent.click(await screen.findByText('智谱 GLM'));
+    fireEvent.change(await screen.findByLabelText(/API Key/), { target: { value: 'sk-good' } });
+    fireEvent.click(screen.getByRole('button', { name: '验证并继续' }));
+    await waitFor(() => expect(mockCreate).toHaveBeenCalled());
+    expect(mockCreate.mock.calls[0]![0]).toMatchObject({ verifiedAtCreation: true });
+  });
+
   it('预设新建 + 验证成功 → create → setProvider → 推进 workspace', async () => {
     const ctx = mkCtx();
     render(<ProviderStep ctx={ctx} />);

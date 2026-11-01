@@ -9,11 +9,13 @@
 // embedded 内嵌形态（P2 Task 3 首启空态）保留自绘卡片仅 token 化：
 // Dialog 只有 portal 遮罩形态，首启空态无上级界面、遮罩/Esc 关闭不适用。
 import { useEffect, useState, type FormEvent } from 'react';
+import { Plus, TriangleAlert } from 'lucide-react';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { ipc } from '../../ipc/client';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { Input } from '../ui/Input';
+import { showToast } from '../ui/Toast';
 
 /** 名称清洗 → 目录名片段。单源指针：electron/src/main/hub/mirror-applier.ts
  *  的 sanitizeDirName（镜像落位同款规则——保留字母/数字/中文/._-，余者 -，
@@ -56,22 +58,61 @@ export function CreateWorkspaceDialog({ onClose, embedded }: Props) {
     if (picked) setManualDir(picked);
   };
 
+  // D7（验收报告 2026-10-31）：目录不存在时的确认弹层态（null = 无确认直接走创建）
+  const [pendingCreate, setPendingCreate] = useState<{ resolvedPath: string } | null>(null);
+
+  /** IPC 错误友好化：剥 Electron 前缀 + errno 映射（D7） */
+  const friendlyError = (err: unknown): string => {
+    const raw = err instanceof Error ? err.message : String(err);
+    const stripped = raw.replace(/^Error invoking remote method '[^']+':\s*/, '');
+    if (/EACCES/.test(stripped)) return `无写入权限：${dir.trim()}（EACCES）`;
+    if (/EROFS/.test(stripped)) return '目标位于只读文件系统（EROFS）';
+    if (/ENOTDIR|ENOTEMPTY/.test(stripped))
+      return '路径中某一段不是目录（ENOTDIR）——请检查拼写';
+    return stripped;
+  };
+
+  const doCreate = async (): Promise<void> => {
+    setLoading(true);
+    setError(null);
+    try {
+      const ws = await create({ name: name.trim(), directoryPath: dir.trim() });
+      if (ws.gitInitialized === false) {
+        showToast('工作空间已创建，但 git 初始化失败（不影响使用）');
+      }
+      onClose();
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (loading) return; // Oracle P1：probe 往返期间防双击（旧代码同步 setLoading 有此保护）
     if (!name.trim() || !dir.trim()) {
       setError('名称和目录不能为空');
       return;
     }
-    setLoading(true);
     setError(null);
+    // D7：提交前只读探测——目录不存在先确认（完整绝对路径 + git init 披露），
+    // 防笔误路径静默 mkdir+init（验收实测 qa-rpg-game-not-exist/.git）
+    setLoading(true);
+    let probe: { exists: boolean; resolvedPath: string; hasGit: boolean };
     try {
-      await create({ name: name.trim(), directoryPath: dir.trim() });
-      onClose();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
+      probe = await ipc.workspace.probePath(dir.trim());
+    } catch {
       setLoading(false);
+      await doCreate(); // 探测通道异常不挡创建（退回旧行为）
+      return;
     }
+    setLoading(false); // 弹确认层期间表单可编辑（确认钮触发 doCreate 自带 loading）
+    if (!probe.exists) {
+      setPendingCreate({ resolvedPath: probe.resolvedPath });
+      return;
+    }
+    await doCreate();
   };
 
   const formFields = (
@@ -114,25 +155,62 @@ export function CreateWorkspaceDialog({ onClose, embedded }: Props) {
     </>
   );
 
+  // D7 确认弹层（目录不存在时）——两种形态共用；确认=建设性动作用主色钮
+  // （预览合同 .omo/previews/pkg3-workspace-path-confirm.html）
+  const confirmLayer = pendingCreate ? (
+    <Dialog
+      open
+      onClose={() => setPendingCreate(null)}
+      title="目录不存在，将创建"
+      width={420}
+      icon={<TriangleAlert size={16} strokeWidth={1.75} className="text-accent-500" />}
+      ariaLabel="确认创建目录"
+      footer={
+        <>
+          <Button type="button" variant="secondary" onClick={() => setPendingCreate(null)}>
+            取消
+          </Button>
+          <Button type="button" onClick={() => void doCreate()}>
+            <Plus size={14} strokeWidth={1.75} />
+            创建目录并初始化
+          </Button>
+        </>
+      }
+    >
+      以下目录当前不存在，确认后将创建它（含缺失的父目录）：
+      <code className="mt-2 mb-2 block border border-subtle bg-canvas font-mono text-xs px-2 py-1.5 rounded break-all">
+        {pendingCreate.resolvedPath}
+      </code>
+      并在该目录执行 git init 初始化仓库，生成首个提交「init: workspace 初始化」。
+      <div className="mt-2 text-xs text-secondary">若路径有笔误，请点取消返回修改。</div>
+    </Dialog>
+  ) : null;
+
   // 内嵌形态：首启空态没有可关闭的上级界面，不套 Dialog；
   // 标题由本卡片自带（App.test 依赖 heading「新建工作空间」）
   if (embedded) {
     return (
-      <form
-        onSubmit={handleSubmit}
-        className="bg-surface-1 rounded-lg border border-subtle p-6 w-full max-w-md"
-      >
-        <h2 className="text-xl font-bold mb-4">新建工作空间</h2>
-        <div className="flex flex-col gap-3">{formFields}</div>
-      </form>
+      <>
+        <form
+          onSubmit={handleSubmit}
+          className="bg-surface-1 rounded-lg border border-subtle p-6 w-full max-w-md"
+        >
+          <h2 className="text-xl font-bold mb-4">新建工作空间</h2>
+          <div className="flex flex-col gap-3">{formFields}</div>
+        </form>
+        {confirmLayer}
+      </>
     );
   }
 
   return (
-    <Dialog open onClose={onClose} title="新建工作空间" width={448}>
-      <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-        {formFields}
-      </form>
-    </Dialog>
+    <>
+      <Dialog open onClose={onClose} title="新建工作空间" width={448}>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+          {formFields}
+        </form>
+      </Dialog>
+      {confirmLayer}
+    </>
   );
 }

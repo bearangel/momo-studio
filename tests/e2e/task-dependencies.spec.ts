@@ -104,6 +104,10 @@ async function skipOnboardingAndCreateWorkspace(win: Page): Promise<void> {
   await win.getByLabel('名称').fill(WS_NAME);
   await win.getByPlaceholder('选择或输入目录路径').fill(path.join(tmpUserData, 'ws'));
   await win.getByRole('button', { name: '创建', exact: true }).click();
+  // D7：目录不存在确认弹层（绝对路径 + git init 披露）——容错点穿
+  //（目录预创建的用例无弹层；3s 内未现即视为直通）
+  const d7Confirm = win.getByRole('button', { name: /创建目录并初始化/ });
+  await d7Confirm.waitFor({ state: 'visible', timeout: 3000 }).then(() => d7Confirm.click()).catch(() => {});
   await expect(win.getByRole('heading', { name: '新建工作空间' })).toBeHidden({ timeout: 15000 });
 }
 

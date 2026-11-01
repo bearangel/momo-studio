@@ -101,6 +101,9 @@ export function ProviderStep({ ctx, onSkip }: Props) {
         platform,
         isDefault: true,
         ...(preset ? { presetKey: preset.key } : {}),
+        // D6（验收报告）：验证刚通过——创建即记为已验证（055 机制，此前漏传
+        // 导致设置页永远「未验证」徽标）
+        verifiedAtCreation: true,
       });
       ctx.setProvider(created.id, modelId);
       ctx.go('workspace');

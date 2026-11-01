@@ -6,6 +6,14 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 状态容错快赢包：D6 验证状态回写 / D7 路径确认弹层
+
+`2.1.0-alpha.55`。来源：验收报告 D6/D7。短设计聊天内定案 + D7 预览门禁（`.omo/previews/pkg3-workspace-path-confirm.html`）。
+
+- **D6 provider 验证状态回写**：后端三件套全现成（migration 055 列 + createProvider(verifiedAtCreation) + markProviderVerified），坏在 renderer 传参缺口——①types.d.ts 补 `verifiedAtCreation?`/`providerId?`（preload 原样透传）；②onboarding「验证并继续」后 create 传 `verifiedAtCreation:true`（报告直接根因——先验证后创建契约）；③设置页「检查连接」传 `providerId`（回写触发）+ 成功后刷新列表（「未验证」徽标即时消除）；ProviderDialog 可分离测试/保存保持 NULL（055「不禁保存」设计意图）。顺带解谜「未验证 9」= GLM 预设模型数徽标
+- **D7 路径确认弹层**：新只读探测通道 `workspace:probePath`（{exists, resolvedPath, hasGit}——主进程 path.resolve 消除相对路径歧义）；三入口（TitleBar＋/首启空态/onboarding）共用组件一处全覆盖——目录不存在 → 确认弹层（完整绝对路径等宽块 + git init 披露 + 主色确认钮「创建目录并初始化」——建设性动作非 danger 红）；**目录已是 git 仓 → 主进程跳过 init 直接复用**（消除旧实现向既有仓覆写 user.name/email + 追加空提交的隐藏副作用）；创建失败 errno 友好化（EACCES→无写入权限等，剥 IPC 前缀）；git 失败 toast（store.create 改返回 Workspace）
+- **测试**：electron workspace 52（+probe/跳过 init 复用锁）；renderer 相关面 372（ProviderStep 带 flag / ProviderSettings 传 providerId / CreateWorkspaceDialog 四分支：确认-取消零 create、确认-create+toast、已存在直建、EACCES 人话）；e2e 全量 **31/31**（四处 UI 建空间流容错点穿确认层）
+
 ## [未发布] — 账本与存储包：D4 dispatch 子任务入 tasks 账本 / D5 思考流全文并档
 
 `2.1.0-alpha.54`。来源：验收报告 D4/D5。spec：`docs/specs/2026-10-31-ledger-storage-package-design.md`（裁定：入账否决虚拟泳道；全文保留否决降采样/清理）。

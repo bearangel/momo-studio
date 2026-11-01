@@ -2223,6 +2223,8 @@ export interface ApiSurface {
     list(): Promise<Workspace[]>;
     get(id: string): Promise<Workspace | null>;
     delete(id: string): Promise<void>;
+    /** D7：目录只读探测——resolvedPath 为主进程 resolve 后绝对路径 */
+    probePath(directoryPath: string): Promise<{ exists: boolean; resolvedPath: string; hasGit: boolean }>;
     /** v25 Task 6（spec §5）：设置/清空默认会话 agent；instanceId=null 清除（查询随 workspace:get/list 返回） */
     setDefaultAgent(workspaceId: string, instanceId: string | null): Promise<void>;
     /** v2.7 T10：切换激活 workspace 通知（main 收口浏览器子系统切换钩子；fire-and-forget） */
@@ -2411,6 +2413,8 @@ export interface ApiSurface {
       defaultModel?: string; isDefault?: boolean; platform?: ProviderPlatform;
       /** 来源预设 key（v31 起）；传入则后端种子预设模型，未知 key 前置校验拒绝 */
       presetKey?: string;
+      /** D6：创建即已验证（onboarding「验证并继续」先测后存）→ 后端记 last_verified_at */
+      verifiedAtCreation?: boolean;
     }): Promise<ModelProvider>;
     update(input: {
       id: string; name?: string; baseUrl?: string; apiKey?: string;
@@ -2418,7 +2422,13 @@ export interface ApiSurface {
     }): Promise<ModelProvider>;
     delete(id: string): Promise<{ ok: boolean }>;
     setDefault(id: string): Promise<{ ok: boolean }>;
-    testConnection(input: { baseUrl: string; apiKey: string; model: string }): Promise<{ ok: boolean; error?: string }>;
+    testConnection(input: {
+      baseUrl: string;
+      apiKey: string;
+      model: string;
+      /** D6：存量 provider 验证成功回写 last_verified_at（provider-ipc 现成机制——此前 renderer 从未传过） */
+      providerId?: string;
+    }): Promise<{ ok: boolean; error?: string }>;
     getApiKey(id: string): Promise<string | null>;
     /** Task 6：GET {baseUrl}/models 拉取远端模型 id 列表（失败抛 IPC error） */
     fetchModels(id: string): Promise<string[]>;
