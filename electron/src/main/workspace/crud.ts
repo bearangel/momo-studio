@@ -49,6 +49,24 @@ function rowToWorkspace(row: WorkspaceRow): Workspace {
  * 创建一个新 workspace：分配 UUID → 创建目录 → git init → 写入 SQLite。
  * git init 失败仅记录警告，不抛出（git 是 nice-to-have，DB 记录才是核心）。
  */
+/**
+ * D7（验收报告 2026-10-31）：目录只读探测——renderer 无 fs 权限，提交前确认
+ * 弹层的数据源。resolvedPath 用主进程 path.resolve 消除相对路径/CWD 歧义。
+ */
+export function probeWorkspacePath(directoryPath: string): {
+  exists: boolean;
+  resolvedPath: string;
+  hasGit: boolean;
+} {
+  const resolvedPath = path.resolve(directoryPath);
+  const exists = fs.existsSync(resolvedPath);
+  return {
+    exists,
+    resolvedPath,
+    hasGit: exists && fs.existsSync(path.join(resolvedPath, '.git')),
+  };
+}
+
 export async function createWorkspace(
   input: CreateWorkspaceInput,
   ownerUserId: string,
@@ -61,13 +79,19 @@ export async function createWorkspace(
     fs.mkdirSync(dir, { recursive: true });
   }
 
-  // git init — 失败不阻断流程
+  // git init — 失败不阻断流程。D7：目录已是 git 仓时跳过——旧实现无条件
+  // initGitRepo 会向既有仓覆写本地 user.name/email 并追加一条空提交（副作用）
   let gitInitialized = false;
-  try {
-    await initGitRepo(dir);
+  if (fs.existsSync(path.join(dir, '.git'))) {
     gitInitialized = true;
-  } catch (err) {
-    logger.warn('Git 初始化失败，继续创建 workspace', { error: (err as Error).message });
+    logger.info('目录已是 git 仓库，跳过初始化直接复用', { dir });
+  } else {
+    try {
+      await initGitRepo(dir);
+      gitInitialized = true;
+    } catch (err) {
+      logger.warn('Git 初始化失败，继续创建 workspace', { error: (err as Error).message });
+    }
   }
 
   const db = getDb();

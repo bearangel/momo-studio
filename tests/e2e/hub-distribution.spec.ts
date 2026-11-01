@@ -935,6 +935,10 @@ async function skipOnboardingAndCreateWorkspace(win: Page, name: string, dir: st
   await win.getByLabel('名称').fill(name);
   await win.getByPlaceholder('选择或输入目录路径').fill(dir);
   await win.getByRole('button', { name: '创建', exact: true }).click();
+  // D7：目录不存在确认弹层（绝对路径 + git init 披露）——容错点穿
+  //（目录预创建的用例无弹层；3s 内未现即视为直通）
+  const d7Confirm = win.getByRole('button', { name: /创建目录并初始化/ });
+  await d7Confirm.waitFor({ state: 'visible', timeout: 3000 }).then(() => d7Confirm.click()).catch(() => {});
   await expect(win.getByLabel('智能体', { exact: true })).toBeVisible({ timeout: 20000 });
 }
 
@@ -1489,6 +1493,10 @@ test.describe.serial('hub 分发链 / readonly 即时拒 / 版本链（M2.3 Task
     await winC.getByLabel('名称').fill(HITL_WS_NAME);
     await winC.getByPlaceholder('选择或输入目录路径').fill(path.join(tmpRoot, 'ws-c'));
     await winC.getByRole('button', { name: '创建', exact: true }).click();
+    // D7：目录不存在确认弹层（绝对路径 + git init 披露）——容错点穿
+    //（目录预创建的用例无弹层；3s 内未现即视为直通）
+    const d7Confirm = winC.getByRole('button', { name: /创建目录并初始化/ });
+    await d7Confirm.waitFor({ state: 'visible', timeout: 3000 }).then(() => d7Confirm.click()).catch(() => {});
     await expect(winC.getByRole('heading', { name: '新建工作空间' })).toBeHidden({ timeout: 15000 });
     await enrollViaSettings(winC, LOW_NODE_NAME);
 

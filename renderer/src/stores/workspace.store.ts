@@ -54,7 +54,7 @@ interface WorkspaceState {
   // 拉取 workspace 列表，默认激活第一个
   load: () => Promise<void>;
   // 创建 workspace 并自动激活
-  create: (input: CreateWorkspaceInput) => Promise<void>;
+  create: (input: CreateWorkspaceInput) => Promise<Workspace>;
   // 切换激活的 workspace
   select: (id: string) => void;
   // 关闭标签（非删除）：加入 closedIds；关闭激活项时切到剩余可见首个（无则置 null）
@@ -125,6 +125,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }));
     persistActive(ws.id); // 新建即激活——持久化供下次启动恢复
     notifySwitch(ws.id); // 新建即激活——通知 main 收口浏览器钩子
+    return ws; // D7：调用方读 gitInitialized（git 失败 toast）
   },
 
   select: (id) => {

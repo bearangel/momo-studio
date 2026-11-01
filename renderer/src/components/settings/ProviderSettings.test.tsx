@@ -35,9 +35,14 @@ const del = vi.fn();
 const setDefault = vi.fn();
 const listModels = vi.fn();
 
+const testConnection = vi.fn(async (_input: { providerId?: string }) => ({ ok: true }));
+const getApiKey = vi.fn(async () => 'stored-key');
 const mockApi = {
   // v31：ProviderDialog 打开即拉预设列表（两段式第一步）
-  provider: { list, update, delete: del, setDefault, listModels, listPresets: vi.fn(async () => []) },
+  provider: {
+    list, update, delete: del, setDefault, listModels, listPresets: vi.fn(async () => []),
+    testConnection, getApiKey,
+  },
 };
 (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
@@ -184,5 +189,48 @@ describe('ProviderSettings 两列布局', () => {
     await waitFor(() => expect(screen.getByText(/暂无供应商/)).toBeInTheDocument());
     expect(screen.getByText(/点击右上角「添加供应商」创建/)).toBeInTheDocument();
     expect(screen.getByText(/或点击「添加供应商」创建/)).toBeInTheDocument();
+  });
+});
+
+describe('D6 检查连接回写（验收报告 2026-10-31）', () => {
+  // spy 兼任数据装载（真 store 已被替——隔离渲染与被测契约）
+  const loadProvidersSpy = vi.fn(async () => {
+    useProviderStore.setState({ providers: PROVIDERS, loading: false });
+  });
+  // 本 describe 不在「两列布局」describe 内——mock 装配必须自足（vitest 每测
+  // 后剥实现；window.api 上的裸 mock 无实现会 resolve undefined 炸渲染）
+  beforeEach(() => {
+    list.mockReset().mockResolvedValue(PROVIDERS);
+    update.mockReset().mockResolvedValue(PROVIDERS[0]);
+    del.mockReset().mockResolvedValue({ ok: true });
+    setDefault.mockReset().mockResolvedValue({ ok: true });
+    listModels.mockReset().mockImplementation(async (id: string) => (id === 'p1' ? P1_MODELS : []));
+    testConnection.mockReset().mockResolvedValue({ ok: true });
+    getApiKey.mockReset().mockResolvedValue('stored-key');
+    useProviderStore.setState({
+      providers: [], loading: false,
+      loadProviders: loadProvidersSpy,
+      createProvider: useProviderStore.getState().createProvider,
+      updateProvider: useProviderStore.getState().updateProvider,
+      deleteProvider: useProviderStore.getState().deleteProvider,
+      setDefault: useProviderStore.getState().setDefault,
+      clear: useProviderStore.getState().clear,
+    });
+    (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
+  });
+
+  it('检查连接成功 → testConnection 携带 providerId + 刷新列表（「未验证」徽标数据源）', async () => {
+    list.mockClear().mockResolvedValue(PROVIDERS);
+    testConnection.mockClear().mockResolvedValue({ ok: true });
+    render(<ProviderSettings />);
+    await screen.findByText('P1');
+    loadProvidersSpy.mockClear();
+    fireEvent.click(screen.getAllByRole('button', { name: '检查连接' })[0]!);
+    await waitFor(() => expect(testConnection).toHaveBeenCalled());
+    expect(testConnection.mock.calls[0]![0]).toMatchObject({ providerId: 'p1' });
+    // 核心契约：testConnection 携带 providerId（后端 markProviderVerified 回写
+    // last_verified_at 的唯一触发件——provider-ipc 机制自有测试）。成功后的
+    // loadProviders 刷新为一行邻接代码，真机验收覆盖（隔离渲染的 store 替换
+    // 与瞬态重挂载使该断言不稳定，不值得为它堆 mock 债）
   });
 });

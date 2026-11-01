@@ -7,10 +7,11 @@
 // - list/get/delete 各自能查到 / 找不到 / 删除记录
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { simpleGit } from 'simple-git';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { createWorkspace, listWorkspaces, getWorkspace, deleteWorkspace } from '../../src/main/workspace/crud';
+import { createWorkspace, listWorkspaces, getWorkspace, deleteWorkspace, probeWorkspacePath } from '../../src/main/workspace/crud';
 import { listSessionsByWorkspace } from '../../src/main/storage/sessions/repo';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 
@@ -29,6 +30,38 @@ afterEach(() => {
 });
 
 describe('workspace/crud', () => {
+  it('D7 probeWorkspacePath：相对路径 resolve 为绝对 + exists/hasGit 判定', () => {
+    const probe = probeWorkspacePath(tmpRoot);
+    expect(probe.exists).toBe(true);
+    expect(probe.resolvedPath).toBe(path.resolve(tmpRoot));
+    expect(probe.hasGit).toBe(false);
+    const ghost = probeWorkspacePath(path.join(tmpRoot, 'ghost-' + Date.now()));
+    expect(ghost.exists).toBe(false);
+    expect(ghost.hasGit).toBe(false);
+  });
+
+  it('D7 目录已是 git 仓库 → 跳过 init 直接复用（不追加空提交/不覆写 user 配置）', async () => {
+    // 先建一个已有提交的仓（用户既有项目形态）
+    const existing = path.join(tmpRoot, 'existing-repo');
+    fs.mkdirSync(existing, { recursive: true });
+    const git = simpleGit(existing);
+    await git.init();
+    await git.addConfig('user.name', '用户本人');
+    await git.addConfig('user.email', 'user@real');
+    await git.commit('用户自己的首个提交', [], { '--allow-empty': null });
+
+    const ws = await createWorkspace(
+      { name: '复用既有仓', directoryPath: existing },
+      '@o:test',
+    );
+    expect(ws.gitInitialized).toBe(true);
+    // 用户配置与提交历史零污染
+    expect((await git.getConfig('user.name')).value).toBe('用户本人');
+    const log = await git.log();
+    expect(log.all).toHaveLength(1);
+    expect(log.all[0]!.message).toContain('用户自己的首个提交');
+  });
+
   it('createWorkspace 创建目录 + git + SQLite 记录', async () => {
     const wsDir = path.join(tmpRoot, 'my-project');
     const ws = await createWorkspace(

@@ -14,6 +14,7 @@ import {
   deleteWorkspace,
   setDefaultAgent,
   renameWorkspace,
+  probeWorkspacePath,
 } from './crud';
 import {
   getAllocation,
@@ -59,6 +60,11 @@ export function registerWorkspaceHandlers(opts: WorkspaceIpcOpts = {}): void {
     const ws = await createWorkspace(input, 'owner');
     emitPluginEvent('workspaceOpened', { workspaceId: ws.id, reason: 'created' });
     return ws;
+  });
+
+  // D7：只读路径探测（确认弹层数据源）——无 DB 无副作用
+  ipcMain.handle('workspace:probePath', (_evt, directoryPath: string) => {
+    return probeWorkspacePath(directoryPath);
   });
 
   ipcMain.handle('workspace:list', async () => {
