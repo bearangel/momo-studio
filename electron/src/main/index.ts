@@ -32,6 +32,7 @@ import { reprobeSandbox } from './sandbox/probe';
 import { enforceQuota } from './journal/quota';
 import { listWorkspaces } from './workspace/crud';
 import { sweepStaleStreaming } from './task/resume';
+import { reconcileDispatchTasksAtBoot } from './agent/dispatch-task-ledger';
 import { sweepTaggedOrphans } from './sandbox/process-registry';
 import { backfillAllCompactSnapshotsInBackground } from './storage/messages/event-compaction';
 import { assembleBrowserSubsystem } from './browser/boot';
@@ -108,6 +109,8 @@ if (!app.requestSingleInstanceLock()) {
       // 未就绪 / 单行收尾失败均不阻断启动。正常关机由 finalizeStreamOnCrash 在
       // child exit 时覆盖；这里是 App 崩溃 / 强制 kill 的兜底。
       const swept = sweepStaleStreaming();
+  // D4 账本：dispatch 簿记行启动对账（registry 纯内存，重启必空——非终态行复位 failed）
+  reconcileDispatchTasksAtBoot();
       if (swept > 0) {
         logger.info('boot 陈旧流清扫完成', { swept });
       }

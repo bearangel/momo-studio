@@ -15,6 +15,7 @@ function mkTask(overrides: Partial<TaskRow> = {}): TaskRow {
     title: 'task',
     description: '',
     status: 'in_progress',
+    origin: 'user',
     sourceSessionId: null,
     sourceMessageId: null,
     creatorUserId: '@owner:home',

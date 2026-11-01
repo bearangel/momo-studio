@@ -524,3 +524,26 @@ describe('task:create 带 groupId（看板分组落组）', () => {
     expect(created.groupId).toBeNull();
   });
 });
+
+describe('D4 只读守卫：origin=dispatch 簿记行拒看板写通道', () => {
+  it('update/move/archive/setPinned 四通道对 dispatch 行 reject（人话报错），用户行不受影响', async () => {
+    const d = insertTask({
+      workspaceId: 'ws1',
+      title: '编排子任务',
+      creatorUserId: 'agent:pm',
+      origin: 'dispatch',
+      status: 'in_progress',
+    });
+    const u = insertTask({ workspaceId: 'ws1', title: '用户任务', creatorUserId: '@owner:home' });
+    const guardMsg = /编排子任务由会话链管理，看板只读/;
+    await expect(handlers.get('task:update')!(undefined, d.id, { title: 'x' })).rejects.toThrow(guardMsg);
+    await expect(
+      handlers.get('task:move')!(undefined, d.id, { kind: 'group', groupId: null }),
+    ).rejects.toThrow(guardMsg);
+    await expect(handlers.get('task:archive')!(undefined, d.id)).rejects.toThrow(guardMsg);
+    await expect(handlers.get('task:setPinned')!(undefined, d.id, true)).rejects.toThrow(guardMsg);
+    // 用户行走原路径（update 成功不抛只读错误）
+    await handlers.get('task:update')!(undefined, u.id, { title: '改名' });
+    expect(getTask(u.id)!.title).toBe('改名');
+  });
+});

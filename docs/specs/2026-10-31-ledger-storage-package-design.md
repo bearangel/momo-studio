@@ -57,7 +57,7 @@
 | settle outcome=needs_input | transitionTaskStatus → **paused**（HITL 等待用户代答——failed 会把「等待人工」误报为失败；paused 语义准确且 in_progress→paused 合法） | :862 |
 | cancel（routeAbortDispatch/stopAll/cancelChain） | transitionTaskStatus → cancelled | :734/:786/:814 |
 | sweepDead 判死 | transitionTaskStatus → failed（errorMessage=判死原因） | :1007 |
-| register（followup 链复用 → round+1 重置在途） | **delete + reinsert**（completed 终态不可逆；dispatch 行为簿记行无自有依赖，删插最干净；messages.task_id 行无 FK 不受影响） | :577 |
+| register（followup 链复用 → round+1 重置在途） | **updateTask 权威复位**（status→in_progress + title 更新；completed 终态不可逆转换——registry 复用是权威重置。禁 DELETE：迁移 555 触发器在 tasks 行删除时把挂链 messages.task_id 置 NULL，followup 断链——orchestration-e2e 实证修正） | :577 |
 
 状态映射全部落在既有 LEGAL_TRANSITIONS 内（in_progress→completed/failed/cancelled 均合法）——**零状态机改动**。heartbeat/markConsumed 不投影（行状态无对应变化）。
 
@@ -68,7 +68,7 @@
 
 ### 3.4 启动对账
 
-boot 序列（index.ts，sweepStaleStreaming 旁）扫 `origin='dispatch' AND status IN ('in_progress','paused')` → registry 必空（内存态）→ 统一 transitionTaskStatus → failed（errorMessage=「应用重启，编排链丢失」）。孤儿行不复存在（paused 覆盖 needs_input 落态的行）。
+boot 序列（index.ts，sweepStaleStreaming 旁）扫 `origin='dispatch' AND status IN ('in_progress','paused')` → registry 必空（内存态）→ 统一转 failed（errorMessage=「应用重启，编排链丢失」）。in_progress 行走 transitionTaskStatus；paused 行越过状态机直接 updateTask（paused→failed 非法转换——启动对账是权威复位而非生命周期转换）。孤儿行不复存在（paused 覆盖 needs_input 落态的行）。
 
 ### 3.5 看板与工具
 

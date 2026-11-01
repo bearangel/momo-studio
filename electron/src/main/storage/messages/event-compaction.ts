@@ -171,3 +171,34 @@ export function backfillAllCompactSnapshotsInBackground(): void {
     }
   })();
 }
+
+/**
+ * D5 终态并档（spec 2026-10-31-ledger-storage-package §4.2）：消息终态时把
+ * thinking_delta 行在位归一——跨 flush 边界的碎行游程合并为锚行单行（锚行保
+ * id/seq/createdAt，payload 更新为全文），非锚行删除；单事务原子。幂等（已并档
+ * no-op）。等价性由三态契约锁（aggregateEvents(逐 token) ≡ (flush 合并) ≡
+ * (终态并档)）。snapshotAtFinalize 在写快照前调用（快照读到的是已并档行）。
+ */
+export function compactThinkingEventsInPlace(messageId: string): void {
+  // 游程合并必须基于全事件序列——结构事件（tool_call 等）是断点；先过滤再合并
+  // 会把跨结构事件的思考错误拼接成一段
+  const all = listEventsByMessage(messageId);
+  const thinking = all.filter((r) => r.eventType === 'thinking_delta');
+  if (thinking.length <= 1) return;
+  const mergedAll = compactEventDeltas(all);
+  const mergedThinking = mergedAll.filter((r) => r.eventType === 'thinking_delta');
+  if (mergedThinking.length >= thinking.length) return; // 已并档（或无相邻游程）——幂等退出
+  const keepIds = new Set(mergedAll.map((m) => m.id));
+  const db = getDb();
+  db.transaction(() => {
+    const del = db.prepare('DELETE FROM message_events WHERE id = ?');
+    for (const r of thinking) {
+      if (!keepIds.has(r.id)) del.run(r.id);
+    }
+    const upd = db.prepare('UPDATE message_events SET payload_json = ? WHERE id = ?');
+    for (const m of mergedThinking) {
+      const delta = typeof m.payload.delta === 'string' ? m.payload.delta : '';
+      upd.run(JSON.stringify({ delta }), m.id);
+    }
+  })();
+}

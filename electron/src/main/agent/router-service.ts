@@ -26,6 +26,12 @@ import {
   HEARTBEAT_INTERVAL_MS,
   type DispatchChainHandle,
 } from './dispatch-registry';
+import {
+  ledgerInsertDispatch,
+  ledgerSettleDispatch,
+  ledgerCancelDispatch,
+  ledgerFailDispatch,
+} from './dispatch-task-ledger';
 import { insertMessage, hasReceiptRow } from '../storage/messages/repo';
 import { getDb } from '../storage/db';
 import { writeStreamStartFailure, pushSessionMessage, abortStreamBySessionId } from './stream-relay';
@@ -598,6 +604,17 @@ export class RouterService {
       return;
     }
 
+    // D4 账本投影（spec 2026-10-31-ledger-storage-package §3.2）：registry → tasks
+    // 单向簿记（followup 复用 = 删插；失败只 warn 不断链）
+    ledgerInsertDispatch({
+      taskId,
+      body: typeof content.body === 'string' ? content.body : '',
+      pmAssignmentId: dispatchFrom,
+      subAssignmentId: assignmentId,
+      sessionId: roomId,
+      ...(chainStreamId !== undefined ? { subStreamSessionId: chainStreamId } : {}),
+    });
+
     const body = this.extractBody(content);
     // P0-7：优先用 PM 预生成的 sub_stream_session_id（与 renderer chip 的查找键
     // 一致）；旧消息无此字段时回退 randomUUID（嵌套展示缺查找键，仅顶层可见）
@@ -732,6 +749,7 @@ export class RouterService {
     }
     // v2.9：链注册表取消——cancelled 恒不投递（abort 止损后的迟到回执不唤醒 PM）
     dispatchRegistry.cancel(taskId);
+    ledgerCancelDispatch(taskId); // D4：账本投影
     if (this.opts.runners.size === 0) {
       // 无 runner 可广播——子 agent 未启动 / 已停止 / 进程重启中。abort 信号丢失，
       // 兜底交给 PM 侧 abort 后 reject（dispatch-wait onAbort）+ 子 agent 自身的
@@ -775,6 +793,7 @@ export class RouterService {
     for (const taskId of dispatchRegistry.cancelByPmStream(lane.streamSessionId)) {
       const h = dispatchRegistry.get(taskId);
       if (h?.subStreamSessionId) this.broadcastAbortDispatch(taskId, h.subStreamSessionId);
+      ledgerCancelDispatch(taskId); // D4：账本投影
     }
     const stopped = abortStreamBySessionId(lane.streamSessionId);
     logger.info('abortTurn 完成', { sessionId, stoppedStream: stopped });
@@ -787,6 +806,7 @@ export class RouterService {
     for (const taskId of cancelled) {
       const h = dispatchRegistry.get(taskId);
       if (h?.subStreamSessionId) this.broadcastAbortDispatch(taskId, h.subStreamSessionId);
+      ledgerCancelDispatch(taskId); // D4：账本投影
     }
     let stoppedStreams = 0;
     for (const runner of this.opts.runners.values()) {
@@ -812,6 +832,7 @@ export class RouterService {
 
     if (!chain || chain.status !== 'in_flight') return { status: 'not_found' };
     dispatchRegistry.cancel(chain.taskId);
+    ledgerCancelDispatch(chain.taskId); // D4：账本投影
     if (chain.subStreamSessionId) this.broadcastAbortDispatch(chain.taskId, chain.subStreamSessionId);
     return { status: 'cancelled' };
   }
@@ -860,6 +881,8 @@ export class RouterService {
     const toolCallsUsed =
       typeof content.tool_calls_used === 'number' ? content.tool_calls_used : undefined;
     const handle = dispatchRegistry.settle(taskId, status, body, toolCallsUsed);
+    // D4：settle → tasks（needs_input→paused / failed→failed+errorMessage）
+    ledgerSettleDispatch(taskId, status, body);
     if (handle && (handle.isFollowupRound || handle.awaitWake)) {
       this.tryDeliver(handle.pmAssignmentId);
     }
@@ -1006,6 +1029,7 @@ export class RouterService {
   private sweepOnce(): void {
     for (const d of dispatchRegistry.sweepDead()) {
       logger.warn('dispatch 链心跳超时判死', { taskId: d.taskId, reason: d.reason });
+      ledgerFailDispatch(d.taskId, d.reason); // D4：账本投影（failed+原因）
       const handle = dispatchRegistry.get(d.taskId);
       if (!handle) continue;
       const runner = this.opts.runners.get(handle.pmAssignmentId);

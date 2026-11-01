@@ -92,6 +92,7 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title' | 'stat
     archivedAt: null,
     routing: { mode: 'group', groupId: 'g1' },
     delegationId: 'T-8f21abcd',
+    origin: 'user',
     parentTaskId: null,
     ...partial,
   };

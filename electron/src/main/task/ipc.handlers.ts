@@ -45,6 +45,17 @@ import { resolveCreateStatus } from './create-status';
 import { resolveConflict, type ConflictStrategy } from './conflict-resolver';
 import { executeConflictResolution } from './conflict-executor';
 import { startTaskAndKickoff, resumePausedTask, cancelTask, abortTaskExecution } from './lifecycle';
+/**
+ * D4 只读守卫（spec §3.5）：origin='dispatch' 簿记行由会话链管理，看板写通道
+ * 一律拒绝（registry 是真相源；从看板取消子任务留后续交互）。
+ */
+function assertNotDispatchRow(id: string): void {
+  const t = getTask(id);
+  if (t?.origin === 'dispatch') {
+    throw new Error('编排子任务由会话链管理，看板只读（不可编辑/移动/归档/顶置）');
+  }
+}
+
 import { detectInterrupted, resumeTask, type InterruptedTaskInfo } from './resume';
 import { executeMove, type MoveTarget } from './move';
 import { validateTaskRoutingInput, type TaskRouting } from '../hub/task-routing';
@@ -223,6 +234,7 @@ export function registerTaskHandlers(): void {
   ipcMain.handle(
     'task:update',
     async (_evt, id: string, patch: Parameters<typeof updateTask>[1]): Promise<void> => {
+      assertNotDispatchRow(id);
       // minor-11 + 看板重构 Task 8 契约洞加固：task:update 是部分字段补丁通道，
       // 但 status / pinnedAt / archivedAt / groupId 四字段各有专属通道，
       // 直接写会绕过 move / pin / archive 的不变式（Task 7 review 发现通用 update
@@ -313,6 +325,7 @@ export function registerTaskHandlers(): void {
   // 动作裁决（start/complete/cancel/换组/no-op）全部在 executeMove 单点；
   // 成功后广播快照，远端看板镜像即时同步
   ipcMain.handle('task:move', async (_evt, id: string, target: MoveTarget): Promise<TaskRow> => {
+    assertNotDispatchRow(id);
     const row = await executeMove(id, target);
     return row;
   });
@@ -323,6 +336,7 @@ export function registerTaskHandlers(): void {
   ipcMain.handle(
     'task:setPinned',
     async (_evt, id: string, pinned: boolean): Promise<TaskRow> => {
+      assertNotDispatchRow(id);
       const row = setTaskPinned(id, pinned);
       return row;
     },
@@ -334,6 +348,7 @@ export function registerTaskHandlers(): void {
   ipcMain.handle('task:archive', async (_evt, id: string): Promise<TaskRow> => {
     const t = getTask(id);
     if (!t) throw new Error(`task ${id} 不存在`);
+    assertNotDispatchRow(id);
     if (!isTerminal(t.status)) throw new Error('仅终态任务可归档(completed/failed/cancelled)');
     updateTask(id, { archivedAt: Date.now() });
     return getTask(id)!;

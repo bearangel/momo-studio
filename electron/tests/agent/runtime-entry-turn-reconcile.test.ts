@@ -86,6 +86,7 @@ function mkTaskRow(id: string, status: TaskRow['status']): TaskRow {
   return {
     id,
     workspaceId: 'ws-1',
+    origin: 'user',
     title: '委派任务',
     description: '',
     status,

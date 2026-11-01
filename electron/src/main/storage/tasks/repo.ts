@@ -27,6 +27,9 @@ import { deriveBlockedBy } from './dependencies-repo';
 
 export type { TaskStatus } from './state-machine';
 
+/** 任务来源（D4 账本包，迁移 071）——见 TaskRow.origin 注释 */
+export type TaskOrigin = 'user' | 'dispatch';
+
 export interface TaskRow {
   id: string;
   workspaceId: string;
@@ -72,6 +75,12 @@ export interface TaskRow {
   /** hub 委派 id 关联（M2.1 迁移 069；T8 提交链回写 / T9 delegation-sync 消费，本列只落不派生） */
   delegationId: string | null;
   /**
+   * 任务来源（D4 账本包，迁移 071）：'user'=用户/系统创建；'dispatch'=编排子任务
+   * 簿记行（dispatchRegistry 单向投影——executor 并发槽排除、看板编排徽标、
+   * 只读守卫、启动对账四处消费）。
+   */
+  origin: TaskOrigin;
+  /**
    * 父任务 id（M3.3 迁移 070，任务层级链——区别于循环实例链 recurrenceParentId）。
    * 写路径校验存在 + 链无环（task/dependency-graph.ts 合并图环检测）。
    */
@@ -88,6 +97,7 @@ export interface TaskRow {
 
 // better-sqlite3 返回行是 snake_case 列名直出。
 type SqlRow = {
+  origin: string;
   id: string;
   workspace_id: string;
   title: string;
@@ -155,6 +165,7 @@ function rowToCamel(r: SqlRow): TaskRow {
     groupId: r.group_id,
     pinnedAt: r.pinned_at,
     archivedAt: r.archived_at,
+    origin: r.origin === 'dispatch' ? 'dispatch' : 'user',
     routing: parseTaskRouting(r.routing_json),
     delegationId: r.delegation_id,
     parentTaskId: r.parent_task_id,
@@ -227,8 +238,8 @@ export function insertTask(
       priority, scheduled_at, recurrence_rule, deadline_at,
       queue_position, runtime_instance_id, estimated_tokens, actual_tokens, tool_calls_used, error_message,
       created_at, updated_at, started_at, completed_at,
-      group_id, pinned_at, archived_at, routing_json, delegation_id, parent_task_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      group_id, pinned_at, archived_at, routing_json, delegation_id, parent_task_id, origin
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.workspaceId,
@@ -263,6 +274,7 @@ export function insertTask(
     input.routing !== undefined ? serializeTaskRouting(input.routing) : null,
     input.delegationId ?? null,
     input.parentTaskId ?? null,
+    input.origin ?? 'user',
   );
   emitPluginEvent('taskCreated', { id, workspaceId: input.workspaceId, title: input.title, status });
   return getTask(id)!;
@@ -293,7 +305,7 @@ export function updateTask(id: string, patch: Partial<Omit<TaskRow, 'id' | 'crea
       queue_position=?, runtime_instance_id=?, estimated_tokens=?, actual_tokens=?, tool_calls_used=?, error_message=?,
       group_id=?, pinned_at=?, archived_at=?,
       updated_at=?, started_at=?, completed_at=?,
-      routing_json=?, delegation_id=?, parent_task_id=?
+      routing_json=?, delegation_id=?, parent_task_id=?, origin=?
     WHERE id=?`,
   ).run(
     next.workspaceId,
@@ -327,6 +339,7 @@ export function updateTask(id: string, patch: Partial<Omit<TaskRow, 'id' | 'crea
     serializeTaskRouting(next.routing),
     next.delegationId,
     next.parentTaskId,
+    next.origin,
     id,
   );
 }

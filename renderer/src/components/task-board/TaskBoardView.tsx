@@ -182,11 +182,12 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
     };
   }, []);
 
-  // 并发状态从本地 tasks 派生（active=in_progress / queued=assigned）
+  // 并发状态从本地 tasks 派生（active=in_progress / queued=assigned）；
+  // D4：dispatch 簿记行不占任务板并发槽（卡片可见，executor 并发语义只算用户行）
   const concurrency = useMemo<BoardConcurrency>(
     () => ({
-      active: tasks.filter((t) => t.status === 'in_progress').length,
-      queued: tasks.filter((t) => t.status === 'assigned').length,
+      active: tasks.filter((t) => t.status === 'in_progress' && t.origin !== 'dispatch').length,
+      queued: tasks.filter((t) => t.status === 'assigned' && t.origin !== 'dispatch').length,
       max: maxConcurrency,
     }),
     [tasks, maxConcurrency],

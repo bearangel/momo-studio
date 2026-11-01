@@ -37,6 +37,7 @@ import type { StreamDelta } from '../../src/main/agent/llm-provider';
 import type { StreamChunk } from '../../src/main/agent/stream-chunk';
 import type { WorkspaceFS } from '../../src/main/files/workspace-fs';
 import { handleTaskReply, __resetBgStateForTest } from '../../src/main/agent/dispatch-wait';
+import { getTask } from '../../src/main/storage/tasks/repo';
 import { dispatchRegistry, __resetDispatchRegistryForTest } from '../../src/main/agent/dispatch-registry';
 import { RouterService } from '../../src/main/agent/router-service';
 import { AgentRunner } from '../../src/main/agent/agent-runner';
@@ -309,5 +310,56 @@ describe('D3 段 1-4：cancelChain 入口（DispatchChip 停止按钮的真实 I
     expect(subChildAborts[0]!.streamSessionId).toBe(subCfg.streamSessionId);
     // 链终态
     expect(dispatchRegistry.get(chainId)?.status).toBe('cancelled');
+
+    // D4 账本投影（全链集成）：register 落行 + cancelChain 投影 cancelled
+    const row = getTask(chainId);
+    expect(row, 'dispatch 链应投影为 tasks 行').toBeDefined();
+    expect(row!.origin).toBe('dispatch');
+    expect(row!.status).toBe('cancelled');
+    expect(row!.assigneeAgentId).toBe('inst-smith');
+  });
+
+  it('D4 settle 投影：task_reply completed → 行翻 completed（真实路由链）', async () => {
+    mockProviderMultiRound([
+      [
+        {
+          type: 'tool_use',
+          toolCall: { id: 'c-smith-2', name: 'dispatch:smith', arguments: { task: '写逻辑' } },
+        },
+        { type: 'done', finishReason: 'tool_use' },
+      ],
+      [{ type: 'text', content: '完成' }, { type: 'done', finishReason: 'stop' }],
+    ]);
+    const loopDone = runChatLoop(
+      sessChatId,
+      '去写逻辑',
+      makeConfig(),
+      makeContext('ss-pm2'),
+      undefined,
+      undefined,
+      undefined,
+      'ss-pm2',
+    );
+    loopDone.catch(() => {});
+
+    await waitForCapture(1);
+    const subCfg = capturedConfigs[0]!;
+    const chainId = subCfg.taskId;
+    if (typeof chainId !== 'string') throw new Error('派发链未闭合');
+    expect(getTask(chainId)?.status).toBe('in_progress');
+
+    // 经真实路由入口触发 settle（dispatch-auto-delivery 同款 mkEvent 直连
+    // routeEvent——sender=子 agent 的 agentUserId，resolveSender 反查匹配链目标）
+    routerSvc!.routeEvent(
+      {
+        getType: () => 'io.momo-studio.task_reply',
+        getContent: () => ({ task_id: chainId, status: 'completed', body: '子任务完成' }),
+        getSender: () => 'agent-inst-smith',
+        getRoomId: () => sessChatId,
+      },
+      'agent-inst-smith',
+      null,
+    );
+    expect(getTask(chainId)?.status, 'settle 投影 → completed').toBe('completed');
   });
 });
