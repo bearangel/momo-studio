@@ -46,10 +46,6 @@ function rowToWorkspace(row: WorkspaceRow): Workspace {
 }
 
 /**
- * 创建一个新 workspace：分配 UUID → 创建目录 → git init → 写入 SQLite。
- * git init 失败仅记录警告，不抛出（git 是 nice-to-have，DB 记录才是核心）。
- */
-/**
  * D7（验收报告 2026-10-31）：目录只读探测——renderer 无 fs 权限，提交前确认
  * 弹层的数据源。resolvedPath 用主进程 path.resolve 消除相对路径/CWD 歧义。
  */
@@ -67,6 +63,8 @@ export function probeWorkspacePath(directoryPath: string): {
   };
 }
 
+/** 创建一个新 workspace：分配 UUID → 创建目录 → git init → 写入 SQLite。
+ * git init 失败仅记录警告，不抛出（git 是 nice-to-have，DB 记录才是核心）。 */
 export async function createWorkspace(
   input: CreateWorkspaceInput,
   ownerUserId: string,

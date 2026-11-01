@@ -90,6 +90,7 @@ export function CreateWorkspaceDialog({ onClose, embedded }: Props) {
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (loading) return; // Oracle P1：probe 往返期间防双击（旧代码同步 setLoading 有此保护）
     if (!name.trim() || !dir.trim()) {
       setError('名称和目录不能为空');
       return;
@@ -97,13 +98,16 @@ export function CreateWorkspaceDialog({ onClose, embedded }: Props) {
     setError(null);
     // D7：提交前只读探测——目录不存在先确认（完整绝对路径 + git init 披露），
     // 防笔误路径静默 mkdir+init（验收实测 qa-rpg-game-not-exist/.git）
+    setLoading(true);
     let probe: { exists: boolean; resolvedPath: string; hasGit: boolean };
     try {
       probe = await ipc.workspace.probePath(dir.trim());
     } catch {
+      setLoading(false);
       await doCreate(); // 探测通道异常不挡创建（退回旧行为）
       return;
     }
+    setLoading(false); // 弹确认层期间表单可编辑（确认钮触发 doCreate 自带 loading）
     if (!probe.exists) {
       setPendingCreate({ resolvedPath: probe.resolvedPath });
       return;
