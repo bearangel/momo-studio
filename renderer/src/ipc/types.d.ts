@@ -210,6 +210,9 @@ export interface RoutingPrecheckResult {
   nodeCaps?: Array<{ nodeId: string; name: string; protoVer: string }>;
 }
 
+/** 任务来源（D4 账本包，迁移 071）——见 TaskRow.origin 注释；与 electron 端 storage/tasks/repo.ts 的 TaskOrigin 对齐 */
+export type TaskOrigin = 'user' | 'dispatch';
+
 /**
  * 任务行（renderer 视图，与 electron 端 storage/tasks/repo.ts 的 TaskRow 完整对齐）。
  *
@@ -258,6 +261,12 @@ export interface TaskRow {
   routing: TaskRouting;
   /** M2.1：hub 委派 id 关联（delegation-sync 回写；缺省 null） */
   delegationId: string | null;
+  /**
+   * 任务来源（D4 账本包，迁移 071）：'user'=用户/系统创建；'dispatch'=编排子任务
+   * 簿记行（dispatchRegistry 单向投影）。渲染层三处消费：看板「编排」徽标、
+   * 右键菜单只读（入口隐藏防挫败，主进程 IPC 守卫是执法层）、并发计数排除。
+   */
+  origin: TaskOrigin;
   /**
    * M3.3：父任务 id（层级链，区别于循环实例链 recurrenceParentId）；写路径走
    * task:setRelations（存在 + 链无环校验），task:update 剥离

@@ -723,7 +723,7 @@ describe('chat() signal 真透传（fetch 边界）', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(((_url: unknown, init?: RequestInit) => {
-        fetchGotSignal = init?.signal;
+        fetchGotSignal = init?.signal ?? undefined;
         // 死等实现：唯一出路是 init.signal abort——若 chat() 未透传，本用例挂死超时红
         return new Promise<Response>((_, reject) => {
           init?.signal?.addEventListener('abort', () => {
@@ -751,7 +751,7 @@ describe('chat() signal 真透传（fetch 边界）', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(((_url: unknown, init?: RequestInit) => {
-        fetchGotSignal = init?.signal;
+        fetchGotSignal = init?.signal ?? undefined;
         return new Promise<Response>((_, reject) => {
           init?.signal?.addEventListener('abort', () => {
             const e = new Error('This operation was aborted');

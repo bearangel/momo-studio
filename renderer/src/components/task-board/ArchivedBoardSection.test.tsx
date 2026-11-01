@@ -59,7 +59,7 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'status'>): Tas
     groupId: 'g-z1',
     pinnedAt: null,
     archivedAt: 999,
-    routing: { mode: 'local' }, delegationId: null, parentTaskId: null,
+    routing: { mode: 'local' }, delegationId: null, origin: 'user', parentTaskId: null,
     ...partial,
   };
 }

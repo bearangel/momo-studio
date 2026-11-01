@@ -250,6 +250,20 @@ describe('detectInterrupted（v2.6.0 启动恢复检测）', () => {
     teardownDb();
   });
 
+  it('D4：dispatch 簿记行不是断点续跑候选（Oracle MUST FIX 1 同族——恢复卡不得对在跑链弹恢复）', () => {
+    const d = insertTask({
+      workspaceId: 'ws1',
+      title: '编排行',
+      creatorUserId: 'agent:pm',
+      origin: 'dispatch',
+      status: 'in_progress',
+    });
+    insertTask({ workspaceId: 'ws1', title: '用户行', creatorUserId: '@o', status: 'in_progress' });
+    const ids = detectInterrupted().map((t) => t.taskId);
+    expect(ids).not.toContain(d.id);
+    expect(ids.length).toBeGreaterThan(0);
+  });
+
   it('只命中 in_progress；跳过 assigned / session_queued / 终态 / draft（2026-09-30 语义修正）', () => {
     seedTask({ id: 'T-1', status: 'in_progress', workspaceId: 'ws1', executionSessionId: 'sess-task1', assigneeAgentId: 'inst1' });
     seedTask({ id: 'T-2', status: 'assigned', workspaceId: 'ws1', executionSessionId: null, assigneeAgentId: 'inst2' });

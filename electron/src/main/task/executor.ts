@@ -173,7 +173,10 @@ export class TaskExecutor {
 
 function countInProgress(): number {
   const row = getDb()
-    .prepare(`SELECT COUNT(*) AS n FROM tasks WHERE status='in_progress'`)
+    .prepare(
+      // D4：origin='dispatch' 簿记行不占任务板并发槽（spec §3.3）
+      `SELECT COUNT(*) AS n FROM tasks WHERE status='in_progress' AND origin <> 'dispatch'`,
+    )
     .get() as { n: number };
   return row.n;
 }

@@ -42,6 +42,7 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title' | 'stat
     archivedAt: null,
     routing: { mode: 'local' },
     delegationId: null,
+    origin: 'user',
     parentTaskId: null,
     ...partial,
   };

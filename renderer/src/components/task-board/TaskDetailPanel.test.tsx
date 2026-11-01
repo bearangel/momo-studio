@@ -120,7 +120,7 @@ function makeTask(overrides: Partial<TaskRow>): TaskRow {
     groupId: null,
     pinnedAt: null,
     archivedAt: null,
-    routing: { mode: 'local' }, delegationId: null, parentTaskId: null,
+    routing: { mode: 'local' }, delegationId: null, origin: 'user', parentTaskId: null,
     ...overrides,
   };
 }
@@ -144,6 +144,24 @@ beforeEach(() => {
   locateMessageMock.mockClear();
   locateTaskExecutionMock.mockClear();
   dismissToast(); // toast 单例复位，防跨用例串扰
+});
+
+describe('TaskDetailPanel D4 编排行只读（Oracle MUST FIX 2 UI 面）', () => {
+  it('dispatch 行 in_progress/paused：暂停/恢复/取消任务按钮全部不渲染（主进程守卫防挫败层）', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress', origin: 'dispatch' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    await screen.findByText('#task-1');
+    expect(screen.queryByText('暂停')).not.toBeInTheDocument();
+    expect(screen.queryByText('取消任务')).not.toBeInTheDocument();
+  });
+
+  it('dispatch 行 paused：恢复按钮不渲染；用户行 paused 对照渲染恢复', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'paused', origin: 'dispatch' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    await screen.findByText('#task-1');
+    expect(screen.queryByText('恢复')).not.toBeInTheDocument();
+    expect(screen.queryByText('取消任务')).not.toBeInTheDocument();
+  });
 });
 
 describe('TaskDetailPanel 进入执行会话（全状态 + 定位接线）', () => {

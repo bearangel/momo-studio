@@ -32,7 +32,7 @@ import {
   getLatestMessageByStreamSessionId,
 } from '../storage/messages/repo';
 import { aggregateTextDeltas } from '../storage/messages/events-repo';
-import { writeCompactSnapshot } from '../storage/messages/event-compaction';
+import { writeCompactSnapshot, compactThinkingEventsInPlace } from '../storage/messages/event-compaction';
 import { getSession } from '../storage/sessions/repo';
 
 /**
@@ -57,6 +57,17 @@ function workspaceOfSession(sessionId: string): string | null {
  * 失败只 warn 不断流（快照缺失时读路径会惰性回填自愈）。
  */
 function snapshotAtFinalize(messageId: string): void {
+  // D5 终态并档（spec 2026-10-31-ledger-storage-package §4.2）：先并档 thinking
+  // 行再写快照——快照读到的是已并档行（内容等价、体积更小）；并档失败只 warn，
+  // 快照照写（读路径三态等价，碎行不影响正确性）
+  try {
+    compactThinkingEventsInPlace(messageId);
+  } catch (err) {
+    logger.warn('thinking 终态并档失败（快照照写，正确性不受影响）', {
+      messageId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
   try {
     writeCompactSnapshot(messageId);
   } catch (err) {

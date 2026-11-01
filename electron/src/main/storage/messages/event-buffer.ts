@@ -68,9 +68,30 @@ export class MessageEventBuffer {
     }
     if (this.pending.length === 0) return;
 
+    // D5（spec 2026-10-31-ledger-storage-package §4.1）：同 message 连续
+    // thinking_delta pending 游程合并为单行（delta 拼接全文）——逐 token 落行
+    // 曾占 message_events 97.8%（4.3h 会话 186MB）。结构事件断游程、跨 message
+    // 不合并、text_delta 不参与（已有 body 终态聚合先例，scope 仅 thinking）。
+    // 读路径全部 seq-append 语义（三态等价契约锁，见 event-compaction.test.ts）。
+    const coalesced: PendingItem[] = [];
+    for (const item of this.pending) {
+      const prev = coalesced[coalesced.length - 1];
+      if (
+        item.eventType === 'thinking_delta' &&
+        prev?.messageId === item.messageId &&
+        prev?.eventType === 'thinking_delta' &&
+        typeof prev.payload.delta === 'string' &&
+        typeof item.payload.delta === 'string'
+      ) {
+        prev.payload = { delta: prev.payload.delta + item.payload.delta };
+        continue;
+      }
+      coalesced.push({ messageId: item.messageId, eventType: item.eventType, payload: item.payload });
+    }
+
     // 为每条 pending 算 seq（按 message 维度）
     const seqCache = new Map<string, number>();
-    const rows: Array<Omit<MessageEventRow, 'id' | 'createdAt'>> = this.pending.map((item) => {
+    const rows: Array<Omit<MessageEventRow, 'id' | 'createdAt'>> = coalesced.map((item) => {
       const seq = seqCache.get(item.messageId) ?? nextSeqForMessage(item.messageId);
       seqCache.set(item.messageId, seq + 1);
       return { messageId: item.messageId, seq, eventType: item.eventType, payload: item.payload };

@@ -37,7 +37,7 @@ const base: TaskRow = {
   priority: 0, scheduledAt: null, recurrenceRule: null, deadlineAt: null, queuePosition: null,
   runtimeInstanceId: null, estimatedTokens: null, actualTokens: null, toolCallsUsed: 0,
   errorMessage: null, sourceNodeId: null, createdAt: 0, updatedAt: 0, startedAt: null, completedAt: null,
-  groupId: null, pinnedAt: null, archivedAt: null, routing: { mode: 'local' }, delegationId: null, parentTaskId: null,
+  groupId: null, pinnedAt: null, archivedAt: null, routing: { mode: 'local' }, delegationId: null, origin: 'user', parentTaskId: null,
 };
 
 beforeEach(() => {
@@ -458,5 +458,78 @@ describe('BoardCard 阻塞角标（M3.3 §2.2）', () => {
       <BoardCard task={{ ...base, blocked: false, blockedBy: ['T-7'] }} selected={false} onClick={() => {}} />,
     );
     expect(screen.queryByText('阻塞', { exact: true })).not.toBeInTheDocument();
+  });
+});
+
+// ── D4 编排徽标 + dispatch 只读（账本包：预览定值清单逐项锁）──────────────────
+describe('BoardCard 编排徽标与 dispatch 只读（D4）', () => {
+  it("origin='dispatch' → 右簇渲染「编排」chip（violet 系定值类名 + Bot 图标）", () => {
+    render(
+      <BoardCard task={{ ...base, origin: 'dispatch', status: 'in_progress' }} selected={false} onClick={() => {}} />,
+    );
+    const chip = screen.getByText('编排', { exact: true });
+    // 预览定值：violet 语义 token + 11px + 不折行不收缩
+    expect(chip.className).toContain('inline-flex');
+    expect(chip.className).toContain('gap-0.5');
+    expect(chip.className).toContain('text-[11px]');
+    expect(chip.className).toContain('text-status-violet');
+    expect(chip.className).toContain('bg-status-violet-tint');
+    expect(chip.className).toContain('whitespace-nowrap');
+    expect(chip.className).toContain('shrink-0');
+    // Bot 图标 11px / stroke 1.75（chip 内唯一 svg）
+    const icon = chip.querySelector('svg');
+    expect(icon).toBeInTheDocument();
+    expect(icon).toHaveAttribute('width', '11');
+    expect(icon).toHaveAttribute('stroke-width', '1.75');
+  });
+
+  it('chip 位置：右簇内 Pinned 图钉之后、状态徽标之前', () => {
+    render(
+      <BoardCard
+        task={{ ...base, origin: 'dispatch', status: 'in_progress', pinnedAt: 999 }}
+        selected={false}
+        onClick={() => {}}
+      />,
+    );
+    const chip = screen.getByText('编排', { exact: true });
+    expect(chip.previousElementSibling?.getAttribute('aria-label')).toBe('已顶置');
+    expect(chip.nextElementSibling).toHaveTextContent('进行中');
+  });
+
+  it("origin='user' → 不渲染「编排」（用户卡 before=after）", () => {
+    render(<BoardCard task={base} selected={false} onClick={() => {}} />);
+    expect(screen.queryByText('编排', { exact: true })).not.toBeInTheDocument();
+  });
+
+  it('dispatch 行短 ID 沿用 UUID 前 6 位（不特判）', () => {
+    render(
+      <BoardCard
+        task={{ ...base, id: 'a3f2c1d9-0000-0000-0000-000000000000', origin: 'dispatch' }}
+        selected={false}
+        onClick={() => {}}
+      />,
+    );
+    expect(screen.getByText(/#a3f2c1 · 任务A/)).toBeInTheDocument();
+  });
+
+  // 只读入口隐藏：draft（用户行有编辑）/ in_progress（用户行有顶置）/ completed
+  // （用户行有归档）三代表态全无菜单——主进程 IPC 守卫是执法层，渲染层防挫败
+  it.each(['draft', 'in_progress', 'completed'] as const)(
+    'dispatch 行 %s 右键 → 不弹菜单（无编辑/归档/顶置）',
+    (status) => {
+      render(<BoardCard task={{ ...base, origin: 'dispatch', status }} selected={false} onClick={() => {}} />);
+      fireEvent.contextMenu(screen.getByRole('button', { name: /任务A/ }));
+      expect(screen.queryByLabelText(`任务菜单 ${base.title}`)).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^顶置$/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^取消顶置$/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^编辑$/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^归档$/ })).not.toBeInTheDocument();
+    },
+  );
+
+  it('用户行右键菜单不受影响（对照：in_progress 出顶置项）', () => {
+    render(<BoardCard task={{ ...base, status: 'in_progress' }} selected={false} onClick={() => {}} />);
+    fireEvent.contextMenu(screen.getByRole('button', { name: /任务A/ }));
+    expect(screen.getByRole('button', { name: /^顶置$/ })).toBeInTheDocument();
   });
 });

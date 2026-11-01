@@ -91,9 +91,9 @@ export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps
         aria-pressed={selected}
         onClick={onClick}
         onContextMenu={(e) => {
-          // 全状态拦截原生菜单（UX 波 2 #1：原非终态放行原生菜单，入口形同虚设）
+          // 全状态拦截原生菜单（UX 波 2 #1）；dispatch 簿记行只读——菜单项全无，不弹（D4）
           e.preventDefault();
-          setMenu({ x: e.clientX, y: e.clientY });
+          if (task.origin !== 'dispatch') setMenu({ x: e.clientX, y: e.clientY });
         }}
         className={`w-full cursor-pointer rounded-md border bg-canvas px-2.5 py-2 text-left transition-colors hover:border-strong hover:bg-surface-1 ${
           selected ? 'border-focus' : 'border-subtle'
@@ -114,6 +114,13 @@ export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps
               aria-label="已顶置"
               className="shrink-0 text-accent-500"
             />
+          )}
+          {task.origin === 'dispatch' && (
+            /* D4 编排徽标：dispatch 簿记行可辨来源（预览定值清单逐项对齐，勿改值） */
+            <span className="inline-flex items-center gap-0.5 text-[11px] leading-none px-1 py-[3px] rounded text-status-violet bg-status-violet-tint whitespace-nowrap shrink-0">
+              <Bot size={11} strokeWidth={1.75} aria-hidden />
+              编排
+            </span>
           )}
           <span className={status.className}>{status.label}</span>
           {task.blocked && (

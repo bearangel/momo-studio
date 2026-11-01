@@ -45,6 +45,7 @@ import * as migration067 from './067_session_groups_pin_type';
 import * as migration068 from './068_session_group_color';
 import * as migration069 from './069_m21_task_routing_mirror_registry';
 import * as migration070 from './070_m33_task_dependencies';
+import * as migration071 from './071_task_origin_column';
 
 export interface Migration {
   version: number;
@@ -1164,6 +1165,10 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // blocked 派生态不落列不加状态，读侧聚合派生）。
     version: migration070.version,
     sql: migration070.up,
+  },
+  {
+    version: migration071.version,
+    sql: migration071.up,
   },
 ];
 

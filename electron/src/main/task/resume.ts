@@ -209,7 +209,8 @@ function resolveAssignmentId(task: TaskRow, breakpointSsId: string | null): stri
  * D6：检测时**不改任务状态**——卡片是唯一闸门；scheduler 边界回归锁在测试侧固化。
  */
 export function detectInterrupted(): InterruptedTaskInfo[] {
-  const rows = listTasks({ status: ['in_progress'] });
+  // D4：dispatch 簿记行非断点续跑候选（链由 registry 管理；boot 对账已复位）
+  const rows = listTasks({ status: ['in_progress'], excludeOrigin: 'dispatch' });
   const store = getJournalStore();
   const result: InterruptedTaskInfo[] = [];
   for (const task of rows) {

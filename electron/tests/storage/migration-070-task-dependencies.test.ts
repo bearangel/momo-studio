@@ -65,9 +65,9 @@ describe('migration 070 —— 注册与升降级', () => {
     expect(sql).toContain('CREATE INDEX IF NOT EXISTS idx_task_dependencies_depends_on');
     const versions = loadMigrations().map((m) => m.version);
     expect(versions).toContain(69);
+    // D4（迁移 071 tasks.origin）：070 不再是末位迁移——锁顺延关系而非终位
+    expect(versions.at(-1), '071 origin 列注册后 070 仍在链中（顺序完整）').toBeGreaterThan(70);
     expect(versions).toContain(70);
-    // 最新迁移锁（069 专项移交至此）：070 为当前收尾迁移
-    expect(Math.max(...versions)).toBe(70);
   });
 
   it('旧库升级兼容：069 终态行升 070 后 parent_task_id NULL、task_dependencies 空表', () => {

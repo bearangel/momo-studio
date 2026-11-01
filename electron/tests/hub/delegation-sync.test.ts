@@ -37,6 +37,7 @@ const NOW = 1_700_000_000_000;
 
 function mkRow(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title'>): TaskRow {
   return {
+    origin: 'user',
     workspaceId: 'ws-1',
     description: '',
     status: 'pending',

@@ -13,12 +13,13 @@ import path from 'node:path';
 import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertMessage } from '../../src/main/storage/messages/repo';
-import { insertEventBatch, type MessageEventRow } from '../../src/main/storage/messages/events-repo';
+import { insertEventBatch, listEventsByMessage, type MessageEventRow } from '../../src/main/storage/messages/events-repo';
 import {
   compactEventDeltas,
   writeCompactSnapshot,
   getCompactSnapshots,
   backfillCompactSnapshots,
+  compactThinkingEventsInPlace,
 } from '../../src/main/storage/messages/event-compaction';
 import { aggregateEvents } from '../../../renderer/src/lib/stream-aggregator';
 
@@ -262,5 +263,84 @@ describe('backfillCompactSnapshots 流式守卫（2026-09-26 P0：流中快照�
     ]);
     const out = backfillCompactSnapshots([done.id]);
     expect(out.get(done.id)?.map((e) => e.eventType)).toEqual(['text_delta', 'final']);
+  });
+});
+
+// === D5（spec §4.2）：终态并档 compactThinkingEventsInPlace + 三态等价契约 ===
+
+describe('D5 终态并档：thinking 行在位归一（锚行保 id/seq，全文入 payload）', () => {
+  function mkMsg(): string {
+    return insertMessage({ sessionId: 'r1', sender: '@a:home', eventType: 'm.room.message', body: '' }).id;
+  }
+
+  function seedThinking(msgId: string): void {
+    // 逐 token 形态（并档前的真实库形态）：3 thinking + tool + 2 thinking
+    insertEventBatch([
+      { messageId: msgId, seq: 1, eventType: 'thinking_delta', payload: { delta: '第一段思考' } },
+      { messageId: msgId, seq: 2, eventType: 'thinking_delta', payload: { delta: '继续' } },
+      { messageId: msgId, seq: 3, eventType: 'thinking_delta', payload: { delta: '深入' } },
+      { messageId: msgId, seq: 4, eventType: 'tool_call_start', payload: { name: 'bash' } },
+      { messageId: msgId, seq: 5, eventType: 'thinking_delta', payload: { delta: '第二段' } },
+      { messageId: msgId, seq: 6, eventType: 'thinking_delta', payload: { delta: '收尾' } },
+    ]);
+  }
+
+  it('6 行 → 3 行（两游程各 1 行 + tool 不动），锚行保 id/seq、payload 为全文', () => {
+    const msg = mkMsg();
+    seedThinking(msg);
+    const before = listEventsByMessage(msg);
+    compactThinkingEventsInPlace(msg);
+    const after = listEventsByMessage(msg);
+
+    expect(after.length).toBe(3);
+    expect(after[0]!.id).toBe(before[0]!.id); // 锚行 id 保留
+    expect(after[0]!.seq).toBe(1);
+    expect((after[0]!.payload as { delta: string }).delta).toBe('第一段思考继续深入');
+    expect(after[1]!.eventType).toBe('tool_call_start'); // 结构事件原样
+    expect((after[2]!.payload as { delta: string }).delta).toBe('第二段收尾');
+    expect(after[2]!.seq).toBe(5); // 第二游程锚 seq
+  });
+
+  it('幂等：二次并档 no-op（行数不变）', () => {
+    const msg2 = mkMsg();
+    seedThinking(msg2);
+    compactThinkingEventsInPlace(msg2);
+    const n = listEventsByMessage(msg2).length;
+    compactThinkingEventsInPlace(msg2);
+    expect(listEventsByMessage(msg2).length).toBe(n);
+  });
+
+  it('空集/单行幂等不抛错', () => {
+    expect(() => compactThinkingEventsInPlace('m-ghost')).not.toThrow();
+    const single = mkMsg();
+    insertEventBatch([
+      { messageId: single, seq: 1, eventType: 'thinking_delta', payload: { delta: '仅一行' } },
+    ]);
+    expect(() => compactThinkingEventsInPlace(single)).not.toThrow();
+    expect(listEventsByMessage(single).length).toBe(1);
+  });
+
+  it('三态等价契约：aggregateEvents(逐 token) ≡ (flush 合并) ≡ (终态并档) 的思考全文', () => {
+    const TOKENS = ['天', '地', '玄', '黄', '宇', '宙', '洪', '荒'];
+    // 形态 A：逐 token 行（旧形态）
+    const a = mkMsg();
+    insertEventBatch(TOKENS.map((t, i) => ({ messageId: a, seq: i + 1, eventType: 'thinking_delta', payload: { delta: t } })));
+    // 形态 B：flush 合并（全游程单行）
+    const b = mkMsg();
+    insertEventBatch([{ messageId: b, seq: 1, eventType: 'thinking_delta', payload: { delta: TOKENS.join('') } }]);
+    // 形态 C：逐 token 落库后终态并档
+    const c = mkMsg();
+    insertEventBatch(TOKENS.map((t, i) => ({ messageId: c, seq: i + 1, eventType: 'thinking_delta', payload: { delta: t } })));
+    compactThinkingEventsInPlace(c);
+
+    const textOf = (msgId: string): string =>
+      listEventsByMessage(msgId)
+        .filter((r) => r.eventType === 'thinking_delta')
+        .map((r) => (r.payload as { delta: string }).delta)
+        .join('');
+    expect(textOf(a)).toBe(TOKENS.join(''));
+    expect(textOf(b)).toBe(TOKENS.join(''));
+    expect(textOf(c)).toBe(TOKENS.join(''));
+    expect(listEventsByMessage(c).length, '形态 C 并档后单行').toBe(1);
   });
 });

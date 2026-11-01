@@ -25,6 +25,7 @@ function makeRow(partial: Partial<TaskRow> = {}): TaskRow {
     title: '任务',
     description: '',
     status: 'pending',
+    origin: 'user',
     sourceSessionId: null,
     sourceMessageId: null,
     creatorUserId: 'owner',

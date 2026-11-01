@@ -467,6 +467,7 @@ function mkTaskRow(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title'>): T
     createdAt: 1000, updatedAt: 1000, startedAt: null, completedAt: null,
     groupId: null, pinnedAt: null, archivedAt: null,
     routing: { mode: 'local' }, delegationId: null, parentTaskId: null,
+    origin: 'user',
     ...partial,
   };
 }

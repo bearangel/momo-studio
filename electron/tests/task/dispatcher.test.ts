@@ -129,6 +129,30 @@ describe('TaskDispatcher', () => {
     expect(mockRunner.executeTask).not.toHaveBeenCalled();
   });
 
+  it('D4：dispatch 簿记行（in_progress）不占全局并发槽——编排在途不挤占任务板 pickup', async () => {
+    // 模拟账本投影行：origin='dispatch' 直插 in_progress（不经历 assigned）
+    insertTask({
+      workspaceId: 'ws1',
+      title: '编排子任务',
+      creatorUserId: 'agent:inst-pm',
+      origin: 'dispatch',
+      status: 'in_progress',
+      assigneeAgentId: 'inst2',
+    });
+    const t = insertTask({
+      workspaceId: 'ws1',
+      title: 'T1',
+      creatorUserId: '@owner:home',
+      assigneeAgentId: 'inst1',
+    });
+    transitionTaskStatus(t.id, 'assigned');
+    // globalMax=1：若 dispatch 行占槽，本 pickup 会被短路（对照「全局并发已满」语义）
+    const { mockRunner, dispatcher } = mkDispatcher({ globalMax: 1 });
+    const picked = await dispatcher.tryPickup('inst1');
+    expect(picked).toBe(true);
+    expect(mockRunner.executeTask).toHaveBeenCalled();
+  });
+
   it('全局并发已满 → 不 pickup', async () => {
     const t = insertTask({
       workspaceId: 'ws1',

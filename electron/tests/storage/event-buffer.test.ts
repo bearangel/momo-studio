@@ -119,3 +119,49 @@ describe('MessageEventBuffer', () => {
     expect(listEventsByMessage(msgId).length).toBe(0);
   });
 });
+
+// === D5（spec 2026-10-31-ledger-storage-package §4.1）：flush 时 thinking_delta 游程合并 ===
+
+describe('D5 flush 合并：同 message 连续 thinking_delta 单行落库', () => {
+  it('连续 thinking 合一行（payload 拼接全文），结构事件断游程，跨 message 不合并', () => {
+    // FK 约束：事件行必须挂在真实 messages 行下
+    const m1 = insertMessage({ sessionId: 'r1', sender: '@a:home', eventType: 'm.room.message', body: '' }).id;
+    const m2 = insertMessage({ sessionId: 'r1', sender: '@a:home', eventType: 'm.room.message', body: '' }).id;
+    const seen: Array<Array<{ eventType: string; payload: { delta?: string } }>> = [];
+    const buf = new MessageEventBuffer({
+      flushMs: 60_000,
+      onFlush: (rows) => {
+        seen.push(rows.map((r) => ({ eventType: r.eventType, payload: r.payload as { delta?: string } })));
+      },
+    });
+    buf.append({ messageId: m1, eventType: 'thinking_delta', payload: { delta: '先' } });
+    buf.append({ messageId: m1, eventType: 'thinking_delta', payload: { delta: '想' } });
+    buf.append({ messageId: m1, eventType: 'thinking_delta', payload: { delta: '一下' } });
+    buf.append({ messageId: m1, eventType: 'tool_call_start', payload: { name: 'bash' } });
+    buf.append({ messageId: m1, eventType: 'thinking_delta', payload: { delta: '再想' } });
+    buf.append({ messageId: m2, eventType: 'thinking_delta', payload: { delta: '别家' } });
+    buf.flush();
+
+    // 6 条 pending → 4 行：m1 thinking×3 合 1 + tool 1 + m1 thinking 1 + m2 thinking 1
+    expect(listEventsByMessage(m1).length).toBe(3);
+    expect(listEventsByMessage(m2).length).toBe(1);
+    const rows = listEventsByMessage(m1);
+    expect(rows[0]!.eventType).toBe('thinking_delta');
+    expect((rows[0]!.payload as { delta: string }).delta).toBe('先想一下');
+    expect(rows[1]!.eventType).toBe('tool_call_start');
+    expect((rows[2]!.payload as { delta: string }).delta).toBe('再想');
+    // wire 推送同粒度（onFlush 收到的即落库行——大块 delta 对 aggregator 透明）
+    expect(seen.at(-1)).toHaveLength(4);
+    buf.destroy();
+  });
+
+  it('非 thinking 事件（text_delta）不参与合并（scope：D5 仅 thinking）', () => {
+    const m3 = insertMessage({ sessionId: 'r1', sender: '@a:home', eventType: 'm.room.message', body: '' }).id;
+    const buf = new MessageEventBuffer({ flushMs: 60_000 });
+    buf.append({ messageId: m3, eventType: 'text_delta', payload: { delta: 'a' } });
+    buf.append({ messageId: m3, eventType: 'text_delta', payload: { delta: 'b' } });
+    buf.flush();
+    expect(listEventsByMessage(m3).length).toBe(2);
+    buf.destroy();
+  });
+});

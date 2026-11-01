@@ -93,7 +93,7 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title' | 'stat
     groupId: null,
     pinnedAt: null,
     archivedAt: null,
-    routing: { mode: 'local' }, delegationId: null, parentTaskId: null,
+    routing: { mode: 'local' }, delegationId: null, origin: 'user', parentTaskId: null,
     ...partial,
   };
 }
@@ -346,6 +346,25 @@ describe('TaskBoardView 主区（看板重构 Task 11）', () => {
     render(<TaskBoardView workspaceId="ws-1" />);
     expect(await screen.findByText(/并发.*1.*\/.*3.*排队.*1/)).toBeInTheDocument();
     expect(screen.getByText('任务看板')).toBeInTheDocument();
+  });
+
+  // D4：dispatch 簿记行可见但不占并发槽（active/queued 都只算用户行）
+  it('dispatch 簿记行不占并发计数，卡片仍可见（D4）', async () => {
+    const fixture = [
+      mkTask({ id: 'i1', title: '用户执行中', status: 'in_progress', priority: 5 }),
+      mkTask({ id: 'd1', title: '编排执行中', status: 'in_progress', priority: 5, origin: 'dispatch' }),
+      mkTask({ id: 'a1', title: '用户排队', status: 'assigned', priority: 5 }),
+      mkTask({ id: 'd2', title: '编排排队', status: 'assigned', priority: 5, origin: 'dispatch' }),
+    ];
+    mockApi.task.list.mockResolvedValue(fixture);
+    useTaskStore.setState({ tasks: fixture });
+    render(<TaskBoardView workspaceId="ws-1" />);
+    // active=1 / queued=1——dispatch 两行（in_progress + assigned）被排除
+    expect(await screen.findByText(/并发.*1.*\/.*3.*排队.*1/)).toBeInTheDocument();
+    // 卡片照常上板 + 「编排」chip 可辨来源
+    expect(screen.getByText(/编排执行中/)).toBeInTheDocument();
+    expect(screen.getByText(/编排排队/)).toBeInTheDocument();
+    expect(screen.getAllByText('编排', { exact: true })).toHaveLength(2);
   });
 
   it('关闭按钮关闭详情面板 → 真实 store 的 selectedTaskId 置空', async () => {
