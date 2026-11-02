@@ -6,6 +6,18 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 打磨包：D9 团队创建回填 / D11 首屏视觉 / D13 退避降噪 / D14 停止防御修 / D16 生效语义（+D15）
+
+`2.1.0-alpha.56`。来源：验收报告 P3 项。裁定：**D10 撤销**（用户裁定：官网取 key 自知格式，placeholder 形态提示无必要）。
+
+- **D9 团队创建回填**：ui.store `pendingCollabDraft` 跨页草稿——「去创建团队」跳页前保留已填 title（空态带「将保留，建团后自动返回」提示）；TeamDialog 增 `onCreated(teamId)` 回调；建团成功 + 草稿在途 → 自动回 im 并由会话头重开 CollabSessionDialog：title 恢复 + 新团队预选（落「按团队」tab）。上下文不再断裂
+- **D11 首屏视觉四项**：①AI 引导卡加「推荐」violet Badge（推荐态显式标注）；②步骤锚点条「1 欢迎 · 2 模型服务/选择智能体 · 3 工作空间」（首屏 ~40% 空高的锚点填充 + 全程位置感，当前段 accent 高亮）；③TitleBar 向导态隐藏新建工作空间「＋」（首屏孤立无语义图标）；④跳过引导 `text-tertiary → text-secondary`
+- **D13 catalog 退避降噪**：≤20% full-jitter（`__setBackoffJitterForTest` 可注入钉零——档位序列锁不漂）+ 日志收敛（失败按 streak 单次 warn，退避窗口内静默——旧实现多表面叠加成 18s 级重复噪音）
+- **D14 停止阻塞防御修**（探查判定：包②并档已把事件桶降 10-30 倍，主因已解）：①`applyEventBatch` 循环内逐事件全量 sort → 批量去重 append 后单次 sort；②aggregator 防御性 `[...timeline]` 拷贝 → 原地排序。增量化 aggregateEvents 记观察项（若长回合仍卡再立项）
+- **D16 「稍后」生效语义**：提示下补人话——「运行期间继续使用当前配置；新配置在该成员下次启动时生效（成员行停止→启动，或重启应用后自动启用）」（探查实锤：模型/能力 spawn 定型进 AGENT_CONFIG、预热池持旧配置子进程——「下次派发自动拾取」不存在，不写）
+- **D15 qa-driver 容错**（技能资产）：单文件 JSON.parse 失败 → error-result 跳过继续轮询 + 结果原子写（tmp+mv）
+- **测试**：electron **5351**（+marketplace 抖动锁）；renderer **3159**（+D9 三锁/成员编辑语义锁）；e2e **31/31**（含 onboarding 首屏改动面）
+
 ## [未发布] — 状态容错快赢包：D6 验证状态回写 / D7 路径确认弹层
 
 `2.1.0-alpha.55`。来源：验收报告 D6/D7。短设计聊天内定案 + D7 预览门禁（`.omo/previews/pkg3-workspace-path-confirm.html`）。

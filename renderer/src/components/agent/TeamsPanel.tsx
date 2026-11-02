@@ -6,6 +6,7 @@
 // v2.1 P3：token 全量语义化；👥 → Users lucide、👑 → Crown lucide（P2 先例）；
 // leader chip 选中态 accent 形态（surface-active + accent-600/300）。
 import { useEffect, useState } from 'react';
+import { useUiStore } from '../../stores/ui.store';
 import { Crown, Users } from 'lucide-react';
 import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -108,7 +109,19 @@ export function TeamsPanel() {
         )}
       </div>
 
-      {createOpen && <TeamDialog onClose={() => setCreateOpen(false)} />}
+      {createOpen && (
+        <TeamDialog
+          onClose={() => setCreateOpen(false)}
+          onCreated={(teamId) => {
+            // D9（验收报告）：协作会话草稿在途 → 建团成功回 im 并请求自动重开预选
+            const ui = useUiStore.getState();
+            if (ui.pendingCollabDraft) {
+              ui.setPendingCollabDraft({ ...ui.pendingCollabDraft, reopenWithTeamId: teamId });
+              ui.setActiveView('im');
+            }
+          }}
+        />
+      )}
       {editingTeam && <TeamDialog editing={editingTeam} onClose={() => setEditingTeam(null)} />}
     </div>
   );

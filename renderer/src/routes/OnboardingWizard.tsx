@@ -16,6 +16,31 @@ import type { OnboardingPlan, OnboardingApplyResult } from '../ipc/types';
 import { ipc } from '../ipc/client';
 
 export type WizardRoute = 'ai' | 'manual';
+/** D11 步骤锚点条：首屏上部空高的锚点填充 + 全程位置感。当前段 accent 高亮 */
+function StepAnchorBar({ step }: { step: WizardStep }): React.JSX.Element {
+  const secondLabel = step === 'manualAgents' ? '选择智能体' : '模型服务';
+  const idx = step === 'welcome' ? 0 : step === 'workspace' || step === 'done' ? 2 : 1;
+  const labels = ['1 欢迎', `2 ${secondLabel}`, '3 工作空间'];
+  return (
+    <div className="w-[440px] mb-3 flex items-center gap-1.5 text-[11px] text-tertiary">
+      {labels.map((label, i) => (
+        <span key={label} className="flex items-center gap-1.5">
+          {i > 0 && <span className="w-7 h-px bg-border-strong mx-1" aria-hidden />}
+          <span className={i === idx ? 'flex items-center gap-1.5 text-accent-500 font-medium' : ''}>
+            <span
+              aria-hidden
+              className={
+                'w-1.5 h-1.5 rounded-full ' + (i === idx ? 'bg-accent-500' : 'bg-border-strong')
+              }
+            />
+            {label}
+          </span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export type WizardStep =
   | 'welcome'
   | 'provider'
@@ -98,8 +123,10 @@ export function OnboardingWizard({ onFinished }: { onFinished: () => void }) {
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-canvas">
-      <TitleBar />
-      <div className="flex-1 min-h-0 flex items-center justify-center p-6">
+      {/* D11：向导态隐藏新建工作空间「＋」——首屏无空间时它是孤立无语义图标 */}
+      <TitleBar wizardMode />
+      <div className="flex-1 min-h-0 flex flex-col items-center justify-center p-6">
+        <StepAnchorBar step={step} />
         {step === 'welcome' && (
           <>
             <WelcomeStep onSelect={(r) => { setRoute(r); setStep('provider'); }} onSkip={handleSkip} />

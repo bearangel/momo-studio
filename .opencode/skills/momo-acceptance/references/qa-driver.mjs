@@ -125,11 +125,25 @@ for (;;) {
   for (const f of files) {
     if (processed.has(f)) continue;
     processed.add(f);
-    const cmd = JSON.parse(fs.readFileSync(path.join(CMD_DIR, f), 'utf8'));
+    // D15（验收报告 2026-10-31）：畸形 cmd 文件零容错——JSON.parse 直接崩且不自愈
+    // （实测手滑 3 次）。单文件 parse 失败记 error-result 跳过继续轮询；写前
+    // 原子化（tmp+mv）防读半写文件竞态
+    let cmd;
+    try {
+      cmd = JSON.parse(fs.readFileSync(path.join(CMD_DIR, f), 'utf8'));
+    } catch (err) {
+      const r = { ok: false, error: `cmd 文件畸形（跳过不中断轮询）: ${err && err.message}` };
+      fs.writeFileSync(path.join(CMD_DIR, f.replace('.cmd.json', '.result.json')), JSON.stringify(r, null, 2));
+      log(`PARSE-FAIL ${f} :: ${r.error}`);
+      continue;
+    }
     const t0 = Date.now();
     const r = await exec(cmd);
     r.ms = Date.now() - t0;
-    fs.writeFileSync(path.join(CMD_DIR, f.replace('.cmd.json', '.result.json')), JSON.stringify(r, null, 2));
+    const resultPath = path.join(CMD_DIR, f.replace('.cmd.json', '.result.json'));
+    const tmpPath = resultPath + '.tmp';
+    fs.writeFileSync(tmpPath, JSON.stringify(r, null, 2));
+    fs.renameSync(tmpPath, resultPath);
     log(`${cmd.action} ${r.ok ? 'OK' : 'FAIL'} ${r.ms}ms${r.error ? ' :: ' + r.error : ''}`);
     if (cmd.action === 'quit') {
       await browser.close(); // 仅断开 CDP 连接，不杀 Electron

@@ -157,14 +157,27 @@ function failureBackoffDelayMs(consecutiveFailures: number): number {
 }
 
 /**
+ * D13：退避抖动因子（0~0.2 随机）——可测试注入钉确定性（档位序列锁需要零抖动）。
+ */
+let backoffJitter = (): number => Math.random() * 0.2;
+/** @internal 仅供测试注入确定性抖动因子 */
+export function __setBackoffJitterForTest(fn: () => number): void {
+  backoffJitter = fn;
+}
+
+/**
  * 记一次失败：连续失败计数 +1 并推进指数退避窗口（60s → 5min → 30min 封顶）。
  * 成功路径在 fetchRemoteCatalog 内清零（清窗口 + 清计数）。
  */
 function recordCatalogFailure(url: string): void {
   const streak = catalogFailureStreak.get(url) ?? 0;
   catalogFailureStreak.set(url, streak + 1);
-  catalogFailureBackoff.set(url, Date.now() + failureBackoffDelayMs(streak));
+  // D13（验收报告）：+≤20% jitter——多实例/多表面同刻失败时错峰重试
+  catalogFailureBackoff.set(url, Date.now() + failureBackoffDelayMs(streak) * (1 + backoffJitter()));
   catalogDegraded.set(url, true);
+  // 日志收敛：每 streak 只打一次（旧实现退避窗口内每次调用都打 info——多表面
+  // 叠加成 18s 级重复噪音）
+  logger.warn('远程 catalog 失败进入退避', { url, streak, backoffMs: failureBackoffDelayMs(streak) });
 }
 
 /**
@@ -178,9 +191,9 @@ export async function fetchCatalog(catalogUrl?: string): Promise<Catalog> {
   const hit = catalogCache.get(url);
   if (hit && hit.expiresAt > Date.now()) return hit.catalog;
 
-  // 退避窗口内零网络——现读本地（readFileSync 毫秒级，保持本地面新鲜）
+  // 退避窗口内零网络——现读本地（readFileSync 毫秒级，保持本地面新鲜）。
+  // D13：窗口内静默——退避已由 recordCatalogFailure 按 streak 打点，此处不再逐调用重复
   if ((catalogFailureBackoff.get(url) ?? 0) > Date.now()) {
-    logger.info('远程 catalog 失败退避中，直接使用本地');
     catalogDegraded.set(url, true);
     return readLocalCatalog(url);
   }

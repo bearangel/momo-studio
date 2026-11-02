@@ -374,7 +374,9 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
   // 时间线按 seq 升序输出（即使调用方传入乱序 events 也保证稳定顺序，
   // 便于 UI 渲染和调试时间线对比）。DB 层 ORDER BY seq ASC 通常已保证，
   // 这里做防御性排序以容忍批量回填或合并场景。
-  const sortedTimeline = [...timeline].sort((a, b) => a.seq - b.seq);
+  // D14：原地排序替代 [...timeline] 防御拷贝——timeline 为本函数局部数组无别名，
+  // 大回合桶（数万事件）下每次聚合省一次全量拷贝
+  timeline.sort((a, b) => a.seq - b.seq);
 
   return {
     thinking,
@@ -385,7 +387,7 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
     status,
     ...(streamError !== undefined ? { error: streamError } : {}),
     ...(thinkingTruncated ? { thinkingTruncated: true, thinkingFullChars } : {}),
-    events: sortedTimeline,
+    events: timeline,
     segments,
   };
 }

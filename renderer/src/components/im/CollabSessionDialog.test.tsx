@@ -19,6 +19,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { AgentDefinition, Team, Workspace, WorkspaceAgentMember } from '../../ipc/types';
 
 const { CollabSessionDialog } = await import('./CollabSessionDialog');
+const { useUiStore } = await import('../../stores/ui.store');
 const { useSessionStore } = await import('../../stores/session.store');
 const { useAgentStore } = await import('../../stores/agent.store');
 const { useWorkspaceStore } = await import('../../stores/workspace.store');
@@ -422,5 +423,40 @@ describe('CollabSessionDialog - 加入 pending 态（2026-10-10）', () => {
     // Task 11：成员行为 checkbox（多选卡）
     await waitFor(() => expect(screen.getByRole('checkbox', { name: '评审员' })).toBeInTheDocument());
     expect(screen.queryByText('加入中…')).toBeNull();
+  });
+});
+
+// === D9（验收报告 2026-10-31）：团队创建回填 ===
+describe('CollabSessionDialog — D9 团队创建回填', () => {
+  beforeEach(() => {
+    useUiStore.setState({ pendingCollabDraft: null, activeView: 'im' });
+  });
+
+  it('「去创建团队」→ 跳页前保留 title 草稿（不再裸丢）+ 辅助文案在场', async () => {
+    // 空态前置：无团队才渲染「去创建团队」
+    useAgentStore.setState({ teams: [], loading: false });
+    const onClose = vi.fn();
+    render(<CollabSessionDialog onClose={onClose} />);
+    fireEvent.click(screen.getByRole('button', { name: '选择团队' }));
+    fireEvent.change(screen.getByLabelText(/会话名称/), { target: { value: 'RPG 开发讨论' } });
+    expect(screen.getByText(/已填写的会话名称将保留/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '去创建团队' }));
+    expect(useUiStore.getState().pendingCollabDraft).toEqual({ title: 'RPG 开发讨论' });
+    expect(useUiStore.getState().activeView).toBe('agents');
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('initialTeamId → 直接落「按团队」tab 且新团队预选（自动重开形态）', async () => {
+    render(
+      <CollabSessionDialog initialTitle="RPG 开发讨论" initialTeamId="team-1" onClose={() => {}} />,
+    );
+    // 未点 tab 即预选：团队行已勾选 + 提交直达 team 目标
+    fireEvent.click(screen.getByRole('button', { name: '创建' }));
+    await waitFor(() =>
+      expect(createCollabSession).toHaveBeenCalledWith('ws-1', 'RPG 开发讨论', {
+        type: 'team',
+        teamId: 'team-1',
+      }),
+    );
   });
 });

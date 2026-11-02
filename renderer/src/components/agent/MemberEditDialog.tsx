@@ -286,6 +286,11 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
             <div className="text-sm text-secondary">
               已保存。该智能体正在运行，<span className="text-accent-600 dark:text-accent-300">需重启</span>才能生效。
             </div>
+            {/* D16（验收报告）：「稍后」生效语义——模型/能力随 spawn 定型（预热池持旧配置
+                子进程），无「下次派发自动拾取」链路；人话注明生效时机 */}
+            <div className="text-xs text-tertiary">
+              选「稍后」：运行期间继续使用当前配置；新配置在该成员下次启动时生效（成员行「停止 → 启动」，或重启应用后自动启用）。
+            </div>
             {error && <div className="text-status-error text-sm">{error}</div>}
             <div className="flex gap-2 justify-end">
               <Button variant="ghost" type="button" onClick={onClose} disabled={saving}>

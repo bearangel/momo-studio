@@ -27,7 +27,7 @@ interface TabMenu {
   y: number;
 }
 
-export function WorkspaceTabs() {
+export function WorkspaceTabs({ hideCreateButton = false }: { hideCreateButton?: boolean }) {
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const closedIds = useWorkspaceStore((s) => s.closedIds);
@@ -190,6 +190,7 @@ export function WorkspaceTabs() {
         })}
       </div>
 
+      {!hideCreateButton && (
       <button
         type="button"
         aria-label="新建工作空间"
@@ -199,6 +200,7 @@ export function WorkspaceTabs() {
       >
         <Plus size={14} strokeWidth={1.75} aria-hidden />
       </button>
+      )}
 
       {/* 已关闭工作空间的重开入口（closedIds 非空才出现，空态零视觉噪音） */}
       <ClosedTabsDropdown />

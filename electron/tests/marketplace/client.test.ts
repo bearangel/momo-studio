@@ -15,6 +15,7 @@ import {
   __resetCatalogCacheForTest,
   __rewindCatalogCacheForTest,
   __rewindFailureBackoffForTest,
+  __setBackoffJitterForTest,
   __getFailureBackoffRemainingForTest,
   CATALOG_CACHE_TTL_MS,
   CATALOG_FAILURE_BACKOFF_MS,
@@ -68,6 +69,14 @@ afterEach(() => {
   __resetCatalogCacheForTest();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
   delete process.env.AP_USER_DATA_DIR;
+});
+
+// D13：全文件钉零抖动——固定档位回卷（60s+1 等）依赖确定性窗口
+beforeEach(() => {
+  __setBackoffJitterForTest(() => 0);
+});
+afterEach(() => {
+  __setBackoffJitterForTest(() => Math.random() * 0.2);
 });
 
 describe('marketplace/client fetchCatalog', () => {
@@ -248,6 +257,16 @@ describe('marketplace/client fetchCatalog 失败指数退避（P2-9）', () => {
   it('退避序列常量锁定：60s → 5min → 30min', () => {
     expect(CATALOG_FAILURE_BACKOFF_STEPS_MS).toEqual([60_000, 300_000, 1_800_000]);
     expect(CATALOG_FAILURE_BACKOFF_MS).toBe(60_000); // 首档兼容导出
+  });
+
+  it('D13 抖动：注入 0.2 因子 → 窗口落在 (档位, 档位×1.2]', async () => {
+    fetchSpy.mockRejectedValue(new Error('down'));
+    __setBackoffJitterForTest(() => 0.2);
+    await fetchCatalog(url);
+    const remaining = __getFailureBackoffRemainingForTest(url);
+    expect(remaining).toBeGreaterThan(CATALOG_FAILURE_BACKOFF_MS);
+    expect(remaining).toBeLessThanOrEqual(CATALOG_FAILURE_BACKOFF_MS * 1.2);
+    __setBackoffJitterForTest(() => 0); // 还原（afterEach 兜底再还原一次）
   });
 
   it('连续失败退避序列 60s → 5min → 30min 封顶（第 4 次仍 30min）', async () => {

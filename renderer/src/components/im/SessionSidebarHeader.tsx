@@ -10,6 +10,7 @@
 // T13 移交约定：Picker 在其 try 块内调用 onContinue 且不 await——消费方（本组件）
 // 必须自行 catch 自己的错误，否则会成为未处理 rejection / 被 Picker 误显示。
 import { useEffect, useState } from 'react';
+import { useUiStore } from '../../stores/ui.store';
 import { Bolt, Users } from 'lucide-react';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useSessionStore } from '../../stores/session.store';
@@ -23,6 +24,17 @@ export function SessionSidebarHeader() {
 
   const [pickerOpen, setPickerOpen] = useState(false);
   const [collabOpen, setCollabOpen] = useState(false);
+  // D9：协作会话草稿回填——「去创建团队」建团成功后自动重开对话框（title 恢复
+  // + 团队预选）；消费即清（单次语义）
+  const pendingCollabDraft = useUiStore((st) => st.pendingCollabDraft);
+  const [reopen, setReopen] = useState<{ title?: string; teamId: string } | null>(null);
+  useEffect(() => {
+    const teamId = pendingCollabDraft?.reopenWithTeamId;
+    if (!teamId) return;
+    setReopen({ title: pendingCollabDraft.title, teamId });
+    useUiStore.getState().setPendingCollabDraft(null);
+    setCollabOpen(true);
+  }, [pendingCollabDraft]);
 
   // needsDefaultAgent 错误态触发：store 在下次 createQuickSession 开始时复位标记，
   // effect 按翻转触发，不会重复弹（setPickerOpen 幂等）
@@ -82,7 +94,13 @@ export function SessionSidebarHeader() {
           onClose={() => setPickerOpen(false)}
         />
       )}
-      {collabOpen && <CollabSessionDialog onClose={() => setCollabOpen(false)} />}
+      {collabOpen && (
+        <CollabSessionDialog
+          initialTitle={reopen?.title}
+          initialTeamId={reopen?.teamId}
+          onClose={() => setCollabOpen(false)}
+        />
+      )}
     </div>
   );
 }

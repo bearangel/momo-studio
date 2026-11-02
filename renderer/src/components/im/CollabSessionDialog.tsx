@@ -41,24 +41,27 @@ import type {
 } from '../../ipc/types';
 
 interface Props {
+  /** D9：草稿回填——自动重开时恢复 title 并预选刚建的团队（落「按团队」tab） */
+  initialTitle?: string;
+  initialTeamId?: string;
   onClose: () => void;
 }
 
 type TargetTab = 'agent' | 'team';
 
-export function CollabSessionDialog({ onClose }: Props) {
+export function CollabSessionDialog({ initialTitle, initialTeamId,  onClose }: Props) {
   const workspace = useWorkspaceStore((s) => s.getActive());
   const { members, teams, definitions, loadMembers, loadTeams, loadDefinitions, addMember } =
     useAgentStore();
   const createCollabSession = useSessionStore((s) => s.createCollabSession);
 
-  const [title, setTitle] = useState('');
-  const [tab, setTab] = useState<TargetTab>('agent');
+  const [title, setTitle] = useState(initialTitle ?? '');
+  const [tab, setTab] = useState<TargetTab>(initialTeamId ? 'team' : 'agent');
   // Task 11 多选状态：勾选序 selectedIds + 主 agent leaderId（agent 页签）；
   // 团队页签仍单选（teamId），两页签目标不同构、互不共享
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [leaderId, setLeaderId] = useState<string | null>(null);
-  const [teamId, setTeamId] = useState<string | null>(null);
+  const [teamId, setTeamId] = useState<string | null>(initialTeamId ?? null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   // 加入中的 def id——addMember IPC 含 agent 启动（秒级），按钮进 pending 态防重复点击/误解
@@ -313,13 +316,20 @@ export function CollabSessionDialog({ onClose }: Props) {
                 <Button
                   variant="ghost"
                   onClick={() => {
-                    // P3-3（2026-10-15）：空态直通——跳智能体页（团队 tab 由该页入口进入）
+                    // P3-3：空态直通跳智能体页；D9（验收报告 2026-10-31）：跳页前
+                    // 保留已填 title——建团成功后自动重开本对话框并预选，草稿不再裸丢
+                    useUiStore.getState().setPendingCollabDraft({
+                      ...(title.trim() ? { title: title.trim() } : {}),
+                    });
                     useUiStore.getState().setActiveView('agents');
                     onClose();
                   }}
                 >
                   去创建团队
                 </Button>
+                <span className="block text-[10px] text-tertiary mt-1">
+                  已填写的会话名称将保留，建团后自动返回
+                </span>
               </div>
             )}
             {teams.map((t) => (
