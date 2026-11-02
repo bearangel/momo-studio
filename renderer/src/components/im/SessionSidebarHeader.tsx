@@ -80,7 +80,11 @@ export function SessionSidebarHeader() {
         type="button"
         aria-label="协作会话"
         title="协作会话：选择多个成员或团队"
-        onClick={() => setCollabOpen(true)}
+        onClick={() => {
+          // D9（Oracle P1）：手动打开 = 放弃在途草稿（防陈旧 title 幽灵重开）
+          useUiStore.getState().setPendingCollabDraft(null);
+          setCollabOpen(true);
+        }}
         className="flex-1 text-xs px-2 py-1.5 rounded bg-surface-2 text-secondary hover:text-primary transition-colors flex items-center justify-center gap-1"
       >
         <Users size={12} strokeWidth={1.75} aria-hidden />
@@ -98,7 +102,10 @@ export function SessionSidebarHeader() {
         <CollabSessionDialog
           initialTitle={reopen?.title}
           initialTeamId={reopen?.teamId}
-          onClose={() => setCollabOpen(false)}
+          onClose={() => {
+            setCollabOpen(false);
+            setReopen(null); // D9（Oracle P1）：关闭即弃预填态——下次手动打开不再带旧 title/team
+          }}
         />
       )}
     </div>

@@ -16,11 +16,20 @@ import type { OnboardingPlan, OnboardingApplyResult } from '../ipc/types';
 import { ipc } from '../ipc/client';
 
 export type WizardRoute = 'ai' | 'manual';
-/** D11 步骤锚点条：首屏上部空高的锚点填充 + 全程位置感。当前段 accent 高亮 */
-function StepAnchorBar({ step }: { step: WizardStep }): React.JSX.Element {
-  const secondLabel = step === 'manualAgents' ? '选择智能体' : '模型服务';
-  const idx = step === 'welcome' ? 0 : step === 'workspace' || step === 'done' ? 2 : 1;
-  const labels = ['1 欢迎', `2 ${secondLabel}`, '3 工作空间'];
+/** D11 步骤锚点条：首屏上部空高的锚点填充 + 全程位置感。当前段 accent 高亮。
+ * Oracle 终审修正：真实流程 DAG 是 welcome→provider→workspace→requirement/preview
+ * （WorkspaceStep 自证「已完成的模型服务与工作空间不会丢失」）——4 段单调映射，
+ * 段 4 按 route 动态（AI=AI 规划 / 手动=选择智能体），进度点不回退。 */
+function StepAnchorBar({ step, route }: { step: WizardStep; route: WizardRoute }): React.JSX.Element {
+  const labels = ['1 欢迎', '2 模型服务', '3 工作空间', route === 'ai' ? '4 AI 规划' : '4 选择智能体'];
+  const idx =
+    step === 'welcome'
+      ? 0
+      : step === 'provider'
+        ? 1
+        : step === 'workspace'
+          ? 2
+          : 3; // requirement/preview/manualAgents/done 均归段 4
   return (
     <div className="w-[440px] mb-3 flex items-center gap-1.5 text-[11px] text-tertiary">
       {labels.map((label, i) => (
@@ -126,7 +135,7 @@ export function OnboardingWizard({ onFinished }: { onFinished: () => void }) {
       {/* D11：向导态隐藏新建工作空间「＋」——首屏无空间时它是孤立无语义图标 */}
       <TitleBar wizardMode />
       <div className="flex-1 min-h-0 flex flex-col items-center justify-center p-6">
-        <StepAnchorBar step={step} />
+        <StepAnchorBar step={step} route={route ?? 'ai'} />
         {step === 'welcome' && (
           <>
             <WelcomeStep onSelect={(r) => { setRoute(r); setStep('provider'); }} onSkip={handleSkip} />

@@ -72,11 +72,12 @@ afterEach(() => {
 });
 
 // D13：全文件钉零抖动——固定档位回卷（60s+1 等）依赖确定性窗口
+const __originalJitter = (): number => Math.random() * 0.2;
 beforeEach(() => {
   __setBackoffJitterForTest(() => 0);
 });
 afterEach(() => {
-  __setBackoffJitterForTest(() => Math.random() * 0.2);
+  __setBackoffJitterForTest(__originalJitter); // 生产默认原引用（Oracle P2：防默认值漂移分叉）
 });
 
 describe('marketplace/client fetchCatalog', () => {

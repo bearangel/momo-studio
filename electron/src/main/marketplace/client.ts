@@ -173,11 +173,12 @@ function recordCatalogFailure(url: string): void {
   const streak = catalogFailureStreak.get(url) ?? 0;
   catalogFailureStreak.set(url, streak + 1);
   // D13（验收报告）：+≤20% jitter——多实例/多表面同刻失败时错峰重试
-  catalogFailureBackoff.set(url, Date.now() + failureBackoffDelayMs(streak) * (1 + backoffJitter()));
+  const jittered = failureBackoffDelayMs(streak) * (1 + backoffJitter());
+  catalogFailureBackoff.set(url, Date.now() + jittered);
   catalogDegraded.set(url, true);
   // 日志收敛：每 streak 只打一次（旧实现退避窗口内每次调用都打 info——多表面
-  // 叠加成 18s 级重复噪音）
-  logger.warn('远程 catalog 失败进入退避', { url, streak, backoffMs: failureBackoffDelayMs(streak) });
+  // 叠加成 18s 级重复噪音）；backoffMs 记 jittered 终值（Oracle P2：排障数字与实际窗口一致）
+  logger.warn('远程 catalog 失败进入退避', { url, streak, backoffMs: Math.round(jittered) });
 }
 
 /**

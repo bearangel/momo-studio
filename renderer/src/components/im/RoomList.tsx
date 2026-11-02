@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent } from 'react';
 import { useSessionStore } from '../../stores/session.store';
+import { useUiStore } from '../../stores/ui.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useThemeStore } from '../../stores/theme.store';
 import { ipc } from '../../ipc/client';
@@ -370,6 +371,7 @@ export function RoomList() {
   const handleGroupCollabCreate = (group: SessionGroupRow): void => {
     setPendingCreateGroupId(group.id);
     setCollabOpen(true);
+            useUiStore.getState().setPendingCollabDraft(null); // D9：手动入口弃在途草稿;
   };
   // 右键菜单态：会话行/组头两类目标 + 弹出坐标（动作复用既有 handler）
   const [menu, setMenu] = useState<
