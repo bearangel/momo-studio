@@ -157,7 +157,9 @@ export function TeamDialog({ onCreated,  editing, onClose }: Props) {
           </div>
         </div>
 
-        <fieldset className="flex flex-col gap-1.5 border-t border-subtle pt-3">
+        {/* 验收补修（2026-11-02）：fieldset 默认 min-width:min-content 会被简介行的
+            nowrap（truncate）抬高固有宽 → 撑破 448px 对话框出横向滚动条；min-w-0 归零 */}
+        <fieldset className="flex min-w-0 flex-col gap-1.5 border-t border-subtle pt-3">
           <legend className="text-sm text-secondary">成员（当前工作空间，至少 2 名）</legend>
           <div className="text-xs text-tertiary">
             勾选加入团队；点右侧皇冠指定队长（默认首个勾选成员，负责接待非 @ 消息）
@@ -184,7 +186,7 @@ export function TeamDialog({ onCreated,  editing, onClose }: Props) {
                     checked={checked}
                     onChange={(e) => toggleMember(m.instanceId, e.target.checked)}
                   />
-                  <span className="mt-0.5">
+                  <span className="mt-0.5 flex-none">
                     {m.iconEmoji || (
                       <Avatar name={memberLabel(m)} bot size="sm" />
                     )}
