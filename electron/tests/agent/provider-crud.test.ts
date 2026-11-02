@@ -46,6 +46,25 @@ describe('provider-crud', () => {
     expect(listProviders()).toHaveLength(1);
   });
 
+  it('验收补修（2026-11-02）：createProvider 携带 defaultModel → provider_models 落行（自定义供应商不再空列表）', async () => {
+    runMigrations();
+    const p = await createProvider({
+      name: '自定义网关', baseUrl: 'https://gw.example.com/v1', apiKey: 'k',
+      defaultModel: 'my-model-x',
+    });
+    const models = listProviderModels(p.id);
+    expect(models.map((m) => m.modelId)).toEqual(['my-model-x']);
+    expect(models[0]!.enabled).toBe(true);
+    expect(getProvider(p.id)!.defaultModel).toBe('my-model-x');
+  });
+
+  it('验收补修：createProvider 未携带 defaultModel → 不凭空造模型行（既有语义保持）', async () => {
+    runMigrations();
+    const p = await createProvider({ name: '裸建', baseUrl: 'u', apiKey: 'k' });
+    expect(listProviderModels(p.id)).toEqual([]);
+    expect(getProvider(p.id)!.defaultModel).toBeNull();
+  });
+
   it('listProviders 不返回 apiKey', async () => {
     runMigrations();
     await createProvider({ name: 'A', baseUrl: 'u', apiKey: 'k' });

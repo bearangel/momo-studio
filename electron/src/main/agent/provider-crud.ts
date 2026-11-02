@@ -174,6 +174,11 @@ export async function createProvider(input: {
   if (input.presetKey) {
     seedPresetModels(id, input.presetKey);
   }
+  // 验收补修（2026-11-02）：显式携带 defaultModel（如引导页手输模型名）时同步
+  // 落一行 provider_models——自定义供应商无 preset 种子可依赖，漏写则模型列表永远空
+  if (input.defaultModel) {
+    upsertProviderModel(id, input.defaultModel, true, null);
+  }
   if (input.isDefault) setDefaultProvider(id);
   logger.info('供应商已创建', { id, name: input.name });
   return getProvider(id)!;
