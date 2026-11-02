@@ -23,6 +23,7 @@ import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
 import { buildCatalog, type ToolCatalogEntry, type ToolMeta } from './catalog-entry';
 import { OUTPUT_LIMITS } from './shared/output-truncate';
+import { createUtf8Collector } from './shared/stream-decode';
 import { parseStringArg } from './shared/arg-parse';
 import { resolveShellSpawn } from '../../sandbox';
 import { buildKillTreeArgs } from '../../sandbox/windows';
@@ -274,9 +275,10 @@ export class ShellTools implements ToolModule {
         process.send?.({ type: 'proc-group:register', streamSessionId: ctx.streamSessionId, pgid: child.pid });
       }
 
-      let stdout = '';
-      let stderr = '';
-      let truncated = false;
+      // 流式 UTF-8 收集器（shared/stream-decode）：多字节字符可被 pipe 边界切开，
+      // 逐 chunk toString 会解出 U+FFFD（中文乱码）。按字符累计到上限即截断。
+      const outCol = createUtf8Collector(OUTPUT_LIMITS.bash_stdout);
+      const errCol = createUtf8Collector(OUTPUT_LIMITS.bash_stderr);
       let killed = false;
       // v1.5.6: 防重复 resolve/reject——close 事件 + 兜底 timer 可能竞争
       let settled = false;
@@ -286,33 +288,13 @@ export class ShellTools implements ToolModule {
         fn();
       };
 
-      // 输出按 OUTPUT_LIMITS.bash_stdout / bash_stderr 截断。逻辑：
-      //   1) 已满 → 直接丢弃本 chunk，同时置 truncated=true；
-      //   2) 本 chunk 超过剩余配额 → 截取剩余部分，置 truncated=true；
-      //   3) 本 chunk 在配额内 → 全量追加。
-      // 关键：必须在「本次发生截断」时立即置 truncated，避免子进程在单 chunk
-      //       填满后立即退出时遗漏标记（truncated 永远不会被设回）。
+      // 输出按 OUTPUT_LIMITS.bash_stdout / bash_stderr 截断——截断判定与标记
+      // 由收集器承担：配额满后 write 不再累加并置 truncated（见 stream-decode.ts）。
       child.stdout.on('data', (chunk: Buffer) => {
-        const remaining = OUTPUT_LIMITS.bash_stdout - stdout.length;
-        if (remaining <= 0) { truncated = true; return; }
-        const chunkStr = chunk.toString('utf-8');
-        if (chunkStr.length > remaining) {
-          stdout += chunkStr.slice(0, remaining);
-          truncated = true;
-        } else {
-          stdout += chunkStr;
-        }
+        outCol.write(chunk);
       });
       child.stderr.on('data', (chunk: Buffer) => {
-        const remaining = OUTPUT_LIMITS.bash_stderr - stderr.length;
-        if (remaining <= 0) { truncated = true; return; }
-        const chunkStr = chunk.toString('utf-8');
-        if (chunkStr.length > remaining) {
-          stderr += chunkStr.slice(0, remaining);
-          truncated = true;
-        } else {
-          stderr += chunkStr;
-        }
+        errCol.write(chunk);
       });
 
       // v1.5.6: 杀整个进程组（bash + 所有子进程）。SIGKILL 不可被捕获/忽略。
@@ -340,6 +322,11 @@ export class ShellTools implements ToolModule {
         if (fallbackTimer) return; // 已在倒计时
         fallbackTimer = setTimeout(() => {
           guard(() => {
+            // 兜底路径（进程被强杀、close 未触发）：不冲尾字节——半个汉字
+            // 冲出来只会是 U+FFFD 噪声，直接取已解码部分。
+            const stdout = outCol.text;
+            const stderr = errCol.text;
+            const truncated = outCol.truncated || errCol.truncated;
             const parts = [`exit_code: null`, `(${reason}，进程组已杀 + 2s 兜底结束)`];
             if (stdout) parts.push(`stdout:\n${stdout}${truncated ? '\n…(已截断)' : ''}`);
             if (stderr) parts.push(`stderr:\n${stderr}${truncated ? '\n…(已截断)' : ''}`);
@@ -383,6 +370,12 @@ export class ShellTools implements ToolModule {
             reject(e);
             return;
           }
+          // 先 end() 冲出不完整尾字节，再取文本（多字节安全的完整输出）。
+          outCol.end();
+          errCol.end();
+          const stdout = outCol.text;
+          const stderr = errCol.text;
+          const truncated = outCol.truncated || errCol.truncated;
           // v2.4：sandbox 行紧跟 exit_code 行——LLM 与调用方据此感知本次执行
           // 是否落在 OS 沙箱内（unsandboxed:* = permissive 降级直跑）。
           const parts: string[] = [`exit_code: ${code ?? 'null'}`, `sandbox: ${plan.tag}`];

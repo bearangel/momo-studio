@@ -8,16 +8,35 @@
 //   - 构造最小 ToolContext：GitTools 只用 wsFs / workspaceDir，其他字段给 stub。
 //   - 不存在的 commit 用例期待 reject（git show 非 0 退出码 → executeShow 抛错）。
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { WorkspaceFS } from '../../../src/main/files/workspace-fs';
 import type { ToolContext } from '../../../src/main/agent/tools/types';
-import { GitTools } from '../../../src/main/agent/tools/git-tools';
+import { GitTools, runGit } from '../../../src/main/agent/tools/git-tools';
 import { runMigrations, closeDb } from '../../../src/main/storage/db';
 import { setGitPolicy, getGitPolicy } from '../../../src/main/workspace/git-policy';
+
+// 子进程桩（仅「流式 UTF-8 解码」用例启用）：本文件其余用例全是真实 git 仓，
+// 故用**部分 mock**——procStub.fake 为 null 时 spawn 委托给真实实现，逐字节
+// 不变；置为 fake 时才替换。与 mcp-spawner-*.test.ts 同款「只 mock 进程边界」策略。
+const procStub = vi.hoisted(() => ({
+  fake: null as null | (() => unknown),
+}));
+
+type SpawnFn = typeof import('node:child_process').spawn;
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  const spawn = ((...args: Parameters<SpawnFn>) => {
+    const fake = procStub.fake;
+    return (fake ? fake() : actual.spawn(...args)) as ReturnType<SpawnFn>;
+  }) as SpawnFn;
+  return { ...actual, spawn, default: { ...actual, spawn } };
+});
 
 let tmpRoot: string;
 let tmpDir: string;
@@ -316,5 +335,44 @@ describe('git 选项注入防护（审查 F2）', () => {
     // 远端形态分层名（斜杠 + 多段）——仅校验形态，创建本地同名分支验证通过
     await tools.execute('git_checkout', { branch: 'main' }, ctx);
     await tools.execute('git_branch', { name: 'origin/main' }, ctx);
+  });
+});
+
+// =====================================================================================
+// 流式 UTF-8 解码回归锁：git 输出经 pipe 交付，边界可能切开多字节字符。
+// 旧实现逐 chunk `chunk.toString('utf-8')`——切开的两半各自解出 U+FFFD，
+// 表现为中文提交信息 / 文件名在会话里显示为乱码。
+// =====================================================================================
+
+/**
+ * 最小子进程桩：stdout/stderr 可 emit data。listeners 全部同步注册完毕后才于
+ * 下一个 tick 依次 emit data 与 close——仿真 pipe 分块到达 + 正常退出。
+ */
+function makeFakeGitProc(stdoutChunks: Buffer[], code = 0): unknown {
+  const bus = new EventEmitter();
+  const stdout = new EventEmitter();
+  const stderr = new EventEmitter();
+  const proc = Object.assign(bus, { stdout, stderr, pid: 4242, kill: (): void => {} });
+  setImmediate(() => {
+    for (const chunk of stdoutChunks) stdout.emit('data', chunk);
+    bus.emit('close', code);
+  });
+  return proc;
+}
+
+describe('runGit 流式 UTF-8 解码', () => {
+  it('中文被 pipe 边界切成两个 chunk → stdout 完整且无替换字符（旧实现必出 U+FFFD）', async () => {
+    const expected = '修改：中文文件名.txt';
+    const bytes = Buffer.from(expected, 'utf8');
+    // 在第 1 字节后切一刀：首字「修」的 3 字节被拆到两个 chunk
+    procStub.fake = (): unknown => makeFakeGitProc([bytes.subarray(0, 1), bytes.subarray(1)]);
+    try {
+      const result = await runGit(['status', '--porcelain=v1'], ctx);
+      expect(result.code).toBe(0);
+      expect(result.stdout).toBe(expected);
+      expect(result.stdout).not.toContain('\uFFFD');
+    } finally {
+      procStub.fake = null;
+    }
   });
 });

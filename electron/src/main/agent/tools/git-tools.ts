@@ -11,8 +11,9 @@
 //     兼防 `--output=` 选项注入任意写）；git_add paths 以 `--` 选项分隔。
 //   - 10s 默认超时：到点 SIGKILL（不可捕获、立即生效），防止恶意构造的死循环
 //     （如巨大的 git log）。
-//   - maxOutput 上限：spawn 后按字节累计 stdout / stderr，超 maxOutput 直接丢弃，
-//     避免一次性把整个仓库历史吃进内存。默认 OUTPUT_LIMITS.git_status = 20KB。
+//   - maxOutput 上限：spawn 后按字符累计 stdout / stderr（流式 UTF-8 解码，跨
+//     chunk 多字节安全），超 maxOutput 直接丢弃，避免一次性把整个仓库历史吃进
+//     内存。默认 OUTPUT_LIMITS.git_status = 20KB。
 //   - 退出码非 0 抛错（与 ShellTools 不同——git 只读命令失败说明真出问题了，
 //     让 LLM 看到 stderr 自我纠正）。
 //   - 写工具的路径参数（git_add paths）逐个走 ctx.wsFs.assertInWorkspace，拒绝
@@ -42,6 +43,7 @@ import type { ToolContext, ToolModule } from './types';
 import { buildCatalog, type ToolCatalogEntry, type ToolMeta } from './catalog-entry';
 import type { WorkspaceFS } from '../../files/workspace-fs';
 import { OUTPUT_LIMITS, truncateString } from './shared/output-truncate';
+import { createUtf8Collector } from './shared/stream-decode';
 import { parseStringArg } from './shared/arg-parse';
 import { getGitPolicy } from '../../workspace/git-policy';
 import { discoverRepos } from '../../git/repos';
@@ -92,14 +94,16 @@ export async function runGit(
       env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    let stdout = '';
-    let stderr = '';
-    // 按字节累计，超 maxOutput 后丢弃后续 chunk（不再累加），避免大输出 OOM。
+    // 流式 UTF-8 解码（shared/stream-decode）：pipe 边界可能切开多字节字符，
+    // 逐 chunk toString 会解出 U+FFFD。按字符累计超 maxOutput 后不再累加，
+    // 避免大输出 OOM。
+    const outCol = createUtf8Collector(maxOutput);
+    const errCol = createUtf8Collector(maxOutput);
     child.stdout.on('data', (chunk: Buffer) => {
-      if (stdout.length < maxOutput) stdout += chunk.toString('utf-8');
+      outCol.write(chunk);
     });
     child.stderr.on('data', (chunk: Buffer) => {
-      if (stderr.length < maxOutput) stderr += chunk.toString('utf-8');
+      errCol.write(chunk);
     });
     // 10s 超时 SIGKILL——不可被捕获，立即生效。
     const timer = setTimeout(() => {
@@ -107,12 +111,17 @@ export async function runGit(
     }, GIT_TIMEOUT_MS);
     child.on('close', (code) => {
       clearTimeout(timer);
-      resolve({ code, stdout, stderr });
+      // end() 冲出不完整尾字节后再取文本
+      outCol.end();
+      errCol.end();
+      resolve({ code, stdout: outCol.text, stderr: errCol.text });
     });
     child.on('error', (err) => {
       // spawn 本身失败（如 git 不存在）：归一化成 code=-1 + stderr 含错误信息。
       clearTimeout(timer);
-      resolve({ code: -1, stdout, stderr: err.message });
+      outCol.end();
+      errCol.end();
+      resolve({ code: -1, stdout: outCol.text, stderr: err.message });
     });
   });
 }
