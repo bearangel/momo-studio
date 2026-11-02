@@ -85,6 +85,13 @@ describe('BrowserPolicy.assertFilePath（win32 语义）', () => {
     expect(policy.assertUrl('ws1', 'file:///c:/ws/proj/a.txt')).toBe('file:///c:/ws/proj/a.txt');
   });
 
+  it('盘符形态的 hash 在返回值中保留（锚点不吃掉）', () => {
+    const policy = new BrowserPolicy(() => settings, 'C:\\WS');
+    expect(policy.assertUrl('ws1', 'file:///c:/ws/proj/a.txt#p2')).toBe(
+      'file:///c:/ws/proj/a.txt#p2',
+    );
+  });
+
   it('percent-encoding 形态的 .. 穿越拒绝（URL 归一化不可达的编码段）', () => {
     const policy = new BrowserPolicy(() => settings, 'C:\\WS');
     expect(() => policy.assertUrl('ws1', 'file:///C:/WS/%2E%2E/outside/a.txt')).toThrow(

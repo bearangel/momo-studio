@@ -48,6 +48,16 @@ function domainMatches(hostname: string, entry: string): boolean {
   return h === e || h.endsWith(`.${e}`);
 }
 
+/**
+ * 越界错误文案：必须给出「边界在哪」与「下一步怎么写」。
+ * 旧文案只有「file:// 仅限 workspace 目录内」——模型不知道根路径，只能猜或放弃
+ * （spec 2026-11-02 §5.3 现场：一轮轮换绝对路径试）。文案含目标路径、工作空间根
+ * 与相对路径建议，模型下一轮即可自纠正。
+ */
+function fileAccessMessage(root: string, target: string): string {
+  return `文件不在工作空间内：${target}。工作空间根：${root}。请传相对路径（如 report.html）或工作空间内的绝对路径。`;
+}
+
 /** 通知推送钩子——构造注入（与 BrowserManagerHooks.pushNotice 同形态；缺省不推）。
  * workspaceId 缺省回退空串——main 端 push 链路在 BrowserPolicy 场景下恒有 wsId 上下文，
  * 透传给 renderer 信任卡路由用（spec §3.7 / v2.7 review M7）。 */
@@ -215,7 +225,8 @@ export class BrowserPolicy {
   /**
    * file:// 限定（spec §6.3 硬安全边界）：与 wsFs.assertInWorkspace 同源规则——
    * resolve 归一后 path.relative 判定必须落在 workspaceRoot 之下（拒 .. 越界）；
-   * 最近存在祖先 realpath 反符号链接逃逸。通过则返回归一化 file:// 绝对 URL。
+   * 最近存在祖先 realpath 反符号链接逃逸。通过则返回归一化 file:// 绝对 URL
+   * （保留入参的 search / hash——锚点导航依赖它）。
    */
   private assertFilePath(url: URL): string {
     let filePath: string;
@@ -233,7 +244,7 @@ export class BrowserPolicy {
     //    形态，等价于 resolve 归一后不在 root 内），并接入 win32 大小写不敏感
     //    比对（PATH_SEMANTICS_WIN32 显式入口，随当前 path 模块语义分叉）。
     if (!isInsideDir(root, normalized, { win32: PATH_SEMANTICS_WIN32 })) {
-      throw new BrowserFileAccessError();
+      throw new BrowserFileAccessError(fileAccessMessage(root, normalized));
     }
 
     // 2) 符号链接逃逸：向上找真实存在的最近祖先，realpath 解析后不得脱离 workspace
@@ -247,7 +258,7 @@ export class BrowserPolicy {
       // 分类体系（审查 Nit）——转 BrowserFileAccessError 并携带根路径，面向
       // LLM 可诊断可重试。
       throw new BrowserFileAccessError(
-        `workspace 目录不可访问（可能已被删除或移动）: ${root}`,
+        `workspace 目录不可访问（可能已被删除或移动）：工作空间根 ${root}。请传相对路径（如 report.html）或确认该目录仍然存在后重试。`,
       );
     }
     let anchor = normalized;
@@ -259,10 +270,18 @@ export class BrowserPolicy {
       // 2) 锚定段同样走 isInsideDir（等价于原 realAnchor !== realRoot 且不
       //    startsWith(realRoot + sep) 的合取形态；win32 态大小写不敏感）
       if (!isInsideDir(realRoot, realAnchor, { win32: PATH_SEMANTICS_WIN32 })) {
-        throw new BrowserFileAccessError();
+        throw new BrowserFileAccessError(fileAccessMessage(realRoot, realAnchor));
       }
     }
 
-    return pathToFileURL(normalized).href;
+    // 返回值保留入参的 search / hash（spec 2026-11-02 §5.3 修正 1）：
+    // pathToFileURL(normalized) 只表示 pathname，`a.html#p2` 的锚点在此没有位置，
+    // 不显式挂回就会被静默吃掉（单测全绿而用户永远停在第 1 页）。边界判定已在
+    // 上方全部完成且只作用于 normalized / realAnchor（纯路径），此处补后缀不参与
+    // 任何路径比对，安全语义不变。
+    const out = pathToFileURL(normalized);
+    out.search = url.search;
+    out.hash = url.hash;
+    return out.href;
   }
 }
