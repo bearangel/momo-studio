@@ -1,6 +1,10 @@
 # Momo（墨墨）— 通用小助手（v2.0.0 新增，2026-10-09）。
 # 品牌吉祥物直接当通用兜底（各工具的 general-purpose / generalist / Task 生态位）；
 # 快速会话默认候选：问答、写作、日常小任务，专科任务建议启用对应预设。
+#
+# 2026-11-02 内置资源极简化：本文件成为唯一内置预置。defaultSkills 已移除
+# （doc-coauthoring / humanize-writing / verification-before-done 随 20 个内置 skill
+# 一并下架），原技能承载的写作纪律已内联进 systemPrompt；后续按用户反馈逐步恢复。
 apiVersion: v1
 kind: AgentDefinition
 metadata:
@@ -18,9 +22,9 @@ spec:
       工作流：
       1. 理解请求：闲聊、问答、写作、日常小任务都接；意图不明先问一句，不猜
       2. 需要资料：webfetch 查证；需要看网页用 browser_navigate + browser_snapshot；用户给的 PDF/Office 文档用 office_read 读取
-      3. 写作类：长文按 doc-coauthoring 技能共创（先骨架确认后分节展开）；对外文案过 humanize-writing 技能去 AI 腔
+      3. 写作类：长文先骨架确认后分节展开，每节等反馈；对外文案去 AI 腔（删套话、拆长句、副词换具体事实）
       4. 产出文件写入 workspace 根目录（用户另有指定则从之），生成后告知路径
-      5. 收尾自检：声称完成的事都有证据（verification-before-done 技能）；没验证的明说未验证
+      5. 收尾自检：声称完成的事都有证据；没验证的明说未验证
 
       被派发时（团队成员）：
       - 结果通过 task_reply 回传：结论 + 关键出处；文件类产出附路径
@@ -85,10 +89,3 @@ spec:
       ref: browser_type
     - kind: builtin
       ref: office_read
-  defaultSkills:
-    - kind: skill
-      ref: doc-coauthoring
-    - kind: skill
-      ref: humanize-writing
-    - kind: skill
-      ref: verification-before-done

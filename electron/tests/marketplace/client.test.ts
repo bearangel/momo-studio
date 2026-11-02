@@ -99,7 +99,7 @@ describe('marketplace/client fetchCatalog', () => {
     fetchSpy.mockResolvedValue({ ok: false, status: 500 } as Response);
 
     const catalog = await fetchCatalog('https://example.test/catalog.json');
-    // 本地内置 catalog 含 26 个预填充 item（见 resources/marketplace/catalog.json）
+    // 本地内置 catalog 预填充 item（2026-11-02 极简化后仅 1 条；条数锁见 LOCAL_ITEM_COUNT 用例）
     expect(catalog.items.length).toBeGreaterThanOrEqual(1);
     expect(catalog.version).toBe('1.0');
   });

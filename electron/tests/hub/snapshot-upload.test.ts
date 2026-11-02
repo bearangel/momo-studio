@@ -228,10 +228,10 @@ describe('buildAndUploadWorkspaceSnapshot', () => {
     expect(checksumShort(result.checksum)).toBe(result.checksum.slice(0, 8));
   });
 
-  it('summary skill 分桶（P2-6）：hub 记账补装 / custom 内嵌 / builtin 与 marketplace 目录桶只入总数', async () => {
+  it('summary skill 分桶（P2-6）：hub 记账补装 / custom 内嵌 / marketplace 目录桶只入总数', async () => {
     const wsId = await mkWorkspace('分桶空间');
     await seedMember(wsId, 'bucket-agent');
-    // 四桶混合：hub 记账（补装位）/ custom 目录（内嵌）/ marketplace 无记账 / builtin（应用实物）
+    // 三桶混合：hub 记账（补装位）/ custom 目录（内嵌）/ marketplace 无记账（bare 桶）
     seedMarketplaceSkillRow('hub-skill');
     seedHubAccounting('skill', 'hub-skill');
     seedCustomSkillDir('embed-skill');
@@ -242,9 +242,10 @@ describe('buildAndUploadWorkspaceSnapshot', () => {
     const result = await buildAndUploadWorkspaceSnapshot(wsId, deps);
 
     const installed = listInstalled();
-    // builtin 桶在场（electron/resources/skills 实物——清单总数含它但不装包）
+    // 2026-11-02 极简化：builtin 桶为空（内置 skill 整库下架）；
+    // 「目录桶只入总数不装包」口径改由 bare-market-skill 承担验证
     const builtinCount = installed.filter((s) => s.source === 'builtin').length;
-    expect(builtinCount).toBeGreaterThan(0);
+    expect(builtinCount).toBe(0);
     expect(installed.map((s) => s.slug)).toEqual(
       expect.arrayContaining(['hub-skill', 'embed-skill', 'bare-market-skill']),
     );

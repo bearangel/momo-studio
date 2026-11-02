@@ -1125,8 +1125,9 @@ describe('registerResourceHandlers', () => {
 
   // P2.3 Task 2（spec 2026-09-23 §5/§6/§7）：预置清单只读 + 外链打开两通道。
   // listBuiltinPresets 不 mock 解析链——默认目录解析 electron/resources/agents 下
-  // 4 个真 YAML，锁「真产物」契约（slug/name/emoji 均为生产消费字段）；openExternal
+  // 真 YAML，锁「真产物」契约（slug/name/emoji 均为生产消费字段）；openExternal
   // 用 shell spy 锁校验门（放行才触达 shell，拒绝路径 shell 必须零调用）。
+  // 2026-11-02 内置资源极简化：预置目录仅剩 general-assistant（Momo）一个真 YAML。
   describe('P2.3 Task 2 预置清单 + 外链打开', () => {
     it('注册 resource:listBuiltinPresets / misc:openExternal 通道', () => {
       const channels = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls.map(
@@ -1137,7 +1138,7 @@ describe('registerResourceHandlers', () => {
       );
     });
 
-    it("resource:listBuiltinPresets('agent') 返回 8 个真 YAML 预置（v2.0.0 阵容，字母序）", async () => {
+    it("resource:listBuiltinPresets('agent') 返回 1 个真 YAML 预置（极简化后仅 Momo）", async () => {
       const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
       const presetCall = calls.find((c: unknown[]) => c[0] === 'resource:listBuiltinPresets');
       const handler = presetCall![1] as (evt: unknown, type: string) => Promise<unknown>;
@@ -1147,16 +1148,7 @@ describe('registerResourceHandlers', () => {
         description: string;
         iconEmoji: string;
       }>;
-      expect(presets.map((p) => p.slug)).toEqual([
-        'code-reviewer',
-        'coder',
-        'general-assistant',
-        'office-assistant',
-        'pm-agent',
-        'requirement-analyst',
-        'researcher',
-        'ui-designer',
-      ]);
+      expect(presets.map((p) => p.slug)).toEqual(['general-assistant']);
       // 每条都是生产消费字段：四字段全为非空字符串（清单卡片直接渲染）
       for (const p of presets) {
         expect(typeof p.slug).toBe('string');
@@ -1168,10 +1160,8 @@ describe('registerResourceHandlers', () => {
         expect(typeof p.iconEmoji).toBe('string');
         expect(p.iconEmoji.length).toBeGreaterThan(0);
       }
-      const office = presets.find((p) => p.slug === 'office-assistant');
-      expect(office).toMatchObject({ name: 'Butler', iconEmoji: '🤵' });
-      const coder = presets.find((p) => p.slug === 'coder');
-      expect(coder).toMatchObject({ name: 'Smith', iconEmoji: '🔨' });
+      const momo = presets.find((p) => p.slug === 'general-assistant');
+      expect(momo).toMatchObject({ name: 'Momo', iconEmoji: '🐾' });
     });
 
     it("resource:listBuiltinPresets('mcp') / ('skill') 返回空数组（当前预置仅 agent）", async () => {

@@ -19,6 +19,9 @@ const AGENTS_DIR = path.join(REPO_ROOT, 'electron', 'resources', 'agents');
 const CATALOG_PATH = path.join(REPO_ROOT, 'resources', 'marketplace', 'catalog.json');
 
 function listSkillSlugs(): string[] {
+  // 2026-11-02 内置资源极简化：内置 skill 整库下架，git 不追踪空目录 → 目录可能
+  // 不存在，缺失视为空集。A/B/C/F 契约保留——未来按用户反馈恢复内置 skill 时立即重新生效。
+  if (!fs.existsSync(SKILLS_DIR)) return [];
   return fs
     .readdirSync(SKILLS_DIR, { withFileTypes: true })
     .filter((e) => e.isDirectory())

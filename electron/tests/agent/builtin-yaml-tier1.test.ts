@@ -1,6 +1,7 @@
 // electron/tests/agent/builtin-yaml-tier1.test.ts
 // builtin agent YAML 契约（spec §4.5）：全部内置 YAML 的 defaultTools ⊇ Tier 1
 // （白名单强执行后 builtin 不丢公共默认能力）。
+// 2026-11-02 内置资源极简化：仅剩 general-assistant.yaml 一个内置预置。
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -12,8 +13,8 @@ const yamlDir = path.resolve(__dirname, '../../resources/agents');
 describe('builtin agent YAML ⊇ Tier 1', () => {
   const files = fs.readdirSync(yamlDir).filter((f) => f.endsWith('.yaml'));
 
-  it('resources/agents 下有 8 个 YAML', () => {
-    expect(files).toHaveLength(8);
+  it('resources/agents 下有 1 个 YAML（极简化后仅 Momo）', () => {
+    expect(files).toEqual(['general-assistant.yaml']);
   });
 
   for (const f of files) {

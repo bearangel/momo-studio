@@ -13,7 +13,6 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
@@ -570,13 +569,6 @@ describe('formatDispatchHint 并行教学（spec §7.2）', () => {
   });
 });
 
-describe('pm-agent.yaml 定位文案（spec 2026-10-08 重定位）', () => {
-  it('builtin PM systemPrompt 为研发管理定位 + leader dispatch 用法；并行教学由 formatDispatchHint 运行时注入（上组用例锁定），不再静态重复', () => {
-    const yamlPath = path.join(__dirname, '..', '..', 'resources', 'agents', 'pm-agent.yaml');
-    const yaml = readFileSync(yamlPath, 'utf-8');
-    expect(yaml).toContain('你是 Architect（总架构师）');
-    expect(yaml).toContain('研发管理');
-    expect(yaml).toContain('dispatch:<');
-    expect(yaml).not.toContain('在同一次回复中连续发出多个 dispatch 工具调用');
-  });
-});
+// pm-agent.yaml 定位文案锁（spec 2026-10-08 重定位）随 2026-11-02 内置资源极简化
+// 整体退役——pm-agent 预置已下架，该锁不再有主体；dispatch 并行教学语义由上方
+// formatDispatchHint 用例组独立锁定，不受影响。

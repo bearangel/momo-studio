@@ -300,10 +300,10 @@ describe('buildWorkspaceSnapshot 清单全量', () => {
     // —— mcpEnabled：仅 stdio 启用面（url/禁用/plugin 来源全排除）——
     expect(cfg.mcpEnabled).toEqual(['my-tools', 'hub-tools']);
 
-    // —— skills：三源全量 ——
+    // —— skills：custom + marketplace 两源全量（builtin 源随 2026-11-02 极简化整库下架）——
     expect(cfg.skills).toContain('my-skill');
     expect(cfg.skills).toContain('market-skill');
-    expect(cfg.skills).toContain('code-review'); // builtin（electron/resources/skills 实物）
+    expect(cfg.skills).not.toContain('code-review'); // 内置 skill 不再入清单（极简化回归锁）
 
     // —— pluginsEnabled + excluded ——
     expect(cfg.pluginsEnabled).toEqual([{ pluginId: 'hub-plugin', slug: 'hub-plugin' }]);

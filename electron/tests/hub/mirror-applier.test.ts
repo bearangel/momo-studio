@@ -1429,6 +1429,9 @@ describe('applyMirrorSnapshot 工作目录', () => {
 // 对 catalog-install 类不成立（双端同 catalog 但装态独立）。修复：目标未装且
 // 本地内置 catalog 有该 slug → 按需落装（零网络，inline 包）→ 解析命中；
 // catalog 也没有的仍软失败（superpowers 类私有 skill）。
+// 2026-11-02 内置资源极简化：catalog 仅剩 general-assistant（Momo）一个 agent
+// 条目；内置 skill 条目整批下架——skill 补装正例不复存在，已删 skill slug
+// 的补装语义随之收敛为软失败（下下方极简化回归锁）。
 
 describe('applyMirrorSnapshot catalog 自愈', () => {
   const noResDeps2 = (archive: ArchiveFixture): MirrorApplierDeps => ({
@@ -1440,7 +1443,7 @@ describe('applyMirrorSnapshot catalog 自愈', () => {
     const archive = await makeArchive(baseManifest({
       workspaceName: 'cat-agent',
       config: {
-        agentMembers: [{ name: '办公助手', slug: 'office-assistant' }],
+        agentMembers: [{ name: 'Momo', slug: 'general-assistant' }],
         teams: [], mcpEnabled: [], skills: [], pluginsEnabled: [], providerRefs: [], prefs: {},
       },
     }));
@@ -1450,14 +1453,14 @@ describe('applyMirrorSnapshot catalog 自愈', () => {
     );
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
-    expect(outcome.unresolvedRefs ?? []).toEqual([]); // catalog 补装生效——不再 agent:office-assistant
+    expect(outcome.unresolvedRefs ?? []).toEqual([]); // catalog 补装生效——不再 agent:general-assistant
     const members = listMembers(listWorkspaces().find((w) => w.name === 'cat-agent')!.id);
     // 身份契约=slug（成员显示名随目标侧定义——catalog 项名与源端可不同）
     expect(members).toHaveLength(1);
-    expect(getAgentDefinition(members[0]!.agentDefinitionId)?.slug).toBe('office-assistant');
+    expect(getAgentDefinition(members[0]!.agentDefinitionId)?.slug).toBe('general-assistant');
   });
 
-  it('skill slug 未装未内嵌、本地 catalog 有 → 自动落装（无 skill unresolved）', async () => {
+  it('已下架的内置 skill：catalog 无条目 → 软失败入 unresolved（2026-11-02 极简化回归锁）', async () => {
     const archive = await makeArchive(baseManifest({
       workspaceName: 'cat-skill',
       config: {
@@ -1471,8 +1474,8 @@ describe('applyMirrorSnapshot catalog 自愈', () => {
     );
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
-    expect(outcome.unresolvedRefs ?? []).toEqual([]);
-    expect(listInstalled().some((s) => s.slug === 'code-review')).toBe(true);
+    // 若未来按用户反馈恢复内置 skill 条目，本用例转红——届时应恢复「catalog 补装正例」用例
+    expect(outcome.unresolvedRefs).toEqual(['skill:code-review']);
   });
 
   it('catalog 没有的 slug（私有 skill）→ 仍软失败入 unresolved（语义不变）', async () => {
@@ -1496,8 +1499,8 @@ describe('applyMirrorSnapshot catalog 自愈', () => {
     const manifest = baseManifest({
       workspaceName: 'cat-idem',
       config: {
-        agentMembers: [{ name: '研究员', slug: 'researcher' }], teams: [],
-        mcpEnabled: [], skills: ['debug-reproduce'], pluginsEnabled: [], providerRefs: [], prefs: {},
+        agentMembers: [{ name: 'Momo', slug: 'general-assistant' }], teams: [],
+        mcpEnabled: [], skills: ['brainstorming'], pluginsEnabled: [], providerRefs: [], prefs: {},
       },
     });
     const archive = await makeArchive(manifest);
@@ -1509,6 +1512,7 @@ describe('applyMirrorSnapshot catalog 自愈', () => {
     );
     expect(second.ok).toBe(true);
     if (!second.ok) return;
-    expect(second.unresolvedRefs ?? []).toEqual([]);
+    // ghost skill 两轮稳定软失败；catalog agent 两轮幂等补装
+    expect(second.unresolvedRefs ?? []).toEqual(['skill:brainstorming']);
   });
 });
