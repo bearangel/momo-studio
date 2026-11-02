@@ -58,11 +58,20 @@ import {
 /** git 子进程的默认超时（毫秒）。到点 SIGKILL。*/
 const GIT_TIMEOUT_MS = 10_000;
 
-/** runGit 的归一化返回值。code=null 表示进程被信号杀死或 spawn 失败。*/
+/**
+ * runGit 的归一化返回值。code=null 表示进程被信号杀死或 spawn 失败。
+ *
+ * `stdoutTruncated` / `stderrTruncated`：流式收集器按 maxOutput **严格封顶**
+ * （createUtf8Collector 到上限即停，恰好封顶时也不越界），而 truncateString 在
+ * `buf.length <= maxLen` 时直接返回原文、不追加标记——不把标记带出来，模型就会
+ * 把「被封顶的 30KB diff」当成完整内容（假完整）。见 formatGitOutput。
+ */
 interface GitResult {
   code: number | null;
   stdout: string;
   stderr: string;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
 }
 
 /**
@@ -114,16 +123,45 @@ export async function runGit(
       // end() 冲出不完整尾字节后再取文本
       outCol.end();
       errCol.end();
-      resolve({ code, stdout: outCol.text, stderr: errCol.text });
+      resolve({
+        code,
+        stdout: outCol.text,
+        stderr: errCol.text,
+        stdoutTruncated: outCol.truncated,
+        stderrTruncated: errCol.truncated,
+      });
     });
     child.on('error', (err) => {
       // spawn 本身失败（如 git 不存在）：归一化成 code=-1 + stderr 含错误信息。
       clearTimeout(timer);
       outCol.end();
       errCol.end();
-      resolve({ code: -1, stdout: outCol.text, stderr: err.message });
+      resolve({
+        code: -1,
+        stdout: outCol.text,
+        stderr: err.message,
+        stdoutTruncated: outCol.truncated,
+        stderrTruncated: false,
+      });
     });
   });
+}
+
+/**
+ * git 只读输出的统一拼装：先按字节上限截断，命中封顶时再补「已截断」标记。
+ *
+ * 本分支回归（终审必修 2）：runGit 的收集器改成严格封顶后，超限输出恰好等于
+ * maxOutput 字符，走 truncateString 的 `buf.length <= maxLen` 早退分支——标记
+ * 永不出现。旧实现整块超限，标记必然命中。缺标记比截断本身更危险：模型会把
+ * 30KB 之后的 diff 当作不存在，基于半份内容下结论。
+ *
+ * 标记措辞与 truncateString 同族（`…(截断…)`），但只报上限不报原始字节数——
+ * 收集器按字符封顶、不统计总字节，刻意不为一条文案扩大 shared 收集器接口。
+ */
+function formatGitOutput(text: string, truncated: boolean, limit: number): string {
+  const body = truncateString(text, limit);
+  if (!truncated) return body;
+  return `${body}\n…(截断，输出超过 ${limit} 字节上限，请缩小范围后重试)`;
 }
 
 /** repo 参数解析（v2.9 多仓 git）：缺省（undefined）→ workspace 根；指定时
@@ -420,7 +458,7 @@ async function executeStatus(args: Record<string, unknown>, ctx: ToolContext): P
   const result = await runGit(['status', '--porcelain=v1'], ctx, undefined, repoPath);
   if (result.code !== 0) throw new Error(`git status 失败: ${result.stderr}`);
   if (!result.stdout.trim()) return '干净的工作区（nothing to commit）';
-  return truncateString(result.stdout, OUTPUT_LIMITS.git_status);
+  return formatGitOutput(result.stdout, result.stdoutTruncated, OUTPUT_LIMITS.git_status);
 }
 
 /** git_diff：默认 unstaged；staged=true 加 --staged；path 走沙箱断言。*/
@@ -436,10 +474,13 @@ async function executeDiff(args: Record<string, unknown>, ctx: ToolContext): Pro
     ctx.wsFs.assertInWorkspace(args.path);
     gitArgs.push('--', args.path);
   }
-  const result = await runGit(gitArgs, ctx, undefined, repoPath);
+  // maxOutput 必须与下方 formatGitOutput 的 limit 同源：此前这里缺省走
+  // git_status(20KB) 却在 30KB 处判截断——两个上限打架，20KB~30KB 区间的内容
+  // 被 runGit 静默丢弃而标记永不出现（终审必修 2 同源缺陷）。
+  const result = await runGit(gitArgs, ctx, OUTPUT_LIMITS.git_show_diff, repoPath);
   if (result.code !== 0) throw new Error(`git diff 失败: ${result.stderr}`);
   if (!result.stdout.trim()) return '(无差异)';
-  return truncateString(result.stdout, OUTPUT_LIMITS.git_show_diff);
+  return formatGitOutput(result.stdout, result.stdoutTruncated, OUTPUT_LIMITS.git_show_diff);
 }
 
 /** git_log：oneline 格式，limit 钳制到 [1, 100]，默认 20。*/
@@ -450,7 +491,7 @@ async function executeLog(args: Record<string, unknown>, ctx: ToolContext): Prom
   if (typeof args.branch === 'string') gitArgs.push(assertGitRefArg('branch', args.branch));
   const result = await runGit(gitArgs, ctx, undefined, repoPath);
   if (result.code !== 0) throw new Error(`git log 失败: ${result.stderr}`);
-  return truncateString(result.stdout, OUTPUT_LIMITS.git_status);
+  return formatGitOutput(result.stdout, result.stdoutTruncated, OUTPUT_LIMITS.git_status);
 }
 
 /** git_show：默认 HEAD；stat=true 加 --stat；maxOutput 用更大的 git_show_diff。*/
@@ -461,7 +502,7 @@ async function executeShow(args: Record<string, unknown>, ctx: ToolContext): Pro
   if (args.stat === true) gitArgs.push('--stat');
   const result = await runGit(gitArgs, ctx, OUTPUT_LIMITS.git_show_diff, repoPath);
   if (result.code !== 0) throw new Error(`git show 失败: ${result.stderr}`);
-  return truncateString(result.stdout, OUTPUT_LIMITS.git_show_diff);
+  return formatGitOutput(result.stdout, result.stdoutTruncated, OUTPUT_LIMITS.git_show_diff);
 }
 
 /** git_add：paths 数组逐个走 wsFs.assertInWorkspace 后再交给 git add。
@@ -489,7 +530,7 @@ async function executeBranch(args: Record<string, unknown>, ctx: ToolContext): P
   if (wantList) {
     const result = await runGit(['branch'], ctx, undefined, repoPath);
     if (result.code !== 0) throw new Error(`git branch 失败: ${result.stderr}`);
-    return result.stdout;
+    return formatGitOutput(result.stdout, result.stdoutTruncated, OUTPUT_LIMITS.git_status);
   }
   const name = assertGitRefArg('name', parseStringArg(args.name, 'name'));
   const result = await runGit(['branch', name], ctx, undefined, repoPath);
@@ -531,7 +572,8 @@ async function executeStash(args: Record<string, unknown>, ctx: ToolContext): Pr
   }
   const result = await runGit(gitArgs, ctx, undefined, repoPath);
   if (result.code !== 0) throw new Error(`git stash ${action} 失败: ${result.stderr}`);
-  return result.stdout || `(无输出，action=${action} 完成)`;
+  if (!result.stdout) return `(无输出，action=${action} 完成)`;
+  return formatGitOutput(result.stdout, result.stdoutTruncated, OUTPUT_LIMITS.git_status);
 }
 
 /**

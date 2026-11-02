@@ -17,6 +17,7 @@ import os from 'node:os';
 import { WorkspaceFS } from '../../../src/main/files/workspace-fs';
 import type { ToolContext } from '../../../src/main/agent/tools/types';
 import { GitTools, runGit } from '../../../src/main/agent/tools/git-tools';
+import { OUTPUT_LIMITS } from '../../../src/main/agent/tools/shared/output-truncate';
 import { runMigrations, closeDb } from '../../../src/main/storage/db';
 import { setGitPolicy, getGitPolicy } from '../../../src/main/workspace/git-policy';
 
@@ -371,6 +372,46 @@ describe('runGit 流式 UTF-8 解码', () => {
       expect(result.code).toBe(0);
       expect(result.stdout).toBe(expected);
       expect(result.stdout).not.toContain('\uFFFD');
+    } finally {
+      procStub.fake = null;
+    }
+  });
+});
+
+// =====================================================================================
+// 截断标记回归锁（终审必修 2）：runGit 换成 createUtf8Collector 后收集器**严格封顶**，
+// 超限输出恰好等于 maxOutput 字符 → truncateString 的 `buf.length <= maxLen` 早退分支
+// 直接返回原文、不追加标记。旧实现整块超限（buf.length > maxLen）标记必然命中。
+//
+// 纯 ASCII：排除「字符数 ≠ 字节数」的干扰，让「恰好封顶」这条判定路径唯一可解释。
+// =====================================================================================
+describe('runGit 超限输出必须带截断标记（不得静默截断）', () => {
+  it('stdout 超过上限：结果含「截断」标记，且标记出现（不是假完整的半份 diff）', async () => {
+    // 40KB 纯 ASCII（> git_show_diff 的 30KB 上限）
+    const big = Buffer.from(
+      Array.from({ length: 40 }, (_, i) => `diff-line-${String(i).padStart(3, '0')}-${'a'.repeat(900)}`).join('\n'),
+      'utf8',
+    );
+    expect(big.length).toBeGreaterThan(OUTPUT_LIMITS.git_show_diff);
+    procStub.fake = (): unknown => makeFakeGitProc([big]);
+    try {
+      const out = await new GitTools().execute('git_show', {}, ctx);
+      expect(out).toContain('截断');
+      // 上限之后的尾巴不可能出现在结果里（收集器封顶），且输出被标记过
+      expect(out).not.toContain('diff-line-039');
+      expect(out.length).toBeLessThan(big.length);
+    } finally {
+      procStub.fake = null;
+    }
+  });
+
+  it('未超限时不加标记（标记只属于真实截断）', async () => {
+    const small = Buffer.from('diff --git a/a.txt b/a.txt\n+hello\n', 'utf8');
+    procStub.fake = (): unknown => makeFakeGitProc([small]);
+    try {
+      const out = await new GitTools().execute('git_show', {}, ctx);
+      expect(out).toBe(small.toString('utf8'));
+      expect(out).not.toContain('截断');
     } finally {
       procStub.fake = null;
     }
