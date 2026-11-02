@@ -9,6 +9,7 @@ import { getSandboxSettings } from './settings';
 import { buildPolicy } from './policy';
 import { buildBwrapArgs } from './linux';
 import { renderSeatbeltProfile } from './macos';
+import { buildWindowsCommandLine } from './windows';
 import type { SpawnPlan } from './types';
 
 /** wrapped 模式缓存 env：npm/pip 缓存重定向到 tmp（写剖面自洽，spec §5.7） */
@@ -50,8 +51,13 @@ export function resolveShellSpawn(
   if (process.platform === 'win32') {
     const shell = getSandboxState()?.windowsShell ?? 'powershell.exe';
     // 刻意不带 -ExecutionPolicy Bypass：保留用户手动授权闸门（spec D5）。
+    // 命令前加 UTF-8 输出序言（PS 5.1 默认 GBK，spec §5.2a）。
     // Windows 无 OS 沙箱：本分支不消费网络态（无 net-off tag → 信任门永不触发）
-    return { kind: 'plain', shell, args: ['-NoProfile', '-NonInteractive', '-Command', command], tag: 'win-powershell' };
+    return {
+      kind: 'plain', shell,
+      args: ['-NoProfile', '-NonInteractive', '-Command', buildWindowsCommandLine(command)],
+      tag: 'win-powershell',
+    };
   }
 
   const state = getSandboxState();

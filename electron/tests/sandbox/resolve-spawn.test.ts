@@ -141,7 +141,12 @@ describe('resolveShellSpawn 平台分支（既有基线）', () => {
       expect(plan.kind).toBe('plain');
       if (plan.kind !== 'plain') return;
       expect(plan.shell).toBe('pwsh.exe');
-      expect(plan.args).toEqual(['-NoProfile', '-NonInteractive', '-Command', 'Write-Output hi']);
+      // 2026-11-02：命令前钉 UTF-8 输出序言（spec §5.2a，PS 5.1 默认 GBK），
+      // 断言写字面量而非调 buildWindowsCommandLine——接线与序言内容各自独立上锁。
+      expect(plan.args).toEqual([
+        '-NoProfile', '-NonInteractive', '-Command',
+        '$OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;\nWrite-Output hi',
+      ]);
       expect(plan.tag).toBe('win-powershell');
     } finally { desc && Object.defineProperty(process, 'platform', desc); }
   });
