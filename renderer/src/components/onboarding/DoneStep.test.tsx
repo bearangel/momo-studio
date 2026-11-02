@@ -60,6 +60,19 @@ describe('DoneStep', () => {
     expect(screen.getByText('需求分析师')).toBeInTheDocument();
   });
 
+  it('验收补修（2026-11-02）：result 带 team → 渲染「已组建团队」行（名 + 队长）；无 team 不渲染', async () => {
+    const withTeam = {
+      ...APPLY_RESULT,
+      team: { id: 't1', name: '引导测试团队', leaderName: '需求分析师' },
+    };
+    render(<DoneStep ctx={mkCtx(withTeam)} />);
+    expect(await screen.findByText('已组建团队')).toBeInTheDocument();
+    expect(screen.getByText(/引导测试团队 · 队长 需求分析师/)).toBeInTheDocument();
+    // 无 team（单 agent 方案）→ 行不存在
+    render(<DoneStep ctx={mkCtx(APPLY_RESULT)} />);
+    expect(screen.getAllByText('已组建团队')).toHaveLength(1);
+  });
+
   it('applyResult 缺省兜底（不崩溃，仅提示已配置）', async () => {
     render(<DoneStep ctx={mkCtx(null)} />);
     expect(await screen.findByText('一切就绪')).toBeInTheDocument();

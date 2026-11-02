@@ -19,6 +19,7 @@
 - **测试**：electron **5351**（+marketplace 抖动锁）；renderer **3159**（+D9 三锁/成员编辑语义锁）；e2e **31/31**（含 onboarding 首屏改动面）
 - **验收补修（2026-11-02，用户实测）**：向导「上一步」导航缺口——ProviderStep chips 形态加「上一步」回欢迎页重选路线；preset/custom 表单加「重新选择」回 chips（选错预设不再卡死，只能跳过）；WorkspaceStep/ManualAgentStep 补「上一步」（与 RequirementStep 既有 ghost 模式同款）
 - **验收补修（2026-11-02，用户实测）**：自定义供应商首屏建好后模型服务空列表 + 默认模型空——createProvider 显式 defaultModel 落 provider_models 行（自定义路径无 preset 种子可依赖）；ProviderStep create 补传 defaultModel；选定/创建成功即写 GlobalSettings.defaultChatModel（幂等一次，后续可改）
+- **验收补修（2026-11-02，用户实测）**：首屏方案只建 agent 不组队（协作能力死路）——applyOnboardingPlan 在 ≥2 成员时自动 createTeam（leader=默认会话 agent，命名派生自工作空间名）；整包重试幂等（既有团队覆盖全部成员则复用）；OnboardingApplyResult 增 team 字段，完成页显示「已组建团队 · 队长」；单 agent 不建团
 
 ## [未发布] — 状态容错快赢包：D6 验证状态回写 / D7 路径确认弹层
 

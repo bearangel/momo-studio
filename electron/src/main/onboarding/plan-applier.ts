@@ -10,6 +10,7 @@ import { updateAgentDefinition, createCustomDef, addMember, generateAgentUserId 
 import { getAgentDefinition, listMembers, listAgentDefinitions } from '../agent/agent-queries';
 import { enablePresetDef } from '../agent/preset';
 import { listBuiltinPresetAgents } from '../agent/builtin';
+import { createTeam, listTeams } from '../agent/team';
 import { listRegistered } from '../mcp/host-manager';
 import { listInstalled } from '../skill/zip-uploader';
 import { SAFE_MINIMUM_TOOLS, ALL_BUILTIN_TOOLS } from '../agent/tools/catalog';
@@ -21,6 +22,8 @@ export interface OnboardingApplyResult {
   applied: Array<{ name: string; kind: 'preset' | 'custom'; instanceId: string }>;
   warnings: string[];
   defaultAgentName: string;
+  /** ≥2 成员时自动组建（或整包重试时复用）的团队（验收补修 2026-11-02）；单 agent 无团队 */
+  team?: { id: string; name: string; leaderName: string };
 }
 
 function toMcpRefs(names: string[]): McpRef[] {
@@ -130,5 +133,33 @@ export async function applyOnboardingPlan(input: {
   const defaultIdx = Math.min(Math.max(plan.defaultAgentIndex, 0), members.length - 1);
   setDefaultAgent(input.workspaceId, members[defaultIdx]!.instanceId);
 
-  return { applied, warnings, defaultAgentName: members[defaultIdx]!.name };
+  // 验收补修（2026-11-02）：≥2 成员自动组队——v25 协作/dispatch 全挂在团队上，
+  // 只建 agent 不建队则协作能力是死路。leader = 默认会话 agent（方案主 agent）。
+  // 命名确定性派生自工作空间名（两路线通用，不引二次 LLM 调用）。
+  let team: OnboardingApplyResult['team'];
+  if (members.length >= 2) {
+    const memberIds = members.map((m) => m.instanceId);
+    // 幂等（整包重试安全）：已有团队成员集包含全部 plan 成员 → 复用不重建
+    const existing = listTeams(input.workspaceId).find((t) => {
+      const tSet = new Set(t.members.map((m) => m.instanceId));
+      return memberIds.every((id) => tSet.has(id));
+    });
+    const t =
+      existing ??
+      createTeam(
+        input.workspaceId,
+        `${workspace.name}团队`,
+        '🚀',
+        memberIds,
+        members[defaultIdx]!.instanceId,
+      );
+    team = { id: t.id, name: t.name, leaderName: members[defaultIdx]!.name };
+  }
+
+  return {
+    applied,
+    warnings,
+    defaultAgentName: members[defaultIdx]!.name,
+    ...(team ? { team } : {}),
+  };
 }
