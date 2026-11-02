@@ -17,6 +17,7 @@
 - **D16 「稍后」生效语义**：提示下补人话——「运行期间继续使用当前配置；新配置在该成员下次启动时生效（成员行停止→启动，或重启应用后自动启用）」（探查实锤：模型/能力 spawn 定型进 AGENT_CONFIG、预热池持旧配置子进程——「下次派发自动拾取」不存在，不写）
 - **D15 qa-driver 容错**（技能资产）：单文件 JSON.parse 失败 → error-result 跳过继续轮询 + 结果原子写（tmp+mv）
 - **测试**：electron **5351**（+marketplace 抖动锁）；renderer **3159**（+D9 三锁/成员编辑语义锁）；e2e **31/31**（含 onboarding 首屏改动面）
+- **验收补修（2026-11-02，用户实测）**：向导「上一步」导航缺口——ProviderStep chips 形态加「上一步」回欢迎页重选路线；preset/custom 表单加「重新选择」回 chips（选错预设不再卡死，只能跳过）；WorkspaceStep/ManualAgentStep 补「上一步」（与 RequirementStep 既有 ghost 模式同款）
 
 ## [未发布] — 状态容错快赢包：D6 验证状态回写 / D7 路径确认弹层
 

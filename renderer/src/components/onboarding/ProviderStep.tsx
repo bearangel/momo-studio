@@ -256,17 +256,32 @@ export function ProviderStep({ ctx, onSkip }: Props) {
           {/* 底部行（预览 S1）：跳过链接居左；主按钮居右。chips 模式无待提交
               动作，仅渲染跳过出口（预览中的禁用态按钮是线稿示意，不设死按钮） */}
           <div className="flex items-center justify-between mt-1">
-            {onSkip ? (
-              <button
-                type="button"
-                onClick={onSkip}
-                className="text-xs text-accent-600 dark:text-accent-300 underline underline-offset-2"
-              >
-                跳过，稍后在设置中配置
-              </button>
-            ) : (
-              <span aria-hidden />
-            )}
+            <div className="flex items-center gap-3">
+              {/* 验收补修（2026-11-02）：chips 形态可回欢迎页重选路线——
+                  此前选错服务方向只能跳过整个引导 */}
+              {mode === 'chips' && (
+                <Button type="button" variant="ghost" onClick={() => ctx.go('welcome')}>
+                  上一步
+                </Button>
+              )}
+              {(
+                /* 同上：选错预设/误入手填 → 回 chips 重选（existing 已有「返回新建」） */
+                <Button type="button" variant="ghost" onClick={() => setMode('chips')}>
+                  重新选择
+                </Button>
+              )}
+              {onSkip ? (
+                <button
+                  type="button"
+                  onClick={onSkip}
+                  className="text-xs text-accent-600 dark:text-accent-300 underline underline-offset-2"
+                >
+                  跳过，稍后在设置中配置
+                </button>
+              ) : (
+                <span aria-hidden />
+              )}
+            </div>
             {mode !== 'chips' && (
               <Button type="button" onClick={() => void submitNew()} disabled={busy}>
                 {busy ? (

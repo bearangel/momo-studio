@@ -4,6 +4,7 @@
 // （名称 + 目录手输 + 原生目录选择器）。创建成功 = store.activeWorkspaceId
 // 从 null 翻转为新 id——在此捕获并按路线分叉推进（真实配置是唯一状态源）。
 import { useEffect } from 'react';
+import { Button } from '../ui/Button';
 import { CreateWorkspaceDialog } from '../workspace/CreateWorkspaceDialog';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import type { WizardCtx } from '../../routes/OnboardingWizard';
@@ -32,6 +33,12 @@ export function WorkspaceStep({ ctx }: Props) {
   return (
     <div className="w-[440px]">
       {/* P3-4（2026-10-15）：h3——embedded 卡片自带 h2「新建工作空间」，双 h2 同层冗余 */}
+      <div className="flex justify-start mb-2">
+        {/* 验收补修（2026-11-02）：回 provider 重选/改 key——此前本步无返回 */}
+        <Button type="button" variant="ghost" onClick={() => ctx.go('provider')}>
+          上一步
+        </Button>
+      </div>
       <h3 className="text-[15px] font-semibold text-primary mb-1">创建工作空间</h3>
       <p className="text-xs text-tertiary mb-4">agent 的文件操作都发生在这个目录里</p>
       <CreateWorkspaceDialog onClose={() => undefined} embedded />

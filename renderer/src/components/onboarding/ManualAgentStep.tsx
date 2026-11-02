@@ -108,6 +108,12 @@ export function ManualAgentStep({ ctx }: Props) {
 
   return (
     <div className="w-[450px]">
+      <div className="flex justify-start mb-2">
+        {/* 验收补修（2026-11-02）：回工作空间步——与 Provider/Workspace 上一步同模式 */}
+        <Button type="button" variant="ghost" onClick={() => ctx.go('workspace')}>
+          上一步
+        </Button>
+      </div>
       <h2 className="text-[15px] font-semibold text-primary">选择你的 agent</h2>
       <p className="text-xs text-tertiary mt-1 mb-3">勾选预制 agent 启用；都不合适可创建自定义</p>
       <div className="flex flex-col gap-2">
