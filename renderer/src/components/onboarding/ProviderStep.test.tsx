@@ -116,6 +116,27 @@ describe('ProviderStep', () => {
     expect(ctx.go).not.toHaveBeenCalled();
   });
 
+  it('验收补修（2026-11-02）：chips 形态「上一步」→ 回欢迎页重选路线', () => {
+    mockList.mockResolvedValue([]);
+    mockListPresets.mockResolvedValue(PRESETS);
+    const ctx = mkCtx();
+    render(<ProviderStep ctx={ctx} />);
+    fireEvent.click(screen.getByRole('button', { name: '上一步' }));
+    expect(ctx.go).toHaveBeenCalledWith('welcome');
+  });
+
+  it('验收补修：preset 表单「重新选择」→ 回 chips 列表（选错预设不再卡死）', async () => {
+    mockList.mockResolvedValue([]);
+    mockListPresets.mockResolvedValue(PRESETS);
+    mockListModels.mockResolvedValue(MODELS_P1);
+    render(<ProviderStep ctx={mkCtx()} />);
+    fireEvent.click(await screen.findByText('智谱 GLM'));
+    await screen.findByLabelText(/API Key/);
+    fireEvent.click(screen.getByRole('button', { name: '重新选择' }));
+    // 回到 chips 列表——预设卡重新可见
+    expect(await screen.findByText('智谱 GLM')).toBeInTheDocument();
+  });
+
   it('D6：验证成功 → create 携带 verifiedAtCreation:true（此前漏传致设置页永显「未验证」）', async () => {
     mockList.mockResolvedValue([]);
     mockListPresets.mockResolvedValue(PRESETS);
