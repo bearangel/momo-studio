@@ -157,14 +157,21 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
         detectNetBlocked(e.payload.result),
     );
     // 累积到 eventLog（按 messageId 分桶 + 去重 + 按 seq 升序）
+    // D14（验收报告）：逐事件全量 sort → 批量去重 append 后单次 sort——
+    // 大回合桶（数万事件）下循环内排序是 O(N·batch·logN) 重活（停止路径阻塞的
+    // 构成部分）；seq 已由批内有序 + 桶内单调，单次排序足够
+    const touched = new Map<string, MessageEventRow[]>();
     for (const e of batch) {
       const list = eventLogByMessage.get(e.messageId) ?? [];
       // 去重按 seq（桶内唯一、由 DB 计数器分配）而非 id——流式事件与重启 hydrate
       // 的 id 生成时机不同，按 id 去重在 id 缺失/占位时会误杀后续批次（P0-5）
       if (list.some((x) => x.seq === e.seq)) continue;
       list.push(e);
-      list.sort((a, b) => a.seq - b.seq);
+      touched.set(e.messageId, list);
       eventLogByMessage.set(e.messageId, list);
+    }
+    for (const list of touched.values()) {
+      list.sort((a, b) => a.seq - b.seq);
     }
     // 重新聚合所有受影响的 messageId
     set((state) => {

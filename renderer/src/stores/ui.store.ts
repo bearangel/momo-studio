@@ -30,9 +30,18 @@ interface PersistedSidebarState {
   sidebarCollapsed: Record<SidebarViewKey, boolean>;
 }
 
+/** D9（验收报告 2026-10-31）：协作会话创建的跨页草稿——「去创建团队」跳页前
+ * 保留已填 title；建团成功写 reopenWithTeamId 由会话头消费自动重开预选。 */
+export interface PendingCollabDraft {
+  title?: string;
+  reopenWithTeamId?: string;
+}
+
 interface UiState {
   activeView: ViewKey;
   setActiveView: (view: ViewKey) => void;
+  pendingCollabDraft: PendingCollabDraft | null;
+  setPendingCollabDraft: (draft: PendingCollabDraft | null) => void;
   /** 各视图独立收起状态（v2.2 优化：三视图互不影响，随 ui.sidebar.v1 持久化） */
   sidebarCollapsed: Record<SidebarViewKey, boolean>;
   toggleSidebar: (view: SidebarViewKey) => void;
@@ -121,6 +130,8 @@ const initial = loadPersisted();
 export const useUiStore = create<UiState>((set) => ({
   activeView: 'im',
   setActiveView: (view) => set({ activeView: view }),
+  pendingCollabDraft: null,
+  setPendingCollabDraft: (draft) => set({ pendingCollabDraft: draft }),
   sidebarCollapsed: initial.sidebarCollapsed,
   toggleSidebar: (view) =>
     set((s) => {

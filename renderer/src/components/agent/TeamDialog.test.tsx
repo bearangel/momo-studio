@@ -170,6 +170,18 @@ function selectTwoMembers(leaderLabel: string): void {
   fireEvent.click(leaderRadio(leaderLabel));
 }
 
+describe('TeamDialog — D9 onCreated 回调', () => {
+  it('创建成功 → onCreated(团队 id)；编辑路径无此语义', async () => {
+    createTeam.mockResolvedValue({ ...EXISTING_TEAM, id: 'team-new' });
+    const onCreated = vi.fn();
+    render(<TeamDialog onCreated={onCreated} onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: '新团队' } });
+    selectTwoMembers('编码助手');
+    fireEvent.click(screen.getByRole('button', { name: /创建|保存/ }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith('team-new'));
+  });
+});
+
 describe('TeamDialog — 创建模式校验', () => {
   it('挂载时加载当前 ws 成员列表', async () => {
     render(<TeamDialog onClose={() => {}} />);

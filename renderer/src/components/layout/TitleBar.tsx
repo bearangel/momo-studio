@@ -10,7 +10,12 @@ import { WorkspaceTabs } from './WorkspaceTabs';
 import { ipc } from '../../ipc/client';
 import { cn } from '../../lib/cn';
 
-export function TitleBar() {
+interface TitleBarProps {
+  /** D11：向导态——隐藏新建工作空间「＋」（onboarding 期间不该建第二个空间） */
+  wizardMode?: boolean;
+}
+
+export function TitleBar({ wizardMode = false }: TitleBarProps) {
   const mac = isMac();
   const [maximized, setMaximized] = useState(false);
 
@@ -38,7 +43,7 @@ export function TitleBar() {
       )}
       {/* mac 原生红绿灯占位 ~78x28，把第一个 tab 让出来避免被遮 */}
       {mac && <div style={{ width: 78 }} className="shrink-0" />}
-      <WorkspaceTabs />
+      <WorkspaceTabs hideCreateButton={wizardMode} />
       {/* tabs 与窗口控件之间的空白拖拽区 */}
       <div className="flex-1 h-full" />
       {!mac && (

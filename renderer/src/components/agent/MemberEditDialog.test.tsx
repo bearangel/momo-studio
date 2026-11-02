@@ -322,6 +322,8 @@ describe('MemberEditDialog — 重启提示', () => {
     expect(screen.getByText(/需重启/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '立即重启' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '稍后' })).toBeInTheDocument();
+    // D16：「稍后」生效语义人话（模型/能力 spawn 定型——无下次派发自动拾取链路）
+    expect(screen.getByText(/下次启动时生效/)).toBeInTheDocument();
   });
 
   it('agent 运行中 + 仅模型变化（deltas 无变化）→ 同样显示重启提示', async () => {

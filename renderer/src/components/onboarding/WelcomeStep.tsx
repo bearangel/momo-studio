@@ -3,6 +3,7 @@
 // 欢迎页（spec 2026-10-10 §8）：两条路线大卡 + 常驻跳过。视觉基线见
 // .omo/previews/onboarding-wizard.html 帧①（P1 门禁确认稿）。
 import { Sparkles, Settings2 } from 'lucide-react';
+import { Badge } from '../ui/Badge';
 import type { WizardRoute } from '../../routes/OnboardingWizard';
 
 interface Props {
@@ -21,8 +22,12 @@ export function WelcomeStep({ onSelect, onSkip }: Props) {
           onClick={() => onSelect('ai')}
           className="flex-1 text-left rounded-lg border border-accent-500 bg-surface-active p-4 hover:border-accent-600 transition-colors"
         >
-          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-surface-3 mb-2.5">
-            <Sparkles size={16} strokeWidth={1.75} className="text-accent-500" />
+          <span className="flex items-start justify-between mb-2.5">
+            <span className="flex h-7 w-7 items-center justify-center rounded-md bg-surface-3">
+              <Sparkles size={16} strokeWidth={1.75} className="text-accent-500" />
+            </span>
+            {/* D11（验收报告）：推荐态显式标注——右卡描边重量近于左卡，无徽标则强调被稀释 */}
+            <Badge tone="violet">推荐</Badge>
           </span>
           <b className="block text-[13px] text-primary">AI 引导</b>
           <span className="block text-[11px] leading-relaxed text-tertiary mt-1">
@@ -46,7 +51,7 @@ export function WelcomeStep({ onSelect, onSkip }: Props) {
       <button
         type="button"
         onClick={onSkip}
-        className="mt-5 text-xs text-tertiary underline underline-offset-2 hover:text-secondary"
+        className="mt-5 text-xs text-secondary underline underline-offset-2"
       >
         跳过引导
       </button>

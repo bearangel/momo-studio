@@ -27,9 +27,11 @@ interface Props {
   /** 编辑模式传入现有团队；缺省 = 创建模式 */
   editing?: Team;
   onClose: () => void;
+  /** D9：创建成功回调（携带团队 id）——草稿回填链消费 */
+  onCreated?: (teamId: string) => void;
 }
 
-export function TeamDialog({ editing, onClose }: Props) {
+export function TeamDialog({ onCreated,  editing, onClose }: Props) {
   const workspace = useWorkspaceStore((s) => s.getActive());
   const { members, loadMembers, createTeam, renameTeam, setLeader, addTeamMember, removeTeamMember } =
     useAgentStore();
@@ -83,12 +85,13 @@ export function TeamDialog({ editing, onClose }: Props) {
     setError(null);
     try {
       if (!editing) {
-        await createTeam(workspace.id, {
+        const created = await createTeam(workspace.id, {
           name: name.trim(),
           iconEmoji,
           memberInstanceIds: [...selected],
           leaderInstanceId: leaderId,
         });
+        onCreated?.(created.id); // D9：草稿回填链（编辑路径无此语义）
       } else {
         // diff 基准 = 提交时 store 现状。editing prop 是打开弹窗时的快照——
         // 部分失败后 store action 已自动刷新 teams，同弹窗重试若仍按快照 diff，
