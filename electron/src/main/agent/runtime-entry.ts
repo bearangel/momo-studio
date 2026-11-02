@@ -342,6 +342,24 @@ export {
 } from './compaction-ipc';
 import { requestCompaction, handleCompactionResultIpc } from './compaction-ipc';
 
+/**
+ * boot 期运行时上下文构建：**沙箱探测先于工具定义定型**。
+ *
+ * 顺序即契约（spec 2026-11-02 §5.5 + 终审必修 1）：`buildRuntimeContext` 内
+ * `getAllToolDefs` → `ShellTools.getDefs()` 在**调用瞬间**读
+ * `getSandboxState()?.windowsShell` 定稿 bash 描述。runtime 是独立子进程，
+ * sandbox/probe 的 `cached` 初值 null——若探测晚于此处，pwsh.exe /
+ * powershell.exe 两支永远进不去，模型恒拿到「未探测 → 回退 5.1」文案；而执行侧
+ * （sandbox/index.ts 的 resolveShellSpawn）此时已有值且**优先 pwsh.exe**。
+ * 结果就是「命令真跑 pwsh（支持 &&），描述却说 5.1 不支持」——spec §5.5 要消灭的
+ * 错误事实。ensureSandboxProbed 是单飞幂等（sandboxProbePromise ??= …），
+ * runTaskChatLoop 里那次调用因此退化为 no-op，保留无害。
+ */
+export async function bootRuntimeContext(config: RuntimeConfig): Promise<RuntimeContext> {
+  await ensureSandboxProbed();
+  return buildRuntimeContext(config);
+}
+
 async function main(): Promise<void> {
   const config = parseConfig(JSON.parse(process.env.AGENT_CONFIG ?? '{}'));
   traceEnabled = config.devMode;
@@ -358,7 +376,7 @@ async function main(): Promise<void> {
     process.stderr.write(`变更账本 store 初始化失败（记账降级）: ${(err as Error).message}\n`);
   }
 
-  const ctx = await buildRuntimeContext(config);
+  const ctx = await bootRuntimeContext(config);
   process.stdout.write('Agent runtime 已启动（task-driven 模式）\n');
 
   // task-config IPC handler：主进程 AgentRunner.executeTask 通过 child.send({type:'task-config',...})

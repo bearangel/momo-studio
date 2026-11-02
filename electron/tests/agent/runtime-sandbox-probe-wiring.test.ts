@@ -34,10 +34,39 @@ vi.mock('../../src/main/sandbox/probe', async (importOriginal) => {
   return { ...actual, reprobeSandbox: vi.fn(actual.reprobeSandbox) };
 });
 
+// 「工具定义定型那一刻的探测态」观测点（终审必修 1 的时序锁）。
+// getAllToolDefs → 各模块 getDefs() → ShellTools 在此读 getSandboxState() 定稿
+// bash 描述。记录调用瞬间的状态：探测若改到 buildRuntimeContext 之后，这里读到
+// 的必然是 null（runtime 子进程 cached 初值 null），用例即红。
+const observed = vi.hoisted(() => ({
+  probed: [] as boolean[],
+  shell: [] as Array<string | null>,
+}));
+
+vi.mock('../../src/main/agent/tools', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/agent/tools')>();
+  const probe = await import('../../src/main/sandbox/probe');
+  return {
+    ...actual,
+    getAllToolDefs: (modules: Parameters<typeof actual.getAllToolDefs>[0]) => {
+      const state = probe.getSandboxState();
+      observed.probed.push(state !== null);
+      observed.shell.push(state?.windowsShell ?? null);
+      return actual.getAllToolDefs(modules);
+    },
+  };
+});
+
 import { createLLMProvider } from '../../src/main/agent/llm-provider';
-import { runTaskChatLoop, __resetSandboxProbeForTest, type RuntimeContext } from '../../src/main/agent/runtime-entry';
+import {
+  runTaskChatLoop,
+  bootRuntimeContext,
+  __resetSandboxProbeForTest,
+  type RuntimeContext,
+} from '../../src/main/agent/runtime-entry';
 import type { TaskConfig, RuntimeConfig } from '../../src/main/agent/runtime-config';
 import { buildToolRegistry } from '../../src/main/agent/tools';
+import { ShellTools } from '../../src/main/agent/tools/shell-tools';
 import { reprobeSandbox, __setSandboxStateForTest, getSandboxState } from '../../src/main/sandbox/probe';
 import { WorkspaceFS } from '../../src/main/files/workspace-fs';
 import { runMigrations, closeDb } from '../../src/main/storage/db';
@@ -180,5 +209,54 @@ describe('runtime 子进程沙箱探测接线锁（主机验收 P0 修复）', (
 
     expect(vi.mocked(reprobeSandbox).mock.calls.length).toBe(1);
     expect(getSandboxState()).not.toBeNull();
+  });
+
+  // ============================================================================
+  // 终审必修 1：探测必须前移到 buildRuntimeContext **之前**。
+  //
+  // 根因：ShellTools.getDefs() 在被调用的一瞬间用 getSandboxState()?.windowsShell
+  // 定稿 bash 描述；runtime 子进程的 cached 初值恒 null。探测若晚于 buildRuntimeContext，
+  // pwsh.exe / powershell.exe 两支永远进不去 → 模型恒拿到「未探测 → 回退 5.1」文案，
+  // 而执行侧 resolveShellSpawn 已有值且优先 pwsh.exe（装 PS7 的机器上命令与描述矛盾）。
+  //
+  // 锁法（顺序无法直接断言，用「定型时刻的快照」间接表达）：mock tools 模块包一层
+  // getAllToolDefs，记录调用瞬间 getSandboxState() 是否为 null。红绿验证——把
+  // bootRuntimeContext 里的 ensureSandboxProbed() 挪到 buildRuntimeContext 之后，
+  // 本用例必红（记录到 null）。
+  // ============================================================================
+  it('bootRuntimeContext：工具定义定型时探测态已就绪（探测晚于 buildRuntimeContext 即红）', async () => {
+    expect(getSandboxState()).toBeNull(); // 前置：boot 前为空
+    observed.probed.length = 0;
+    observed.shell.length = 0;
+
+    const ctx2 = await bootRuntimeContext(makeConfig({ workspaceDir: tmpDir }));
+
+    expect(vi.mocked(reprobeSandbox).mock.calls.length).toBe(1);
+    // buildRuntimeContext 内会调两次 getAllToolDefs（defs 列表 + 白名单并集）
+    expect(observed.probed.length).toBeGreaterThan(0);
+    expect(observed.probed.every(Boolean)).toBe(true);
+    expect(getSandboxState()).not.toBeNull();
+    expect(ctx2.tools.some((t) => t.name === 'bash')).toBe(true);
+  });
+
+  // 探测已就绪且实测 shell = pwsh.exe 时，getDefs 的 bash 描述必须带 pwsh 事实。
+  // win32 门控：描述按 process.platform 分平台（不 mock process.platform），posix
+  // 上 shellToolDescription 根本不看 detectedShell——这一支只能在 win32 上验。
+  // win32 文案本身由 tests/agent/tools/shell-tool-description.test.ts 三平台无关地锁住。
+  it.skipIf(process.platform !== 'win32')('探测态 windowsShell=pwsh.exe 时 bash 描述含 pwsh 事实（支持 &&）', () => {
+    __setSandboxStateForTest({
+      platform: 'win32',
+      sandboxTool: null,
+      toolVersion: null,
+      available: false,
+      unavailableReason: null,
+      windowsShell: 'pwsh.exe',
+      executionPolicy: null,
+      probedAt: Date.now(),
+    });
+    const bash = new ShellTools().getDefs().find((d) => d.name === 'bash');
+    expect(bash?.description).toContain('PowerShell 7（pwsh.exe）');
+    expect(bash?.description).toContain('支持 &&');
+    expect(bash?.description).not.toContain('不支持');
   });
 });
