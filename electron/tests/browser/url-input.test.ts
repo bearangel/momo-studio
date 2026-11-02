@@ -73,6 +73,27 @@ describe('resolveNavigateInput（本机原生路径语义）', () => {
     expect(nav('file:///C:/abs/a.html')).toBe('file:///C:/abs/a.html');
   });
 
+  it('posix 语义下带 host 的 file URL 原样返回（host 不得被抹掉，交 policy 抛协议错误）', () => {
+    // 取舍说明：用例显式传 platform: 'linux' 并注入 posix 版 fileUrlToPath。原因是
+    // posix 的 fileURLToPath 对非 localhost host 抛 ERR_INVALID_FILE_URL_HOST（才进
+    // 回退分支），而本机（Windows）真实的 fileURLToPath 会把 file://srv/... 成功解析成
+    // UNC——不注入就永远走不到被测的守卫，测试会在开发机上假绿。注入口本身就是 spec
+    // §5.3 为该形态留的。两平台对同一输入的「原样返回」结果字符串一致。
+    const posixFileUrlToPath = (u: URL): string => {
+      if (u.hostname !== '' && u.hostname !== 'localhost') {
+        throw new TypeError('ERR_INVALID_FILE_URL_HOST: must be localhost or empty');
+      }
+      return u.pathname;
+    };
+    expect(
+      resolveNavigateInput('file://srv/share/x.html', {
+        workspaceDir: WS,
+        platform: 'linux',
+        fileUrlToPath: posixFileUrlToPath,
+      }).url,
+    ).toBe('file://srv/share/x.html');
+  });
+
   it.each(['', '   '])('空串/空白串 %j 抛「URL 为空」', (raw) => {
     expect(() => nav(raw)).toThrow(/URL 为空/);
   });

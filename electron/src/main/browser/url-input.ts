@@ -126,6 +126,20 @@ export function resolveNavigateInput(
       }
       const rawPathname = parsed?.pathname ?? trimmed.slice('file:'.length);
       const suffix = parsed !== undefined ? `${parsed.search}${parsed.hash}` : '';
+      // 回退前守卫：非 win32 上 pathname 天然不含 host，若在此继续会静默把
+      // 「远程文件引用」（file://srv/share/x.html）抹成「本机绝对路径」——那既不是
+      // spec §5.3 枚举的回退触发条件（仅 win32 无盘符 / 非法 percent-encoding），
+      // 也会绕过 policy 对带 host file URL 的既有分类（BrowserProtocolError）。
+      // 故原样透传，交由 policy 判定。win32 的 UNC 由 fileUrlToPath 成功解析，
+      // 不会走到这里。
+      if (
+        platform !== 'win32' &&
+        parsed !== undefined &&
+        parsed.hostname !== '' &&
+        parsed.hostname !== 'localhost'
+      ) {
+        return { url: trimmed };
+      }
       // win32 上 file:/// 后的前导 / 只表示「无盘符」，不携带根语义（本平台无此形态的
       // 合法含义，spec §5.3 已知取舍：按相对路径处理）；posix 上 /x 是合法绝对路径，
       // 不能剥——越界由 policy 拒。
