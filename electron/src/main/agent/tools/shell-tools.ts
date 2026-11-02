@@ -192,15 +192,51 @@ const SHELL_CATALOG_META: Record<string, ToolMeta> = {
 };
 
 /**
- * 描述公共部分：参数（command / timeoutMs，见 inputSchema）与返回值格式说明，
- * 逐字沿用原文。平台差异部分由 shellToolDescription 追加在尾部。
+ * 描述首句（平台无关）：命令在哪个工作目录执行。沙箱姿态由各平台分支紧跟其后
+ * 追加（posix 用 bwrap/seatbelt 事实，win32 用「无 OS 沙箱」事实）。
  */
-const SHELL_DESC_BASE =
-  '在 workspace 根目录执行 shell 命令（受 OS 沙箱约束：读全盘但敏感目录不可读、仅可写 workspace 与 /tmp；网络出站按沙箱设置双态——永久允许（默认）/拒绝）。沙箱内无法启动 GUI 应用与系统浏览器（open/LaunchServices 被拒）——需要打开网页时用 browser_navigate 等浏览器工具。30s 超时，stdout+stderr 各截断 10KB。退出码非 0 不抛错。每条命令独立 shell，cd 不持久。后台进程（& 启动）在本回合内可跨命令存活，回合结束时由平台统一回收——不要依赖跨回合的后台服务（下回合需重启）。沙箱内 ps 与 kill 系统调用被拦截（kill -0/pkill 会误报「进程已死/无权限」）：查自己启动的进程用 process_list，判端口占用用 lsof/curl，关闭自己启动的服务用 process_kill（bash 里 kill 必失败）。';
+const SHELL_DESC_BASE_COMMON_INTRO = '在 workspace 根目录执行 shell 命令';
 
-/** 环境变量受限白名单提示（三平台共用，对应 buildSandboxEnv 的白名单实现） */
-const SHELL_DESC_ENV_HINT =
+/**
+ * 描述公共段（平台无关）：超时 / 截断 / 退出码 / 每条命令独立 shell。
+ * 这类说明三平台一致，也是 brief 要求逐字保留的部分。
+ */
+const SHELL_DESC_BASE_COMMON =
+  '30s 超时，stdout+stderr 各截断 10KB。退出码非 0 不抛错。每条命令独立 shell，cd 不持久。';
+
+/**
+ * POSIX 专属：沙箱写面与 GUI 启动限制（bwrap/seatbelt 语义）。
+ * win32 无 OS 沙箱（resolveShellSpawn 走 kind:'plain'），`/tmp` 在 PowerShell 下
+ * 也不是那个意思——这段挂到 win32 描述上就是给模型错误事实。
+ */
+const SHELL_DESC_BASE_POSIX_SANDBOX =
+  '（受 OS 沙箱约束：读全盘但敏感目录不可读、仅可写 workspace 与 /tmp；网络出站按沙箱设置双态——永久允许（默认）/拒绝）。沙箱内无法启动 GUI 应用与系统浏览器（open/LaunchServices 被拒）——需要打开网页时用 browser_navigate 等浏览器工具。';
+
+/**
+ * POSIX 专属：后台进程（进程组）与 ps / kill 拦截语义。
+ * win32 无进程组语义（超时杀树走 taskkill），且 PowerShell 没有 ps/kill/lsof，
+ * `&` 是调用运算符而非后台化——同样不得出现在 win32 描述里。
+ */
+const SHELL_DESC_BASE_POSIX_PROCESS =
+  '后台进程（& 启动）在本回合内可跨命令存活，回合结束时由平台统一回收——不要依赖跨回合的后台服务（下回合需重启）。沙箱内 ps 与 kill 系统调用被拦截（kill -0/pkill 会误报「进程已死/无权限」）：查自己启动的进程用 process_list，判端口占用用 lsof/curl，关闭自己启动的服务用 process_kill（bash 里 kill 必失败）。';
+
+/** posix 白名单提示：posix 清单含 PATH/HOME/USER/TERM…（大小写敏感，见 POSIX_ALLOWED_ENV） */
+const SHELL_DESC_ENV_HINT_POSIX =
   '环境变量是受限白名单：只传 PATH/HOME 等基础变量，不要依赖 PATH 以外的自定义变量（自设的 API key 等取不到，需要时走专用工具）。';
+
+/**
+ * win32 白名单提示：清单是 Path / PATHEXT / SystemRoot / TEMP / USERPROFILE… 且
+ * **没有 HOME**（见 WIN32_ALLOWED_ENV，环境变量名大小写不敏感）。
+ */
+const SHELL_DESC_ENV_HINT_WIN32 =
+  '环境变量是受限白名单：只传 Path / PATHEXT / SystemRoot / TEMP / USERPROFILE 等基础变量（没有 HOME），不要依赖白名单以外的自定义变量（自设的 API key 等取不到，需要时走专用工具）。';
+
+/**
+ * win32 沙箱姿态：无 OS 沙箱，命令以当前用户权限直跑（spec §5.5 甲方案——
+ * 只把事实告诉模型）。三种 shell 形态共用。
+ */
+const WIN32_DESC_SANDBOX =
+  '（Windows 无 OS 沙箱：命令以当前用户权限直接执行，可读全盘、写入受系统文件权限约束，网络出站不做拦截；工作目录同样锁定 workspace 根；需要网页内容时用 browser_navigate 等浏览器工具——启系统浏览器拿不到结果）。';
 
 /** win32 写文件标准写法（spec §5.2c 只教不改）——三种 shell 形态共用 */
 const WIN32_DESC_WRITE_FILE_HINT =
@@ -209,21 +245,27 @@ const WIN32_DESC_WRITE_FILE_HINT =
 /**
  * win32 的 shell 事实段：按实测 shell 分支，避免对 pwsh 7 硬写「不支持 &&」
  *（sandbox/windows.ts 的 detectWindowsShell 优先 pwsh.exe，pwsh 7 支持 &&）。
- * 探测态为 null（子进程尚未探测）或未知值时给中性文案 + 版本自检指引。
+ * 探测态为 null（子进程尚未探测）或未知值时：说明实际回退到 powershell.exe 并按
+ * 5.1 语法给默认建议，同时保留 $PSVersionTable 自检作为兜底。
  */
 function win32ShellSection(detectedShell: string | null): string {
   if (detectedShell === 'pwsh.exe') {
-    return '运行环境是 PowerShell 7（pwsh.exe），不是 bash：支持 && 串联；路径分隔符 \\，反引号是转义符；输出已按 UTF-8 解码；node / python / npm / git 可直接调用。';
+    return '运行环境是 PowerShell 7（pwsh.exe），不是 bash：支持 && 串联；路径分隔符是 \\，反引号是转义符；输出已按 UTF-8 解码；node / python / npm / git 可直接调用。';
   }
   if (detectedShell === 'powershell.exe') {
-    return '运行环境是 Windows PowerShell 5.1（不是 bash、不是 pwsh）：串联用 ;，不支持 &&；路径分隔符 \\，反引号是转义符；输出已按 UTF-8 解码；node / python / npm / git 可直接调用。';
+    return '运行环境是 Windows PowerShell 5.1（不是 bash、不是 pwsh）：串联用 ;，不支持 &&；路径分隔符是 \\，反引号是转义符；输出已按 UTF-8 解码；node / python / npm / git 可直接调用。';
   }
-  return '运行环境是 Windows PowerShell（不是 bash；具体版本尚未探测）：先跑 $PSVersionTable.PSVersion 确认 shell 版本——主版本 ≥ 7 支持 && 串联，5.1 只能用 ; 串联。路径分隔符 \\，反引号是转义符；输出已按 UTF-8 解码。';
+  // 未探测（或未知值）：sandbox/index.ts 的 win32 分支此时实际回退到 powershell.exe，
+  // 所以按 5.1 语法给默认建议；版本自检保留为兜底（确认是 7+ 就可用 &&）。
+  return '运行环境是 Windows PowerShell（不是 bash）：探测完成前实际回退到系统自带的 powershell.exe（5.1），因此默认按 5.1 语法写命令——串联用 ;，不支持 &&；可先跑 $PSVersionTable.PSVersion 确认版本，主版本 ≥ 7 则支持 && 串联。路径分隔符是 \\，反引号是转义符；输出已按 UTF-8 解码；node / python / npm / git 可直接调用。';
 }
 
 /**
  * 按平台 + 实测 shell 生成 bash 工具描述（spec 2026-11-02 §5.5）。
- * 纯函数（平台经参数进入，不读 process.platform）——单测直接锁三分支文案。
+ * 纯函数（平台经参数进入，不读 process.platform）——单测直接锁各分支文案。
+ *
+ * 平台无关段（首句 + 公共段）与平台专属段（沙箱 / 进程语义 / shell 事实）分开拼：
+ * posix 保留 bwrap/seatbelt 事实并逐字不动；win32 只说 Windows 上成立的事实。
  *
  * @param platform 目标平台
  * @param detectedShell 探测到的 win32 shell（'pwsh.exe' / 'powershell.exe' / null=未探测）
@@ -233,9 +275,10 @@ export function shellToolDescription(
   detectedShell: string | null,
 ): string {
   if (platform !== 'win32') {
-    return `${SHELL_DESC_BASE}支持 && 串联；外部程序从 PATH 解析。${SHELL_DESC_ENV_HINT}`;
+    // posix 拼接顺序与拆分前逐字一致（沙箱段在首句后、公共段在其后）
+    return `${SHELL_DESC_BASE_COMMON_INTRO}${SHELL_DESC_BASE_POSIX_SANDBOX}${SHELL_DESC_BASE_COMMON}${SHELL_DESC_BASE_POSIX_PROCESS}支持 && 串联；外部程序从 PATH 解析。${SHELL_DESC_ENV_HINT_POSIX}`;
   }
-  return `${SHELL_DESC_BASE}${win32ShellSection(detectedShell)}${WIN32_DESC_WRITE_FILE_HINT}${SHELL_DESC_ENV_HINT}`;
+  return `${SHELL_DESC_BASE_COMMON_INTRO}${WIN32_DESC_SANDBOX}${SHELL_DESC_BASE_COMMON}${win32ShellSection(detectedShell)}${WIN32_DESC_WRITE_FILE_HINT}${SHELL_DESC_ENV_HINT_WIN32}`;
 }
 
 export class ShellTools implements ToolModule {
