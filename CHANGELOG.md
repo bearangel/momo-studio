@@ -21,6 +21,7 @@
 - **验收补修（2026-11-02，用户实测）**：自定义供应商首屏建好后模型服务空列表 + 默认模型空——createProvider 显式 defaultModel 落 provider_models 行（自定义路径无 preset 种子可依赖）；ProviderStep create 补传 defaultModel；选定/创建成功即写 GlobalSettings.defaultChatModel（幂等一次，后续可改）
 - **验收补修（2026-11-02，用户实测）**：首屏方案只建 agent 不组队（协作能力死路）——applyOnboardingPlan 在 ≥2 成员时自动 createTeam（leader=默认会话 agent，命名派生自工作空间名）；整包重试幂等（既有团队覆盖全部成员则复用）；OnboardingApplyResult 增 team 字段，完成页显示「已组建团队 · 队长」；单 agent 不建团
 - **验收补修（2026-11-02，用户实测，预览批准）**：TeamDialog 成员/leader 双列表合一——每行右侧皇冠 radio 行内指定队长（首个勾选自动成为队长；取消勾选现任队长 → 皇冠自动落到剩余已选首位，「请选择 leader」报错态消灭）；每行新增 agent 简介次行（definitions 映射，空简介不渲染）；队长「队长/现任队长」徽标。预览 `.omo/previews/team-dialog-merged.html`
+- **验收补修（2026-11-02，用户实测）**：TeamDialog 列表合一后对话框底部横向滚动条——fieldset 默认 min-width:min-content 被简介行 nowrap（truncate）抬高固有宽撑破 448px；fieldset 加 min-w-0 归零 + 头像 flex-none
 
 ## [未发布] — 状态容错快赢包：D6 验证状态回写 / D7 路径确认弹层
 
