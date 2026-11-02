@@ -13,7 +13,8 @@
 //     → RichComposer.insertPill 插入文件 pill（contenteditable=false span，
 //     data-kind="file"，文字流中原子块，取代 v2.11 的 pendingFiles chip）
 //   - / 触发（空 body 锚定）→ 命令组（session.listCommands，主进程 commands.ts
-//     单一真相源）+ 技能组（ipc.resource.list 过滤 installed，builtin 三技能）
+//     单一真相源）+ 技能组（ipc.resource.list 过滤 installed；2026-11-02 内置
+//     资源极简化后内置技能下架——本 spec 在 userData/skills 预写自定义技能驱动）
 //     → 技能选择 → 技能 pill（不进正文、随 context 第 3 参发送，
 //     取代 v2.11 的 pendingSkills chip）
 //   - 发送：serializeSegments(getSegments()) → sendMessage(body, mentions, context)
@@ -57,6 +58,16 @@ test.beforeAll(() => {
     path.join(tmpWsDir, 'package.json'),
     JSON.stringify({ name: 'momo-composer-e2e', version: '1.0.0' }, null, 2),
   );
+  // / 菜单技能组数据源是 listInstalled 自定义技能扫描（AP_USER_DATA_DIR/skills）——
+  // 2026-11-02 极简化后内置技能整库下架，预写自定义技能保证 '/'+技能 pill 链有稳定命中
+  // （custom 分支准入条件：目录内必有 .sha256 标记文件——zip-uploader「无标记 = 非 custom」）
+  const skillDir = path.join(tmpUserData, 'skills', 'e2e-review-skill');
+  fs.mkdirSync(skillDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(skillDir, 'SKILL.md'),
+    '---\nname: E2E 审查\ndescription: composer-context e2e 自定义技能 fixture\nversion: 0.1.0\n---\n\n按清单逐项核查。',
+  );
+  fs.writeFileSync(path.join(skillDir, '.sha256'), 'e2e-fixture-marker');
 });
 
 test.afterAll(() => {
@@ -183,11 +194,11 @@ test('输入框支持文件引用与技能 chip：@ 文件 → / 技能 → 发�
     await input.fill('/');
     await expect(win.getByRole('button', { name: /^\/compact/ })).toBeVisible();
     await expect(win.getByText('技能', { exact: true })).toBeVisible();
-    await win.getByRole('button', { name: '代码审查', exact: true }).click();
+    await win.getByRole('button', { name: 'E2E 审查', exact: true }).click();
     // 技能选择不插正文：/ 触发字符被剥掉、skill pill 替代——编辑器现在
     // 含技能 pill（label = 技能名；spec §3：技能不进 body），编辑器
     // textContent 应包含技能名；空字符串断言（toHaveValue('')）已不适用
-    await expect(input).toContainText('代码审查');
+    await expect(input).toContainText('E2E 审查');
     await expect(input.locator('span[data-kind="skill"]')).toHaveCount(1);
 
     // ---- 6. @ 文件引用：@ 前缀（v2.11.1 统一菜单）→ 选 package.json → 文件 pill 内联 ----
@@ -219,7 +230,7 @@ test('输入框支持文件引用与技能 chip：@ 文件 → / 技能 → 发�
 
     const chips = win.getByTestId('message-context-chips');
     await expect(chips).toBeVisible();
-    await expect(chips.getByText('代码审查')).toBeVisible();
+    await expect(chips.getByText('E2E 审查')).toBeVisible();
     // 文件 chip 是可点按钮（点击打开编辑器），aria-label 即完整相对路径
     await expect(chips.getByRole('button', { name: 'package.json' })).toBeVisible();
   } finally {
