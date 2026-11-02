@@ -21,6 +21,10 @@
 - Conventional Commits：`fix:` / `test:` / `refactor:`。
 - posix 侧 `buildSandboxEnv` 的输出必须与改动前**逐字相等**。
 - 不改安全边界：`BrowserPolicy.assertFilePath` 的越界/realpath 判定只作用于 pathname。
+- **原生模块 ABI**：本机 `better-sqlite3` 现在是 Electron ABI 149，Node/vitest 加载会报模块版本不匹配。跑任何触 DB 的测试前先切回 Node ABI：
+  `cd electron && npx pnpm@9.0.0 rebuild better-sqlite3`（若静默 no-op，改在 `node_modules/.pnpm/better-sqlite3@12.11.1/node_modules/better-sqlite3 && npx prebuild-install`）。
+  Task 9 手工验收前再用 `npm_config_nodedir=$USERPROFILE\.electron-gyp\electron-44.9.1` + `electron-rebuild` 切回 Electron ABI。`keytar` 是 N-API，不受影响。
+- 测试里的路径期望值**必须用 `pathToFileURL(path.join(...))` 现算**，禁止硬编码 `file:///ws/...`：非 win32 的那份测试跑在真实平台语义上（Windows 开发机会得到 `file:///C:/ws/...`，Linux CI 得到 `file:///ws/...`）。
 
 ## Review Focus
 
@@ -417,23 +421,23 @@ git commit -m "fix(agent): shell 工具描述按实测 shell 生成，避免对 
   ```
 - 判定顺序严格按 spec §5.3 的六步（盘符优先排除 → http(s) → file: 先 `fileUrlToPath` → 其他 scheme 透传 → 无 scheme 时先切 `#`/`?` 再判平台绝对性）。
 
-- [ ] **Step 1: 写失败测试（posix）**
+- [ ] **Step 1: 写失败测试（真实平台路径语义）**
 
-断言用 `expect(resolveNavigateInput(x, { workspaceDir: '/ws' }).url)`，逐条对应值：
+断言写成 `expect(resolveNavigateInput(x, { workspaceDir: '/ws' }).url)`，期望值**一律用 `pathToFileURL(...)` 现算**（见 Global Constraints 最后一条），不要写字面量。逐条覆盖：
 
 | 输入 | 期望 |
 |---|---|
-| `'report.html'` | `'file:///ws/report.html'` |
-| `'./sub/a.html'` | `'file:///ws/sub/a.html'` |
-| `'a.html#p2'` | `'file:///ws/a.html#p2'` |
-| `'a.html?x=1#p2'` | `'file:///ws/a.html?x=1#p2'` |
-| `'研发 周报%模板.html'` | `'file:///ws/' + encodeURI('研发 周报%模板.html')`（`%` 不被当成编码，不抛错） |
-| `'%E7%A0%94.html'` | `'file:///ws/研.html'`（合法 percent 解码） |
-| `'/etc/hosts'` | `'file:///etc/hosts'`（平台绝对 → 原样，越界由 policy 拒） |
-| `'http://localhost:5173/x'` | 原样 |
-| `'ftp://x/y'` | 原样（交给 policy 抛 BrowserProtocolError） |
-| `'file:///C:/abs/a.html'`（posix） | `'file:///C:/abs/a.html'`（posix 上视为绝对路径） |
-| `'../outside.html'` | `'file:///outside.html'`（归一即可，是否越界由 policy 判） |
+| `'report.html'` | `pathToFileURL(path.join('/ws', 'report.html')).href` |
+| `'./sub/a.html'` | `pathToFileURL(path.join('/ws', 'sub/a.html')).href` |
+| `'a.html#p2'` | `pathToFileURL(path.join('/ws', 'a.html')).href + '#p2'` |
+| `'a.html?x=1#p2'` | `pathToFileURL(path.join('/ws', 'a.html')).href + '?x=1#p2'` |
+| `'研发 周报%模板.html'` | `pathToFileURL(path.join('/ws', '研发 周报%模板.html')).href`（`%` 是字面量、不抛错、不被当编码，最终编码为 `%25`） |
+| `'%E7%A0%94.html'` | `pathToFileURL(path.join('/ws', '研.html')).href`（合法 percent 解码后再编码） |
+| `'../outside.html'` | `pathToFileURL(path.resolve('/ws', '../outside.html')).href`（归一即可，越界由 policy 判） |
+| `'/etc/hosts'` | `pathToFileURL(path.resolve('/etc/hosts')).href`（平台绝对 → 原样语义） |
+| `'http://localhost:5173/x'` | 原样 `'http://localhost:5173/x'` |
+| `'ftp://x/y'` | 原样 `'ftp://x/y'`（交给 policy 抛 BrowserProtocolError） |
+| `'file:///C:/abs/a.html'` | 原样 `'file:///C:/abs/a.html'`（能被 `fileUrlToPath` 解析成功的，一律按绝对路径走） |
 | `''` / `'   '` | 抛错，错误信息含「URL 为空」 |
 
 - [ ] **Step 2: 跑测试确认失败**
@@ -547,18 +551,21 @@ git commit -m "fix(browser): file URL 保留 hash/query，越界错误补工作�
 在 `browser-tools.test.ts`（沿用该文件既有 `mkCtx()` + 桩 manager）加两例：
 
 ```ts
+// 期望 URL 一律现算（该测试的 ctx.workspaceId='ws1'、workspaceDir='/tmp/ws1'，见文件内 ctx 构造）
+const expected = pathToFileURL(path.join('/tmp/ws1', 'report.html')).href;
+
 it('browser_navigate 收到相对路径时，manager 收到工作空间内绝对 file URL', async () => {
-  await tools.execute('browser_navigate', { url: 'report.html' }, mkCtx());
-  expect(manager.navigate).toHaveBeenCalledWith('ws-1', 'file:///ws/report.html', expect.anything());
+  await tools.execute('browser_navigate', { url: 'report.html' }, ctx);
+  expect(managerMock.navigate).toHaveBeenCalledWith('ws1', expected, expect.anything());
 });
 
 it('browser_tabs open 同样归一（同一 bug 的第二个入口）', async () => {
-  await tools.execute('browser_tabs', { action: 'open', url: 'report.html' }, mkCtx());
-  expect(manager.tabsAction).toHaveBeenCalledWith('ws-1', 'open', undefined, 'file:///ws/report.html', expect.anything(), expect.anything());
+  await tools.execute('browser_tabs', { action: 'open', url: 'report.html' }, ctx);
+  expect(managerMock.tabsAction).toHaveBeenCalledWith('ws1', 'open', undefined, expected, undefined, expect.anything());
 });
 ```
 
-> `mkCtx()` 的 `workspaceDir` / `workspaceId` 用该文件现有值；断言里的具体字符串按实际值调整，**相对路径 → 绝对 file URL 这一关系必须被断言**。
+> 第 6 参 `opCtx` 的具体值由该文件的既有 `OP_CTX` 决定；真正必须锁住的是「第 4 参是**绝对** file URL」与「第 5 参仍是 `undefined`（source 由工具层缺省，`browser-tools.ts` 现有调用形态就是 `(wsId, action, index, url, undefined, opCtx)`）」。
 
 - [ ] **Step 2: 跑测试确认失败**
 
