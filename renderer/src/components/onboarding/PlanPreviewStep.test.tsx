@@ -24,7 +24,7 @@ import { PlanPreviewStep } from './PlanPreviewStep';
 
 const PLAN: OnboardingPlan = {
   agents: [
-    { kind: 'preset', slug: 'coder', reason: '写代码', mcps: ['filesystem'], skills: [] },
+    { kind: 'preset', slug: 'general-assistant', reason: '写代码', mcps: ['filesystem'], skills: [] },
     {
       kind: 'custom',
       name: '测试工程师',
@@ -60,9 +60,9 @@ function mkCtx(plan: OnboardingPlan, warnings: string[] = []): WizardCtx {
 }
 
 const APPLY_RESULT = {
-  applied: [{ name: '程序员', kind: 'preset' as const, instanceId: 'i1' }],
+  applied: [{ name: 'Momo', kind: 'preset' as const, instanceId: 'i1' }],
   warnings: [],
-  defaultAgentName: '程序员',
+  defaultAgentName: 'Momo',
 };
 
 beforeEach(() => {
@@ -73,7 +73,7 @@ beforeEach(() => {
 describe('PlanPreviewStep', () => {
   it('渲染方案卡：agent 名 + 来源徽标 + reason + 挂载标签', async () => {
     render(<PlanPreviewStep ctx={mkCtx(PLAN)} />);
-    expect(await screen.findByText('程序员')).toBeInTheDocument();
+    expect(await screen.findByText('Momo')).toBeInTheDocument();
     expect(screen.getByText('预制')).toBeInTheDocument();
     expect(screen.getByText('测试工程师')).toBeInTheDocument();
     expect(screen.getByText('自定义')).toBeInTheDocument();
@@ -93,7 +93,7 @@ describe('PlanPreviewStep', () => {
 
   it('取消全部勾选 → 应用按钮禁用；默认单选随勾选收缩回退', async () => {
     render(<PlanPreviewStep ctx={mkCtx(PLAN)} />);
-    // coder 卡默认勾选且为默认；先取消第二张卡，再取消第一张
+    // preset 卡（Momo）默认勾选且为默认；先取消第二张卡，再取消第一张
     const checks = screen.getAllByRole('checkbox');
     expect(checks.length).toBe(2);
     fireEvent.click(checks[1]!);

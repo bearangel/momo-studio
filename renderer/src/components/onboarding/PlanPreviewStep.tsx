@@ -20,15 +20,10 @@ function agentLabel(a: OnboardingPlanAgent): string {
   return a.kind === 'custom' ? a.name : presetName(a.slug);
 }
 
+// 2026-11-02 内置资源极简化：唯一内置预置 = general-assistant（Momo）。
+// 其余预置已下架；未来按用户反馈恢复时在此补映射。
 const PRESET_NAMES: Record<string, string> = {
-  coder: '程序员',
-  'pm-agent': '项目经理',
-  'requirement-analyst': '需求分析师',
-  'office-assistant': '办公助理',
-  'ui-designer': 'UI 设计师',
-  'code-reviewer': '代码审查员',
-  'general-assistant': '通用助理',
-  researcher: '调研员',
+  'general-assistant': 'Momo',
 };
 
 function presetName(slug: string): string {
