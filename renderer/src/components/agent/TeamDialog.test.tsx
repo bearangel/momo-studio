@@ -7,8 +7,11 @@
 // Mock 策略（momo-test-rules）：
 //   - store 为真实 zustand 实例，setState 注入状态与 action 桩；
 //   - 断言生产消费的字段（memberInstanceIds / leaderInstanceId / 调用顺序）。
-// v2.1 P3 语义锁：emoji 退役后视觉要素改语义查询——Avatar bot 兜底（title=成员名）、
-// 当前 leader 行 Crown 标记（title=团队 leader，TeamsPanel 同款）。
+// v2.1 P3 语义锁：emoji 退役后视觉要素改语义查询——Avatar bot 兜底（title=成员名）。
+//
+// 验收补修（2026-11-02，用户实测）语义更新：成员/leader 双列表合一（皇冠 radio 行内）；
+// 首个勾选自动成为队长；取消勾选现任队长 → 皇冠落到剩余已选首位（报错态消灭）；
+// 简介次行按 definitions 映射（空简介不渲染）。队长视觉 = 「队长/现任队长」徽标。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import type { AgentDefinition, Team, Workspace, WorkspaceAgentMember } from '../../ipc/types';
@@ -38,7 +41,7 @@ const DEF_1: AgentDefinition = {
   systemPrompt: '',
   defaultTools: [],
   source: 'custom',
-  description: '',
+  description: '编写与重构代码，把设计落成可运行实现',
   iconEmoji: '🤖',
   defaultMcps: [],
   defaultSkills: [],
@@ -47,8 +50,8 @@ const DEF_1: AgentDefinition = {
   modelName: 'gpt-4o',
 };
 
-const DEF_2: AgentDefinition = { ...DEF_1, id: 'def-2', name: '评审员', slug: 'reviewer' };
-const DEF_3: AgentDefinition = { ...DEF_1, id: 'def-3', name: '测试员', slug: 'tester' };
+const DEF_2: AgentDefinition = { ...DEF_1, id: 'def-2', name: '评审员', slug: 'reviewer', description: '评审代码与方案，把关质量风险' };
+const DEF_3: AgentDefinition = { ...DEF_1, id: 'def-3', name: '测试员', slug: 'tester', description: '' };
 
 const MEMBER_1: WorkspaceAgentMember = {
   instanceId: 'inst-1',
@@ -150,24 +153,23 @@ beforeEach(() => {
   });
 });
 
-// 同一成员名在成员 checkbox 与 leader radio 两处出现，须按 fieldset 收窄查询防歧义
+// 验收补修后单列表：checkbox 按成员名查询（列表内唯一）；皇冠 radio aria-label=「设为队长：名」
 const memberGroup = (): HTMLElement =>
   screen.getByRole('group', { name: '成员（当前工作空间，至少 2 名）' });
-const leaderGroup = (): HTMLElement => screen.getByRole('group', { name: '团队 leader' });
 
 function clickMember(name: string): void {
   fireEvent.click(within(memberGroup()).getByLabelText(name));
 }
 
 function leaderRadio(name: string): HTMLInputElement {
-  return within(leaderGroup()).getByLabelText(`设为 leader：${name}`) as HTMLInputElement;
+  return within(memberGroup()).getByLabelText(`设为队长：${name}`) as HTMLInputElement;
 }
 
-/** 勾选两个成员并选 leader（提交前的完整合法形态） */
+/** 勾选两个成员（首个勾选自动成为队长；需要不同队长再点皇冠） */
 function selectTwoMembers(leaderLabel: string): void {
   clickMember('编码助手');
   clickMember('评审员');
-  fireEvent.click(leaderRadio(leaderLabel));
+  if (leaderLabel !== '编码助手') fireEvent.click(leaderRadio(leaderLabel));
 }
 
 describe('TeamDialog — D9 onCreated 回调', () => {
@@ -205,34 +207,53 @@ describe('TeamDialog — 创建模式校验', () => {
     expect(createTeam).not.toHaveBeenCalled();
   });
 
-  it('勾选 ≥2 成员但未选 leader → 提示选择 leader', async () => {
+  it('验收补修：勾选即自动产生队长——「请选择 leader」报错态消灭', async () => {
     render(<TeamDialog onClose={() => {}} />);
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: '攻坚组' } });
     clickMember('编码助手');
     clickMember('评审员');
     fireEvent.click(screen.getByRole('button', { name: '创建' }));
-    expect(await screen.findByText('请选择团队 leader')).toBeInTheDocument();
-    expect(createTeam).not.toHaveBeenCalled();
+    await waitFor(() => expect(createTeam).toHaveBeenCalled());
+    // 首个勾选（编码助手）自动成为队长——无需手动指定即可合法提交
+    expect(createTeam).toHaveBeenCalledWith('ws-1', expect.objectContaining({ leaderInstanceId: 'inst-1' }));
   });
 });
 
-describe('TeamDialog — leader 联动', () => {
-  it('未勾选的成员其 leader 单选禁用；勾选后启用', async () => {
+describe('TeamDialog — leader 联动（验收补修：列表合一）', () => {
+  it('未勾选的成员其皇冠 radio 禁用；勾选后启用', async () => {
     render(<TeamDialog onClose={() => {}} />);
     expect(leaderRadio('编码助手')).toBeDisabled();
     clickMember('编码助手');
     expect(leaderRadio('编码助手')).toBeEnabled();
   });
 
-  it('取消勾选已选为 leader 的成员 → leader 选择被清空', async () => {
+  it('首个勾选成员自动成为队长', async () => {
     render(<TeamDialog onClose={() => {}} />);
-    clickMember('编码助手');
+    expect(screen.queryByText('队长')).not.toBeInTheDocument();
     clickMember('评审员');
-    fireEvent.click(leaderRadio('编码助手'));
-    // 取消勾选编码助手 → leader 复位 + 该 radio 回到禁用
-    clickMember('编码助手');
-    expect((leaderRadio('编码助手') as HTMLInputElement).checked).toBe(false);
+    expect(leaderRadio('评审员').checked).toBe(true);
+    expect(screen.getByText('队长')).toBeInTheDocument();
+  });
+
+  it('取消勾选现任队长 → 皇冠自动落到剩余已选首位（不再清空报错）', async () => {
+    render(<TeamDialog onClose={() => {}} />);
+    clickMember('编码助手'); // 自动队长
+    clickMember('评审员');
+    clickMember('编码助手'); // 取消现任队长
+    expect(leaderRadio('编码助手').checked).toBe(false);
     expect(leaderRadio('编码助手')).toBeDisabled();
+    expect(leaderRadio('评审员').checked).toBe(true);
+  });
+});
+
+describe('TeamDialog — agent 简介行（验收补修）', () => {
+  it('每行名称下渲染 def description；空简介/无 def 不渲染次行', () => {
+    render(<TeamDialog onClose={() => {}} />);
+    expect(screen.getByText('编写与重构代码，把设计落成可运行实现')).toBeInTheDocument();
+    expect(screen.getByText('评审代码与方案，把关质量风险')).toBeInTheDocument();
+    // 测试员 def description 为空 → 无简介节点；幽灵成员 def 不存在 → 同理
+    const testerRow = screen.getByText('测试员').closest('label')!;
+    expect(within(testerRow).queryByText(/./, { selector: 'span.block' })).not.toBeInTheDocument();
   });
 });
 
@@ -364,21 +385,23 @@ describe('TeamDialog — v2.1 视觉收敛语义锁', () => {
     expect(screen.getByTitle('幽灵成员')).toBeInTheDocument();
   });
 
-  it('当前 leader 行显示 Crown 标记；取消勾选 leader → 标记随复位消失', async () => {
+  it('编辑回填：现任队长行「现任队长」徽标；取消其勾选 → 皇冠转移徽标跟随', async () => {
     render(<TeamDialog editing={EXISTING_TEAM} onClose={() => {}} />);
-    // 回填：inst-1 是 leader → Crown 存在且唯一
-    expect(screen.getAllByTitle('团队 leader')).toHaveLength(1);
-    // 取消勾选编码助手（当前 leader）→ leaderId 复位 → Crown 消失
+    expect(screen.getByText('现任队长')).toBeInTheDocument();
+    // 取消勾选编码助手（现任队长）→ 皇冠落到评审员 → 徽标变为「队长」
     clickMember('编码助手');
-    expect(screen.queryByTitle('团队 leader')).not.toBeInTheDocument();
+    expect(screen.queryByText('现任队长')).not.toBeInTheDocument();
+    expect(screen.getByText('队长')).toBeInTheDocument();
+    expect(leaderRadio('评审员').checked).toBe(true);
   });
 
-  it('创建模式选定 leader 后 Crown 出现且唯一', async () => {
+  it('创建模式首勾即出「队长」徽标；切皇冠后徽标跟随移动', async () => {
     render(<TeamDialog onClose={() => {}} />);
-    expect(screen.queryByTitle('团队 leader')).not.toBeInTheDocument();
     clickMember('编码助手');
+    expect(screen.getByText('队长')).toBeInTheDocument();
     clickMember('评审员');
     fireEvent.click(leaderRadio('评审员'));
-    expect(screen.getAllByTitle('团队 leader')).toHaveLength(1);
+    expect(screen.getAllByText('队长')).toHaveLength(1);
+    expect(leaderRadio('评审员').checked).toBe(true);
   });
 });
