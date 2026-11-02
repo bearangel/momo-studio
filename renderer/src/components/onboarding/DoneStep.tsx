@@ -45,6 +45,14 @@ export function DoneStep({ ctx }: Props) {
               <b className="font-medium text-primary">默认会话智能体</b>
               <span>{r.defaultAgentName}</span>
             </div>
+            {r.team && (
+              <div className="flex justify-between border-b border-border-subtle py-1.5 text-xs text-secondary">
+                <b className="font-medium text-primary">已组建团队</b>
+                <span>
+                  {r.team.name} · 队长 {r.team.leaderName}
+                </span>
+              </div>
+            )}
             {r.warnings.length > 0 && (
               <div className="py-1.5 text-xs text-status-warning">{r.warnings.join('；')}</div>
             )}

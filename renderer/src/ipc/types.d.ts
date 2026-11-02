@@ -2806,6 +2806,8 @@ export interface OnboardingApplyResult {
   /** 非致命警告（剔除的未注册引用等），预览页与结果页展示 */
   warnings: string[];
   defaultAgentName: string;
+  /** ≥2 成员时自动组建（或整包重试时复用）的团队（验收补修 2026-11-02）；单 agent 无团队 */
+  team?: { id: string; name: string; leaderName: string };
 }
 
 /** onboarding:markDone 入参 */

@@ -87,6 +87,55 @@ const CUSTOM_AGENT = {
 };
 
 describe('applyOnboardingPlan', () => {
+  it('验收补修（2026-11-02）：≥2 成员自动组建团队——leader=默认会话 agent，命名派生自工作空间名', async () => {
+    const result = await applyOnboardingPlan({
+      plan: { agents: [PRESET_AGENT, CUSTOM_AGENT], defaultAgentIndex: 0 },
+      workspaceId: wsId,
+      providerId: 'prov-1',
+      modelId: 'glm-test',
+    });
+    expect(result.team).toBeDefined();
+    expect(result.team!.name).toBe('引导测试团队');
+    expect(result.team!.leaderName).toBe('需求讨论师');
+    const rows = getDb().prepare('SELECT * FROM teams WHERE workspace_id = ?').all(wsId) as
+      Array<{ id: string; name: string; leader_instance_id: string }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.name).toBe('引导测试团队');
+    // leader = defaultAgentIndex=0 的成员（需求讨论师）
+    const leaderMember = listMembers(wsId).find((m) => m.agentName === '需求讨论师');
+    expect(rows[0]!.leader_instance_id).toBe(leaderMember!.instanceId);
+    // 团队成员 = 全部 applied
+    const memberRows = getDb().prepare('SELECT instance_id FROM team_members WHERE team_id = ?').all(rows[0]!.id) as
+      Array<{ instance_id: string }>;
+    expect(memberRows).toHaveLength(2);
+  });
+
+  it('验收补修：单 agent 方案不组建团队（无协作语义）', async () => {
+    const result = await applyOnboardingPlan({
+      plan: { agents: [PRESET_AGENT], defaultAgentIndex: 0 },
+      workspaceId: wsId,
+      providerId: 'prov-1',
+      modelId: 'glm-test',
+    });
+    expect(result.team).toBeUndefined();
+    expect(getDb().prepare('SELECT * FROM teams').all()).toHaveLength(0);
+  });
+
+  it('验收补修：整包重试幂等——已有团队覆盖全部成员 → 复用不重建', async () => {
+    const input = {
+      plan: { agents: [PRESET_AGENT, CUSTOM_AGENT], defaultAgentIndex: 1 },
+      workspaceId: wsId,
+      providerId: 'prov-1',
+      modelId: 'glm-test',
+    };
+    const first = await applyOnboardingPlan(input);
+    const second = await applyOnboardingPlan(input);
+    expect(getDb().prepare('SELECT * FROM teams').all()).toHaveLength(1);
+    expect(second.team!.id).toBe(first.team!.id);
+    // 重试不扩成员（复用同一团队）
+    expect(second.team!.name).toBe(first.team!.name);
+  });
+
   it('preset 项：启用 def + 加入成员 + 设默认', async () => {
     const result = await applyOnboardingPlan({
       plan: { agents: [PRESET_AGENT], defaultAgentIndex: 0 },
