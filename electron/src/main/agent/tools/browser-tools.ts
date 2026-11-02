@@ -27,6 +27,7 @@ import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
 import { buildCatalog, type ToolCatalogEntry, type ToolMeta } from './catalog-entry';
 import { parseStringArg } from './shared/arg-parse';
+import { resolveNavigateInput } from '../../browser/url-input';
 import { SCROLL_DEFAULT_AMOUNT } from '../../browser/actions';
 import type { TabInfo } from '../../browser/types';
 import type { BrowserOpCtx } from '../../browser/op-protocol';
@@ -212,7 +213,7 @@ export class BrowserTools implements ToolModule {
       {
         name: 'browser_navigate',
         description:
-          '在浏览器中打开 URL 并等待加载完成，返回最终 URL 与页面标题。支持 http(s) 与 workspace 内的 file://（越界路径会被拒绝）。阅读长页面请用 browser_scroll 滚动后再 browser_snapshot 获取可见内容',
+          '在浏览器中打开 URL 并等待加载完成，返回最终 URL 与页面标题。支持 http(s) URL、工作空间内相对路径（如 report.html、sub/a.html#p2）、工作空间内绝对 file:// URL（越界路径会被拒绝）。阅读长页面请用 browser_scroll 滚动后再 browser_snapshot 获取可见内容',
         inputSchema: {
           type: 'object',
           properties: {
@@ -392,7 +393,11 @@ export class BrowserTools implements ToolModule {
 
     switch (name) {
       case 'browser_navigate': {
-        const url = parseStringArg(args.url, 'url');
+        const raw = parseStringArg(args.url, 'url');
+        // 入口归一（spec 2026-11-02 §5.3）：相对路径按工具上下文的 workspaceDir 解析成
+        // 绝对 file URL；http(s) / 合法 file URL 原样透传；越界仍由 policy 拒。
+        // 用 ctx.workspaceDir（工具层自带、无过期风险），不用 policy 的 workspaceRoot。
+        const { url } = resolveNavigateInput(raw, { workspaceDir: ctx.workspaceDir });
         const r = await manager.navigate(wsId, url, opCtx);
         return `已导航到 ${r.url}\n页面标题: ${r.title}`;
       }
@@ -444,7 +449,14 @@ export class BrowserTools implements ToolModule {
       case 'browser_tabs': {
         const action = parseTabsAction(args.action);
         const index = parseTabIndex(args.index);
-        const url = parseOptionalString(args.url, 'url');
+        const rawUrl = parseOptionalString(args.url, 'url');
+        // open 的 url 与 browser_navigate 同一归一规则（第二个 agent 可见入口，spec §5.3）；
+        // 仅 open 且显式给了 url 才归一——undefined 仍交给 manager 走 ABOUT_BLANK 既有路径，
+        // 其它 action 的 url 本就无意义，保持原样透传不改行为。
+        const url =
+          action === 'open' && rawUrl !== undefined
+            ? resolveNavigateInput(rawUrl, { workspaceDir: ctx.workspaceDir }).url
+            : rawUrl;
         // source 位显式 undefined（工具路径恒缺省 'agent'）；ctx 经尾参透传
         const tabs = await manager.tabsAction(wsId, action, index, url, undefined, opCtx);
         if (tabs.length === 0) return '（当前无打开的 tab）';

@@ -16,10 +16,15 @@
 //   - browser_close 后 browser_navigate 仍直接透传 manager（懒重建语义 T2 已锁）
 //   - 未 initBrowserTools 防御：12 工具全部拒绝（注册中心构建不依赖 deps）
 //   - 契约锁：真实 BrowserManager / BrowserPolicy 结构性满足注入端口（编译期）
+//   - 工作空间相对路径归一（spec 2026-11-02 §5.3）：browser_navigate 与
+//     browser_tabs(open) 两个 agent 入口交付 manager 的必须是绝对 file URL；
+//     open 不带 url 时仍透传 undefined（ABOUT_BLANK 既有路径）
 // mock 仿真真实运行时语义（momo-test-rules）：manager mock 方法签名/返回形态与
 // T2 真实实现一致（navigate→{url,title} / snapshot→string / screenshot→{path} /
 // tabsAction→TabInfo[] 等）；policy 错误抛真实 BrowserError 子类实例。
 
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import {
   BrowserTools,
@@ -378,6 +383,51 @@ describe('execute 路由透传', () => {
 
   it('未知工具名 → 明确报错（防御：handles 门外的兜底）', async () => {
     await expect(tools.execute('browser_bogus', {}, ctx)).rejects.toThrow(/未知浏览器工具/);
+  });
+});
+
+// =================================================================================
+// 工作空间相对路径归一（跨层契约锁——spec 2026-11-02 §5.3 两个 agent 入口）
+// =================================================================================
+
+describe('工作空间相对路径归一', () => {
+  /** 期望 URL 一律现算：与本文件 ctx.workspaceDir 的平台语义保持同一真相源 */
+  const expectedReportUrl = (): string =>
+    pathToFileURL(path.join(ctx.workspaceDir, 'report.html')).href;
+
+  it('browser_navigate 收到相对路径时，manager 收到工作空间内绝对 file URL', async () => {
+    await tools.execute('browser_navigate', { url: 'report.html' }, ctx);
+    expect(managerMock.navigate).toHaveBeenCalledWith('ws1', expectedReportUrl(), expect.anything());
+  });
+
+  it('browser_tabs open 同样归一（同一 bug 的第二个入口）', async () => {
+    await tools.execute('browser_tabs', { action: 'open', url: 'report.html' }, ctx);
+    expect(managerMock.tabsAction).toHaveBeenCalledWith(
+      'ws1',
+      'open',
+      undefined,
+      expectedReportUrl(),
+      undefined,
+      expect.anything(),
+    );
+  });
+
+  it('browser_tabs open 不带 url → 第四参仍为 undefined（ABOUT_BLANK 既有路径不受影响）', async () => {
+    await tools.execute('browser_tabs', { action: 'open' }, ctx);
+    expect(managerMock.tabsAction).toHaveBeenCalledWith(
+      'ws1',
+      'open',
+      undefined,
+      undefined,
+      undefined,
+      OP_CTX,
+    );
+  });
+
+  it('相对路径的 #锚点 不被吃掉（子目录 + fragment 一并透传 manager）', async () => {
+    const expected = pathToFileURL(path.join(ctx.workspaceDir, 'sub', 'a.html')).href;
+    await tools.execute('browser_navigate', { url: 'sub/a.html#p2' }, ctx);
+    expect(managerMock.navigate).toHaveBeenCalledWith('ws1', `${expected}#p2`, OP_CTX);
   });
 });
 
