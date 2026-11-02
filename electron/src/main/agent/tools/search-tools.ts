@@ -46,7 +46,10 @@ const DEFAULT_IGNORE: string[] = ['**/node_modules/**', '**/.git/**', '**/dist/*
  * 设计要点：
  *   - 路径双校验：传入 startDir 先过一次 WorkspaceFS.assertInWorkspace，
  *     fast-glob 列出的每个候选文件再过一遍，防止符号链接逃逸。
- *   - 大文件跳过：grep 单文件 >1MB 直接跳过，避免 OOM（LLM 拿不到也无所谓）。
+ *   - grep 的 path 可以是目录（递归搜索）或单个文件（只搜它；显式点名即
+ *     绕过 DEFAULT_IGNORE / .gitignore，见 spec 2026-11-02 §5.4）。
+ *   - 大文件跳过：grep 单文件 >1MB 不读——目录模式静默跳过，单文件模式明确
+ *     返回「超过 1MB 未搜索」，不让模型误以为是「没有匹配」。
  *   - 行截断：单行 >200 字符截断显示，避免单个超长行挤占 LLM 上下文。
  *   - 输出上限：从 OUTPUT_LIMITS 读 grep_matches=50 / glob_matches=200。
  */
@@ -66,8 +69,11 @@ export class SearchTools implements ToolModule {
           type: 'object',
           properties: {
             pattern: { type: 'string', description: 'JS 正则表达式字符串' },
-            include: { type: 'string', description: '文件名 glob 过滤，如 "*.ts"' },
-            path: { type: 'string', description: '搜索起始目录（相对 workspace），默认 "."' },
+            include: { type: 'string', description: '文件名 glob 过滤，如 "*.ts"（path 指向文件时忽略）' },
+            path: {
+              type: 'string',
+              description: '搜索起始目录，或单个文件（相对 workspace），默认 "."',
+            },
             caseInsensitive: { type: 'boolean', description: '大小写不敏感，默认 false' },
           },
           required: ['pattern'],
@@ -103,6 +109,71 @@ export class SearchTools implements ToolModule {
   }
 }
 
+/** grep 单文件大小上限（1MB）：超限不读，避免大文件挤爆内存。 */
+const MAX_GREP_FILE_SIZE = 1024 * 1024;
+
+/** 一条 grep 命中。file 为相对「搜索起点」的路径（单文件模式即文件名本身）。 */
+interface GrepMatch {
+  file: string;
+  line: number;
+  content: string;
+}
+
+/** 逐行扫描单个文件内容并追加命中。命中数达输出上限时置 state.limitReached
+ *  （外层据此停止继续读后续文件）；目录模式与单文件模式共用同一扫描口径。 */
+function collectFileMatches(
+  content: string,
+  relPath: string,
+  regex: RegExp,
+  matches: GrepMatch[],
+  state: { limitReached: boolean },
+): void {
+  const lines = content.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    // noUncheckedIndexedAccess 下 lines[i] 类型为 string | undefined，此处断言非空
+    const line = lines[i] ?? '';
+    if (matches.length >= OUTPUT_LIMITS.grep_matches) {
+      state.limitReached = true;
+      break;
+    }
+    regex.lastIndex = 0;
+    if (regex.test(line)) {
+      // 单行 >200 字符截断显示，避免单个超长行挤占 LLM 上下文
+      const preview = line.length > 200 ? line.slice(0, 200) + '…' : line;
+      matches.push({ file: relPath, line: i + 1, content: preview });
+    }
+  }
+}
+
+/** 统一输出格式：0 条 → 「(无匹配)」；达输出上限且确实被截断 → 追加提示。
+ *  truncateArray 仅在 > maxCount 时追加标记；limitReached 区分「恰好 = 上限」场景。 */
+function formatGrepResult(matches: GrepMatch[], limitReached: boolean): string {
+  if (matches.length === 0) return '(无匹配)';
+  const body = truncateArray(
+    matches,
+    OUTPUT_LIMITS.grep_matches,
+    (m) => `${m.file}:${m.line}:${m.content}`,
+  );
+  if (matches.length >= OUTPUT_LIMITS.grep_matches && limitReached) {
+    return `${body}\n\n…(已达上限 ${OUTPUT_LIMITS.grep_matches} 条，请缩小范围)`;
+  }
+  return body;
+}
+
+/** stat 搜索起点：ENOENT/ENOTDIR 转「路径不存在: <原样 path>」；其他失败
+ *  （EACCES 等）带上原始错误一起抛出——不静默吞成「(无匹配)」。 */
+async function statSearchRoot(absPath: string, rawPath: string): Promise<fs.Stats> {
+  try {
+    return await fs.promises.stat(absPath);
+  } catch (e) {
+    const code = e instanceof Error ? (e as NodeJS.ErrnoException).code : undefined;
+    if (code === 'ENOENT' || code === 'ENOTDIR') throw new Error(`路径不存在: ${rawPath}`);
+    throw new Error(
+      `无法访问路径: ${rawPath} - ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+}
+
 async function executeGrep(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
   const pattern = parseStringArg(args.pattern, 'pattern');
   const includeGlob = typeof args.include === 'string' ? args.include : '**/*';
@@ -110,6 +181,10 @@ async function executeGrep(args: Record<string, unknown>, ctx: ToolContext): Pro
   const caseInsensitive = args.caseInsensitive === true;
 
   const absStart = ctx.wsFs.assertInWorkspace(startDir);
+  // spec 2026-11-02 §5.4：path 可能显式点名「单个文件」（真实会话传过
+  // 中文文件名 HTML）。旧实现一律当目录交给 fast-glob，Windows 上直接
+  // ENOTDIR: not a directory, scandir。先 stat 分流，再决定候选集。
+  const targetStat = await statSearchRoot(absStart, startDir);
 
   // g 标志让 .test() 在多行查找时可重置 lastIndex；caseInsensitive 时再加 i。
   let regex: RegExp;
@@ -117,6 +192,22 @@ async function executeGrep(args: Record<string, unknown>, ctx: ToolContext): Pro
     regex = new RegExp(pattern, caseInsensitive ? 'gi' : 'g');
   } catch (e) {
     throw new Error(`非法正则: ${pattern} - ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  // 单文件模式：候选集就是该文件，cwd 语义退化为其父目录（include 被忽略，
+  // 只可能命中这一个文件）。跳过 DEFAULT_IGNORE 与 .gitignore——用户显式点名
+  // dist/x.html 就该搜它，静默给「(无匹配)」是骗人。沙箱校验已在上面完成。
+  if (targetStat.isFile()) {
+    // 1MB 上限保留（防 OOM），但不静默：明确告知未搜索，模型可分段读后逐段核。
+    if (targetStat.size > MAX_GREP_FILE_SIZE) {
+      return `文件超过 1MB 未搜索：${startDir}（可按范围分段读后用 grep 逐段核）`;
+    }
+    // file 字段口径与目录模式一致：相对 absStart（此处即文件名本身）的路径。
+    const content = await fs.promises.readFile(absStart, 'utf-8');
+    const matches: GrepMatch[] = [];
+    const state = { limitReached: false };
+    collectFileMatches(content, path.basename(absStart), regex, matches, state);
+    return formatGrepResult(matches, state.limitReached);
   }
 
   // fast-glob 先按文件名 candidate，再读内容过滤。比 ripgrep 慢但 zero-dep。
@@ -129,14 +220,13 @@ async function executeGrep(args: Record<string, unknown>, ctx: ToolContext): Pro
   const ig = loadGitignore(ctx.workspaceDir);
   const filtered = ig ? candidates.filter((p) => !ig.ignores(p)) : candidates;
 
-  const matches: Array<{ file: string; line: number; content: string }> = [];
-  const MAX_FILE_SIZE = 1024 * 1024;
+  const matches: GrepMatch[] = [];
   // 命中上限时记录，让结果末尾追加「已达上限」提示（LLM 可据此缩小范围）。
-  let limitReached = false;
+  const state = { limitReached: false };
 
   for (const relPath of filtered) {
     if (matches.length >= OUTPUT_LIMITS.grep_matches) {
-      limitReached = true;
+      state.limitReached = true;
       break;
     }
     const absFile = path.join(absStart, relPath);
@@ -144,32 +234,13 @@ async function executeGrep(args: Record<string, unknown>, ctx: ToolContext): Pro
     ctx.wsFs.assertInWorkspace(absFile);
 
     const stat = await fs.promises.stat(absFile);
-    if (stat.size > MAX_FILE_SIZE) continue;
+    if (stat.size > MAX_GREP_FILE_SIZE) continue;
 
     const content = await fs.promises.readFile(absFile, 'utf-8');
-    const lines = content.split('\n');
-    for (let i = 0; i < lines.length; i++) {
-      // noUncheckedIndexedAccess 下 lines[i] 类型为 string | undefined，此处断言非空
-      const line = lines[i] ?? '';
-      if (matches.length >= OUTPUT_LIMITS.grep_matches) {
-        limitReached = true;
-        break;
-      }
-      regex.lastIndex = 0;
-      if (regex.test(line)) {
-        const preview = line.length > 200 ? line.slice(0, 200) + '…' : line;
-        matches.push({ file: relPath, line: i + 1, content: preview });
-      }
-    }
+    collectFileMatches(content, relPath, regex, matches, state);
   }
 
-  if (matches.length === 0) return '(无匹配)';
-  // truncateArray 仅在 > maxCount 时追加标记；limitReached 区分「恰好 = 上限」场景。
-  const body = truncateArray(matches, OUTPUT_LIMITS.grep_matches, (m) => `${m.file}:${m.line}:${m.content}`);
-  if (matches.length >= OUTPUT_LIMITS.grep_matches && limitReached) {
-    return `${body}\n\n…(已达上限 ${OUTPUT_LIMITS.grep_matches} 条，请缩小范围)`;
-  }
-  return body;
+  return formatGrepResult(matches, state.limitReached);
 }
 
 async function executeGlob(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
@@ -177,6 +248,10 @@ async function executeGlob(args: Record<string, unknown>, ctx: ToolContext): Pro
   const startDir = typeof args.path === 'string' ? args.path : '.';
 
   const absStart = ctx.wsFs.assertInWorkspace(startDir);
+  // glob 的 path 语义仍是「目录」（单文件无意义）；只补不存在时的明确文案，
+  // 避免 fast-glob 抛裸 ENOENT 让模型无从判断是拼错还是越界。
+  await statSearchRoot(absStart, startDir);
+
   const files = await fastGlob(pattern, {
     cwd: absStart, absolute: false, ignore: DEFAULT_IGNORE, onlyFiles: true,
   });

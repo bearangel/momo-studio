@@ -1,6 +1,6 @@
 // electron/tests/agent/tools/search-tools.test.ts
 //
-// SearchTools 单元测试：grep / glob / .gitignore 三组用例，共 10 条。
+// SearchTools 单元测试：grep / glob / .gitignore 三组用例，共 15 条。
 // 设计要点：
 //   - 每条用例都用真实 tmp 目录（避免共享 fs）+ 真实 WorkspaceFS 沙箱。
 //   - 构造最小 ToolContext（搜索工具只用 wsFs / workspaceDir / sendStreamChunk，
@@ -101,6 +101,63 @@ describe('SearchTools grep', () => {
     // 实现走 limitReached 分支，输出含「已达上限」字样（让 LLM 缩小范围）
     expect(result).toContain('已达上限');
   });
+
+  // spec 2026-11-02 §5.4：path 可能是单个文件（真实会话传入中文文件名 HTML，
+  // 旧实现一律当目录交给 fast-glob → ENOTDIR）。文件名用中文，锁住非 ASCII 路径。
+  it('path 指向单个文件时只搜该文件', async () => {
+    await fs.promises.writeFile(
+      path.join(tmpDir, '研发周报PPT模板.html'),
+      '<h1>第 1 页</h1>\n<h2>TODO: 补第 2 页</h2>\n',
+    );
+    await fs.promises.writeFile(path.join(tmpDir, 'other.ts'), 'TODO\n');
+    const tools = new SearchTools();
+    // include 在单文件模式下被忽略（只可能命中这一个文件），故意传不匹配的 *.ts
+    const result = await tools.execute(
+      'grep',
+      { pattern: 'TODO', path: '研发周报PPT模板.html', include: '*.ts' },
+      ctx,
+    );
+    expect(result).toContain('研发周报PPT模板.html:2:<h2>TODO: 补第 2 页</h2>');
+    expect(result).not.toContain('other.ts');
+  });
+
+  // 回归锁（spec §5.4：显式点名的文件绕过 DEFAULT_IGNORE 与 .gitignore）：
+  // 若实现仍走过滤层，本用例会得到「(无匹配)」而失败。
+  it('显式点名的文件即使被 .gitignore 与 DEFAULT_IGNORE 覆盖也能搜到', async () => {
+    await fs.promises.writeFile(path.join(tmpDir, '.gitignore'), '*.log\n');
+    await fs.promises.writeFile(path.join(tmpDir, 'debug.log'), 'TODO\n');
+    await fs.promises.mkdir(path.join(tmpDir, 'dist'), { recursive: true });
+    await fs.promises.writeFile(path.join(tmpDir, 'dist/ship.html'), 'SHIP\n');
+    const tools = new SearchTools();
+
+    // 目录模式对照：两层忽略都要生效（行为不变）
+    expect(await tools.execute('grep', { pattern: 'TODO' }, ctx)).toBe('(无匹配)');
+    expect(await tools.execute('grep', { pattern: 'SHIP' }, ctx)).toBe('(无匹配)');
+
+    // 显式点名：忽略层不参与
+    expect(await tools.execute('grep', { pattern: 'TODO', path: 'debug.log' }, ctx)).toContain(
+      'debug.log:1:TODO',
+    );
+    expect(
+      await tools.execute('grep', { pattern: 'SHIP', path: 'dist/ship.html' }, ctx),
+    ).toContain('ship.html:1:SHIP');
+  });
+
+  it('文件超过 1MB 时明确提示未搜索，而不是 (无匹配)', async () => {
+    await fs.promises.writeFile(path.join(tmpDir, 'huge.html'), 'x'.repeat(1024 * 1024 + 16));
+    const tools = new SearchTools();
+    const result = await tools.execute('grep', { pattern: 'TODO', path: 'huge.html' }, ctx);
+    expect(result).toContain('超过 1MB 未搜索');
+    expect(result).toContain('huge.html');
+    expect(result).not.toContain('(无匹配)');
+  });
+
+  it('path 不存在时抛明确中文错误', async () => {
+    const tools = new SearchTools();
+    await expect(
+      tools.execute('grep', { pattern: 'TODO', path: 'nope.html' }, ctx),
+    ).rejects.toThrow(/路径不存在: nope\.html/);
+  });
 });
 
 describe('SearchTools glob', () => {
@@ -123,6 +180,14 @@ describe('SearchTools glob', () => {
     const result = await tools.execute('glob', { pattern: '**/*' }, ctx);
     expect(result).toContain('real.ts');
     expect(result).not.toContain('.git');
+  });
+
+  // glob 的 path 语义仍是「目录」；不存在时给与 grep 一致的明确文案
+  it('path 不存在时抛明确中文错误', async () => {
+    const tools = new SearchTools();
+    await expect(
+      tools.execute('glob', { pattern: '**/*.ts', path: 'no-such-dir' }, ctx),
+    ).rejects.toThrow(/路径不存在: no-such-dir/);
   });
 });
 
