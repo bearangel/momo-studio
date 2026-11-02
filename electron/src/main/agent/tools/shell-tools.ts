@@ -25,7 +25,7 @@ import { buildCatalog, type ToolCatalogEntry, type ToolMeta } from './catalog-en
 import { OUTPUT_LIMITS } from './shared/output-truncate';
 import { createUtf8Collector } from './shared/stream-decode';
 import { parseStringArg } from './shared/arg-parse';
-import { resolveShellSpawn } from '../../sandbox';
+import { getSandboxState, resolveShellSpawn } from '../../sandbox';
 import { buildKillTreeArgs } from '../../sandbox/windows';
 import {
   requestEffectiveNetwork,
@@ -191,11 +191,58 @@ const SHELL_CATALOG_META: Record<string, ToolMeta> = {
   bash: { displayName: '终端命令', category: 'Shell', categoryEmoji: '💻', defaultOn: false, riskNote: '任意代码执行' },
 };
 
+/**
+ * 描述公共部分：参数（command / timeoutMs，见 inputSchema）与返回值格式说明，
+ * 逐字沿用原文。平台差异部分由 shellToolDescription 追加在尾部。
+ */
+const SHELL_DESC_BASE =
+  '在 workspace 根目录执行 shell 命令（受 OS 沙箱约束：读全盘但敏感目录不可读、仅可写 workspace 与 /tmp；网络出站按沙箱设置双态——永久允许（默认）/拒绝）。沙箱内无法启动 GUI 应用与系统浏览器（open/LaunchServices 被拒）——需要打开网页时用 browser_navigate 等浏览器工具。30s 超时，stdout+stderr 各截断 10KB。退出码非 0 不抛错。每条命令独立 shell，cd 不持久。后台进程（& 启动）在本回合内可跨命令存活，回合结束时由平台统一回收——不要依赖跨回合的后台服务（下回合需重启）。沙箱内 ps 与 kill 系统调用被拦截（kill -0/pkill 会误报「进程已死/无权限」）：查自己启动的进程用 process_list，判端口占用用 lsof/curl，关闭自己启动的服务用 process_kill（bash 里 kill 必失败）。';
+
+/** 环境变量受限白名单提示（三平台共用，对应 buildSandboxEnv 的白名单实现） */
+const SHELL_DESC_ENV_HINT =
+  '环境变量是受限白名单：只传 PATH/HOME 等基础变量，不要依赖 PATH 以外的自定义变量（自设的 API key 等取不到，需要时走专用工具）。';
+
+/** win32 写文件标准写法（spec §5.2c 只教不改）——三种 shell 形态共用 */
+const WIN32_DESC_WRITE_FILE_HINT =
+  '写文本文件（HTML/JSON/CSV/脚本）用无 BOM 的 UTF-8：[System.IO.File]::WriteAllText($path, $content, [System.Text.UTF8Encoding]::new($false))；不要用 > / Out-File 写文件——不同 PowerShell 版本默认编码不同（PS 5.1 会写成带 BOM 的 UTF-8 或 UTF-16LE），下游工具可能读不了。';
+
+/**
+ * win32 的 shell 事实段：按实测 shell 分支，避免对 pwsh 7 硬写「不支持 &&」
+ *（sandbox/windows.ts 的 detectWindowsShell 优先 pwsh.exe，pwsh 7 支持 &&）。
+ * 探测态为 null（子进程尚未探测）或未知值时给中性文案 + 版本自检指引。
+ */
+function win32ShellSection(detectedShell: string | null): string {
+  if (detectedShell === 'pwsh.exe') {
+    return '运行环境是 PowerShell 7（pwsh.exe），不是 bash：支持 && 串联；路径分隔符 \\，反引号是转义符；输出已按 UTF-8 解码；node / python / npm / git 可直接调用。';
+  }
+  if (detectedShell === 'powershell.exe') {
+    return '运行环境是 Windows PowerShell 5.1（不是 bash、不是 pwsh）：串联用 ;，不支持 &&；路径分隔符 \\，反引号是转义符；输出已按 UTF-8 解码；node / python / npm / git 可直接调用。';
+  }
+  return '运行环境是 Windows PowerShell（不是 bash；具体版本尚未探测）：先跑 $PSVersionTable.PSVersion 确认 shell 版本——主版本 ≥ 7 支持 && 串联，5.1 只能用 ; 串联。路径分隔符 \\，反引号是转义符；输出已按 UTF-8 解码。';
+}
+
+/**
+ * 按平台 + 实测 shell 生成 bash 工具描述（spec 2026-11-02 §5.5）。
+ * 纯函数（平台经参数进入，不读 process.platform）——单测直接锁三分支文案。
+ *
+ * @param platform 目标平台
+ * @param detectedShell 探测到的 win32 shell（'pwsh.exe' / 'powershell.exe' / null=未探测）
+ */
+export function shellToolDescription(
+  platform: NodeJS.Platform,
+  detectedShell: string | null,
+): string {
+  if (platform !== 'win32') {
+    return `${SHELL_DESC_BASE}支持 && 串联；外部程序从 PATH 解析。${SHELL_DESC_ENV_HINT}`;
+  }
+  return `${SHELL_DESC_BASE}${win32ShellSection(detectedShell)}${WIN32_DESC_WRITE_FILE_HINT}${SHELL_DESC_ENV_HINT}`;
+}
+
 export class ShellTools implements ToolModule {
   getDefs(): LLMToolDef[] {
     return [{
       name: 'bash',
-      description: '在 workspace 根目录执行 shell 命令（受 OS 沙箱约束：读全盘但敏感目录不可读、仅可写 workspace 与 /tmp；网络出站按沙箱设置双态——永久允许（默认）/拒绝）。沙箱内无法启动 GUI 应用与系统浏览器（open/LaunchServices 被拒）——需要打开网页时用 browser_navigate 等浏览器工具。30s 超时，stdout+stderr 各截断 10KB。退出码非 0 不抛错。每条命令独立 shell，cd 不持久。后台进程（& 启动）在本回合内可跨命令存活，回合结束时由平台统一回收——不要依赖跨回合的后台服务（下回合需重启）。沙箱内 ps 与 kill 系统调用被拦截（kill -0/pkill 会误报「进程已死/无权限」）：查自己启动的进程用 process_list，判端口占用用 lsof/curl，关闭自己启动的服务用 process_kill（bash 里 kill 必失败）。',
+      description: shellToolDescription(process.platform, getSandboxState()?.windowsShell ?? null),
       inputSchema: {
         type: 'object',
         properties: {
