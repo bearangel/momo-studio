@@ -1,16 +1,19 @@
 // renderer/src/components/agent/TeamDialog.tsx
 //
 // v25 Task 13：创建/编辑团队弹窗（spec §6.4）——同一表单，editing prop 决定模式。
-// 创建：图标+名称*、成员多选（当前 ws members，≥2 校验）、leader 从已勾选中单选
-// （未勾选时禁用；取消勾选当前 leader 时自动清空选择）。
+// 创建：图标+名称*、成员多选（当前 ws members，≥2 校验）。
 // 编辑：回填现有团队，提交按 diff 应用——改名 → 加成员 → 换 leader → 移除成员。
 // 顺序契约：先 setLeader 再移除旧 leader（后端 removeTeamMember 有 leader 守卫，
 // 先转移才能移除）；先加成员再设其为 leader（setLeader 要求新 leader 已在团队内）。
 //
-// v2.1 P3：手写 modal 外壳 → Dialog 原子件；成员行/leader 行 token 化 + hover surface-3；
-// 成员图标缺省 → Avatar bot（对齐 CollabSessionDialog / MembersPanel 先例）；
-// 当前 leader 行 Crown 标记（TeamsPanel 同款 title="团队 leader"）。
-// 成员 checkbox / leader radio 保留原生 input（P2 Task 15 先例：行内单/多选原生 + aria-label）。
+// 验收补修（2026-11-02，用户实测）：成员列表与 leader 列表合一——每行右侧
+// 皇冠 radio 行内指定队长（首个勾选自动成为队长；取消勾选现任队长 → 皇冠自动
+// 落到剩余已选首位，消灭「请选择 leader」报错态）；每行名称下新增 agent 简介
+// 次行（definitions 按 agentDefinitionId 映射，无简介不渲染）。
+//
+// v2.1 P3：手写 modal 外壳 → Dialog 原子件；成员行 token 化 + hover surface-3；
+// 成员图标缺省 → Avatar bot（对齐 CollabSessionDialog / MembersPanel 先例）。
+// checkbox / 皇冠 radio 保留原生 input（P2 Task 15 先例：行内单/多选原生 + aria-label）。
 import { useEffect, useState, type FormEvent } from 'react';
 import { Crown } from 'lucide-react';
 import { useAgentStore } from '../../stores/agent.store';
@@ -33,8 +36,10 @@ interface Props {
 
 export function TeamDialog({ onCreated,  editing, onClose }: Props) {
   const workspace = useWorkspaceStore((s) => s.getActive());
-  const { members, loadMembers, createTeam, renameTeam, setLeader, addTeamMember, removeTeamMember } =
-    useAgentStore();
+  const {
+    members, definitions, loadMembers, loadDefinitions,
+    createTeam, renameTeam, setLeader, addTeamMember, removeTeamMember,
+  } = useAgentStore();
 
   const [name, setName] = useState(editing?.name ?? '');
   const [iconEmoji, setIconEmoji] = useState(editing?.iconEmoji ?? '👥');
@@ -46,11 +51,16 @@ export function TeamDialog({ onCreated,  editing, onClose }: Props) {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (workspace) void loadMembers(workspace.id);
-  }, [workspace, loadMembers]);
+    if (workspace) {
+      void loadMembers(workspace.id);
+      void loadDefinitions();
+    }
+  }, [workspace, loadMembers, loadDefinitions]);
 
   // v2.2：agentName 由后端 JOIN definitions 产出（members 数据面），不依赖 defMap
   const memberLabel = (m: WorkspaceAgentMember): string => m.agentName;
+  const memberDesc = (m: WorkspaceAgentMember): string =>
+    definitions.find((d) => d.id === m.agentDefinitionId)?.description ?? '';
 
   const toggleMember = (instanceId: string, checked: boolean): void => {
     setSelected((cur) => {
@@ -59,8 +69,14 @@ export function TeamDialog({ onCreated,  editing, onClose }: Props) {
       else next.delete(instanceId);
       return next;
     });
-    // 取消勾选当前 leader → 选择复位（leader 只能来自已勾选成员）
-    if (!checked && leaderId === instanceId) setLeaderId('');
+    if (checked && !leaderId) {
+      // 首个勾选成员自动成为队长（皇冠可见，用户可再切换）
+      setLeaderId(instanceId);
+    } else if (!checked && leaderId === instanceId) {
+      // 取消勾选现任队长 → 皇冠自动落到剩余已选首位
+      const rest = [...selected].filter((id) => id !== instanceId);
+      setLeaderId(rest[0] ?? '');
+    }
   };
 
   const validate = (): string | null => {
@@ -143,63 +159,76 @@ export function TeamDialog({ onCreated,  editing, onClose }: Props) {
 
         <fieldset className="flex flex-col gap-1.5 border-t border-subtle pt-3">
           <legend className="text-sm text-secondary">成员（当前工作空间，至少 2 名）</legend>
+          <div className="text-xs text-tertiary">
+            勾选加入团队；点右侧皇冠指定队长（默认首个勾选成员，负责接待非 @ 消息）
+          </div>
           {members.length === 0 && (
             <div className="text-xs text-tertiary">
               当前工作空间暂无智能体成员，请先在「智能体成员」Tab 添加
             </div>
           )}
-          {members.map((m) => (
-            <label
-              key={m.instanceId}
-              className="flex items-center gap-2 text-sm text-secondary px-2 py-1.5 rounded hover:bg-surface-3"
-            >
-              <input
-                type="checkbox"
-                aria-label={memberLabel(m)}
-                checked={selected.has(m.instanceId)}
-                onChange={(e) => toggleMember(m.instanceId, e.target.checked)}
-              />
-              <span>
-                {m.iconEmoji || (
-                  <Avatar name={memberLabel(m)} bot size="sm" />
-                )}
-              </span>
-              <span>{memberLabel(m)}</span>
-            </label>
-          ))}
-        </fieldset>
-
-        <fieldset className="flex flex-col gap-1.5 border-t border-subtle pt-3">
-          <legend className="text-sm text-secondary">团队 leader</legend>
-          <div className="text-xs text-tertiary">从已勾选成员中选择；leader 负责接待非 @ 消息</div>
           {members.map((m) => {
             const checked = selected.has(m.instanceId);
+            const isLeader = leaderId === m.instanceId;
+            const desc = memberDesc(m);
             return (
-              <label
+              <div
                 key={m.instanceId}
-                className={cn(
-                  'flex items-center gap-2 text-sm px-2 py-1.5 rounded',
-                  checked ? 'text-secondary hover:bg-surface-3' : 'text-disabled',
-                )}
+                className={cn('flex items-start gap-2 rounded px-2 py-1.5 hover:bg-surface-3', !checked && 'opacity-60')}
               >
-                <input
-                  type="radio"
-                  name="team-leader"
-                  aria-label={`设为 leader：${memberLabel(m)}`}
-                  checked={leaderId === m.instanceId}
-                  disabled={!checked}
-                  onChange={() => setLeaderId(m.instanceId)}
-                />
-                {memberLabel(m)}
-                {leaderId === m.instanceId && (
-                  <span
-                    className="inline-flex items-center text-accent-600 dark:text-accent-300"
-                    title="团队 leader"
-                  >
-                    <Crown size={11} strokeWidth={1.75} aria-hidden className="text-accent-500" />
+                <label className="flex flex-1 min-w-0 cursor-pointer items-start gap-2">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    aria-label={memberLabel(m)}
+                    checked={checked}
+                    onChange={(e) => toggleMember(m.instanceId, e.target.checked)}
+                  />
+                  <span className="mt-0.5">
+                    {m.iconEmoji || (
+                      <Avatar name={memberLabel(m)} bot size="sm" />
+                    )}
                   </span>
-                )}
-              </label>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-1.5">
+                      <span className="text-[13px] text-primary">{memberLabel(m)}</span>
+                      {isLeader && (
+                        <span className="rounded-full border border-accent-500/40 px-1.5 py-px text-[10px] font-medium text-accent-600 dark:text-accent-300">
+                          {editing && isLeader && editing.leaderInstanceId === m.instanceId ? '现任队长' : '队长'}
+                        </span>
+                      )}
+                    </span>
+                    {desc && (
+                      <span className="block truncate text-[11px] leading-relaxed text-tertiary">
+                        {desc}
+                      </span>
+                    )}
+                  </span>
+                </label>
+                <label
+                  className={cn(
+                    'mt-1 inline-flex h-4 w-4 flex-none items-center justify-center rounded-full border',
+                    isLeader
+                      ? 'border-accent-500 bg-accent-500/15'
+                      : checked
+                        ? 'cursor-pointer border-border-strong hover:border-accent-500'
+                        : 'border-border-subtle opacity-40',
+                  )}
+                >
+                  <input
+                    type="radio"
+                    name="team-leader"
+                    className="sr-only"
+                    aria-label={`设为队长：${memberLabel(m)}`}
+                    checked={isLeader}
+                    disabled={!checked}
+                    onChange={() => setLeaderId(m.instanceId)}
+                  />
+                  {isLeader && (
+                    <Crown size={9} strokeWidth={2.25} aria-hidden className="text-accent-500" />
+                  )}
+                </label>
+              </div>
             );
           })}
         </fieldset>
