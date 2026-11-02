@@ -111,7 +111,14 @@ vi.mock('../src/main/agent/router-bootstrap', () => ({
 vi.mock('../src/main/storage/memories/tokenize', () => ({
   tokenizeForIndex: b.tokenizeForIndex,
 }));
-vi.mock('../src/main/sandbox/probe', () => ({ reprobeSandbox: b.reprobeSandbox }));
+// sandbox/probe 工厂桩：除 reprobeSandbox（index.ts boot 接线）外，还需 getSandboxState
+// ——ShellTools.getDefs() 会读实测 win32 shell 生成描述（sandbox/index.ts 透传）。
+// 返回 null = 「尚未探测」这一真实状态，正好覆盖描述的中性/回退文案分支；
+// 刻意不用 importOriginal 透传（那会让本测试真的 spawn 探测命令）。
+vi.mock('../src/main/sandbox/probe', () => ({
+  reprobeSandbox: b.reprobeSandbox,
+  getSandboxState: (): null => null,
+}));
 vi.mock('../src/main/journal/quota', () => ({ enforceQuota: b.enforceQuota }));
 vi.mock('../src/main/workspace/crud', () => ({ listWorkspaces: b.listWorkspaces }));
 vi.mock('../src/main/task/resume', () => ({ sweepStaleStreaming: b.sweepStaleStreaming }));
