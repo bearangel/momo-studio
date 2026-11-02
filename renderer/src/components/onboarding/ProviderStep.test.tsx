@@ -7,6 +7,7 @@ import { vi, describe, it, expect, beforeEach } from 'vitest';
 import type { WizardCtx } from '../../routes/OnboardingWizard';
 
 const mockCreate = vi.fn();
+const mockUpdateGlobal = vi.fn();
 const mockTestConnection = vi.fn();
 const mockList = vi.fn();
 const mockListPresets = vi.fn();
@@ -20,6 +21,9 @@ vi.mock('../../ipc/client', () => ({
       listModels: (...a: unknown[]) => mockListModels(...a),
       create: (...a: unknown[]) => mockCreate(...a),
       testConnection: (...a: unknown[]) => mockTestConnection(...a),
+    },
+    settings: {
+      updateGlobal: (...a: unknown[]) => mockUpdateGlobal(...a),
     },
   },
 }));
@@ -88,6 +92,7 @@ beforeEach(() => {
   mockListPresets.mockResolvedValue(PRESETS);
   mockListModels.mockResolvedValue(MODELS_P1);
   mockCreate.mockResolvedValue(EXISTING);
+  mockUpdateGlobal.mockResolvedValue(undefined);
 });
 
 describe('ProviderStep', () => {
@@ -153,6 +158,30 @@ describe('ProviderStep', () => {
     expect(mockCreate.mock.calls[0]![0]).toMatchObject({ verifiedAtCreation: true });
   });
 
+  it('验收补修（2026-11-02）：自定义供应商手输模型 → create 带 defaultModel（无 presetKey）+ 模型行不再空', async () => {
+    mockTestConnection.mockResolvedValue({ ok: true });
+    mockCreate.mockResolvedValue({ ...EXISTING, id: 'p-custom' });
+    const ctx = mkCtx();
+    render(<ProviderStep ctx={ctx} />);
+    fireEvent.click(await screen.findByText('+ 自定义供应商'));
+    fireEvent.change(await screen.findByLabelText(/名称/), { target: { value: '公司网关' } });
+    fireEvent.change(screen.getByLabelText(/Base URL/), { target: { value: 'https://gw.example.com/v1' } });
+    fireEvent.change(screen.getByLabelText(/API Key/), { target: { value: 'sk-gw' } });
+    fireEvent.change(screen.getByLabelText(/模型名/), { target: { value: 'internal-pro-1' } });
+    fireEvent.click(screen.getByRole('button', { name: '验证并继续' }));
+    await waitFor(() => expect(mockCreate).toHaveBeenCalled());
+    expect(mockCreate.mock.calls[0]![0]).toMatchObject({
+      name: '公司网关', defaultModel: 'internal-pro-1', platform: 'openai',
+    });
+    expect(mockCreate.mock.calls[0]![0]).not.toHaveProperty('presetKey');
+    await waitFor(() =>
+      expect(mockUpdateGlobal).toHaveBeenCalledWith({
+        defaultChatModel: { providerId: 'p-custom', modelId: 'internal-pro-1' },
+      }),
+    );
+    expect(ctx.go).toHaveBeenCalledWith('workspace');
+  });
+
   it('预设新建 + 验证成功 → create → setProvider → 推进 workspace', async () => {
     const ctx = mkCtx();
     render(<ProviderStep ctx={ctx} />);
@@ -167,8 +196,17 @@ describe('ProviderStep', () => {
     );
     await waitFor(() =>
       expect(mockCreate).toHaveBeenCalledWith(
-        expect.objectContaining({ name: '智谱 GLM', presetKey: 'zhipu', isDefault: true }),
+        expect.objectContaining({
+          name: '智谱 GLM', presetKey: 'zhipu', isDefault: true,
+          defaultModel: 'glm-5.3',
+        }),
       ),
+    );
+    // 验收补修（2026-11-02）：首屏选定模型落全局默认会话模型
+    await waitFor(() =>
+      expect(mockUpdateGlobal).toHaveBeenCalledWith({
+        defaultChatModel: { providerId: 'p1', modelId: 'glm-5.3' },
+      }),
     );
     expect(ctx.setProvider).toHaveBeenCalledWith('p1', 'glm-5.3');
     expect(ctx.go).toHaveBeenCalledWith('workspace');

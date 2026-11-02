@@ -74,10 +74,19 @@ export function ProviderStep({ ctx, onSkip }: Props) {
     }
   };
 
-  const submitExisting = (): void => {
+  const submitExisting = async (): Promise<void> => {
     if (!existingId || !modelId) return;
-    ctx.setProvider(existingId, modelId);
-    ctx.go('workspace');
+    try {
+      // 验收补修（2026-11-02）：首屏明确选定的模型记为全局默认会话模型
+      //（幂等一次，进系统后用户可在设置改）
+      await ipc.settings.updateGlobal({
+        defaultChatModel: { providerId: existingId, modelId },
+      });
+      ctx.setProvider(existingId, modelId);
+      ctx.go('workspace');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const submitNew = async (): Promise<void> => {
@@ -100,10 +109,16 @@ export function ProviderStep({ ctx, onSkip }: Props) {
         apiKey,
         platform,
         isDefault: true,
+        // 验收补修（2026-11-02）：defaultModel 必须随创建落库（provider_models
+        // 行 + default_model 列）——自定义供应商手输模型漏传则进系统后模型服务空
+        defaultModel: modelId.trim(),
         ...(preset ? { presetKey: preset.key } : {}),
         // D6（验收报告）：验证刚通过——创建即记为已验证（055 机制，此前漏传
         // 导致设置页永远「未验证」徽标）
         verifiedAtCreation: true,
+      });
+      await ipc.settings.updateGlobal({
+        defaultChatModel: { providerId: created.id, modelId: modelId.trim() },
       });
       ctx.setProvider(created.id, modelId);
       ctx.go('workspace');
@@ -154,7 +169,7 @@ export function ProviderStep({ ctx, onSkip }: Props) {
             <Button type="button" variant="ghost" onClick={() => setMode('chips')}>
               返回新建
             </Button>
-            <Button type="button" onClick={submitExisting} disabled={!existingId || !modelId}>
+            <Button type="button" onClick={() => void submitExisting()} disabled={!existingId || !modelId}>
               继续
             </Button>
           </div>
