@@ -89,27 +89,73 @@ export function assertCommandAllowed(command: string): void {
 }
 
 /**
- * 构造沙箱环境变量。白名单外的 process.env 一律不传入子进程——这是
+ * posix 白名单（v2.4 原清单，**大小写敏感**比对——语义不许变）。
+ * 进程运行必需的 PATH/HOME/USER/... 与本地化相关变量。
+ */
+const POSIX_ALLOWED_ENV = new Set([
+  'PATH', 'HOME', 'USER', 'USERPROFILE',
+  'LANG', 'LC_ALL', 'LC_CTYPE',
+  'SHELL', 'TERM',
+  'TMPDIR', 'TMP', 'TEMP',
+  'SYSTEMROOT', 'WINDIR',
+]);
+
+/**
+ * win32 白名单（spec 2026-11-02 §5.1）。Windows 环境变量名大小写不敏感，
+ * 实际环境里是 `Path` / `SystemRoot`——旧实现按大写比对等于把 PATH 整条丢掉，
+ * 子进程解析不到 node / python / npm / git。`PATHEXT` 是 PowerShell 解析外部
+ * 程序的必需项，旧清单同样缺失。
+ */
+const WIN32_ALLOWED_ENV: readonly string[] = [
+  'Path', 'PATHEXT', 'SystemRoot', 'SystemDrive', 'WINDIR', 'ComSpec', 'TEMP', 'TMP',
+  'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'USERNAME', 'USERDOMAIN', 'COMPUTERNAME',
+  'PSModulePath', 'APPDATA', 'LOCALAPPDATA', 'ProgramData', 'ProgramFiles',
+  'ProgramFiles(x86)', 'PUBLIC', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'OS',
+];
+
+/** win32 白名单的小写形态（比对用；复制时保留输入环境里的原始大小写） */
+const WIN32_ALLOWED_ENV_LOWER = new Set(WIN32_ALLOWED_ENV.map((k) => k.toLowerCase()));
+
+/**
+ * win32 固定注入：控制台代码页无关的 UTF-8 输出（Python 默认按 locale 写 cp936
+ * 字节 → 按 UTF-8 解码即乱码）。属工具行为设定，非用户可见配置。
+ */
+const WIN32_FIXED_ENV: NodeJS.ProcessEnv = {
+  PYTHONUTF8: '1',
+  PYTHONIOENCODING: 'utf-8',
+};
+
+/**
+ * 构造沙箱环境变量。白名单外的一律不传入子进程——这是
  * 「LLM 看不到主机 API key/token」的核心防线。
  *
- * 白名单成员：进程运行必需的 PATH/HOME/USER/... 与本地化相关变量。
- * 额外注入 WORKSPACE_DIR（让脚本感知沙箱根）+ MOMO_STUDIO_AGENT（标记来源）。
+ * posix 与 win32 用两份清单：posix 保持大小写敏感（逐字不变），win32 大小写
+ * 不敏感且额外注入 UTF-8 变量。两分支末尾都注入 WORKSPACE_DIR（让脚本感知
+ * 沙箱根）+ MOMO_STUDIO_AGENT（标记来源）。
+ *
+ * @param env 源环境，缺省 process.env（测试注入用）
+ * @param platform 目标平台，缺省 process.platform（测试注入用）
  */
-export function buildSandboxEnv(ctx: ToolContext): NodeJS.ProcessEnv {
-  const ALLOWED = new Set([
-    'PATH', 'HOME', 'USER', 'USERPROFILE',
-    'LANG', 'LC_ALL', 'LC_CTYPE',
-    'SHELL', 'TERM',
-    'TMPDIR', 'TMP', 'TEMP',
-    'SYSTEMROOT', 'WINDIR',
-  ]);
-  const env: NodeJS.ProcessEnv = {};
-  for (const key of Object.keys(process.env)) {
-    if (ALLOWED.has(key)) env[key] = process.env[key];
+export function buildSandboxEnv(
+  ctx: ToolContext,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  if (platform === 'win32') {
+    for (const key of Object.keys(env)) {
+      // 大小写不敏感命中；键名按输入的原始大小写复制（Path 仍是 Path）
+      if (WIN32_ALLOWED_ENV_LOWER.has(key.toLowerCase())) out[key] = env[key];
+    }
+    Object.assign(out, WIN32_FIXED_ENV);
+  } else {
+    for (const key of Object.keys(env)) {
+      if (POSIX_ALLOWED_ENV.has(key)) out[key] = env[key];
+    }
   }
-  env.WORKSPACE_DIR = ctx.workspaceDir;
-  env.MOMO_STUDIO_AGENT = '1';
-  return env;
+  out.WORKSPACE_DIR = ctx.workspaceDir;
+  out.MOMO_STUDIO_AGENT = '1';
+  return out;
 }
 
 /** 把 v 钳制到 [min, max] 区间。timeoutMs 越界时归一化到合法范围。 */
