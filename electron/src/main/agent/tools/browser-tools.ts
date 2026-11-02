@@ -217,7 +217,11 @@ export class BrowserTools implements ToolModule {
         inputSchema: {
           type: 'object',
           properties: {
-            url: { type: 'string', description: '目标 URL（http(s) 或 workspace 内 file://）' },
+            url: {
+              type: 'string',
+              description:
+                '目标 URL 或工作空间内路径：http(s) URL、工作空间内相对路径（如 report.html、sub/a.html#p2）、工作空间内绝对 file:// URL（越界路径会被拒绝）',
+            },
           },
           required: ['url'],
         },
@@ -331,7 +335,11 @@ export class BrowserTools implements ToolModule {
               description: 'tab 操作类型',
             },
             index: { type: 'number', description: 'close / switch 的目标下标（从 0 起）' },
-            url: { type: 'string', description: 'open 携带的 URL（http(s) 或 workspace 内 file://）' },
+            url: {
+              type: 'string',
+              description:
+                'open 携带的目标：http(s) URL、工作空间内相对路径（如 report.html、sub/a.html#p2）、工作空间内绝对 file:// URL（越界路径会被拒绝）',
+            },
           },
           required: ['action'],
         },

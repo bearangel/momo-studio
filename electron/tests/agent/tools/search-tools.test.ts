@@ -150,6 +150,10 @@ describe('SearchTools grep', () => {
     expect(result).toContain('超过 1MB 未搜索');
     expect(result).toContain('huge.html');
     expect(result).not.toContain('(无匹配)');
+    // 下一步必须可执行（终审 Minor 5）：grep 没有行范围参数，建议「再用 grep
+    // 逐段核」是死路——模型照着做只会再撞同一个 1MB 上限。
+    expect(result).toContain('read_file');
+    expect(result).not.toContain('用 grep 逐段核');
   });
 
   it('path 不存在时抛明确中文错误', async () => {
@@ -188,6 +192,22 @@ describe('SearchTools glob', () => {
     await expect(
       tools.execute('glob', { pattern: '**/*.ts', path: 'no-such-dir' }, ctx),
     ).rejects.toThrow(/路径不存在: no-such-dir/);
+  });
+
+  // 终审 Minor 3：path 指向文件时旧实现把该路径交给 fast-glob，抛裸
+  // `ENOTDIR: not a directory, scandir`——模型看不出是「用错了工具」还是「越界」。
+  it('path 指向文件时抛可执行的中文错误（不再是裸 ENOTDIR）', async () => {
+    await fs.promises.writeFile(path.join(tmpDir, 'report.html'), '<h1>x</h1>');
+    const tools = new SearchTools();
+    let err: Error | null = null;
+    try {
+      await tools.execute('glob', { pattern: '**/*.ts', path: 'report.html' }, ctx);
+    } catch (e) {
+      err = e as Error;
+    }
+    expect(err).not.toBeNull();
+    expect(err?.message).toContain('path 必须是目录: report.html');
+    expect(err?.message).not.toContain('ENOTDIR');
   });
 });
 

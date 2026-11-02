@@ -40,4 +40,33 @@ describe('createUtf8Collector', () => {
     expect(() => c.end()).not.toThrow();
     expect(c.text.length).toBeLessThanOrEqual(1);
   });
+
+  // 终审可选补强：满额后到达的空 chunk 只是 decoder 的 no-op（StringDecoder.write
+  // 对空 buffer 返回空串），绝不能因为「又来了一次 write」就翻出截断标记。
+  it('满额后到达空 chunk 不置截断标记', () => {
+    const c = createUtf8Collector(4);
+    c.write(Buffer.from('中文测试', 'utf8'));
+    c.write(Buffer.alloc(0));
+    c.end();
+    expect(c.text).toBe('中文测试');
+    expect(c.truncated).toBe(false);
+  });
+
+  // 终审可选补强：截断也可能只在 end() 冲尾字节时发生——限定的配额刚好比已解码
+  // 文本多 0（剩余 0）而尾字节又补出字符，append 落在 remaining<=0 分支即置标记。
+  it('仅靠 end() 的尾字节也能触发截断标记', () => {
+    const c = createUtf8Collector(1);
+    // 第一个 chunk 只给「中」的前 2 字节（不足一个字符，decoder 缓存住不外抛）
+    c.write(Buffer.from('中', 'utf8').subarray(0, 2));
+    expect(c.text).toBe('');
+    // 补第 3 字节：flush 出「中」，恰好用满 limit=1
+    c.write(Buffer.from('中', 'utf8').subarray(2));
+    expect(c.text).toBe('中');
+    expect(c.truncated).toBe(false);
+    // 再挂一个不完整尾字节，end() 会把它当作 U+FFFD 冲出 → 超出配额 → 截断
+    c.write(Buffer.from('文', 'utf8').subarray(0, 2));
+    c.end();
+    expect(c.truncated).toBe(true);
+    expect(c.text).toBe('中');
+  });
 });

@@ -22,12 +22,18 @@ describe('buildSandboxEnv', () => {
     expect(out.PATHEXT).toBe('.COM;.EXE;.BAT');
     expect(out.SystemRoot).toBe('C:\\Windows');
     expect(out.windir).toBe('C:\\Windows');
+    // win32 分支同样必须注入两个环境标识（终审 Minor 6：此前只有 posix 用例锁住，
+    // win32 漏注入时模型脚本读不到 WORKSPACE_DIR，测试却全绿）
+    expect(out.WORKSPACE_DIR).toBe('C:\\ws');
+    expect(out.MOMO_STUDIO_AGENT).toBe('1');
   });
 
   it('win32：注入 PYTHONUTF8 与 PYTHONIOENCODING', () => {
     const out = buildSandboxEnv(ctx, {}, 'win32');
     expect(out.PYTHONUTF8).toBe('1');
     expect(out.PYTHONIOENCODING).toBe('utf-8');
+    expect(out.WORKSPACE_DIR).toBe('C:\\ws');
+    expect(out.MOMO_STUDIO_AGENT).toBe('1');
   });
 
   it('win32：白名单外的变量不下发', () => {

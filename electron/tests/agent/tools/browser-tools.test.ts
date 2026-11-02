@@ -209,12 +209,19 @@ describe('getDefs——12 条定义齐全', () => {
     }
   });
 
-  it('navigate：url 必填，描述含 http 与 workspace 内 file:// 提示', () => {
+  it('navigate：url 必填，描述与工具描述一致（http / 相对路径 / file://）', () => {
     const def = defs.find((d) => d.name === 'browser_navigate')!;
     expect(requiredOf(def)).toContain('url');
     expect(propOf(def, 'url')?.type).toBe('string');
     expect(def.description).toContain('http');
     expect(def.description).toContain('file://');
+    // 终审 Minor 4：属性描述曾只写「http(s) 或 workspace 内 file://」，
+    // 与工具描述「支持工作空间内相对路径」自相矛盾——模型读属性描述会以为
+    // report.html 这种相对路径不能用。两处必须同时给出三种形态。
+    const urlDesc = String(propOf(def, 'url')?.description ?? '');
+    expect(urlDesc).toContain('report.html');
+    expect(urlDesc).toContain('file://');
+    expect(urlDesc).toMatch(/相对路径/);
   });
 
   it('type：selector + text 必填，submit 为 boolean', () => {

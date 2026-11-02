@@ -5,13 +5,17 @@
 //   - v2.4：OS 沙箱接入（spec §5.2）——spawn 参数经 resolveShellSpawn 三态决策：
 //     wrapped（bwrap/sandbox-exec 包裹）/ plain（permissive 降级直跑，结果带
 //     unsandboxed 标记）/ blocked（strict 且不可用，spawn 前抛错含安装指引）。
-//   - cwd 锁定 ctx.workspaceDir：spawn 直接传 cwd，LLM 无法靠 `cd` 越界；
-//     每条命令独立 shell（`bash -c '<cmd>'`），cd 不持久。
+//   - 初始 cwd 固定为 ctx.workspaceDir：spawn 直接传 cwd，LLM 传的相对路径默认
+//     落在 workspace 内；但 cwd 只锁**起点**、不锁可达范围——win32 无 OS 沙箱时
+//     命令内 `cd C:\` 会成功，posix 沙箱也只拦敏感读与 workspace 外写。不要把它
+//     当成「cd 越不了界」的防线。每条命令独立 shell（`bash -c '<cmd>'`），cd 不持久。
 //   - 命令黑名单在 spawn 前拦截：rm -rf 根/家目录、mkfs、dd 写设备、fork bomb、
 //     改写 /etc/passwd|shadow|sudoers、chmod -R /、关机重启、git commit（强制走
 //     git_commit 工具接受 GitPolicy 校验）。命中即抛错，由调用方转成 tool result。
-//   - 环境变量白名单：只传 PATH/HOME/USER/... 等基础变量，API key/token 一律
-//     不传入子进程；额外注入 WORKSPACE_DIR / MOMO_STUDIO_AGENT。
+//   - 环境变量白名单（两套清单，见下方 POSIX_ALLOWED_ENV / WIN32_ALLOWED_ENV）：
+//     posix 只传 PATH/HOME/USER/TERM 等基础变量（大小写敏感）；win32 只传
+//     Path/PATHEXT/SystemRoot/TEMP/USERPROFILE 等（**没有 HOME**，大小写不敏感）。
+//     API key/token 一律不传入子进程；额外注入 WORKSPACE_DIR / MOMO_STUDIO_AGENT。
 //   - 输出截断：stdout/stderr 各 10KB（OUTPUT_LIMITS），超长追加截断标记。
 //   - 超时：默认 30s，最大 120s，超时 SIGKILL 子进程并返回超时标记；
 //     退出码非 0 不抛错，让 LLM 看到 stderr 自我纠正。
@@ -119,11 +123,12 @@ const WIN32_ALLOWED_ENV_LOWER = new Set(WIN32_ALLOWED_ENV.map((k) => k.toLowerCa
 /**
  * win32 固定注入：控制台代码页无关的 UTF-8 输出（Python 默认按 locale 写 cp936
  * 字节 → 按 UTF-8 解码即乱码）。属工具行为设定，非用户可见配置。
+ * Object.freeze：模块级常量被多个子进程 spawn 复用，冻结防误改（改一处即全平台污染）。
  */
-const WIN32_FIXED_ENV: NodeJS.ProcessEnv = {
+const WIN32_FIXED_ENV: NodeJS.ProcessEnv = Object.freeze({
   PYTHONUTF8: '1',
   PYTHONIOENCODING: 'utf-8',
-};
+});
 
 /**
  * 构造沙箱环境变量。白名单外的一律不传入子进程——这是
@@ -236,7 +241,7 @@ const SHELL_DESC_ENV_HINT_WIN32 =
  * 只把事实告诉模型）。三种 shell 形态共用。
  */
 const WIN32_DESC_SANDBOX =
-  '（Windows 无 OS 沙箱：命令以当前用户权限直接执行，可读全盘、写入受系统文件权限约束，网络出站不做拦截；工作目录同样锁定 workspace 根；需要网页内容时用 browser_navigate 等浏览器工具——启系统浏览器拿不到结果）。';
+  '（Windows 无 OS 沙箱：命令以当前用户权限直接执行，可读全盘、写入受系统文件权限约束，网络出站不做拦截；初始工作目录是 workspace 根，命令内仍可 cd 到其他目录；需要网页内容时用 browser_navigate 等浏览器工具——启系统浏览器拿不到结果）。';
 
 /** win32 写文件标准写法（spec §5.2c 只教不改）——三种 shell 形态共用 */
 const WIN32_DESC_WRITE_FILE_HINT =

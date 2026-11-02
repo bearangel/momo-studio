@@ -186,6 +186,7 @@ export function resolveNavigateInput(raw: string, opts: ResolveNavigateInputOpts
    - 成功 → `pathToFileURL(path.resolve(abs))`，附回原 `search` / `hash` → 返回（越界由 policy 拒）
    - 抛错（win32 无盘符形态 `file:///x.html`，或非法 percent-encoding）→ 取 `url.pathname`，`decodeURIComponent` 后落到第 6 步
    - 说明：posix 上 `file:///x.html` 不抛错（返回 `/x.html`）→ 走"平台绝对"分支 → 由 policy 按越界拒绝（见 §5.3 已知取舍）
+   - **回退前守卫**（Task 5 修复轮补的既有实现）：非 win32 且 `url.hostname` 非空、也不是 `localhost` 的 `file:` URL（如 `file://srv/share/x.html`）**原样透传**，交 policy 抛 `BrowserProtocolError`。理由：`pathname` 天然不含 host，若继续走第 6 步会把这个「远程文件引用」静默抹成本机绝对路径——既不是本节枚举的回退触发条件，也绕过 policy 对带 host file URL 的既有错误分类（win32 的 UNC 形态由 `fileUrlToPath` 成功解析，不会走到这条守卫）
 5. 其他已知 scheme（`ftp:` / `data:` / `javascript:` / `chrome:` 等）→ 原样返回，由 policy 抛 `BrowserProtocolError`（保持既有错误分类）
 6. 无 scheme 或第 4 步回退：
    - 按**首个** `#` 或 `?` 切出 `pathPart` + 后缀（**必须先切**，否则 `a.html#p2` 会把 `#p2` 当文件名）
@@ -241,7 +242,9 @@ function shellToolDescription(platform: NodeJS.Platform, detectedShell: string |
 - **posix**：现状 + 「支持 `&&` 串联；外部程序从 PATH 解析」
 - **win32 + `pwsh.exe`**：「运行环境是 PowerShell 7（pwsh）。支持 `&&`；输出 UTF-8」
 - **win32 + `powershell.exe`**：「运行环境是 **Windows PowerShell 5.1**（不是 bash、不是 pwsh）。串联用 `;`，**不支持 `&&`**；路径分隔符 `\`，反引号是转义符；输出已按 UTF-8 解码；`node` / `python` / `npm` / `git` 可直接调用」
-- **win32 探测态为 null**（子进程尚未探测）：中性文案 + 自检指引「先跑 `$PSVersionTable.PSVersion` 确认 shell 版本再决定用 `;` 还是 `&&`」
+- **win32 探测态为 null / 未知值**（子进程尚未探测，或探测到非 pwsh/powershell 形态）：**说明实际回退到系统自带的 `powershell.exe`（5.1）**，按 5.1 语法给默认建议（串联用 `;`、不支持 `&&`），并保留 `$PSVersionTable.PSVersion` 自检作兜底（主版本 ≥ 7 即可用 `&&`）。依据：`sandbox/index.ts` 的 win32 分支在探测态为空时确实回退 `powershell.exe`——描述必须说「实际会发生什么」；只写「尚未探测」会让模型无从下笔。
+
+**探测时序（实现约束，非文案）**：`getDefs()` 在**被调用的一瞬间**读 `getSandboxState()?.windowsShell` 定稿文案，而 runtime 是独立子进程（`cached` 初值 null）。因此 boot 必须走 `runtime-entry.ts` 的 `bootRuntimeContext()`——先 `ensureSandboxProbed()` 再 `buildRuntimeContext()`。顺序颠倒则上面两支永远进不去，模型恒拿到「未探测 → 回退 5.1」文案，而执行侧 `resolveShellSpawn` 仍优先 `pwsh.exe`——正是本节要消灭的错误事实。`tests/agent/runtime-sandbox-probe-wiring.test.ts` 锁该顺序。
 
 三个平台文案都补：**写文件用 §5.2c 的无 BOM 写法**（win32 适用），以及「环境变量是受限白名单，不要依赖 `PATH` 以外的自定义变量」。
 

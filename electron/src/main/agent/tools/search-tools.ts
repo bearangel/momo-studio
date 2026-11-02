@@ -198,9 +198,11 @@ async function executeGrep(args: Record<string, unknown>, ctx: ToolContext): Pro
   // 只可能命中这一个文件）。跳过 DEFAULT_IGNORE 与 .gitignore——用户显式点名
   // dist/x.html 就该搜它，静默给「(无匹配)」是骗人。沙箱校验已在上面完成。
   if (targetStat.isFile()) {
-    // 1MB 上限保留（防 OOM），但不静默：明确告知未搜索，模型可分段读后逐段核。
+    // 1MB 上限保留（防 OOM），但不静默：明确告知未搜索 + 给**可执行**的下一步。
+    // 旧提示「用 grep 逐段核」不可执行——grep 只有 pattern/path/include，没有行
+    // 范围参数，模型照着做只会再撞同一个 1MB 上限（终审 Minor 5）。
     if (targetStat.size > MAX_GREP_FILE_SIZE) {
-      return `文件超过 1MB 未搜索：${startDir}（可按范围分段读后用 grep 逐段核）`;
+      return `文件超过 1MB 未搜索：${startDir}（可用 read_file 分页读后再定位，如先读前 200KB 找到关键词所在行）`;
     }
     // file 字段口径与目录模式一致：相对 absStart（此处即文件名本身）的路径。
     const content = await fs.promises.readFile(absStart, 'utf-8');
@@ -248,9 +250,12 @@ async function executeGlob(args: Record<string, unknown>, ctx: ToolContext): Pro
   const startDir = typeof args.path === 'string' ? args.path : '.';
 
   const absStart = ctx.wsFs.assertInWorkspace(startDir);
-  // glob 的 path 语义仍是「目录」（单文件无意义）；只补不存在时的明确文案，
-  // 避免 fast-glob 抛裸 ENOENT 让模型无从判断是拼错还是越界。
-  await statSearchRoot(absStart, startDir);
+  // glob 的 path 语义仍是「目录」（单文件对 glob 无意义）：不存在给明确文案，
+  // 指向文件时也不能放给 fast-glob 抛裸 ENOTDIR——改成可执行的中文错误（终审 Minor 3）。
+  const startStat = await statSearchRoot(absStart, startDir);
+  if (!startStat.isDirectory()) {
+    throw new Error(`path 必须是目录: ${startDir}（glob 的 path 只接受目录；要搜单个文件请用 grep）`);
+  }
 
   const files = await fastGlob(pattern, {
     cwd: absStart, absolute: false, ignore: DEFAULT_IGNORE, onlyFiles: true,
