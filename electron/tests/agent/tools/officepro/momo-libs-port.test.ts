@@ -6,7 +6,6 @@
 // office-tools.test.ts 的 fill_ppt_template 蓝本）。
 import AdmZip from 'adm-zip';
 import ExcelJS from 'exceljs';
-import PptxGenJS from 'pptxgenjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -45,6 +44,14 @@ interface PptSlideFill {
   replaces?: Array<{ from: string; to: string }>;
 }
 
+interface PptxLike {
+  layout?: string;
+  addSlide(o?: { masterName?: string }): { addText(t: string | Array<string | { text: string; options?: Record<string, unknown> }>, o?: Record<string, unknown>): unknown };
+  defineSlideMaster(o: Record<string, unknown>): unknown;
+  write(o: { outputType: 'nodebuffer' }): Promise<Buffer>;
+  writeFile(o: { fileName: string }): Promise<string>;
+}
+const PptxGenJS = require(path.join(PLUGIN_ROOT, 'vendor/node_modules/pptxgenjs')) as new () => PptxLike;
 const momoChart = require(path.join(PLUGIN_ROOT, 'vendor/momo-libs/momo-chart/index.js')) as {
   buildChartXml: (data: ChartData) => string;
   injectXlsxChart: (buf: Buffer, spec: XlsxChartSpec) => Buffer;

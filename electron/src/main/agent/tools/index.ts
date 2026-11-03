@@ -11,10 +11,9 @@
 //     browser_hover / browser_scroll / browser_evaluate / browser_console_messages /
 //     browser_tabs / browser_close——无条件注册，信任门在 execute 内，
 //     依赖经 initBrowserTools 由 boot 接线）。
-//   + OfficeTools（v2.1 办公八工具：office_read / office_read_cells /
-//     office_create_excel / office_write_excel / office_create_doc /
-//     office_create_ppt / office_create_pdf / office_copy——xlsx/docx/pptx/pdf
-//     四格式读写全接线——无条件注册）。
+//   + OfficeTools（spec 2026-11-03 §6：只读三件——office_read /
+//     office_read_cells / office_copy；office 生成类六工具已下线，能力由
+//     office-pro 插件（run_js 代码工坊）承接——无条件注册）。
 //   + SessionTools（跨会话引用：list_sessions / read_session）
 // 通用前置处理（权限 / 审计）仍在 runtime-entry 入口处，不在本注册中心做。
 
