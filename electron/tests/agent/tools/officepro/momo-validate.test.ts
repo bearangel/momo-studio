@@ -61,4 +61,33 @@ describe('momo-validate（结构校验）', () => {
     expect(r.ok).toBe(false);
     expect(r.errors[0]).toContain('不支持的扩展名');
   });
+
+  // 验收实锤：charSpacing 150/180 产出 spc=15000/18000，结构合法但渲染成逐字竖排
+  const slideWithSpc = (spc: string): string =>
+    '<?xml version="1.0"?><p:sld xmlns:p="urn:x"><p:txBody><a:p><a:r>' +
+    `<a:rPr sz="1100" spc="${spc}"/><a:t>IT 部</a:t></a:r></a:p></p:txBody></p:sld>`;
+
+  function pptxWithSpc(name: string, spc: string): string {
+    return zipWrite(name, [
+      ['[Content_Types].xml', XML],
+      ['_rels/.rels', XML],
+      ['ppt/presentation.xml', XML],
+      ['ppt/slides/slide1.xml', slideWithSpc(spc)],
+    ]);
+  }
+
+  it('字符间距异常（spc=18000 → 180.0pt）→ 报错并给出换算', () => {
+    const r = validateOfficeFile(pptxWithSpc('spc-bad.pptx', '18000'));
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => e.includes('字符间距异常') && e.includes('180.0pt'))).toBe(true);
+  });
+
+  it('字符间距边界：1200 不报、1300 报（阈值 >12pt）', () => {
+    expect(validateOfficeFile(pptxWithSpc('spc-edge-ok.pptx', '1200')).ok).toBe(true);
+    expect(validateOfficeFile(pptxWithSpc('spc-edge-bad.pptx', '1300')).ok).toBe(false);
+  });
+
+  it('正常 spc=0 不影响既有校验', () => {
+    expect(validateOfficeFile(pptxWithSpc('spc-zero.pptx', '0')).ok).toBe(true);
+  });
 });

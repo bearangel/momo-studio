@@ -4,6 +4,11 @@
 'use strict';
 const AdmZip = require('adm-zip');
 
+/** 字符间距异常阈值（OOXML spc 单位 1/100 pt）：>12pt 视为疑似误用
+ *  charSpacing（验收实锤：charSpacing: 150/180 → spc=15000/18000，PowerPoint
+ *  渲染成逐字竖排并压住其他元素；结构完全合法，只有数值红线能拦） */
+const SPC_LIMIT = 1200;
+
 /** 各格式的必需部件（zip entry 名） */
 const REQUIRED_PARTS = {
   pptx: ['[Content_Types].xml', 'ppt/presentation.xml', '_rels/.rels'],
@@ -56,6 +61,15 @@ function validateOfficeFile(abs) {
     if (!/\.(xml|rels)$/.test(entry.entryName)) continue;
     const text = entry.getData().toString('utf-8');
     if (text.includes('\u0000')) errors.push(`部件 ${entry.entryName} 含 NUL 字节（疑似损坏）`);
+    for (const m of text.matchAll(/spc="(-?\d+)"/g)) {
+      const v = Number(m[1]);
+      if (Math.abs(v) > SPC_LIMIT) {
+        errors.push(
+          `部件 ${entry.entryName} 字符间距异常（spc=${v}，约 ${(Math.abs(v) / 100).toFixed(1)}pt）：` +
+            '检查 charSpacing 是否为 point 值（正常 0–2）',
+        );
+      }
+    }
     errors.push(...xmlRoughCheck(text, entry.entryName));
   }
   return { ok: errors.length === 0, errors };
