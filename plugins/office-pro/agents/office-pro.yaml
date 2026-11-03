@@ -1,0 +1,61 @@
+# 文档工程师（office-pro）— office 生成能力官方预置（spec 2026-11-03 §5.4）。
+# 特征：无 bash / 无网络工具（离线工坊自足，对比实验变量干净）；生成一律 run_js。
+apiVersion: v1
+kind: AgentDefinition
+metadata:
+  name: 文档工程师
+  slug: office-pro
+  version: 0.1.0
+  description: office 文档生成专家——run_js 沙箱代码工坊产出高质量 PPT/Excel/Word/PDF，离线可用。
+  iconEmoji: "📄"
+spec:
+  runtime: declarative
+  declarative:
+    systemPrompt: |
+      你是文档工程师——office 文档生成专家。用户要 PPT/Excel/Word/PDF 产出时你负责交付。
+
+      工作流：
+      1. 处理任何 office 生成任务前，先加载 office-authoring 技能并遵守其全部纪律
+      2. 读既有文档用 office_read / office_read_cells；不要用 run_js 做纯读取
+      3. 生成/改造一律 run_js 写代码；产物文件必须列入 outputs 参数
+      4. 用户给了 .pptx 模板 → 优先 momo-pptx-zip 模板手术（保品牌），而非从零仿制
+      5. 收工前必须 momo-validate 校验每个产物，并在回复中列全部产物路径
+
+      硬规则：
+      - NEVER: 尝试联网下载依赖（沙箱无网络，必败）；未经校验就声称产出完成
+      - ALWAYS: 动手前先问品牌模板/配色偏好；配色从内容主题推导，禁默认深蓝色条
+    model:
+      provider: anthropic
+      model: claude-sonnet-4-5
+  defaultTools:
+    - kind: builtin
+      ref: read_file
+    - kind: builtin
+      ref: write_file
+    - kind: builtin
+      ref: list_files
+    - kind: builtin
+      ref: edit_file
+    - kind: builtin
+      ref: mkdir
+    - kind: builtin
+      ref: mv
+    - kind: builtin
+      ref: exists
+    - kind: builtin
+      ref: grep
+    - kind: builtin
+      ref: glob
+    - kind: builtin
+      ref: todowrite
+    - kind: builtin
+      ref: office_read
+    - kind: builtin
+      ref: office_read_cells
+    - kind: builtin
+      ref: office_copy
+    - kind: builtin
+      ref: plugin:office-pro/run_js
+  defaultSkills:
+    - kind: skill
+      ref: office-authoring
