@@ -158,60 +158,6 @@ describe('模板态插件 MCP 集成（假引擎）', () => {
     expect(after).not.toBe(before);
   }, 30000);
 
-  it('④ C1 回归锁：boot.js 进程链——宿主断连后孙进程（引擎）随之退出', async () => {
-    const rec = seedDevPlugin();
-    // 预建索引目录——绕开并行 init 路径（本用例锁进程链，init 语义由 harness 覆盖）
-    fs.mkdirSync(path.join(tmpRoot, 'ws-a', '.momo-codegraph'), { recursive: true });
-    // boot 形态：command node + boot.js --engine <假引擎> --root <ws>
-    // 假引擎 serve 前写 pid 文件；断连后断言该 pid 消亡
-    const pidFile = path.join(tmpRoot, 'grandchild.pid');
-    const FAKE_BOOT_ENGINE = FAKE_ENGINE.replace(
-      "rl.on('line',",
-      `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\nrl.on('line',`,
-    );
-    const root = path.join(tmpRoot, 'dev-plugin');
-    fs.writeFileSync(path.join(root, 'engine', 'bin', 'codegraph'), FAKE_BOOT_ENGINE, {
-      encoding: 'utf-8',
-      mode: 0o755,
-    });
-    await writePluginConfig(PID, SCHEMA, { workspaceRoot: path.join(tmpRoot, 'ws-a') }, 'ws-a');
-    // 直接注册 boot 形态定义（绕过 mcp.json——本用例测进程链而非注册）
-    const cfg: import('../../src/main/mcp/types').McpServerConfig = {
-      id: 'plugin-cg-codegraph',
-      name: 'codegraph',
-      version: '0.0.0',
-      command: 'node',
-      args: [
-        path.join(path.dirname(__dirname), '..', '..', 'plugins', 'codegraph', 'bin', 'boot.js'),
-        '--engine', path.join(root, 'engine', 'bin', 'codegraph'),
-        '--root', path.join(tmpRoot, 'ws-a'),
-      ],
-      transport: 'stdio',
-      source: 'plugin',
-      pluginId: PID,
-    };
-    const client = await getOrStartMcp('ws-a', cfg);
-    await client.callTool('codegraph_explore', {});
-    // 引擎孙进程已记录 pid
-    await new Promise((r) => setTimeout(r, 300));
-    const pid = Number(fs.readFileSync(pidFile, 'utf-8').trim());
-    expect(pid).toBeGreaterThan(0);
-    // 断连前存活态不设硬断言——宿主侧管道提前半关时 boot.js 的 stdin-EOF
-    // 联动会先杀引擎（产品语义正确的路径）；核心不变量是 disconnect 后必死
-    let aliveBefore = false;
-    try { process.kill(pid, 0); aliveBefore = true; } catch { aliveBefore = false; }
-    // 宿主断连（kill 直接子进程 node boot.js）
-    await client.disconnect();
-    // 轮询孙进程消亡（信号转发 + stdin EOF 联动后应 ≤3s）
-    const deadline = Date.now() + 8000;
-    let gone = false;
-    while (Date.now() < deadline) {
-      try { process.kill(pid, 0); await new Promise((r) => setTimeout(r, 300)); }
-      catch { gone = true; break; }
-    }
-    expect(gone).toBe(true); // 无论断连前死活，孙进程终态必须消亡
-  }, 30000);
-
   it('② setConfig 联动失效：改 workspaceRoot 后旧实例回收、新参数生效（stale root 杜绝）', async () => {
     const rec = seedDevPlugin();
     await writePluginConfig(PID, SCHEMA, { workspaceRoot: path.join(tmpRoot, 'ws-a') }, 'ws-a');

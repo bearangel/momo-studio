@@ -204,9 +204,37 @@ describe('I2：LIKE _ 通配与 I3：reload 收敛（审查修复）', () => {
   });
 });
 
-// v2.0 引擎整合回归锁：插件 agent 注册链（manifest agents 声明 → 定义落库 source='plugin'）
+// v2.0 引擎整合回归锁：插件 agent 注册链（manifest agents 声明 → 定义落库 source='plugin'）。
+// 2026-11-03 夹具化（spec 2026-11-03-momo-plugin §4）：原版 sourcePath 指向仓库
+// plugins/codegraph，插件已迁出至独立仓 momo-plugin——改 tmp 夹具 + 内联与真实
+// code-navigator 同形的 YAML，断言语义不变。
 describe('registerPluginAgents（codegraph v2.0 agents 声明）', () => {
   it('manifest 声明 agents → yaml 注册为 plugin 源定义', () => {
+    const fxRoot = path.join(tmpRoot, 'cg-fixture');
+    fs.mkdirSync(path.join(fxRoot, 'agents'), { recursive: true });
+    fs.writeFileSync(
+      path.join(fxRoot, 'agents', 'code-navigator.yaml'),
+      `# 夹具：与 momo-plugin 仓 codegraph agents/code-navigator.yaml 同形（最小保留 frontmatter 语义字段）
+apiVersion: v1
+kind: AgentDefinition
+metadata:
+  name: 代码导航员
+  slug: code-navigator
+  version: 1.0.0
+  description: 问「某符号被谁调用 / 改动影响面」派我；先用 codegraph 图谱查询，再读源码确认。
+spec:
+  declarative:
+    systemPrompt: |
+      你是代码导航员——调用关系专家。
+    model:
+      provider: openai
+      model: gpt-4o
+  defaultTools:
+    - kind: builtin
+      ref: read_file
+`,
+      'utf-8',
+    );
     const manifest = {
       id: 'cg',
       name: 'cg',
@@ -219,7 +247,7 @@ describe('registerPluginAgents（codegraph v2.0 agents 声明）', () => {
       manifestJson: JSON.stringify(manifest),
       state: 'active',
       source: 'dev',
-      sourcePath: path.resolve(__dirname, '../../../plugins/codegraph'),
+      sourcePath: fxRoot,
       installedAt: 'x',
     } as Parameters<typeof registerPluginAgents>[0];
     const n = registerPluginAgents(rec);

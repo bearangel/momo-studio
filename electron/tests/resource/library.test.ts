@@ -51,8 +51,8 @@ vi.mock('../../src/main/marketplace/installer', () => ({
   uninstallPackage: vi.fn(),
 }));
 
-// mock 插件资源行（plugins 表/开发目录扫描——不 mock 会读到仓库 plugins/codegraph
-// 的 agent+skill 两行，测试随仓库插件状态漂移；本文件只测三源纯合并逻辑）
+// mock 插件资源行（plugins 表/开发目录扫描——历史注：仓库曾内置 plugins/codegraph
+// 目录，2026-11-03 已迁出至独立仓 momo-plugin；本文件只测三源纯合并逻辑）
 vi.mock('../../src/main/plugin/resources', () => ({
   listPluginResourceRows: vi.fn(() => []),
 }));

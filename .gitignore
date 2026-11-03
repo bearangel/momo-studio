@@ -13,5 +13,3 @@ playwright-report/
 .pnpm-store
 .superpowers
 .devcontainer
-plugins/codegraph/engine/
-plugins/codegraph/vendor/
