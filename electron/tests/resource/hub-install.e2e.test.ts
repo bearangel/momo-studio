@@ -53,7 +53,6 @@ import {
   isTrustedDownloadUrl,
   __resetTrustedDownloadOriginsForTest,
 } from '../../src/main/marketplace/installer';
-import { __resetCatalogCacheForTest } from '../../src/main/marketplace/client';
 import { resolveUserDataDir } from '../../src/main/paths';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-hub-install-e2e-${Date.now()}`);
@@ -257,7 +256,6 @@ beforeEach(async () => {
   hubRequests = [];
   hubAuths = [];
   __resetTrustedDownloadOriginsForTest();
-  __resetCatalogCacheForTest();
   blockMarketplaceNetwork();
 
   fixtures.set('hub-e2e-agent', {
@@ -496,73 +494,7 @@ describe('T10 e2e：resource:list 并入 hub 已装项 + 五源并列', () => {
     expect(uninstalled).toBeDefined();
   });
 
-  it('五源并列：builtin / marketplace / custom / smithery / hub 同时在场互不遮蔽', async () => {
-    // marketplace 远程目录 → 本地 catalog（内置项 + 一个远程项）
-    const localCatalog = JSON.parse(
-      fs.readFileSync(
-        path.resolve(__dirname, '../../../resources/marketplace/catalog.json'),
-        'utf-8',
-      ),
-    ) as { version: string; updatedAt: string; items: Array<Record<string, unknown>> };
-    const remoteItem = {
-      id: 'mcp-remote-demo',
-      type: 'mcp',
-      slug: 'remote-demo',
-      name: '网络 Demo',
-      version: '1.0.0',
-      author: 'Momo Studio',
-      description: '网络来源的演示 MCP',
-      readme: '# 网络 Demo',
-      tags: [],
-      category: 'dev',
-      iconEmoji: '🔌',
-      verificationStatus: 'community',
-      downloadUrl: 'https://example.com/remote-demo.tar.gz',
-      checksum: 'a'.repeat(64),
-      sizeBytes: 1,
-      installCount: 0,
-    };
-    const builtinMcp = {
-      id: 'mcp-builtin-demo',
-      type: 'mcp',
-      slug: 'builtin-demo',
-      name: '预置 Demo',
-      version: '1.0.0',
-      author: 'Momo Studio',
-      description: '预置的演示 MCP',
-      readme: '# 预置 Demo',
-      tags: [],
-      category: 'dev',
-      iconEmoji: '🧩',
-      verificationStatus: 'official',
-      downloadUrl: '',
-      checksum: '',
-      sizeBytes: 1,
-      installCount: 0,
-    };
-    const catalog = {
-      version: localCatalog.version,
-      updatedAt: localCatalog.updatedAt,
-      items: [...localCatalog.items, remoteItem, builtinMcp],
-    };
-    // 远程目录被禁网 → 回退本地文件；此处改写本地文件不可行，改为直接注入
-    // fetch 拦截层：marketplace 目录请求返回上面的合成目录，hub 请求照常真发。
-    const origFetch = REAL_FETCH;
-    vi.mocked(globalThis.fetch).mockImplementation(((
-      input: Parameters<typeof fetch>[0],
-      init?: Parameters<typeof fetch>[1],
-    ) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-      if (url.includes('raw.githubusercontent.com')) {
-        return Promise.resolve({
-          ok: true,
-          status: 200,
-          json: async () => catalog,
-        } as unknown as Response);
-      }
-      return origFetch(input, init);
-    }) as typeof fetch);
-
+  it('四源并列：builtin / custom / smithery（存量行） / hub 同时在场互不遮蔽（marketplace 源已随网络获取下线退役）', async () => {
     // custom MCP
     registerMcpDefinition({
       id: 'custom-mcp-demo',
@@ -573,35 +505,41 @@ describe('T10 e2e：resource:list 并入 hub 已装项 + 五源并列', () => {
       env: {},
       source: 'custom',
     });
-    // smithery 已装 MCP（直连注册，零网络）
-    const { installSmitheryRemote } = await import('../../src/main/resource/hub-install');
-    await installSmitheryRemote('e2e-smithery', 'https://e2e.run.tools', {});
-    // hub 已装 MCP（真包安装）
-    await installHubPackage('mcp', 'hub-e2e-mcp');
-    // marketplace remote-demo 记一笔已装（断言迁移——library-store-split：list 收窄为
-    // 本地实体后，已装记账行（item_id=catalog id）是 marketplace 行留在库页的形态）
+    // smithery 存量 MCP（直连注册终态同形 + `smithery:` 前缀记账，零网络）
+    registerMcpDefinition({
+      id: 'smithery-mcp-e2e-row',
+      name: 'e2e-smithery',
+      version: '1.0.0',
+      transport: 'streamable_http',
+      url: 'https://e2e.run.tools',
+      headers: {},
+      command: '',
+      args: [],
+      source: 'smithery',
+    });
     getDb()
       .prepare(
         `INSERT INTO installed_packages (id, item_id, item_type, slug, version, cache_path, checksum)
-         VALUES ('e2e-mp-row', 'mcp-remote-demo', 'mcp', 'remote-demo', '1.0.0', '/cache/e2e-mp-row', '')`,
+         VALUES ('e2e-smithery-row', 'smithery:e2e-smithery', 'mcp', 'e2e-smithery', '1.0.0', '', '')`,
       )
       .run();
+    // hub 已装 MCP（真包安装）
+    await installHubPackage('mcp', 'hub-e2e-mcp');
 
-    const items = await listResources({ type: 'mcp' });
+    // builtin = 本地 catalog 直读的 Momo（agent，无 type 过滤的合并面可见）
+    const items = await listResources();
     const bySource = new Map(items.map((i) => [i.source, i]));
     expect([...bySource.keys()].sort()).toEqual([
       'builtin',
       'custom',
       'hub',
-      'marketplace',
       'smithery',
     ]);
+    expect(bySource.get('builtin')!.id).toBe('builtin-agent-general-assistant');
     expect(bySource.get('hub')!.id).toBe('hub-mcp-hub-e2e-mcp');
     expect(bySource.get('hub')!.installed).toBe(true);
     expect(bySource.get('smithery')!.id).toBe('smithery-mcp-e2e-smithery');
     expect(bySource.get('custom')!.id).toBe('custom-mcp-custom-demo');
-    expect(bySource.get('marketplace')!.id).toBe('marketplace-mcp-remote-demo');
-    expect(bySource.get('builtin')!.id).toBe('builtin-mcp-builtin-demo');
   });
 
   it('hub 未接入（未配置）→ 目录空 + degraded=false + resource:list 无 hub 项', async () => {

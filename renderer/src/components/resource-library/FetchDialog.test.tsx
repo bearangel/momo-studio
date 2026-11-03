@@ -1,5 +1,6 @@
 // renderer/src/components/resource-library/FetchDialog.test.tsx
-// FetchDialog 三源 × 四态 × 特殊态矩阵（library-store-split spec §4 / 预览 §C §D）。
+// FetchDialog hub 单源 × 四态 × 特殊态矩阵（library-store-split spec §4 / 预览 §C §D；
+// 2026-11-02 网络获取下线——marketplace/smithery 变体组随通道退役）。
 // Mock 方式遵循 TypePageShell.test.tsx 形态：真实 jsdom window 上装 window.api
 // （ipc.client 是真实 Proxy——mock 收窄到 IPC 边界）；store 用真实实现 +
 // setState 注入已装行（弹窗四态的本地真源）。
@@ -13,7 +14,6 @@ import type { RegistryListEntry, ResourceItem, ResourceType } from '../../ipc/ty
 
 const registryListMock = vi.fn();
 const installMock = vi.fn();
-const installSmitheryRemoteMock = vi.fn();
 /** hub:installProgress 载荷的最小消费面形状（dialog 只读 stage/type/slug/字节拍） */
 type HubProgressEventLike = {
   stage: string;
@@ -30,7 +30,6 @@ const mockApi = {
     list: resourceListMock,
     registryList: registryListMock,
     install: installMock,
-    installSmitheryRemote: installSmitheryRemoteMock,
     getCatalogStatus: vi.fn(async () => ({ degraded: false })),
   },
   hub: {
@@ -77,7 +76,6 @@ function mockRegistryResult(over: Partial<{
 beforeEach(() => {
   registryListMock.mockReset();
   installMock.mockReset().mockResolvedValue(undefined);
-  installSmitheryRemoteMock.mockReset().mockResolvedValue(undefined);
   onInstallProgress.mockClear();
   resourceListMock.mockReset().mockResolvedValue([]);
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
@@ -248,135 +246,9 @@ describe('FetchDialog — 特殊态（预览 §D）', () => {
   });
 });
 
-describe('FetchDialog — marketplace 变体', () => {
-  function mpEntry(slug: string, name: string, version: string, installed: boolean): RegistryListEntry {
-    return {
-      id: `marketplace-skill-${slug}`, type: 'skill', name, description: `${name}描述`,
-      version, tags: [], item: {
-        id: `marketplace-skill-${slug}`, type: 'skill', source: 'marketplace', slug,
-        name, description: 'd', version, installed, installable: !installed, removable: installed,
-      } as ResourceItem,
-    };
-  }
-
-  it('脚注「官方内置目录 · N 项」；已装行按 store 本地版本判最新；无刷新入口', async () => {
-    useResourceStore.setState({
-      typeFilter: 'skill', activeType: 'skill',
-      items: [{
-        id: 'marketplace-skill-brainstorm', type: 'skill', source: 'marketplace',
-        slug: 'brainstorm', name: '头脑风暴引导', description: 'd',
-        version: '2.1.0', installedVersion: '2.1.0', installed: true, installable: false, removable: true,
-      }],
-    });
-    mockRegistryResult({
-      entries: [
-        mpEntry('brainstorm', '头脑风暴引导', '2.1.0', true),
-        mpEntry('tech-writing', '技术写作润色', '1.0.3', false),
-      ],
-      total: 12,
-    });
-    render(<FetchDialog source="marketplace" type="skill" onClose={vi.fn()} />);
-
-    expect(await screen.findByText('官方内置目录 · 12 项')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: '刷新目录' })).toBeNull();
-    const installed = screen.getByTestId('fetch-row-marketplace-skill-brainstorm');
-    expect(within(installed).getByText('✓ 已装 v2.1.0 · 最新')).toBeTruthy();
-    const fresh = screen.getByTestId('fetch-row-marketplace-skill-tech-writing');
-    expect(within(fresh).getByRole('button', { name: '安装' })).toBeTruthy();
-    // marketplace 无元信息段（预览 §D 变体——无版本数数据）
-    expect(within(installed).queryByText(/个版本/)).toBeNull();
-  });
-
-  it('providerKey=builtin（catalog 快照分支）', async () => {
-    mockRegistryResult({ entries: [], total: 0 });
-    render(<FetchDialog source="marketplace" type="skill" onClose={vi.fn()} />);
-    await waitFor(() => expect(registryListMock).toHaveBeenCalledWith('builtin', 'skill', undefined, 1, undefined));
-  });
-});
-
-describe('FetchDialog — smithery 变体（仅 MCP）', () => {
-  function smEntry(slug: string, name: string, installable: boolean, author = 'upstash'): RegistryListEntry {
-    return {
-      id: `smithery-mcp-${slug}`, type: 'mcp', name, description: `${name}服务器`,
-      tags: [], item: {
-        id: `smithery-mcp-${slug}`, type: 'mcp', source: 'smithery', slug,
-        name, description: 'd', installed: false, installable, removable: false,
-        marketplace: { author, readme: '', downloadUrl: '', checksum: '', verificationStatus: 'verified', tags: [], category: 'smithery' },
-      } as ResourceItem,
-    };
-  }
-
-  it('版本槽显示 @namespace；hosted 未部署行灰显「不可装」；脚注 smithery.ai 文案', async () => {
-    mockRegistryResult({
-      entries: [
-        smEntry('context7', 'context7', true),
-        smEntry('seq', 'sequential-thinking', false, 'smithery'),
-      ],
-    });
-    render(<FetchDialog source="smithery" type="mcp" onClose={vi.fn()} />);
-
-    expect(await screen.findByText('context7')).toBeTruthy();
-    expect(screen.getByText('@upstash')).toBeTruthy();
-    const blocked = screen.getByTestId('fetch-row-smithery-mcp-seq');
-    expect(within(blocked).getByText('hosted 未部署 · 不可装')).toBeTruthy();
-    expect(within(blocked).queryByRole('button')).toBeNull();
-    expect(screen.getByText('smithery.ai · 社区目录 · 远程直连注册')).toBeTruthy();
-  });
-
-  it('needsConfig 两态：install 返回 schema → 行内配置表单 → 提交走 installSmitheryRemote', async () => {
-    mockRegistryResult({ entries: [smEntry('context7', 'context7', true)] });
-    installMock.mockResolvedValueOnce({
-      needsConfig: true,
-      schema: { required: ['token'], properties: { token: { title: 'API Token' } } },
-    });
-    render(<FetchDialog source="smithery" type="mcp" onClose={vi.fn()} />);
-    fireEvent.click(await screen.findByRole('button', { name: '安装' }));
-    const formTitle = await screen.findByText('配置「context7」');
-    expect(formTitle).toBeTruthy();
-    const form = formTitle.parentElement as HTMLElement;
-    // 必填校验：空值提交被拦（表单内安装钮与行内安装钮同名——scope 到表单容器）
-    fireEvent.click(within(form).getByRole('button', { name: '安装' }));
-    expect(await within(form).findByText('请填写必填字段：token')).toBeTruthy();
-    expect(installSmitheryRemoteMock).not.toHaveBeenCalled();
-
-    fireEvent.change(screen.getByLabelText('API Token'), { target: { value: 'sk-x' } });
-    fireEvent.click(within(form).getByRole('button', { name: '安装' }));
-    await waitFor(() =>
-      expect(installSmitheryRemoteMock).toHaveBeenCalledWith('smithery-mcp-context7', { token: 'sk-x' }),
-    );
-    // 成功横幅（installNotice 机制——装完落库页）
-    await waitFor(() =>
-      expect(useResourceStore.getState().installNotice).toBe('已从 Smithery 安装「context7」'),
-    );
-  });
-
-  it('服务端搜索：搜索词经 300ms 防抖以 query 重查首页', async () => {
-    vi.useFakeTimers();
-    try {
-      mockRegistryResult({ entries: [] });
-      const { rerender } = render(<FetchDialog source="smithery" type="mcp" onClose={vi.fn()} />);
-      await vi.waitFor(() => expect(registryListMock).toHaveBeenCalledTimes(1));
-
-      fireEvent.change(screen.getByPlaceholderText('搜索服务器…'), { target: { value: 'weather' } });
-      // 防抖窗内不重查
-      expect(registryListMock).toHaveBeenCalledTimes(1);
-      vi.advanceTimersByTime(350);
-      await vi.waitFor(() =>
-        expect(registryListMock).toHaveBeenLastCalledWith('smithery', 'mcp', 'weather', 1, undefined),
-      );
-      rerender(<FetchDialog source="smithery" type="mcp" onClose={vi.fn()} />);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('smithery 降级 → warning 卡 + 重试', async () => {
-    mockRegistryResult({ degraded: true });
-    render(<FetchDialog source="smithery" type="mcp" onClose={vi.fn()} />);
-    expect(await screen.findByText('Smithery 暂不可达')).toBeTruthy();
-    expect(screen.getByRole('button', { name: '重试' })).toBeTruthy();
-  });
-});
+// ── marketplace / smithery 变体组已随 2026-11-02 网络获取下线退役
+//    （FetchDialog 收敛 hub 单源；providerKey=builtin 浏览分支、smithery
+//    服务端搜索/needsConfig 表单/降级卡不复存在）──
 
 describe('FetchDialog — 失败路径', () => {
   it('registryList 抛错 → 弹窗内红字 + 重试按钮（不白屏）', async () => {

@@ -1,14 +1,13 @@
 // renderer/src/components/resource-library/FetchDialog.tsx
-// 获取弹窗（library-store-split spec §2.3，三源同构）：momo-hub / 网络市场 / Smithery。
+// 获取弹窗（library-store-split spec §2.3）：momo-hub 单源（2026-11-02 网络
+// 获取下线——网络市场 / Smithery 分支已随通道退役）。
 // 布局与文案为预览合同定值（§C/§D + 定值清单 C1-C19）：
 //   - 容器 620px / max-h 560px / 圆角 12px；标题「从 {源名} 获取 · {类型名}」
-//   - 搜索（hub/marketplace 目录快照客户端过滤；smithery 服务端分页 + 滚动加载更多）
+//   - 搜索（hub 目录快照客户端过滤）
 //   - 行内四态：安装 / 更新（✓已装vN + 描边钮）/ 已装最新（灰显）/ 安装中（脚注进度）
-//   - smithery hosted 未部署 → 行内灰显「hosted 未部署 · 不可装」
 //   - 特殊态：hub 未接入空态卡（去设置接入）/ 降级 warning 卡（重试）
-// 安装链复用 store.installResource（banner + 库页刷新零分叉）；smithery
-// needsConfig 两态在弹窗内渲染 schema 表单 → installSmitheryRemote 二段安装。
-import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from 'react';
+// 安装链复用 store.installResource（banner + 库页刷新零分叉）。
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, CloudOff, RotateCw, TriangleAlert, X } from 'lucide-react';
 import { ipc } from '../../ipc/client';
@@ -18,7 +17,7 @@ import { useResourceStore } from '../../stores/resource.store';
 import { useUiStore } from '../../stores/ui.store';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
-import type { JsonSchemaLike, RegistryListEntry, ResourceType } from '../../ipc/types';
+import type { RegistryListEntry, ResourceType } from '../../ipc/types';
 import {
   FETCH_PROVIDER_KEY,
   FETCH_SOURCE_ICON,
@@ -37,8 +36,6 @@ const TYPE_NAME: Record<ResourceType, string> = {
 /** 搜索占位文案（预览 §C/§D 定值） */
 const SEARCH_PLACEHOLDER: Record<FetchSource, string> = {
   hub: '搜索名称 / 描述 / slug…',
-  marketplace: '搜索…',
-  smithery: '搜索服务器…',
 };
 
 interface Props {
@@ -57,7 +54,7 @@ interface RegistryListResult {
   revision?: number;
 }
 
-type RowState = 'install' | 'update' | 'latest' | 'blocked';
+type RowState = 'install' | 'update' | 'latest';
 
 /** 本地已装行查找键——按 source:slug 对齐（弹窗行 item.source 即库页已装来源） */
 function localKey(entry: RegistryListEntry): string {
@@ -72,14 +69,11 @@ export function FetchDialog({ source, type, onClose }: Props) {
   const selfNodeId = useHubStore((s) => s.status?.nodeId ?? null);
 
   const [query, setQuery] = useState('');
-  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [entries, setEntries] = useState<RegistryListEntry[]>([]);
   const [meta, setMeta] = useState<{ nodeName?: string; total?: number; revision?: number }>({});
   const [notEnrolled, setNotEnrolled] = useState(false);
   const [degraded, setDegraded] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [hasMore, setHasMore] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [installing, setInstalling] = useState<{
     id: string;
     slug: string;
@@ -87,40 +81,22 @@ export function FetchDialog({ source, type, onClose }: Props) {
     percent: number | null;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // smithery needsConfig 二段：待配置条目 + schema + 已填值
-  const [configTarget, setConfigTarget] = useState<{
-    entry: RegistryListEntry;
-    schema: JsonSchemaLike;
-    values: Record<string, string>;
-  } | null>(null);
-  const [configError, setConfigError] = useState<string | null>(null);
-
-  const pageRef = useRef(1);
-
-  // smithery 服务端搜索：搜索词防抖 300ms 重查首页（spec §6 首版简单做）
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedQuery(query), 300);
-    return () => clearTimeout(t);
-  }, [query]);
 
   const loadEntries = useCallback(
     async (opts?: { fresh?: boolean }): Promise<void> => {
       setLoading(true);
       setError(null);
-      pageRef.current = 1;
       try {
-        const q = source === 'smithery' ? debouncedQuery.trim() || undefined : undefined;
         const r: RegistryListResult = await ipc.resource.registryList(
           providerKey,
           type,
-          q,
+          undefined,
           1,
           opts?.fresh ? { fresh: true } : undefined,
         );
         setEntries(r.entries);
         setDegraded(r.degraded);
         setNotEnrolled(r.notEnrolled ?? false);
-        setHasMore(r.hasMore);
         setMeta({ nodeName: r.nodeName, total: r.total, revision: r.revision });
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -128,32 +104,12 @@ export function FetchDialog({ source, type, onClose }: Props) {
         setLoading(false);
       }
     },
-    [providerKey, source, type, debouncedQuery],
+    [providerKey, type],
   );
 
   useEffect(() => {
     void loadEntries();
   }, [loadEntries]);
-
-  const loadMore = useCallback(async (): Promise<void> => {
-    if (source !== 'smithery' || !hasMore || loadingMore || loading) return;
-    setLoadingMore(true);
-    try {
-      const r: RegistryListResult = await ipc.resource.registryList(
-        providerKey,
-        type,
-        debouncedQuery.trim() || undefined,
-        pageRef.current + 1,
-      );
-      pageRef.current += 1;
-      setEntries((prev) => [...prev, ...r.entries]);
-      setHasMore(r.hasMore);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoadingMore(false);
-    }
-  }, [providerKey, source, type, debouncedQuery, hasMore, loadingMore, loading]);
 
   // hub 安装进度事件 → 脚注进度行（字节拍换算百分比；extracting/未知为不定态）
   useEffect(() => {
@@ -188,7 +144,7 @@ export function FetchDialog({ source, type, onClose }: Props) {
   const rowState = useCallback(
     (entry: RegistryListEntry): RowState => {
       const local = installedVersions.get(localKey(entry));
-      if (local === undefined) return entry.item.installable ? 'install' : 'blocked';
+      if (local === undefined) return 'install';
       if (entry.version && compareVersions(entry.version, local) > 0) return 'update';
       return 'latest';
     },
@@ -196,7 +152,6 @@ export function FetchDialog({ source, type, onClose }: Props) {
   );
 
   const visibleEntries = useMemo(() => {
-    if (source === 'smithery') return entries;
     const q = query.trim().toLowerCase();
     if (!q) return entries;
     return entries.filter(
@@ -205,25 +160,14 @@ export function FetchDialog({ source, type, onClose }: Props) {
         e.description.toLowerCase().includes(q) ||
         e.item.slug.toLowerCase().includes(q),
     );
-  }, [entries, query, source]);
+  }, [entries, query]);
 
   const handleInstall = useCallback(
     async (entry: RegistryListEntry): Promise<void> => {
       setError(null);
-      setConfigError(null);
       setInstalling({ id: entry.item.id, slug: entry.item.slug, name: entry.name, percent: null });
       const result = await useResourceStore.getState().installResource(entry.item.id);
       setInstalling(null);
-      // smithery 两态：needsConfig=true 时未安装——弹窗内渲染 schema 表单
-      if (result && typeof result === 'object' && 'needsConfig' in result && result.needsConfig) {
-        const properties = result.schema?.properties ?? {};
-        setConfigTarget({
-          entry,
-          schema: result.schema ?? {},
-          values: Object.fromEntries(Object.keys(properties).map((k) => [k, ''])),
-        });
-        return;
-      }
       if (result === false) {
         setError(useResourceStore.getState().error ?? '安装失败');
         return;
@@ -233,48 +177,13 @@ export function FetchDialog({ source, type, onClose }: Props) {
     [loadEntries],
   );
 
-  const submitSmitheryConfig = useCallback(async (): Promise<void> => {
-    if (!configTarget) return;
-    const required = configTarget.schema.required ?? [];
-    const missing = required.filter((k) => configTarget.values[k]?.trim() === '');
-    if (missing.length > 0) {
-      setConfigError(`请填写必填字段：${missing.join('、')}`);
-      return;
-    }
-    setConfigError(null);
-    try {
-      await ipc.resource.installSmitheryRemote(
-        configTarget.entry.item.id,
-        Object.fromEntries(
-          Object.entries(configTarget.values).filter(([, v]) => v !== ''),
-        ),
-      );
-      useResourceStore.setState({
-        installNotice: `已从 Smithery 安装「${configTarget.entry.name}」`,
-      });
-      setConfigTarget(null);
-      await useResourceStore.getState().load();
-      await loadEntries();
-    } catch (err) {
-      setConfigError(err instanceof Error ? err.message : String(err));
-    }
-  }, [configTarget, loadEntries]);
-
   // hub 未接入空态卡「去设置接入」
   const goSettings = useCallback((): void => {
     onClose();
     useUiStore.getState().setActiveView('settings');
   }, [onClose]);
 
-  const footerText = (() => {
-    if (source === 'hub') {
-      return `已连接 ${meta.nodeName ?? 'momo-hub'} · 目录 ${meta.total ?? entries.length} 项 · 修订 ${meta.revision ?? 0}`;
-    }
-    if (source === 'marketplace') {
-      return `官方内置目录 · ${meta.total ?? entries.length} 项`;
-    }
-    return 'smithery.ai · 社区目录 · 远程直连注册';
-  })();
+  const footerText = `已连接 ${meta.nodeName ?? 'momo-hub'} · 目录 ${meta.total ?? entries.length} 项 · 修订 ${meta.revision ?? 0}`;
 
   // Esc 关闭（capture 阶段，与 ui/Dialog 同语义）
   useEffect(() => {
@@ -287,11 +196,6 @@ export function FetchDialog({ source, type, onClose }: Props) {
     window.addEventListener('keydown', onKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', onKeyDown, { capture: true });
   }, [onClose]);
-
-  const onListScroll = (e: UIEvent<HTMLDivElement>): void => {
-    const el = e.currentTarget;
-    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 40) void loadMore();
-  };
 
   // 特殊态：hub 未接入（空目录 + notEnrolled）→ 引导卡（预览 §D C18）
   if (notEnrolled) {
@@ -316,26 +220,22 @@ export function FetchDialog({ source, type, onClose }: Props) {
     );
   }
 
-  // 特殊态：降级（hub 目录失败回落 / smithery 网络退避）→ warning 卡 + 重试（预览 §D C19）
+  // 特殊态：降级（hub 目录失败回落）→ warning 卡 + 重试（预览 §D C19）
   if (degraded) {
-    // 标题按预览定值：hub 卡写「hub 暂不可达」（源名短称）；smithery 同构扩展
-    const degradedTitle = source === 'hub' ? 'hub 暂不可达' : 'Smithery 暂不可达';
     return createPortal(
       <>
         <div className="fixed inset-0 z-50 bg-backdrop" onClick={onClose} aria-hidden />
         <div
           role="dialog"
           aria-modal="true"
-          aria-label={degradedTitle}
+          aria-label="hub 暂不可达"
           className="fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 w-[420px] rounded-xl border border-subtle bg-canvas shadow-[0_24px_64px_rgba(0,0,0,.28)] px-7 pt-[34px] pb-[30px] text-center"
         >
           <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-[10px] bg-status-warning-tint text-status-warning">
             <TriangleAlert size={22} strokeWidth={1.75} aria-hidden />
           </div>
-          <div className="text-[14.5px] font-semibold text-primary">{degradedTitle}</div>
-          <p className="mt-1.5 mb-4 text-[12.5px] text-tertiary">
-            离线或网络受限{source === 'hub' ? '，展示最近一次目录快照' : '，稍后重试'}
-          </p>
+          <div className="text-[14.5px] font-semibold text-primary">hub 暂不可达</div>
+          <p className="mt-1.5 mb-4 text-[12.5px] text-tertiary">离线或网络受限，展示最近一次目录快照</p>
           <Button variant="secondary" onClick={() => void loadEntries({ fresh: true })}>
             重试
           </Button>
@@ -383,7 +283,7 @@ export function FetchDialog({ source, type, onClose }: Props) {
         </div>
 
         {/* 列表（预览 C7） */}
-        <div className="flex-1 overflow-y-auto border-t border-subtle" onScroll={source === 'smithery' ? onListScroll : undefined}>
+        <div className="flex-1 overflow-y-auto border-t border-subtle">
           {loading ? (
             <div className="py-8 text-center text-sm text-tertiary">加载中…</div>
           ) : error ? (
@@ -421,21 +321,15 @@ export function FetchDialog({ source, type, onClose }: Props) {
                     <div className="flex flex-wrap items-baseline gap-2">
                       <span className="text-[13.5px] font-semibold text-primary">{entry.name}</span>
                       <span className="text-[11.5px] tabular-nums text-tertiary">
-                        {source === 'smithery'
-                          ? `@${entry.item.marketplace?.author ?? ''}`
-                          : entry.version !== undefined
-                            ? `v${entry.version}`
-                            : ''}
+                        {entry.version !== undefined ? `v${entry.version}` : ''}
                       </span>
                     </div>
                     <div className="mt-0.5 truncate text-xs text-tertiary">{entry.description}</div>
-                    {source === 'hub' && (
-                      <div className="mt-0.5 flex gap-2.5 text-[11.5px] text-tertiary">
-                        {entry.item.marketplace?.author && <span>{entry.item.marketplace.author}</span>}
-                        {entry.versionCount !== undefined && <span>{entry.versionCount} 个版本</span>}
-                        {local !== undefined && local !== '' && <span>本地 v{local}</span>}
-                      </div>
-                    )}
+                    <div className="mt-0.5 flex gap-2.5 text-[11.5px] text-tertiary">
+                      {entry.item.marketplace?.author && <span>{entry.item.marketplace.author}</span>}
+                      {entry.versionCount !== undefined && <span>{entry.versionCount} 个版本</span>}
+                      {local !== undefined && local !== '' && <span>本地 v{local}</span>}
+                    </div>
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-1">
                     {ownPublish ? (
@@ -460,9 +354,6 @@ export function FetchDialog({ source, type, onClose }: Props) {
                         安装
                       </button>
                     )}
-                    {state === 'blocked' && (
-                      <span className="text-[11.5px] text-disabled">hosted 未部署 · 不可装</span>
-                    )}
                     {state === 'update' && local !== undefined && (
                       <>
                         <span className="text-[11.5px] text-status-success">✓ 已装 v{local}</span>
@@ -486,59 +377,18 @@ export function FetchDialog({ source, type, onClose }: Props) {
               );
             })
           )}
-          {source === 'smithery' && loadingMore && (
-            <div className="py-2 text-center text-xs text-tertiary">加载更多…</div>
-          )}
         </div>
-
-        {/* smithery needsConfig 表单（预览无画面；两段安装的最小呈现——必填校验 + 提交） */}
-        {configTarget && (
-          <div className="border-t border-subtle px-4 py-3">
-            <div className="mb-2 text-[13px] font-medium text-primary">
-              配置「{configTarget.entry.name}」
-            </div>
-            <div className="flex flex-col gap-2">
-              {Object.entries(configTarget.schema.properties ?? {}).map(([key, prop]) => (
-                <label key={key} className="flex items-center gap-3">
-                  <span className="w-28 shrink-0 text-xs text-secondary">
-                    {prop.title ?? key}
-                    {(configTarget.schema.required ?? []).includes(key) ? ' *' : ''}
-                  </span>
-                  <Input
-                    aria-label={prop.title ?? key}
-                    value={configTarget.values[key] ?? ''}
-                    onChange={(e) =>
-                      setConfigTarget((cur) =>
-                        cur ? { ...cur, values: { ...cur.values, [key]: e.target.value } } : cur,
-                      )
-                    }
-                    className="bg-canvas"
-                  />
-                </label>
-              ))}
-            </div>
-            {configError && <p className="mt-2 text-xs text-status-error">{configError}</p>}
-            <div className="mt-3 flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setConfigTarget(null)}>
-                取消
-              </Button>
-              <Button onClick={() => void submitSmitheryConfig()}>安装</Button>
-            </div>
-          </div>
-        )}
 
         {/* 脚注（预览 C14-C17：连接态 + hub 刷新入口 + 安装进度） */}
         <div className="flex items-center gap-2 border-t border-subtle px-4 py-2 text-[11.5px] text-tertiary">
-          {source === 'hub' && (
-            <button
-              type="button"
-              aria-label="刷新目录"
-              className="flex text-tertiary hover:text-secondary"
-              onClick={() => void loadEntries({ fresh: true })}
-            >
-              <RotateCw size={12} strokeWidth={1.75} aria-hidden />
-            </button>
-          )}
+          <button
+            type="button"
+            aria-label="刷新目录"
+            className="flex text-tertiary hover:text-secondary"
+            onClick={() => void loadEntries({ fresh: true })}
+          >
+            <RotateCw size={12} strokeWidth={1.75} aria-hidden />
+          </button>
           <span>{footerText}</span>
           {installing && (
             <span className="ml-auto inline-flex items-center gap-1.5" data-testid="fetch-installing">

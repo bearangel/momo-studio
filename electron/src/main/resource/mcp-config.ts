@@ -2,10 +2,10 @@
 //
 // P2.2 Task 4：已装远程 MCP 配置查看/编辑服务（spec §4.1/§4.2 契约形状、
 // §5.1/§5.2 主进程逻辑）。
-//   - getMcpConfigView：三级 schema 降级（§5.1）——库存 config_schema →
-//     Smithery 详情实时拉取 + 顺手回写（下次离线可用，回写失败仅 warn）→
-//     裸模式 bare=true；values 按 x-from 反解回显（query 字段从 url query
-//     参数 decode、header 字段读 headers_json）
+//   - getMcpConfigView：schema 两级降级——库存 config_schema → 裸模式
+//     bare=true（原 Smithery 实时拉取级已随 2026-11-02 注册表下线退役）；
+//     values 按 x-from 反解回显（query 字段从 url query 参数 decode、
+//     header 字段读 headers_json）
 //   - updateRemoteMcpConfig：校验（存在 / streamable_http / https）→ 按
 //     resolveSchema 分流（与 getMcpConfigView 判定一致）：schema 模式经
 //     composeRemoteConfig（Task 2 单点）重组，裸模式 url + headers 整包
@@ -18,7 +18,6 @@
 // 类型 McpConfigView / McpConfigUpdateInput / DanglingMcpRef 在本文件定义并
 // 导出，Task 6 做 renderer types.d.ts 镜像。
 
-import { getDb } from '../storage/db';
 import { logger } from '../logger';
 import {
   evictMcpByName,
@@ -31,7 +30,7 @@ import {
 } from '../mcp/host-manager';
 import { listAgentDefinitions } from '../agent/crud';
 import type { McpConfigSchema, McpEntryUpdateInput, RegisteredMcp } from '../mcp/types';
-import { composeRemoteConfig, fetchSmitheryDetail } from './hub-install';
+import { composeRemoteConfig } from './hub-install';
 
 /** P2.5：全字段编辑入参（定义在 mcp/types.ts；renderer types.d.ts 同形镜像） */
 export type { McpEntryUpdateInput };
@@ -65,33 +64,13 @@ export interface McpConfigUpdateInput {
   schema?: McpConfigSchema;
 }
 
-/** 三级降级（spec §5.1）：库存 → Smithery 实时拉取+回写 → 裸模式。
- *  回写副作用幂等：拉到即落 config_schema 列，二次调用命中第一级。 */
-async function resolveSchema(
+/** schema 降级（2026-11-02 smithery 下线后两级）：库存 config_schema → 裸模式
+ *  bare=true（smithery 实时拉取级已随注册表退役，存量行无库存 schema 时直接裸模式）。 */
+function resolveSchema(
   def: RegisteredMcp,
-): Promise<{ schema: McpConfigSchema; bare: false } | { bare: true }> {
+): { schema: McpConfigSchema; bare: false } | { bare: true } {
   if (def.configSchema && Object.keys(def.configSchema).length > 0) {
     return { schema: def.configSchema, bare: false };
-  }
-  // 仅 smithery 远程有详情接口可拉（slug = 注册名）；custom/marketplace 直接裸模式
-  if (def.source === 'smithery') {
-    try {
-      const schema = (await fetchSmitheryDetail(def.name)).connections[0]?.configSchema;
-      if (schema && Object.keys(schema).length > 0) {
-        try {
-          getDb()
-            .prepare('UPDATE mcp_definitions SET config_schema = ? WHERE name = ?')
-            .run(JSON.stringify(schema), def.name);
-        } catch {
-          // 回写失败不阻塞编辑（本次内存中已可用，只是下次还要再拉）
-          logger.warn('config_schema 回写失败（不影响编辑）', { name: def.name });
-        }
-        return { schema, bare: false };
-      }
-    } catch {
-      // 拉取失败（网络/非 2xx）降级裸模式，不阻塞编辑（spec §7）
-      logger.warn('Smithery schema 拉取失败，降级裸模式', { name: def.name });
-    }
   }
   return { bare: true };
 }

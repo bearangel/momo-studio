@@ -1210,19 +1210,6 @@ export interface PluginApiSurface {
 }
 
 /**
- * 网络获取 provider 元信息（P2 双轨 hub，spec 2026-09-22 §4.1）。
- * resource:registryProviders 返回——builtin 恒可用（本地 catalog 零网络），
- * hub 项 degraded 取各自退避状态（UI 置灰信号，不隐藏）。
- */
-export interface RegistryProviderMeta {
-  key: 'builtin' | 'smithery' | 'hub';
-  label: string;
-  region: 'local' | 'intl' | 'cn';
-  types: ResourceType[];
-  degraded: boolean;
-}
-
-/**
  * Smithery configSchema 的 renderer 镜像（P2.1 Task 3 直连安装契约）。
  * 与 electron 端 resource/hub-install.ts 的 JsonSchemaLike 对齐（跨进程独立定义，
  * 仅结构对齐）；properties 键即配置字段名，x-from 声明注入位置（缺省 header）。
@@ -1234,17 +1221,6 @@ export interface JsonSchemaLike {
     description?: string;
     'x-from'?: 'header' | 'query';
   }>;
-}
-
-/**
- * resource:install smithery 条目两态返回（P2.1 Task 3）：
- *   - { needsConfig: true, schema }  详情 configSchema.required 非空——需用户补配置
- *     （Task 6 弹窗渲染表单，提交走 resource.installSmitheryRemote）
- *   - { needsConfig: false }         已直连安装完成
- */
-export interface SmitheryInstallResult {
-  needsConfig: boolean;
-  schema?: JsonSchemaLike;
 }
 
 /**
@@ -2544,18 +2520,11 @@ export interface ApiSurface {
     getDetail(id: string): Promise<ResourceItem | null>;
     /**
      * v1.7：安装资源（builtin/custom 不可安装，抛错）。
-     * P2.1 Task 3：smithery 条目返回两态 SmitheryInstallResult（needsConfig=true
-     * 带 schema 未安装）。
      * M2.3 T2：hub 条目安装/更新返回 HubInstallResult（alreadyLatest=true 为
      * 「已是最新」零动作如实回执）；其余源返回空。
      */
-    install(id: string): Promise<SmitheryInstallResult | HubInstallResult | void>;
-    /**
-     * P2.1 Task 3：smithery needsConfig 二段安装——Task 6 弹窗收集配置后提交。
-     * 主进程重拉详情作 schema 真源，按 x-from 分流（query 进 URL / 其余进 headers）。
-     */
-    installSmitheryRemote(id: string, config: Record<string, string>): Promise<void>;
-    /** v1.7：删除/卸载资源（builtin 抛错；marketplace→uninstall；custom 按 type 三分支） */
+    install(id: string): Promise<HubInstallResult | void>;
+    /** v1.7：删除/卸载资源（builtin 抛错；custom 按 type 三分支；hub/smithery 存量行本地卸载） */
     delete(id: string): Promise<void>;
     /** P3 Task 7：注册自定义 MCP（source 固定 'custom'），返回新条目的 ResourceItem */
     registerMcp(config: RegisterMcpInput): Promise<ResourceItem>;
@@ -2591,19 +2560,15 @@ export interface ApiSurface {
       filename: string,
       userConfig: Record<string, string>,
     ): Promise<ResourceItem>;
-    /** P2 Task 4：网络获取 provider 元信息（builtin 恒可用 + 两 hub 含 degraded 状态） */
-    registryProviders(): Promise<RegistryProviderMeta[]>;
     /**
-     * P2 Task 4：按 provider 拉取注册表条目（builtin 分支本地过滤排序、hasMore 恒 false；
-     * hub 失败 degraded 不抛错）。P2.1 Task 4：query 服务端搜索 + page 分页（1 起始），
-     * hasMore 驱动「加载更多」。
-     * library-store-split（spec 2026-10-29 §2.4）：获取弹窗三源唯一浏览通道；
+     * P2 Task 4：按 provider 拉取注册表条目（momo-hub 单源——网络获取下线后唯一
+     * 远端浏览通道；hub 失败 degraded 不抛错）。query 服务端搜索 + page 分页
+     * （1 起始），hasMore 驱动「加载更多」。
      * opts.fresh 供 hub「刷新」入口（loadFresh，失败回落快照不写降级）；
-     * nodeName/total/revision 为弹窗脚注元数据（hub 携带 nodeName/revision/total，
-     * builtin 携带 total，smithery 均无）。
+     * nodeName/total/revision 为弹窗脚注元数据。
      */
     registryList(
-      providerKey: RegistryProviderMeta['key'],
+      providerKey: 'hub',
       type: ResourceType,
       query?: string,
       page?: number,

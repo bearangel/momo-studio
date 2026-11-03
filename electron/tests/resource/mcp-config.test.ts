@@ -1,26 +1,24 @@
 // electron/tests/resource/mcp-config.test.ts
 //
-// P2.2 Task 4：resource 层编辑服务（getMcpConfigView 三级降级 +
+// P2.2 Task 4：resource 层编辑服务（getMcpConfigView schema 两级降级 +
 // updateRemoteMcpConfig）测试。覆盖面（brief Step 1）：
-//   - 三级降级：① 库存 schema 命中（bare=false + values 回显：header 字段读
-//     headers、query 字段从 url ?k=v decode 反解）② smithery 空 schema 行 →
-//     fetchSmitheryDetail 拉取 + 回写 DB（二次调用不再 fetch）③ fetch 失败 →
-//     裸模式（url/headers 原样 + values 空）④ 非 smithery 远程 → 直接裸模式
-//     不 fetch；边界：fetch 成功但 schema 空对象 → 仍降级裸模式
+//   - 两级降级（2026-11-02 smithery 下线后——原实时拉取级已退役）：① 库存
+//     schema 命中（bare=false + values 回显：header 字段读 headers、query
+//     字段从 url ?k=v decode 反解）② 无库存 schema（含 smithery 存量空行）→
+//     裸模式（url/headers 原样 + values 空），零网络
 //   - update：schema 模式 compose 重组（query 进 url / header 进 headers /
 //     trim 空串剔除）+ 裸模式 headers 整包直写 + input.schema 透传落库 +
 //     evictMcpByName 被调
 //   - 错误路径专项（momo-test-rules 铁律 3）：名字不存在 / stdio 条目 /
-//     非 https url——中文错误上抛且行不动；fetch 非 2xx 抛错 → warn + 裸模式
+//     非 https url——中文错误上抛且行不动
 //   - 集成锁（承 Task 3 host-manager-edit.test.ts 手法）：编辑 → 驱逐 →
 //     callMcpTool 重建握手携带新 Authorization（编辑即时生效闭环）
 //   - P2.2 Task 5 追加：listDanglingMcpRefs 悬空扫描——未注册名聚合 /
 //     已注册不列 / 同 def 重复引用去重 / 扫描异常（坏 JSON 行）降级空数组
 //
-// Mock 策略（铁律 5 收窄）：仅模块级 mock fetchSmitheryDetail（网络边界，
-// spread 实际模块保 composeRemoteConfig 等真实现）；evictMcpByName 包
-// vi.fn(真实实现)——行为不变，仅供「被调」断言；DB 全真（runMigrations 全量
-// 迁移）。集成锁的真实连接经 globalThis.fetch stub（HttpMcpClient 网络边界）。
+// Mock 策略（铁律 5 收窄）：evictMcpByName 包 vi.fn(真实实现)——行为不变，
+// 仅供「被调」断言；DB 全真（runMigrations 全量迁移）。集成锁的真实连接经
+// globalThis.fetch stub（HttpMcpClient 网络边界）。
 //
 // DB 隔离沿用仓库既定模式（照抄 host-manager-edit.test.ts）：
 //   - process.env.AP_USER_DATA_DIR 指向临时目录
@@ -39,7 +37,6 @@ import {
   callMcpTool,
   evictMcpByName,
 } from '../../src/main/mcp/host-manager';
-import { fetchSmitheryDetail } from '../../src/main/resource/hub-install';
 import {
   getMcpConfigView,
   updateRemoteMcpConfig,
@@ -49,13 +46,6 @@ import { saveAgentDefinition } from '../../src/main/agent/crud';
 import { logger } from '../../src/main/logger';
 import type { McpServerConfig } from '../../src/main/mcp/types';
 import type { McpRef } from '../../src/main/agent/types';
-
-// 模块级 mock：只盖 fetchSmitheryDetail（网络边界），其余导出（含
-// composeRemoteConfig）走真实实现——编辑链的分流重组必须是真的。
-vi.mock('../../src/main/resource/hub-install', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../src/main/resource/hub-install')>()),
-  fetchSmitheryDetail: vi.fn(),
-}));
 
 // evictMcpByName 包 vi.fn(真实实现)：驱逐行为全真（集成锁依赖），仅记录
 // 调用事实供 update 断言（mcp-config 经同一模块实例拿到的是这个包装函数）。
@@ -70,7 +60,6 @@ beforeEach(() => {
   fs.mkdirSync(tmpRoot, { recursive: true });
   process.env.AP_USER_DATA_DIR = tmpRoot;
   runMigrations();
-  vi.mocked(fetchSmitheryDetail).mockReset();
   vi.mocked(evictMcpByName).mockClear();
 });
 
@@ -166,9 +155,10 @@ function stubRemoteFetch(): { restore: () => void; authSeen: string[] } {
   return { restore: () => spy.mockRestore(), authSeen };
 }
 
-// ─── getMcpConfigView：三级降级（spec §5.1） ────────────────────────────────
+// ─── getMcpConfigView：schema 两级降级（原 smithery 实时拉取级已随
+//     2026-11-02 网络获取下线退役）──────────────────────────────────────────
 
-describe('getMcpConfigView 三级降级', () => {
+describe('getMcpConfigView schema 两级降级', () => {
   it('第一级：库存 schema 非空 → bare=false + values 回显（header 读 headers、query 从 url 反解 decode）', async () => {
     registerMcpDefinition(
       remoteRow({
@@ -191,8 +181,6 @@ describe('getMcpConfigView 三级降级', () => {
       url: 'https://lv1.test/mcp?projectId=p%201%26x',
       headers: {},
     });
-    // 库存命中不发起网络
-    expect(fetchSmitheryDetail).not.toHaveBeenCalled();
   });
 
   it('边界：schema 字段无现值（url 无该 query、headers 无该键）→ values 不含该键', async () => {
@@ -206,75 +194,29 @@ describe('getMcpConfigView 三级降级', () => {
     expect(view.values).toEqual({});
   });
 
-  it('第二级：smithery 空 schema → fetchSmitheryDetail 拉取 + 回写 DB，二次调用不再 fetch', async () => {
-    vi.mocked(fetchSmitheryDetail).mockResolvedValue({
-      connections: [{ configSchema: DETAIL_SCHEMA }],
-    });
+  it('第二级：无库存 schema（smithery 存量空行）→ 直接裸模式（零网络），不回写', async () => {
+    // smithery 安装链已退役——存量空 schema 行与 custom 空行同径：库存缺 → 裸模式
     registerMcpDefinition(
       remoteRow({
         name: 'lv2-mcp',
         source: 'smithery',
         url: 'https://lv2.test/mcp',
-        headers: { apiKey: 'k1' },
+        headers: { Authorization: 'Bearer t' },
       }),
     );
 
     const view = await getMcpConfigView('lv2-mcp');
 
-    expect(fetchSmitheryDetail).toHaveBeenCalledTimes(1);
-    expect(fetchSmitheryDetail).toHaveBeenCalledWith('lv2-mcp'); // slug = 注册名
-    expect(view.bare).toBe(false);
-    expect(view.schema).toEqual(DETAIL_SCHEMA);
-    expect(view.values).toEqual({ apiKey: 'k1' });
-    // 回写断言（原始列）：下次离线可用
-    expect(JSON.parse(rawSchemaColumn('lv2-mcp'))).toEqual(DETAIL_SCHEMA);
-
-    // 第二次调用走第一级（库存命中），不再 fetch
-    const view2 = await getMcpConfigView('lv2-mcp');
-    expect(fetchSmitheryDetail).toHaveBeenCalledTimes(1);
-    expect(view2.bare).toBe(false);
-  });
-
-  it('第三级：fetch 抛错（非 2xx）→ bare=true + url/headers 原样 + values 空，不回写', async () => {
-    vi
-      .mocked(fetchSmitheryDetail)
-      .mockRejectedValue(new Error('Smithery 详情获取失败：HTTP 503'));
-    registerMcpDefinition(
-      remoteRow({
-        name: 'lv3-mcp',
-        source: 'smithery',
-        url: 'https://lv3.test/mcp',
-        headers: { Authorization: 'Bearer t' },
-      }),
-    );
-
-    const view = await getMcpConfigView('lv3-mcp');
-
     expect(view.bare).toBe(true);
     expect(view.schema).toBeUndefined();
     expect(view.values).toEqual({});
-    expect(view.url).toBe('https://lv3.test/mcp');
+    expect(view.url).toBe('https://lv2.test/mcp');
     expect(view.headers).toEqual({ Authorization: 'Bearer t' });
-    expect(fetchSmitheryDetail).toHaveBeenCalledTimes(1);
-    // 拉取失败不产生半写状态：config_schema 仍为兜底 '{}'
-    expect(rawSchemaColumn('lv3-mcp')).toBe('{}');
+    // 不产生半写状态：config_schema 仍为兜底 '{}'
+    expect(rawSchemaColumn('lv2-mcp')).toBe('{}');
   });
 
-  it('边界：fetch 成功但 connections[0].configSchema 为空对象 → 仍降级裸模式', async () => {
-    vi.mocked(fetchSmitheryDetail).mockResolvedValue({
-      connections: [{ configSchema: {} }],
-    });
-    registerMcpDefinition(
-      remoteRow({ name: 'empty-schema', source: 'smithery', url: 'https://e.test/mcp' }),
-    );
-
-    const view = await getMcpConfigView('empty-schema');
-
-    expect(view.bare).toBe(true);
-    expect(view.values).toEqual({});
-  });
-
-  it('非 smithery 远程（custom）→ 直接裸模式，不发起 fetch', async () => {
+  it('非 smithery 远程（custom）→ 直接裸模式', async () => {
     registerMcpDefinition(
       remoteRow({
         name: 'bare-custom',
@@ -289,7 +231,6 @@ describe('getMcpConfigView 三级降级', () => {
     expect(view.values).toEqual({});
     expect(view.url).toBe('https://bare.test/mcp');
     expect(view.headers).toEqual({ Authorization: 'Bearer c' });
-    expect(fetchSmitheryDetail).not.toHaveBeenCalled();
   });
 
   it('错误路径：名字不存在 → 中文「未注册」', async () => {
@@ -334,8 +275,6 @@ describe('updateRemoteMcpConfig', () => {
     expect(cfg?.url).toBe('https://new.test/mcp?projectId=p%202');
     expect(cfg?.headers).toEqual({ apiKey: 'k2' });
     expect(evictMcpByName).toHaveBeenCalledWith('upd-schema');
-    // 库存 schema 命中 → 编辑全程无网络
-    expect(fetchSmitheryDetail).not.toHaveBeenCalled();
   });
 
   it('schema 模式：config 值 trim 后空串剔除（可选字段留空不下发）', async () => {
@@ -358,10 +297,7 @@ describe('updateRemoteMcpConfig', () => {
     expect(cfg?.headers).toEqual({});
   });
 
-  it('smithery 空 schema 行：update 先 resolveSchema（fetch + 回写副作用）再走 schema 模式重组', async () => {
-    vi.mocked(fetchSmitheryDetail).mockResolvedValue({
-      connections: [{ configSchema: DETAIL_SCHEMA }],
-    });
+  it('smithery 空 schema 行：resolveSchema 判裸模式 → update 走裸模式整包覆盖（拉取级已退役）', async () => {
     registerMcpDefinition(
       remoteRow({
         name: 'upd-smithery',
@@ -373,15 +309,15 @@ describe('updateRemoteMcpConfig', () => {
 
     await updateRemoteMcpConfig('upd-smithery', {
       url: 'https://s2.test/mcp',
-      config: { apiKey: 'k9', projectId: 'p9' },
+      config: {},
+      headers: { Authorization: 'Bearer t9' },
     });
 
-    expect(fetchSmitheryDetail).toHaveBeenCalledWith('upd-smithery');
     const cfg = getMcpConfig('upd-smithery');
-    expect(cfg?.url).toBe('https://s2.test/mcp?projectId=p9');
-    expect(cfg?.headers).toEqual({ apiKey: 'k9' });
-    // 回写副作用幂等可见：schema 已落库（input.schema 缺省不覆盖）
-    expect(cfg?.configSchema).toEqual(DETAIL_SCHEMA);
+    expect(cfg?.url).toBe('https://s2.test/mcp');
+    expect(cfg?.headers).toEqual({ Authorization: 'Bearer t9' });
+    // 裸模式不产生 schema 半写状态
+    expect(cfg?.configSchema).toBeUndefined();
   });
 
   it('裸模式：input.headers 整包覆盖 + url 直写（无 schema 分流）', async () => {
@@ -459,9 +395,8 @@ describe('updateRemoteMcpConfig', () => {
         config: {},
       }),
     ).rejects.toThrow(/http:\/\/ 或 https:\/\//);
-    // 校验失败不得改写定义，也不产生网络副作用
+    // 校验失败不得改写定义
     expect(getMcpConfig('https-guard')?.url).toBe('https://old.test/mcp');
-    expect(fetchSmitheryDetail).not.toHaveBeenCalled();
   });
 
   it('http url → 放行更新（自建/本地测试，裸模式直写）', async () => {

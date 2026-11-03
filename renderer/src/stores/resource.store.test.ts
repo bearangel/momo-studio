@@ -192,36 +192,21 @@ describe('resource.store — install 反馈闭环', () => {
   });
 });
 
-describe('resource.store — smithery needsConfig 两态透传（P2.1 Task 3）', () => {
+describe('resource.store — install 返回值语义（2026-11-02 网络获取下线后 hub 单源）', () => {
   beforeEach(() => {
     resourceList.mockClear();
   });
 
-  it('install 返回 {needsConfig:true} → 原样透传；不设成功横幅、不刷列表、不写 error', async () => {
-    const schema = { required: ['braveApiKey'], properties: { braveApiKey: { type: 'string' } } };
-    resourceInstall.mockResolvedValueOnce({ needsConfig: true, schema });
+  it('install 返回对象（hub 回执形状）→ 走成功路径（true + 横幅 + 刷新）', async () => {
+    resourceInstall.mockResolvedValueOnce({ cachePath: '/x' });
 
-    const result = await useResourceStore.getState().installResource('smithery-mcp-brave');
-
-    // 未安装——结果对象原样透传给调用方（Task 6 弹窗消费）
-    expect(result).toEqual({ needsConfig: true, schema });
-    const state = useResourceStore.getState();
-    expect(state.installNotice).toBeNull();
-    expect(state.error).toBeNull();
-    // 未发生安装——不该触发列表刷新
-    expect(resourceList).not.toHaveBeenCalled();
-  });
-
-  it('install 返回 {needsConfig:false} → 走成功路径（true + 横幅 + 刷新）', async () => {
-    resourceInstall.mockResolvedValueOnce({ needsConfig: false });
-
-    const ok = await useResourceStore.getState().installResource('smithery-mcp-plain');
+    const ok = await useResourceStore.getState().installResource('hub-agent-x');
 
     expect(ok).toBe(true);
     expect(useResourceStore.getState().installNotice).toBe('已导入至「自定义」');
   });
 
-  it('旧路径返回 undefined（marketplace/p2p）→ 布尔语义不变', async () => {
+  it('旧路径返回 undefined（无回执）→ 布尔语义不变', async () => {
     resourceInstall.mockResolvedValueOnce(undefined);
     const ok = await useResourceStore.getState().installResource('p2p-agent-x1y2-research');
     expect(ok).toBe(true);
@@ -467,22 +452,18 @@ describe('resource.store — hub 发布事件 → 更新角标态（M1 Task 14�
     expect(useResourceStore.getState().hubUpdates).toEqual({});
   });
 
-  it('loadCatalogStatus：sources[].hub 降级位写入 hubDegraded；sources 缺席回 false', async () => {
+  it('loadCatalogStatus：sources[].hub 降级位写入 hubDegraded；sources 缺席回退顶层 degraded', async () => {
     resourceGetCatalogStatus.mockResolvedValueOnce({
-      degraded: false,
-      sources: [
-        { source: 'marketplace', degraded: false },
-        { source: 'hub', degraded: true },
-      ],
+      degraded: true,
+      sources: [{ source: 'hub', degraded: true }],
     });
     await useResourceStore.getState().loadCatalogStatus();
     expect(useResourceStore.getState().hubDegraded).toBe(true);
-    expect(useResourceStore.getState().catalogDegraded).toBe(false);
 
+    // sources 缺席（旧形状容忍）→ 顶层 degraded 兜底（下线后顶层即 hub 态）
     resourceGetCatalogStatus.mockResolvedValueOnce({ degraded: true });
     await useResourceStore.getState().loadCatalogStatus();
-    expect(useResourceStore.getState().hubDegraded).toBe(false);
-    expect(useResourceStore.getState().catalogDegraded).toBe(true);
+    expect(useResourceStore.getState().hubDegraded).toBe(true);
   });
 });
 

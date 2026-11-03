@@ -49,7 +49,6 @@ import {
   listHubMarketplaceItems,
 } from '../../src/main/resource/hub/momo-hub';
 import { __resetTrustedDownloadOriginsForTest } from '../../src/main/marketplace/installer';
-import { __resetCatalogCacheForTest } from '../../src/main/marketplace/client';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-hub-stale-${Date.now()}`);
 
@@ -194,7 +193,6 @@ beforeEach(async () => {
   catalogFails = false;
   hubRequests = [];
   __resetTrustedDownloadOriginsForTest();
-  __resetCatalogCacheForTest();
   hubServer = await startMockHub();
   const addr = hubServer.address() as AddressInfo;
   hubUrl = `http://127.0.0.1:${addr.port}`;

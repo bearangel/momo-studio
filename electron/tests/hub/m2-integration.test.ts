@@ -81,7 +81,6 @@ import { listAgentDefinitions } from '../../src/main/agent/crud';
 import { listWorkspaces } from '../../src/main/workspace/crud';
 import { __setHubContextResolverForTest } from '../../src/main/resource/hub/momo-hub';
 import { __resetTrustedDownloadOriginsForTest } from '../../src/main/marketplace/installer';
-import { __resetCatalogCacheForTest } from '../../src/main/marketplace/client';
 
 // ── 节点身份（SimHub 注册面：token→nodeId，镜像真实 hub 的 enrollment 语义）──
 
@@ -912,7 +911,6 @@ beforeAll(async () => {
   setKeychainImpl(memKeychain);
   runMigrations();
   __resetTrustedDownloadOriginsForTest();
-  __resetCatalogCacheForTest();
 
   await sim.start();
   // B 侧 hub 配置 + 凭证（applier 快照下载链经真 config/keychain 读取）

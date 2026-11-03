@@ -7,16 +7,15 @@
 // resource:uploadSkill（转调 zip-uploader 返回 UploadedSkill[]）——注册面收敛到
 // resource:* 命名空间（mcp:register / skill:uploadZip 退役）。
 //
-// P2 Task 4 追加：resource:registryProviders / resource:registryList（hub provider
-// 框架 IPC 面）。hub 模块整体 mock——provider 行为由 tests/resource/hub/* 单测覆盖。
+// P2 Task 4 追加：resource:registryList（hub provider 框架 IPC 面）。
+// hub 模块整体 mock——provider 行为由 tests/resource/hub/* 单测覆盖。
+// 2026-11-02 网络获取下线：registryProviders 通道删除（renderer 零消费死通道）、
+// registryList 收敛 momo-hub 单源、marketplace/smithery 安装链用例随通道退役
+//（smithery 存量卸载路由用例保留）。
 //
 // P2 Task 7 追加：resource:registerMcp 二态透传（remote 输入 transport/url 传给
 // registerMcpDefinition）。真实 DB 全链往返由 register-mcp-remote-contract.test.ts
 // 覆盖，本文件只锁 handler 的调用形状。
-//
-// P2.1 Task 3 追加：resource:install smithery 分支两态（needsConfig 判定——拉详情
-// 后 required 非空返回 schema 不注册；否则直装）+ 新通道 resource:installSmitheryRemote
-// （needsConfig 二段安装：反解 id → 重拉详情 → 带用户配置直装）。
 //
 // P2.2 Task 6 追加：resource:getMcpConfig / resource:updateMcpConfig /
 // resource:danglingMcpRefs 三通道（spec §4.1/§4.2/§4.3）。业务语义（三级降级 /
@@ -72,30 +71,30 @@ vi.mock('../../src/main/marketplace/installer', () => ({
   listInstalled: installerListInstalled,
 }));
 
-// P2 Task 4：hub provider 模块整体 mock（真实行为由 tests/resource/hub/* 覆盖）。
+// P2 Task 4：hub provider 注册表 mock（真实行为由 tests/resource/hub/* 覆盖）。
+// 2026-11-02 网络获取下线后 HUB_PROVIDERS 仅 momo-hub——mock 单 provider 锁
+// registryList 的透传委托面（smithery provider 已退役）。
 // vi.mock 工厂会被提升到文件顶部——共享 spy 须经 vi.hoisted 声明，避免 TDZ。
-const { smitheryList } = vi.hoisted(() => ({
-  smitheryList: vi.fn(),
+const { hubProviderList } = vi.hoisted(() => ({
+  hubProviderList: vi.fn(),
 }));
-vi.mock('../../src/main/resource/hub/smithery', () => ({
-  smitheryProvider: {
-    key: 'smithery', label: 'Smithery', region: 'intl', types: ['mcp'], list: smitheryList,
-  },
-  isSmitheryDegraded: vi.fn(() => false),
-  __resetHubBackoffForTest: vi.fn(),
+vi.mock('../../src/main/resource/hub', () => ({
+  HUB_PROVIDERS: [
+    {
+      key: 'hub', label: 'momo-hub', region: 'cn',
+      types: ['agent', 'mcp', 'skill', 'plugin'],
+      list: hubProviderList,
+    },
+  ],
 }));
 
 // P2 Task 5：hub 安装/卸载模块 mock（真实链路由 tests/resource/hub-install.test.ts
 // 以真实 DB + fetch 桩覆盖；本文件只测 IPC 路由分支）。
-// P2.1 Task 3：installSmitheryMcp（install-config 死码）退役，换成
-// fetchSmitheryDetail + installSmitheryRemote 两函数。
 // P2.1 Task 5：bundle-import（DXT/MCPB 本地包导入）——真实行为由
 // tests/mcp/bundle-import.test.ts 以真实 DB + AdmZip 全量覆盖；本文件仅测
 // IPC handler 的转调与 delete 分支路由。
 const { hubInstallMocks } = vi.hoisted(() => ({
   hubInstallMocks: {
-    fetchSmitheryDetail: vi.fn(),
-    installSmitheryRemote: vi.fn(),
     uninstallHubMcp: vi.fn(),
     listHubInstalledResources: vi.fn(() => []),
     // M1 Task 10：momo-hub 第五源安装/卸载（真实链路由 tests/resource/
@@ -124,39 +123,19 @@ const { mcpConfigMocks } = vi.hoisted(() => ({
 }));
 vi.mock('../../src/main/resource/mcp-config', () => mcpConfigMocks);
 
-// mock fetchCatalog（marketplace delete 分支需要）。catalog id 刻意不同于 ResourceItem.id，
-// 以回归保护"误传 ResourceItem.id 给 uninstallPackage"的静默 no-op bug。
+// mock fetchCatalog：library 模块被整体 mock 后主链不消费——但 resource/custom
+// 等真实传递模块可能间接触达，保持本地化直读语义的最小桩（零网络）。
 vi.mock('../../src/main/marketplace/client', () => ({
   fetchCatalog: vi.fn(async () => ({
     version: '1.0',
-    updatedAt: '2026-08-11',
-    items: [
-      {
-        id: 'catalog-id-remote',
-        type: 'skill',
-        slug: 'remote',
-        name: 'Remote',
-        version: '1',
-        author: '@x',
-        description: 'd',
-        readme: 'r',
-        tags: [],
-        category: 'c',
-        iconEmoji: '📦',
-        verificationStatus: 'community',
-        downloadUrl: 'http://x',
-        checksum: 'x',
-        sizeBytes: 0,
-        installCount: 0,
-      },
-    ],
+    updatedAt: '2026-11-02',
+    items: [],
   })),
 }));
 
 import { ipcMain } from 'electron';
 import { registerResourceHandlers } from '../../src/main/resource/ipc.handlers';
 import { listResources, resolveResourceById } from '../../src/main/resource/library';
-import { fetchCatalog } from '../../src/main/marketplace/client';
 import { deleteRegistered, registerMcpDefinition } from '../../src/main/mcp/host-manager';
 import { deleteCustomSkill, uploadSkillZip } from '../../src/main/skill/zip-uploader';
 import {
@@ -166,7 +145,6 @@ import {
   isBundleInstalled,
 } from '../../src/main/mcp/bundle-import';
 import { deleteDefinition, removeMcpRefsFromAgents } from '../../src/main/agent/crud';
-import { installPackage, uninstallPackage } from '../../src/main/marketplace/installer';
 import { setBuiltinAgentsDir } from '../../src/main/agent/builtin';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -190,13 +168,16 @@ describe('registerResourceHandlers', () => {
         'resource:delete',
         'resource:registerMcp',
         'resource:uploadSkill',
-        // P2.1 Task 3：smithery needsConfig 二段安装通道
-        'resource:installSmitheryRemote',
         // P2.1 Task 5：DXT/MCPB 本地包两阶段导入通道
         'resource:parseMcpBundle',
         'resource:importMcpBundle',
+        // 网络获取下线回归锁：安装/浏览通道面不再回潮
+        'resource:registryList',
       ]),
     );
+    // 死通道与 smithery 二段通道已删除（2026-11-02 网络获取下线）
+    expect(channels).not.toContain('resource:installSmitheryRemote');
+    expect(channels).not.toContain('resource:registryProviders');
   });
 
   it('resource:list 调 listResources(filter)', async () => {
@@ -269,25 +250,6 @@ describe('registerResourceHandlers', () => {
     const handler = deleteCall![1] as (evt: unknown, id: string) => Promise<void>;
     await handler({}, 'custom-agent-uuid1');
     expect(deleteDefinition).toHaveBeenCalledWith('uuid1');
-  });
-
-  it('resource:delete marketplace-* 路由到 uninstallPackage（传 catalog id，非 ResourceItem.id）', async () => {
-    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      id: 'marketplace-skill-remote',
-      type: 'skill',
-      source: 'marketplace',
-      slug: 'remote',
-      removable: true,
-      name: 'remote',
-    });
-    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
-    const deleteCall = calls.find((c: unknown[]) => c[0] === 'resource:delete');
-    const handler = deleteCall![1] as (evt: unknown, id: string) => Promise<void>;
-    await handler({}, 'marketplace-skill-remote');
-    // 必须传 catalog 的 MarketplaceItem.id（'catalog-id-remote'），不是 ResourceItem.id
-    // （'marketplace-skill-remote'）——后者会让 uninstallPackage 查无此行触发静默 no-op。
-    // type 同取 catalog 原值（T15a-F1 类型双键）。
-    expect(uninstallPackage).toHaveBeenCalledWith('catalog-id-remote', 'skill');
   });
 
   it('resource:registerMcp 转调 registerMcpDefinition（source=custom，id/version 主进程补全）', async () => {
@@ -417,94 +379,17 @@ describe('registerResourceHandlers', () => {
     expect(result).toBe(uploaded);
   });
 
-  it('注册 registryProviders / registryList 通道', () => {
+  it('注册 registryList 通道', () => {
     const channels = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls.map(
       (c: unknown[]) => c[0],
     );
     expect(channels).toEqual(
-      expect.arrayContaining(['resource:registryProviders', 'resource:registryList']),
+      expect.arrayContaining(['resource:registryList']),
     );
   });
 
-  it('resource:registryProviders 返回 builtin + hub（degraded 取各自封装）', async () => {
-    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
-    const metaCall = calls.find((c: unknown[]) => c[0] === 'resource:registryProviders');
-    const handler = metaCall![1] as () => Promise<unknown>;
-    const providers = (await handler()) as Array<{
-      key: string; label: string; region: string; types: string[]; degraded: boolean;
-    }>;
-    expect(providers.map((p) => p.key)).toEqual(['builtin', 'smithery', 'hub']);
-    expect(providers[0]).toMatchObject({ region: 'local', degraded: false });
-    expect(providers[0]!.types).toEqual(['agent', 'mcp', 'skill']);
-    expect(providers[1]).toMatchObject({ label: 'Smithery', region: 'intl', degraded: false });
-    // T12：plugin 自 M1d 接通——provider types 四类在册（安装链走 plugin 域注册入口）
-    expect(providers[2]).toMatchObject({ label: 'momo-hub', region: 'local', degraded: false });
-    expect(providers[2]!.types).toEqual(['agent', 'mcp', 'skill', 'plugin']);
-  });
-
-  it('resource:registryList builtin 分支：catalog 快照直连（断言迁移——library-store-split 起不经收窄后的 listResources）+ 过滤排序映射 + total', async () => {
-    const snapshot = {
-      version: '1.0',
-      updatedAt: '2026-10-29',
-      items: [
-        {
-          id: 'catalog-mcp-installed', type: 'mcp', slug: 'installed', name: '已装服务',
-          version: '1', author: 'a', description: 'd1', readme: 'r', tags: ['t'], category: 'c1',
-          iconEmoji: '', verificationStatus: 'community', downloadUrl: 'http://x/installed.zip', checksum: 'x', sizeBytes: 0, installCount: 0,
-        },
-        {
-          id: 'catalog-mcp-fs', type: 'mcp', slug: 'fs-tool', name: 'File System',
-          version: '2', author: 'a', description: '文件系统', readme: 'r', tags: [], category: 'c2',
-          iconEmoji: '', verificationStatus: 'community', downloadUrl: 'http://x/fs.zip', checksum: 'x', sizeBytes: 0, installCount: 0,
-        },
-        {
-          id: 'catalog-skill-other', type: 'skill', slug: 'other', name: 'Other',
-          version: '1', author: 'a', description: '无关类型', readme: 'r', tags: [], category: 'c3',
-          iconEmoji: '', verificationStatus: 'community', downloadUrl: 'http://x/other.zip', checksum: 'x', sizeBytes: 0, installCount: 0,
-        },
-      ],
-    };
-    (fetchCatalog as ReturnType<typeof vi.fn>).mockResolvedValueOnce(snapshot);
-    // 已装行：catalog-mcp-installed（fromCatalogItem 据此置 installed/installedVersion）
-    installerListInstalled.mockReturnValue([
-      { itemId: 'catalog-mcp-installed', itemType: 'mcp', version: '1', cachePath: '/cache/catalog-mcp-installed' },
-    ]);
-    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
-    const listCall = calls.find((c: unknown[]) => c[0] === 'resource:registryList');
-    const handler = listCall![1] as (
-      evt: unknown,
-      providerKey: string,
-      type: string,
-      query?: string,
-      page?: number,
-    ) => Promise<{
-      entries: Array<{ id: string; tags: string[]; category?: string }>;
-      degraded: boolean; hasMore: boolean; total?: number;
-    }>;
-    const result = await handler({}, 'builtin', 'mcp', 'file', 1);
-    expect(fetchCatalog).toHaveBeenCalled();
-    expect(listResources).not.toHaveBeenCalled();
-    expect(result.degraded).toBe(false);
-    // builtin 是本地全量目录，无服务端分页——page 参数被忽略且 hasMore 恒 false
-    expect(result.hasMore).toBe(false);
-    // total = 该类型目录快照总数（搜索前口径）
-    expect(result.total).toBe(2);
-    // 「file」只命中 File System（name 模糊）
-    expect(result.entries.map((e) => e.id)).toEqual(['marketplace-mcp-fs-tool']);
-    expect(result.entries[0]!.tags).toEqual([]);
-    expect(result.entries[0]!.category).toBe('c2');
-
-    // 无 query：全量返回且未安装在前、已装垫底（与 renderer catalog provider 同语义）
-    (fetchCatalog as ReturnType<typeof vi.fn>).mockResolvedValueOnce(snapshot);
-    const all = await handler({}, 'builtin', 'mcp');
-    expect(all.entries.map((e) => e.id)).toEqual([
-      'marketplace-mcp-fs-tool', 'marketplace-mcp-installed',
-    ]);
-    expect(all.hasMore).toBe(false);
-  });
-
-  it('resource:registryList hub 分支委托对应 provider.list（query / page / opts 透传 + hasMore 透出）', async () => {
-    smitheryList.mockResolvedValueOnce({ entries: [], degraded: false, hasMore: true });
+  it('resource:registryList hub 分支委托 provider.list（query / page / opts 透传 + hasMore 透出）', async () => {
+    hubProviderList.mockResolvedValueOnce({ entries: [], degraded: false, hasMore: true });
     const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
     const listCall = calls.find((c: unknown[]) => c[0] === 'resource:registryList');
     const handler = listCall![1] as (
@@ -515,12 +400,12 @@ describe('registerResourceHandlers', () => {
       page?: number,
       opts?: { fresh?: boolean },
     ) => Promise<unknown>;
-    const result = await handler({}, 'smithery', 'mcp', 'weather', 2, { fresh: true });
-    expect(smitheryList).toHaveBeenCalledWith('mcp', 'weather', 2, { fresh: true });
+    const result = await handler({}, 'hub', 'mcp', 'weather', 2, { fresh: true });
+    expect(hubProviderList).toHaveBeenCalledWith('mcp', 'weather', 2, { fresh: true });
     expect(result).toEqual({ entries: [], degraded: false, hasMore: true });
   });
 
-  it('resource:registryList 未知 provider 抛错', async () => {
+  it('resource:registryList 未知 provider 抛错（builtin/smithery 已随网络获取下线退役）', async () => {
     const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
     const listCall = calls.find((c: unknown[]) => c[0] === 'resource:registryList');
     const handler = listCall![1] as (
@@ -593,12 +478,12 @@ describe('registerResourceHandlers', () => {
     const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
     await expect(handler({}, 'marketplace-agent-installed')).rejects.toThrow(/不可安装/);
     expect(hubInstallMocks.installHubPackage).not.toHaveBeenCalled();
-    expect(installPackage).not.toHaveBeenCalled();
   });
 
   it('resource:install smithery 已装项（installable=false）→ 守卫仍拦（hub 放行不外溢到 smithery）', async () => {
     // listHubInstalledResources 恒置 installable=false——smithery 已装重装由
     // 守卫拦截的既有契约（ipc.handlers 注释明示），D6 hub 前置不得改变该面
+    //（存量 smithery 行仍经 library 映射出现——安装链退役后守卫即终防线）
     (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       id: 'smithery-mcp-weather',
       type: 'mcp',
@@ -612,7 +497,7 @@ describe('registerResourceHandlers', () => {
     const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
     const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
     await expect(handler({}, 'smithery-mcp-weather')).rejects.toThrow(/不可安装/);
-    expect(installPackage).not.toHaveBeenCalled();
+    expect(hubInstallMocks.installHubPackage).not.toHaveBeenCalled();
   });
 
   it('resource:install hub 分支：hub 离线（library 查不到）→ 仍按 id 反解进安装链（plugin 同链）', async () => {
@@ -633,28 +518,7 @@ describe('registerResourceHandlers', () => {
     });
   });
 
-  it('resource:install marketplace 未装条目（library 查不到）→ id 反解进安装链（library-store-split：获取弹窗安装主路径兜底）', async () => {
-    // 收窄后未装 marketplace 条目不在 library——resolve 返回 null，走 id 反解
-    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
-    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
-    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
-    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
-    await handler({}, 'marketplace-skill-remote');
-    // catalog 按 slug+type 反查原 MarketplaceItem 传入 installPackage（id 是 catalog id）
-    expect(installPackage).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'catalog-id-remote', type: 'skill', slug: 'remote' }),
-    );
-  });
-
-  it('resource:install marketplace 未装条目 catalog 反查不到 → 人话错误', async () => {
-    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
-    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
-    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
-    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
-    await expect(handler({}, 'marketplace-skill-nope')).rejects.toThrow(/未找到 slug=nope/);
-  });
-
-  it('resource:install 非 marketplace / 非 hub 源仍抛「不支持 install 操作」', async () => {
+  it('resource:install 非 hub 源仍抛「不支持 install 操作」（marketplace/smithery 安装链已退役）', async () => {
     (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       id: 'custom-agent-uuid1',
       type: 'agent',
@@ -685,153 +549,9 @@ describe('registerResourceHandlers', () => {
     expect(hubInstallMocks.uninstallHubPackage).toHaveBeenCalledWith('skill', 'hub-e2e-skill');
   });
 
-  it('resource:install hub 分支（P2.1 Task 3 两态）：未装 smithery 条目 → 拉详情直装 + needsConfig:false', async () => {
-    // 未安装的 registry 条目不在 library（library 只映射已装行）→ resolve 返回 null
-    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
-    const schema = { properties: { token: { type: 'string' } } };
-    hubInstallMocks.fetchSmitheryDetail.mockResolvedValueOnce({
-      connections: [{ type: 'http', deploymentUrl: 'https://brave.run.tools', configSchema: schema }],
-    });
-    hubInstallMocks.installSmitheryRemote.mockResolvedValueOnce(undefined);
-    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
-    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
-    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
-    const result = await handler({}, 'smithery-mcp-@owner/weather');
-    // slug 是完整 qualifiedName（含 @ 与 /），id 贪婪反解整体透传
-    expect(hubInstallMocks.fetchSmitheryDetail).toHaveBeenCalledWith('@owner/weather');
-    expect(hubInstallMocks.installSmitheryRemote).toHaveBeenCalledWith(
-      '@owner/weather', 'https://brave.run.tools', {}, schema,
-    );
-    expect(result).toEqual({ needsConfig: false });
-  });
-
-  it('resource:install smithery：configSchema.required 非空 → needsConfig:true 带 schema，不注册', async () => {
-    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
-    const schema = {
-      required: ['braveApiKey'],
-      properties: { braveApiKey: { type: 'string', title: 'Brave API Key', 'x-from': 'header' } },
-    };
-    hubInstallMocks.fetchSmitheryDetail.mockResolvedValueOnce({
-      connections: [{ type: 'http', deploymentUrl: 'https://brave.run.tools', configSchema: schema }],
-    });
-    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
-    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
-    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
-    const result = await handler({}, 'smithery-mcp-brave');
-    // 两态分支：需要用户补配置——绝不触发安装（Task 6 弹窗收集后走二段通道）
-    expect(hubInstallMocks.installSmitheryRemote).not.toHaveBeenCalled();
-    expect(result).toEqual({ needsConfig: true, schema });
-  });
-
-  it('resource:install smithery：deploymentUrl 缺失 → 抛「暂不可直连」且不安装', async () => {
-    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
-    hubInstallMocks.fetchSmitheryDetail.mockResolvedValueOnce({ connections: [{}] });
-    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
-    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
-    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
-    await expect(handler({}, 'smithery-mcp-oauth-only')).rejects.toThrow(
-      /该服务器暂不可直连（可能需要 Smithery 托管 OAuth）/,
-    );
-    expect(hubInstallMocks.installSmitheryRemote).not.toHaveBeenCalled();
-  });
-
-  // 终审 Minor-2：API 响应缺 connections 字段时 detail.connections[0] 抛英文 TypeError
-  // （pino/console.error 链路会把 TypeError 原文抛给 renderer，可读性 0）。
-  // 该测试为回归锁：任何重写 installSmitheryEntry / installSmitheryRemote 取连接的代码
-  // 若未做形状防御必失败。配合 ipc.handlers.ts 的 Array.isArray 守卫阅读。
-  it('resource:install smithery：响应缺 connections → 抛「暂不可直连」中文错误而非 TypeError', async () => {
-    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
-    // {}——无 connections 键，最小退化响应
-    hubInstallMocks.fetchSmitheryDetail.mockResolvedValueOnce({});
-    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
-    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
-    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
-    await expect(handler({}, 'smithery-mcp-empty')).rejects.toThrow(
-      /该服务器暂不可直连（可能需要 Smithery 托管 OAuth）/,
-    );
-    expect(hubInstallMocks.installSmitheryRemote).not.toHaveBeenCalled();
-  });
-
-  // 复审网眼补：installSmitheryRemote 通道（site #2）的镜像退化用例——
-  // 既有 { connections: [] } 用例对「无守卫也绿」（空数组索引不抛 TypeError），本例用 {}
-  // 才能锁死 ipc.handlers.ts 中 resource:installSmitheryRemote handler 的 Array.isArray 防御。
-  it('resource:installSmitheryRemote：响应缺 connections → 同样抛中文错误而非 TypeError', async () => {
-    hubInstallMocks.fetchSmitheryDetail.mockResolvedValueOnce({});
-    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
-    const remoteCall = calls.find(
-      (c: unknown[]) => c[0] === 'resource:installSmitheryRemote',
-    );
-    const handler = remoteCall![1] as (
-      evt: unknown,
-      id: string,
-      config: Record<string, string>,
-    ) => Promise<void>;
-    await expect(handler({}, 'smithery-mcp-empty2', {})).rejects.toThrow(
-      /该服务器暂不可直连（可能需要 Smithery 托管 OAuth）/,
-    );
-    expect(hubInstallMocks.installSmitheryRemote).not.toHaveBeenCalled();
-  });
-
-  it('resource:install smithery：deploymentUrl 非 https → 抛「暂不可直连」且不安装', async () => {
-    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
-    hubInstallMocks.fetchSmitheryDetail.mockResolvedValueOnce({
-      connections: [{ deploymentUrl: 'http://plain.run.tools' }],
-    });
-    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
-    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
-    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
-    await expect(handler({}, 'smithery-mcp-insecure')).rejects.toThrow(/暂不可直连/);
-    expect(hubInstallMocks.installSmitheryRemote).not.toHaveBeenCalled();
-  });
-
-  it('resource:installSmitheryRemote：反解 id → 重拉详情（schema 真源）→ 带用户配置直装', async () => {
-    const schema = {
-      required: ['braveApiKey'],
-      properties: { braveApiKey: { type: 'string', 'x-from': 'header' } },
-    };
-    hubInstallMocks.fetchSmitheryDetail.mockResolvedValueOnce({
-      connections: [{ deploymentUrl: 'https://brave.run.tools', configSchema: schema }],
-    });
-    hubInstallMocks.installSmitheryRemote.mockResolvedValueOnce(undefined);
-    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
-    const remoteCall = calls.find((c: unknown[]) => c[0] === 'resource:installSmitheryRemote');
-    const handler = remoteCall![1] as (
-      evt: unknown,
-      id: string,
-      config: Record<string, string>,
-    ) => Promise<void>;
-    await handler({}, 'smithery-mcp-@owner/weather', { braveApiKey: 'k9' });
-    // 重拉详情保持 schema 真源（不信任 renderer 回传），配置原样透传
-    expect(hubInstallMocks.fetchSmitheryDetail).toHaveBeenCalledWith('@owner/weather');
-    expect(hubInstallMocks.installSmitheryRemote).toHaveBeenCalledWith(
-      '@owner/weather', 'https://brave.run.tools', { braveApiKey: 'k9' }, schema,
-    );
-  });
-
-  it('resource:installSmitheryRemote：非 smithery MCP id 抛错', async () => {
-    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
-    const remoteCall = calls.find((c: unknown[]) => c[0] === 'resource:installSmitheryRemote');
-    const handler = remoteCall![1] as (
-      evt: unknown,
-      id: string,
-      config: Record<string, string>,
-    ) => Promise<void>;
-    await expect(handler({}, 'custom-mcp-github', {})).rejects.toThrow(/非 smithery/);
-    expect(hubInstallMocks.fetchSmitheryDetail).not.toHaveBeenCalled();
-  });
-
-  it('resource:installSmitheryRemote：详情缺 deploymentUrl → 抛「暂不可直连」', async () => {
-    hubInstallMocks.fetchSmitheryDetail.mockResolvedValueOnce({ connections: [] });
-    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
-    const remoteCall = calls.find((c: unknown[]) => c[0] === 'resource:installSmitheryRemote');
-    const handler = remoteCall![1] as (
-      evt: unknown,
-      id: string,
-      config: Record<string, string>,
-    ) => Promise<void>;
-    await expect(handler({}, 'smithery-mcp-gone', {})).rejects.toThrow(/暂不可直连/);
-    expect(hubInstallMocks.installSmitheryRemote).not.toHaveBeenCalled();
-  });
+  // ── smithery 安装/needsConfig 两态用例组（P2.1 Task 3，共 9 例）已随
+  //    2026-11-02 网络获取下线退役——installSmitheryEntry / installSmitheryRemote
+  //    通道与详情拉取链不复存在；下方保留存量行的本地卸载路由用例 ──
 
   it('resource:delete smithery 条目路由到 uninstallHubMcp（switch 前提前 return）', async () => {
     (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({

@@ -1,9 +1,8 @@
 // electron/tests/resource/builtin-marketplace.test.ts
 //
-// v1.7 Task 2：builtin + marketplace 两源的 list 函数测试。
-// 覆盖：
+// v1.7 Task 2：builtin 源 list 函数测试（marketplace 源已随 2026-11-02 网络获取
+// 下线退役——listMarketplaceResources 及其用例删除）。覆盖：
 //   - builtin 过滤 downloadUrl="" 项 + installed/installable/removable 标记 + id 命名 + marketplace 元数据保留
-//   - marketplace 过滤 downloadUrl 非空项 + installable/removable（未装态）+ id 命名
 //
 // DB 隔离：fromCatalogItem 内部调用 marketplace/installer.listInstalled() → getDb()，
 // 因此每个用例 runMigrations() 建 installed_packages 表（空表），closeDb() 收尾。
@@ -14,7 +13,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { runMigrations, closeDb } from '../../src/main/storage/db';
 import { listBuiltinResources } from '../../src/main/resource/builtin';
-import { listMarketplaceResources } from '../../src/main/resource/marketplace';
 import type { Catalog } from '../../src/main/marketplace/types';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-resource-task2-test-${Date.now()}`);
@@ -108,24 +106,6 @@ describe('listBuiltinResources', () => {
   });
 });
 
-describe('listMarketplaceResources', () => {
-  it('只返回 downloadUrl 非空的 catalog 项', () => {
-    const items = listMarketplaceResources(mockCatalog);
-    expect(items).toHaveLength(1);
-    expect(items[0]!.slug).toBe('remote-skill');
-    expect(items[0]!.source).toBe('marketplace');
-  });
-
-  it('marketplace 项 installable=true / removable=false（未装时可 install）', () => {
-    const items = listMarketplaceResources(mockCatalog);
-    expect(items[0]).toMatchObject({
-      installable: true,
-      removable: false,
-    });
-  });
-
-  it('marketplace 项 id 形如 marketplace-${type}-${slug}', () => {
-    const items = listMarketplaceResources(mockCatalog);
-    expect(items[0]!.id).toBe('marketplace-skill-remote-skill');
-  });
-});
+// listMarketplaceResources 用例已随 2026-11-02 marketplace 源退役删除
+//（catalog 的 remote-skill 条目保留在 fixture 中——锁 builtin 过滤器对
+// downloadUrl 非空项的排除语义）。

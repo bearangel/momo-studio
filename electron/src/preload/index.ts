@@ -27,14 +27,12 @@ import type {
   OnboardingStatus,
   RegisterMcpInput,
   RegistryListEntry,
-  RegistryProviderMeta,
   ResourceFilter,
   ResourceItem,
   ResourceType,
   ScannedSkill,
   SessionGroupRow,
   SkillCreateInput,
-  SmitheryInstallResult,
   HubInstallResult,
   HubCatalogOwnership,
   HubCoexistIssue,
@@ -450,14 +448,10 @@ const api: ApiSurface = {
     list: (filter?: ResourceFilter) => invoke<ResourceItem[]>('resource:list', filter),
     // v1.7：按 id 查单个资源详情（找不到返回 null）
     getDetail: (id: string) => invoke<ResourceItem | null>('resource:getDetail', id),
-    // v1.7：安装资源（builtin/custom 不可安装）。P2.1 Task 3：smithery 条目返回
-    // needsConfig 两态（Task 6 弹窗消费）。M2.3 T2：hub 条目返回 HubInstallResult
-    // （alreadyLatest=true 如实回执「已是最新」），其余源返回空
-    install: (id: string) => invoke<SmitheryInstallResult | HubInstallResult | void>('resource:install', id),
-    // P2.1 Task 3：smithery needsConfig 二段安装（弹窗收集配置后提交）
-    installSmitheryRemote: (id: string, config: Record<string, string>) =>
-      invoke<void>('resource:installSmitheryRemote', id, config),
-    // v1.7：删除/卸载资源（builtin 抛错；marketplace→uninstall；custom 三分支）
+    // v1.7：安装资源（builtin/custom 不可安装）。M2.3 T2：hub 条目返回
+    // HubInstallResult（alreadyLatest=true 如实回执「已是最新」），其余源返回空
+    install: (id: string) => invoke<HubInstallResult | void>('resource:install', id),
+    // v1.7：删除/卸载资源（builtin 抛错；custom 三分支；hub/smithery 存量行本地卸载）
     delete: (id: string) => invoke<void>('resource:delete', id),
     // P3 Task 7：注册自定义 MCP（收敛自 api.mcp.register），返回新资源的 ResourceItem
     registerMcp: (config: RegisterMcpInput) =>
@@ -490,11 +484,10 @@ const api: ApiSurface = {
         filename,
         userConfig,
       ),
-    // P2 Task 4：网络注册表（hub provider 框架）——renderer 经此消费，不直连 hub。
-    // P2.1 Task 4：query（服务端搜索）与 page（1 起始）透传，返回加 hasMore
-    registryProviders: () => invoke<RegistryProviderMeta[]>('resource:registryProviders'),
+    // P2 Task 4：网络注册表（momo-hub 单源）——renderer 经此消费，不直连 hub。
+    // query（服务端搜索）与 page（1 起始）透传，返回加 hasMore
     registryList: (
-      providerKey: RegistryProviderMeta['key'],
+      providerKey: 'hub',
       type: RegistryListEntry['type'],
       query?: string,
       page?: number,

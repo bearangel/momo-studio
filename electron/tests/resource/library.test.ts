@@ -1,12 +1,14 @@
 // electron/tests/resource/library.test.ts
 //
 // v1.7 Task 4：listResources / resolveResourceById 主入口测试。
+// 2026-11-02 网络获取下线：marketplace 映射已删（存量孤儿行隐身）——合并面
+// = builtin（catalog 内置 + 本地预置 skill）+ custom + smithery 存量 + hub。
 // 覆盖：
-//   - 合并三源（builtin + marketplace + custom）
+//   - 合并面（builtin + custom）
 //   - filter.type 按类型过滤
 //   - filter.source 按来源过滤
-//   - filter.source='custom' 短路 fetchCatalog（不发起远程请求）
-//   - fetchCatalog 失败时 builtin+marketplace 返回空，但 custom 仍工作
+//   - filter.source='custom' 短路 fetchCatalog（不读 catalog）
+//   - fetchCatalog 失败时 builtin 返回空，但 custom 仍工作
 //   - resolveResourceById 合法 id 反查
 //   - resolveResourceById 非法 id 返回 null
 // 隔离：vi.mock 替换 fetchCatalog / listCustomResources / installer.listInstalled /
@@ -16,14 +18,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { listResources, resolveResourceById } from '../../src/main/resource/library';
 import type { ResourceItem } from '../../src/main/resource/types';
 const mockCatalog = {
-  version: '1.0', updatedAt: '2026-08-11',
+  version: '1.0', updatedAt: '2026-11-02',
   items: [
     { id: 'builtin-1', type: 'agent', slug: 'pm', name: 'PM', version: '1',
       author: 'Momo', description: 'd', readme: 'r', tags: [], category: 'c',
       iconEmoji: '👔', verificationStatus: 'official', downloadUrl: '', checksum: '', sizeBytes: 0, installCount: 0 },
-    { id: 'marketplace-1', type: 'skill', slug: 'remote', name: 'Remote', version: '1',
-      author: '@x', description: 'd', readme: 'r', tags: [], category: 'c',
-      iconEmoji: '📦', verificationStatus: 'community', downloadUrl: 'http://x', checksum: 'x', sizeBytes: 0, installCount: 0 },
+    // catalog 内置 skill（downloadUrl 空）——与本地预置扫描同 slug，锁「catalog 优先去重」
+    { id: 'builtin-skill-remote', type: 'skill', slug: 'remote', name: 'Remote', version: '1',
+      author: 'Momo', description: 'd', readme: 'r', tags: [], category: 'c',
+      iconEmoji: '📦', verificationStatus: 'official', downloadUrl: '', checksum: '', sizeBytes: 0, installCount: 0 },
   ],
 };
 
@@ -93,20 +96,15 @@ beforeEach(() => {
 });
 
 describe('listResources', () => {
-  it('合并三源：builtin + marketplace + custom（断言迁移——library-store-split：未装 marketplace 条目收窄后不入列）', async () => {
+  it('合并面：catalog builtin + 本地预置 builtin + custom（marketplace 源已退役）', async () => {
     const items = await listResources();
-    // 3 项 = 1 catalog builtin(agent) + 1 本地预置 builtin(skill) + 1 custom(mcp)
-    // ——marketplace(skill remote) 未装（listInstalled 空），收窄语义下剔除
-    expect(items).toHaveLength(3);
-    expect(items.map((i) => i.source).sort()).toEqual(['builtin', 'builtin', 'custom']);
+    // 4 项 = 1 catalog builtin(agent pm) + 1 catalog builtin skill(remote) + 1 本地预置
+    // builtin(code-review) + 1 custom(mcp)——'remote' 本地预置被 catalog 内置项去重
+    expect(items).toHaveLength(4);
+    expect(items.map((i) => i.source).sort()).toEqual(['builtin', 'builtin', 'builtin', 'custom']);
   });
 
-  it('本地预置 skill 并入 builtin 源（catalog 优先去重，custom 源条目忽略）', async () => {
-    // marketplace 'remote' 记一笔已装（itemId=catalog id）——去重语义（catalog 优先）
-    // 与收窄语义（已装 marketplace 保留）同时被本用例锁住
-    installerMocks.listInstalled.mockReturnValue([
-      { itemId: 'marketplace-1', itemType: 'skill', version: '1', cachePath: '/cache/marketplace-1' },
-    ]);
+  it('本地预置 skill 并入 builtin 源（catalog 内置同 slug 优先去重，custom 源条目忽略）', async () => {
     const skills = await listResources({ type: 'skill' });
     // code-review（本地预置）出现在 builtin 源，四态正确
     const local = skills.find((i) => i.slug === 'code-review');
@@ -120,21 +118,16 @@ describe('listResources', () => {
       removable: false,
       name: '代码审查',
     });
-    // slug='remote' 与 marketplace 同名——catalog 优先，本地条目丢弃，不重复；
-    // 已装 marketplace 行保留（installedVersion = 记账版本）
+    // slug='remote' 与 catalog 内置 skill 同名——catalog 优先，本地条目丢弃，不重复
     const remotes = skills.filter((i) => i.slug === 'remote');
     expect(remotes).toHaveLength(1);
-    expect(remotes[0]!.source).toBe('marketplace');
-    expect(remotes[0]!.installed).toBe(true);
-    expect(remotes[0]!.installedVersion).toBe('1');
+    expect(remotes[0]!.source).toBe('builtin');
+    expect(remotes[0]!.name).toBe('Remote');
     // listInstalled 的 custom 源条目不属于 builtin 合并面（custom 走 custom.ts，本测试其 mock 无 skill）
     expect(skills.some((i) => i.slug === 'my-upload')).toBe(false);
   });
 
   it('library-store-split 收窄：已装远端出处条目恒在，未装远端条目一律剔除', async () => {
-    installerMocks.listInstalled.mockReturnValue([
-      { itemId: 'marketplace-1', itemType: 'skill', version: '1', cachePath: '/cache/marketplace-1' },
-    ]);
     hubInstallMocks.listHubCatalogResources.mockResolvedValue([
       { id: 'hub-agent-installed', type: 'agent', source: 'hub', slug: 'h1', name: '已装 hub', description: 'd', installed: true, installable: false, removable: true, version: '1.0.0' },
       { id: 'hub-agent-catalog-only', type: 'agent', source: 'hub', slug: 'h2', name: '未装 hub 目录项', description: 'd', installed: false, installable: true, removable: false, version: '1.0.0' },
@@ -150,8 +143,7 @@ describe('listResources', () => {
     // 已装远端出处条目保留
     expect(items.some((i) => i.id === 'hub-agent-installed')).toBe(true);
     expect(items.some((i) => i.id === 'smithery-mcp-weather')).toBe(true);
-    expect(items.some((i) => i.id === 'marketplace-skill-remote')).toBe(true);
-    // 未装远端条目剔除（hub 目录项 / marketplace catalog 项均不出现）
+    // 未装远端条目剔除（hub 目录项不出现）
     expect(items.some((i) => i.id === 'hub-agent-catalog-only')).toBe(false);
     expect(items.every((i) => i.installed)).toBe(true);
   });

@@ -37,7 +37,6 @@ import {
   listHubCatalogResources,
 } from '../../src/main/resource/hub-install';
 import { uninstallPackage } from '../../src/main/marketplace/installer';
-import { listMarketplaceResources } from '../../src/main/resource/marketplace';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-publish-acc-${Date.now()}`);
 
@@ -346,44 +345,14 @@ describe('recordPublishAccounting（四类发布回填 hub 记账）', () => {
       recordPublishAccounting('skill', 'superpowers', '2.0.0', 'hub-sum');
 
       // hub 页签单卡（catalog 在场路径）：目录卡唯一（兜底行因 M5.2 记账≠已装不再产出）；
-      // 发布记账不置已装——卡按未装呈现（installable），不属于安装态
+      // 发布记账不置已装——卡按未装呈现（installable），不属于安装态。
+      //（原「marketplace 页签独立卡」断言已随 2026-11-02 marketplace 映射删除退役）
       const hubView = await listHubCatalogResources('skill');
       const cards = hubView.filter((r) => r.slug === 'superpowers');
       expect(cards).toHaveLength(1);
       expect(cards[0]?.source).toBe('hub');
       expect(cards[0]?.installed).toBe(false);
       expect(cards[0]?.installedVersion).toBeUndefined();
-
-      // 本地页签独立卡不受牵连：marketplace 页签按自身目录出卡（source=marketplace），
-      // hub 侧去重/记账不泄漏进本地视图
-      const mktView = listMarketplaceResources({
-        version: '1.0.0',
-        updatedAt: '',
-        items: [
-          {
-            id: 'skill-superpowers',
-            type: 'skill',
-            slug: 'superpowers',
-            name: 'superpowers',
-            version: '1.0.0',
-            author: 'mkt',
-            description: '',
-            readme: '',
-            tags: [],
-            category: '',
-            iconEmoji: '',
-            verificationStatus: 'unverified',
-            downloadUrl: 'https://example.com/x.tar.gz',
-            checksum: '',
-            sizeBytes: 1,
-            installCount: 0,
-          },
-        ],
-      });
-      expect(mktView).toHaveLength(1);
-      expect(mktView[0]?.source).toBe('marketplace');
-      expect(mktView[0]?.slug).toBe('superpowers');
-      expect(mktView[0]?.installed).toBe(true); // marketplace 已装行命中（item_id 同键）
     } finally {
       __setHubContextResolverForTest(null);
       server.closeAllConnections();

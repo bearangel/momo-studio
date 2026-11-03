@@ -336,11 +336,11 @@ test.describe.serial('资源库「库/商店」分离（library-store-split）',
     expect(win, '场景1 已建实例复用').not.toBeNull();
     const page = win!;
 
-    // 「＋」菜单远端组：hub 置顶 → 网络市场（Smithery 仅 MCP，skill 页不出现）
+    // 「＋」菜单远端组：网络获取下线后仅 momo-hub 一项（marketplace/smithery 不回潮）
     await page.getByRole('button', { name: '添加技能' }).click();
     const menu = page.locator('[role="menu"]');
     await expect(menu.getByText('从 momo-hub 获取…')).toBeVisible();
-    await expect(menu.getByText('从网络市场获取…')).toBeVisible();
+    await expect(menu.getByText('从网络市场获取…')).toHaveCount(0);
     await expect(menu.getByText('从 Smithery 获取…')).toHaveCount(0);
 
     await menu.getByText('从 momo-hub 获取…').click();

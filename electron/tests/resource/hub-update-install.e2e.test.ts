@@ -48,7 +48,6 @@ import { listHubCatalogResources } from '../../src/main/resource/hub-install';
 import {
   __resetTrustedDownloadOriginsForTest,
 } from '../../src/main/marketplace/installer';
-import { __resetCatalogCacheForTest } from '../../src/main/marketplace/client';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-hub-update-e2e-${Date.now()}`);
 
@@ -201,7 +200,6 @@ beforeEach(async () => {
   hubAuths = [];
   fixtures.clear();
   __resetTrustedDownloadOriginsForTest();
-  __resetCatalogCacheForTest();
   blockMarketplaceNetwork();
 
   const v1 = agentPackage(SLUG, '1.0.0');

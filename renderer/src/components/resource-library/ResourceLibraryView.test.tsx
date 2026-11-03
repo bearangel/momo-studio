@@ -122,7 +122,7 @@ describe('ResourceLibraryView（三页壳）', () => {
     expect(screen.getByRole('button', { name: '添加服务器' })).toBeTruthy();
   });
 
-  it('MCP 页下拉：三条本地路径 + 远端组三项（hub 置顶 → 网络市场 → Smithery）；无「从网络获取」（断言迁移——library-store-split §2.2）', () => {
+  it('MCP 页下拉：三条本地路径 + 远端组仅 hub（网络获取下线回归锁——marketplace/smithery 项不回潮）；无「从网络获取」', () => {
     render(<ResourceLibraryView />);
     fireEvent.click(screen.getByRole('button', { name: /MCP/ }));
     fireEvent.click(screen.getByRole('button', { name: '添加服务器' }));
@@ -130,8 +130,8 @@ describe('ResourceLibraryView（三页壳）', () => {
     expect(screen.getByText('导入 JSON…')).toBeTruthy();
     expect(screen.getByText('导入 DXT / MCPB 包')).toBeTruthy();
     expect(screen.getByText('从 momo-hub 获取…')).toBeTruthy();
-    expect(screen.getByText('从网络市场获取…')).toBeTruthy();
-    expect(screen.getByText('从 Smithery 获取…')).toBeTruthy();
+    expect(screen.queryByText('从网络市场获取…')).toBeNull();
+    expect(screen.queryByText('从 Smithery 获取…')).toBeNull();
     expect(screen.queryByText('从网络获取…')).toBeNull();
   });
 
@@ -224,14 +224,14 @@ describe('DXT/MCPB 导入入口', () => {
 // 收敛为：列表卡「启用」按钮（ResourceCard 按 builtin.agentEnabled 渲染）→
 // openPresetDialog（builtin-<slug> def 反查）→ EnablePresetDialog。
 describe('预置启用链路（菜单入口已删）', () => {
-  it('Agent 页「＋」菜单无「启用预置库」；本地两项 + 远端组（hub / 网络市场）', () => {
+  it('Agent 页「＋」菜单无「启用预置库」；本地两项 + 远端组仅 hub', () => {
     render(<ResourceLibraryView />);
     fireEvent.click(screen.getByRole('button', { name: '新建 / 导入' }));
     expect(screen.queryByText('启用预置库')).toBeNull();
     expect(screen.getByText('新建智能体…')).toBeTruthy();
     expect(screen.getByText('导入 YAML 文件…')).toBeTruthy();
     expect(screen.getByText('从 momo-hub 获取…')).toBeTruthy();
-    expect(screen.getByText('从网络市场获取…')).toBeTruthy();
+    expect(screen.queryByText('从网络市场获取…')).toBeNull();
     expect(screen.queryByText('从 Smithery 获取…')).toBeNull();
   });
 

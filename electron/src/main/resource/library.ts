@@ -1,23 +1,23 @@
 // electron/src/main/resource/library.ts
 //
-// listResources：统一五源（builtin/custom/marketplace/smithery/hub）资源列表的主入口。
-// 内部一次 fetchCatalog（远程优先 + 本地回退），按 downloadUrl 分流到 builtin/marketplace，
-// 再合并 custom（DB/fs 同步读）、smithery（已装 MCP）与 hub（momo-hub 目录项，
-// installed_packages 的 `hub:` 前缀记账且 cache_path 非空〔真实安装〕判定已装——
-// 发布记账行不算，M5.2）。
-// fetchCatalog 失败时只丢 builtin+marketplace，custom/hub 仍正常返回。
+// listResources：统一多源（builtin/custom/smithery 存量/hub/plugin）资源列表的
+// 主入口。catalog 本地直读（2026-11-02 marketplace 远程通道下线——fetchCatalog
+// 已收敛为纯本地，builtin 按 downloadUrl=="" 分流），custom 走 DB/fs 同步读、
+// smithery 只映射已装 MCP（存量兼容——浏览/安装已随注册表通道退役）、hub 走
+// momo-hub 目录（installed_packages 的 `hub:` 前缀记账且 cache_path 非空〔真实
+// 安装〕判定已装——发布记账行不算，M5.2）。marketplace 映射已删除：存量已装
+// 条目随 catalog 条目消失而隐身（未发板裁定，不做兜底行）。
 //
-// filter 支持按 type/source 过滤。filter.source 指定时短路不必要源（避免 fetchCatalog）。
+// filter 支持按 type/source 过滤。filter.source 指定时短路不必要源。
 //
 // library-store-split（spec 2026-10-29 §2.4）：默认语义收窄为**本地实体**——
-// 只返回 installed=true 的行（builtin/custom/plugin 行恒 true；marketplace/
-// smithery/hub 只保留已装出处条目）。库页一条卡 = 一个本地实体，远端目录
-// 浏览职能迁 resource:registryList（弹窗通道），未装远端条目不再混入本列表。
+// 只返回 installed=true 的行（builtin/custom/plugin 行恒 true；smithery/hub
+// 只保留已装出处条目）。库页一条卡 = 一个本地实体，远端目录浏览职能迁
+// resource:registryList（momo-hub 弹窗通道），未装远端条目不混入本列表。
 
 import { fetchCatalog } from '../marketplace/client';
 import { listInstalled as listInstalledSkills } from '../skill/zip-uploader';
 import { listBuiltinResources } from './builtin';
-import { listMarketplaceResources } from './marketplace';
 import { listCustomResources } from './custom';
 import { listHubCatalogResources, listHubInstalledResources } from './hub-install';
 import { listPluginResourceRows } from '../plugin/resources';
@@ -31,7 +31,7 @@ import {
 import { logger } from '../logger';
 
 export async function listResources(filter?: ResourceFilter): Promise<ResourceItem[]> {
-  const needCatalog = !filter?.source || filter.source === 'builtin' || filter.source === 'marketplace';
+  const needCatalog = !filter?.source || filter.source === 'builtin';
   const needCustom = !filter?.source || filter.source === 'custom';
   const needSmithery = !filter?.source || filter.source === 'smithery';
   // momo-hub 第五源：目录项经 provider 拉取（未接入/离线降级时为空目录，不抛错）
@@ -41,17 +41,15 @@ export async function listResources(filter?: ResourceFilter): Promise<ResourceIt
   const tasks: Promise<unknown>[] = [];
 
   let builtinItems: ResourceItem[] = [];
-  let marketplaceItems: ResourceItem[] = [];
 
   if (needCatalog) {
     tasks.push(
       fetchCatalog()
         .then((catalog) => {
           builtinItems = listBuiltinResources(catalog);
-          marketplaceItems = listMarketplaceResources(catalog);
         })
         .catch((err) => {
-          logger.warn('listResources: fetchCatalog 失败，builtin/marketplace 返回空', { error: (err as Error).message });
+          logger.warn('listResources: 本地 catalog 读取失败，builtin 返回空', { error: (err as Error).message });
         }),
     );
   }
@@ -89,7 +87,7 @@ export async function listResources(filter?: ResourceFilter): Promise<ResourceIt
   if (needCatalog && (!filter?.type || filter.type === 'skill')) {
     try {
       const catalogSkillSlugs = new Set(
-        [...builtinItems, ...marketplaceItems]
+        builtinItems
           .filter((i) => i.type === 'skill')
           .map((i) => i.slug),
       );
@@ -137,7 +135,6 @@ export async function listResources(filter?: ResourceFilter): Promise<ResourceIt
 
   let items = [
     ...builtinItems,
-    ...marketplaceItems,
     ...customItems,
     ...smitheryItems,
     ...hubItems,
@@ -154,8 +151,8 @@ export async function listResources(filter?: ResourceFilter): Promise<ResourceIt
   }
 
   // library-store-split：收窄为本地实体——只保留已装行。builtin / custom /
-  // plugin 行恒 installed=true（天然通过）；marketplace / smithery / hub 的
-  // 未装目录条目在此剔除，远端浏览走 resource:registryList 弹窗通道。
+  // plugin 行恒 installed=true（天然通过）；smithery / hub 的未装目录条目在
+  // 此剔除，远端浏览走 resource:registryList 弹窗通道。
   items = items.filter((i) => i.installed);
 
   // M5.1 插件优先归并（spec 2026-10-30 §1.1，installed 收窄同层）：插件行在场

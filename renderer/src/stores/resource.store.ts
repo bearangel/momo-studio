@@ -18,8 +18,7 @@
 //   - installResource：包 try/catch——安装失败必须落到 error 字段，
 //     避免 unhandled rejection；成功后 set installNotice 给 View 渲染一次性成功横幅；
 //     返回 true/false 表示成功/失败（false 时错误已在 error 字段）。
-//     P2.1 Task 3：smithery needsConfig:true 时原样透传 SmitheryInstallResult
-//     （未安装——不刷列表不设横幅；对象对旧布尔消费方恒真，语义兼容）
+//     安装源仅 momo-hub（2026-11-02 网络获取下线——marketplace/smithery 链已退役）
 //
 // 注意：搜索（query）刻意不进 IPC filter——v1.7 后端 filter 只支持 type/source 两个维度，
 // 关键词搜索在前端 in-memory 完成（name/description/slug 模糊匹配，见 View 层）。
@@ -38,7 +37,6 @@ import type {
   ResourceItem,
   ResourceFilter,
   ResourceType,
-  SmitheryInstallResult,
 } from '../ipc/types';
 
 /**
@@ -55,13 +53,8 @@ interface ResourceStore {
   /** 安装成功提示横幅（null = 无；下一次 filter/type 切换清掉，load 不清） */
   installNotice: InstallNotice | null;
   /**
-   * D9：市场目录降级标志（agent 预置目录的远程 catalog 部分不可达时 true）。
-   * 查询失败按 false——宁可漏报不误报降级。
-   */
-  catalogDegraded: boolean;
-  /**
    * M1 Task 14：momo-hub 目录降级标志（getCatalogStatus sources[].hub）——
-   * hub 页签「hub 暂不可达」黄条数据源。失败按 false（同 D9 宁漏报不误报）。
+   * hub 页签「hub 暂不可达」黄条数据源。失败按 false（宁可漏报不误报降级）。
    */
   hubDegraded: boolean;
   /**
@@ -125,7 +118,7 @@ interface ResourceStore {
   setActiveType: (t: ResourceType) => void;
   /** 删除/卸载某资源后刷新 */
   deleteResource: (id: string) => Promise<void>;
-  /** D9：拉取市场目录健康状态（degraded 写 catalogDegraded；失败静默回 false） */
+  /** D9：拉取目录健康状态（hub 源写 hubDegraded；失败静默回 false） */
   loadCatalogStatus: () => Promise<void>;
   /**
    * M1 Task 14：订阅 hub:resourcePublished（含本机与其他节点的发布），按
@@ -170,11 +163,10 @@ interface ResourceStore {
    */
   setPluginEnabled: (id: string, workspaceId: string, enabled: boolean) => Promise<void>;
   /**
-   * 安装某资源后刷新；返回成功布尔（false 时错误在 error 字段）——marketplace
-   * agent 安装引导据此触发。P2.1 Task 3：smithery needsConfig:true 时原样透传
-   * SmitheryInstallResult（对象对旧布尔消费方恒真，语义兼容）；横幅精修归 Task 6。
+   * 安装某资源后刷新；返回成功布尔（false 时错误在 error 字段）——hub agent
+   * 安装引导据此触发。横幅精修归 Task 6。
    */
-  installResource: (id: string) => Promise<boolean | SmitheryInstallResult>;
+  installResource: (id: string) => Promise<boolean>;
 }
 
 /** load 序号（过期响应丢弃——见 load 内注释） */
@@ -185,7 +177,6 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   loading: false,
   error: null,
   installNotice: null,
-  catalogDegraded: false,
   hubDegraded: false,
   hubStatusKnown: false,
   hubNotEnrolled: false,
@@ -280,8 +271,7 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
     try {
       const r = await ipc.resource.getCatalogStatus();
       set({
-        catalogDegraded: r.degraded,
-        hubDegraded: r.sources?.find((s) => s.source === 'hub')?.degraded ?? false,
+        hubDegraded: r.sources?.find((s) => s.source === 'hub')?.degraded ?? r.degraded ?? false,
         hubNotEnrolled: r.hubNotEnrolled ?? false,
         hubStatusKnown: true,
       });
@@ -289,7 +279,6 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
       // 通道未就绪（主进程并行接线）或查询失败——不误报降级（提示条语义不变），
       // 但标记状态未知：播种据此拒绝建基线。
       set({
-        catalogDegraded: false,
         hubDegraded: false,
         hubNotEnrolled: false,
         hubStatusKnown: false,
@@ -450,13 +439,6 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
     const before = get().items.find((i) => i.id === id);
     try {
       const result = await ipc.resource.install(id);
-      // P2.1 Task 3：smithery needsConfig 两态——需要用户补配置时未安装，
-      // 不刷列表、不设成功横幅，结果原样透传给调用方（Task 6 弹窗消费）。
-      // M2.3 T2：install 返回联合含 HubInstallResult（hub alreadyLatest 回执），
-      // 'needsConfig' in 窄化取 smithery 分支；hub 分支落下方横幅逻辑。
-      if (result && typeof result === 'object' && 'needsConfig' in result && result.needsConfig) {
-        return result;
-      }
       await get().load();
       const after = get().items.find((i) => i.id === id);
       if (after?.source === 'hub') {

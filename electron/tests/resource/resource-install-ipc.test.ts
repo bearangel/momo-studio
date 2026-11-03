@@ -140,8 +140,9 @@ describe('resource:install — 失败文案人话化（M2.4 D1）', () => {
 
 // M2.5 终审 FIX-1：getCatalogStatus 必须如实透出「hub 未接入」——renderer 播种
 // 门控据此区分「目录为空」与「未接入」，杜绝兜底记账行被当成目录证据。
+// 2026-11-02 网络获取下线：sources 仅剩 hub 源（marketplace 已本地化无降级语义）。
 describe('resource:getCatalogStatus — hubNotEnrolled（M2.5 终审 FIX-1）', () => {
-  it('未接入 → hubNotEnrolled=true；接入 → false；两者 hub 源均不报降级', async () => {
+  it('未接入 → hubNotEnrolled=true；接入 → false；hub 源不报降级', async () => {
     const handler = getHandler('resource:getCatalogStatus');
 
     hubCatalogMocks.notEnrolled = true;
@@ -150,7 +151,6 @@ describe('resource:getCatalogStatus — hubNotEnrolled（M2.5 终审 FIX-1）', 
       degraded: false,
       hubNotEnrolled: true,
       sources: [
-        { source: 'marketplace', degraded: false },
         { source: 'hub', degraded: false },
       ],
     });
@@ -160,7 +160,6 @@ describe('resource:getCatalogStatus — hubNotEnrolled（M2.5 终审 FIX-1）', 
       degraded: false,
       hubNotEnrolled: false,
       sources: [
-        { source: 'marketplace', degraded: false },
         { source: 'hub', degraded: false },
       ],
     });

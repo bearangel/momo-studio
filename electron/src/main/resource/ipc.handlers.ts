@@ -1,9 +1,9 @@
 // electron/src/main/resource/ipc.handlers.ts
 //
-// 资源库 IPC handler 注册。22 个 resource 通道 + 1 个 misc 通道：
+// 资源库 IPC handler 注册。20 个 resource 通道 + 1 个 misc 通道：
 //   - resource:list         统一列表（filter 可选）
 //   - resource:getDetail    按 id 查详情
-//   - resource:install      marketplace 资源安装（封装现有 installPackage）
+//   - resource:install      hub 资源安装（未装条目经 id 反解直装，不经 library）
 //   - resource:delete       统一删除/卸载（按 source+type 路由到底层删除函数）
 //   - resource:registerMcp  注册自定义 MCP（P3 收敛自 mcp:register，返回 ResourceItem）
 //   - resource:uploadSkill  上传自定义 skill zip（P3 收敛自 skill:uploadZip）
@@ -12,9 +12,8 @@
 //     skill 导入两通道（P2.6 spec 2026-09-24 §4——scan 下载+解析落 tmp 返回
 //     importId+清单；import 一次性消费返回 imported/failures 逐条结果）
 import { emitPluginEvent } from '../plugin/event-sources';
-//   - resource:registryProviders / resource:registryList  网络注册表（P2 双轨 hub，
-//     spec 2026-09-22 §4.1——renderer 经此二通道消费 hub，不直连外网）
-//   - resource:installSmitheryRemote  smithery needsConfig 二段安装（P2.1 Task 3）
+//   - resource:registryList  网络注册表浏览（momo-hub 单源，spec 2026-09-22 §4.1
+//     ——renderer 经此通道消费 hub，不直连外网）
 //   - resource:parseMcpBundle / resource:importMcpBundle  DXT/MCPB 本地包两阶段
 //     导入（P2.1 Task 5——parse 预览不落盘，import 重解包替换注册）
 //   - resource:getMcpConfig / resource:updateMcpConfig / resource:danglingMcpRefs
@@ -27,18 +26,20 @@ import { emitPluginEvent } from '../plugin/event-sources';
 //   - misc:openExternal     外链转系统浏览器（P2.3 spec §6——misc 命名空间首个
 //     通道，无独立 misc 注册点，归属此文件，后续 misc:* 在此追加）
 //
+// 2026-11-02 资源网络获取下线：marketplace 远程 catalog 与 smithery 注册表
+// 浏览/安装通道整体退役，远端获取只保留 momo-hub（resource:install 与
+// registryList 均收敛为 hub 单源；原 installSmitheryRemote / registryProviders
+// 通道删除）。smithery 已装存量行走本地映射仍可卸载（delete smithery 分支）；
+// Git 仓库导入是用户显式 URL 的手动通道，不在下线范围。
+//
 // 设计原则：
 //   - list / getDetail 直接转发给 library（纯查询，无副作用）
-//   - install 支持 marketplace / hub（smithery）双源（builtin 不可装、
-//     custom 已在本地）；hub 未装条目经 id 反解直装，不经 library（两态返回：
-//     needsConfig=true 时带 schema 给 renderer 弹窗，不注册）
-//   - delete 按 source + type 路由：marketplace→uninstallPackage / custom 三分支 /
-//     builtin 抛错。各底层删除函数的参数语义不同，详见各分支注释。
-//     custom+mcp 先查 bundle 记账行（P2.1 Task 5：DXT/MCPB 条目走 bundle 卸载，
-//     同步清理解包目录与记账行）。
+//   - install 仅 hub 源；builtin 直显不可装、custom 已在本地
+//   - delete 按 source + type 路由：custom 三分支（mcp 先查 bundle 记账行，
+//     P2.1 Task 5：DXT/MCPB 条目走 bundle 卸载）/ hub / smithery 存量本地卸载
+//     / builtin 抛错。各底层删除函数的参数语义不同，详见各分支注释。
 //   - registerMcp / uploadSkill 是注册表写入口，语义归 resource 域：registerMcp
 //     落库 source='custom' 后复用 library 的 custom 映射取回 ResourceItem 返回。
-//     （modelscope hub 轨已于 P2.1 移除，P3 若公开 API 落地再评估）
 //
 // P4 Task 4 追加：三个 custom 写通道成功后 fire-and-forget 广播资源目录
 //
@@ -47,7 +48,6 @@ import { randomUUID } from 'node:crypto';
 import { ipcMain, shell, app } from 'electron';
 import { logger } from '../logger';
 import { listResources, resolveResourceById } from './library';
-import { listMarketplaceResources } from './marketplace';
 import {
   parseResourceId,
   sourceLabel,
@@ -56,12 +56,9 @@ import {
   type ResourceType,
 } from './types';
 import {
-  fetchSmitheryDetail,
-  installSmitheryRemote,
   uninstallHubMcp,
   installHubPackage,
   uninstallHubPackage,
-  type SmitheryInstallResult,
 } from './hub-install';
 import {
   getMcpConfigView,
@@ -74,12 +71,9 @@ import {
   type McpEntryUpdateInput,
 } from './mcp-config';
 import { HUB_PROVIDERS } from './hub';
-import { isSmitheryDegraded } from './hub/smithery';
 import { getHubCatalogOwnership, isHubCatalogDegraded, isHubNotEnrolled } from './hub/momo-hub';
 import { scanHubCoexistIssues } from './hub/ownership';
 import { cleanupPluginDups, scanPluginDupIssues } from './plugin-dedup';
-import { installPackage, uninstallPackage } from '../marketplace/installer';
-import { fetchCatalog, isCatalogDegraded } from '../marketplace/client';
 import { deleteRegistered, registerMcpDefinition } from '../mcp/host-manager';
 import {
   parseMcpBundle,
@@ -116,28 +110,6 @@ export interface RegisterMcpInput {
 }
 
 /**
- * smithery 条目安装两态判定（P2.1 Task 3）：拉详情 → deploymentUrl 校验 →
- * required 非空返回 needsConfig（不注册——Task 6 弹窗收集后走
- * resource:installSmitheryRemote 二段通道）；否则直装。
- */
-async function installSmitheryEntry(slug: string): Promise<SmitheryInstallResult> {
-  const detail = await fetchSmitheryDetail(slug);
-  // detail.connections 可能缺失（响应形状退化），防御读取后由下方「!conn?.deploymentUrl」
-  // 分支自然落到中文「暂不可直连」错误，避免对 renderer 抛不可读的英文 TypeError
-  const conn = Array.isArray(detail.connections) ? detail.connections[0] : undefined;
-  const deploymentUrl = conn?.deploymentUrl;
-  if (!deploymentUrl || !deploymentUrl.startsWith('https://')) {
-    throw new Error('该服务器暂不可直连（可能需要 Smithery 托管 OAuth）');
-  }
-  const schema = conn?.configSchema;
-  if (schema?.required?.length) {
-    return { needsConfig: true, schema };
-  }
-  await installSmitheryRemote(slug, deploymentUrl, {}, schema);
-  return { needsConfig: false };
-}
-
-/**
  * MCP 配置编辑两通道的入参防御：name 须非空字符串（IPC 序列化缺参/空串兜底，
  * 防止空名落进 service 层查库后抛出不可读的「未注册」误报）。
  */
@@ -168,41 +140,19 @@ export function registerResourceHandlers(): void {
     return resolveResourceById(id);
   });
 
-  // resource:install — marketplace 安装（P4 Task 5）+ hub 安装（P2.1 Task 3 / M1 Task 10）
-  // marketplace：installPackage 底层需要完整的 MarketplaceItem（含 downloadUrl/checksum 等），
-  // ResourceItem 不携带这些字段，故先 fetchCatalog 按 slug 找到原 catalog item 再传入。
-  // smithery：详情 deploymentUrl 直连（两态返回——needsConfig 见
-  // installSmitheryEntry；renderer types.d.ts 的 SmitheryInstallResult 有镜像）。
-  // hub（momo-hub 第五源）：目录项 → MarketplaceItem → installPackage 全链
+  // resource:install — hub 安装（M1 Task 10；网络获取下线后唯一安装源）。
+  // hub（momo-hub）：目录项 → MarketplaceItem → installPackage 全链
   // （installHubPackage 内 fresh 查目录取 latest + 已装 semver 判定——target ≤
   // 已装返回 alreadyLatest 如实回执，M2.3 T2；返回形状透传 renderer）。
   const __resourceInstall = async (_evt: unknown, id: string): Promise<unknown> => {
     const item = await resolveResourceById(id);
     if (!item) {
-      // hub（smithery）未安装条目不在 library——library 只映射已装行。
-      // 注册表「安装」按钮的主路径：id 反解三元组直接进 hub 安装链
+      // hub 未装条目不在 library——library 只映射已装行。注册表「安装」按钮的
+      // 主路径：id 反解三元组直接进 hub 安装链（installHubPackage 内部查目录，
+      // 失败给人话错误）。plugin 自 T12 起同链安装（plugin 域注册链 + 记账）。
       const hubParsed = parseResourceId(id);
-      if (hubParsed?.type === 'mcp' && hubParsed.source === 'smithery') {
-        return installSmitheryEntry(hubParsed.slug);
-      }
-      // momo-hub 条目：hub 离线/降级时目录拉不到、library 里查不到——
-      // 仍按 id 反解三元组进安装链（installHubPackage 内部查目录，失败给人话错误）。
-      // plugin 自 T12 起同链安装（plugin 域注册链 + 记账）
       if (hubParsed?.source === 'hub') {
         return installHubPackage(hubParsed.type, hubParsed.slug, hubInstallContext());
-      }
-      // marketplace 条目：library-store-split 起 listResources 收窄为本地实体，
-      // 未装条目查不到——获取弹窗「安装」按 id 反解进安装链（catalog 按 slug+type
-      // 反查原 MarketplaceItem，与下方已装分支同口径）
-      if (hubParsed?.source === 'marketplace') {
-        const catalog = await fetchCatalog();
-        const catalogItem = catalog.items.find(
-          (ci) => ci.slug === hubParsed.slug && ci.type === hubParsed.type && ci.downloadUrl,
-        );
-        if (!catalogItem) {
-          throw new Error(`marketplace catalog 中未找到 slug=${hubParsed.slug}`);
-        }
-        return installPackage(catalogItem);
       }
       throw new Error(`资源 ${id} 不存在`);
     }
@@ -210,24 +160,13 @@ export function registerResourceHandlers(): void {
     // 恒 false（fromCatalogItem / 兜底行口径），但更新语义 = 同 slug 重装目录新
     // 版本（cache 按 version 分目录 + installed_packages upsert，T10 语义），
     // renderer 更新按钮与安装按钮同走 resource:install——守卫不得拦截。
-    // marketplace / smithery 已装重装仍由下方守卫拦（既有保护不动）。
     if (item.source === 'hub') {
       return installHubPackage(item.type, item.slug, hubInstallContext());
     }
+    // builtin 直显不可装、custom 本就在本地；其余 source 一律拒绝
+    //（smithery 存量行 installable 恒 false，由上方守卫拦截）。
     if (!item.installable) throw new Error(`「${item.name}」不可安装`);
-
-    if (item.source !== 'marketplace') {
-      throw new Error(`source=${item.source} 不支持 install 操作`);
-    }
-    // 注：已装 smithery 条目不在此分支——listHubInstalledResources 恒置
-    // installable=false，上方「不可安装」守卫先抛，无需重复处理
-    // fetchCatalog 拿到完整 catalog，按 slug 找到原 MarketplaceItem
-    const catalog = await fetchCatalog();
-    const catalogItem = catalog.items.find((ci) => ci.slug === item.slug);
-    if (!catalogItem) {
-      throw new Error(`marketplace catalog 中未找到 slug=${item.slug}`);
-    }
-    return installPackage(catalogItem);
+    throw new Error(`source=${item.source} 不支持 install 操作`);
   };
   ipcMain.handle('resource:install', async (evt: unknown, id: string): Promise<unknown> => {
     try {
@@ -241,34 +180,13 @@ export function registerResourceHandlers(): void {
     }
   });
 
-  // resource:installSmitheryRemote — smithery needsConfig 二段安装（P2.1 Task 3）。
-  // 反解 id → 重拉详情（schema 真源——不信任 renderer 回传，防漂移）→
-  // 带用户配置直装（x-from 分流在 installSmitheryRemote 内完成）。
-  ipcMain.handle(
-    'resource:installSmitheryRemote',
-    async (_evt, id: string, config: Record<string, string>) => {
-      const parsed = parseResourceId(id);
-      if (!parsed || parsed.source !== 'smithery' || parsed.type !== 'mcp') {
-        throw new Error(`非 smithery MCP 资源：${id}`);
-      }
-      const detail = await fetchSmitheryDetail(parsed.slug);
-      // 同 installSmitheryEntry：防御响应缺 connections 字段，避免英文 TypeError 上抛
-      const conn = Array.isArray(detail.connections) ? detail.connections[0] : undefined;
-      const deploymentUrl = conn?.deploymentUrl;
-      if (!deploymentUrl || !deploymentUrl.startsWith('https://')) {
-        throw new Error('该服务器暂不可直连（可能需要 Smithery 托管 OAuth）');
-      }
-      await installSmitheryRemote(parsed.slug, deploymentUrl, config, conn?.configSchema);
-    },
-  );
-
   // resource:delete — 按 source + type 路由到底层删除函数
   //   - builtin        → 抛错（系统预置不可移除）
-  //   - marketplace    → uninstallPackage(catalogItem.id)（按 installed_packages.item_id 查删）
   //   - custom + mcp   → deleteRegistered(item.slug)（按 mcp_definitions.name 查删）
   //   - custom + skill → deleteCustomSkill(item.slug)（按 skills 目录名查删）
   //   - custom + agent → deleteDefinition(item.slug)（按 agent_definitions.slug 查删）
-  //   - smithery       → uninstallHubMcp（mcp 行 + installed_packages 记账同删）
+  //   - smithery       → uninstallHubMcp（存量已装行的本地卸载通道——浏览/安装
+  //                      已随注册表下线退役，已装行仍可管理）
   const __resourceDelete = async (_evt: unknown, id: string): Promise<unknown> => {
     const item = await resolveResourceById(id);
     if (!item) throw new Error(`资源 ${id} 不存在`);
@@ -283,18 +201,6 @@ export function registerResourceHandlers(): void {
       return;
     }
     switch (item.source) {
-      case 'marketplace': {
-        // 警告：uninstallPackage 按 installed_packages.item_id + item_type 查删——
-        // item_id 列存的是 catalog 的 MarketplaceItem.id（opaque），不是
-        // ResourceItem.id。直接传 item.id 会查无此行 → 静默 no-op（用户以为删成功
-        // 但实际没删）。须 fetchCatalog 按 slug 反查 catalog 原 id 与 type。
-        const catalog = await fetchCatalog();
-        const catalogItem = catalog.items.find((ci) => ci.slug === item.slug);
-        if (!catalogItem) {
-          throw new Error(`marketplace catalog 中未找到 slug=${item.slug}（可能 catalog 已变更）`);
-        }
-        return uninstallPackage(catalogItem.id, catalogItem.type);
-      }
       case 'hub': {
         // hub 记账 item_id = `hub:{slug}`（hubPackageItemId 单点前缀）——同款陷阱：
         // 传 ResourceItem.id 会查无此行 → 静默 no-op。type 从当前资源上下文透传
@@ -433,38 +339,9 @@ export function registerResourceHandlers(): void {
     },
   );
 
-  // resource:registryProviders — 网络获取模式 provider 元信息（含可达性，spec §4.1）。
-  // builtin 恒可用（本地 catalog，零网络）；hub degraded 取各自退避状态——不打网络，
-  // 退避窗口内即视为不可达，窗口过期后首次 list 才真探测。
-  ipcMain.handle('resource:registryProviders', async () => {
-    const hubs = HUB_PROVIDERS.map((p) => ({
-      key: p.key,
-      label: p.label,
-      region: p.region,
-      types: [...p.types],
-      // 新增 provider 默认视为可达（false），接入退避后再挂各自探测函数
-      degraded:
-        p.key === 'smithery' ? isSmitheryDegraded() : p.key === 'hub' ? isHubCatalogDegraded() : false,
-    }));
-    return [
-      {
-        key: 'builtin',
-        label: '内置市场',
-        region: 'local' as const,
-        types: ['agent', 'mcp', 'skill'] as const,
-        degraded: false,
-      },
-      ...hubs,
-    ];
-  });
-
-  // resource:registryList — 按 provider 拉取注册表条目（library-store-split 起
-  // 获取弹窗三源的唯一浏览通道）。builtin（=网络市场 catalog 快照）分支直连
-  // listMarketplaceResources（resource:list 已收窄为本地实体，不经其取目录）+
-  // 客户端过滤（name/description/slug 模糊）排序（未安装在前、已装垫底）——
-  // 本地全量目录无服务端分页，page 参数忽略、hasMore 恒 false；hub/smithery
-  // 分支委托对应 provider（query / page / opts 透传，各自带退避负缓存，失败
-  // 返回 degraded 不抛错；opts.fresh 供 hub 弹窗「刷新」入口走 loadFresh）。
+  // resource:registryList — 按 provider 拉取注册表条目（获取弹窗的浏览通道，
+  // momo-hub 单源）。委托 hubProvider（query / page / opts 透传，自带退避负缓存，
+  // 失败返回 degraded 不抛错；opts.fresh 供 hub 弹窗「刷新」入口走 loadFresh）。
   ipcMain.handle(
     'resource:registryList',
     async (
@@ -475,37 +352,6 @@ export function registerResourceHandlers(): void {
       page?: number,
       opts?: { fresh?: boolean },
     ) => {
-      if (providerKey === 'builtin') {
-        const catalog = await fetchCatalog();
-        const items = listMarketplaceResources(catalog).filter((i) => i.type === type);
-        const q = query?.trim().toLowerCase();
-        const matched = q
-          ? items.filter(
-              (i) =>
-                i.name.toLowerCase().includes(q) ||
-                i.description.toLowerCase().includes(q) ||
-                i.slug.toLowerCase().includes(q),
-            )
-          : items;
-        return {
-          entries: matched
-            .slice()
-            .sort((a, b) => Number(a.installed) - Number(b.installed))
-            .map((item) => ({
-              id: item.id,
-              type: item.type,
-              name: item.name,
-              description: item.description,
-              version: item.version,
-              tags: item.marketplace?.tags ?? [],
-              category: item.marketplace?.category,
-              item,
-            })),
-          degraded: false,
-          hasMore: false,
-          total: items.length,
-        };
-      }
       const provider = HUB_PROVIDERS.find((p) => p.key === providerKey);
       if (!provider) throw new Error(`未知 registry provider: ${providerKey}`);
       return provider.list(type, query, page, opts);
@@ -569,16 +415,15 @@ export function registerResourceHandlers(): void {
     return listDanglingMcpRefs();
   });
 
-  // resource:getCatalogStatus — 远程目录降级态（走查 D9）。renderer 资源库据此
-  // 显示「网络目录暂时不可达」提示条，区分「离线降级」与「目录为空」。
-  // sources 逐源聚合（M1c）：marketplace 远程目录 + momo-hub 目录各自的降级态。
+  // resource:getCatalogStatus — 远程目录降级态（走查 D9）。网络获取下线后仅
+  // momo-hub 一源（marketplace 已本地化，无降级语义）。renderer 据此显示目录
+  // 不可达提示、区分「离线降级」与「目录为空」。
   // hubNotEnrolled（M2.5 终审 FIX-1）：hub 未接入是「无目录」而非「目录为空」，
   // renderer 播种门控必须据此拒绝把兜底记账行当成「已是最新」的目录证据。
   ipcMain.handle('resource:getCatalogStatus', () => ({
-    degraded: isCatalogDegraded(),
+    degraded: isHubCatalogDegraded(),
     hubNotEnrolled: isHubNotEnrolled(),
     sources: [
-      { source: 'marketplace' as const, degraded: isCatalogDegraded() },
       { source: 'hub' as const, degraded: isHubCatalogDegraded() },
     ],
   }));
