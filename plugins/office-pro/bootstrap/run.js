@@ -131,9 +131,14 @@ fs.openSync = function guardedOpenSync(p, flags, ...args) {
   return fd;
 };
 const origOpenAsync = fsp.open;
-fsp.open = function guardedOpen(p, flags, ...args) {
-  if (isWriteFlags(flags)) assertWritable(p);
-  return origOpenAsync.apply(fsp, [p, flags, ...args]);
+fsp.open = async function guardedOpen(p, flags, ...args) {
+  const write = isWriteFlags(flags);
+  if (write) assertWritable(p);
+  const fh = await origOpenAsync.apply(fsp, [p, flags, ...args]);
+  // 写意图 open 的 FileHandle.fd 同样登记（终审复审 #1：否则 fh.fd 经
+  // fs.writeSync 写会被 fd 白名单误杀，与 openSync 路径行为不一致）
+  if (write && typeof fh?.fd === 'number') allowedWriteFds.add(fh.fd);
+  return fh;
 };
 for (const name of ['writeSync', 'write', 'writevSync', 'writev']) {
   const orig = fs[name];
@@ -153,7 +158,8 @@ fs.createWriteStream = function guardedCreateWriteStream(p, ...args) {
   const target = p && typeof p === 'object' && !Buffer.isBuffer(p) && 'path' in p ? p.path : p;
   assertWritable(target);
   const ws = origCreateWriteStream.call(fs, p, ...args);
-  // 流的内部写入走 fd（fs.write 已被 fd 白名单守卫）——open 后登记该 fd
+  // 流内部写入走 fd（fs.write 已按 fd 白名单守卫）：open 事件后登记 fd。
+  // open 前 ws.fd 为 null，不存在「未登记即写」的窗口（终审复审 #2 已核对）。
   ws.once('open', (fd) => allowedWriteFds.add(fd));
   return ws;
 };

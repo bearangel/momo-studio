@@ -70,6 +70,12 @@ describe('bootstrap 沙箱入口', () => {
     expect(r.stdout).toContain('fd-write-ok hi');
   });
 
+  it('promises.open 写意图拿到的 FileHandle.fd → writeSync 放行（终审复审 #1 回归锁）', async () => {
+    const r = await run(`const fs=require('fs'); const fh=await fs.promises.open('fh-ok.txt','w'); fs.writeSync(fh.fd,'fh-ok'); await fh.close(); console.log('fh-fd-write', fs.readFileSync('fh-ok.txt','utf8'));`);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('fh-fd-write fh-ok');
+  });
+
   it('只读 fd（open r）→ writeSync 由 OS 语义拒绝（EBADF/EACCES，不可借 r 打开写）', async () => {
     const r = await run(`const fs=require('fs'); fs.writeFileSync('readonly.txt','seed'); const fd=fs.openSync('readonly.txt','r'); try { fs.writeSync(fd,'x'); console.log('SHOULD-NOT-PASS'); } catch (e) { console.log('READONLY-BLOCKED:' + (e.code||e.message).slice(0,10)); }`);
     expect(r.stdout).toContain('READONLY-BLOCKED');
