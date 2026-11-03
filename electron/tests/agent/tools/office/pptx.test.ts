@@ -1,288 +1,55 @@
-// pptx round-trip 测试。pptxgenjs 真生成 → 自解析真提取（双向都不 mock——
-// css-select 命名空间选择器 a\:t 的真实行为由本 round-trip 锁死）。
-// v2.1 视觉三件套（spec §14.9-1/2/4）：生成物 unzip 断言真实 OOXML 部件
-// （<p:bg> / ppt/media / graphicFrame + ppt/charts），不信任库的中间形态。
+// pptx 读侧测试（spec 2026-11-03 §6 下线生成后）：读提取 round-trip。
+// 夹具由插件 vendor 的 pptxgenjs 真生成 → readPptx 真解析（css-select 命名空间
+// 选择器 a\:t 的真实行为由本 round-trip 锁死；双向都不 mock）。
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import AdmZip from 'adm-zip';
-import { createPptx, parsePptxSlides, readPptx, type WorkspacePathResolver } from '../../../../src/main/agent/tools/office/pptx';
+import { readPptx } from '../../../../src/main/agent/tools/office/pptx';
+import { loadVendorLib } from './vendor-fixtures';
 
-// 1x1 透明 PNG（合法最小 PNG；pptxgenjs 仅原样嵌入不解析像素）
-const PNG_1PX = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
-  'base64',
-);
-
-let wsDir: string;
-
-beforeEach(() => {
-  wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-pptx-ws-'));
-});
-
-afterEach(() => {
-  fs.rmSync(wsDir, { recursive: true, force: true });
-});
-
-/** 模拟 office-tools.ts 的注入形态：箭头包装 + 越界防御（真实越界防御由
- * office-tools.test.ts 用真 WorkspaceFS 端到端锁定） */
-const resolver: WorkspacePathResolver = (rel) => {
-  if (rel.includes('..')) throw new Error('路径越界');
-  return path.join(wsDir, rel);
-};
-
-/** 生成 → 落盘 → 打开 zip（slide XML / rels / media / chart 部件断言入口） */
-async function generate(slidesRaw: unknown[]): Promise<AdmZip> {
-  const buf = await createPptx(parsePptxSlides(slidesRaw, resolver));
-  expect(buf.subarray(0, 2)).toEqual(Buffer.from([0x50, 0x4b]));
-  const abs = path.join(wsDir, 'out.pptx');
-  fs.writeFileSync(abs, buf);
-  return new AdmZip(abs);
+interface PptxLike {
+  addSlide(): { addText(t: string | string[], o?: Record<string, unknown>): unknown };
+  writeFile(o: { fileName: string }): Promise<string>;
 }
 
-function entryText(zip: AdmZip, name: string): string {
-  const e = zip.getEntry(name);
-  if (!e) throw new Error(`zip 缺少部件 ${name}；实际有: ${zip.getEntries().map((x) => x.entryName).join(', ')}`);
-  return e.getData().toString('utf-8');
+let tmp: string;
+
+beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-pptx-')); });
+afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+
+async function makeDeck(build: (p: PptxLike) => void): Promise<string> {
+  const PptxGenJS = loadVendorLib<new () => PptxLike>('pptxgenjs');
+  const pptx = new PptxGenJS();
+  build(pptx);
+  const file = path.join(tmp, `deck-${Math.random().toString(36).slice(2)}.pptx`);
+  await pptx.writeFile({ fileName: file });
+  return file;
 }
 
-/** pptxgenjs 的 chart 部件编号是模块级全局计数器（跨生成实例累加），
- * 断言一律按 chart\d+.xml 正则查找，不依赖具体编号 */
-function chartEntry(zip: AdmZip): { name: string; xml: string } {
-  const e = zip.getEntries().find((x) => /^ppt\/charts\/chart\d+\.xml$/.test(x.entryName));
-  if (!e) throw new Error('zip 缺少 ppt/charts/chartN.xml 部件');
-  return { name: e.entryName, xml: e.getData().toString('utf-8') };
-}
-
-describe('pptx round-trip', () => {
-  it('生成 → 提取：标题/要点/表格/备注逐 slide 保真', async () => {
-    const buf = await createPptx(parsePptxSlides([
-      { title: '季度汇报', bullets: ['收入增长 20%', '成本下降 5%'], notes: '强调同比' },
-      { title: '数据表', table: { header: ['季度', '营收'], rows: [['Q1', '100 万']] } },
-    ]));
-    expect(buf.subarray(0, 2)).toEqual(Buffer.from([0x50, 0x4b]));
-    const abs = path.join(os.tmpdir(), `momo-pptx-${Date.now()}.pptx`);
-    fs.writeFileSync(abs, buf);
-    try {
-      const out = await readPptx(abs);
-      expect(out).toContain('## Slide 1');
-      expect(out).toContain('季度汇报');
-      expect(out).toContain('收入增长 20%');
-      expect(out).toContain('备注: 强调同比');
-      expect(out).toContain('## Slide 2');
-      expect(out).toContain('100 万');
-    } finally {
-      fs.rmSync(abs, { force: true });
-    }
-  });
-  it('非法 slide 拒绝', () => {
-    expect(() => parsePptxSlides([{ bullets: ['x'] }])).toThrow(/title/);
-    expect(() => parsePptxSlides([])).toThrow();
-  });
-});
-
-describe('pptx 背景色（spec §14.9-1）', () => {
-  it('slide XML 含 <p:bg> 与 hex 色值', async () => {
-    const zip = await generate([{ title: '封面', background: '1F3864' }]);
-    const xml = entryText(zip, 'ppt/slides/slide1.xml');
-    expect(xml).toContain('<p:bg>');
-    expect(xml).toContain('1F3864');
-  });
-  it('hex 校验拒绝', () => {
-    expect(() => parsePptxSlides([{ title: 'x', background: '12345' }], resolver)).toThrow(/hex/);
-    expect(() => parsePptxSlides([{ title: 'x', background: 'GGGGGG' }], resolver)).toThrow(/hex/);
-    expect(() => parsePptxSlides([{ title: 'x', background: '#1F3864' }], resolver)).toThrow(/hex/);
-  });
-});
-
-describe('pptx 插图（spec §14.9-2）', () => {
-  it('media 部件字节一致 + slide rels 引用 image', async () => {
-    fs.mkdirSync(path.join(wsDir, 'img'), { recursive: true });
-    fs.writeFileSync(path.join(wsDir, 'img/logo.png'), PNG_1PX);
-    const zip = await generate([{ title: '带图页', images: [{ path: 'img/logo.png', x: 1, y: 2, w: 4, h: 2 }] }]);
-    const media = zip.getEntries().find((e) => /^ppt\/media\/.+\.(png|jpe?g|gif|webp|bmp)$/.test(e.entryName));
-    expect(media).toBeDefined();
-    expect(media!.getData().equals(PNG_1PX)).toBe(true);
-    const rels = entryText(zip, 'ppt/slides/_rels/slide1.xml.rels');
-    expect(rels).toContain('../media/');
-    expect(rels).toContain('/image');
-  });
-  it('缺省几何：不给 x/y/w/h 也正常生成（h 按 w×0.6 兜底）', async () => {
-    fs.writeFileSync(path.join(wsDir, 'pic.png'), PNG_1PX);
-    const zip = await generate([{ title: '默认尺寸', images: [{ path: 'pic.png' }] }]);
-    expect(zip.getEntries().some((e) => /^ppt\/media\/.+\.png$/.test(e.entryName))).toBe(true);
-  });
-  it('校验拒绝：不存在 / 坏扩展 / 越界 / 非数字坐标 / w≤0 / 未注入解析器', () => {
-    expect(() => parsePptxSlides([{ title: 'x', images: [{ path: 'nope.png' }] }], resolver)).toThrow(/图片不存在/);
-    fs.writeFileSync(path.join(wsDir, 'a.txt'), 'x');
-    fs.writeFileSync(path.join(wsDir, 'pic.png'), PNG_1PX);
-    expect(() => parsePptxSlides([{ title: 'x', images: [{ path: 'a.txt' }] }], resolver)).toThrow(/扩展名/);
-    expect(() => parsePptxSlides([{ title: 'x', images: [{ path: '../escape.png' }] }], resolver)).toThrow(/越界/);
-    expect(() => parsePptxSlides([{ title: 'x', images: [{ path: 'pic.png', x: 'left' }] }], resolver)).toThrow(/有限数字/);
-    expect(() => parsePptxSlides([{ title: 'x', images: [{ path: 'pic.png', w: -1 }] }], resolver)).toThrow(/正数/);
-    expect(() => parsePptxSlides([{ title: 'x', images: [{ path: 'pic.png', h: 0 }] }], resolver)).toThrow(/正数/);
-    expect(() => parsePptxSlides([{ title: 'x', images: [{ path: 'pic.png' }] }])).toThrow(/解析器/);
-    expect(() => parsePptxSlides([{ title: 'x', images: [] }], resolver)).toThrow(/非空数组/);
-  });
-});
-
-describe('pptx 图表（spec §14.9-4）', () => {
-  const barSlides = [{
-    title: '营收',
-    chart: {
-      type: 'bar' as const,
-      categories: ['Q1', 'Q2', 'Q3'],
-      series: [
-        { name: '营收', values: [100, 150, 180], color: '4472C4' },
-        { name: '成本', values: [60, 70, 65] },
-      ],
-      title: '季度营收对比',
-    },
-  }];
-
-  it('slide XML 含 graphicFrame；chart 部件含类型/系列/系列色/标题；embeddings 有数据工作簿', async () => {
-    const zip = await generate(barSlides);
-    expect(entryText(zip, 'ppt/slides/slide1.xml')).toContain('<p:graphicFrame>');
-    const { name, xml: chartXml } = chartEntry(zip);
-    expect(chartXml).toContain('<c:barChart>');
-    expect(chartXml).toContain('<c:barDir val="col"/>');
-    expect(chartXml).toContain('季度营收对比');
-    expect(chartXml).toContain('营收');
-    expect(chartXml).toContain('4472C4');
-    expect(zip.getEntries().some((e) => /^ppt\/embeddings\/.+\.xlsx$/.test(e.entryName))).toBe(true);
-    const rels = entryText(zip, 'ppt/slides/_rels/slide1.xml.rels');
-    expect(rels).toContain(`/ppt/charts/${name.split('/').pop()}`);
-  });
-  it('bar_h：barDir=bar；line/pie：对应图类型', async () => {
-    const hZip = await generate([{ title: '横条', chart: { type: 'bar_h', categories: ['甲', '乙'], series: [{ name: '量', values: [3, 5] }] } }]);
-    expect(chartEntry(hZip).xml).toContain('<c:barDir val="bar"/>');
-    const lineZip = await generate([{ title: '折线', chart: { type: 'line', categories: ['1月', '2月'], series: [{ name: '温度', values: [10, 12] }] } }]);
-    expect(chartEntry(lineZip).xml).toContain('<c:lineChart>');
-    const pieZip = await generate([{ title: '饼图', chart: { type: 'pie', categories: ['A', 'B'], series: [{ name: '占比', values: [30, 70] }] } }]);
-    expect(chartEntry(pieZip).xml).toContain('<c:pieChart>');
-  });
-  it('校验拒绝：非法 type / pie 多系列 / 长度不一致 / 坏色 / 空类别 / 非数字值', () => {
-    const bad = (chart: Record<string, unknown>) => parsePptxSlides([{ title: 'x', chart }], resolver);
-    expect(() => bad({ type: 'scatter', categories: ['a'], series: [{ name: 's', values: [1] }] })).toThrow(/type/);
-    expect(() => bad({
-      type: 'pie', categories: ['a', 'b'],
-      series: [{ name: 's1', values: [1, 2] }, { name: 's2', values: [3, 4] }],
-    })).toThrow(/pie/);
-    expect(() => bad({ type: 'bar', categories: ['a', 'b'], series: [{ name: 's', values: [1] }] })).toThrow(/不一致/);
-    expect(() => bad({ type: 'bar', categories: ['a'], series: [{ name: 's', values: [1], color: 'XYZ' }] })).toThrow(/hex/);
-    expect(() => bad({ type: 'bar', categories: [], series: [{ name: 's', values: [] }] })).toThrow(/categories/);
-    expect(() => bad({ type: 'bar', categories: ['a'], series: [{ name: 's', values: ['x'] }] })).toThrow(/有限数字/);
-    expect(() => bad({ type: 'bar', categories: ['a'] })).toThrow(/series/);
-  });
-});
-
-// ============ PPT 质量专项（2026-10-10）：几何互斥 + 版式引擎 ============
-
-/** 从 slide XML 提取全部形状几何（EMU→英寸），[{kind,x,y,w,h}] */
-function shapeGeometries(xml: string): Array<{ kind: string; x: number; y: number; w: number; h: number }> {
-  const out: Array<{ kind: string; x: number; y: number; w: number; h: number }> = [];
-  const re = /<(p:sp|p:graphicFrame)>.*?<\/\1>/gs;
-  for (const m of xml.matchAll(re)) {
-    const block = m[0];
-    const g = block.match(/<a:off x="(-?\d+)" y="(-?\d+)"\s*\/>\s*<a:ext cx="(\d+)" cy="(\d+)"/s);
-    if (g) {
-      out.push({
-        kind: m[1] === 'p:graphicFrame' ? 'chart' : 'sp',
-        x: Number(g[1]) / 914400, y: Number(g[2]) / 914400,
-        w: Number(g[3]) / 914400, h: Number(g[4]) / 914400,
-      });
-    }
-  }
-  return out;
-}
-
-describe('pptx 几何编排器（PPT 质量专项 A：同页内容不叠放）', () => {
-  it('bullets + chart 同页 → chart 区域起点在 bullets 区域底部之下（修复前同起点 y=1.6 压盖）', async () => {
-    const zip = await generate([
-      { title: '费用预警', bullets: ['招聘费执行率 82.6%', '市场推广费年化预测超支'], chart: { type: 'bar', categories: ['招聘费', '推广费'], series: [{ name: '执行率%', values: [82.6, 76.3] }] } },
-    ]);
-    const xml = entryText(zip, 'ppt/slides/slide1.xml');
-    const geo = shapeGeometries(xml);
-    // 含 bullets 文本的文本框（y 在内容区、含多行文本）与 chart graphicFrame
-    const chart = geo.find((g) => g.kind === 'chart');
-    expect(chart).toBeDefined();
-    // bullets 区：内容区里 y 最小、非 title bar 的文本形状（title bar 文字 y≈0.12 排除，页码排除）
-    const textBlocks = geo.filter((g) => g.kind === 'sp' && g.y > 0.9 && g.y < 4.5 && g.h > 0.3);
-    expect(textBlocks.length).toBeGreaterThan(0);
-    const bulletsBottom = Math.max(...textBlocks.map((g) => g.y + g.h));
-    expect(chart!.y).toBeGreaterThanOrEqual(bulletsBottom - 0.01);
+describe('pptx round-trip（读侧）', () => {
+  it('多页文本 + 备注 → 按页提取、跳过空文本', async () => {
+    const file = await makeDeck((p) => {
+      p.addSlide().addText('封面标题');
+      p.addSlide().addText('要点一\n要点二', { x: 0.5, y: 1 });
+    });
+    const out = await readPptx(file);
+    expect(out).toContain('封面标题');
+    expect(out).toContain('要点一');
+    expect(out).toContain('要点二');
+    expect(out).toContain('## Slide 1');
   });
 
-  it('table + bullets 同页 → 纵向顺序排列不重叠', async () => {
-    const zip = await generate([
-      { title: '汇总', table: { header: ['季度', '营收'], rows: [['Q1', '100']] }, bullets: ['同比 +12%'] },
-    ]);
-    const geo = shapeGeometries(entryText(zip, 'ppt/slides/slide1.xml'));
-    // table 是 graphicFrame（无 chart 时唯一 graphicFrame）
-    const tableFrame = geo.find((g) => g.kind === 'chart');
-    expect(tableFrame).toBeDefined();
-    const textBlocks = geo.filter((g) => g.kind === 'sp' && g.y > 0.9 && g.h > 0.25 && g.y < 4.5);
-    const bulletsBlock = textBlocks.find((g) => g.y > tableFrame!.y);
-    expect(bulletsBlock).toBeDefined();
-    expect(bulletsBlock!.y).toBeGreaterThanOrEqual(tableFrame!.y + tableFrame!.h - 0.01);
+  it('预置 abortSignal → 立即返回已中断', async () => {
+    const file = await makeDeck((p) => { p.addSlide().addText('x'); });
+    const ac = new AbortController();
+    ac.abort();
+    await expect(readPptx(file, ac.signal)).rejects.toThrow('已中断');
   });
-});
 
-describe('pptx 版式引擎（PPT 质量专项 B：默认即有版式感）', () => {
-  it('首页自动 cover：accent 竖条 + 大标题色字（非白底黑字标题框）', async () => {
-    const zip = await generate([{ title: '月度经营分析', bullets: ['2026 年 9 月 · 财务部'] }]);
-    const xml = entryText(zip, 'ppt/slides/slide1.xml');
-    expect(xml).toContain('1F4E79'); // 缺省 accent 色块存在
-    expect(xml).toContain('月度经营分析');
-  });
-  it('纯标题中间页自动 section：accent 整页底色', async () => {
-    const zip = await generate([
-      { title: '封面', bullets: ['副题'] },
-      { title: '第二章 数据洞察' },
-      { title: '结尾页', bullets: ['谢谢'] },
-    ]);
-    const sectionXml = entryText(zip, 'ppt/slides/slide2.xml');
-    expect(sectionXml).toContain('<p:bg>');
-    expect(sectionXml).toContain('1F4E79');
-  });
-  it('content 页带 title bar（accent 色块横带）与页脚页码', async () => {
-    const zip = await generate([
-      { title: '封面' },
-      { title: '要点页', bullets: ['要点一', '要点二'] },
-    ]);
-    const xml = entryText(zip, 'ppt/slides/slide2.xml');
-    expect(xml).toContain('1F4E79');
-    expect(xml).toMatch(/<a:t>2<\/a:t>/); // 页脚页码
-  });
-  it('accentColor 显式覆盖缺省主题色', async () => {
-    const zip = await generate([{ title: '封面' }, { title: '要点', bullets: ['x'], accentColor: 'C00000' }]);
-    expect(entryText(zip, 'ppt/slides/slide2.xml')).toContain('C00000');
-  });
-  it('bullets 超 6 条自动双栏（同 y 两个文本区左右分布）', async () => {
-    const zip = await generate([
-      { title: '封面' },
-      { title: '多维要点', bullets: ['一', '二', '三', '四', '五', '六', '七'] },
-    ]);
-    const geo = shapeGeometries(entryText(zip, 'ppt/slides/slide2.xml'))
-      .filter((g) => g.kind === 'sp' && g.y > 1.0 && g.h > 0.5);
-    const ys = [...new Set(geo.map((g) => Math.round(g.y * 10) / 10))];
-    expect(geo.length).toBeGreaterThanOrEqual(2);
-    expect(ys.length).toBe(1); // 双栏同起点
-    const xs = geo.map((g) => g.x).sort((a, b) => a - b);
-    expect(xs[1]! - xs[0]!).toBeGreaterThan(3); // 左右分栏间距
-  });
-  it('layout 显式指定与非法值校验', () => {
-    expect(() => parsePptxSlides([{ title: 'x', layout: 'fancy' }])).toThrow(/layout/);
-    const ok = parsePptxSlides([{ title: 'x', layout: 'section' }]);
-    expect(ok[0]!.layout).toBe('section');
-  });
-  it('chart 中文类目字号适配（catAxisLabelFontSize=11 落 chart XML）', async () => {
-    const zip = await generate([
-      { title: '封面' },
-      { title: '图', chart: { type: 'bar', categories: ['市场推广费执行率'], series: [{ name: '执行率', values: [76] }] } },
-    ]);
-    const chartXml = zip.getEntries().map((e) => /ppt\/charts\/chart\d+\.xml$/.test(e.entryName) ? e.getData().toString('utf-8') : '').join('');
-    expect(chartXml).toContain('sz="1100"');
+  it('非 pptx 文件（zip 缺部件）→ 抛错可自诊', async () => {
+    const fake = path.join(tmp, 'bad.pptx');
+    fs.writeFileSync(fake, 'not a zip');
+    await expect(readPptx(fake)).rejects.toThrow();
   });
 });

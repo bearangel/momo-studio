@@ -1,67 +1,49 @@
-// 依赖仓库内字体资产（Step 1 提交进 git）；字体是测试前置而非 mock 对象。
+// pdf 读侧测试（spec 2026-11-03 §6 下线生成后）：逐页文本提取 + 扫描版明确报错。
+// 夹具由插件 vendor 的 pdfkit 真生成（内嵌字体），pdfjs 真解析。
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createPdf, parsePdfBlocks, readPdf, resolveFontPath } from '../../../../src/main/agent/tools/office/pdf';
+import { readPdf } from '../../../../src/main/agent/tools/office/pdf';
+import { loadVendorLib } from './vendor-fixtures';
 
-describe('createPdf', () => {
-  it('中文字块渲染：产出 PDF 魔数且非平凡体积', async () => {
-    expect(fs.existsSync(resolveFontPath())).toBe(true);
-    const buf = await createPdf(parsePdfBlocks([
-      { type: 'heading', level: 1, text: '季度报告' },
-      { type: 'para', text: '收入与成本概况如下。' },
-      { type: 'list', items: ['华东区', '华北区'], ordered: true },
-      { type: 'table', header: ['区域', '营收'], rows: [['华东', '100 万']] },
-      { type: 'pagebreak' },
-      { type: 'para', text: '第二页。' },
-    ]));
-    expect(buf.subarray(0, 4).toString('ascii')).toBe('%PDF');
-    // 内嵌 CJK 子集的体积下界：实测 35 唯一字符子集 7.6KB（pdfkit 压缩）；
-    // 无字体嵌入的纯文本 PDF <2KB，5KB 阈值区分度充分
-    expect(buf.length).toBeGreaterThan(5 * 1024);
-  });
-});
+interface PdfDoc {
+  on(ev: string, cb: () => void): void;
+  text(t: string): void;
+  addPage(): void;
+  end(): void;
+  pipe(stream: fs.WriteStream): void;
+}
+type PdfKit = new (o?: Record<string, unknown>) => PdfDoc;
 
-describe('readPdf', () => {
-  it('逐页提取自产 PDF 的中文文本', async () => {
-    const buf = await createPdf(parsePdfBlocks([
-      { type: 'heading', text: '标题甲' },
-      { type: 'para', text: '正文乙' },
-    ]));
-    const abs = path.join(os.tmpdir(), `momo-pdf-${Date.now()}.pdf`);
-    fs.writeFileSync(abs, buf);
-    try {
-      const out = await readPdf(abs);
-      expect(out).toContain('第 1 页');
-      expect(out).toContain('标题甲');
-    } finally {
-      fs.rmSync(abs, { force: true });
-    }
+describe('readPdf（读侧）', () => {
+  it('逐页文本提取（真实 pdfkit 产物）', async () => {
+    const PDFDocument = loadVendorLib<PdfKit>('pdfkit');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-pdf-'));
+    const file = path.join(tmp, 'a.pdf');
+    await new Promise<void>((resolve, reject) => {
+      const doc = new PDFDocument({ autoFirstPage: true });
+      const stream = fs.createWriteStream(file);
+      stream.on('finish', () => resolve());
+      stream.on('error', reject);
+      doc.pipe(stream);
+      doc.text('PageOneContent');
+      doc.addPage();
+      doc.text('PageTwoContent');
+      doc.end();
+    });
+    const out = await readPdf(file);
+    expect(out).toContain('PageOneContent');
+    expect(out).toContain('PageTwoContent');
+    expect(out).toContain('第 1 页');
+    fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('无文本层（空渲染页）报扫描版错误', async () => {
-    // pdfkit 直接 addPage 不写文本 → 空文本层
-    const PDFDocument = (await import('pdfkit')).default;
-    const doc = new PDFDocument();
-    const chunks: Buffer[] = [];
-    const done = new Promise<void>((r) => doc.on('end', () => r()));
-    doc.on('data', (c: Buffer) => chunks.push(c));
-    doc.addPage();
-    doc.end();
-    await done;
-    const abs = path.join(os.tmpdir(), `momo-pdf-empty-${Date.now()}.pdf`);
-    fs.writeFileSync(abs, Buffer.concat(chunks));
-    try {
-      await expect(readPdf(abs)).rejects.toThrow(/无文本层/);
-    } finally {
-      fs.rmSync(abs, { force: true });
-    }
-  });
-});
-
-describe('parsePdfBlocks', () => {
-  it('非法 block 拒绝', () => {
-    expect(() => parsePdfBlocks([{ type: 'chart' }])).toThrow(/type/);
+  it('非法 PDF → 抛错可自诊', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-pdf-'));
+    const file = path.join(tmp, 'bad.pdf');
+    fs.writeFileSync(file, 'not a pdf');
+    await expect(readPdf(file)).rejects.toThrow();
+    fs.rmSync(tmp, { recursive: true, force: true });
   });
 });

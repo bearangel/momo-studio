@@ -93,6 +93,46 @@ export function resolveShellSpawn(
   return { kind: 'plain', shell: '/bin/bash', args: ['-c', command], tag: `unsandboxed:${reason}` };
 }
 
+/**
+ * 受管任意 argv 沙箱包裹（office-pro 插件 run_js 消费，spec 2026-11-03 §5.2）。
+ * 与 resolveShellSpawn 同源 policy 基建，差异两点：
+ *  1) 包裹对象是任意 argv（argv[0]=可执行文件）而非 bash -c 命令串；
+ *  2) 网络恒关——office 生成零联网诉求，不消费 bash 的动态网络授权
+ *     （内网安全默认；net-off tag 透传给 LLM 自诊）。
+ * 三态语义与 resolveShellSpawn 一致：wrapped / plain / blocked。
+ */
+export function resolveSandboxedSpawn(workspaceDir: string, argv: string[]): SpawnPlan {
+  if (argv.length === 0) throw new Error('resolveSandboxedSpawn: argv 不能为空');
+  const settings = getSandboxSettings();
+  const policy = buildPolicy(workspaceDir, false, []);
+  if (process.platform === 'win32') {
+    // Windows 无 OS 沙箱（与 resolveShellSpawn win32 分支同基线）：直跑 + tag 标注
+    return { kind: 'plain', shell: argv[0]!, args: argv.slice(1), tag: 'win-plain/net-off' };
+  }
+  const state = getSandboxState();
+  if (process.platform === 'linux' && state?.sandboxTool === 'bwrap') {
+    return {
+      kind: 'wrapped', shell: 'bwrap',
+      args: [...buildBwrapArgs(policy), ...argv],
+      tag: 'bwrap/net-off', envAdditions: cacheEnvAdditions(policy.tmpDir), cleanupFiles: [],
+    };
+  }
+  if (process.platform === 'darwin' && state?.sandboxTool === 'seatbelt') {
+    const profilePath = path.join(os.tmpdir(), `momo-sbx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.sb`);
+    fs.writeFileSync(profilePath, renderSeatbeltProfile(policy), 'utf-8');
+    return {
+      kind: 'wrapped', shell: 'sandbox-exec',
+      args: ['-f', profilePath, ...argv],
+      tag: 'seatbelt/net-off', envAdditions: cacheEnvAdditions(policy.tmpDir), cleanupFiles: [profilePath],
+    };
+  }
+  const reason = state?.unavailableReason ?? '沙箱未探测';
+  if (settings.mode === 'strict') {
+    return { kind: 'blocked', reason: `OS 沙箱不可用（${reason}）。${sandboxInstallHint(process.platform)}` };
+  }
+  return { kind: 'plain', shell: argv[0]!, args: argv.slice(1), tag: `unsandboxed/net-off:${reason}` };
+}
+
 export { __setSandboxStateForTest, getSandboxState, reprobeSandbox } from './probe';
 export type { SandboxProbeState, CmdRunner } from './probe';
 export { __setSandboxSettingsForTest, getSandboxSettings } from './settings';

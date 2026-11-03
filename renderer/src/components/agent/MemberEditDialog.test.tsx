@@ -575,6 +575,29 @@ describe('MemberEditDialog — 插件工具覆盖（铁律 4/5：builtin 存量�
     });
   });
 
+  it('插件预置 agent（def.defaultTools 声明 plugin: ref）→ 声明不构成授权：不勾选 + 未授权引导（验收实锤）', async () => {
+    listAssembledTools.mockResolvedValue(TOOLS);
+    getMemberDeltasMock.mockResolvedValue({ ...EMPTY_DELTAS });
+    allocationGet.mockResolvedValue({
+      workspaceId: buildMember().workspaceId, tools: [], mcps: [], skills: [],
+    } satisfies WorkspaceAllocation);
+    const def = buildDef({
+      defaultTools: [
+        { kind: 'builtin', ref: 'read_file' },
+        { kind: 'builtin', ref: 'plugin:cg/explore' },
+      ],
+    });
+    render(<MemberEditDialog member={buildMember()} def={def} onClose={() => {}} />);
+    await screen.findByText('插件工具');
+    expect(screen.getByLabelText('启用 plugin:cg/explore')).not.toBeChecked();
+    expect(screen.getByText(/声明了 1 个插件工具但当前未授权/)).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('启用 plugin:cg/explore'));
+    fireEvent.click(screen.getByText('保存'));
+    await waitFor(() => expect(setMemberDeltasMock).toHaveBeenCalled());
+    const arg = setMemberDeltasMock.mock.calls[0]![1] as AssignmentDeltas;
+    expect(arg.addedPluginTools).toEqual(['plugin:cg/explore']);
+  });
+
   it('打开时回放成员级授权初值（added 行点亮对应工具；未授权不亮）', async () => {
     listAssembledTools.mockResolvedValue(TOOLS);
     getMemberDeltasMock.mockResolvedValue({

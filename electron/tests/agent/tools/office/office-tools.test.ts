@@ -1,9 +1,8 @@
-// OfficeTools 全链路（真实 tmp + 真实 WorkspaceFS + 真实 ReadTracker + 真实 journal store）。
+// OfficeTools 读侧全链路（spec 2026-11-03 §6 下线生成后：读/精读/复制三件；真实 tmp +
+// 真实 WorkspaceFS + 真实 ReadTracker + 真实 journal store）。夹具经插件 vendor 生成库构造。
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
-import AdmZip from 'adm-zip';
 import ExcelJS from 'exceljs';
-import PptxGenJS from 'pptxgenjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -54,67 +53,38 @@ afterEach(() => {
 });
 
 describe('handles / getDefs', () => {
-  it('全部工具名全部路由命中', () => {
-    for (const n of ['office_read', 'office_read_cells', 'office_create_excel', 'office_write_excel', 'office_create_doc', 'office_create_ppt', 'office_fill_ppt_template', 'office_create_pdf', 'office_copy']) {
+  it('只读三件全命中；已下线生成类不再命中（spec 2026-11-03 §6）', () => {
+    for (const n of ['office_read', 'office_read_cells', 'office_copy']) {
       expect(tools.handles(n)).toBe(true);
     }
-    expect(tools.handles('read_file')).toBe(false);
+    for (const gone of ['office_create_excel', 'office_write_excel', 'office_create_doc', 'office_create_ppt', 'office_fill_ppt_template', 'office_create_pdf', 'read_file']) {
+      expect(tools.handles(gone)).toBe(false);
+    }
+    expect(tools.getDefs().map((d) => d.name).sort()).toEqual(['office_copy', 'office_read', 'office_read_cells']);
   });
 });
 
-describe('office_create_excel', () => {
-  it('新建落盘 + 记账 create + blob 与磁盘一致', async () => {
-    const out = await tools.execute('office_create_excel', { path: '报表.xlsx', sheets: [{ name: '汇总', headers: ['A'] }] }, ctx);
-    expect(out).toContain('已创建');
-    expect(fs.existsSync(path.join(tmpDir, '报表.xlsx'))).toBe(true);
-    const entries = getJournalStore()!.listByPath('ws-office', '报表.xlsx');
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.op).toBe('create');
-    expect(entries[0]?.beforeHash).toBeNull();
-    const blob = getJournalStore()!.readBlobBytes('ws-office', entries[0]!.afterHash!);
-    expect(blob!.equals(fs.readFileSync(path.join(tmpDir, '报表.xlsx')))).toBe(true);
-  });
-  it('覆盖未读抛错（含 office_read 指引）', async () => {
-    fs.writeFileSync(path.join(tmpDir, 'x.xlsx'), 'old');
-    await expect(tools.execute('office_create_excel', { path: 'x.xlsx' }, ctx)).rejects.toThrow(/office_read/);
-  });
-});
 
-describe('office_write_excel', () => {
-  it('未读先写抛错；读后 add_sheet+set_cells 成功且记账 modify', async () => {
-    await tools.execute('office_create_excel', { path: 'w.xlsx' }, ctx);
-    ctx.readTracker = new ReadTracker(); // 重置已读状态
-    await expect(
-      tools.execute('office_write_excel', { path: 'w.xlsx', ops: [{ op: 'set_cells', sheet: 'Sheet1', values: [[1]] }] }, ctx),
-    ).rejects.toThrow(/office_read/);
-    await tools.execute('office_read', { path: 'w.xlsx' }, ctx);
-    const out = await tools.execute('office_write_excel', {
-      path: 'w.xlsx',
-      ops: [{ op: 'add_sheet', name: '汇总' }, { op: 'set_cells', sheet: '汇总', values: [['k', 'v']] }],
-    }, ctx);
-    expect(out).toContain('w.xlsx');
-    const entries = getJournalStore()!.listByPath('ws-office', 'w.xlsx');
-    expect(entries.at(-1)?.op).toBe('modify');
-    const wb = new ExcelJS.Workbook();
-    await wb.xlsx.readFile(path.join(tmpDir, 'w.xlsx'));
-    expect(wb.getWorksheet('汇总')!.getCell('A1').value).toBe('k');
-  });
-  it('文件不存在报错并指引 create', async () => {
-    await expect(
-      tools.execute('office_write_excel', { path: 'nope.xlsx', ops: [{ op: 'set_cells', sheet: 'S', values: [[1]] }] }, ctx),
-    ).rejects.toThrow(/office_create_excel/);
-  });
-});
+
+async function writeXlsxFixture(rel: string, sheetName = 'Sheet1'): Promise<void> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet(sheetName);
+  ws.addRow(['数量']);
+  ws.addRow([1]);
+  await wb.xlsx.writeFile(path.join(tmpDir, rel));
+}
 
 describe('office_copy', () => {
   it('复制后字节一致；目标存在未读抛错', async () => {
-    await tools.execute('office_create_excel', { path: 'src.xlsx', sheets: [{ name: 'S', headers: ['h'] }] }, ctx);
-    ctx.readTracker = new ReadTracker(); // 重置已读状态（create 落盘即标记已读，自复制目标须构造为未读）
-    await expect(tools.execute('office_copy', { from: 'src.xlsx', to: 'src.xlsx' }, ctx)).rejects.toThrow(/office_read/);
+    await writeXlsxFixture('src.xlsx');
+    ctx.readTracker = new ReadTracker();
+    fs.writeFileSync(path.join(tmpDir, 'dst.xlsx'), fs.readFileSync(path.join(tmpDir, 'src.xlsx')));
+    await expect(tools.execute('office_copy', { from: 'src.xlsx', to: 'dst.xlsx' }, ctx)).rejects.toThrow(/office_read/);
     const out = await tools.execute('office_copy', { from: 'src.xlsx', to: '副本.xlsx' }, ctx);
     expect(out).toContain('副本.xlsx');
     expect(fs.readFileSync(path.join(tmpDir, '副本.xlsx')).equals(fs.readFileSync(path.join(tmpDir, 'src.xlsx')))).toBe(true);
   });
+
   it('源不存在 / 旧格式报错', async () => {
     await expect(tools.execute('office_copy', { from: 'no.xlsx', to: 'b.xlsx' }, ctx)).rejects.toThrow(/不存在/);
     fs.writeFileSync(path.join(tmpDir, 'old.xls'), 'x');
@@ -122,148 +92,27 @@ describe('office_copy', () => {
   });
 });
 
-describe('office_fill_ppt_template（spec §14.9-3）', () => {
-  /** 1 页占位符模板（pptxgenjs 真生成；母版带 title/body 占位符） */
-  async function buildPlaceholderPptx(): Promise<Buffer> {
-    const pptx = new PptxGenJS();
-    pptx.layout = 'LAYOUT_16x9';
-    pptx.defineSlideMaster({
-      title: 'M',
-      objects: [
-        { placeholder: { options: { name: 'title', type: 'title', x: 0.5, y: 0.4, w: 9, h: 1 }, text: 't' } },
-        { placeholder: { options: { name: 'body', type: 'body', x: 0.7, y: 1.7, w: 8, h: 3 }, text: 'b' } },
-      ],
-    });
-    const s = pptx.addSlide({ masterName: 'M' });
-    s.addText('旧标题', { placeholder: 'title' });
-    s.addText([{ text: '旧要点', options: { bullet: true } }], { placeholder: 'body' });
-    const out = await pptx.write({ outputType: 'nodebuffer' });
-    return Buffer.from(out as Uint8Array);
-  }
-
-  it('填充产出新文件 + 记账 create + 模板文件字节不变 + 输出标记已读', async () => {
-    fs.writeFileSync(path.join(tmpDir, '模板.pptx'), await buildPlaceholderPptx());
-    const templateBytes = fs.readFileSync(path.join(tmpDir, '模板.pptx'));
-    const out = await tools.execute('office_fill_ppt_template', {
-      template: '模板.pptx',
-      path: 'filled.pptx',
-      slides: [{ title: '新标题', bullets: ['要点一', '要点二'] }],
-    }, ctx);
-    expect(out).toContain('filled.pptx');
-    // 另存语义：模板零修改
-    expect(fs.readFileSync(path.join(tmpDir, '模板.pptx')).equals(templateBytes)).toBe(true);
-    // 记账 create（copy 语义）且 after blob 与磁盘一致
-    const entries = getJournalStore()!.listByPath('ws-office', 'filled.pptx');
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.op).toBe('create');
-    expect(entries[0]?.beforeHash).toBeNull();
-    expect(getJournalStore()!.readBlobBytes('ws-office', entries[0]!.afterHash!)!.equals(
-      fs.readFileSync(path.join(tmpDir, 'filled.pptx')),
-    )).toBe(true);
-    // 产物内容真实生效
-    const zip = new AdmZip(path.join(tmpDir, 'filled.pptx'));
-    const slide = zip.readAsText('ppt/slides/slide1.xml');
-    expect(slide).toContain('新标题');
-    expect(slide).toContain('要点一');
-    // 输出标记已读：紧跟再填充同目标不抛未读错
-    const again = await tools.execute('office_fill_ppt_template', {
-      template: '模板.pptx',
-      path: 'filled.pptx',
-      slides: [{ title: '再填标题' }],
-    }, ctx);
-    expect(again).toContain('filled.pptx');
-    expect(getJournalStore()!.listByPath('ws-office', 'filled.pptx').at(-1)?.op).toBe('modify');
-  });
-  it('模板不存在 / 非 pptx 模板 / 输出与模板同路径 / 覆盖未读输出 报错', async () => {
-    await expect(tools.execute('office_fill_ppt_template', {
-      template: 'no.pptx', path: 'o.pptx', slides: [{ title: 'x' }],
-    }, ctx)).rejects.toThrow(/模板不存在/);
-    await tools.execute('office_create_doc', { path: 'd.docx', sections: [{ type: 'para', text: 'x' }] }, ctx);
-    await expect(tools.execute('office_fill_ppt_template', {
-      template: 'd.docx', path: 'o.pptx', slides: [{ title: 'x' }],
-    }, ctx)).rejects.toThrow(/pptx/);
-    fs.writeFileSync(path.join(tmpDir, 't.pptx'), await buildPlaceholderPptx());
-    await expect(tools.execute('office_fill_ppt_template', {
-      template: 't.pptx', path: 't.pptx', slides: [{ title: 'x' }],
-    }, ctx)).rejects.toThrow(/另存/);
-    fs.writeFileSync(path.join(tmpDir, 'exists.pptx'), 'old');
-    await expect(tools.execute('office_fill_ppt_template', {
-      template: 't.pptx', path: 'exists.pptx', slides: [{ title: 'x' }],
-    }, ctx)).rejects.toThrow(/office_read/);
-  });
-  it('symlink 别名指向模板 → 同路径守卫仍拒绝（realpath 归一，模板不被毁）', async () => {
-    fs.writeFileSync(path.join(tmpDir, 't2.pptx'), await buildPlaceholderPptx());
-    const before = fs.readFileSync(path.join(tmpDir, 't2.pptx'));
-    fs.symlinkSync(path.join(tmpDir, 't2.pptx'), path.join(tmpDir, 'alias.pptx'));
-    await expect(tools.execute('office_fill_ppt_template', {
-      template: 't2.pptx', path: 'alias.pptx', slides: [{ title: 'x' }],
-    }, ctx)).rejects.toThrow(/另存/);
-    expect(fs.readFileSync(path.join(tmpDir, 't2.pptx')).equals(before)).toBe(true);
-  });
-});
-
 describe('office_read / office_read_cells', () => {
-  it('读后标记已读（后续 write 过门）+ 精读含 sheet 名标签', async () => {
-    await tools.execute('office_create_excel', { path: 'r.xlsx' }, ctx);
+  it('预览含 sheet 名标签；精读返回区域数据', async () => {
+    await writeXlsxFixture('r.xlsx');
     const out = await tools.execute('office_read', { path: 'r.xlsx' }, ctx);
     expect(out).toContain('## Sheet: Sheet1');
-    // 已读标记验证：紧跟 write 不抛未读错
-    const w = await tools.execute('office_write_excel', { path: 'r.xlsx', ops: [{ op: 'set_cells', sheet: 'Sheet1', values: [[9]] }] }, ctx);
-    expect(w).toContain('r.xlsx');
     const cells = await tools.execute('office_read_cells', { path: 'r.xlsx', sheet: 'Sheet1' }, ctx);
     expect(cells).toContain('Sheet: Sheet1');
   });
+
   it('不支持扩展名与越界路径报错', async () => {
     fs.writeFileSync(path.join(tmpDir, 'a.txt'), 'x');
     await expect(tools.execute('office_read', { path: 'a.txt' }, ctx)).rejects.toThrow(/不支持的文档格式/);
     await expect(tools.execute('office_read', { path: '../outside.xlsx' }, ctx)).rejects.toThrow();
   });
+
   it('预置 abortSignal：office_read 与 read_cells 立即返回已中断', async () => {
     const ctl = new AbortController();
     ctl.abort();
     const abortedCtx = { ...ctx, abortSignal: ctl.signal };
-    await tools.execute('office_create_excel', { path: 'a.xlsx' }, ctx);
+    await writeXlsxFixture('a.xlsx');
     await expect(tools.execute('office_read', { path: 'a.xlsx' }, abortedCtx)).resolves.toBe('已中断');
     await expect(tools.execute('office_read_cells', { path: 'a.xlsx', sheet: 'Sheet1' }, abortedCtx)).resolves.toBe('已中断');
-  });
-});
-
-describe('office_create_doc', () => {
-  it('office_create_doc 覆盖已读目标：modify 记账且 beforeHash 非空、before blob 字节一致', async () => {
-    await tools.execute('office_create_doc', { path: 'd.docx', sections: [{ type: 'para', text: 'v1' }] }, ctx);
-    const v1Bytes = fs.readFileSync(path.join(tmpDir, 'd.docx'));
-    await tools.execute('office_read', { path: 'd.docx' }, ctx);
-    await tools.execute('office_create_doc', { path: 'd.docx', sections: [{ type: 'para', text: 'v2' }] }, ctx);
-    const entries = getJournalStore()!.listByPath('ws-office', 'd.docx');
-    const mod = entries.filter((e) => e.op === 'modify');
-    expect(mod).toHaveLength(1);
-    expect(mod[0]?.beforeHash).not.toBeNull();
-    const beforeBlob = getJournalStore()!.readBlobBytes('ws-office', mod[0]!.beforeHash!);
-    expect(beforeBlob).not.toBeNull(); // v1 文件字节（docx zip）
-    expect(beforeBlob!.equals(v1Bytes)).toBe(true);
-  });
-});
-
-describe('office_create_ppt 视觉能力（真实 WorkspaceFS 端到端）', () => {
-  it('插图经真实 wsFs 解析入包；越界图片路径被沙箱拒绝', async () => {
-    // 1x1 PNG：office_create_ppt → media 部件存在（pptxgenjs 仅嵌入不解析像素）
-    const png = Buffer.from(
-      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
-      'base64',
-    );
-    fs.writeFileSync(path.join(tmpDir, 'logo.png'), png);
-    const out = await tools.execute('office_create_ppt', {
-      path: 'v.pptx',
-      slides: [{ title: '带图', images: [{ path: 'logo.png' }], background: '1F3864' }],
-    }, ctx);
-    expect(out).toContain('v.pptx');
-    const zip = new AdmZip(path.join(tmpDir, 'v.pptx'));
-    expect(zip.getEntries().some((e) => /^ppt\/media\/.+\.png$/.test(e.entryName))).toBe(true);
-    // 越界（真实 WorkspaceFS 防御，端到端）：图片 path 不允许逃出 workspace
-    await expect(tools.execute('office_create_ppt', {
-      path: 'e.pptx',
-      slides: [{ title: '逃逸', images: [{ path: '../logo.png' }] }],
-    }, ctx)).rejects.toThrow();
-    expect(fs.existsSync(path.join(tmpDir, 'e.pptx'))).toBe(false);
   });
 });

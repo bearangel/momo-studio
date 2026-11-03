@@ -58,6 +58,8 @@ import { buildToolRegistry, executeTool as executeToolModule, getAllToolDefs } f
 import { assembleToolModules, toolSourceFor } from './tools/plugin-tools';
 import type { ToolModule, ToolContext } from './tools/types';
 import { ReadTracker } from './tools/shared/read-tracker';
+import { execSandboxed } from './tools/shared/sandboxed-exec';
+import { buildRecordCtx, recordChangeSafe, toJournalRelPath } from './tools/shared/change-journal';
 import { SkillRegistry } from '../skill/registry';
 import { sendStreamChunk, type StreamChunk } from './stream-chunk';
 // v2.6.0 断点续跑取 RebuiltTurn 类型；会话连续性 B 段（spec 2026-09-14 §4）取
@@ -2368,6 +2370,23 @@ export async function doExecuteTool(
       // 子进程落盘基准（apply_patch 备份）：主进程经 AGENT_CONFIG 定型注入；
       // 缺省（旧配置）由 apply-patch-tools 回退 os.tmpdir()
       userDataDir: config.userDataDir,
+      // v2.1 office-pro：受管沙箱执行 + 变更账本记账注入（插件 run_js 经
+      // ToolContext 消费，未注入时明确报错拒跑、不降级裸 spawn）。此处是
+      // 生产接线闭合点——曾漏装被「测试自 mock ctx」掩盖（2026-11-03 验收
+      // 发现），接线回归锁见 tests/agent/tools/officepro/runtime-wiring.test.ts。
+      execSandboxed,
+      // 闭包引用 toolCtx 自身（工具执行期才调用，初始化早已完成）：记账上下文
+      // 与工具实际拿到的 ctx 完全同源（含上方 taskId 回退链定型值与 roomId/
+      // streamSessionId），与 office-tools.ts 直调 buildRecordCtx 的形态一致。
+      recordFileChange: (toolName, relPath, op, before, after) => {
+        recordChangeSafe(
+          buildRecordCtx(toolName, toolCtx),
+          toJournalRelPath(toolCtx, relPath),
+          op,
+          before,
+          after,
+        );
+      },
     };
     return executeToolModule(name, call.arguments, toolCtx, ctx.toolModules);
   }
