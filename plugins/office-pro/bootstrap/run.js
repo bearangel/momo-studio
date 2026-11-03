@@ -93,6 +93,57 @@ for (const name of FS_ASYNC_DST) {
   fsp[name] = function guarded(src, dst, ...args) { assertWritable(dst); return orig.apply(fsp, [src, dst, ...args]); };
 }
 
+// fd 族：openSync / promises.open 按 flags 判写意图——只读（'r' / 'rs'）放行，
+// 其余字符串一律视为写（fail-closed，非法串由 Node 自身 EINVAL 兜底）；
+// 对象形态（个别调用方传 {flags:'w'}）递归读 .flags。
+function isWriteFlags(flags) {
+  if (typeof flags === 'string') return flags !== 'r' && flags !== 'rs';
+  if (flags && typeof flags === 'object') return isWriteFlags(flags.flags);
+  return false;
+}
+const origOpenSync = fs.openSync;
+fs.openSync = function guardedOpenSync(p, flags, ...args) {
+  if (isWriteFlags(flags)) assertWritable(p);
+  return origOpenSync.call(fs, p, flags, ...args);
+};
+const origOpenAsync = fsp.open;
+fsp.open = function guardedOpen(p, flags, ...args) {
+  if (isWriteFlags(flags)) assertWritable(p);
+  return origOpenAsync.apply(fsp, [p, flags, ...args]);
+};
+
+// 流族：createWriteStream 落点检查。对象形态取 opts.path（Node 必填），
+// 字符串/Buffer 形态直接交 assertWritable（内部 String() 归一）。
+const origCreateWriteStream = fs.createWriteStream;
+fs.createWriteStream = function guardedCreateWriteStream(p, ...args) {
+  const target = p && typeof p === 'object' && !Buffer.isBuffer(p) && 'path' in p ? p.path : p;
+  assertWritable(target);
+  return origCreateWriteStream.call(fs, p, ...args);
+};
+
+// 链接族：只查新建链接的落点（各 API 第 2 参）——symlink 的 target 指向
+// 沙箱外是合法用途（引用既有文件），链接本身必须落在沙箱内。
+const origSymlinkSync = fs.symlinkSync;
+fs.symlinkSync = function guardedSymlinkSync(target, p, ...args) {
+  assertWritable(p);
+  return origSymlinkSync.call(fs, target, p, ...args);
+};
+const origLinkSync = fs.linkSync;
+fs.linkSync = function guardedLinkSync(existing, p, ...args) {
+  assertWritable(p);
+  return origLinkSync.call(fs, existing, p, ...args);
+};
+const origSymlinkAsync = fsp.symlink;
+fsp.symlink = function guardedSymlink(target, p, ...args) {
+  assertWritable(p);
+  return origSymlinkAsync.apply(fsp, [target, p, ...args]);
+};
+const origLinkAsync = fsp.link;
+fsp.link = function guardedLink(existing, p, ...args) {
+  assertWritable(p);
+  return origLinkAsync.apply(fsp, [existing, p, ...args]);
+};
+
 // ③ 执行脚本：new Function 绑定 CJS 语义 + async 包裹（顶层 await 可用）
 (async () => {
   const code = fs.readFileSync(scriptPath, 'utf-8');
