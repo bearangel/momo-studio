@@ -6,6 +6,18 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — office-pro 插件：office 生成能力代码工坊化 + 核心生成类下线
+
+`2.1.0-alpha.57`。依据 spec `docs/specs/2026-11-03-office-pro-plugin-design.md`（已批准）+ 实施计划
+`docs/plans/2026-11-03-office-pro-plugin.md`（M1–M4 全量落地）。
+
+- **office-pro 插件（M2/M3）**：`run_js` 沙箱代码执行工具（ELECTRON_RUN_AS_NODE 子进程 + OS 沙箱复用 + net-off 固定 + 声明式 outputs 记账 + 读写门禁）+ bootstrap（vendor 白名单解析 / fs 写守卫含 fd·流·链接族 / 顶层 await）+ momo-libs（momo-chart 原生图表注入、momo-pptx-zip 模板手术、momo-validate 结构校验含 spc 字距红线）+ office-authoring skill（决策树/footgun/设计规范/QA）+ 文档工程师预置 agent（无 bash）
+- **沙箱层（M1）**：`resolveSandboxedSpawn`（任意 argv 包裹，网络恒关）+ `execSandboxed`（超时/中止进程组强杀、输出截断、env 白名单）+ ToolContext 设施注入（`execSandboxed` / `recordFileChange`，**生产接线含 runtime-entry 装配 + wiring 回归测试**）
+- **核心下线（M4）**：office 生成类六工具删除（create_cell/ppt/doc/pdf/fill_ppt_template），只读三件保留（office_read / office_read_cells / office_copy）；chart-xml/pptx-zip/fill/xlsx-zip 写侧随之退役（读侧图表摘要保留）；electron 依赖移除 pptxgenjs/docx/pdfkit；失效工具 ref 装配层过滤 + 启动 warn（存量 agent 可自诊）
+- **验收修复（隔离实例 + CDP 实测）**：①插件清单名对齐 `momo-plugin.json`；②成员编辑插件工具勾选按真实授权公式派生（声明≠授权）+ 未授权引导；③momo-validate 增 `spc>12pt` 字符间距异常检查（验收实锤：charSpacing 误传 150/180 致逐字竖排）；④skill 量化 charSpacing 单位与 0–2 安全范围
+- **测试**：electron **5243**（office 读侧重写 + 插件全链含真 vendor 冒烟 + 接线/变异锁）；renderer **3166**（D1 授权派生锁 + 变异验证）
+- **验收报告**：`.omo/qa-reports/2026-11-03-office-pro/`（9 pass / 0 fail / 3 n-a；D1/D6 闭环）
+
 ## [未发布] — 打磨包：D9 团队创建回填 / D11 首屏视觉 / D13 退避降噪 / D14 停止防御修 / D16 生效语义（+D15）
 
 `2.1.0-alpha.56`。来源：验收报告 P3 项。裁定：**D10 撤销**（用户裁定：官网取 key 自知格式，placeholder 形态提示无必要）。
