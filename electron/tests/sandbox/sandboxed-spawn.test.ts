@@ -64,6 +64,11 @@ describe('resolveSandboxedSpawn（任意 argv 包裹，net-off 固定）', () =>
       expect(fs.existsSync(plan.args[1]!)).toBe(true); // profile 已写盘
       expect(plan.args.slice(2)).toEqual(ARGV);
       expect(plan.cleanupFiles).toHaveLength(1);
+      // net-off 的 OS 层断言（终审 triage）：profile 必须 (deny default) 且不含 allow network*
+      const profile = fs.readFileSync(plan.args[1]!, 'utf-8');
+      expect(profile).toContain('(deny default)');
+      expect(profile).not.toContain('(allow network*');
+      try { fs.unlinkSync(plan.args[1]!); } catch { /* 清理容错 */ }
     }
   });
 
@@ -74,6 +79,8 @@ describe('resolveSandboxedSpawn（任意 argv 包裹，net-off 固定）', () =>
     if (plan.kind === 'wrapped') {
       expect(plan.tag).toBe('bwrap/net-off');
       expect(plan.args.slice(-ARGV.length)).toEqual(ARGV);
+      // net-off 的 OS 层断言（终审 triage）：bwrap 必须带 --unshare-net
+      expect(plan.args).toContain('--unshare-net');
     }
   });
 

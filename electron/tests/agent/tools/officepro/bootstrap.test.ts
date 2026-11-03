@@ -57,6 +57,39 @@ describe('bootstrap 沙箱入口', () => {
     expect(fs.existsSync(path.join(ws, 'ok.txt'))).toBe(true);
   });
 
+  // 终审 B1：fd 写白名单 + 只读 fd 语义 + callback 形态守卫
+  it('Review Focus：writeSync 伪造 fd → 拒绝（fd 未授权写入）', async () => {
+    const r = await run(`try { require('fs').writeSync(99, 'x'); console.log('SHOULD-NOT-PASS'); } catch (e) { console.log('GUARDED:' + e.message.slice(0, 12)); }`);
+    expect(r.stdout).toContain('GUARDED:沙箱写守卫拒绝');
+    expect(r.stdout).not.toContain('SHOULD-NOT-PASS');
+  });
+
+  it('守卫 open 拿到的可写 fd → writeSync 放行', async () => {
+    const r = await run(`const fs=require('fs'); const fd=fs.openSync('fd-ok.txt','w'); fs.writeSync(fd,'hi'); fs.closeSync(fd); console.log('fd-write-ok', fs.readFileSync('fd-ok.txt','utf8'));`);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('fd-write-ok hi');
+  });
+
+  it('只读 fd（open r）→ writeSync 由 OS 语义拒绝（EBADF/EACCES，不可借 r 打开写）', async () => {
+    const r = await run(`const fs=require('fs'); fs.writeFileSync('readonly.txt','seed'); const fd=fs.openSync('readonly.txt','r'); try { fs.writeSync(fd,'x'); console.log('SHOULD-NOT-PASS'); } catch (e) { console.log('READONLY-BLOCKED:' + (e.code||e.message).slice(0,10)); }`);
+    expect(r.stdout).toContain('READONLY-BLOCKED');
+    expect(r.stdout).not.toContain('SHOULD-NOT-PASS');
+  });
+
+  it('callback 形态 fs.writeFile 越界 → 拒绝', async () => {
+    const outside = path.join(path.parse(tmp).root, 'momo-cb-evil.txt');
+    // 守卫在参数校验期同步抛（Node 对非法参数同步抛的惯例）——try/catch 覆盖
+    const r = await run(`try { await new Promise((res, rej) => require('fs').writeFile(${JSON.stringify(outside)}, 'x', (e) => (e ? rej(e) : res()))); console.log('SHOULD-NOT-PASS'); } catch (e) { console.log('GUARDED:' + e.message.slice(0, 12)); }`);
+    expect(r.stdout).toContain('GUARDED:沙箱写守卫拒绝');
+    expect(r.stdout).not.toContain('SHOULD-NOT-PASS');
+  });
+
+  it('promises.open 写 flag 越界 → 拒绝', async () => {
+    const outside = path.join(path.parse(tmp).root, 'momo-open-evil.txt');
+    const r = await run(`try { await require('fs').promises.open(${JSON.stringify(outside)}, 'w'); console.log('SHOULD-NOT-PASS'); } catch (e) { console.log('GUARDED:' + e.message.slice(0, 12)); }`);
+    expect(r.stdout).toContain('GUARDED:沙箱写守卫拒绝');
+  });
+
   it('顶层 await 可用', async () => {
     const r = await run(`await new Promise((r2) => setTimeout(r2, 30)); console.log('tla-ok');`);
     expect(r.code).toBe(0);

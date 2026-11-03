@@ -118,16 +118,33 @@ function isWriteFlags(flags) {
   if (flags && typeof flags === 'object') return isWriteFlags(flags.flags);
   return false;
 }
+// fd 写授权集：0/1/2（stdio）+ 经守卫 open 拿到的可写 fd。writeSync(fd) 这类
+// 按 fd 写入无路径可查——白名单外一律拒绝（防借既有/伪造 fd 写任意目标，
+// 终审 B1）。只读 fd 的写入由 OS 语义兜底（POSIX EBADF；测试已锁）。
+const allowedWriteFds = new Set([0, 1, 2]);
 const origOpenSync = fs.openSync;
 fs.openSync = function guardedOpenSync(p, flags, ...args) {
-  if (isWriteFlags(flags)) assertWritable(p);
-  return origOpenSync.call(fs, p, flags, ...args);
+  const write = isWriteFlags(flags);
+  if (write) assertWritable(p);
+  const fd = origOpenSync.call(fs, p, flags, ...args);
+  if (write) allowedWriteFds.add(fd);
+  return fd;
 };
 const origOpenAsync = fsp.open;
 fsp.open = function guardedOpen(p, flags, ...args) {
   if (isWriteFlags(flags)) assertWritable(p);
   return origOpenAsync.apply(fsp, [p, flags, ...args]);
 };
+for (const name of ['writeSync', 'write', 'writevSync', 'writev']) {
+  const orig = fs[name];
+  if (typeof orig !== 'function') continue;
+  fs[name] = function guardedFdWrite(fd, ...args) {
+    if (!allowedWriteFds.has(fd)) {
+      throw new Error(`沙箱写守卫拒绝（fd 未授权写入）: fd=${String(fd)}`);
+    }
+    return orig.call(fs, fd, ...args);
+  };
+}
 
 // 流族：createWriteStream 落点检查。对象形态取 opts.path（Node 必填），
 // 字符串/Buffer 形态直接交 assertWritable（内部 String() 归一）。
@@ -135,8 +152,26 @@ const origCreateWriteStream = fs.createWriteStream;
 fs.createWriteStream = function guardedCreateWriteStream(p, ...args) {
   const target = p && typeof p === 'object' && !Buffer.isBuffer(p) && 'path' in p ? p.path : p;
   assertWritable(target);
-  return origCreateWriteStream.call(fs, p, ...args);
+  const ws = origCreateWriteStream.call(fs, p, ...args);
+  // 流的内部写入走 fd（fs.write 已被 fd 白名单守卫）——open 后登记该 fd
+  ws.once('open', (fd) => allowedWriteFds.add(fd));
+  return ws;
 };
+
+// callback 形态（终审 B1）：fs.writeFile(path, data, cb) 等回调 API 与 sync/promises
+// 同语义守卫——路径在首参，rename/copyFile 查目标（第 2 参）。
+const FS_CB_FIRST = ['writeFile', 'appendFile', 'unlink', 'mkdir', 'rm', 'rmdir', 'truncate'];
+const FS_CB_DST = ['rename', 'copyFile'];
+for (const name of FS_CB_FIRST) {
+  const orig = fs[name];
+  if (typeof orig !== 'function') continue;
+  fs[name] = function guardedCb(p, ...args) { assertWritable(p); return orig.call(fs, p, ...args); };
+}
+for (const name of FS_CB_DST) {
+  const orig = fs[name];
+  if (typeof orig !== 'function') continue;
+  fs[name] = function guardedCb(src, dst, ...args) { assertWritable(dst); return orig.call(fs, src, dst, ...args); };
+}
 
 // 链接族：只查新建链接的落点（各 API 第 2 参）——symlink 的 target 指向
 // 沙箱外是合法用途（引用既有文件），链接本身必须落在沙箱内。

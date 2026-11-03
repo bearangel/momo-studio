@@ -22,7 +22,7 @@ import {
   readAllocationLayer,
   readAssignmentDeltas,
 } from './capability-merger';
-import { ALL_BUILTIN_TOOLS } from './tools/catalog';
+import { collectKnownToolNames } from './known-tool-names';
 import { resolveSkillsDir } from '../paths';
 import {
   buildPluginToolRefs,
@@ -399,10 +399,8 @@ export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentR
   // 必须先于 return 计算——allowedTools 是权限白名单，未知名永远匹配不上，
   // 留着只会让「引用了已下线工具」静默失效；过滤 + warn 让存量 agent 可自查。
   const allPluginRefs = buildPluginToolRefs(workspaceId);
-  const knownToolNames = new Set<string>([
-    ...ALL_BUILTIN_TOOLS,
-    ...allPluginRefs.flatMap((r) => r.modulePaths.map((mp) => `plugin:${r.pluginId}/${path.basename(mp, '.js')}`)),
-  ]);
+  // known 域取自真实工具定义（插件工具名来自 getDefs().name，≠ 文件名——终审 B2）
+  const knownToolNames = collectKnownToolNames(workspaceId);
   const filteredTools = dropUnknownToolRefs(merged.tools, knownToolNames);
   if (filteredTools.dropped.length > 0) {
     logger.warn('能力引用了不存在或已下线的工具，已过滤', {
