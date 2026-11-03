@@ -16,10 +16,13 @@ function xmlRoughCheck(xml, part) {
   const errors = [];
   const body = xml.replace(/^\uFEFF/, '').trim();
   if (!body.startsWith('<')) return [`部件 ${part} 不以 < 开头（疑似二进制损坏）`];
+  // trim 必需：真实产物（pptxgenjs/exceljs）声明与根标签之间有 \r\n，剥声明后
+  // 前导空白会让下方 ^ 锚定的 open/自闭合分支失配（Task 4 接真实 pptxgenjs 产物时实证）
   const stripped = body
     .replace(/<\?[\s\S]*?\?>/g, '')
     .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '');
+    .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '')
+    .trim();
   if (/^<([A-Za-z_][\w.:-]*)[\s\S]*?\/>/.test(stripped)) return errors; // 自闭合根：合法
   const open = /^<([A-Za-z_][\w.:-]*)/.exec(stripped);
   const close = /<\/([A-Za-z_][\w.:-]*)\s*>$/.exec(stripped);
