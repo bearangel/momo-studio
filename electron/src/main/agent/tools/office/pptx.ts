@@ -43,36 +43,3 @@ export async function readPptx(abs: string, signal?: AbortSignal): Promise<strin
   }
   return parts.join('\n\n');
 }
-
-/** workspace 相对路径 → 绝对路径解析器（越界路径抛错）。
- * office-tools.ts 以箭头函数注入 ctx.wsFs.assertInWorkspace（方法读 this，禁止裸传引用）；
- * pptx.ts 本体不感知 WorkspaceFS 类型，保持与 workspace 模块解耦。 */
-export type WorkspacePathResolver = (rel: string) => string;
-
-/** 插图（parse 后形态）：path 保留入参相对路径供回显，abs 为已通过
- * assertInWorkspace + 存在性 + 扩展白名单校验的绝对路径（createPptx 读字节用） */
-export interface PptxImageSpec {
-  path: string;
-  abs: string;
-  x?: number;
-  y?: number;
-  w?: number;
-  h?: number;
-}
-
-export type PptxChartType = 'bar' | 'bar_h' | 'line' | 'pie';
-
-/** 图表（spec §14.9-4）：categories 与各 series.values 等长（parse 保证）；
- * pie 仅 1 个系列（对齐 excel add_chart 语义）；color 为 6 位 hex 系列色 */
-export interface PptxChartSpec {
-  type: PptxChartType;
-  categories: string[];
-  series: Array<{ name: string; values: number[]; color?: string }>;
-  title?: string;
-}
-
-/** 页型（2026-10-10 PPT 质量专项）：cover 封面 / section 章节隔页 / content 常规内容 /
- * chart 图表主体页 / closing 结尾页。缺省按内容自动推断（首页 cover、末页空内容
- * closing、含图表 chart、纯标题 section、其余 content）——默认即有版式感，
- * 不依赖 LLM 显式选型 */
-export type PptxSlideLayout = 'cover' | 'section' | 'content' | 'chart' | 'closing';
