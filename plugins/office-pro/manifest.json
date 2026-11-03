@@ -1,0 +1,12 @@
+{
+  "id": "office-pro",
+  "name": "Office Pro",
+  "version": "0.1.0",
+  "description": "office 文档生成代码工坊：run_js 沙箱执行 + office-authoring 方法论 + 文档工程师预置",
+  "minAppVersion": "2.1.0",
+  "components": {
+    "tools": "./tools",
+    "skills": "./skills",
+    "agents": "./agents"
+  }
+}

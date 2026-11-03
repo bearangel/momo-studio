@@ -1,0 +1,13 @@
+{
+  "name": "office-pro-vendor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "office-pro 插件运行库（内网安装：npm --offline --cache <预置缓存> 或私服 registry）",
+  "dependencies": {
+    "pptxgenjs": "^4.0.1",
+    "exceljs": "^4.4.0",
+    "docx": "^9.7.1",
+    "pdfkit": "^0.20.2",
+    "adm-zip": "^0.6.0"
+  }
+}

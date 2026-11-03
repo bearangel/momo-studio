@@ -15,3 +15,6 @@ playwright-report/
 .devcontainer
 plugins/codegraph/engine/
 plugins/codegraph/vendor/
+
+# office-pro vendor 构建产物（npm install 生成，不随 git 提交）
+plugins/office-pro/vendor/node_modules/
