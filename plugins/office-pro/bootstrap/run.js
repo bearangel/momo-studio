@@ -28,12 +28,29 @@ const VENDOR_LIBS = {
   'momo-pptx-zip': 'momo-libs/momo-pptx-zip/index.js',
   'momo-validate': 'momo-libs/momo-validate/index.js',
 };
+// exports['.'] 条件映射里取 CJS require 入口：字符串直用；对象按
+// node.require → require → default 顺序（Node CJS 解析同款优先级）。
+function exportsRequireEntry(exp) {
+  if (typeof exp === 'string') return exp;
+  if (!exp || typeof exp !== 'object') return null;
+  const node = exp.node;
+  if (typeof node === 'string') return node;
+  if (node && typeof node.require === 'string') return node.require;
+  if (typeof exp.require === 'string') return exp.require;
+  if (typeof exp.default === 'string') return exp.default;
+  return null;
+}
 function vendorEntry(name) {
   const p = path.join(vendorRoot, VENDOR_LIBS[name]);
   if (name.startsWith('momo-')) return p;
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(p, 'package.json'), 'utf-8'));
-    return path.join(p, typeof pkg.main === 'string' && pkg.main ? pkg.main : 'index.js');
+    if (typeof pkg.main === 'string' && pkg.main) return path.join(p, pkg.main);
+    // main 缺失时回退 exports['.']（真包首次接验：pdfkit@0.17 仅声明 exports 无 main，
+    // 旧逻辑回退 index.js 必 ENOENT）。
+    const viaExports = exportsRequireEntry(pkg.exports && pkg.exports['.']);
+    if (viaExports) return path.join(p, viaExports);
+    return path.join(p, 'index.js');
   } catch (_e) {
     return path.join(p, 'index.js');
   }
