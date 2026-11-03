@@ -9,7 +9,7 @@ import { PLUGIN_ROOT } from './fixtures';
 
 describe('office-pro 插件 manifest 与预置 agent', () => {
   it('manifest 通过 validateManifest（含交叉引用：run_js ↔ tools/run_js.js、office-authoring ↔ skills 子目录）', () => {
-    const manifest = parseManifest(fs.readFileSync(path.join(PLUGIN_ROOT, 'manifest.json'), 'utf-8'));
+    const manifest = parseManifest(fs.readFileSync(path.join(PLUGIN_ROOT, 'momo-plugin.json'), 'utf-8'));
     expect(() => validateManifest(manifest, PLUGIN_ROOT)).not.toThrow();
   });
 
