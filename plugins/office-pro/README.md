@@ -13,7 +13,7 @@ office 文档生成代码工坊插件：在 Momo Studio 的 run_js 沙箱里执�
 
 ```
 plugins/office-pro/
-├── manifest.json          # 插件清单（id / 版本 / 组件入口）
+├── momo-plugin.json          # 插件清单（id / 版本 / 组件入口）
 ├── tools/                 # 插件工具（run_js 等，M3+）
 ├── bootstrap/             # 沙箱引导脚本（M3+）
 ├── skills/office-authoring/  # office 编写方法论 skill（M4+）
