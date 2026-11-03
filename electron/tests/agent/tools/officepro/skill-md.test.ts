@@ -22,4 +22,12 @@ describe('office-authoring SKILL.md', () => {
       expect(def.body).toContain(keyword);
     }
   });
+
+  // charSpacing 事故防线（验收实锤：150/180 产出逐字竖排）——单位与安全范围必须写进 skill
+  it('footgun 含 charSpacing 单位与安全范围', () => {
+    const def = parseSkillMd(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf-8'), skillDir);
+    expect(def.body).toContain('charSpacing');
+    expect(def.body).toMatch(/单位是 point/);
+    expect(def.body).toMatch(/0–2|0-2/);
+  });
 });

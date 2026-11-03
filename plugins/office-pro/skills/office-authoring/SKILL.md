@@ -33,7 +33,7 @@ tags: [office, pptx, xlsx, docx, pdf]
 
 正确用法：
 - 颜色 hex **不带 #**：`{ color: '1F4E79' }`
-- 字距参数是 `charSpacing`（写 `letterSpacing` 静默失效）
+- 字距参数是 `charSpacing`（写 `letterSpacing` 静默失效）。**单位是 point，安全范围 0–2**（正常排版基本不需要）；**绝不传百分比/倍数直觉值**——传 150/180 会让每个字后垫半页空白，PowerPoint 渲染成逐字竖排并压住其他元素（验收实锤的最高代价事故）
 - 双轴图必须 `valAxes` + `catAxes` 成对给出
 - options 对象会被**原地 mutate**（内部做 EMU 换算）——同一个字面量不要复用
 - 版面单位英寸；16:9 为 10 × 5.625
