@@ -9,6 +9,7 @@ import type { StreamChunk } from '../stream-chunk';
 import type { ToolCatalogEntry } from './catalog-entry';
 import type { ToolPermissionConfig } from './shared/permission';
 import type { ReadTracker } from './shared/read-tracker';
+import type { SandboxedExecRequest, SandboxedExecResult } from './shared/sandboxed-exec';
 
 /** 工具执行时的共享上下文。runtime-entry 在每次工具调用前组装并传入。 */
 export interface ToolContext {
@@ -57,6 +58,20 @@ export interface ToolContext {
    * 以此为基准；缺省（测试直调 / 旧配置）由消费方回退 os.tmpdir()。
    */
   userDataDir?: string;
+  /**
+   * v2.1 office-pro（spec 2026-11-03 §5.2）：受管沙箱执行（决策 + 收集 + 超时/
+   * 中止强杀 + 输出截断）。插件工具无法 import 内部模块，经 ctx 注入；未注入
+   * （旧调用方/单测直调）时消费方必须拒绝执行，不得降级裸 spawn。
+   */
+  execSandboxed?: (req: SandboxedExecRequest) => Promise<SandboxedExecResult>;
+  /** v2.1 office-pro：变更账本记账薄封装（recordChangeSafe 同参语义；toolName 用完整工具名） */
+  recordFileChange?: (
+    toolName: string,
+    relPath: string,
+    op: 'create' | 'modify' | 'delete',
+    before: string | Buffer | null,
+    after: string | Buffer | null,
+  ) => unknown;
 }
 
 /** 工具模块统一接口。每个类别一个实现。 */
