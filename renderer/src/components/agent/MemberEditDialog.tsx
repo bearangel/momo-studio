@@ -95,9 +95,12 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
     removedPluginTools: [],
   });
   // 授权模型（spec 2026-10-21 §6）：勾=授权行；生效=(ws授权∪added)−(removed∪def禁)。
-  // ws 授权基线取 defaultCaps（Layer1∪Layer2——def.defaultTools 仅 builtin ref，
-  // defCaps 恒不含 plugin: 模式；终审 I-1 修复）
-  const wsGranted = defaultCaps.tools.filter((t) => t.startsWith('plugin:'));
+  // ws 授权基线只取 allocation（Layer2）——**不得含 def.defaultTools**：运行时
+  // grants 公式为 allocation ∪ addedPluginTools，def 层 ref 不构成授权；若按
+  // defCaps 派生会显示「已勾选」而运行时不生效（验收实锤：插件预置 agent 的
+  // def 声明 run_js 时 tool 消失）。def 声明仅作意图提示，未授权时下方给引导。
+  const [allocCaps, setAllocCaps] = useState<Capabilities>({ tools: [], mcps: [], skills: [] });
+  const wsGranted = allocCaps.tools.filter((t) => t.startsWith('plugin:'));
   const pluginChecked = effectivePluginGranted(
     def.deniedTools ?? [],
     pluginDeltas,
@@ -107,6 +110,10 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
   const handlePluginToggle = (changed: string, on: boolean): void => {
     setPluginDeltas((prev) => computePluginToolGrants(def.deniedTools ?? [], prev, changed, on));
   };
+  const declaredPluginRefs = (def.defaultTools ?? [])
+    .map((t) => t.ref)
+    .filter((ref) => ref.startsWith('plugin:'));
+  const declaredUngranted = declaredPluginRefs.filter((ref) => !pluginChecked.includes(ref));
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -128,6 +135,7 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
         if (cancelled) return;
         const merged = mergeDefault(defCaps, alloc);
         setDefaultCaps(merged);
+        setAllocCaps({ tools: alloc.tools ?? [], mcps: alloc.mcps ?? [], skills: alloc.skills ?? [] });
         setInitialDeltas(deltas);
         setValue(applyDeltas(merged, deltas));
         setPluginDeltas({
@@ -266,6 +274,11 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
                   onToggle={handlePluginToggle}
                   disabled={false}
                 />
+                {declaredUngranted.length > 0 && (
+                  <p className="text-xs text-status-warning">
+                    该智能体定义声明了 {declaredUngranted.length} 个插件工具但当前未授权（{declaredUngranted.join('、')}）——勾选上方对应项后保存即可生效
+                  </p>
+                )}
               </section>
             )}
 
