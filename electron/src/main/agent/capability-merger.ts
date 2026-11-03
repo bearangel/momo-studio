@@ -107,3 +107,20 @@ export function readAllocationLayer(workspaceId: string): WorkspaceAllocation {
 export function readAssignmentDeltas(instanceId: string): AssignmentDeltas {
   return getAssignmentDeltas(instanceId);
 }
+
+/**
+ * 已知工具名集合外的 ref 过滤（spec 2026-11-03 §6.3）：引用已下线/不存在工具的
+ * ref 丢弃并回报，供装配层打 warn——存量自定义 agent 的 defaultTools 引用了
+ * 已删工具（如 office_create_ppt）时启动可见提示，不崩。
+ */
+export function dropUnknownToolRefs(
+  refs: string[],
+  knownNames: ReadonlySet<string>,
+): { kept: string[]; dropped: string[] } {
+  const kept: string[] = [];
+  const dropped: string[] = [];
+  for (const ref of refs) {
+    (knownNames.has(ref) ? kept : dropped).push(ref);
+  }
+  return { kept, dropped };
+}

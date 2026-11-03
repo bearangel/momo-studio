@@ -17,10 +17,12 @@
 import path from 'node:path';
 import { loadElectronApis } from '../electron-access';
 import {
+  dropUnknownToolRefs,
   mergeCapabilities,
   readAllocationLayer,
   readAssignmentDeltas,
 } from './capability-merger';
+import { ALL_BUILTIN_TOOLS } from './tools/catalog';
 import { resolveSkillsDir } from '../paths';
 import {
   buildPluginToolRefs,
@@ -393,6 +395,21 @@ export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentR
   const allocation = readAllocationLayer(workspaceId);
   const deltas = readAssignmentDeltas(instanceId);
   const merged = mergeCapabilities(def, allocation, deltas);
+  // spec 2026-11-03 §6.3：失效 ref 过滤（插件工具全名 + 内置全集为已知域）。
+  // 必须先于 return 计算——allowedTools 是权限白名单，未知名永远匹配不上，
+  // 留着只会让「引用了已下线工具」静默失效；过滤 + warn 让存量 agent 可自查。
+  const allPluginRefs = buildPluginToolRefs(workspaceId);
+  const knownToolNames = new Set<string>([
+    ...ALL_BUILTIN_TOOLS,
+    ...allPluginRefs.flatMap((r) => r.modulePaths.map((mp) => `plugin:${r.pluginId}/${path.basename(mp, '.js')}`)),
+  ]);
+  const filteredTools = dropUnknownToolRefs(merged.tools, knownToolNames);
+  if (filteredTools.dropped.length > 0) {
+    logger.warn('能力引用了不存在或已下线的工具，已过滤', {
+      instanceId,
+      dropped: filteredTools.dropped,
+    });
+  }
   // 插件 skill 池（启用插件）与授权 slug 集合（spec §6：∩ merged.skills）
   const pluginSkillRefs = buildPluginSkillRefs(workspaceId);
   const pluginSkillSlugs = new Set(pluginSkillRefs.map((r) => r.slug));
@@ -414,7 +431,8 @@ export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentR
     role,
     subAgents,
     // v1.6 修复：allowedTools 来自三层合并后的 merged.tools（非 undefined）
-    allowedTools: merged.tools,
+    // spec 2026-11-03 §6.3：再滤失效 ref（未知名永远匹配不上白名单，过滤即显式化）
+    allowedTools: filteredTools.kept,
     // agent 级工具门控：三层合并终态（def 级基线 ∪ 成员 removed − 成员 added，
     // capability-merger 第 4 输出——builtin 只读对象经成员 deltas 管理的唯一通道）
     deniedTools: merged.deniedTools,
@@ -429,7 +447,7 @@ export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentR
     // 插件工具装配快照（spec §6 白名单）：授权集 = ws allocation ∪ 成员勾选，
     // 再剔黑名单（deniedTools 终态——黑名单优先保守语义）；spawn 时定型
     pluginTools: filterPluginToolRefsByGrant(
-      buildPluginToolRefs(workspaceId),
+      allPluginRefs,
       [...new Set([...allocation.tools, ...(deltas.addedPluginTools ?? [])])],
       merged.deniedTools,
     ),
