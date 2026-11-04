@@ -20,7 +20,7 @@ import { wirePanelEventPush } from './plugin/panel-sync';
 import { wireHookBridgeAudit } from './plugin/hook-bridge-main';
 import { stopAllPluginServices } from './plugin/service-manager';
 import { runLegacyUpgradeIfNeeded, writeLegacyUpgradeNotice } from './upgrade/legacy-upgrade';
-import { setSessionMainWindow, broadcastRuntimeChanged } from './im/session-service';
+import { broadcastRuntimeChanged } from './im/session-service';
 import { initTaskRuntime, stopTaskRuntime } from './task/runtime-init';
 import { logger } from './logger';
 import { destroyAllTaskDrivenRuntimes } from './agent/runtime-registry';
@@ -35,7 +35,7 @@ import { sweepStaleStreaming } from './task/resume';
 import { reconcileDispatchTasksAtBoot } from './agent/dispatch-task-ledger';
 import { sweepTaggedOrphans } from './sandbox/process-registry';
 import { backfillAllCompactSnapshotsInBackground } from './storage/messages/event-compaction';
-import { assembleBrowserSubsystem } from './browser/boot';
+import { assembleBrowserSubsystem, type BrowserBootHandle } from './browser/boot';
 import { initRealViewFactory } from './browser/view-factory';
 import { BROWSER_SHOT_SCHEME } from './browser/protocol';
 // browser 工具 IPC 桥（主机验收 P0 修复）：runtime 子进程 browser-op 请求的
@@ -54,6 +54,10 @@ import { wireKeychainScope } from './storage/keychain';
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
+  // 浏览器子系统句柄提升到本层：app.on('activate') 窗口重建路径需要再接线
+  // （boot 期 whenReady 内组装赋值；未完成时为 null，重建路径可选链安全跳过）
+  let browserBootRef: BrowserBootHandle | null = null;
+
   app.on('second-instance', () => {
     // 兜底取第一个可见窗口（主窗口引用不可用时经 BrowserWindow 全局面获取；
     // 不可见窗口不抢焦点；无可见窗口时安静返回）
@@ -232,12 +236,14 @@ if (!app.requestSingleInstanceLock()) {
       });
 
       const win = createMainWindow();
-      setSessionMainWindow(win);
+      // 推送目标窗口不在此注入：session-service 各推送按推送时点动态解析当前窗口
+      // （窗口销毁重建后不断链，2026-11-04 主机 P0）
 
       // v2.7：视图叠加接线——create/destroy 时 addChildView/removeChildView 到主窗口
       // contentView（占位区 rect 由 renderer 上报 → manager.setBounds）；
       // 推送面/IPC invoke 面定标到主窗口 webContents（16 通道注册）；
       // before-quit → disposeAll 销毁活跃视图（partition 数据落盘）
+      browserBootRef = browserBoot;
       browserBoot.factory.setMountTarget(win.contentView);
       browserBoot.attachToWindow(ipcMain, win.webContents);
       browserBoot.bindLifecycle(app);
@@ -267,7 +273,15 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
+    if (BrowserWindow.getAllWindows().length !== 0) return;
+    const win = createMainWindow();
+    // 窗口重建再接线（macOS 关窗 → dock 重开，2026-11-04 姊妹 P0）：浏览器子系统
+    // 挂载面换新 contentView（setMountTarget 迁移存活 tab/overlay 视图）+ 推送面
+    // 重定标（attachToWindow 二次调用仅重定标不重注册——ipcRegistered 守卫）；
+    // session-service 推送已按当前窗口动态解析无需处理；boot 未完成（null）时
+    // 可选链安全跳过
+    browserBootRef?.factory.setMountTarget(win.contentView);
+    browserBootRef?.attachToWindow(ipcMain, win.webContents);
   });
 
   app.on('before-quit', () => {

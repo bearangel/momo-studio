@@ -13,11 +13,12 @@
 //     workspace_agent_members / workspaces.default_agent_instance_id）
 //   - 命名接线走真实 session-naming（applyFirstMessageTitle 纯 DB 路径，无 LLM）
 //   - router 经 setSessionRouter 注入满足 SessionRouter 结构的 spy 对象
+//   - 推送窗口经 __setElectronApisForTest 注入假 BrowserWindow（getAllWindows
+//     动态解析面）——与生产 stream-relay.pushSessionMessage 同一解析语义
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import type { BrowserWindow } from 'electron';
 
 // logger mock：断言「router 缺席导致派发跳过」的 warn 留痕（防静默死路回归）
 vi.mock('../../src/main/logger', () => ({
@@ -28,11 +29,13 @@ import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertSession, addSessionMember, getSession } from '../../src/main/storage/sessions/repo';
 import { insertTask, getTask } from '../../src/main/storage/tasks/repo';
 import { logger } from '../../src/main/logger';
+import { __setElectronApisForTest } from '../../src/main/electron-access';
 import {
   resolveTarget,
   sendUserMessage,
+  broadcastRuntimeChanged,
+  broadcastSessionListChanged,
   setSessionRouter,
-  setSessionMainWindow,
 } from '../../src/main/im/session-service';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-session-service-${Date.now()}`);
@@ -67,10 +70,27 @@ function seedMember(
   ).run(instanceId, defId, `@${instanceId}:s`, opts?.lastRunning ?? 1);
 }
 
-function makeFakeWindow(): { win: BrowserWindow; send: ReturnType<typeof vi.fn> } {
+/** 假窗口结构面（BrowserWindowLike 元素形状；send 为 mock 供断言） */
+interface FakeWindow {
+  isDestroyed(): boolean;
+  webContents: { send: ReturnType<typeof vi.fn> };
+}
+
+function makeFakeWindow(): { win: FakeWindow; send: ReturnType<typeof vi.fn> } {
   const send = vi.fn();
-  const win = { isDestroyed: () => false, webContents: { send } } as unknown as BrowserWindow;
-  return { win, send };
+  return { win: { isDestroyed: () => false, webContents: { send } }, send };
+}
+
+/**
+ * 注入假 BrowserWindow 静态面（getAllWindows 动态解析）——生产推送目标的
+ * 真实解析路径。销毁窗口工厂供错误路径用例复用。
+ */
+function installFakeWindows(wins: FakeWindow[]): void {
+  __setElectronApisForTest({ BrowserWindow: { getAllWindows: () => wins } });
+}
+
+function makeDestroyedWindow(): FakeWindow {
+  return { isDestroyed: () => true, webContents: { send: vi.fn() } };
 }
 
 function makeSpyRouter() {
@@ -88,7 +108,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setSessionRouter(null);
-  setSessionMainWindow(null);
+  __setElectronApisForTest(null);
   closeDb();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
   delete process.env.AP_USER_DATA_DIR;
@@ -203,7 +223,7 @@ describe('sendUserMessage 全链', () => {
     addSessionMember(s.id, 'inst-a', true);
 
     const { win, send } = makeFakeWindow();
-    setSessionMainWindow(win);
+    installFakeWindows([win]);
     const { router, routeUserChat } = makeSpyRouter();
     setSessionRouter(router);
 
@@ -384,7 +404,7 @@ describe('sendUserMessage 全链', () => {
     insertTask({ id: 'T-2', workspaceId: 'ws1', title: '被提及', creatorUserId: '@owner:s', status: 'pending' });
 
     const { win, send } = makeFakeWindow();
-    setSessionMainWindow(win);
+    installFakeWindows([win]);
     const { router } = makeSpyRouter();
     setSessionRouter(router);
 
@@ -433,7 +453,7 @@ describe('sendUserMessage 全链', () => {
     insertTask({ id: 'T-005', workspaceId: 'ws1', title: '被描述提及', creatorUserId: '@owner:s', status: 'pending' });
 
     const { win, send } = makeFakeWindow();
-    setSessionMainWindow(win);
+    installFakeWindows([win]);
     const { router, routeUserChat } = makeSpyRouter();
     setSessionRouter(router);
 
@@ -503,7 +523,7 @@ describe('sendUserMessage 全链', () => {
     insertTask({ id: 'T-005', workspaceId: 'ws1', title: '被描述提及', creatorUserId: '@owner:s', status: 'pending' });
 
     const { win, send } = makeFakeWindow();
-    setSessionMainWindow(win);
+    installFakeWindows([win]);
     const { router } = makeSpyRouter();
     setSessionRouter(router);
 
@@ -652,5 +672,69 @@ describe('sendUserMessage 全链', () => {
       .prepare('SELECT context_json FROM messages WHERE session_id = ? ORDER BY created_at DESC LIMIT 1')
       .get(s.id) as { context_json: string | null };
     expect(row.context_json).not.toBeNull();
+  });
+});
+
+// === 推送窗口解析回归锁（2026-11-04 主机 P0）===
+// 复现：macOS 红绿灯关窗（窗口 #1 销毁，darwin 下 app 存活）→ dock 重新激活走
+// app.on('activate') 重建窗口 #2。旧实现经 setSessionMainWindow 注入的模块级
+// 引用永远停在窗口 #1：pushMessageRow 判 isDestroyed 后静默丢弃——用户消息
+// 落库但 renderer 永不显示；同期 agent 消息行走 stream-relay 的
+// BrowserWindow.getAllWindows()[0] 动态解析，正常显示。「同一通道两种窗口
+// 解析」即契约漂移，本组用例锁死四通道全部按当前窗口动态解析。
+describe('推送窗口解析（窗口销毁重建后不断链）', () => {
+  it('窗口重建后 sendUserMessage 的 session:message 推到当前窗口（owner 消息实时可见）', async () => {
+    const db = getDb();
+    seedWorkspace(db, 'ws1');
+    seedAgentDef(db, 'def-a', 'A');
+    seedMember(db, 'inst-a', 'def-a');
+    const s = insertSession({ workspaceId: 'ws1', title: '快速会话' });
+    addSessionMember(s.id, 'inst-a', true);
+    setSessionRouter(makeSpyRouter().router);
+
+    // 旧窗口已销毁摘除（getAllWindows 只含重建后的新窗口）
+    const { win, send } = makeFakeWindow();
+    installFakeWindows([win]);
+
+    await sendUserMessage({ sessionId: s.id, body: '重建后的第一条' });
+
+    const row = db
+      .prepare('SELECT id FROM messages WHERE session_id = ?')
+      .get(s.id) as { id: string };
+    expect(send).toHaveBeenCalledWith(
+      'session:message',
+      expect.objectContaining({ id: row.id, sessionId: s.id, sender: 'owner', body: '重建后的第一条' }),
+    );
+  });
+
+  it('broadcastRuntimeChanged / broadcastSessionListChanged 推到当前窗口', () => {
+    const { win, send } = makeFakeWindow();
+    installFakeWindows([win]);
+
+    broadcastRuntimeChanged();
+    broadcastSessionListChanged();
+
+    expect(send).toHaveBeenCalledWith('agent:runtimeChanged');
+    expect(send).toHaveBeenCalledWith('session:listChanged');
+  });
+
+  it('getAllWindows 首窗口已销毁 → 静默跳过不抛错（消息仍落库）', async () => {
+    const db = getDb();
+    seedWorkspace(db, 'ws1');
+    seedAgentDef(db, 'def-a', 'A');
+    seedMember(db, 'inst-a', 'def-a');
+    const s = insertSession({ workspaceId: 'ws1', title: '快速会话' });
+    addSessionMember(s.id, 'inst-a', true);
+    setSessionRouter(makeSpyRouter().router);
+
+    const destroyed = makeDestroyedWindow();
+    installFakeWindows([destroyed]);
+
+    await expect(
+      sendUserMessage({ sessionId: s.id, body: '无窗口可达' }),
+    ).resolves.toEqual({ readOnly: false });
+    expect(destroyed.webContents.send).not.toHaveBeenCalled();
+    const rows = db.prepare('SELECT id FROM messages WHERE session_id = ?').all(s.id) as unknown[];
+    expect(rows).toHaveLength(1);
   });
 });

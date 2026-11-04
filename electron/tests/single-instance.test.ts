@@ -58,7 +58,6 @@ const b = vi.hoisted(() => ({
   runMigrations: vi.fn(),
   runLegacyUpgradeIfNeeded: vi.fn(async (): Promise<string | null> => null),
   writeLegacyUpgradeNotice: vi.fn(),
-  setSessionMainWindow: vi.fn(),
   broadcastRuntimeChanged: vi.fn(),
   initTaskRuntime: vi.fn(),
   stopTaskRuntime: vi.fn(),
@@ -87,7 +86,6 @@ vi.mock('../src/main/upgrade/legacy-upgrade', () => ({
   writeLegacyUpgradeNotice: b.writeLegacyUpgradeNotice,
 }));
 vi.mock('../src/main/im/session-service', () => ({
-  setSessionMainWindow: b.setSessionMainWindow,
   broadcastRuntimeChanged: b.broadcastRuntimeChanged,
 }));
 vi.mock('../src/main/task/runtime-init', () => ({
@@ -161,6 +159,13 @@ function mkWindow(opts: { visible: boolean; minimized: boolean }) {
 function getSecondInstanceCb(): () => void {
   const hit = h.onCalls.find((c) => c.event === 'second-instance');
   if (!hit) throw new Error('second-instance 未注册');
+  return hit.cb;
+}
+
+/** 从 app.on 捕获里取 activate 回调（macOS 关窗 → dock 重开的窗口重建路径） */
+function getActivateCb(): () => void {
+  const hit = h.onCalls.find((c) => c.event === 'activate');
+  if (!hit) throw new Error('activate 未注册');
   return hit.cb;
 }
 
@@ -255,5 +260,39 @@ describe('单实例锁：有锁分支', () => {
     await loadMain();
 
     expect(() => getSecondInstanceCb()()).not.toThrow();
+  });
+});
+
+// === activate 窗口重建接线锁（2026-11-04 姊妹 P0）===
+// macOS 红绿灯关窗（darwin 下 app 存活）→ dock 重开走 activate 重建窗口。
+// 重建后浏览器子系统必须再接线（挂载面随迁 + 推送面重定标）——本 harness 的
+// whenReady 永不 resolve（boot 体不执行、browserBootRef 停留 null），锁的是
+// 重建分支自身的接线形状与 null 安全；随迁/重定标语义由 view-factory.test.ts
+// 与 boot-wiring.test.ts 各自锁定。
+describe('activate（窗口重建路径）', () => {
+  it('无窗口 → 重建主窗口', async () => {
+    h.getAllWindows.mockReturnValue([]);
+    await loadMain();
+
+    getActivateCb()();
+
+    expect(b.createMainWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it('已有窗口 → 不重复建窗', async () => {
+    h.getAllWindows.mockReturnValue([mkWindow({ visible: true, minimized: false })]);
+    await loadMain();
+
+    getActivateCb()();
+
+    expect(b.createMainWindow).not.toHaveBeenCalled();
+  });
+
+  it('boot 未完成（browserBootRef=null）→ 重建不抛错（可选链守卫）', async () => {
+    h.getAllWindows.mockReturnValue([]);
+    await loadMain(); // whenReady 永不 resolve——browserBootRef 停留 null
+
+    expect(() => getActivateCb()()).not.toThrow();
+    expect(b.createMainWindow).toHaveBeenCalledTimes(1);
   });
 });

@@ -9,11 +9,12 @@
 //   → push session:message 到 renderer → P2P 广播（fire-and-forget）
 //   → 冲突检测（失败不阻塞）→ resolveTarget → router.routeUserChat
 //
-// 依赖注入（与 sync-manager 的 setMainWindow / router-bootstrap 的 setBridgeRouter 同法）：
+// 依赖注入（与 router-bootstrap 的 setBridgeRouter 同法）：
 //   - setSessionRouter：RouterService 由 router-bootstrap lazy 启动后注入；null 表示未就绪
-//   - setSessionMainWindow：主窗口由 main/index.ts 创建后注入
 //
-// 对 electron 仅做 type-only import——模块在测试进程（无 Electron 运行时）可安全加载。
+// 推送目标窗口动态解析（BrowserWindow.getAllWindows()[0]，与 stream-relay.pushSessionMessage
+// 同法）——不持模块级窗口引用。对 electron 的访问经 loadElectronApis 惰性取用，
+// 模块在测试进程（无 Electron 运行时）可安全加载。
 
 import {
   insertMessage,
@@ -39,7 +40,7 @@ import { applyFirstMessageTitle } from './session-naming';
 import { getSessionMembersInfo, type SessionMemberInfo } from './session-ops';
 import { SESSION_COMMANDS, isKnownSessionCommand, COMPACT_ACK_EVENT_TYPE } from './commands';
 import type { MessageContext } from '../../../../renderer/src/ipc/types';
-import type { BrowserWindow } from 'electron';
+import { loadElectronApis } from '../electron-access';
 import { logger } from '../logger';
 
 /** 进程内路由器最小契约（RouterService 的结构子集；避免直接依赖 agent 模块防循环引用） */
@@ -65,11 +66,23 @@ export function setSessionRouter(svc: SessionRouter | null): void {
   router = svc;
 }
 
-/** 模块级注入：主窗口引用（push session:message / im:conflict / agent:runtimeChanged 用） */
-let mainWindow: BrowserWindow | null = null;
-
-export function setSessionMainWindow(win: BrowserWindow | null): void {
-  mainWindow = win;
+/**
+ * 推送到当前主窗口 renderer（动态解析）。
+ *
+ * 2026-11-04 主机 P0：此前经 setSessionMainWindow 注入的模块级引用，在 macOS
+ * 关窗 → dock 重新激活重建窗口后仍指向已销毁旧窗口——pushMessageRow 判
+ * isDestroyed 即静默丢弃，用户消息落库但 renderer 永不显示（同期 agent 行走
+ * stream-relay 动态解析正常显示）。同一通道（session:message）两种窗口解析
+ * 即契约漂移；本模块全部推送统一按推送时点解析当前窗口，与
+ * stream-relay.pushSessionMessage / write-blocked-emit 同法。非 Electron 环境
+ * （测试 / headless / runtime 子进程）静默跳过。
+ */
+function pushToMainWindow(channel: string, ...args: unknown[]): void {
+  const { BrowserWindow } = loadElectronApis();
+  if (!BrowserWindow) return;
+  const win = BrowserWindow.getAllWindows()[0];
+  if (!win || win.isDestroyed()) return;
+  win.webContents.send(channel, ...args);
 }
 
 /**
@@ -78,8 +91,7 @@ export function setSessionMainWindow(win: BrowserWindow | null): void {
  * 名 'agent:runtimeChanged' 保持不变，renderer 订阅方无感知。
  */
 export function broadcastRuntimeChanged(): void {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  mainWindow.webContents.send('agent:runtimeChanged');
+  pushToMainWindow('agent:runtimeChanged');
 }
 
 /**
@@ -89,8 +101,7 @@ export function broadcastRuntimeChanged(): void {
  * renderer 收到后轻量重拉列表（不动激活会话）。
  */
 export function broadcastSessionListChanged(): void {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  mainWindow.webContents.send('session:listChanged');
+  pushToMainWindow('session:listChanged');
 }
 
 /**
@@ -204,8 +215,8 @@ export async function sendUserMessage(input: {
           })[0] ?? null,
         getTask,
       });
-      if (conflict && mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('im:conflict', conflict);
+      if (conflict) {
+        pushToMainWindow('im:conflict', conflict);
       }
     } catch (err) {
       logger.warn('冲突检测失败（不阻塞消息发送）', {
@@ -256,8 +267,7 @@ export async function sendUserMessage(input: {
 
 /** 推送 SQLite MessageRow 到 renderer（与 im:message 载荷形状对齐，跨 IPC 一致） */
 function pushMessageRow(msg: MessageRow): void {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  mainWindow.webContents.send('session:message', msg);
+  pushToMainWindow('session:message', msg);
 }
 
 // ─── 会话命令（/compact，spec §5.4） ─────────────────────────────────────────
