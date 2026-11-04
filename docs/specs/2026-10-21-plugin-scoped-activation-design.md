@@ -66,9 +66,9 @@ agent 拥有能力（三层合并）            = 授权：定义声明 ∪ 工�
 |---|---|---|
 | **MCP** | **零改动**。`mcpNames = filterDisabledPluginMcps(filterEnabledMcps(merged.mcps), ws)` 不变——插件名此后只可能来自 def 声明 / allocation 显式 / 成员勾选 | 零 |
 | **Skill** | `resolveSkillSlugs` 入参 = `merged.skills − 插件slug集`；`buildPluginSkillRefs(ws)` 从无条件附加改为 `∩ merged.skills`（插件 slug 只经三层合并进入） | 零 |
-| **Tool** | 白名单翻转：授权集 = `allocation.tools 命中插件全名/组模式 ∪ deltas.addedPluginTools`（字段语义从「禁用覆盖」升级为「成员授权」）；生效集 = 授权集 − `(def.deniedTools ∪ deltas.removedPluginTools)`（黑名单优先的保守语义不变）。落点：`buildPluginToolRefs(ws)` 产物按生效集过滤 `modulePaths`（全滤空的 ref 丢弃） | **零**（「可见性 = 装配面」既有设计） |
+| **Tool** | 白名单翻转：授权集 = `def.defaultTools 的 plugin: refs（2026-11-04 纳入）∪ allocation.tools 命中插件全名/组模式 ∪ deltas.addedPluginTools`（字段语义从「禁用覆盖」升级为「成员授权」）；生效集 = 授权集 − `(def.deniedTools ∪ deltas.removedPluginTools)`（黑名单优先的保守语义不变）。落点：`buildPluginToolRefs(ws)` 产物按生效集过滤 `modulePaths`（全滤空的 ref 丢弃）。实现取 `merged.tools ∪ addedPluginTools` 为授权集（mergeCapabilities 单一真相源，天然含 def ∪ allocation ± tools deltas） | **零**（「可见性 = 装配面」既有设计） |
 
-- def 级正向声明插件工具的通道**不做**（YAGNI——插件作者用 MCP；`ToolRef.kind` 扩展留待真实需求）
+- def 级正向声明插件工具的通道：**2026-11-04 修订为已做**——office-pro 实证插件作者就是声明自家工具（`defaultTools: [{kind:'builtin', ref:'plugin:office-pro/run_js'}]`，YAML 解析链本就落库，仅原授权公式不认）；`ToolRef.kind` 仍不扩展，plugin: 前缀 ref 沿用 builtin kind。与 §2 总模型「定义声明是合法授权通道」及 MCP/Skill 行为对齐；停用总闸语义不变（`buildPluginToolRefs(ws)` 已按启停过滤，停用插件的声明不装配）。UI 侧 MemberEditDialog 勾选基线同步（`effectivePluginGranted` 第三参 = ws allocation ∪ def 声明），原「声明未授权」警告补丁撤除。消费面矩阵：`.omo/feature-matrices/2026-11-04-plugin-tool-def-grant.md`
 - allocation.tools 对插件工具的匹配语义与 deniedTools 同款：`plugin:<id>/*` 组模式 + `plugin:<id>/<name>` 精确名
 
 ## 7. 启停即时生效与运行时重建
@@ -113,7 +113,7 @@ agent 拥有能力（三层合并）            = 授权：定义声明 ∪ 工�
 | 安装（zip/dev/marketplace） | 写 enablement(安装ws=1)，allocation 零写入 | 066 回填全启用 + skill 物化 | — |
 | 列表开关+徽标 | ✓ | ✓（显示已启用） | — |
 | 明细清单 | ✓ | ✓ | — |
-| 成员勾选（MCP/skill/tools） | 默认全不勾，勾上=授权 | 保持现状（物化），可取消 | 只读 def 经成员勾选管理 ✓ |
+| 成员勾选（MCP/skill/tools） | 默认全不勾，勾上=授权；插件预置 agent 例外——def 声明的 plugin: refs 默认点亮（2026-11-04），取消写 removed 行 | 保持现状（物化），可取消 | 只读 def 经成员勾选管理 ✓ |
 | 工作空间配置（MCP/skill 页） | 显式批量授权通道 | 现有行保留 | — |
 | 面板/service/hooks | 行缺失=停用 | 迁移回填保现状 | — |
 | 新建工作空间 | 所有插件默认停用 | — | — |
