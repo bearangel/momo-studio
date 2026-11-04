@@ -167,6 +167,12 @@ function buildDef(overrides: Partial<AgentDefinition> = {}): AgentDefinition {
   };
 }
 
+/** 等工具目录就绪并展开指定分类分组（ToolPickerPanel 2026-11-04 起默认全收起） */
+async function openGroup(label: string): Promise<void> {
+  await screen.findByRole('button', { name: `${label} 分组` });
+  fireEvent.click(screen.getByRole('button', { name: `${label} 分组` }));
+}
+
 describe('MemberEditDialog — 加载', () => {
   it('无 deltas 时 value = default（def + ws allocation 合集）', async () => {
     // def.defaultTools=[read_file], allocation.tools=[grep] → default=[read_file, grep]
@@ -180,10 +186,10 @@ describe('MemberEditDialog — 加载', () => {
     render(
       <MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />,
     );
-    // 等待加载完成（checkbox 出现）
-    await waitFor(() => {
-      expect(screen.getByLabelText('读取文件（read_file）')).toBeInTheDocument();
-    });
+    // 等待加载完成（分组头出现）并展开三个分组
+    await openGroup('文件');
+    await openGroup('搜索');
+    await openGroup('Shell');
     expect((screen.getByLabelText('读取文件（read_file）') as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText('内容搜索（grep）') as HTMLInputElement).checked).toBe(true);
     // bash 既不在 def 也不在 allocation → 未勾
@@ -200,10 +206,9 @@ describe('MemberEditDialog — 加载', () => {
     render(
       <MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />,
     );
-    await waitFor(() => {
-      expect(screen.getByLabelText('终端命令（bash）')).toBeInTheDocument();
-    });
+    await openGroup('Shell');
     expect((screen.getByLabelText('终端命令（bash）') as HTMLInputElement).checked).toBe(true);
+    await openGroup('文件');
     expect((screen.getByLabelText('读取文件（read_file）') as HTMLInputElement).checked).toBe(false);
   });
 
@@ -230,9 +235,7 @@ describe('MemberEditDialog — 改 added', () => {
     render(
       <MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />,
     );
-    await waitFor(() => {
-      expect(screen.getByLabelText('终端命令（bash）')).toBeInTheDocument();
-    });
+    await openGroup('Shell');
     fireEvent.click(screen.getByLabelText('终端命令（bash）'));
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
@@ -253,9 +256,7 @@ describe('MemberEditDialog — 改 removed', () => {
     render(
       <MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />,
     );
-    await waitFor(() => {
-      expect(screen.getByLabelText('读取文件（read_file）')).toBeInTheDocument();
-    });
+    await openGroup('文件');
     fireEvent.click(screen.getByLabelText('读取文件（read_file）'));
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
@@ -274,10 +275,9 @@ describe('MemberEditDialog — 保存全量', () => {
     render(
       <MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />,
     );
-    await waitFor(() => {
-      expect(screen.getByLabelText('终端命令（bash）')).toBeInTheDocument();
-    });
+    await openGroup('Shell');
     fireEvent.click(screen.getByLabelText('终端命令（bash）'));
+    await openGroup('文件');
     fireEvent.click(screen.getByLabelText('读取文件（read_file）'));
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
@@ -294,9 +294,7 @@ describe('MemberEditDialog — 保存全量', () => {
     render(
       <MemberEditDialog member={buildMember()} def={buildDef()} onClose={onClose} />,
     );
-    await waitFor(() => {
-      expect(screen.getByLabelText('终端命令（bash）')).toBeInTheDocument();
-    });
+    await openGroup('Shell');
     fireEvent.click(screen.getByRole('button', { name: '取消' }));
     expect(setMemberDeltasMock).not.toHaveBeenCalled();
     expect(updateDefinition).not.toHaveBeenCalled();
@@ -309,9 +307,7 @@ describe('MemberEditDialog — 重启提示', () => {
     render(
       <MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />,
     );
-    await waitFor(() => {
-      expect(screen.getByLabelText('终端命令（bash）')).toBeInTheDocument();
-    });
+    await openGroup('Shell');
     fireEvent.click(screen.getByLabelText('终端命令（bash）'));
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
@@ -356,9 +352,7 @@ describe('MemberEditDialog — 重启提示', () => {
     render(
       <MemberEditDialog member={buildMember()} def={buildDef()} onClose={onClose} />,
     );
-    await waitFor(() => {
-      expect(screen.getByLabelText('终端命令（bash）')).toBeInTheDocument();
-    });
+    await openGroup('Shell');
     fireEvent.click(screen.getByLabelText('终端命令（bash）'));
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => {
@@ -384,9 +378,7 @@ describe('MemberEditDialog — 重启提示', () => {
     render(
       <MemberEditDialog member={buildMember({ lastRunning: false })} def={buildDef()} onClose={onClose} />,
     );
-    await waitFor(() => {
-      expect(screen.getByLabelText('终端命令（bash）')).toBeInTheDocument();
-    });
+    await openGroup('Shell');
     fireEvent.click(screen.getByLabelText('终端命令（bash）'));
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
@@ -403,9 +395,7 @@ describe('MemberEditDialog — 重启提示', () => {
     render(
       <MemberEditDialog member={buildMember()} def={buildDef()} onClose={onClose} />,
     );
-    await waitFor(() => {
-      expect(screen.getByLabelText('终端命令（bash）')).toBeInTheDocument();
-    });
+    await openGroup('Shell');
     fireEvent.click(screen.getByLabelText('终端命令（bash）'));
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => {
@@ -429,7 +419,7 @@ describe('MemberEditDialog — 模型区（全局定义）', () => {
 
   it('模型未变化保存 → updateDefinition 不被调用', async () => {
     render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />);
-    await screen.findByLabelText('终端命令（bash）');
+    await openGroup('Shell');
     fireEvent.click(screen.getByLabelText('终端命令（bash）')); // 只改能力
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => {
@@ -452,7 +442,7 @@ describe('MemberEditDialog — 模型区（全局定义）', () => {
 
   it('模型未变保存 → 不刷新 definitions（避免无谓 IPC）', async () => {
     render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />);
-    await screen.findByLabelText('终端命令（bash）');
+    await openGroup('Shell');
     fireEvent.click(screen.getByLabelText('终端命令（bash）'));
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => {
@@ -487,7 +477,7 @@ describe('MemberEditDialog — 模型区（全局定义）', () => {
 
   it('API Key 区已移除（无 key 输入框）', async () => {
     render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />);
-    await screen.findByLabelText('终端命令（bash）');
+    await openGroup('Shell');
     expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument();
     expect(screen.queryByText(/当前使用独立 API key override/)).not.toBeInTheDocument();
   });
@@ -523,21 +513,29 @@ describe('MemberEditDialog — 模型区（全局定义）', () => {
 
 
 // ── 功能全面性规则案例：插件工具成员级覆盖（builtin 只读对象的管理通道）──
+// 2026-11-04：插件分组并入工具 tab（ToolPickerPanel 附加分组，默认收起——单工具
+// 断言前先点组行展开；组头 checkbox 收起态即渲染）
 describe('MemberEditDialog — 插件工具覆盖（铁律 4/5：builtin 存量场景）', () => {
   const TOOLS = [
     { pluginId: 'cg', pluginName: 'Codegraph 代码图谱', toolName: 'explore', fullName: 'plugin:cg/explore', description: '查图谱' },
     { pluginId: 'cg', pluginName: 'Codegraph 代码图谱', toolName: 'status', fullName: 'plugin:cg/status', description: '索引状态' },
   ];
 
+  /** 等插件分组渲染（目录 IPC + 装配面 IPC 均异步）并展开 */
+  async function openPluginGroup(): Promise<void> {
+    await screen.findByRole('button', { name: 'Codegraph 代码图谱 分组' });
+    fireEvent.click(screen.getByRole('button', { name: 'Codegraph 代码图谱 分组' }));
+  }
+
   it('builtin agent（只读定义）渲染插件分组；新语义默认全不勾，组头勾选 → addedPluginTools 授权行', async () => {
     listAssembledTools.mockResolvedValue(TOOLS);
     const def = buildDef({ id: 'builtin-coder', name: 'Smith', source: 'builtin' as AgentDefinition['source'] });
     render(<MemberEditDialog member={buildMember()} def={def} onClose={() => {}} />);
-    expect(await screen.findByText('插件工具')).toBeInTheDocument();
-    expect(screen.getByText('plugin:cg/explore')).toBeInTheDocument();
-    // 默认关（spec 2026-10-21 §6：插件工具默认不给任何 agent）
+    await openPluginGroup();
+    // 默认关（spec 2026-10-21 §6：插件工具默认不给任何 agent；def 无声明）
     expect(screen.getByLabelText('启用插件 Codegraph 代码图谱 全部工具')).not.toBeChecked();
-    expect(screen.getByText('全不启用')).toBeInTheDocument();
+    expect(screen.getByText('0/2')).toBeInTheDocument();
+    expect(screen.getByLabelText('启用 plugin:cg/explore')).not.toBeChecked();
     fireEvent.click(screen.getByLabelText('启用插件 Codegraph 代码图谱 全部工具'));
     fireEvent.click(screen.getByText('保存'));
     await waitFor(() => expect(setMemberDeltasMock).toHaveBeenCalled());
@@ -551,7 +549,7 @@ describe('MemberEditDialog — 插件工具覆盖（铁律 4/5：builtin 存量�
     getMemberDeltasMock.mockResolvedValue({ ...EMPTY_DELTAS });
     const def = buildDef({ deniedTools: ['plugin:cg/*'] });
     render(<MemberEditDialog member={buildMember()} def={def} onClose={() => {}} />);
-    await screen.findByText('插件工具');
+    await screen.findByRole('button', { name: 'Codegraph 代码图谱 分组' });
     expect(screen.getByLabelText('启用插件 Codegraph 代码图谱 全部工具')).not.toBeChecked();
     fireEvent.click(screen.getByLabelText('启用插件 Codegraph 代码图谱 全部工具'));
     fireEvent.click(screen.getByText('保存'));
@@ -568,14 +566,12 @@ describe('MemberEditDialog — 插件工具覆盖（铁律 4/5：builtin 存量�
       workspaceId: buildMember().workspaceId, tools: ['plugin:cg/*'], mcps: [], skills: [],
     } satisfies WorkspaceAllocation);
     render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />);
-    await screen.findByText('插件工具');
-    await waitFor(() => {
-      expect(screen.getByLabelText('启用 plugin:cg/explore')).toBeChecked();
-      expect(screen.getByLabelText('启用 plugin:cg/status')).toBeChecked();
-    });
+    await openPluginGroup();
+    expect(screen.getByLabelText('启用 plugin:cg/explore')).toBeChecked();
+    expect(screen.getByLabelText('启用 plugin:cg/status')).toBeChecked();
   });
 
-  it('插件预置 agent（def.defaultTools 声明 plugin: ref）→ 声明不构成授权：不勾选 + 未授权引导（验收实锤）', async () => {
+  it('插件预置 agent（def.defaultTools 声明 plugin: ref）→ 声明即授权默认勾选（2026-11-04 与 MCP/Skill 对齐）；取消写 removed 行', async () => {
     listAssembledTools.mockResolvedValue(TOOLS);
     getMemberDeltasMock.mockResolvedValue({ ...EMPTY_DELTAS });
     allocationGet.mockResolvedValue({
@@ -588,14 +584,20 @@ describe('MemberEditDialog — 插件工具覆盖（铁律 4/5：builtin 存量�
       ],
     });
     render(<MemberEditDialog member={buildMember()} def={def} onClose={() => {}} />);
-    await screen.findByText('插件工具');
-    expect(screen.getByLabelText('启用 plugin:cg/explore')).not.toBeChecked();
-    expect(screen.getByText(/声明了 1 个插件工具但当前未授权/)).toBeInTheDocument();
+    await openPluginGroup();
+    // def 声明 → 默认勾选（electron spawn 侧授权集同步纳入 def 声明）
+    expect(screen.getByLabelText('启用 plugin:cg/explore')).toBeChecked();
+    expect(screen.getByLabelText('启用 plugin:cg/status')).not.toBeChecked();
+    expect(screen.getByText('1/2')).toBeInTheDocument();
+    // 旧语义的「声明未授权」警告补丁随修复撤除
+    expect(screen.queryByText(/声明了.*插件工具但当前未授权/)).not.toBeInTheDocument();
+    // 取消 def 声明的工具 → 写 removedPluginTools 行（成员级反向取消，deny 优先）
     fireEvent.click(screen.getByLabelText('启用 plugin:cg/explore'));
     fireEvent.click(screen.getByText('保存'));
     await waitFor(() => expect(setMemberDeltasMock).toHaveBeenCalled());
     const arg = setMemberDeltasMock.mock.calls[0]![1] as AssignmentDeltas;
-    expect(arg.addedPluginTools).toEqual(['plugin:cg/explore']);
+    expect(arg.addedPluginTools).toEqual([]);
+    expect(arg.removedPluginTools).toEqual(['plugin:cg/explore']);
   });
 
   it('打开时回放成员级授权初值（added 行点亮对应工具；未授权不亮）', async () => {
@@ -605,7 +607,7 @@ describe('MemberEditDialog — 插件工具覆盖（铁律 4/5：builtin 存量�
       addedPluginTools: ['plugin:cg/status'],
     });
     render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />);
-    await screen.findByText('插件工具');
+    await openPluginGroup();
     expect(screen.getByLabelText('启用 plugin:cg/status')).toBeChecked();
     expect(screen.getByLabelText('启用 plugin:cg/explore')).not.toBeChecked();
   });

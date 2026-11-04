@@ -25,8 +25,7 @@ import { ProviderModelPicker } from './ProviderModelPicker';
 import { ThinkingOverrideControl } from './ThinkingOverrideControl';
 import { useToolCatalog } from '../../lib/useToolCatalog';
 import { usePluginTools } from '../../lib/usePluginTools';
-import { PluginToolsSection, computeDeniedTools, deniedMatch } from './PluginToolsSection';
-import { defToCapabilities } from '../../lib/capability-helpers';
+import { computeDeniedTools, defToCapabilities, deniedMatch } from '../../lib/capability-helpers';
 import type { AgentDefinition, ReasoningCapability, ThinkingConfig } from '../../ipc/types';
 
 interface Props {
@@ -157,7 +156,7 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
   const title = mode === 'create' ? '新建智能体定义' : mode === 'edit' ? '编辑智能体定义' : '配置预置智能体';
 
   return (
-    <Dialog open onClose={onClose} title={title} width={448}>
+    <Dialog open onClose={onClose} title={title} width={560}>
       <form onSubmit={handleSubmit} className="flex flex-col gap-3">
         <Input
           label="名称"
@@ -219,7 +218,9 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
           </div>
         )}
 
-        {/* v1.6 能力配置区：create/edit 可改；configure(builtin) 只读 */}
+        {/* v1.6 能力配置区：create/edit 可改；configure(builtin) 只读。
+            2026-11-04：插件工具并入工具 tab（CapabilityTabs → ToolPickerPanel 附加分组），
+            不再渲染 tab 外挂区块（修「切 MCP/Skill 标签插件工具仍显示」bug） */}
         <div className="flex flex-col gap-2 border-t border-subtle pt-3">
           <div className="text-sm text-secondary">能力配置</div>
           {isBuiltin && (
@@ -231,30 +232,25 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
             mode={isBuiltin ? 'readonly' : 'edit'}
             value={capabilities}
             onChange={(next) => setCapabilities(next)}
+            pluginTools={pluginTools ?? []}
+            pluginChecked={(pluginTools ?? [])
+              .map((t) => t.fullName)
+              .filter((n) => !deniedMatch(n, deniedTools))}
+            onPluginToggle={(changed, next) => {
+              // 定义级语义保留（spec §6 黑名单优先）：changed 为组模式或精确名，
+              // 组模式需按插件展开——从串反解 pluginId
+              const pid = changed.slice('plugin:'.length).split('/')[0] ?? '';
+              setDeniedTools((prev) =>
+                computeDeniedTools(
+                  prev,
+                  pid,
+                  (pluginTools ?? []).filter((t) => t.pluginId === pid).map((t) => t.fullName),
+                  changed,
+                  next,
+                ),
+              );
+            }}
           />
-          {(pluginTools?.length ?? 0) > 0 && (
-            <PluginToolsSection
-              tools={pluginTools ?? []}
-              checkedFullNames={(pluginTools ?? [])
-                .map((t) => t.fullName)
-                .filter((n) => !deniedMatch(n, deniedTools))}
-              onToggle={(changed, next) => {
-                // 定义级语义保留（spec §6 黑名单优先）：changed 为组模式或精确名，
-                // 组模式需按插件展开——从串反解 pluginId
-                const pid = changed.slice('plugin:'.length).split('/')[0] ?? '';
-                setDeniedTools((prev) =>
-                  computeDeniedTools(
-                    prev,
-                    pid,
-                    (pluginTools ?? []).filter((t) => t.pluginId === pid).map((t) => t.fullName),
-                    changed,
-                    next,
-                  ),
-                );
-              }}
-              disabled={readOnly}
-            />
-          )}
         </div>
 
         {error && <div className="text-status-error text-sm">{error}</div>}

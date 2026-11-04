@@ -29,7 +29,6 @@ import { useAgentStore } from '../../stores/agent.store';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { CapabilityTabs } from './CapabilityTabs';
-import { PluginToolsSection } from './PluginToolsSection';
 import { usePluginTools } from '../../lib/usePluginTools';
 import { computePluginToolGrants, effectivePluginGranted } from '../../lib/capability-helpers';
 import { ProviderModelPicker } from './ProviderModelPicker';
@@ -94,26 +93,25 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
     addedPluginTools: [],
     removedPluginTools: [],
   });
-  // 授权模型（spec 2026-10-21 §6）：勾=授权行；生效=(ws授权∪added)−(removed∪def禁)。
-  // ws 授权基线只取 allocation（Layer2）——**不得含 def.defaultTools**：运行时
-  // grants 公式为 allocation ∪ addedPluginTools，def 层 ref 不构成授权；若按
-  // defCaps 派生会显示「已勾选」而运行时不生效（验收实锤：插件预置 agent 的
-  // def 声明 run_js 时 tool 消失）。def 声明仅作意图提示，未授权时下方给引导。
+  // 授权模型（spec 2026-10-21 §6 + 2026-11-04 def 声明纳入）：勾=授权行；
+  // 生效=(授权基线 ∪ added)−(removed ∪ def禁)。授权基线 = ws allocation 的
+  // plugin: refs ∪ def.defaultTools 的 plugin: refs——def 声明（插件预置 agent
+  // 如 office-pro 声明自身工具）开箱即授权，与 electron spawn 侧授权集、
+  // MCP/Skill「定义声明是合法授权通道」语义三方对齐。
   const [allocCaps, setAllocCaps] = useState<Capabilities>({ tools: [], mcps: [], skills: [] });
   const wsGranted = allocCaps.tools.filter((t) => t.startsWith('plugin:'));
+  const declaredPluginRefs = (def.defaultTools ?? [])
+    .map((t) => t.ref)
+    .filter((ref) => ref.startsWith('plugin:'));
   const pluginChecked = effectivePluginGranted(
     def.deniedTools ?? [],
     pluginDeltas,
-    wsGranted,
+    [...wsGranted, ...declaredPluginRefs],
     (pluginTools ?? []).map((t) => t.fullName),
   );
   const handlePluginToggle = (changed: string, on: boolean): void => {
     setPluginDeltas((prev) => computePluginToolGrants(def.deniedTools ?? [], prev, changed, on));
   };
-  const declaredPluginRefs = (def.defaultTools ?? [])
-    .map((t) => t.ref)
-    .filter((ref) => ref.startsWith('plugin:'));
-  const declaredUngranted = declaredPluginRefs.filter((ref) => !pluginChecked.includes(ref));
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -217,7 +215,7 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
       open
       onClose={handleDialogClose}
       title={`编辑成员：${def.iconEmoji} ${def.name}`}
-      width={448}
+      width={560}
     >
       <div className="flex flex-col gap-3">
         <div className="text-xs text-tertiary">
@@ -255,7 +253,8 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
 
         {!loading && !pendingRestart && (
           <>
-            {/* 能力覆盖区 */}
+            {/* 能力覆盖区（2026-11-04：插件工具并入工具 tab，不再渲染 tab 外挂区块——
+                修「切 MCP/Skill 标签插件工具仍显示」bug） */}
             <section className="flex flex-col gap-2 border-t border-subtle pt-3">
               <CapabilityTabs
                 mode="override"
@@ -263,24 +262,11 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
                 defaultValue={defaultCaps}
                 value={value}
                 onChange={(next) => setValue(next)}
+                pluginTools={pluginTools ?? []}
+                pluginChecked={pluginChecked}
+                onPluginToggle={handlePluginToggle}
               />
             </section>
-
-            {(pluginTools?.length ?? 0) > 0 && (
-              <section className="flex flex-col gap-2 border-t border-subtle pt-3">
-                <PluginToolsSection
-                  tools={pluginTools ?? []}
-                  checkedFullNames={pluginChecked}
-                  onToggle={handlePluginToggle}
-                  disabled={false}
-                />
-                {declaredUngranted.length > 0 && (
-                  <p className="text-xs text-status-warning">
-                    该智能体定义声明了 {declaredUngranted.length} 个插件工具但当前未授权（{declaredUngranted.join('、')}）——勾选上方对应项后保存即可生效
-                  </p>
-                )}
-              </section>
-            )}
 
             {error && <div className="text-status-error text-sm">{error}</div>}
             <div className="flex gap-2 justify-end">

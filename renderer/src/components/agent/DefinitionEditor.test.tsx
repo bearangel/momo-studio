@@ -124,6 +124,17 @@ function buildDef(overrides: Partial<AgentDefinition> = {}): AgentDefinition {
   };
 }
 
+/** 等工具目录就绪并展开指定分类分组（ToolPickerPanel 2026-11-04 起默认全收起） */
+async function openGroup(label: string): Promise<void> {
+  await screen.findByRole('button', { name: `${label} 分组` });
+  fireEvent.click(screen.getByRole('button', { name: `${label} 分组` }));
+}
+
+/** 等 Tier 1 回填完成（tab 计数 2/3 = defaultOn 集已勾——收起态下的稳定锚点） */
+async function awaitTier1Backfill(): Promise<void> {
+  await screen.findByText('2/3');
+}
+
 describe('DefinitionEditor — create 模式能力配置区', () => {
   it('渲染「能力配置」标题', async () => {
     render(<DefinitionEditor mode="create" onClose={() => {}} />);
@@ -132,13 +143,17 @@ describe('DefinitionEditor — create 模式能力配置区', () => {
 
   it('create 模式目录就绪后默认勾选 defaultOn 集（read_file 已勾，bash 未勾）', async () => {
     render(<DefinitionEditor mode="create" onClose={() => {}} />);
-    expect((await screen.findByLabelText('读取文件（read_file）') as HTMLInputElement).checked).toBe(true);
+    await awaitTier1Backfill();
+    await openGroup('文件');
+    await openGroup('Shell');
+    expect((screen.getByLabelText('读取文件（read_file）') as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText('终端命令（bash）') as HTMLInputElement).checked).toBe(false);
   });
 
   it('create 模式 checkbox 可交互（非 readonly）', async () => {
     render(<DefinitionEditor mode="create" onClose={() => {}} />);
-    expect(await screen.findByLabelText('终端命令（bash）')).not.toBeDisabled();
+    await openGroup('Shell');
+    expect(screen.getByLabelText('终端命令（bash）')).not.toBeDisabled();
   });
 
   it('模型字段为 ProviderModelPicker 下拉（非手填 Input）', async () => {
@@ -148,8 +163,7 @@ describe('DefinitionEditor — create 模式能力配置区', () => {
 
   it('提交时 IPC.createCustom 收到 defaultTools = 目录 defaultOn 集', async () => {
     render(<DefinitionEditor mode="create" onClose={() => {}} />);
-    // 等 Tier 1 回填完成（目录就绪 → capabilities 回填 → read_file 勾选）
-    await screen.findByLabelText('读取文件（read_file）');
+    await awaitTier1Backfill();
     // 填必填字段
     fireEvent.change(screen.getByPlaceholderText('如：代码审查员'), { target: { value: '测试 agent' } });
     fireEvent.change(screen.getByPlaceholderText('如：code-reviewer'), { target: { value: 'test-agent' } });
@@ -177,7 +191,8 @@ describe('DefinitionEditor — create 模式能力配置区', () => {
   it('勾选 bash 后提交，IPC.createCustom.defaultTools 含 bash', async () => {
     render(<DefinitionEditor mode="create" onClose={() => {}} />);
     // 等 Tier 1 回填完成再操作（否则空集起勾会覆盖回填语义）
-    await screen.findByLabelText('读取文件（read_file）');
+    await awaitTier1Backfill();
+    await openGroup('Shell');
     fireEvent.change(screen.getByPlaceholderText('如：代码审查员'), { target: { value: 'A' } });
     fireEvent.change(screen.getByPlaceholderText('如：code-reviewer'), { target: { value: 'a' } });
     fireEvent.change(screen.getByPlaceholderText('你是一名资深审查员...'), {
@@ -210,21 +225,24 @@ describe('DefinitionEditor — edit 模式加载现有 def 能力', () => {
       defaultTools: [{ kind: 'builtin', ref: 'bash' }],
     });
     render(<DefinitionEditor mode="edit" def={def} onClose={() => {}} />);
-    expect((await screen.findByLabelText('终端命令（bash）') as HTMLInputElement).checked).toBe(true);
+    await openGroup('Shell');
+    await openGroup('文件');
+    expect((screen.getByLabelText('终端命令（bash）') as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText('读取文件（read_file）') as HTMLInputElement).checked).toBe(false);
   });
 
   it('edit 模式 checkbox 可交互', async () => {
     const def = buildDef();
     render(<DefinitionEditor mode="edit" def={def} onClose={() => {}} />);
-    expect(await screen.findByLabelText('终端命令（bash）')).not.toBeDisabled();
+    await openGroup('Shell');
+    expect(screen.getByLabelText('终端命令（bash）')).not.toBeDisabled();
   });
 
   it('edit 模式提交时 IPC.updateDefinition 收到 defaultTools（含修改后值）', async () => {
     const def = buildDef({ defaultTools: [{ kind: 'builtin', ref: 'read_file' }] });
     render(<DefinitionEditor mode="edit" def={def} onClose={() => {}} />);
-    // 勾上 bash（等目录渲染出 checkbox）
-    fireEvent.click(await screen.findByLabelText('终端命令（bash）'));
+    await openGroup('Shell');
+    fireEvent.click(screen.getByLabelText('终端命令（bash）'));
     fireEvent.click(screen.getByText('保存'));
 
     await waitFor(() => {
@@ -245,7 +263,7 @@ describe('DefinitionEditor — 空工具集提交守卫（终审 Finding 1）', 
   // 反而放行全部工具；create/edit 提交边界必须拦截（configure 只读不受影响）
   it('create 模式清空工具集后提交 → 拦截并提示，不调 createCustom', async () => {
     render(<DefinitionEditor mode="create" onClose={() => {}} />);
-    await screen.findByLabelText('读取文件（read_file）'); // Tier 1 回填完成
+    await awaitTier1Backfill(); // Tier 1 回填完成
     fireEvent.click(screen.getByText('清空')); // 快捷按钮把工具集置空
     fireEvent.change(screen.getByPlaceholderText('如：代码审查员'), { target: { value: '测试 agent' } });
     fireEvent.change(screen.getByPlaceholderText('如：code-reviewer'), { target: { value: 'test-agent' } });
@@ -263,7 +281,7 @@ describe('DefinitionEditor — 空工具集提交守卫（终审 Finding 1）', 
   it('edit 模式清空工具集后保存 → 同样拦截，不调 updateDefinition', async () => {
     const def = buildDef({ defaultTools: [{ kind: 'builtin', ref: 'read_file' }] });
     render(<DefinitionEditor mode="edit" def={def} onClose={() => {}} />);
-    await screen.findByLabelText('读取文件（read_file）');
+    await openGroup('文件');
     fireEvent.click(screen.getByText('清空'));
 
     fireEvent.click(screen.getByText('保存'));
@@ -283,7 +301,9 @@ describe('DefinitionEditor — configure（builtin）模式只读', () => {
   it('configure 模式 CapabilityTabs checkbox disabled', async () => {
     const def = buildDef({ source: 'builtin', defaultTools: [{ kind: 'builtin', ref: 'read_file' }] });
     render(<DefinitionEditor mode="configure" def={def} onClose={() => {}} />);
-    expect(await screen.findByLabelText('读取文件（read_file）')).toBeDisabled();
+    await openGroup('文件');
+    await openGroup('Shell');
+    expect(screen.getByLabelText('读取文件（read_file）')).toBeDisabled();
     expect(screen.getByLabelText('终端命令（bash）')).toBeDisabled();
   });
 });
@@ -338,8 +358,8 @@ describe('DefinitionEditor — brief 数据丢失回归锁：def.thinkingJson �
 });
 
 // ── 工作空间维度 v1.1（spec §7.3）：插件工具门控分组 ──
-import { computeDeniedTools } from './PluginToolsSection';
-
+// 2026-11-04：插件分组并入工具 tab（ToolPickerPanel 附加分组，默认收起）
+import { computeDeniedTools } from '../../lib/capability-helpers';
 
 describe('插件工具门控分组（工作空间维度 v1.1）', () => {
   beforeEach(() => {
@@ -349,16 +369,19 @@ describe('插件工具门控分组（工作空间维度 v1.1）', () => {
     ]);
   });
 
-  it('渲染插件分组：组头与单工具名可见；全开默认无 denied', async () => {
+  it('渲染插件分组：组头 + 插件徽标可见；展开后单工具可见；全开默认无 denied', async () => {
     render(<DefinitionEditor mode="create" onClose={() => {}} />);
-    expect(await screen.findByText('插件工具')).toBeInTheDocument();
-    expect(screen.getByText('plugin:cg/explore')).toBeInTheDocument();
-    expect(screen.getByText('plugin:cg/status')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Codegraph 分组' })).toBeInTheDocument();
+    expect(screen.getByText('插件 cg')).toBeInTheDocument();
+    // 默认收起（预览合同）；展开后工具行可见
+    fireEvent.click(screen.getByRole('button', { name: 'Codegraph 分组' }));
+    expect(screen.getByRole('checkbox', { name: '启用 plugin:cg/explore' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '启用 plugin:cg/status' })).toBeInTheDocument();
   });
 
   it('取消勾选组头（禁用整组）→ 提交携带 plugin:cg/*', async () => {
     render(<DefinitionEditor mode="create" onClose={() => {}} />);
-    await screen.findByText('插件工具');
+    await screen.findByRole('button', { name: 'Codegraph 分组' });
     fireEvent.click(screen.getByLabelText('启用插件 Codegraph 全部工具'));
     fireEvent.change(screen.getByPlaceholderText('如：代码审查员'), { target: { value: '测试 agent' } });
     fireEvent.change(screen.getByPlaceholderText('如：code-reviewer'), { target: { value: 'test-agent' } });
@@ -373,7 +396,8 @@ describe('插件工具门控分组（工作空间维度 v1.1）', () => {
 
   it('取消勾选单工具（禁用）→ 提交携带精确名', async () => {
     render(<DefinitionEditor mode="create" onClose={() => {}} />);
-    await screen.findByText('插件工具');
+    await screen.findByRole('button', { name: 'Codegraph 分组' });
+    fireEvent.click(screen.getByRole('button', { name: 'Codegraph 分组' }));
     fireEvent.click(screen.getByLabelText('启用 plugin:cg/explore'));
     fireEvent.change(screen.getByPlaceholderText('如：代码审查员'), { target: { value: '测试 agent' } });
     fireEvent.change(screen.getByPlaceholderText('如：code-reviewer'), { target: { value: 'test-agent' } });

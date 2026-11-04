@@ -165,14 +165,21 @@ describe('AgentCreateWizard', () => {
   });
 });
 
+/** 等目录就绪并展开指定分类分组（ToolPickerPanel 2026-11-04 起默认全收起） */
+async function openGroup(label: string): Promise<void> {
+  await screen.findByRole('button', { name: `${label} 分组` });
+  fireEvent.click(screen.getByRole('button', { name: `${label} 分组` }));
+}
+
 describe('AgentCreateWizard — 工具目录源（v2.x Task 7）', () => {
   it('能力步骤「自定义」档渲染 IPC 目录分组，Tier 1 回填勾选', async () => {
     render(<AgentCreateWizard onClose={vi.fn()} onSuccess={vi.fn()} />);
     fillStep1AndNext();
     fillStep2AndNext();
-    // 切「自定义」档展开工具分组（分组标题 = 目录 categoryEmoji + category）
+    // 切「自定义」档展开工具面板（分组头 = 目录 categoryEmoji + category）
     fireEvent.click(screen.getByLabelText('自定义'));
     expect(await screen.findByText('📁 文件')).toBeTruthy();
+    await openGroup('文件');
     const readFile = screen.getByLabelText('读取文件（read_file）') as HTMLInputElement;
     const rm = screen.getByLabelText('删除文件（rm）') as HTMLInputElement;
     expect(readFile).toBeTruthy();
@@ -197,7 +204,8 @@ describe('AgentCreateWizard — 空工具集提交守卫（终审 Finding 1）',
     fillStep2AndNext();
     fireEvent.click(screen.getByLabelText('自定义'));
     // 目录就绪 Tier 1 回填后取消唯一勾选项 → 自选集为空
-    fireEvent.click(await screen.findByLabelText('读取文件（read_file）'));
+    await openGroup('文件');
+    fireEvent.click(screen.getByLabelText('读取文件（read_file）'));
     fireEvent.click(screen.getByRole('button', { name: '下一步' }));
     fireEvent.click(screen.getByRole('button', { name: '选供应商' }));
     fireEvent.click(screen.getByRole('button', { name: '选模型' }));
@@ -250,7 +258,8 @@ describe('AgentCreateWizard — 薄 fork 预填（2026-10-08 预设可见化）'
     expect((screen.getByLabelText('系统提示词') as HTMLTextAreaElement).value).toBe(FORK_SEED.systemPrompt);
     fireEvent.click(screen.getByRole('button', { name: '下一步' })); // 进步 3 能力
     expect((screen.getByLabelText('自定义') as HTMLInputElement).checked).toBe(true);
-    expect((await screen.findByLabelText('读取文件（read_file）') as HTMLInputElement).checked).toBe(true);
+    await openGroup('文件');
+    expect((screen.getByLabelText('读取文件（read_file）') as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText('删除文件（rm）') as HTMLInputElement).checked).toBe(true);
     expect((screen.getByRole('checkbox', { name: /pdf/ }) as HTMLInputElement).checked).toBe(true);
   });

@@ -19,6 +19,7 @@ import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { ProviderModelPicker } from './ProviderModelPicker';
 import { ThinkingOverrideControl } from './ThinkingOverrideControl';
+import { ToolPickerPanel } from './ToolPickerPanel';
 import { Button } from '../ui/Button';
 import { Checkbox } from '../ui/Checkbox';
 import { Input } from '../ui/Input';
@@ -77,7 +78,8 @@ export function AgentCreateWizard({ onClose, onSuccess, initialDef, source = 'li
   // agentView 专用：创建后把新成员设为当前 workspace 的默认会话智能体
   const [setAsDefault, setSetAsDefault] = useState(false);
 
-  const { data: catalog, error: catalogError } = useToolCatalog();
+  // catalogError 由 ToolPickerPanel 内部提示（能力步唯一目录消费面）
+  const { data: catalog } = useToolCatalog();
 
   // 目录就绪后把空自选集初始化为 Tier 1（用户已手动改过则不覆盖，同 CreateAgentDialog）
   useEffect(() => {
@@ -244,33 +246,12 @@ export function AgentCreateWizard({ onClose, onSuccess, initialDef, source = 'li
               ))}
               {preset === 'custom' && (
                 <div className="flex flex-col gap-2 pl-5 pt-1">
-                  {catalogError && (
-                    <div className="text-xs text-status-error">工具目录加载失败：{catalogError}</div>
-                  )}
-                  {(catalog?.categories ?? []).map((cat) => (
-                    <div key={cat.label}>
-                      {/* cat.emoji 为 IPC 目录数据字段（豁免，非 UI 硬编码图标） */}
-                      <div className="text-xs text-tertiary mb-1">{cat.emoji} {cat.label}</div>
-                      <div className="flex flex-wrap gap-2">
-                        {cat.tools.map((tool) => {
-                          // 2026-10-12 工具名中文化：中文主名 + 英文小字副注（勾选值仍是英文 name）
-                          const display = catalog?.displayName(tool) ?? tool;
-                          return (
-                            <label key={tool} className="flex items-center gap-1 text-xs text-secondary">
-                              <input
-                                type="checkbox"
-                                aria-label={`${display}（${tool}）`}
-                                checked={customTools.includes(tool)}
-                                onChange={() => toggle(customTools, setCustomTools, tool)}
-                              />
-                              {display}
-                              <span className="text-tertiary">{tool}</span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
+                  {/* 2026-11-04：平铺 checkbox 换 ToolPickerPanel（搜索 + 折叠分组 +
+                      组三态；向导建全局自定义 def，无插件工具通道 → 不传插件分组） */}
+                  <ToolPickerPanel
+                    value={customTools}
+                    onChange={setCustomTools}
+                  />
                 </div>
               )}
             </fieldset>
