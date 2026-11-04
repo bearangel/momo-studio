@@ -274,3 +274,112 @@ describe('spawn 装配授权翻转（spec 2026-10-21 §6）', () => {
     expect(opts.pluginTools ?? []).toHaveLength(0);
   });
 });
+
+// def 声明纳入插件工具授权集（2026-11-04，与 MCP/Skill「定义声明是合法授权通道」
+// 语义对齐——spec 2026-10-21 §2 总模型 vs §6 Tool 行不对称的修正）。
+// 场景锚点（feature-matrices/2026-11-04-plugin-tool-def-grant.md 生命周期列）：
+// 新建插件 agent 开箱即用 / 存量 office-pro 无 deltas 即刻生效 / builtin 无声明不受影响。
+describe('spawn 装配授权：def 声明纳入授权集（2026-11-04）', () => {
+  /** 复用 seedGrantedPlugin 的插件骨架（启用 + tools/main.js），不带任何授权行 */
+  function seedPluginNoGrant(): void {
+    const db = getDb();
+    const root = path.join(os.tmpdir(), `momo-spa-defgrant-${Date.now()}`);
+    fs.mkdirSync(path.join(root, 'tools'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'tools', 'main.js'), 'module.exports.createTools = () => ({});');
+    fs.writeFileSync(
+      path.join(root, 'momo-plugin.json'),
+      JSON.stringify({
+        id: 'pg', name: 'PG', version: '1.0.0', description: '',
+        components: { tools: './tools' },
+      }),
+    );
+    db.prepare(
+      `INSERT INTO plugins (id, version, manifest_json, state, source, source_path, installed_at)
+       VALUES ('pg', '1.0.0', ?, 'active', 'dev', ?, 'x')`,
+    ).run(fs.readFileSync(path.join(root, 'momo-plugin.json'), 'utf-8'), root);
+    db.prepare(
+      `INSERT INTO plugin_enablements (workspace_id, plugin_id, enabled) VALUES ('ws1', 'pg', 1)`,
+    ).run();
+  }
+
+  it('def.defaultTools 声明精确名 → 无 allocation/deltas 也装配（存量 office-pro 场景）', async () => {
+    const db = getDb();
+    seedWorkspaceAndDef(db, 'ws1', 'def1', '[]');
+    seedPluginNoGrant();
+    const opts = await buildSpawnOpts({
+      instanceId: 'inst1', agentUserId: 'agent-t-ab12cd', workspaceId: 'ws1',
+      workspaceDir: '/tmp', def: makeDef('def1', ['plugin:pg/main']), role: 'standalone', llmApiKey: 'k',
+    });
+    expect(opts.pluginTools).toHaveLength(1);
+    expect(opts.pluginTools![0]!.modulePaths.some((m) => m.endsWith('main.js'))).toBe(true);
+  });
+
+  it('def.defaultTools 声明组模式 plugin:pg/* → 全量装配', async () => {
+    const db = getDb();
+    seedWorkspaceAndDef(db, 'ws1', 'def1', '[]');
+    seedPluginNoGrant();
+    const opts = await buildSpawnOpts({
+      instanceId: 'inst1', agentUserId: 'agent-t-ab12cd', workspaceId: 'ws1',
+      workspaceDir: '/tmp', def: makeDef('def1', ['plugin:pg/*']), role: 'standalone', llmApiKey: 'k',
+    });
+    expect(opts.pluginTools).toHaveLength(1);
+  });
+
+  it('def 声明 ∩ def.deniedTools 同名 → 黑名单优先不装配', async () => {
+    const db = getDb();
+    seedWorkspaceAndDef(db, 'ws1', 'def1', '[]');
+    seedPluginNoGrant();
+    const def = { ...makeDef('def1', ['plugin:pg/main']), deniedTools: ['plugin:pg/main'] };
+    const opts = await buildSpawnOpts({
+      instanceId: 'inst1', agentUserId: 'agent-t-ab12cd', workspaceId: 'ws1',
+      workspaceDir: '/tmp', def, role: 'standalone', llmApiKey: 'k',
+    });
+    expect(opts.pluginTools ?? []).toHaveLength(0);
+  });
+
+  it('成员 removedPluginTools 反向取消 def 声明 → 不装配', async () => {
+    const db = getDb();
+    seedWorkspaceAndDef(db, 'ws1', 'def1', '[]');
+    seedPluginNoGrant();
+    db.prepare(
+      `INSERT INTO workspace_agent_members
+         (instance_id, workspace_id, agent_definition_id, agent_user_id)
+       VALUES ('inst1', 'ws1', 'def1', 'agent-t-ab12cd')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO agent_assignment_capabilities (assignment_id, capability_type, mode, ref)
+       VALUES ('inst1', 'plugin_tool', 'remove', 'plugin:pg/main')`,
+    ).run();
+    const opts = await buildSpawnOpts({
+      instanceId: 'inst1', agentUserId: 'agent-t-ab12cd', workspaceId: 'ws1',
+      workspaceDir: '/tmp', def: makeDef('def1', ['plugin:pg/main']), role: 'standalone', llmApiKey: 'k',
+    });
+    expect(opts.pluginTools ?? []).toHaveLength(0);
+  });
+
+  it('def 声明但插件在 ws 停用 → 不装配（总闸语义不变）', async () => {
+    const db = getDb();
+    seedWorkspaceAndDef(db, 'ws1', 'def1', '[]');
+    seedPluginNoGrant();
+    // 总闸关：enablement 行翻 false（INSERT OR REPLACE 覆盖 seed 的 1）
+    db.prepare(
+      `INSERT OR REPLACE INTO plugin_enablements (workspace_id, plugin_id, enabled) VALUES ('ws1', 'pg', 0)`,
+    ).run();
+    const opts = await buildSpawnOpts({
+      instanceId: 'inst1', agentUserId: 'agent-t-ab12cd', workspaceId: 'ws1',
+      workspaceDir: '/tmp', def: makeDef('def1', ['plugin:pg/main']), role: 'standalone', llmApiKey: 'k',
+    });
+    expect(opts.pluginTools ?? []).toHaveLength(0);
+  });
+
+  it('无声明无授权（builtin 场景）→ 仍空装配，行为不回归', async () => {
+    const db = getDb();
+    seedWorkspaceAndDef(db, 'ws1', 'def1', '[]');
+    seedPluginNoGrant();
+    const opts = await buildSpawnOpts({
+      instanceId: 'inst1', agentUserId: 'agent-t-ab12cd', workspaceId: 'ws1',
+      workspaceDir: '/tmp', def: makeDef('def1', ['read_file']), role: 'standalone', llmApiKey: 'k',
+    });
+    expect(opts.pluginTools ?? []).toHaveLength(0);
+  });
+});

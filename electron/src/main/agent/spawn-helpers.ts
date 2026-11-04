@@ -442,11 +442,13 @@ export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentR
     ],
     // 组⑤启停：禁用的 MCP 不进 agent 工具面；再滤禁用插件的贡献名（P2）
     mcpNames: filterDisabledPluginMcps(filterEnabledMcps(merged.mcps), workspaceId),
-    // 插件工具装配快照（spec §6 白名单）：授权集 = ws allocation ∪ 成员勾选，
-    // 再剔黑名单（deniedTools 终态——黑名单优先保守语义）；spawn 时定型
+    // 插件工具装配快照（spec §6 白名单 + 2026-11-04 def 声明纳入）：授权集 =
+    // merged.tools（def 声明 ∪ ws allocation ± 成员 tools deltas，与 MCP/Skill
+    // 「定义声明是合法授权通道」语义对齐）∪ 成员插件勾选，再剔黑名单
+    // （deniedTools 终态——黑名单优先保守语义）；spawn 时定型
     pluginTools: filterPluginToolRefsByGrant(
       allPluginRefs,
-      [...new Set([...allocation.tools, ...(deltas.addedPluginTools ?? [])])],
+      [...new Set([...merged.tools, ...(deltas.addedPluginTools ?? [])])],
       merged.deniedTools,
     ),
     // 插件 hooks 存在标志（P3 spec §5.2）：无 hook 的 workspace 子进程零往返短路
