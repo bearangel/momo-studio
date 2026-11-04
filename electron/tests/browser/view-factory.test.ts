@@ -367,3 +367,79 @@ describe('overlay 生命周期（随 tab 视图全灭销毁）', () => {
     expect(mount.removeChildView).toHaveBeenCalledTimes(1);
   });
 });
+
+// === 挂载目标变更随迁（2026-11-04 姊妹 P0 回归锁）===
+// 复现：macOS 红绿灯关窗（窗口 #1 销毁）→ dock 重开走 app.on('activate') 重建
+// 窗口 #2，index.ts 以新 contentView 调 setMountTarget。旧实现只换引用不迁移——
+// 存活 tab/overlay 视图仍挂在已销毁的旧 contentView 上（孤儿化，侧栏空白直到
+// tab 全灭重建）。锁死语义：换目标 = 存活视图随迁 + overlay 栈顶纪律保持。
+describe('setMountTarget 变更随迁（窗口重建）', () => {
+  it('换目标 → 存活 tab 视图按原序重挂新目标；已挂 overlay 随迁且保持栈顶', () => {
+    const factory = initRealViewFactory(hooks);
+    const oldMount = mkMount();
+    factory.setMountTarget(oldMount);
+    factory.create('ws-1');
+    factory.create('ws-1');
+    factory.showOverlay('ws-1', 'agent');
+    const overlay = findView('browser-overlay');
+    const tabs = createdViews.filter((c) => c.partition === 'persist:browser-ws-1');
+    expect(tabs).toHaveLength(2);
+
+    const newMount = mkMount();
+    factory.setMountTarget(newMount);
+
+    expect(newMount.addChildView.mock.calls.map((c) => c[0])).toEqual([
+      tabs[0]!.view,
+      tabs[1]!.view,
+      overlay.view,
+    ]);
+    expect(oldMount.removeChildView).toHaveBeenCalledWith(tabs[0]!.view);
+    expect(oldMount.removeChildView).toHaveBeenCalledWith(overlay.view);
+  });
+
+  it('user 态（未挂）的 overlay 不重挂新目标', () => {
+    const factory = initRealViewFactory(hooks);
+    const oldMount = mkMount();
+    factory.setMountTarget(oldMount);
+    factory.create('ws-1');
+    factory.showOverlay('ws-1', 'agent');
+    factory.showOverlay('ws-1', 'user'); // 摘除——attached=false
+    const overlay = findView('browser-overlay');
+    const tab = createdViews.find((c) => c.partition === 'persist:browser-ws-1')!;
+
+    const newMount = mkMount();
+    factory.setMountTarget(newMount);
+
+    expect(newMount.addChildView.mock.calls.map((c) => c[0])).toEqual([tab.view]);
+    expect(newMount.addChildView).not.toHaveBeenCalledWith(overlay.view);
+  });
+
+  it('旧目标已销毁（removeChildView 抛 destroyed）→ 随迁不中断', () => {
+    const factory = initRealViewFactory(hooks);
+    const oldMount = mkMount();
+    oldMount.removeChildView.mockImplementation(() => {
+      throw new Error('Object has been destroyed');
+    });
+    factory.setMountTarget(oldMount);
+    factory.create('ws-1');
+    const tab = createdViews[0]!;
+
+    const newMount = mkMount();
+    expect(() => factory.setMountTarget(newMount)).not.toThrow();
+    expect(newMount.addChildView).toHaveBeenCalledWith(tab.view);
+  });
+
+  it('目标置 null（防御语义）→ 尽力摘除 + 后续 create 不挂载不抛错', () => {
+    const factory = initRealViewFactory(hooks);
+    const oldMount = mkMount();
+    factory.setMountTarget(oldMount);
+    factory.create('ws-1');
+    const tab = createdViews[0]!;
+
+    factory.setMountTarget(null);
+
+    expect(oldMount.removeChildView).toHaveBeenCalledWith(tab.view);
+    expect(() => factory.create('ws-1')).not.toThrow();
+    expect(oldMount.addChildView).toHaveBeenCalledTimes(1); // 仅首次 create
+  });
+});

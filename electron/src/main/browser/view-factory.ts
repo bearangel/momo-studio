@@ -80,6 +80,18 @@ const OVERLAY_CSS =
 /** overlay preload 编译产物路径（tsc 主流水线：src/main/browser → dist/main/browser） */
 const overlayPreloadPath = path.join(__dirname, 'overlay-preload.js');
 
+/** 尽力摘除（挂载目标变更随迁用）：目标已随窗口销毁时 removeChildView 抛
+ *  "Object has been destroyed"——摘除无意义，debug 留痕跳过 */
+function detachView(mount: ViewMount, view: unknown): void {
+  try {
+    mount.removeChildView(view);
+  } catch (err) {
+    logger.debug('旧挂载目标摘除跳过（已随窗口销毁）', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 /**
  * 构建真实 Electron 视图工厂。
  *
@@ -246,7 +258,29 @@ export function initRealViewFactory(hooks: RealFactoryHooks): ViewFactory &
     },
 
     setMountTarget(next: ViewMount | null): void {
+      // 挂载目标变更（窗口重建随迁，2026-11-04 姊妹 P0）：macOS 关窗 → dock 重开
+      // 后 index.ts 以新 contentView 调用本方法——存活 tab 视图与已挂 overlay 必须随迁，
+      // 否则仍挂在已销毁旧 contentView 上（孤儿化：侧栏空白，直到 tab 全灭重建）。
+      // 旧目标摘除防御性容错：native 对象已随窗口销毁时 removeChildView 抛
+      // "Object has been destroyed"（此时摘除本就无意义），debug 级留痕不中断随迁。
+      if (mount && mount !== next) {
+        for (const set of viewsByWs.values()) {
+          for (const v of set) detachView(mount, v);
+        }
+        for (const rec of overlays.values()) {
+          if (rec.attached) detachView(mount, rec.view);
+        }
+      }
       mount = next;
+      if (next === null) return;
+      for (const set of viewsByWs.values()) {
+        for (const v of set) next.addChildView(v);
+      }
+      // overlay 恒在 tab 视图之上（附加序 = z 序，与 create 内栈顶纪律同源）：
+      // 随迁重挂放末位恢复栈顶
+      for (const rec of overlays.values()) {
+        if (rec.attached) next.addChildView(rec.view);
+      }
     },
   };
 }
