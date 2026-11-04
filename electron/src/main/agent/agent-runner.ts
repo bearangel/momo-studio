@@ -877,6 +877,11 @@ export class AgentRunner {
       this.sweepEscapes(active);
       // v2.3 车道：流收尾让道（迟到收尾按 streamSessionId 匹配天然 no-op）
       clearLaneIfMatch(active.executionSessionId, active.streamSessionId);
+      // 2026-11-03 成员停止卡流修复：destroy 同步清空活跃表，child exit 异步到达时
+      // handleChildExit 已无活跃可收尾——终态事件生产者被短路，消息行滞留 streaming
+      // （renderer 永显「处理中 + 停止钮」）。此处自产终态，与 handleChildExit 同款；
+      // 幂等——后续 exit 回调的 finalizeStreamOnCrash 见非 streaming 状态自然 no-op。
+      finalizeStreamOnCrash(active.streamSessionId, null);
     }
     this.activeTasks.clear();
   }

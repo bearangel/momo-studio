@@ -720,6 +720,46 @@ describe('AgentRunner child exit 清理链（C2）', () => {
     delete process.env.AP_USER_DATA_DIR;
   });
 
+  // 2026-11-03 成员停止卡流回归锁（实锤案例：成员行「停止」→ stopAgentRuntime →
+  // destroy）：destroy 同步清空活跃表，child exit 异步到达时 handleChildExit 无
+  // 活跃可收尾——终态事件生产者被短路，消息行滞留 streaming，renderer 永显
+  // 「处理中 + 停止钮」。destroy 必须自产终态（与 handleChildExit 同款
+  // finalizeStreamOnCrash；幂等——后续 exit 回调见非 streaming 状态 no-op）。
+  it('destroy 对在途流补终态：消息行 → failed + final 事件落库（不再滞留 streaming）', async () => {
+    const child = mkMockChild();
+    const warmPool = new WarmPool({ spawn: vi.fn().mockResolvedValue(child) });
+    await warmPool.warm('inst1');
+    const runner = mkRunner(warmPool);
+    // 真实生产者路径建行：流式消息行（start chunk 落库形态）
+    insertMessage({
+      sessionId: '!r:home',
+      sender: '@agent:localhost',
+      eventType: 'message',
+      body: '',
+      streamSessionId: 'ss-destroy-1',
+      status: 'streaming',
+    });
+    await runner.executeTask({
+      taskId: null,
+      executionSessionId: '!r:home',
+      body: 'x',
+      streamSessionId: 'ss-destroy-1',
+    });
+    expect(runner.activeTaskCount()).toBe(1);
+
+    runner.destroy();
+
+    const msg = getMessageByStreamSessionId('ss-destroy-1');
+    expect(msg).not.toBeNull();
+    expect(msg!.status).toBe('failed');
+    const events = getDb()
+      .prepare('SELECT event_type, payload_json FROM message_events WHERE message_id = ?')
+      .all(msg!.id) as Array<{ event_type: string; payload_json: string }>;
+    const final = events.find((e) => e.event_type === 'final');
+    expect(final).toBeDefined();
+    expect((JSON.parse(final!.payload_json) as { status: string }).status).toBe('failed');
+  });
+
   it('R1 回归锁（复审）：退出路径 forced 空闲边沿仅在中止活跃任务时触发——崩溃触发、例行退出不触发、关机不触发', async () => {
     // 三用例共用夹具构造helper
     const mk = async () => {
