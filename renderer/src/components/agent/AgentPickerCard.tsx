@@ -20,7 +20,7 @@ import { useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Crown, Server, Sparkles, Wrench } from 'lucide-react';
 import { Avatar } from '../ui/Avatar';
 import { cn } from '../../lib/cn';
-import { deniedMatch } from './PluginToolsSection';
+import { deniedMatch } from '../../lib/capability-helpers';
 import type { EffectiveCapabilities } from '../../ipc/types';
 
 export interface AgentPickerCardProps {

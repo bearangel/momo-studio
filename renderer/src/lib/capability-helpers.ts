@@ -172,15 +172,56 @@ function matchesToolPattern(fullName: string, patterns: string[]): boolean {
 }
 
 /** 成员级插件工具生效授权集（渲染初值，spec §6 公式）：
- *  工具全名域 = (wsGranted ∪ added) 授予 − (removed ∪ def 禁)，模式串展开语义
- *  与 electron spawn 侧 toolRefMatches 完全对齐 */
+ *  工具全名域 = (授权基线 ∪ added) 授予 − (removed ∪ def 禁)，模式串展开语义
+ *  与 electron spawn 侧 toolRefMatches 完全对齐。
+ *  授权基线（2026-11-04 def 声明纳入）= ws allocation 的 plugin: refs ∪
+ *  def.defaultTools 的 plugin: refs——与 MCP/Skill「定义声明是合法授权通道」对齐 */
 export function effectivePluginGranted(
   defDenied: string[],
   deltas: Pick<AssignmentDeltas, 'addedPluginTools' | 'removedPluginTools'>,
-  wsGranted: string[],
+  granted: string[],
   toolFullNames: string[],
 ): string[] {
-  const grant = [...wsGranted, ...(deltas.addedPluginTools ?? [])];
+  const grant = [...granted, ...(deltas.addedPluginTools ?? [])];
   const deny = [...defDenied, ...(deltas.removedPluginTools ?? [])];
   return toolFullNames.filter((n) => matchesToolPattern(n, grant) && !matchesToolPattern(n, deny));
+}
+
+/** 定义级换算（deniedTools 整体清单维护；原 PluginToolsSection 导出，2026-11-04
+ *  组件并入 ToolPickerPanel 后纯函数落 capability-helpers）：
+ *  changed 形态两种——整组模式 `plugin:<id>/*` 或精确名 `plugin:<id>/<name>`。
+ *  组模式存在时开单个工具 = 摘组模式 + 展开其余精确名（保持其余仍禁）。 */
+export function computeDeniedTools(
+  current: string[],
+  pluginId: string,
+  toolFullNames: string[],
+  changed: string,
+  on: boolean,
+): string[] {
+  const group = `plugin:${pluginId}/*`;
+  if (!on) {
+    if (changed === group) return [...new Set([...current, group])];
+    const hadGroup = current.includes(group);
+    const base = current.filter((p) => p !== group);
+    const rest = hadGroup ? toolFullNames.filter((n) => n !== changed) : [];
+    return [...new Set([...base, changed, ...rest])];
+  }
+  if (changed === group) {
+    return current.filter((p) => p !== group && !p.startsWith(`plugin:${pluginId}/`));
+  }
+  // 组模式下开单个：摘组模式，其余仍禁的展开为精确名（语义连续不跳变）
+  const hadGroup = current.includes(group);
+  const base = current.filter((p) => p !== group && p !== changed);
+  const rest = hadGroup ? toolFullNames.filter((n) => n !== changed) : [];
+  return [...base, ...rest];
+}
+
+/** denied 模式串命中（精确名或组前缀）——DefinitionEditor 由 deniedTools 换算
+ *  checked 用；AgentPickerCard 徽标展示用 */
+export function deniedMatch(fullName: string, patterns: string[]): boolean {
+  for (const p of patterns) {
+    if (p === fullName) return true;
+    if (p.endsWith('/*') && fullName.startsWith(p.slice(0, -1))) return true;
+  }
+  return false;
 }

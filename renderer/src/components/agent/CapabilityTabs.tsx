@@ -1,9 +1,9 @@
 // renderer/src/components/agent/CapabilityTabs.tsx
 //
-// 能力配置共享组件：三个 Tab（工具 / MCP / Skill）+ 类别分组 checkbox。
+// 能力配置共享组件：三个 Tab（工具 / MCP / Skill）。
 // 三种模式：
 //   - mode='edit'：value 是绝对勾选集合（DefinitionEditor 自定义 agent 编辑用）。
-//                  底部显示 [全选] [清空] [安全最小集] 三个快捷按钮。
+//                  工具 tab 经 ToolPickerPanel 提供快捷按钮 [全选][清空][安全最小集]。
 //   - mode='override'：value 是最终值。调用方（Layer 3 弹窗 MemberEditDialog）
 //                      在保存时对照 defaultValue 计算 added/removed delta。
 //                      本组件只管最终值，不计算 delta，仅在 UI 上提示默认集合。
@@ -13,8 +13,11 @@
 // 被 DefinitionEditor（edit / readonly 模式）和 MemberEditDialog（override 模式）复用。
 // v2.1 P3：token 全量语义化（tab / 分组标签 / 快捷按钮 / 空态提示）。
 // v2.x 工具目录切源：分组/全集/最小集来自 IPC tools:getCatalog（useToolCatalog，
-// 单一真相源）；类别 emoji 为目录数据字段，按数据豁免保留。目录未就绪或失败时
-// 工具 Tab 顶部显示加载/错误提示，MCP / Skill Tab 不受影响。
+// 单一真相源）。目录未就绪或失败时 ToolPickerPanel 顶部显示加载/错误提示，
+// MCP / Skill Tab 不受影响。
+// 2026-11-04：工具 tab 换用 ToolPickerPanel（搜索 + 折叠分组 + 组三态）；插件
+// 工具经 pluginTools/pluginChecked/onPluginToggle 并入工具 tab（取代 tab 外挂
+// PluginToolsSection——修「切 MCP/Skill 标签插件工具仍显示」bug）。
 import { useEffect, useState } from 'react';
 import { ipc } from '../../ipc/client';
 import { cn } from '../../lib/cn';
@@ -23,7 +26,8 @@ import { useToolCatalog } from '../../lib/useToolCatalog';
 // 自身 props 使用，同时 re-export 保持现有 `import { type Capabilities } from './CapabilityTabs'` 不破。
 import { type Capabilities } from '../../lib/capability-helpers';
 export type { Capabilities };
-import type { ResourceItem } from '../../ipc/types';
+import { ToolPickerPanel } from './ToolPickerPanel';
+import type { PluginToolInfo, ResourceItem } from '../../ipc/types';
 
 type Tab = 'tools' | 'mcp' | 'skill';
 
@@ -41,6 +45,12 @@ export interface CapabilityTabsProps {
   value: Capabilities;
   /** 勾选变化回调，返回新的完整能力集合 */
   onChange: (next: Capabilities) => void;
+  /** 插件工具候选池（工具 tab 附加分组）；缺省不渲染插件分组 */
+  pluginTools?: PluginToolInfo[];
+  /** 插件工具勾选全名集（受控，语义归调用方：定义级 denied 反推 / 成员级授权集） */
+  pluginChecked?: string[];
+  /** 插件勾选变化：changed 为精确名或 plugin:<id>/* 组模式串 */
+  onPluginToggle?: (changed: string, on: boolean) => void;
 }
 
 const TAB_LABELS: Record<Tab, string> = {
@@ -49,9 +59,18 @@ const TAB_LABELS: Record<Tab, string> = {
   skill: 'Skill',
 };
 
-export function CapabilityTabs({ mode, defaultValue, value, onChange, workspaceId }: CapabilityTabsProps) {
+export function CapabilityTabs({
+  mode,
+  defaultValue,
+  value,
+  onChange,
+  workspaceId,
+  pluginTools,
+  pluginChecked,
+  onPluginToggle,
+}: CapabilityTabsProps) {
   const [tab, setTab] = useState<Tab>('tools');
-  const { data: catalog, error: catalogError } = useToolCatalog();
+  const { data: catalog } = useToolCatalog();
   // v1.7：mcps / skills 拉取自统一 ipc.resource.list；filter installed 只展示已安装项。
   const [mcps, setMcps] = useState<ResourceItem[]>([]);
   const [skills, setSkills] = useState<ResourceItem[]>([]);
@@ -68,6 +87,11 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange, workspaceI
   }, [workspaceId]);
 
   const readonly = mode === 'readonly';
+
+  // tab 计数（预览合同「工具 24/57」）：plugin: 前缀 ref 归插件分组，不计入内置侧
+  const builtinChecked = value.tools.filter((t) => !t.startsWith('plugin:')).length;
+  const totalTools = (catalog?.allTools.length ?? 0) + (pluginTools?.length ?? 0);
+  const checkedTools = builtinChecked + (pluginChecked?.length ?? 0);
 
   /** 切换某一项（tools / mcps / skills）的勾选状态 */
   function toggleItem(bucket: 'tools' | 'mcps' | 'skills', item: string, checked: boolean): void {
@@ -96,81 +120,27 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange, workspaceI
             onClick={() => setTab(t)}
           >
             {TAB_LABELS[t]}
+            {t === 'tools' && totalTools > 0 && (
+              <span className="ml-1 text-tertiary">{checkedTools}/{totalTools}</span>
+            )}
           </button>
         ))}
       </div>
 
-      {/* 工具 Tab */}
+      {/* 工具 Tab：ToolPickerPanel（搜索/折叠/组三态/插件分组） */}
       {tab === 'tools' && (
         <div className="flex flex-col gap-2">
-          {/* 目录加载态与错误态（不阻塞表单其余字段）；加载≠错误， tertiary / error 分色 */}
-          {catalogError && (
-            <div className="text-xs text-status-error">
-              {`工具目录加载失败：${catalogError}`}
-            </div>
-          )}
-          {!catalogError && !catalog && <div className="text-xs text-tertiary">工具目录加载中…</div>}
-          {(catalog?.categories ?? []).map((cat) => (
-            <div key={cat.label}>
-              <div className="text-xs text-tertiary mb-1">
-                {cat.emoji} {cat.label}
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {cat.tools.map((tool) => {
-                  const checked = value.tools.includes(tool);
-                  // 2026-10-12 工具名中文化：中文主名 + 英文小字副注（勾选值/提交仍是英文 name）
-                  const display = catalog?.displayName(tool) ?? tool;
-                  return (
-                    <label
-                      key={tool}
-                      className="flex items-center gap-1 text-xs text-secondary"
-                    >
-                      <input
-                        type="checkbox"
-                        aria-label={`${display}（${tool}）`}
-                        checked={checked}
-                        disabled={readonly}
-                        onChange={(e) => toggleItem('tools', tool, e.target.checked)}
-                      />
-                      {display}
-                      <span className="text-tertiary">{tool}</span>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+          <ToolPickerPanel
+            value={value.tools}
+            onChange={(tools) => onChange({ ...value, tools })}
+            disabled={readonly}
+            quickActions={mode === 'edit'}
+            pluginTools={pluginTools}
+            pluginChecked={pluginChecked}
+            onPluginToggle={onPluginToggle}
+          />
 
-          {/* edit 模式：三个快捷按钮（全选/安全最小集依赖目录数据，未就绪时 disabled） */}
-          {mode === 'edit' && (
-            <div className="flex gap-1 mt-1">
-              <button
-                type="button"
-                disabled={!catalog}
-                className="text-xs px-2 py-0.5 rounded bg-surface-2 hover:bg-surface-3"
-                onClick={() => onChange({ ...value, tools: [...(catalog?.allTools ?? [])] })}
-              >
-                全选
-              </button>
-              <button
-                type="button"
-                className="text-xs px-2 py-0.5 rounded bg-surface-2 hover:bg-surface-3"
-                onClick={() => onChange({ ...value, tools: [] })}
-              >
-                清空
-              </button>
-              <button
-                type="button"
-                disabled={!catalog}
-                className="text-xs px-2 py-0.5 rounded bg-surface-2 hover:bg-surface-3"
-                onClick={() => onChange({ ...value, tools: [...(catalog?.safeMinimum ?? [])] })}
-              >
-                安全最小集
-              </button>
-            </div>
-          )}
-
-          {/* override 模式：提示默认值（delta 由调用方在保存时计算）；工具名用中文显示名 */}
+          {/* override 模式：提示默认值（delta 由调用方在保存时计算） */}
           {mode === 'override' && defaultValue && (
             <div className="text-xs text-tertiary mt-1">
               默认（def + workspace）：

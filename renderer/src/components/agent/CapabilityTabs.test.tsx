@@ -138,23 +138,30 @@ describe('CapabilityTabs — 工具目录加载态与错误态', () => {
   });
 });
 
+/** 等目录就绪并展开指定分类分组（ToolPickerPanel 2026-11-04 起默认全收起） */
+async function openGroup(label: string): Promise<void> {
+  await screen.findByRole('button', { name: `${label} 分组` });
+  fireEvent.click(screen.getByRole('button', { name: `${label} 分组` }));
+}
+
 describe('CapabilityTabs — edit 模式', () => {
   it('value 中的工具默认勾选（read_file 属于 mock 目录 defaultOn 集）', async () => {
     render(<CapabilityTabs {...defaultProps()} />);
-    const cb = await screen.findByLabelText('读取文件（read_file）');
-    expect((cb as HTMLInputElement).checked).toBe(true);
+    await openGroup('文件');
+    expect((screen.getByLabelText('读取文件（read_file）') as HTMLInputElement).checked).toBe(true);
   });
 
   it('value 之外的工具默认不勾选（bash defaultOn=false）', async () => {
     render(<CapabilityTabs {...defaultProps()} />);
-    const cb = await screen.findByLabelText('终端命令（bash）');
-    expect((cb as HTMLInputElement).checked).toBe(false);
+    await openGroup('Shell');
+    expect((screen.getByLabelText('终端命令（bash）') as HTMLInputElement).checked).toBe(false);
   });
 
   it('勾选一个未选工具 → onChange 加入该工具', async () => {
     const onChange = vi.fn();
     render(<CapabilityTabs {...defaultProps({ onChange })} />);
-    fireEvent.click(await screen.findByLabelText('终端命令（bash）'));
+    await openGroup('Shell');
+    fireEvent.click(screen.getByLabelText('终端命令（bash）'));
     expect(onChange).toHaveBeenCalledWith({
       tools: expect.arrayContaining([...MOCK_SAFE_MINIMUM, 'bash']),
       mcps: [],
@@ -168,7 +175,8 @@ describe('CapabilityTabs — edit 模式', () => {
   it('取消一个已选工具 → onChange 移除该工具', async () => {
     const onChange = vi.fn();
     render(<CapabilityTabs {...defaultProps({ onChange })} />);
-    fireEvent.click(await screen.findByLabelText('读取文件（read_file）'));
+    await openGroup('文件');
+    fireEvent.click(screen.getByLabelText('读取文件（read_file）'));
     expect(onChange).toHaveBeenCalledTimes(1);
     const call = onChange.mock.calls[0]![0];
     expect(call.tools).not.toContain('read_file');
@@ -177,12 +185,13 @@ describe('CapabilityTabs — edit 模式', () => {
 
   it('checkbox 不 disabled（可交互）', async () => {
     render(<CapabilityTabs {...defaultProps()} />);
-    expect(await screen.findByLabelText('终端命令（bash）')).not.toBeDisabled();
+    await openGroup('Shell');
+    expect(screen.getByLabelText('终端命令（bash）')).not.toBeDisabled();
   });
 
   it('显示三个快捷按钮：全选 / 清空 / 安全最小集', async () => {
     render(<CapabilityTabs {...defaultProps()} />);
-    await screen.findByLabelText('读取文件（read_file）');
+    await openGroup('文件');
     expect(screen.getByText('全选')).toBeInTheDocument();
     expect(screen.getByText('清空')).toBeInTheDocument();
     expect(screen.getByText('安全最小集')).toBeInTheDocument();
@@ -202,7 +211,7 @@ describe('CapabilityTabs — edit 模式', () => {
   it('点击 [清空] → onChange 设置为空工具集', async () => {
     const onChange = vi.fn();
     render(<CapabilityTabs {...defaultProps({ onChange })} />);
-    await screen.findByLabelText('读取文件（read_file）');
+    await openGroup('文件');
     fireEvent.click(screen.getByText('清空'));
     expect(onChange).toHaveBeenCalledWith({
       tools: [],
@@ -241,8 +250,10 @@ describe('CapabilityTabs — readonly 模式（builtin configure）', () => {
       />,
     );
     // 勾选的 disabled
-    expect(await screen.findByLabelText('读取文件（read_file）')).toBeDisabled();
+    await openGroup('文件');
+    expect(screen.getByLabelText('读取文件（read_file）')).toBeDisabled();
     // 未勾选的也 disabled
+    await openGroup('Shell');
     expect(screen.getByLabelText('终端命令（bash）')).toBeDisabled();
   });
 
@@ -272,7 +283,8 @@ describe('CapabilityTabs — readonly 模式（builtin configure）', () => {
       />,
     );
     // disabled 的 checkbox 点击不会触发 change 事件
-    const cb = await screen.findByLabelText('终端命令（bash）');
+    await openGroup('Shell');
+    const cb = screen.getByLabelText('终端命令（bash）');
     expect(cb).toBeDisabled();
     expect((cb as HTMLInputElement).checked).toBe(false);
     expect(onChange).not.toHaveBeenCalled();
@@ -290,7 +302,9 @@ describe('CapabilityTabs — override 模式（Layer 3 弹窗）', () => {
         })}
       />,
     );
-    expect((await screen.findByLabelText('读取文件（read_file）') as HTMLInputElement).checked).toBe(true);
+    await openGroup('文件');
+    await openGroup('Shell');
+    expect((screen.getByLabelText('读取文件（read_file）') as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText('终端命令（bash）') as HTMLInputElement).checked).toBe(true);
     // write_file 既不在 default 也不在 value → 未勾
     expect((screen.getByLabelText('写入文件（write_file）') as HTMLInputElement).checked).toBe(false);
@@ -306,7 +320,8 @@ describe('CapabilityTabs — override 模式（Layer 3 弹窗）', () => {
         })}
       />,
     );
-    expect(await screen.findByLabelText('终端命令（bash）')).not.toBeDisabled();
+    await openGroup('Shell');
+    expect(screen.getByLabelText('终端命令（bash）')).not.toBeDisabled();
   });
 
   it('不渲染快捷按钮（override 模式下用户精细调整，不提供批量操作）', () => {
