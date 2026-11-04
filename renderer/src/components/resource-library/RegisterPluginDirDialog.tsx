@@ -22,6 +22,17 @@ export function RegisterPluginDirDialog({ onClose, onSuccess }: Props) {
 
   const trimmed = dir.trim();
 
+  const handleBrowse = async (): Promise<void> => {
+    try {
+      const picked = await ipc.dialog.pickDirectory({ title: '选择插件源码目录' });
+      if (!picked) return;
+      setDir(picked);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   const handleRegister = async (): Promise<void> => {
     if (!trimmed || registering) return;
     setRegistering(true);
@@ -41,18 +52,31 @@ export function RegisterPluginDirDialog({ onClose, onSuccess }: Props) {
     <Dialog open onClose={registering ? () => undefined : onClose} title="注册开发目录" width={448}>
       <div className="flex flex-col gap-3">
         <div className="flex flex-col gap-1">
-          <Input
-            label="插件源码目录"
-            aria-label="插件源码目录"
-            spellCheck={false}
-            placeholder="/path/to/my-plugin（含 momo-plugin.json）"
-            value={dir}
-            onChange={(e) => {
-              setDir(e.target.value);
-              setError(null);
-            }}
-            disabled={registering}
-          />
+          <div className="flex items-end gap-2">
+            <div className="flex-1 min-w-0">
+              <Input
+                label="插件源码目录"
+                aria-label="插件源码目录"
+                spellCheck={false}
+                placeholder="/path/to/my-plugin（含 momo-plugin.json）"
+                value={dir}
+                onChange={(e) => {
+                  setDir(e.target.value);
+                  setError(null);
+                }}
+                disabled={registering}
+              />
+            </div>
+            <Button
+              variant="secondary"
+              type="button"
+              className="shrink-0"
+              disabled={registering}
+              onClick={() => void handleBrowse()}
+            >
+              浏览…
+            </Button>
+          </div>
           <p className="text-xs text-tertiary mt-1">
             不拷贝文件，直接读取该目录（改码后的重载动作随 P2 工具激活提供）。同名插件重复注册
             = 刷新版本。

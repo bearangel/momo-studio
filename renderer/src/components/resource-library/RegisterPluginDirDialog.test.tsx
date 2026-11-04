@@ -10,9 +10,11 @@ import { RegisterPluginDirDialog } from './RegisterPluginDirDialog';
 import type { PluginSummary } from '../../ipc/types';
 
 const installDevDir = vi.fn();
+const pickDirectory = vi.fn();
 
 const mockApi = {
   plugin: { installDevDir },
+  dialog: { pickDirectory },
 };
 
 const SUMMARY: PluginSummary = {
@@ -27,6 +29,7 @@ const SUMMARY: PluginSummary = {
 
 beforeEach(() => {
   installDevDir.mockReset().mockResolvedValue(SUMMARY);
+  pickDirectory.mockReset();
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 });
 
@@ -34,6 +37,31 @@ describe('RegisterPluginDirDialog', () => {
   it('空路径时注册按钮禁用', () => {
     render(<RegisterPluginDirDialog onClose={vi.fn()} onSuccess={vi.fn()} />);
     expect(screen.getByRole('button', { name: '注册' })).toBeDisabled();
+  });
+
+  it('「浏览…」调 dialog.pickDirectory，选中路径回填输入框（注册按钮随之可用）', async () => {
+    pickDirectory.mockResolvedValue('/Users/x/dev/momo-plugin/plugins/office-pro');
+    render(<RegisterPluginDirDialog onClose={vi.fn()} onSuccess={vi.fn()} />);
+    expect(screen.getByRole('button', { name: '注册' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: '浏览…' }));
+    await waitFor(() =>
+      expect(pickDirectory).toHaveBeenCalledWith({ title: '选择插件源码目录' }),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText('插件源码目录')).toHaveValue(
+        '/Users/x/dev/momo-plugin/plugins/office-pro',
+      ),
+    );
+    expect(screen.getByRole('button', { name: '注册' })).toBeEnabled();
+  });
+
+  it('「浏览…」取消（pickDirectory 返回 null）不改动输入框', async () => {
+    pickDirectory.mockResolvedValue(null);
+    render(<RegisterPluginDirDialog onClose={vi.fn()} onSuccess={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText('插件源码目录'), { target: { value: '/keep' } });
+    fireEvent.click(screen.getByRole('button', { name: '浏览…' }));
+    await waitFor(() => expect(pickDirectory).toHaveBeenCalled());
+    expect(screen.getByLabelText('插件源码目录')).toHaveValue('/keep');
   });
 
   it('注册调 plugin.installDevDir 成功后自动关闭（onSuccess 带 summary + onClose）', async () => {

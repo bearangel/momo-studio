@@ -9,6 +9,7 @@ import path from 'node:path';
 import { beforeEach, afterEach, describe, expect, it } from 'vitest';
 import { closeDb, getDb, runMigrations } from '../../src/main/storage/db';
 import { registerPluginAgents, removePluginAgents } from '../../src/main/plugin/agent-sync';
+import { updateGlobalSettings } from '../../src/main/settings/crud';
 import { upsertPlugin } from '../../src/main/plugin/registry';
 import type { PluginRecord } from '../../src/main/plugin/types';
 
@@ -117,6 +118,83 @@ describe('registerPluginAgents', () => {
     };
     upsertPlugin(rec);
     expect(registerPluginAgents(rec)).toBe(0);
+  });
+});
+
+// 模型绑定解析锁（2026-11-03 插件 agent LLM 配置闭环）：落库模型三列优先级 =
+// 既有行显式配置（重载不丢）→ 全局默认聊天模型（provider 存在校验）→ null。
+// 背景：saveAgentDefinition 的 upsert 冲突时覆盖模型列，注册若恒带 null 会在
+// 每次插件 reload 后清掉用户配置（资源库「配置」/成员编辑写入的模型绑定）。
+describe('模型绑定解析（registerPluginAgents）', () => {
+  function modelColsOf(defId: string): {
+    modelProviderId: string | null;
+    modelName: string | null;
+  } {
+    const row = getDb()
+      .prepare('SELECT model_provider_id, model_name FROM agent_definitions WHERE id = ?')
+      .get(defId) as { model_provider_id: string | null; model_name: string | null };
+    return { modelProviderId: row.model_provider_id, modelName: row.model_name };
+  }
+
+  function seedProvider(id: string): void {
+    getDb()
+      .prepare(
+        `INSERT INTO model_providers (id, name, base_url, api_key_ref, is_default, platform)
+         VALUES (?, '测试供应商', 'https://x', 'ref', 0, 'openai')`,
+      )
+      .run(id);
+  }
+
+  it('无显式配置 + 全局默认已配置（provider 在库）→ 落默认模型', () => {
+    seedProvider('prov-a');
+    updateGlobalSettings({ defaultChatModel: { providerId: 'prov-a', modelId: 'glm-5.3' } });
+    const rec = mkPlugin('mb1', AGENT_YAML);
+    upsertPlugin(rec);
+    registerPluginAgents(rec);
+    expect(modelColsOf('plugin:mb1:code-navigator')).toEqual({
+      modelProviderId: 'prov-a',
+      modelName: 'glm-5.3',
+    });
+  });
+
+  it('重载保留既有行显式配置（不清用户模型绑定）', () => {
+    const rec = mkPlugin('mb2', AGENT_YAML);
+    upsertPlugin(rec);
+    registerPluginAgents(rec);
+    // 模拟用户经资源库「配置」写入的显式绑定（updateDefinition 落点即模型三列）
+    getDb()
+      .prepare(
+        `UPDATE agent_definitions SET model_provider_id = ?, model_name = ? WHERE id = ?`,
+      )
+      .run('prov-user', 'glm-5.2', 'plugin:mb2:code-navigator');
+    // 全局默认随后才配置——显式配置仍优先，不被默认覆盖
+    seedProvider('prov-b');
+    updateGlobalSettings({ defaultChatModel: { providerId: 'prov-b', modelId: 'glm-5.3' } });
+    registerPluginAgents(rec); // reload 链重注册
+    expect(modelColsOf('plugin:mb2:code-navigator')).toEqual({
+      modelProviderId: 'prov-user',
+      modelName: 'glm-5.2',
+    });
+  });
+
+  it('默认未配置 / 默认 provider 已删 → 落 null（spawn 校验报错兜底）', () => {
+    // 场景①：默认从未配置
+    const rec = mkPlugin('mb3', AGENT_YAML);
+    upsertPlugin(rec);
+    registerPluginAgents(rec);
+    expect(modelColsOf('plugin:mb3:code-navigator')).toEqual({
+      modelProviderId: null,
+      modelName: '',
+    });
+    // 场景②：默认指向已删除的 provider——不落悬空引用
+    updateGlobalSettings({ defaultChatModel: { providerId: 'prov-gone', modelId: 'x' } });
+    const rec2 = mkPlugin('mb4', AGENT_YAML);
+    upsertPlugin(rec2);
+    registerPluginAgents(rec2);
+    expect(modelColsOf('plugin:mb4:code-navigator')).toEqual({
+      modelProviderId: null,
+      modelName: '',
+    });
   });
 });
 

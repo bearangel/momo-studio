@@ -7,8 +7,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseAgentManifestWithSuggestion } from '../agent/manifest-parser';
+import { getAgentDefinition } from '../agent/agent-queries';
+import { getProvider } from '../agent/provider-crud';
 import { saveAgentDefinition } from '../agent/crud';
 import type { AgentDefinition } from '../agent/types';
+import type { ThinkingConfig } from '../llm/provider-presets';
+import { getGlobalSettings } from '../settings/crud';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
 import { resolvePluginRoot } from './assembly';
@@ -44,6 +48,35 @@ export function registerPluginAgents(rec: PluginRecord): number {
   return registered;
 }
 
+interface ModelBinding {
+  providerId: string;
+  modelId: string;
+  thinkingJson: ThinkingConfig | null;
+}
+
+/**
+ * 插件 agent 模型绑定解析（2026-11-03 LLM 配置闭环）。优先级：
+ * ① 既有行显式配置——用户经资源库「配置」/成员编辑写入；saveAgentDefinition 的
+ *   upsert 冲突时覆盖模型列，注册若不带旧值会在每次 reload 后清掉用户配置
+ * ② 全局默认聊天模型（defaultChatModel）——插件作者无法预知本地 provider ID，
+ *   YAML 不携带绑定，安装即自动应用默认；provider 已删视为不可用，不落悬空引用
+ * ③ 均无 → null（spawn 校验报错指路资源库配置入口）
+ */
+function resolveModelBinding(defId: string): ModelBinding | null {
+  const existing = getAgentDefinition(defId);
+  if (existing?.modelProviderId && existing.modelName) {
+    return {
+      providerId: existing.modelProviderId,
+      modelId: existing.modelName,
+      thinkingJson: existing.thinkingJson ?? null,
+    };
+  }
+  const ref = getGlobalSettings().defaultChatModel;
+  if (!ref?.providerId || !ref.modelId) return null;
+  if (getProvider(ref.providerId) === null) return null;
+  return { providerId: ref.providerId, modelId: ref.modelId, thinkingJson: null };
+}
+
 function registerAgentFiles(
   rec: PluginRecord,
   dir: string,
@@ -55,12 +88,17 @@ function registerAgentFiles(
     try {
       const yamlContent = fs.readFileSync(path.join(dir, file), 'utf-8');
       const { def: parsedDef } = parseAgentManifestWithSuggestion(yamlContent);
+      const defId = `plugin:${rec.id}:${parsedDef.slug}`;
+      const model = resolveModelBinding(defId);
       const def: AgentDefinition = {
         ...parsedDef,
-        id: `plugin:${rec.id}:${parsedDef.slug}`,
+        id: defId,
         source: 'plugin',
         workspaceId: null,
-        modelProviderId: null,
+        modelProviderId: model?.providerId ?? null,
+        // model_name 列 NOT NULL（string 类型）；无绑定时落 '' 与「未配置」语义对齐
+        modelName: model?.modelId ?? '',
+        thinkingJson: model?.thinkingJson ?? null,
       };
       saveAgentDefinition(def);
       liveDefIds.push(def.id);

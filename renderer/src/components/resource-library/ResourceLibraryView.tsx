@@ -106,10 +106,15 @@ export function ResourceLibraryView() {
     if (!item || item.type !== 'agent') return;
     try {
       const defs = await ipc.agent.list();
+      // def 匹配口径按 source：builtin 行 slug=YAML slug（id=builtin-<slug>）；
+      // plugin 行 slug=def.id（plugin:<pid>:<slug>，custom.ts 映射约定）；custom 行
+      // slug=def.id（UUID）。plugin 按 id 匹配，其余按 slug 兜底。
       const def =
         item.source === 'builtin'
           ? (defs.find((d) => d.id === `builtin-${item.slug}`) ?? defs.find((d) => d.slug === item.slug))
-          : defs.find((d) => d.slug === item.slug);
+          : item.source === 'plugin'
+            ? defs.find((d) => d.id === item.slug)
+            : defs.find((d) => d.slug === item.slug);
       setPresetTarget({ slug: item.slug, name: item.name, def });
     } catch (err) {
       console.error('打开预设 agent 配置失败', { itemId, error: err instanceof Error ? err.message : String(err) });

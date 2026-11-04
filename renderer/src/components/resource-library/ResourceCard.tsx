@@ -338,10 +338,12 @@ export function ResourceCard({
               编辑
             </button>
           )}
-          {/* 配置：builtin 已启用 / marketplace 已装 agent（改模型等） */}
+          {/* 配置：builtin 已启用 / marketplace 已装 / 插件自带 agent（改模型等）。
+              plugin 行不可编辑定义本体（随插件生命周期），仅开放模型绑定配置 */}
           {item.type === 'agent' && onConfigure &&
             ((item.source === 'builtin' && item.builtin?.agentEnabled) ||
-              (item.source === 'marketplace' && item.installed)) && (
+              (item.source === 'marketplace' && item.installed) ||
+              (item.source === 'plugin' && item.installed)) && (
             <button
               type="button"
               className="text-xs px-2 py-0.5 rounded bg-surface-active text-accent-600 dark:text-accent-300 hover:opacity-80"

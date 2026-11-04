@@ -185,6 +185,27 @@ describe('ResourceCard 状态矩阵（P1 预览 §D 契约锁，13 形态）', (
     );
     expect(screen.getByText('插件已停用')).toBeTruthy();
   });
+
+  it('⑪ agent·plugin 自带：有「配置」钮（模型绑定入口），无启用/停用/编辑（生命周期归插件）', () => {
+    const onConfigure = vi.fn();
+    render(
+      <ResourceCard
+        item={mkItem({
+          id: 'plugin-agent-doc', type: 'agent', source: 'plugin',
+          slug: 'plugin:office-pro:doc-engineer',
+          installed: true, installable: false, removable: false,
+        })}
+        selected={false} onSelect={noop} onConfigure={onConfigure}
+      />,
+    );
+    const btn = screen.getByRole('button', { name: '配置' });
+    expect(btn).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '启用' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '停用' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '编辑' })).toBeNull();
+    fireEvent.click(btn);
+    expect(onConfigure).toHaveBeenCalledWith('plugin-agent-doc');
+  });
 });
 
 describe('ResourceCard 五源并列渲染（M1 Task 10 回归锁）', () => {
