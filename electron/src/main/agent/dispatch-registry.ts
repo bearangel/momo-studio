@@ -25,6 +25,14 @@ export type ChainStatus = 'in_flight' | 'done' | 'cancelled';
 /** 子任务结局：completed 成功；failed 含 failed / needs_input（与 BgHandle.outcome 同语义） */
 export type ChainOutcome = 'completed' | 'failed';
 
+/**
+ * 用户停止链的细分（deliverChainResult 标题分支依据）：
+ * - runtime-stopped：用户停止 agent runtime（W4，2026-11-04 事故 A 面）
+ * - task-cancelled / task-paused：用户任务级取消/暂停（W4 残留缺口——链被单独
+ *   中断流但不清链，曾 233 秒后被 sweepDead 误判成心跳超时）
+ */
+export type UserStopKind = 'runtime-stopped' | 'task-cancelled' | 'task-paused';
+
 /** 单条 dispatch 链的主进程侧句柄 */
 export interface DispatchChainHandle {
   /** 链 ID（dispatch 事件的 task_id，单点生成沿线透传） */
@@ -45,6 +53,10 @@ export interface DispatchChainHandle {
   outcome?: ChainOutcome;
   body?: string;
   toolCallsUsed?: number;
+  /** 用户停止 agent runtime 判停（settleUserStop 置位）——回执标题行据此显示「被用户停止」而非「失败」（2026-11-04 事故 A 面） */
+  userStopped?: boolean;
+  /** 用户停止细分（settleUserStop 置位）——标题行据此区分「被用户停止/已被用户取消/已被用户暂停」 */
+  userStopKind?: UserStopKind;
   startedAt: number;
   /** 最近一次心跳（或注册）时刻——死亡检测基准 */
   lastHeartbeatAt: number;
@@ -67,6 +79,13 @@ export const HEARTBEAT_DEAD_THRESHOLD_MS = 3 * HEARTBEAT_INTERVAL_MS;
  * 与 dispatch-wait BG_SETTLED_CAP 同语义（跨轮侧容量更大：链含注入语义）。
  */
 export const CHAIN_SETTLED_CAP = 64;
+
+/**
+ * 进度分段最小间隔（2026-11-04 事故 B 面）：同链两条【进度分段】会话行的
+ * 最小时间距离。事件时判定（routeTaskReply 心跳 piggyback 的时间检查），
+ * 非定时器——且自上次发射后无新工具活动时永不发射。
+ */
+export const PROGRESS_SEGMENT_INTERVAL_MS = 2 * 60_000;
 
 /** register 入参（routeDispatch 从 dispatch 事件 content 提取） */
 export interface RegisterChainInput {
@@ -106,6 +125,8 @@ export interface InFlightChain {
 export class DispatchRegistry {
   private readonly chains = new Map<string, DispatchChainHandle>();
   private readonly nowFn: () => number;
+  /** 进度分段节流状态（taskId → 上次发射时刻 + 发射时的工具调用计数）——链单例内存态，重启丢失可接受 */
+  private readonly progressThrottle = new Map<string, { lastEmitAt: number; lastToolCount: number }>();
 
   constructor(opts?: { now?: () => number }) {
     this.nowFn = opts?.now ?? ((): number => Date.now());
@@ -128,6 +149,8 @@ export class DispatchRegistry {
       existing.outcome = undefined;
       existing.body = undefined;
       existing.toolCallsUsed = undefined;
+      existing.userStopped = undefined;
+      existing.userStopKind = undefined;
       existing.completedAt = undefined;
       existing.delivered = false;
       existing.awaitWake = false;
@@ -136,6 +159,7 @@ export class DispatchRegistry {
       existing.subStreamSessionId = input.subStreamSessionId;
       existing.pmStreamSessionId = input.pmStreamSessionId;
       existing.round += 1;
+      this.progressThrottle.delete(input.taskId); // 新一轮进度从零起算（首条 ≥1 活动即发）
       return true;
     }
     const now = this.nowFn();
@@ -170,9 +194,37 @@ export class DispatchRegistry {
     return true;
   }
 
+  /**
+   * 进度分段闸门（2026-11-04 事故 B 面，routeTaskReply 心跳 piggyback 消费）：
+   *  - 首条：≥1 工具活动立即放行（用户尽快看到「动起来了」），零活动不放行
+   *  - 后续：距上次发射 ≥ PROGRESS_SEGMENT_INTERVAL_MS 且工具计数较上次发射
+   *    有增长才放行（双闸——静默链永不刷屏，83 分钟零信号的事故面不复发）
+   * 放行即落位新节流状态（调用方免二次记账）。纯内存时间检查，无定时器。
+   */
+  progressGate(taskId: string, toolCalls: number): boolean {
+    const h = this.chains.get(taskId);
+    if (!h || h.status !== 'in_flight') return false;
+    const now = this.nowFn();
+    const st = this.progressThrottle.get(taskId);
+    if (st === undefined) {
+      if (toolCalls < 1) return false;
+    } else {
+      if (toolCalls <= st.lastToolCount) return false;
+      if (now - st.lastEmitAt < PROGRESS_SEGMENT_INTERVAL_MS) return false;
+    }
+    this.progressThrottle.set(taskId, { lastEmitAt: now, lastToolCount: toolCalls });
+    return true;
+  }
+
+  /** 链终态 / 取消时清理进度分段节流状态（防 Map 无界增长；settle/cancel/sweep 共用） */
+  private clearProgressState(taskId: string): void {
+    this.progressThrottle.delete(taskId);
+  }
+
   /** 测试用：清空全部链（生产禁用——经模块级 __resetDispatchRegistryForTest） */
   clear(): void {
     this.chains.clear();
+    this.progressThrottle.clear();
   }
 
   /**
@@ -195,8 +247,40 @@ export class DispatchRegistry {
     h.body = body;
     h.toolCallsUsed = toolCallsUsed ?? 0;
     h.completedAt = this.nowFn();
+    this.clearProgressState(taskId);
     this.enforceSettledCap();
     return { ...h };
+  }
+
+  /**
+   * 用户停止链判停统一入口（stopAgentRuntime / 任务级取消/暂停联动）：
+   * in_flight → done failed + userStopped 置位（kind 细分标题行——W4「被用户
+   * 停止」/ 任务级「已被用户取消/已被用户暂停」）——区别于 sweepDead 的心跳
+   * 超时误判（用户动作 233 秒后曾被报成「判定无响应」，PM 据假回执误判基础
+   * 设施故障）。回执正文由调用方注入（含审计/账本实数）。幂等：非在途 → undefined。
+   */
+  settleUserStop(taskId: string, body: string, kind: UserStopKind = 'runtime-stopped'): DispatchChainHandle | undefined {
+    const h = this.chains.get(taskId);
+    if (!h || h.status !== 'in_flight') return undefined;
+    h.status = 'done';
+    h.outcome = 'failed';
+    h.userStopped = true;
+    h.userStopKind = kind;
+    h.body = body;
+    h.toolCallsUsed = h.toolCallsUsed ?? 0;
+    h.completedAt = this.nowFn();
+    this.clearProgressState(taskId);
+    this.enforceSettledCap();
+    return { ...h };
+  }
+
+  /** 该子 agent（assignmentId）名下全部在途链 taskId 清单（settleChainsOnAgentStop 消费） */
+  inFlightTaskIdsBySubAgent(subAssignmentId: string): string[] {
+    const out: string[] = [];
+    for (const h of this.chains.values()) {
+      if (h.subAssignmentId === subAssignmentId && h.status === 'in_flight') out.push(h.taskId);
+    }
+    return out;
   }
 
   /**
@@ -220,6 +304,7 @@ export class DispatchRegistry {
     if (!h || h.status !== 'in_flight') return undefined;
     h.status = 'cancelled';
     h.completedAt = this.nowFn();
+    this.clearProgressState(taskId);
     this.enforceSettledCap();
     return { ...h };
   }
@@ -231,6 +316,7 @@ export class DispatchRegistry {
       if (h.pmStreamSessionId !== pmStreamSessionId || h.status !== 'in_flight') continue;
       h.status = 'cancelled';
       h.completedAt = this.nowFn();
+      this.clearProgressState(h.taskId);
       out.push(h.taskId);
     }
     if (out.length > 0) this.enforceSettledCap();
@@ -244,6 +330,7 @@ export class DispatchRegistry {
       if (h.sessionId !== sessionId || h.status !== 'in_flight') continue;
       h.status = 'cancelled';
       h.completedAt = this.nowFn();
+      this.clearProgressState(h.taskId);
       out.push(h.taskId);
     }
     if (out.length > 0) this.enforceSettledCap();
@@ -386,6 +473,7 @@ export class DispatchRegistry {
       h.body = `子 agent 心跳超时（${Math.round(silentMs / 1000)} 秒无进度信号），判定无响应`;
       h.toolCallsUsed = h.toolCallsUsed ?? 0;
       h.completedAt = now;
+      this.clearProgressState(h.taskId);
       this.enforceSettledCap();
       dead.push({ taskId: h.taskId, pmAssignmentId: h.pmAssignmentId, reason: h.body });
     }

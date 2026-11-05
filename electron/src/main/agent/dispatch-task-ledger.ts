@@ -13,6 +13,11 @@
 import { getDb } from '../storage/db';
 import { getTask, insertTask, transitionTaskStatus, updateTask } from '../storage/tasks/repo';
 import type { TaskStatus } from '../storage/tasks/state-machine';
+import {
+  handleQuotaFailureSettle,
+  isQuotaLimitError,
+  resetQuotaRetryCount,
+} from '../task/quota-resume';
 import { logger } from '../logger';
 
 /** register 投影入参（routeDispatch 调用点手边的全部事实） */
@@ -96,14 +101,54 @@ export function ledgerInsertDispatch(input: DispatchLedgerInput): void {
   }
 }
 
-/** settle 投影：completed/failed/needs_input → completed/failed/paused */
-export function ledgerSettleDispatch(taskId: string, outcome: 'completed' | 'failed' | 'needs_input', body?: string): void {
+/** settle 投影：completed/failed/needs_input → completed/failed/paused。
+ * 配额受限失败（429 + 配额措辞，2026-11-04 事故）例外：不落终态 failed——
+ * handleQuotaFailureSettle 排 assigned + scheduled_at 自动续跑（既有 executor
+ * 放行链），连续 3 次预算耗尽后回落终态（人工介入）。
+ *
+ * R3 真实 token 遥测（2026-11-05）：usage（子 agent 本轮运行累计的 provider
+ * 上报值）在两处读-改-写累积进 actual_tokens——终态转换 extraPatch 与配额排队
+ * 分支（排队不落终态，但本轮消耗已发生，不写即随续跑轮丢失）；幂等跳过分支
+ * （行已终态/已排队）不写——那是同一 run 的重复钩子，写入即双计。 */
+export function ledgerSettleDispatch(
+  taskId: string,
+  outcome: 'completed' | 'failed' | 'needs_input',
+  body?: string,
+  usage?: { promptTokens: number; completionTokens: number },
+): void {
   try {
     const row = getTask(taskId);
     if (!row || row.origin !== 'dispatch') return;
     if (row.status === SETTLE_STATUS[outcome]) return; // 幂等（迟到重复钩子）
+    if (outcome === 'failed' && (row.status === 'assigned' || row.status === 'session_queued')) {
+      // 另一 settle 入口（task-end）已排配额自动续跑——迟到失败钩子不覆盖排队行
+      logger.info('dispatch 账本 settle：行已排队配额自动续跑，忽略失败投影', {
+        taskId,
+        status: row.status,
+      });
+      return;
+    }
+    if (outcome === 'failed' && body !== undefined && isQuotaLimitError(body)) {
+      const quotaOutcome = handleQuotaFailureSettle(taskId, row, body);
+      if (quotaOutcome !== 'fallthrough') {
+        // 配额排队（非终态）：本轮 usage 仍真实发生——独立 updateTask 累积
+        // （只触碰 actualTokens，routing_json 原样保留，配额计数不受影响）
+        if (usage) {
+          updateTask(taskId, {
+            actualTokens: (row.actualTokens ?? 0) + usage.promptTokens + usage.completionTokens,
+          });
+        }
+        return; // scheduled / pending：不落终态
+      }
+    }
+    // 非配额结局（成功 / needs_input / 非配额失败 / 配额预算耗尽）——连续计数清零
+    resetQuotaRetryCount(taskId);
     transitionTaskStatus(taskId, SETTLE_STATUS[outcome], {
       ...(outcome === 'failed' && body ? { errorMessage: body.slice(0, 200) } : {}),
+      // R3：终态转换同笔 UPDATE 携带 usage 累积（(existing ?? 0) + 本轮值）
+      ...(usage
+        ? { actualTokens: (row.actualTokens ?? 0) + usage.promptTokens + usage.completionTokens }
+        : {}),
       completedAt: Date.now(), // D4（Oracle P1-1）：终态时间戳——详情面板/统计消费
     });
   } catch (err) {
@@ -115,12 +160,14 @@ export function ledgerSettleDispatch(taskId: string, outcome: 'completed' | 'fai
   }
 }
 
-/** cancel 投影（routeAbortDispatch / stopAll / cancelChain 三入口共用） */
+/** cancel 投影（routeAbortDispatch / stopAll / cancelChain 三入口共用）。
+ * 取消是非配额结局——连续配额计数清零。 */
 export function ledgerCancelDispatch(taskId: string): void {
   try {
     const row = getTask(taskId);
     if (!row || row.origin !== 'dispatch') return;
     if (row.status === 'cancelled') return;
+    resetQuotaRetryCount(taskId);
     transitionTaskStatus(taskId, 'cancelled', { completedAt: Date.now() });
   } catch (err) {
     logger.warn('dispatch 账本 cancel 投影失败（不影响运行链）', {
@@ -130,12 +177,33 @@ export function ledgerCancelDispatch(taskId: string): void {
   }
 }
 
-/** sweepDead 判死投影 → failed + 判死原因 */
+/**
+ * 按任务 ID 计数账本（journal_entries）行——dispatch 回执计数读真的降级数据源
+ * （2026-11-04：审计 task_id 接线前的存量链 / 纯文件变更任务，回据账本实数报
+ * 「文件变更 N 处」）。永不抛错：查询失败降级返回 0 并 warn（同 countToolCallsForTask 纪律）。
+ */
+export function countJournalChangesForTask(taskId: string): number {
+  try {
+    const row = getDb()
+      .prepare('SELECT COUNT(*) AS n FROM journal_entries WHERE task_id = ?')
+      .get(taskId) as { n: number } | undefined;
+    return row?.n ?? 0;
+  } catch (err) {
+    logger.warn('journal_entries 任务维度计数失败（回执计数降级为 0）', {
+      taskId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return 0;
+  }
+}
+
+/** sweepDead 判死投影 → failed + 判死原因（非配额结局——连续配额计数清零） */
 export function ledgerFailDispatch(taskId: string, reason: string): void {
   try {
     const row = getTask(taskId);
     if (!row || row.origin !== 'dispatch') return;
     if (row.status === 'failed') return;
+    resetQuotaRetryCount(taskId);
     transitionTaskStatus(taskId, 'failed', {
       errorMessage: reason.slice(0, 200),
       completedAt: Date.now(),

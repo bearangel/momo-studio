@@ -33,7 +33,7 @@ import type { AgentRuntimeOpts } from './runtime-config';
 import { handleStreamChunk, setAbortResolver } from './stream-relay';
 import { WarmPool } from './warm-pool';
 import { AgentRunner, markShuttingDown, __resetShuttingDownForTest } from './agent-runner';
-import { notifyRunnerIdle } from './router-service';
+import { notifyRunnerIdle, notifyAgentStopped } from './router-service';
 import { spawnForAgent, type SpawnedRuntime } from './runtime-spawner';
 import { ProviderTokenBucket } from './llm/token-bucket';
 
@@ -263,6 +263,9 @@ export async function stopAgentRuntime(instanceId: string): Promise<void> {
   getDb()
     .prepare('UPDATE workspace_agent_members SET last_running = 0 WHERE instance_id = ?')
     .run(instanceId);
+  // 用户停止联动（2026-11-04 事故 A 面）：该 agent 名下在途 dispatch 链立即以
+  // 「用户已主动停止」落终态并投递真实产出回执——不留给 sweepDead 误判成心跳超时
+  notifyAgentStopped(instanceId);
   logger.info('stopAgentRuntime 完成（销毁 runtime + DB 同步）', { instanceId });
 }
 

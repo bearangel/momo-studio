@@ -223,6 +223,14 @@ function buildTodoReconcileNotice(items: Array<{ subject: string }>): string {
 }
 
 /**
+ * 对账注入轮的未执行 tool_call 合成响应文案（2026-11-04 配对不变量兜底）：
+ * 部分 OpenAI 兼容网关 finish_reason=stop 仍附带 tool_calls——这些调用未执行、
+ * 无结果，注入轮直接 push 会造成「assistant 带 toolCalls 但无 tool 响应」的
+ * 悬空对，下一轮请求被供应商整发 400（与 llm-history-repair 同族防线）。
+ */
+const RECONCILE_UNEXECUTED_TOOL_RESULT = '[收尾核对注入轮，本条工具调用未执行]';
+
+/**
  * 任务回合对账门禁合成条前缀（turn reconciliation spec 2026-09-28 §3.2）。
  * 导出供 renderer「一键催」镜像同步测试按文件路径引用（board-columns 双镜像
  * TS6059 先例）——措辞改动必须双侧同步，本前缀同时登记在
@@ -582,6 +590,12 @@ export interface RunChatLoopStats {
   toolCallsUsed: number;
   endChunkSent?: boolean;
   aborted?: boolean;
+  /**
+   * R3（2026-11-05）真实 token 遥测：本轮运行累计的 provider 上报 usage
+   * （跨全部 LLM 轮次整数直加）。provider 未报 usage 时保持 undefined——
+   * 下游（task-end / task_reply）不携带该字段，tasks.actual_tokens 保持 NULL。
+   */
+  usageTotal?: { promptTokens: number; completionTokens: number };
 }
 
 /**
@@ -1379,9 +1393,20 @@ export async function runChatLoop(
           case 'tool_use':
             toolCalls.push(delta.toolCall);
             break;
-          case 'done':
+          case 'done': {
             finishReason = delta.finishReason;
+            // R3 usage 聚合：done delta 携带 usage 时累计进 stats（累积点直写——
+            // runChatLoop 全部出口共享同一 stats 引用，单点写入即覆盖所有出口，
+            // 无需逐出口补写；被中断的流不产 done，天然无重复计入）
+            if (delta.usage && stats) {
+              const prev = stats.usageTotal ?? { promptTokens: 0, completionTokens: 0 };
+              stats.usageTotal = {
+                promptTokens: prev.promptTokens + delta.usage.promptTokens,
+                completionTokens: prev.completionTokens + delta.usage.completionTokens,
+              };
+            }
             break;
+          }
         }
       }
     } catch (err) {
@@ -1481,6 +1506,9 @@ export async function runChatLoop(
           content: accumulatedText,
           ...(toolCalls.length > 0 ? { toolCalls } : {}),
         });
+        for (const tc of toolCalls) {
+          messages.push({ role: 'tool', content: RECONCILE_UNEXECUTED_TOOL_RESULT, toolCallId: tc.id });
+        }
         messages.push({ role: 'user', content: buildTodoReconcileNotice(staleUserItems) });
         accumulatedText = '';
         continue;
@@ -1508,6 +1536,9 @@ export async function runChatLoop(
           content: accumulatedText,
           ...(toolCalls.length > 0 ? { toolCalls } : {}),
         });
+        for (const tc of toolCalls) {
+          messages.push({ role: 'tool', content: RECONCILE_UNEXECUTED_TOOL_RESULT, toolCallId: tc.id });
+        }
         messages.push({
           role: 'user',
           content: buildTurnReconcileNotice(hostOpenTaskId, uncleanUserItems),
@@ -2172,6 +2203,8 @@ export async function runTaskChatLoop(
         taskId: dispatchContext.task_id,
         status: replyStatus,
         toolCallsUsed: stats.toolCallsUsed,
+        // R3：本轮 provider 真实 token 用量随终态回执上报（无 usage 时字段缺席）
+        ...(stats.usageTotal ? { usageTotal: stats.usageTotal } : {}),
         replyTo: dispatchContext.fromAssignmentId,
       });
       sendTaskReplyEvent(roomId, config.agentUserId, { ...reply.content });
@@ -2201,16 +2234,33 @@ export async function runTaskChatLoop(
         taskId: dispatchContext.task_id,
         status: 'failed',
         toolCallsUsed: stats.toolCallsUsed,
+        // R3：失败回执同样上报已发生消耗（主进程 failed 终态照常累积写）
+        ...(stats.usageTotal ? { usageTotal: stats.usageTotal } : {}),
         replyTo: dispatchContext.fromAssignmentId,
       });
       sendTaskReplyEvent(roomId, config.agentUserId, { ...reply.content });
     }
-    sendTaskEndAndExit({ type: 'task-end', streamSessionId, taskId, error: msg }, 1);
+    sendTaskEndAndExit(
+      {
+        type: 'task-end',
+        streamSessionId,
+        taskId,
+        error: msg,
+        ...(stats.usageTotal ? { usageTotal: stats.usageTotal } : {}),
+      },
+      1,
+    );
     return;
   }
 
   sendTaskEndAndExit(
-    { type: 'task-end', streamSessionId, taskId, toolCallsUsed: stats.toolCallsUsed },
+    {
+      type: 'task-end',
+      streamSessionId,
+      taskId,
+      toolCallsUsed: stats.toolCallsUsed,
+      ...(stats.usageTotal ? { usageTotal: stats.usageTotal } : {}),
+    },
     0,
   );
 }
@@ -2265,6 +2315,10 @@ async function executeTool(
       outputSummary: output,
       success,
       durationMs: Date.now() - startTime,
+      // 任务遥测（2026-11-04）：归因链与 change-journal 记账同源
+      // （currentTaskId → hostTaskId 回退），tool_calls.task_id 与
+      // journal_entries.task_id 落同一 id 空间——回执计数据此对账
+      taskId: config.currentTaskId ?? config.hostTaskId ?? null,
       source: toolSourceFor(call.name, ctx.toolModules),
       preToolUse: decisionSink.decision ? JSON.stringify(decisionSink.decision) : null,
     });

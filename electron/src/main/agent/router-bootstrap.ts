@@ -20,7 +20,12 @@
 // 均直接派发 runner，不经过 dispatcher——本模块不再构造 TaskDispatcher，
 // 也不再把 providerBuckets 传入（buckets 只为 dispatcher 的限流检查存在）。
 
-import { RouterService, setRunnerIdleHandler } from './router-service';
+import {
+  RouterService,
+  setRunnerIdleHandler,
+  setAgentStopHandler,
+  setTaskUserActionHandler,
+} from './router-service';
 import { setBridgeRouter } from './internal-event-bridge';
 import { setSessionRouter } from '../im/session-service';
 import { setFinalListener } from './stream-relay';
@@ -66,6 +71,16 @@ export async function ensureRouterService(
   setRunnerIdleHandler((assignmentId, forcedExit, roundStartedAt) =>
     currentRouterService?.onPmIdle(assignmentId, forcedExit, roundStartedAt),
   );
+  // 用户停止 agent runtime → 该子 agent 名下在途链以真实原因落终态 + 投递回执
+  //（2026-11-04 事故 A 面——防 sweepDead 把用户停止误判成心跳超时死亡）
+  setAgentStopHandler((instanceId) =>
+    currentRouterService?.settleChainsOnAgentStop(instanceId),
+  );
+  // 任务级用户取消/暂停 → 该任务名下在途链以真实原因落终态 + 投递回执
+  //（W4 残留缺口——同构防 sweepDead 把任务级中断误判成心跳超时死亡）
+  setTaskUserActionHandler((taskId, action) =>
+    currentRouterService?.settleChainForTaskUserAction(taskId, action),
+  );
   logger.info('RouterService lazy 启动', { runnerCount: runners.size });
 }
 
@@ -89,6 +104,8 @@ export function destroyRouterService(): void {
   setSessionRouter(null);
   setFinalListener(null);
   setRunnerIdleHandler(null);
+  setAgentStopHandler(null);
+  setTaskUserActionHandler(null);
   currentRouterService.stop();
   currentRouterService = null;
   logger.info('RouterService 已销毁');

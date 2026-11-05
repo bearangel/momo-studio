@@ -18,6 +18,7 @@ import { notifyExecutor, buildKickoffBody } from './executor';
 import { startTask, type StartTaskOpts, type StartTaskResult } from './starter';
 import { captureTaskScanBaseline } from '../journal/baseline';
 import { abortTasksBySessionEverywhere } from '../agent/runtime-registry';
+import { notifyTaskUserAction, type TaskUserAction } from '../agent/router-service';
 import { abortTaskStreamByLane } from '../agent/session-lane';
 import { sendUserMessage, broadcastSessionListChanged } from '../im/session-service';
 
@@ -31,12 +32,29 @@ export type { StartTaskOpts, StartTaskResult } from './starter';
  *
  * Task 7 铺路：只 abort 运行时流，不携带任何 transition——调用方自行决定
  * 状态迁移（cancelTask = transition cancelled 后调它）。
+ *
+ * 任务级用户取消/暂停联动（W4 残留缺口）：全部调用方（cancelTask /
+ * task:transition paused/cancelled 分支 / taskGroup:archive 级联）都先 transition
+ * 再调本函数，故行状态在中止时已是权威终值——据此通知 RouterService 把该任务
+ * 名下在途 dispatch 链以真实原因落终态（否则 233 秒后被 sweepDead 误判成心跳
+ * 超时）。系统级暂停不经本函数（conflict-executor 只 transition），不会误挂
+ * 「用户暂停」语义；无链任务经 registry 查空自然 no-op。
  */
 export function abortTaskExecution(taskId: string): void {
-  if (abortTaskStreamByLane(taskId)) return;
-  const row = getTask(taskId);
-  if (!row?.executionSessionId) return;
-  abortTasksBySessionEverywhere(row.executionSessionId);
+  if (!abortTaskStreamByLane(taskId)) {
+    const row = getTask(taskId);
+    if (row?.executionSessionId) {
+      abortTasksBySessionEverywhere(row.executionSessionId);
+    }
+  }
+  settleDispatchChainOnUserAction(taskId);
+}
+
+/** 行状态（权威）→ 用户动作推导：cancelled/paused 之外的状态不联动（诚实措辞前提） */
+function settleDispatchChainOnUserAction(taskId: string): void {
+  const status = getTask(taskId)?.status;
+  if (status !== 'cancelled' && status !== 'paused') return;
+  notifyTaskUserAction(taskId, status as TaskUserAction);
 }
 
 /**

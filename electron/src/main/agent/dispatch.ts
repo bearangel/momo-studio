@@ -46,6 +46,12 @@ export interface DispatchContent {
   followup_round?: boolean;
 }
 
+/** task_reply 携带的按任务累计 usage（R3 真实 token 遥测，snake_case 线协议形态） */
+export interface TaskReplyUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+}
+
 /** task_reply 消息内容（Matrix event type: io.momo-studio.task_reply） */
 export interface TaskReplyContent {
   body: string;
@@ -54,6 +60,12 @@ export interface TaskReplyContent {
   progress_pct?: number;
   /** v1.4：子 agent 报告本任务使用的工具调用次数 */
   tool_calls_used?: number;
+  /**
+   * R3（2026-11-05）：子 agent 报告本轮运行累计的 provider 真实 token 用量。
+   * provider 未报 usage 时缺席（不伪造 0）——主进程据此决定是否写
+   * tasks.actual_tokens。终态回执携带（心跳不带）。
+   */
+  usage_total?: TaskReplyUsage;
   /** v2（I2 修复）：目标 PM 的 botUserId，用于 RouterService 精确路由（避免广播）。
    * 缺省时 RouterService 回退到广播所有 runner（向后兼容旧 task_reply event）。 */
   reply_to?: string;
@@ -123,6 +135,8 @@ export function buildTaskReply(opts: {
   progressPct?: number;
   /** v1.4：子 agent 报告本任务使用的工具调用次数 */
   toolCallsUsed?: number;
+  /** R3：本轮运行累计的 provider 真实 token 用量（camelCase 入参 → snake_case 线协议） */
+  usageTotal?: { promptTokens: number; completionTokens: number };
   /** v2（I2 修复）：目标 PM 的 assignmentId，用于精确路由 */
   replyTo?: string;
 }): { eventType: typeof TASK_REPLY_EVENT_TYPE; content: TaskReplyContent } {
@@ -134,9 +148,33 @@ export function buildTaskReply(opts: {
       status: opts.status,
       progress_pct: opts.progressPct,
       tool_calls_used: opts.toolCallsUsed,
+      ...(opts.usageTotal
+        ? {
+            usage_total: {
+              prompt_tokens: opts.usageTotal.promptTokens,
+              completion_tokens: opts.usageTotal.completionTokens,
+            },
+          }
+        : {}),
       ...(opts.replyTo ? { reply_to: opts.replyTo } : {}),
     },
   };
+}
+
+/**
+ * usage_total 载荷校验（R3）：合法（双字段均为有限非负整数）返回归一化 camelCase
+ * 形状；任何类型不符（字符串/负数/NaN/缺字段）返回 undefined——与 parseTaskReply
+ * 同款宽进纪律，坏字段整字段丢弃，绝不抛错。主进程 RouterService 消费侧共用。
+ */
+export function parseUsageTotal(raw: unknown): { promptTokens: number; completionTokens: number } | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const u = raw as { prompt_tokens?: unknown; completion_tokens?: unknown };
+  if (!isNonNegInt(u.prompt_tokens) || !isNonNegInt(u.completion_tokens)) return undefined;
+  return { promptTokens: u.prompt_tokens, completionTokens: u.completion_tokens };
+}
+
+function isNonNegInt(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0;
 }
 
 /** 从 Matrix event content 解析 dispatch；缺关键字段或类型不符时返回 null。
@@ -241,6 +279,7 @@ export function parseTaskReply(content: Record<string, unknown>): TaskReplyConte
   if (typeof content.body !== 'string') return null;
   if (typeof content.status !== 'string') return null;
   if (!VALID_REPLY_STATUSES.has(content.status as TaskReplyContent['status'])) return null;
+  const usageTotal = parseUsageTotal(content.usage_total);
   return {
     body: content.body,
     task_id: content.task_id,
@@ -251,6 +290,7 @@ export function parseTaskReply(content: Record<string, unknown>): TaskReplyConte
     ...(typeof content.tool_calls_used === 'number'
       ? { tool_calls_used: content.tool_calls_used }
       : {}),
+    ...(usageTotal !== undefined ? { usage_total: { prompt_tokens: usageTotal.promptTokens, completion_tokens: usageTotal.completionTokens } } : {}),
     ...(typeof content.reply_to === 'string' ? { reply_to: content.reply_to } : {}),
   };
 }

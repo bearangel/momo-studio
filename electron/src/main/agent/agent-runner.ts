@@ -30,6 +30,11 @@ import { scheduleExtraction } from '../memory/extraction';
 import { resolveMaxToolCalls } from '../settings/crud';
 import { spawnNextInstanceIfRecurring } from '../task/recurrence';
 import { notifyExecutor } from '../task/executor';
+import {
+  handleQuotaFailureSettle,
+  isQuotaLimitError,
+  resetQuotaRetryCount,
+} from '../task/quota-resume';
 import { clearLaneIfMatch } from './session-lane';
 // browser 工具 IPC 桥（主机验收 P0 修复）：子进程 browser-op 请求在此路由到
 // 主进程真实编排面（BrowserManager 只能活在主进程），见 browser/op-router.ts
@@ -185,6 +190,22 @@ interface ActiveTask {
 /** task-end 到达后仍未收尾的兜底宽限上限 */
 const DEFAULT_TASK_END_GRACE_MS = 15_000;
 
+/**
+ * task-end IPC 的 usageTotal 载荷校验（R3，camelCase 形态——与 toolCallsUsed
+ * 同一消息的命名约定）。宽进：字符串/负数/NaN/缺字段一律 undefined（旧子进程
+ * 不携带该字段、坏字段按缺席），绝不抛错——遥测是旁路，不得影响收尾链路。
+ */
+function parseUsageTotalCamel(
+  raw: unknown,
+): { promptTokens: number; completionTokens: number } | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const u = raw as { promptTokens?: unknown; completionTokens?: unknown };
+  const ok = (v: unknown): v is number =>
+    typeof v === 'number' && Number.isInteger(v) && v >= 0;
+  if (!ok(u.promptTokens) || !ok(u.completionTokens)) return undefined;
+  return { promptTokens: u.promptTokens, completionTokens: u.completionTokens };
+}
+
 // === v2.6.0 关机保态（计划补强裁定 1） ===
 /**
  * 模块级关机标志——before-quit 链（runtime-registry.destroyAllTaskDrivenRuntimes）
@@ -275,7 +296,7 @@ export class AgentRunner {
 
     // 注册 message handler：过滤本 task 的 streamSessionId，按消息类型收尾
     const child = runtime.child;
-    const messageHandler = (msg: unknown): void => {
+      const messageHandler = (msg: unknown): void => {
       if (typeof msg !== 'object' || msg === null) return;
       const m = msg as {
         type?: string;
@@ -284,6 +305,7 @@ export class AgentRunner {
         finishReason?: 'stop' | 'budget_exhausted' | 'interrupted' | 'error';
         error?: string;
         toolCallsUsed?: number;
+        usageTotal?: unknown;
       };
       // browser-op（browser 工具 IPC 桥请求）：载荷以 requestId 关联而非
       // streamSessionId——必须在下方「只处理本 task 的 chunk」过滤之前分发，
@@ -342,9 +364,11 @@ export class AgentRunner {
         // C1：task 终结信号——先转换任务行终态，再回收 runtime（顺序见
         // finalizeActiveTask；task_reply 在子进程侧先于 task-end 发送，此处
         // 收到时链路必然已完整）
+        const usageTotal = parseUsageTotalCamel(m.usageTotal);
         this.finalizeActiveTask(task.streamSessionId, {
           ...(m.toolCallsUsed !== undefined ? { toolCallsUsed: m.toolCallsUsed } : {}),
           ...(m.error !== undefined ? { error: m.error } : {}),
+          ...(usageTotal !== undefined ? { usageTotal } : {}),
         });
       }
     };
@@ -521,12 +545,15 @@ export class AgentRunner {
    * 收尾一个活跃 task：反注册 handler → 清兜底计时器 → 任务行终态转换（C1）→
    * 回收 runtime。幂等：活跃表无记录时 no-op（exit 路径可能已清理）。
    *
-   * @param taskEndInfo task-end 消息携带的附加信息（error / toolCallsUsed）；
+   * @param taskEndInfo task-end 消息携带的附加信息（error / toolCallsUsed /
+   *        usageTotal——R3 真实 token 用量，仅随本回合末次 task-end 到达）；
    *        兜底计时器 / exit 路径触发时为 undefined
    */
   private finalizeActiveTask(
     streamSessionId: string,
-    taskEndInfo: { toolCallsUsed?: number; error?: string } | undefined,
+    taskEndInfo:
+      | { toolCallsUsed?: number; error?: string; usageTotal?: { promptTokens: number; completionTokens: number } }
+      | undefined,
   ): void {
     const active = this.activeTasks.get(streamSessionId);
     if (!active) return;
@@ -580,7 +607,9 @@ export class AgentRunner {
    */
   private transitionTaskTerminal(
     active: ActiveTask,
-    taskEndInfo: { toolCallsUsed?: number; error?: string } | undefined,
+    taskEndInfo:
+      | { toolCallsUsed?: number; error?: string; usageTotal?: { promptTokens: number; completionTokens: number } }
+      | undefined,
   ): void {
     const taskId = active.taskId;
     if (taskId === null) return;
@@ -599,11 +628,37 @@ export class AgentRunner {
       logger.info('task-end 对应任务行不存在（dispatch 派生 task_id），跳过终态转换', { taskId });
       return;
     }
-    if (isTerminal(row.status)) return;
+    if (isTerminal(row.status)) {
+      // dispatch 行已由工具侧（complete_task / fail_task）转终态——迟到的
+      // task-end 只负责清配额续跑计数（成功/失败均为非配额结局，幂等 no-op），
+      // 不做任何状态改写
+      if (row.origin === 'dispatch') resetQuotaRetryCount(taskId);
+      return;
+    }
     // K7-2：用户已主动暂停（先转 paused 再 abort 流）——中断信号到达时
     // 不覆盖为 cancelled，paused 语义保留给「恢复」入口
     if (row.status === 'paused') return;
     const failed = taskEndInfo?.error !== undefined || active.lastFinish?.finishReason === 'error';
+    // 配额受限自动续跑（2026-11-04 事故）：dispatch 簿记行的 429 配额失败不落
+    // 终态 failed——handleQuotaFailureSettle 排 assigned + scheduled_at 走既有
+    // executor 放行链。与 dispatch-task-ledger 的 task_reply 入口共用调度单点
+    // （幂等：先到者调度；后到者见 assigned/session_queued no-op，防覆盖/防重复通知）。
+    if (row.origin === 'dispatch') {
+      const quotaErrText = failed ? (taskEndInfo?.error ?? active.lastFinish?.error ?? '') : null;
+      if (quotaErrText !== null && isQuotaLimitError(quotaErrText)) {
+        const quotaOutcome = handleQuotaFailureSettle(taskId, row, quotaErrText);
+        if (quotaOutcome !== 'fallthrough') return; // scheduled / pending：不落终态
+      } else if (failed && (row.status === 'assigned' || row.status === 'session_queued')) {
+        // 配额续跑已排队（task_reply 链路先到）——迟到 task-end 不覆盖排队行
+        logger.warn('task-end：配额续跑排队中的 dispatch 行收到错误，忽略（防覆盖）', {
+          taskId,
+        });
+        return;
+      } else {
+        // 成功 / 取消 / 非配额失败 / 配额预算耗尽——连续配额计数清零（幂等）
+        resetQuotaRetryCount(taskId);
+      }
+    }
     const to: TaskStatus = failed ? 'failed'
       : active.lastFinish?.finishReason === 'interrupted' ? 'cancelled'
         : 'completed';
@@ -611,10 +666,20 @@ export class AgentRunner {
       logger.warn('task-end 终态转换不合法，跳过', { taskId, from: row.status, to });
       return;
     }
+    // R3 真实 token 遥测：本回合终态转换时读-改-写累积 actual_tokens（行值在
+    // 本函数入口已加载，同步流无并发窗口；quota-resume / followup 复用同任务行
+    // 时的跨轮累积靠 (existing ?? 0) 语义保证；updateTask 不触碰 routing/routingJson
+    // 时 routing_json 原样保留——W3 配额计数契约不受影响）
+    const usageDelta = taskEndInfo?.usageTotal;
+    const actualTokensPatch =
+      usageDelta !== undefined
+        ? { actualTokens: (row.actualTokens ?? 0) + usageDelta.promptTokens + usageDelta.completionTokens }
+        : {};
     try {
       transitionTaskStatus(taskId, to, {
         completedAt: Date.now(),
         ...(taskEndInfo?.toolCallsUsed !== undefined ? { toolCallsUsed: taskEndInfo.toolCallsUsed } : {}),
+        ...actualTokensPatch,
         ...(failed
           ? {
               errorMessage:

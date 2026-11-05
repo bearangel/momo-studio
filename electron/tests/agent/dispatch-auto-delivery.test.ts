@@ -36,6 +36,7 @@ import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertSession } from '../../src/main/storage/sessions/repo';
 import { listMessagesBySession, insertMessage, type MessageRow } from '../../src/main/storage/messages/repo';
 import { appendFollowupQuestionRow } from '../../src/main/agent/chain-writer';
+import { insertToolCall } from '../../src/main/audit/insert';
 import { __setElectronApisForTest } from '../../src/main/electron-access';
 import { RouterService } from '../../src/main/agent/router-service';
 import { dispatchRegistry, __resetDispatchRegistryForTest } from '../../src/main/agent/dispatch-registry';
@@ -335,6 +336,154 @@ describe('routeDispatch 重复轮拒绝', () => {
     }
     expect(subSpies.executeTask).not.toHaveBeenCalled();
     expect(dispatchRegistry.get('../../etc/evil')).toBeUndefined();
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// 回执计数读真（2026-11-04 P0）：心跳超时判死 / 崩溃路径的子进程永不发
+// task_reply.tool_calls_used → 回执曾把 49 处文件变更的任务报成
+// 「工具调用 0 次」误导编排。计数分级：子进程上报 > 0 → 沿用；否则审计管道
+// 按 task_id 计数；再降级 journal_entries 文件变更数（「文件变更 N 处」）。
+// ══════════════════════════════════════════════════════════════════════════
+
+describe('回执计数读真', () => {
+  /** 种子：该 task_id 的审计行（生产写入链） */
+  function seedAuditRows(taskId: string, n: number): void {
+    for (let i = 0; i < n; i++) {
+      insertToolCall({
+        workspaceId: 'ws',
+        agentBotUserId: 'agent-inst-sub',
+        toolName: 'write_file',
+        inputSummary: '',
+        outputSummary: '',
+        success: true,
+        durationMs: 1,
+        taskId,
+      });
+    }
+  }
+
+  /** 种子：该 task_id 的账本行（列形状对齐 journal_entries 表） */
+  function seedJournalRows(taskId: string, n: number): void {
+    const db = getDb();
+    const stmt = db.prepare(
+      `INSERT INTO journal_entries (id, workspace_id, task_id, stream_session_id, tool_name, path, op, created_at)
+       VALUES (?, 'ws', ?, 'ss-jx', 'write_file', ?, 'create', ?)`,
+    );
+    for (let i = 0; i < n; i++) {
+      stmt.run(`je-${taskId}-${i}`, taskId, `src/f${i}.ts`, Date.now());
+    }
+  }
+
+  it('心跳判死形态（无 tool_calls_used）+ 审计有账 → 回执报审计实数，不再谎报 0', async () => {
+    seedAuditRows('T-hon-1', 2);
+    dispatchRegistry.register({
+      taskId: 'T-hon-1',
+      pmAssignmentId: 'inst-pm',
+      subAssignmentId: 'inst-sub',
+      sessionId: sessChatId,
+      isFollowupRound: true,
+    });
+    const { runner, spies } = mkRunner(false);
+    const svc = new RouterService({ runners: new Map([['inst-pm', runner]]) });
+
+    await svc.routeEvent(
+      mkEvent('io.momo-studio.task_reply', {
+        task_id: 'T-hon-1',
+        status: 'failed',
+        body: '子 agent 心跳超时（233 秒无进度信号），判定无进展',
+      }, sessChatId),
+      'owner',
+      null,
+      'inst-pm',
+    );
+    await vi.waitFor(() => { expect(spies.executeTask).toHaveBeenCalledTimes(1); });
+    const body = (spies.executeTask.mock.calls[0]![0] as { body: string }).body;
+    expect(body).toContain('工具调用 2 次');
+    expect(body).not.toContain('工具调用 0 次');
+  });
+
+  it('审计无账 + 账本有账 → 降级「文件变更 N 处」（生产事故形态直击）', async () => {
+    seedJournalRows('T-hon-2', 3);
+    dispatchRegistry.register({
+      taskId: 'T-hon-2',
+      pmAssignmentId: 'inst-pm',
+      subAssignmentId: 'inst-sub',
+      sessionId: sessChatId,
+      isFollowupRound: true,
+    });
+    const { runner, spies } = mkRunner(false);
+    const svc = new RouterService({ runners: new Map([['inst-pm', runner]]) });
+
+    await svc.routeEvent(
+      mkEvent('io.momo-studio.task_reply', {
+        task_id: 'T-hon-2',
+        status: 'failed',
+        body: '子 agent 心跳超时（233 秒无进度信号），判定无进展',
+      }, sessChatId),
+      'owner',
+      null,
+      'inst-pm',
+    );
+    await vi.waitFor(() => { expect(spies.executeTask).toHaveBeenCalledTimes(1); });
+    const body = (spies.executeTask.mock.calls[0]![0] as { body: string }).body;
+    expect(body).toContain('工具调用 0 次，文件变更 3 处');
+  });
+
+  it('子进程上报 > 0 → 上报值优先（审计账不覆盖子进程精确计数）', async () => {
+    seedAuditRows('T-hon-3', 7);
+    dispatchRegistry.register({
+      taskId: 'T-hon-3',
+      pmAssignmentId: 'inst-pm',
+      subAssignmentId: 'inst-sub',
+      sessionId: sessChatId,
+      isFollowupRound: true,
+    });
+    const { runner, spies } = mkRunner(false);
+    const svc = new RouterService({ runners: new Map([['inst-pm', runner]]) });
+
+    await svc.routeEvent(
+      mkEvent('io.momo-studio.task_reply', {
+        task_id: 'T-hon-3',
+        status: 'completed',
+        body: '正常完成的结果',
+        tool_calls_used: 5,
+      }, sessChatId),
+      'owner',
+      null,
+      'inst-pm',
+    );
+    await vi.waitFor(() => { expect(spies.executeTask).toHaveBeenCalledTimes(1); });
+    const body = (spies.executeTask.mock.calls[0]![0] as { body: string }).body;
+    expect(body).toContain('工具调用 5 次');
+    expect(body).not.toContain('工具调用 7 次');
+  });
+
+  it('全空（真没干活）→ 维持「工具调用 0 次」既有格式', async () => {
+    dispatchRegistry.register({
+      taskId: 'T-hon-4',
+      pmAssignmentId: 'inst-pm',
+      subAssignmentId: 'inst-sub',
+      sessionId: sessChatId,
+      isFollowupRound: true,
+    });
+    const { runner, spies } = mkRunner(false);
+    const svc = new RouterService({ runners: new Map([['inst-pm', runner]]) });
+
+    await svc.routeEvent(
+      mkEvent('io.momo-studio.task_reply', {
+        task_id: 'T-hon-4',
+        status: 'failed',
+        body: '启动即失败',
+      }, sessChatId),
+      'owner',
+      null,
+      'inst-pm',
+    );
+    await vi.waitFor(() => { expect(spies.executeTask).toHaveBeenCalledTimes(1); });
+    const body = (spies.executeTask.mock.calls[0]![0] as { body: string }).body;
+    expect(body).toContain('工具调用 0 次');
+    expect(body).not.toContain('文件变更');
   });
 });
 

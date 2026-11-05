@@ -291,8 +291,47 @@ describe('任务回合对账门禁（F1 扩展，spec §3.1）', () => {
     expect((sentChunks as SentChunk[]).find((c) => c.type === 'end')!.finishReason).toBe('stop');
   });
 
-  it('任务已 closed → 不注入核对合成条', async () => {
-    taskStatuses.set('T-060', 'completed');
+  it('stop 仍附带 tool_calls 的非合规网关 → 注入轮补合成 tool 响应（配对不变量，防 400）', async () => {
+    taskStatuses.set('T-060', 'in_progress');
+    __setTodosForTest(SSI, [
+      { id: 't2', subject: '落地实现', status: 'pending', source: 'user' },
+    ]);
+    // 非合规网关形态：tool_use delta 累积了 toolCalls，但 finishReason=stop
+    //（对账门恰好在此分支注入——不补合成响应则下一轮请求悬空 400）
+    const stopWithTools = async function* (): AsyncGenerator<StreamDelta> {
+      yield { type: 'tool_use', toolCall: { id: 'tc-x', name: 'read_file', arguments: { path: 'a.txt' } } };
+      yield { type: 'text', content: '想先读文件' };
+      yield { type: 'done', finishReason: 'stop' };
+    };
+    const chatStream = scriptProvider([stopWithTools, finalText('最终总结')]);
+    vi.mocked(createLLMProvider).mockReturnValue({ chat: vi.fn(), chatStream } as never);
+
+    await runChatLoop(
+      ROOM,
+      '【任务启动】#T-060 · 委派任务',
+      makeConfig({ hostTaskId: 'T-060' }),
+      makeContext(),
+      undefined,
+      undefined,
+      undefined,
+      SSI,
+    );
+
+    expect(chatStream).toHaveBeenCalledTimes(2);
+    // 第二轮（注入轮）消息序列满足配对不变量：assistant 带 toolCalls 后紧跟
+    // 对应 toolCallId 的 tool 响应，先于任何其它角色消息
+    const msgs = capturedCalls[1]!;
+    const assistantIdx = msgs.findIndex(
+      (m) => m.role === 'assistant' && (m.toolCalls?.length ?? 0) > 0,
+    );
+    expect(assistantIdx).toBeGreaterThanOrEqual(0);
+    const follower = msgs[assistantIdx + 1]!;
+    expect(follower.role).toBe('tool');
+    expect(follower.toolCallId).toBe('tc-x');
+    expect(follower.content).toContain('未执行');
+  });
+
+  it('任务已 closed → 不注入核对合成条', async () => {    taskStatuses.set('T-060', 'completed');
     __setTodosForTest(SSI, [
       { id: 't2', subject: '落地实现', status: 'pending', source: 'user' },
     ]);

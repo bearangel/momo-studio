@@ -20,6 +20,7 @@ import {
   ABORT_DISPATCH_EVENT_TYPE,
   TASK_REPLY_ACK_EVENT_TYPE,
   parseHistoryPrefix,
+  parseUsageTotal,
 } from './dispatch';
 import {
   dispatchRegistry,
@@ -31,8 +32,11 @@ import {
   ledgerSettleDispatch,
   ledgerCancelDispatch,
   ledgerFailDispatch,
+  countJournalChangesForTask,
 } from './dispatch-task-ledger';
+import { countToolCallsForTask } from '../audit/query';
 import { insertMessage, hasReceiptRow } from '../storage/messages/repo';
+import { getTask } from '../storage/tasks/repo';
 import { getDb } from '../storage/db';
 import { writeStreamStartFailure, pushSessionMessage, abortStreamBySessionId } from './stream-relay';
 import type { AgentRunner, TaskConfig } from './agent-runner';
@@ -72,6 +76,48 @@ export function notifyRunnerIdle(assignmentId: string, forcedExit = false, round
   }
 }
 
+// === 用户停止 agent runtime → dispatch 链停止回执（2026-11-04 事故 A 面）===
+// 模块级间接（与 runnerIdleHandler 同法）：runtime-registry 的 stopAgentRuntime →
+// notifyAgentStopped → bootstrap 绑定的 settleChainsOnAgentStop。经模块函数而非
+// 直连 router-bootstrap 实例，避免 runtime-registry → router-bootstrap 构造期环。
+
+/** 模块级停止处理器（ensureRouterService 注入 / destroyRouterService 置空） */
+let agentStopHandler: ((instanceId: string) => void) | null = null;
+
+export function setAgentStopHandler(handler: ((instanceId: string) => void) | null): void {
+  agentStopHandler = handler;
+}
+
+/** stopAgentRuntime 联动入口（handler 未绑定 / 抛错都只记日志——停止主链路不受影响） */
+export function notifyAgentStopped(instanceId: string): void {
+  try {
+    agentStopHandler?.(instanceId);
+  } catch (err) {
+    logger.warn('agent 停止通知处理失败', { instanceId, error: String(err) });
+  }
+}
+
+/** 任务级用户动作（取消/暂停）——settleChainForTaskUserAction 的入参语义 */
+export type TaskUserAction = 'cancelled' | 'paused';
+
+/** 模块级任务级用户动作处理器（ensureRouterService 注入 / destroyRouterService 置空） */
+let taskUserActionHandler: ((taskId: string, action: TaskUserAction) => void) | null = null;
+
+export function setTaskUserActionHandler(
+  handler: ((taskId: string, action: TaskUserAction) => void) | null,
+): void {
+  taskUserActionHandler = handler;
+}
+
+/** abortTaskExecution 联动入口（handler 未绑定 / 抛错都只记日志——任务生命周期主链路不受影响） */
+export function notifyTaskUserAction(taskId: string, action: TaskUserAction): void {
+  try {
+    taskUserActionHandler?.(taskId, action);
+  } catch (err) {
+    logger.warn('任务级用户动作通知处理失败', { taskId, action, error: String(err) });
+  }
+}
+
 // === B2/B3（安全 review 2026-09-24）：内部事件身份与 taskId 加固 ===
 
 /** B3：taskId 进入注册表 / 文件名 / 提示文本前的合法形状（拒绝路径穿越与控制字符） */
@@ -80,6 +126,26 @@ const SAFE_TASK_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 /** B3：taskId 进入提示文本前的净化——剥离控制字符（防伪造消息结构注入 PM 上下文） */
 function safeTaskIdText(taskId: string): string {
   return taskId.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 64);
+}
+
+/**
+ * 回执计数读真（2026-11-04 P0）：心跳判死 / 崩溃路径的子进程永不发
+ * task_reply.tool_calls_used，旧实现直打印 `?? 0`——生产事故：49 处文件
+ * 变更的链被回执报成「工具调用 0 次」误导编排。分级取数：
+ *   1. 子进程上报 > 0 → 沿用（本回合精确值，回执语义「第 N 轮」）
+ *   2. 审计管道按链 id 计数 > 0 → 审计实数（task_id 接线后的新链）
+ *   3. 账本（journal_entries）按链 id 计数 > 0 → 降级「文件变更 N 处」
+ *      （接线前的存量链 / 纯文件变更任务——如实标注计量口径）
+ *   4. 全空 → 维持「工具调用 0 次」（真没干的诚实零）
+ * 两个计数助手均永不抛错（DB 故障降级 0）——投递链韧性优先。
+ */
+function honestReceiptCount(taskId: string, reported: number | undefined): string {
+  if (reported !== undefined && reported > 0) return `（工具调用 ${reported} 次）`;
+  const audited = countToolCallsForTask(taskId);
+  if (audited > 0) return `（工具调用 ${audited} 次）`;
+  const changes = countJournalChangesForTask(taskId);
+  if (changes > 0) return `（工具调用 0 次，文件变更 ${changes} 处）`;
+  return `（工具调用 0 次）`;
 }
 
 /**
@@ -872,16 +938,24 @@ export class RouterService {
       }
     }
     if (status === 'in_progress') {
-      dispatchRegistry.heartbeat(taskId);
+      // 心跳续命 + 进度分段行 piggyback（2026-11-04 事故 B 面）：maybeEmit 内
+      // 无 notify / 投递路径——纯会话可见性，不改变「心跳不唤醒 PM」的既有语义
+      if (dispatchRegistry.heartbeat(taskId)) {
+        this.maybeEmitProgressSegment(taskId);
+      }
       return;
     }
     if (status !== 'completed' && status !== 'failed' && status !== 'needs_input') return;
     const body = typeof content.body === 'string' ? content.body : '';
     const toolCallsUsed =
       typeof content.tool_calls_used === 'number' ? content.tool_calls_used : undefined;
+    // R3 真实 token 遥测：task_reply 携带 usage_total（snake_case 线协议）时
+    // 随 settle 透传账本层累积写 actual_tokens（parseUsageTotal 宽进——坏字段
+    // 按缺席，不阻塞 settle）
+    const usage = parseUsageTotal(content.usage_total);
     const handle = dispatchRegistry.settle(taskId, status, body, toolCallsUsed);
     // D4：settle → tasks（needs_input→paused / failed→failed+errorMessage）
-    ledgerSettleDispatch(taskId, status, body);
+    ledgerSettleDispatch(taskId, status, body, usage);
     if (handle && (handle.isFollowupRound || handle.awaitWake)) {
       this.tryDeliver(handle.pmAssignmentId);
     }
@@ -895,6 +969,45 @@ export class RouterService {
     const taskId = content.task_id;
     if (typeof taskId !== 'string') return;
     dispatchRegistry.markConsumed(taskId);
+  }
+
+  /**
+   * 进度分段行（2026-11-04 事故 B 面）：dispatch 链执行期间会话零进度信号
+   * （子 agent 静默工作 83 分钟），用户无法判断是否还在动。此处随心跳
+   * piggyback 注入单行进度消息——节流/活动闸由 registry.progressGate 判定
+   * （首条 ≥1 工具活动即发；其后同链 2 分钟一条且须有新活动）。
+   *
+   * 契约纪律（momo-boundary-rules）：本行是会话历史可见性，不是链回执——
+   *   - 不 routeUserChat / 不 notifyTaskReply / 不 tryDeliver（绝不唤醒 PM leader）
+   *   - 不带 taskId（不进 rebuildSubConversation 链历史聚合面）
+   *   - sender='system' + insertMessage/pushSessionMessage——与回执行同路落库推送
+   */
+  private maybeEmitProgressSegment(taskId: string): void {
+    try {
+      const chain = dispatchRegistry.get(taskId);
+      if (!chain) return;
+      const toolCalls = countToolCallsForTask(taskId);
+      if (!dispatchRegistry.progressGate(taskId, toolCalls)) return;
+      const changes = countJournalChangesForTask(taskId);
+      const title = getTask(taskId)?.title?.trim();
+      const label = title && title.length > 0 ? title : safeTaskIdText(taskId).slice(0, 8);
+      const body =
+        `【进度分段】子任务 ${label} 进行中 · ` +
+        `工具调用累计 ${toolCalls} 次 · 文件变更累计 ${changes} 处`;
+      const row = insertMessage({
+        sessionId: chain.sessionId,
+        sender: 'system',
+        eventType: 'm.room.message',
+        body,
+      });
+      pushSessionMessage(row); // spec §6.4：随落库实时推送 renderer
+    } catch (err) {
+      // 行落库失败不影响心跳续命（可见性是增强不是前提——与回执行降级纪律一致）
+      logger.warn('进度分段行落库失败（不影响心跳续命）', {
+        taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**
@@ -964,12 +1077,21 @@ export class RouterService {
       return;
     }
     const streamSessionId = randomUUID();
-    const statusText = h.outcome === 'failed' ? '失败' : '完成';
+    // 标题行（2026-11-04 事故 A 面）：用户停止是独立事实——不显示「失败」，
+    // 更不携带心跳超时语义（超时文案只可能来自 sweepDead 注入的 body）。
+    // kind 细分：runtime 停止「被用户停止」/ 任务级取消/暂停「已被用户取消/已被用户暂停」
+    const stopText =
+      h.userStopKind === 'task-cancelled'
+        ? '已被用户取消'
+        : h.userStopKind === 'task-paused'
+          ? '已被用户暂停'
+          : '被用户停止';
+    const statusText = h.userStopped ? stopText : h.outcome === 'failed' ? '失败' : '完成';
     // B3：taskId 经净化插值（防伪造消息结构注入 PM 上下文）
     const chainIdText = safeTaskIdText(h.taskId);
     const body =
       `【dispatch 回执自动送达】任务链 ${chainIdText}（第 ${h.round} 轮）已${statusText}` +
-      `（工具调用 ${h.toolCallsUsed ?? 0} 次）。\n` +
+      `${honestReceiptCount(h.taskId, h.toolCallsUsed)}。\n` +
       `--- 回执正文 ---\n${h.body ?? ''}\n--- 回执结束 ---\n` +
       '如需就该结果继续追问，使用 dispatch_followup(taskId)；本通知已持久化到会话历史。';
     try {
@@ -1016,6 +1138,89 @@ export class RouterService {
       forcedExit ? { deliverSettledUndelivered: true, roundStartedAt } : undefined,
     );
     this.tryDeliver(assignmentId);
+  }
+
+  /**
+   * 用户停止 agent runtime 联动（2026-11-04 事故 A 面，notifyAgentStopped 消费）：
+   * 该子 agent 名下全部在途链立即以「用户已主动停止」落终态——不再留给
+   * sweepDead 在 233 秒后把用户停止误判成心跳超时死亡（事故中 PM 据假回执
+   * 得出「基础设施问题」结论，而子 agent 实际已产出 30+ 文件）。
+   * - 回执计数读真：审计 tool_calls + 账本 journal_entries（W2 助手，故障降级 0）
+   * - 账本投影不重复落：stopAgentRuntime 的 pauseRunningTasksForAgent 已把任务行
+   *   转 paused（K7-1 保留恢复价值），此处不覆盖
+   * - 后半段与 sweepOnce 同构：notifyTaskReply 解除 PM 同步等待 + 投递判定
+   */
+  settleChainsOnAgentStop(instanceId: string): void {
+    for (const taskId of dispatchRegistry.inFlightTaskIdsBySubAgent(instanceId)) {
+      const toolCalls = countToolCallsForTask(taskId);
+      const changes = countJournalChangesForTask(taskId);
+      // B3：taskId 经净化插值（防伪造消息结构注入 PM 上下文）
+      const body =
+        `用户已主动停止子 agent 运行 · 已产出文件变更 ${changes} 处 · ` +
+        `工具调用 ${toolCalls} 次（截至停止）。产出已落盘，可用 dispatch_followup(${safeTaskIdText(taskId)}) 续作。`;
+      const handle = dispatchRegistry.settleUserStop(taskId, body);
+      if (!handle) continue; // 并发已终态（幂等忽略）
+      logger.info('dispatch 链因用户停止 agent runtime 落终态', { taskId, instanceId });
+      const runner = this.opts.runners.get(handle.pmAssignmentId);
+      runner
+        ?.notifyTaskReply({ taskId, status: 'failed', body })
+        .catch((err: unknown) =>
+          logger.warn('用户停止回执通知 PM 失败', {
+            taskId,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        );
+      if (handle.isFollowupRound || handle.awaitWake) {
+        this.tryDeliver(handle.pmAssignmentId);
+      }
+    }
+  }
+
+  /**
+   * 任务级用户取消/暂停联动（W4 残留缺口，notifyTaskUserAction 消费）：
+   * 用户从任务 UI 单独取消/暂停任务（不停止 agent runtime）时，流被
+   * abortTaskExecution 中断而链曾保持 in_flight——233 秒后被 sweepDead 误判成
+   * 「子 agent 心跳超时」（与 W4 停止误判同构）。此处让该任务名下在途链立即以
+   * 真实原因落终态：
+   * - 回执计数读真：审计 tool_calls + 账本 journal_entries（W2 助手，故障降级 0）
+   * - 任务行投影不重复落：调用方（cancelTask / task:transition paused 分支）的
+   *   transition 已把行转 cancelled/paused（权威），此处不覆盖
+   * - 后半段与 settleChainsOnAgentStop 同构：notifyTaskReply 解除 PM 同步等待 +
+   *   投递判定；幂等：非在途（已由 agent 停止/清扫落终态）→ no-op 不双投
+   */
+  settleChainForTaskUserAction(taskId: string, action: TaskUserAction): void {
+    const chain = dispatchRegistry.get(taskId);
+    if (!chain || chain.status !== 'in_flight') return;
+    const toolCalls = countToolCallsForTask(taskId);
+    const changes = countJournalChangesForTask(taskId);
+    // B3：taskId 经净化插值（防伪造消息结构注入 PM 上下文）
+    const idText = safeTaskIdText(taskId);
+    const body =
+      action === 'cancelled'
+        ? `任务已被用户取消 · 截至取消已产出文件变更 ${changes} 处 · ` +
+          `工具调用 ${toolCalls} 次。产出已落盘，可用 dispatch_followup(${idText}) 续作。`
+        : `任务已被用户暂停 · 截至暂停已产出文件变更 ${changes} 处 · ` +
+          `工具调用 ${toolCalls} 次。产出已落盘，可在恢复任务后用 dispatch_followup(${idText}) 续作。`;
+    const handle = dispatchRegistry.settleUserStop(
+      taskId,
+      body,
+      action === 'cancelled' ? 'task-cancelled' : 'task-paused',
+    );
+    if (!handle) return; // 并发已终态（幂等忽略）
+    logger.info('dispatch 链因任务级用户动作落终态', { taskId, action });
+    const runner = this.opts.runners.get(handle.pmAssignmentId);
+    runner
+      ?.notifyTaskReply({ taskId, status: 'failed', body })
+      .catch((err: unknown) =>
+        logger.warn('任务级用户动作回执通知 PM 失败', {
+          taskId,
+          action,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    if (handle.isFollowupRound || handle.awaitWake) {
+      this.tryDeliver(handle.pmAssignmentId);
+    }
   }
 
   /**
