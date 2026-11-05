@@ -140,6 +140,8 @@ interface AuditToolCallChildMsg {
   outputSummary?: unknown;
   success?: unknown;
   durationMs?: unknown;
+  /** 任务遥测（2026-11-04）：子进程归因链 currentTaskId ?? hostTaskId；快速会话 null */
+  taskId?: unknown;
   source?: unknown;
   preToolUse?: unknown;
 }
@@ -402,6 +404,8 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
           inputSummary: String(m.inputSummary ?? ''),
           outputSummary: String(m.outputSummary ?? ''),
           success: m.success === true,
+          // 遥测归因：仅非空字符串透传（IPC 类型漂移容忍与兄弟字段一致）
+          taskId: typeof m.taskId === 'string' && m.taskId.length > 0 ? m.taskId : null,
           source: m.source === 'plugin' ? 'plugin' : 'builtin',
           preToolUse: typeof m.preToolUse === 'string' ? m.preToolUse : null,
           durationMs: Number.isFinite(rawDuration) ? Math.trunc(rawDuration) : 0,

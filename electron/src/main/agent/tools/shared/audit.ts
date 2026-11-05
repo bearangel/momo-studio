@@ -19,6 +19,12 @@ export interface ToolCallAudit {
   outputSummary: string;
   success: boolean;
   durationMs: number;
+  /**
+   * 关联任务 ID（2026-11-04 遥测接线）：runTaskChatLoop 织入的
+   * currentTaskId ?? hostTaskId——与 change-journal 记账归因同源同链
+   * （boundary-rules 一义一名：同一 task_id 空间）。快速会话为 null。
+   */
+  taskId?: string | null;
   /** 插件系统 P2（spec §4.3）：溯源标记——插件工具 'plugin'，缺省 'builtin' */
   source?: 'builtin' | 'plugin';
   /** 插件系统 P3（spec §5.4）：preToolUse 决策 JSON（null=无 hook 参与） */
@@ -42,6 +48,7 @@ export function logToolCall(audit: ToolCallAudit): void {
     outputSummary: audit.outputSummary.slice(0, AUDIT_SUMMARY_MAX),
     success: audit.success,
     durationMs: audit.durationMs,
+    taskId: audit.taskId ?? null,
     source: audit.source ?? 'builtin',
     preToolUse: audit.preToolUse ?? null,
   });

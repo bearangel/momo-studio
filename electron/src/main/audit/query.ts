@@ -7,13 +7,14 @@
 // success 列在 DB 里是 INTEGER(0/1)，这里转成 boolean 给上层用。
 
 import { getDb } from '../storage/db';
+import { logger } from '../logger';
 
 /** 单条工具调用审计记录，与 renderer 端 ToolCallRecord 类型对齐 */
 export interface ToolCallRecord {
   id: string;
   workspaceId: string;
   agentBotUserId: string;
-  /** 任务 ID（当前插桩恒为 null，预留字段） */
+  /** 任务 ID（2026-11-04 起由子进程归因链贯穿；快速会话为 null） */
   taskId: string | null;
   toolName: string;
   inputSummary: string;
@@ -97,4 +98,24 @@ export function getToolCalls(workspaceId: string, opts: ToolCallQueryOpts = {}):
     .all(...params, limit, offset) as ToolCallRow[];
 
   return rows.map(rowToRecord);
+}
+
+/**
+ * 按任务 ID 计数审计行（dispatch 回执计数读真的数据源，2026-11-04）。
+ * 永不抛错：查询失败（DB 故障）降级返回 0 并 warn——回执投递链韧性与
+ * ledger 投影同纪律（计数降级不得断投递）。
+ */
+export function countToolCallsForTask(taskId: string): number {
+  try {
+    const row = getDb()
+      .prepare('SELECT COUNT(*) AS n FROM tool_calls WHERE task_id = ?')
+      .get(taskId) as { n: number } | undefined;
+    return row?.n ?? 0;
+  } catch (err) {
+    logger.warn('tool_calls 任务维度计数失败（回执计数降级为 0）', {
+      taskId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return 0;
+  }
 }

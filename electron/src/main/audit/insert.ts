@@ -15,7 +15,7 @@ export interface InsertToolCallInput {
   outputSummary: string;
   success: boolean;
   durationMs: number;
-  /** 关联任务 ID（当前插桩恒为 null，预留字段） */
+  /** 关联任务 ID（2026-11-04 起由子进程归因链 currentTaskId ?? hostTaskId 贯穿；快速会话为 null） */
   taskId?: string | null;
   /** 插件系统 P2：溯源（插件工具 'plugin'，缺省 'builtin'） */
   source?: 'builtin' | 'plugin';
@@ -23,26 +23,36 @@ export interface InsertToolCallInput {
   preToolUse?: string | null;
 }
 
-/** 插入一条工具调用审计记录；id 随机生成，timestamp 由 SQLite datetime('now') 产出（UTC） */
+/**
+ * 插入一条工具调用审计记录；id 随机生成，timestamp 由 SQLite datetime('now') 产出（UTC）。
+ * 携带 taskId 时同步递增 tasks.tool_calls_used（单条 UPDATE；任务行不存在 →
+ * 0 行 no-op 不阻断审计写入）。
+ */
 export function insertToolCall(input: InsertToolCallInput): void {
-  getDb()
-    .prepare(
-      `INSERT INTO tool_calls
-         (id, workspace_id, agent_bot_user_id, task_id, tool_name,
-          input_summary, output_summary, success, duration_ms, source, pre_tool_use, timestamp)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
-    )
-    .run(
-      randomUUID(),
-      input.workspaceId,
-      input.agentBotUserId,
-      input.taskId ?? null,
-      input.toolName,
-      input.inputSummary,
-      input.outputSummary,
-      input.success ? 1 : 0,
-      input.durationMs,
-      input.source ?? 'builtin',
-      input.preToolUse ?? null,
+  const db = getDb();
+  const taskId = input.taskId ?? null;
+  db.prepare(
+    `INSERT INTO tool_calls
+       (id, workspace_id, agent_bot_user_id, task_id, tool_name,
+        input_summary, output_summary, success, duration_ms, source, pre_tool_use, timestamp)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+  ).run(
+    randomUUID(),
+    input.workspaceId,
+    input.agentBotUserId,
+    taskId,
+    input.toolName,
+    input.inputSummary,
+    input.outputSummary,
+    input.success ? 1 : 0,
+    input.durationMs,
+    input.source ?? 'builtin',
+    input.preToolUse ?? null,
+  );
+  if (taskId !== null) {
+    db.prepare('UPDATE tasks SET tool_calls_used = tool_calls_used + 1, updated_at = ? WHERE id = ?').run(
+      Date.now(),
+      taskId,
     );
+  }
 }

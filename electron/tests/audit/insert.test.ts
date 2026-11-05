@@ -12,6 +12,7 @@ import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertToolCall } from '../../src/main/audit/insert';
 import { getToolCalls } from '../../src/main/audit/query';
+import { insertTask } from '../../src/main/storage/tasks/repo';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-audit-insert-test-${Date.now()}`);
 
@@ -115,5 +116,57 @@ describe('audit/insertToolCall', () => {
     // DB 中无游离行（总数恰为 2）
     const total = getDb().prepare('SELECT COUNT(*) AS n FROM tool_calls').get() as { n: number };
     expect(total.n).toBe(2);
+  });
+
+  // ── 任务遥测（2026-11-04 接线）：携带 taskId 的审计同步递增 tasks.tool_calls_used ──
+
+  it('携带 taskId → tool_calls_used 按次递增（单条 UPDATE 语义，多行累计）', () => {
+    getDb()
+      .prepare(`INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES ('ws-t', 'T', '/tmp', '@o')`)
+      .run();
+    insertTask({ id: 'T-8001', workspaceId: 'ws-t', title: '遥测递增', creatorUserId: '@o' });
+    const before = (getDb().prepare('SELECT updated_at FROM tasks WHERE id = ?').get('T-8001') as { updated_at: number }).updated_at;
+
+    for (let i = 0; i < 3; i++) {
+      insertToolCall({
+        workspaceId: 'ws-t', agentBotUserId: '@bot:a', toolName: 'write_file',
+        inputSummary: '', outputSummary: '', success: true, durationMs: 1,
+        taskId: 'T-8001',
+      });
+    }
+
+    const row = getDb().prepare('SELECT tool_calls_used, updated_at FROM tasks WHERE id = ?').get('T-8001') as {
+      tool_calls_used: number;
+      updated_at: number;
+    };
+    expect(row.tool_calls_used).toBe(3);
+    // 计数递增是行修改——updated_at 随之 bump（与 updateTask 语义一致）
+    expect(row.updated_at).toBeGreaterThanOrEqual(before);
+  });
+
+  it('taskId 为 null / 未知任务 id → 落库照常，不递增不抛错', () => {
+    getDb()
+      .prepare(`INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES ('ws-t2', 'T', '/tmp', '@o')`)
+      .run();
+
+    // null：快速会话形态
+    insertToolCall({
+      workspaceId: 'ws-t2', agentBotUserId: '@bot:a', toolName: 'read_file',
+      inputSummary: '', outputSummary: '', success: true, durationMs: 1,
+    });
+    // 未知任务 id：任务行不存在 → UPDATE 0 行 no-op（tool_calls.task_id 无外键约束）
+    expect(() =>
+      insertToolCall({
+        workspaceId: 'ws-t2', agentBotUserId: '@bot:a', toolName: 'bash',
+        inputSummary: '', outputSummary: '', success: true, durationMs: 1,
+        taskId: 'T-不存在的任务',
+      }),
+    ).not.toThrow();
+
+    expect(getToolCalls('ws-t2')).toHaveLength(2);
+    const task = getDb().prepare('SELECT tool_calls_used FROM tasks WHERE id = ?').get('T-不存在的任务') as
+      | { tool_calls_used: number }
+      | undefined;
+    expect(task).toBeUndefined();
   });
 });
