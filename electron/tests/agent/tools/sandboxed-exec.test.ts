@@ -6,10 +6,17 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { __setSandboxStateForTest } from '../../../src/main/sandbox/probe';
 import { __setSandboxSettingsForTest } from '../../../src/main/sandbox/settings';
 import { execSandboxed } from '../../../src/main/agent/tools/shared/sandboxed-exec';
+
+// 登录 shell PATH 探测替身（进程边界 mock，momo-test-rules）：探测结果钉为
+// 确定目录，mergePathEntries 保留真实实现（与 shell-tools.test.ts 同形）。
+vi.mock('../../../src/main/sandbox/path-resolve', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/main/sandbox/path-resolve')>();
+  return { ...actual, resolveLoginShellPath: vi.fn(async () => '/opt/momo-login-test/bin') };
+});
 
 const NODE = process.execPath;
 // 测试环境为纯 node：ELECTRON_RUN_AS_NODE 是 no-op（无害）；打包环境 execPath=
@@ -72,6 +79,14 @@ describe('execSandboxed（plain 路径行为锁）', () => {
   it('req.env 追加变量可见（ELECTRON_RUN_AS_NODE 协议锁定）', async () => {
     const r = await execSandboxed({ argv: [NODE, '-e', 'console.log(process.env.ELECTRON_RUN_AS_NODE)'], cwd: tmpWs, timeoutMs: 10_000, maxOutputBytes: 64 * 1024, env: ENV });
     expect(r.stdout.trim()).toBe('1');
+  });
+
+  // 登录 shell PATH 工具链增补（2026-11-04 sdkman 事故回归锁）：与 bash 通道
+  // （shell-tools.ts）同源——插件 run_js 子进程同样能看到登录 shell 工具链目录。
+  it('PATH 增补登录 shell 工具链目录（只增值、不加键）', async () => {
+    const r = await execSandboxed({ argv: [NODE, '-e', 'console.log(process.env.PATH)'], cwd: tmpWs, timeoutMs: 10_000, maxOutputBytes: 64 * 1024, env: ENV });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('/opt/momo-login-test/bin');
   });
 
   it('strict + 沙箱不可用 → blocked 抛错（不静默降级）', async () => {

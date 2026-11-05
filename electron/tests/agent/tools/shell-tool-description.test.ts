@@ -81,7 +81,7 @@ describe('shellToolDescription', () => {
       '30s 超时，stdout+stderr 各截断 10KB。退出码非 0 不抛错。每条命令独立 shell，cd 不持久。',
       '后台进程（& 启动）在本回合内可跨命令存活，回合结束时由平台统一回收——不要依赖跨回合的后台服务（下回合需重启）。',
       '沙箱内 ps 与 kill 系统调用被拦截（kill -0/pkill 会误报「进程已死/无权限」）：查自己启动的进程用 process_list，判端口占用用 lsof/curl，关闭自己启动的服务用 process_kill（bash 里 kill 必失败）。',
-      '支持 && 串联；外部程序从 PATH 解析。',
+      '支持 && 串联；外部程序从 PATH 解析——PATH 已并入用户登录 shell 的工具链目录（如 sdkman、homebrew），出现 command not found 通常确属未安装而非工具链不可见。',
       '环境变量是受限白名单：只传 PATH/HOME 等基础变量，不要依赖 PATH 以外的自定义变量（自设的 API key 等取不到，需要时走专用工具）。',
     ].join('');
     expect(shellToolDescription('linux', null)).toBe(expected);

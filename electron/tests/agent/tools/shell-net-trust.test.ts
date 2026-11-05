@@ -33,6 +33,13 @@ vi.mock('../../../src/main/agent/tools/net-trust-bridge', () => ({
   requestEffectiveNetwork: effectiveMock,
 }));
 
+// 登录 shell PATH 探测替身（2026-11-04 工具链增补）：返回空串使合并为 no-op，
+// 关键是不经 spawnMock——本文件的 spawn 调用计数与 results[0] 断言专属 bash 通道。
+vi.mock('../../../src/main/sandbox/path-resolve', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/main/sandbox/path-resolve')>();
+  return { ...actual, resolveLoginShellPath: vi.fn(async () => '') };
+});
+
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   return { ...actual, spawn: spawnMock };

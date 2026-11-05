@@ -30,6 +30,7 @@ import { OUTPUT_LIMITS } from './shared/output-truncate';
 import { createUtf8Collector } from './shared/stream-decode';
 import { parseStringArg } from './shared/arg-parse';
 import { getSandboxState, resolveShellSpawn } from '../../sandbox';
+import { mergePathEntries, resolveLoginShellPath } from '../../sandbox/path-resolve';
 import { buildKillTreeArgs } from '../../sandbox/windows';
 import {
   requestEffectiveNetwork,
@@ -281,7 +282,7 @@ export function shellToolDescription(
 ): string {
   if (platform !== 'win32') {
     // posix 拼接顺序与拆分前逐字一致（沙箱段在首句后、公共段在其后）
-    return `${SHELL_DESC_BASE_COMMON_INTRO}${SHELL_DESC_BASE_POSIX_SANDBOX}${SHELL_DESC_BASE_COMMON}${SHELL_DESC_BASE_POSIX_PROCESS}支持 && 串联；外部程序从 PATH 解析。${SHELL_DESC_ENV_HINT_POSIX}`;
+    return `${SHELL_DESC_BASE_COMMON_INTRO}${SHELL_DESC_BASE_POSIX_SANDBOX}${SHELL_DESC_BASE_COMMON}${SHELL_DESC_BASE_POSIX_PROCESS}支持 && 串联；外部程序从 PATH 解析——PATH 已并入用户登录 shell 的工具链目录（如 sdkman、homebrew），出现 command not found 通常确属未安装而非工具链不可见。${SHELL_DESC_ENV_HINT_POSIX}`;
   }
   return `${SHELL_DESC_BASE_COMMON_INTRO}${WIN32_DESC_SANDBOX}${SHELL_DESC_BASE_COMMON}${win32ShellSection(detectedShell)}${WIN32_DESC_WRITE_FILE_HINT}${SHELL_DESC_ENV_HINT_WIN32}`;
 }
@@ -396,6 +397,14 @@ export class ShellTools implements ToolModule {
     if (plan.kind === 'blocked') throw new Error(plan.reason);
     // wrapped 模式叠加沙箱 env 增量（npm/pip 缓存重定向到 tmp，写剖面自洽）
     const env = { ...buildSandboxEnv(ctx), ...(plan.kind === 'wrapped' ? plan.envAdditions : {}) };
+    // 工具链可见性（2026-11-04）：GUI 启动的最小 PATH 看不见 ~/.sdkman、
+    // /opt/homebrew 等登录 shell 工具链目录——spawn 前把登录 shell PATH 合并进
+    // 白名单 PATH 的值（只增值、不加键；win32 无登录 shell 语义，解析原样返回
+    // 使合并为 no-op）。解析每进程缓存一次（path-resolve），首条 bash 命令至多
+    // 多付一次探测延迟，后续调用零开销。
+    if (env.PATH !== undefined) {
+      env.PATH = mergePathEntries(env.PATH, await resolveLoginShellPath());
+    }
     const isWin = process.platform === 'win32';
 
     return await new Promise<{ text: string; blocked: boolean; dirs: string[] }>((resolve, reject) => {

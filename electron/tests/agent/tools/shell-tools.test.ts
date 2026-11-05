@@ -11,7 +11,7 @@
 // v2.5 工具链机制整体移除（2026-10-04）：net-trust payload 仅 {netOn, extraDirs}
 // 两字段，toolchainOn 已从契约下线。__setNetQueryForTest 替身形状相应精简。
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -25,6 +25,14 @@ import {
   __setNetQueryForTest,
 } from '../../../src/main/agent/tools/shell-tools';
 import { WRITE_BLOCKED_HINT } from '../../../src/main/agent/tools/sandbox-write-hint';
+
+// 登录 shell PATH 探测替身（进程边界 mock，momo-test-rules）：探测结果钉为
+// 确定目录；mergePathEntries 保留真实实现——生产合并语义（去重/顺序）在
+// 下方增补回归锁里被真实消费。
+vi.mock('../../../src/main/sandbox/path-resolve', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/main/sandbox/path-resolve')>();
+  return { ...actual, resolveLoginShellPath: vi.fn(async () => '/opt/momo-login-test/bin') };
+});
 
 /** 测试用 settings 构造器：v2.5 起 SandboxSettings 仅含 mode/networkPolicy */
 function settings(mode: 'strict' | 'permissive', networkPolicy: 'deny' | 'allow') {
@@ -178,6 +186,45 @@ describe('bash 输出截断', () => {
     const tools = new ShellTools();
     const result = await tools.execute('bash', { command: 'yes hello | head -2000' }, ctx);
     expect(result).toContain('截断');
+  });
+});
+
+// ═══ 登录 shell PATH 工具链增补（2026-11-04 sdkman 事故回归锁）═══
+// 生产事故：GUI launchd 最小 PATH 看不见 ~/.sdkman → agent 误判「沙箱无 JDK」。
+// 契约锁：真跑 /bin/bash 让子进程自己 echo $PATH——生产者（mergePathEntries
+// 真实实现）与消费者（bash 子进程）不经手写中间数据。
+describe('bash PATH 登录 shell 工具链增补', () => {
+  it('子进程 PATH 含登录 shell 目录，且基座条目在前（追加不重排基座）', async () => {
+    const tools = new ShellTools();
+    const result = await tools.execute('bash', { command: 'echo $PATH' }, ctx);
+    expect(result).toContain('exit_code: 0');
+    expect(result).toContain('/opt/momo-login-test/bin');
+    const base0 = process.env.PATH?.split(path.delimiter)[0] ?? '';
+    if (base0 !== '') {
+      expect(result.indexOf(base0)).toBeGreaterThanOrEqual(0);
+      expect(result.indexOf(base0)).toBeLessThan(result.indexOf('/opt/momo-login-test/bin'));
+    }
+  });
+
+  it('只增值、不加键：增补后子进程环境键集合仍 ⊆ 白名单 ∪ 平台注入键', async () => {
+    const tools = new ShellTools();
+    const result = await tools.execute('bash', { command: 'env | cut -d= -f1' }, ctx);
+    const keys = (result.split('stdout:\n')[1] ?? '')
+      .trim().split('\n').map((k) => k.trim()).filter(Boolean);
+    expect(keys).toContain('PATH');
+    const allowed = new Set([
+      'PATH', 'HOME', 'USER', 'USERPROFILE',
+      'LANG', 'LC_ALL', 'LC_CTYPE',
+      'SHELL', 'TERM',
+      'TMPDIR', 'TMP', 'TEMP',
+      'SYSTEMROOT', 'WINDIR',
+      'WORKSPACE_DIR', 'MOMO_STUDIO_AGENT',
+      // bash 自生变量（PWD/OLDPWD/SHLVL/_）由 shell 启动时自行设置，
+      // 不是父进程 spawn env 传入——不计入白名单判定
+      'PWD', 'OLDPWD', 'SHLVL', '_',
+    ]);
+    const unexpected = keys.filter((k) => !allowed.has(k));
+    expect(unexpected, `白名单外的环境变量键: ${unexpected.join(',')}`).toEqual([]);
   });
 });
 

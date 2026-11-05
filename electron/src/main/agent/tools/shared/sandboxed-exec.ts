@@ -6,6 +6,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import { resolveSandboxedSpawn } from '../../../sandbox';
+import { mergePathEntries, resolveLoginShellPath } from '../../../sandbox/path-resolve';
 
 export interface SandboxedExecRequest {
   /** 完整 argv（argv[0]=可执行文件绝对路径） */
@@ -65,6 +66,12 @@ export async function execSandboxed(req: SandboxedExecRequest): Promise<Sandboxe
     ...(plan.kind === 'wrapped' ? plan.envAdditions : {}),
     ...(req.env ?? {}),
   };
+  // 工具链可见性（2026-11-04）：与 bash 通道（shell-tools.ts）同源——登录
+  // shell PATH 并入白名单 PATH 的值（只增值、不加键），插件 run_js 子进程同样
+  // 能看到 sdkman/homebrew 等工具链目录。解析每进程缓存一次（path-resolve）。
+  if (env.PATH !== undefined) {
+    env.PATH = mergePathEntries(env.PATH, await resolveLoginShellPath());
+  }
   const isWin = process.platform === 'win32';
   const child = spawn(plan.shell, plan.args, {
     cwd: req.cwd,
