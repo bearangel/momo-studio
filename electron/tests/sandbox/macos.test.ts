@@ -103,3 +103,54 @@ describe('renderSeatbeltProfile', () => {
     expect(prof).toContain('(allow file-write* (subpath "/Users/dev/Library/Python"))');
   });
 });
+
+describe('renderSeatbeltProfile full-disk 写域（2026-11-05 spec §5.4）', () => {
+  const fd: ShellSandboxPolicy = {
+    workspaceDir: '/Users/dev/snapshot-ws', homeDir: '/Users/dev',
+    tmpDir: '/private/var/folders/xx/T', sensitiveDirs: ['/Users/dev/.ssh'],
+    networkEnabled: false, extraWriteDirs: [], writeScope: 'full-disk',
+  };
+
+  it('快照：全盘 allow → 核心 deny 逐条 → /usr/local re-allow 殿后（后匹配优先——次序即正确性）', () => {
+    expect(renderSeatbeltProfile(fd)).toMatchInlineSnapshot(`
+      "(version 1)
+      (deny default)
+      (allow file-read* (subpath "/"))
+      (deny file-read* (subpath "/Users/dev/.ssh"))
+      (allow file-write* (subpath "/"))
+      (deny file-write* (subpath "/System"))
+      (deny file-write* (subpath "/bin"))
+      (deny file-write* (subpath "/sbin"))
+      (deny file-write* (subpath "/usr"))
+      (deny file-write* (subpath "/etc"))
+      (deny file-write* (subpath "/private/etc"))
+      (deny file-write* (subpath "/Library"))
+      (allow file-write* (subpath "/usr/local"))
+      (allow file-write* (literal "/dev/null"))
+      (allow process-exec process-fork)
+      (allow signal (target self))
+      (allow file-ioctl sysctl-read mach-lookup)
+      "
+    `);
+  });
+
+  it('次序锁：全盘 allow 在所有核心 deny 之前；re-allow 在 deny /usr 之后', () => {
+    const p = renderSeatbeltProfile(fd);
+    expect(p.indexOf('(allow file-write* (subpath "/"))')).toBeLessThan(p.indexOf('(deny file-write* (subpath "/System"))'));
+    expect(p.indexOf('(allow file-write* (subpath "/usr/local"))')).toBeGreaterThan(p.indexOf('(deny file-write* (subpath "/usr"))'));
+  });
+
+  it('sensitiveDirs 读遮蔽共存（写域与读遮蔽正交）', () => {
+    expect(renderSeatbeltProfile(fd)).toContain('(deny file-read* (subpath "/Users/dev/.ssh"))');
+  });
+
+  it('confined 态无全盘写行（既有行为反证）', () => {
+    const c = { ...fd, writeScope: 'confined' as const };
+    expect(renderSeatbeltProfile(c)).not.toContain('(allow file-write* (subpath "/"))');
+  });
+
+  it('full-disk 态 extraWriteDirs 授权行不渲染（全盘 allow 已覆盖，spec §5.4 省略语义）', () => {
+    const p = renderSeatbeltProfile({ ...fd, extraWriteDirs: ['/Users/dev/.rustup'] });
+    expect(p).not.toContain('.rustup');
+  });
+});
