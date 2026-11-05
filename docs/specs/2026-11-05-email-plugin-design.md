@@ -102,10 +102,10 @@ secrets: {
 | 文件 | 内容 | 边界 |
 |---|---|---|
 | `accounts.json` | 账号元数据：accountId、email、显示名、imap/smtp host/port/tls 模式、用户名、创建时间、健康状态、`retention`（本地缓存保留时长） | **不含密码**（密码在 keytar，键 `account:<accountId>`）；人可读 |
-| `data.db` | `node:sqlite` 数据库（Electron 44 / Node 24 内置，无原生依赖）：表 `drafts`（草稿登记 + `inputPayload`，对外投影剔除）、`envelope_cache`（信封缓存，每 folder 上限 500、uid 降序）、`envelope_cache_meta`（savedAt）、`folder_cache`（文件夹树 + unseen，冷启动秒开）；`PRAGMA user_version` 版本化（当前 2）；WAL + `busy_timeout=5000` | service 是唯一写者；agent 工具子进程严禁直开，一律走 `callService` |
+| `data.db` | `node:sqlite` 数据库（Electron 44 / Node 24 内置，无原生依赖）：表 `drafts`（草稿登记 + `inputPayload`，对外投影剔除）、`envelope_cache`（信封缓存，每 folder 上限 500、uid 降序）、`envelope_cache_meta`（savedAt）、`folder_cache`（文件夹树 + unseen，冷启动秒开）、`local_archive`（归档路径索引，schema v3）；`PRAGMA user_version` 版本化（当前 3）；WAL + `busy_timeout=5000` | service 是唯一写者；agent 工具子进程严禁直开，一律走 `callService` |
 
 - 研发期一次性重置：启动时清理旧 `drafts.json` 与 `cache/`，**不做数据迁移**（研发阶段无兼容负担）。
-- 正文缓存仍为纯内存 LRU（50 封，键 `accountId\|folder\|uid`），不落盘、重启后按需重拉。
+- 正文/附件的本地加密归档（自定义根目录 + `local_archive` 路径索引 + 读信本地优先）见 `2026-11-05-email-local-archive-design.md`。
 
 本插件**不做工作区隔离**：邮箱账号与邮件是用户级资产，缓存键为 `accountId + folder`，跨工作区共享（依据 2026-10-17 spec §4.5）。
 
