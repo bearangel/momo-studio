@@ -27,6 +27,7 @@
 // （messages=[] + rounds=0，不抛——调用方以提示注入兜底，不阻断）。
 import type { LLMMessage } from './llm-provider';
 import { createAssistantRoundAggregator } from './turn-reconstructor';
+import { repairDanglingToolCalls } from './llm-history-repair';
 import { mapsToUserRole } from './sender-role';
 import { logger } from '../logger';
 import { getDb } from '../storage/db';
@@ -106,7 +107,10 @@ export function rebuildSubConversation(
     }
     agg.flush();
 
-    return { messages: agg.messages, rounds, degraded: false };
+    // 悬空 tool_call 修复门（2026-11-04 生产 HTTP-400 P0）：与 turn-reconstructor
+    // 的 rebuildStreamMessages 出口同款配对不变量兜底——链前缀直接拼进子 agent
+    // 的 LLM 请求，任何悬空 toolCalls 同样整请求 400。
+    return { messages: repairDanglingToolCalls(agg.messages), rounds, degraded: false };
   } catch (err) {
     // 降级（spec §3.3）：重建任何抛错 → catch 兜底不抛（degraded 方向安全）
     logger.warn('rebuildSubConversation 重建失败，降级为空历史', {

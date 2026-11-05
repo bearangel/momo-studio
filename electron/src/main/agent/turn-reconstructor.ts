@@ -31,6 +31,7 @@
 //   thinking / todo_update / status_change / final / message_roll /
 //   segment_boundary / 未知 kind → 跳过（不进 LLM 上下文 / 前向兼容）
 import type { LLMMessage, LLMToolCall } from './llm-provider';
+import { repairDanglingToolCalls } from './llm-history-repair';
 import type { SteerReplayItem, ExpandedImageItem } from './runtime-config';
 import { renderTurnBody, isExpandedContext } from './turn-context';
 import { expandMessageContext, MAX_IMAGES_PER_REQUEST } from '../im/context-expander';
@@ -439,7 +440,11 @@ function rebuildStreamMessages(
   // 流末 flush：残留文本收尾 + 未配对 call 合成中断 result
   agg.flush();
 
-  const messages = agg.messages;
+  // 悬空 tool_call 修复门（2026-11-04 生产 HTTP-400 P0，任务 a07252ba /
+  // cec28988）：组装出口的配对不变量兜底——聚合器构造上恒配对，此门防御
+  // DB 事件残缺 / 既有脏数据等未枚举形态，保证重建段不再因「assistant 带
+  // toolCalls 而无对应 tool 响应」被 OpenAI 兼容供应商整请求 400 拒收。
+  const messages = repairDanglingToolCalls(agg.messages);
   const degenerate = !messages.some((m) => m.role !== 'user');
   return { messages, toolCallsUsed: agg.toolCallsUsed, steers, degenerate, endTs };
 }
