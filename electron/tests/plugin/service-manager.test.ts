@@ -336,3 +336,47 @@ describe('lazy start 单飞（终审 I1）', () => {
     expect(marks.filter((m) => m === 'start:ws-r')).toHaveLength(1);
   });
 });
+
+// ── 插件自管 secrets（ctx.secrets——邮件插件起）：keytar 代理，键域 plugin.<id>.secret.<key> ──
+import {
+  setKeytarBackendForTest,
+  __resetKeychainImplForTest,
+  keychainServiceName,
+} from '../../src/main/storage/keychain';
+import type { PluginServiceCtx } from '../../src/main/plugin/service-manager';
+
+const SECRETS_SVC = `module.exports.createService = function (pluginCtx) {
+  globalThis.__capturedCtx = pluginCtx;
+  return { async start() {}, async stop() {}, async handle() { return 'ok'; } };
+};`;
+
+describe('ctx.secrets（插件自管 secrets keytar 代理）', () => {
+  afterEach(() => {
+    setKeytarBackendForTest(null);
+    __resetKeychainImplForTest();
+    delete (globalThis as { __capturedCtx?: PluginServiceCtx }).__capturedCtx;
+  });
+
+  it('ctx.secrets：set/get/delete 走 keytar，键域 plugin.<id>.secret.<key>；非法键拒绝', async () => {
+    const writes: Array<[string, string, string]> = [];
+    setKeytarBackendForTest({
+      async setPassword(service, account, password) { writes.push([service, account, password]); },
+      async getPassword(_s, account) { return account.endsWith(':pw') ? 'secret-v' : null; },
+      async deletePassword() { return true; },
+      async findCredentials() { return []; },
+    });
+    __resetKeychainImplForTest();
+    const rec = mkPlugin('secrets-demo', SECRETS_SVC);
+    const started = await startPluginService(rec);
+    expect(started).toBe(true);
+    const capturedCtx = (globalThis as { __capturedCtx?: PluginServiceCtx }).__capturedCtx;
+    const secrets = capturedCtx!.secrets;
+    await secrets.set('account:acc1:pw', 'raw-pw');
+    expect(writes[0]![0]).toBe(keychainServiceName());
+    expect(writes[0]![1]).toBe('plugin.secrets-demo.secret.account:acc1:pw');
+    expect(await secrets.get('account:acc1:pw')).toBe('secret-v');
+    await expect(secrets.set('bad key!', 'v')).rejects.toThrow('非法 secret 键');
+    await expect(secrets.get('../escape')).rejects.toThrow('非法 secret 键');
+    await stopPluginService('secrets-demo');
+  });
+});

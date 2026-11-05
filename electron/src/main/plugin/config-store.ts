@@ -43,6 +43,16 @@ export function sensitiveRef(pluginId: string, key: string): string {
   return `plugin.${pluginId}.config.${key}`;
 }
 
+/** 插件自管 secret 键（service ctx.secrets 面）：与 config 敏感键同域点分惯例，域后缀区分 */
+export function pluginSecretRef(pluginId: string, key: string): string {
+  return `plugin.${pluginId}.secret.${key}`;
+}
+
+/** secret 键白名单：字母数字开头，主体 [A-Za-z0-9_.:-]，总长 ≤128（拒 glob/路径注入面） */
+export function isValidPluginSecretKey(key: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(key);
+}
+
 /** config 属性键：字母数字开头（spec 自家用例为 camelCase，如 indexCommand），
  *  拒空格/点/斜杠等路径与注入面字符 */
 function isConfigKey(s: string): boolean {
