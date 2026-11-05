@@ -155,6 +155,9 @@ export class WorkspaceFS {
    * 大小写不敏感子串匹配；.git* 前缀与 node_modules 条目排除（与 listDir
    * 一致）；符号链接目录不进入（Dirent.isDirectory 对 symlink 为 false，
    * 天然防环）。双上限：结果 limit + 遍历总数 traversalCap。
+   * 空 query = match-all 全量列举（2026-11-05：会话工具条「文件」按钮限定
+   * 菜单的全量浏览数据源；既有消费方 FileTree/MentionInput 手动路径均有
+   * 空串守卫，不发空 query，语义变更零波及）。
    */
   async searchNames(
     query: string,
@@ -162,7 +165,6 @@ export class WorkspaceFS {
     traversalCap: number = SEARCH_TRAVERSAL_CAP_DEFAULT,
   ): Promise<SearchHit[]> {
     const q = query.trim().toLowerCase();
-    if (q === '') return [];
     const hits: SearchHit[] = [];
     let visited = 0;
     const walk = async (relDir: string): Promise<void> => {

@@ -54,15 +54,15 @@ function ensureExt(ext: string): AssetImageExt {
 
 /**
  * workspace 目录解析：注入优先，生产走 getWorkspace（momo-test-rules 铁律 5）。
- * 这里与 context-expander 不同——asset:saveImage 不能「静默降级」，未知 workspace
- * 必须抛错（spec §11 错误矩阵：asset 失败 → 渲染端不插 pill + 错误 toast，输入不受影响）。
+ * 这里与 context-expander 不同——asset 通道不能「静默降级」，未知 workspace
+ * 必须抛错（spec §11 错误矩阵：asset 失败 → 渲染端不插 pill + 错误提示，输入不受影响）。
  */
-function workspaceDirOf(workspaceId: string): string {
+function workspaceDirOf(workspaceId: string, channel = 'asset:saveImage'): string {
   const injected = deps.workspaceDir?.(workspaceId);
   if (injected !== undefined && injected !== null) return injected;
   const ws = getWorkspace(workspaceId);
   if (!ws) {
-    throw new Error(`asset:saveImage 失败：workspace 不存在 (id=${workspaceId})`);
+    throw new Error(`${channel} 失败：workspace 不存在 (id=${workspaceId})`);
   }
   return ws.directoryPath;
 }
@@ -166,5 +166,113 @@ export function registerAssetHandlers(): void {
       return saveImage(workspaceId, data, ext);
     },
   );
+  ipcMain.handle(
+    'asset:importFile',
+    async (_evt, workspaceId: string, data: Uint8Array, name: string) => {
+      return importFile(workspaceId, data, name);
+    },
+  );
   logger.info('Asset IPC handlers 已注册');
+}
+
+/** 外部文件导入落盘目录（相对 workspace 根，2026-11-05 预览方案 A）：顶层 imports/——agent 文件工具可读、@ 搜索可命中（与 .momo/assets 的隐藏语义刻意区分） */
+export const IMPORTS_REL_DIR = 'imports';
+
+/** 单个导入文件字节上限：覆盖常见文档/表格/PDF；与 renderer MentionInput IMPORT_MAX_BYTES 同值（注释互指，改必两处） */
+const MAX_IMPORT_BYTES = 64 * 1024 * 1024;
+
+/**
+ * 导入文件名清洗：basename 剥路径 + 控制字符剔除 + 长度截断（保扩展名）。
+ * 文件名是用户心智与 agent 引用锚点，故不做内容寻址（与 saveImage 的差异点）；
+ * 真正的越界防线是 assertInWorkspace，这里是入口消毒 + 友好报错。
+ */
+function sanitizeImportName(raw: unknown): string {
+  if (typeof raw !== 'string') {
+    throw new Error(`asset:importFile 失败：文件名必须是字符串，收到 ${raw === null ? 'null' : typeof raw}`);
+  }
+  let base = path.basename(raw).replace(/[\x00-\x1f\x7f]/g, '').trim();
+  if (base === '' || base === '.' || base === '..') {
+    throw new Error(`asset:importFile 失败：文件名非法，收到 "${raw}"`);
+  }
+  // basename 已剥 '/'（win32 也剥 '\\'）；残余分隔符（跨平台形态）直接拒——
+  // POSIX 上字面反斜杠虽是合法文件名字符，但几乎必是注入尝试，拒之无副作用
+  if (base.includes('/') || base.includes('\\')) {
+    throw new Error('asset:importFile 失败：文件名不能包含路径分隔符');
+  }
+  // 文件系统单名上限 255 字节，CJK 多字节——按 120 字符截断保余量（保留扩展名）
+  if (base.length > 120) {
+    const ext = path.extname(base);
+    base = `${base.slice(0, 120 - ext.length)}${ext}`;
+  }
+  return base;
+}
+
+/**
+ * 主入口（2026-11-05 预览方案 A）：把外部文件字节复制到
+ * `<workspace>/imports/<文件名>`，返回相对路径。重名自动加 " (N)" 后缀。
+ * 安全范式与 saveImage 同层：类型守门 → 尺寸守门 → workspace 解析 →
+ * assertInWorkspace（mkdir 之前）→ tmp + rename 原子写。
+ */
+export async function importFile(
+  workspaceId: string,
+  data: Uint8Array,
+  name: unknown,
+): Promise<{ path: string }> {
+  if (!(data instanceof Uint8Array)) {
+    throw new Error(
+      `asset:importFile 失败：data 必须是 Uint8Array，收到 ${data === null ? 'null' : typeof data}`,
+    );
+  }
+  if (data.byteLength > MAX_IMPORT_BYTES) {
+    throw new Error(
+      `asset:importFile 失败：文件大小 ${data.byteLength} 字节超过上限 ${MAX_IMPORT_BYTES} 字节（64MB）`,
+    );
+  }
+  const base = sanitizeImportName(name);
+
+  const wsDir = path.resolve(workspaceDirOf(workspaceId, 'asset:importFile'));
+  const wsFs = new WorkspaceFS(wsDir);
+  wsFs.assertInWorkspace(`${IMPORTS_REL_DIR}/${base}`);
+
+  const importsAbs = path.join(wsDir, IMPORTS_REL_DIR);
+  fs.mkdirSync(importsAbs, { recursive: true });
+
+  // 重名加后缀：`需求文档 v2.md` → `需求文档 v2 (1).md`。后缀形由已清洗的
+  // base 派生（无新分隔符），无需重复 assertInWorkspace
+  let finalName = base;
+  for (let n = 1; fs.existsSync(path.join(importsAbs, finalName)); n++) {
+    if (n > 999) throw new Error(`asset:importFile 失败：同名文件过多（${base}）`);
+    const ext = path.extname(base);
+    const stem = base.slice(0, base.length - ext.length);
+    finalName = `${stem} (${n})${ext}`;
+  }
+
+  const targetRel = `${IMPORTS_REL_DIR}/${finalName}`;
+  const tmpRel = `${targetRel}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+  wsFs.assertInWorkspace(tmpRel);
+
+  const targetAbs = path.join(importsAbs, finalName);
+  const tmpAbs = path.join(importsAbs, path.basename(tmpRel));
+  try {
+    await fs.promises.writeFile(tmpAbs, Buffer.from(data));
+    fs.renameSync(tmpAbs, targetAbs);
+  } catch (err) {
+    try {
+      if (fs.existsSync(tmpAbs)) fs.rmSync(tmpAbs);
+    } catch {
+      // 静默：清理失败不应掩盖原始错误
+    }
+    logger.warn('asset:importFile 写盘失败', {
+      workspaceId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
+
+  logger.info('asset:importFile 已写入', {
+    workspaceId,
+    path: targetRel,
+    bytes: data.byteLength,
+  });
+  return { path: targetRel };
 }

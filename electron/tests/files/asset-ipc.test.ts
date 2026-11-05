@@ -1,11 +1,17 @@
 // electron/tests/files/asset-ipc.test.ts
 //
-// asset:saveImage IPC 测试：内容寻址落盘 + 去重 + 尺寸守门 + ext 白名单 + 路径防御。
+// asset:saveImage / asset:importFile IPC 测试：saveImage 内容寻址落盘 + 去重 +
+//   尺寸守门 + ext 白名单 + 路径防御；importFile（2026-11-05 预览方案 A）命名
+//   落盘 + 重名后缀 + 名字消毒 + 64MB 守门。
 // momo-test-rules：真实 fs（不 mock fs）保证落盘/去重的语义是真的；workspace 定位经
 //   setAssetDeps 注入（生产路径依赖 electron app + SQLite），与 im/context-expander
 //   的 expanderDeps 同款；vi.mock 锁 ipcMain 注册与 getWorkspace 解耦。
 // 覆盖：落盘+字节相等 / 同 hash 去重 / ext 白名单 / 8MB 尺寸守门 / 未知 workspace /
-//   Uint8Array 运行期类型校验 / 符号链接逃逸（fix round 1 I-1+I-2）
+//   Uint8Array 运行期类型校验 / 符号链接逃逸（fix round 1 I-1+I-2）；
+//   importFile（2026-11-05 预览方案 A）：imports/ 落盘 / 重名后缀 / 路径注入清洗 /
+//   64MB 守门 / 名称与字节类型校验；
+//   importFile：命名落盘 / 重名 (N) 后缀 / 路径片段剥除 / 非法名 / 64MB 守门 /
+//   类型守门 / 未知 workspace / IPC 注册委托
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -72,10 +78,14 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-  // 每个用例前清空 assets 目录，确保去重等用例相互隔离
+  // 每个用例前清空 assets / imports 目录，确保去重、重名后缀等用例相互隔离
   const assetsDir = path.join(workspaceDir, '.momo', 'assets');
   if (fs.existsSync(assetsDir)) {
     fs.rmSync(assetsDir, { recursive: true, force: true });
+  }
+  const importsDir = path.join(workspaceDir, 'imports');
+  if (fs.existsSync(importsDir)) {
+    fs.rmSync(importsDir, { recursive: true, force: true });
   }
 });
 
@@ -232,5 +242,113 @@ describe('asset:saveImage IPC 注册', () => {
       'png',
     )) as { path: string };
     expect(result.path).toMatch(/^\.momo\/assets\/[0-9a-f]{12}\.png$/);
+  });
+});
+
+describe('asset:importFile 单元（实时 fs，2026-11-05 预览方案 A）', () => {
+  const DOC = Buffer.from('模拟外部文档内容'.repeat(10));
+
+  it('落盘 imports/<文件名> 并返回相对路径，字节一致', async () => {
+    const result = await assetModule.importFile(wsId, new Uint8Array(DOC), '需求文档 v2.md');
+    expect(result.path).toBe('imports/需求文档 v2.md');
+    const abs = path.join(workspaceDir, 'imports', '需求文档 v2.md');
+    expect(fs.existsSync(abs)).toBe(true);
+    expect(fs.readFileSync(abs).equals(DOC)).toBe(true);
+  });
+
+  it('重名自动加 " (N)" 后缀：两次导入同名 → 原名 + (1)（与内容无关的命名碰撞）', async () => {
+    const r1 = await assetModule.importFile(wsId, new Uint8Array(DOC), '报告.docx');
+    const r2 = await assetModule.importFile(wsId, new Uint8Array(Buffer.from('不同内容')), '报告.docx');
+    const r3 = await assetModule.importFile(wsId, new Uint8Array(DOC), '报告.docx');
+    expect(r1.path).toBe('imports/报告.docx');
+    expect(r2.path).toBe('imports/报告 (1).docx');
+    expect(r3.path).toBe('imports/报告 (2).docx');
+  });
+
+  it('路径注入名 ../../evil.sh → basename 清洗后落 imports 内，workspace 外无文件', async () => {
+    const result = await assetModule.importFile(wsId, new Uint8Array(DOC), '../../evil.sh');
+    expect(result.path).toBe('imports/evil.sh');
+    expect(fs.existsSync(path.join(workspaceDir, 'evil.sh'))).toBe(false);
+    expect(fs.existsSync(path.join(tmpRoot, 'evil.sh'))).toBe(false);
+  });
+
+  it('文件名非法（空串 / "." / ".."）→ 抛中文错误，无落盘', async () => {
+    for (const evil of ['', '   ', '.', '..']) {
+      await expect(assetModule.importFile(wsId, new Uint8Array(DOC), evil)).rejects.toThrow(/文件名非法/);
+    }
+    expect(fs.existsSync(path.join(workspaceDir, 'imports'))).toBe(false);
+  });
+
+  it('文件名非字符串（null，类型层绕过）→ 抛中文错误', async () => {
+    await expect(
+      assetModule.importFile(wsId, new Uint8Array(DOC), null as unknown as string),
+    ).rejects.toThrow(/文件名必须是字符串/);
+  });
+
+  it('超长文件名（>120 字符）→ 截断保扩展名，落盘成功', async () => {
+    const longStem = '长'.repeat(150);
+    const result = await assetModule.importFile(wsId, new Uint8Array(DOC), `${longStem}.pdf`);
+    const finalName = result.path.slice('imports/'.length);
+    expect(finalName.endsWith('.pdf')).toBe(true);
+    expect(finalName.length).toBeLessThanOrEqual(120);
+    expect(fs.existsSync(path.join(workspaceDir, 'imports', finalName))).toBe(true);
+  });
+
+  it('64MB+1 字节 → 尺寸守门拒绝，imports 目录不创建', async () => {
+    const big = Buffer.alloc(64 * 1024 * 1024 + 1, 0x20);
+    await expect(assetModule.importFile(wsId, new Uint8Array(big), '大文件.bin')).rejects.toThrow(/64MB/);
+    expect(fs.existsSync(path.join(workspaceDir, 'imports'))).toBe(false);
+  });
+
+  it('data 传入 string（绕过类型层）→ 抛中文错误，无落盘（与 saveImage I-2 同款防线）', async () => {
+    await expect(
+      assetModule.importFile(wsId, 'NOT_BYTES' as unknown as Uint8Array, 'a.txt'),
+    ).rejects.toThrow(/Uint8Array/);
+    expect(fs.existsSync(path.join(workspaceDir, 'imports'))).toBe(false);
+  });
+
+  it('未知 workspace → 抛中文错误（通道名 asset:importFile，非 saveImage）', async () => {
+    await expect(
+      assetModule.importFile('unknown-ws', new Uint8Array(DOC), 'a.txt'),
+    ).rejects.toThrow(/asset:importFile 失败：workspace 不存在/);
+  });
+
+  it('imports 目录被植入 symlink 指向 workspace 外 → assertInWorkspace 拒绝，外部无文件（与 saveImage I-1 同款防线）', async () => {
+    const outsideDir = path.join(tmpRoot, 'attacker-import-outside');
+    fs.mkdirSync(outsideDir, { recursive: true });
+    const symlinkPath = path.join(workspaceDir, 'imports');
+    fs.symlinkSync(outsideDir, symlinkPath);
+    try {
+      await expect(
+        assetModule.importFile(wsId, new Uint8Array(DOC), 'a.txt'),
+      ).rejects.toThrow();
+      expect(fs.readdirSync(outsideDir)).toEqual([]);
+    } finally {
+      try { fs.unlinkSync(symlinkPath); } catch { /* ignore */ }
+      fs.rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('asset:importFile IPC 注册', () => {
+  beforeEach(() => {
+    ipcHandlers.clear();
+    assetModule.registerAssetHandlers();
+  });
+
+  it('注册 asset:importFile 通道', () => {
+    expect(ipcHandlers.has('asset:importFile')).toBe(true);
+  });
+
+  it('IPC handler 委托给 importFile（三参透传）', async () => {
+    const handler = ipcHandlers.get('asset:importFile');
+    if (!handler) throw new Error('asset:importFile 未注册');
+    const result = (await handler(
+      {},
+      wsId,
+      new Uint8Array([1, 2, 3]),
+      'handoff.txt',
+    )) as { path: string };
+    expect(result.path).toBe('imports/handoff.txt');
   });
 });

@@ -30,10 +30,21 @@ function put(rel: string, content = ''): void {
 }
 
 describe('files/workspace-fs searchNames', () => {
-  it('空 query 返回 []', async () => {
+  it('空 query = match-all 全量列举（2026-11-05：文件按钮限定菜单数据源；含目录行）', async () => {
     put('a.ts');
-    await expect(wsFs.searchNames('')).resolves.toEqual([]);
-    await expect(wsFs.searchNames('   ')).resolves.toEqual([]);
+    put('src/deep/b.md');
+    const hits = await wsFs.searchNames('');
+    expect(hits).toEqual(
+      expect.arrayContaining([
+        { path: 'a.ts', isDirectory: false },
+        { path: 'src', isDirectory: true },
+        { path: 'src/deep', isDirectory: true },
+        { path: 'src/deep/b.md', isDirectory: false },
+      ]),
+    );
+    expect(hits).toHaveLength(4);
+    // 纯空白等价空 query
+    await expect(wsFs.searchNames('   ')).resolves.toHaveLength(4);
   });
 
   it('嵌套目录中的文件按名命中，path 含目录前缀（/ 分隔）', async () => {
