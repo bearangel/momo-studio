@@ -20,6 +20,9 @@ export interface ShellSandboxPolicy {
   /** 写授权目录（spec 2026-10-03 §6.2）：预置清单 ∪ 动态授权并集——展开归一
    * 后的绝对路径；空数组 = 仅工作空间/tmp 可写（默认安全方向） */
   extraWriteDirs: string[];
+  /** 写域（spec 2026-11-05 §5.3）：confined=现行（workspace+tmp+extraWriteDirs）；
+   * full-disk=全盘可写除 OS 核心目录（清单见 policy.ts，sensitiveDirs 读遮蔽两态共用） */
+  writeScope: SandboxWritePolicy;
 }
 
 /** resolveShellSpawn 产物：wrapped=OS 隔离 / plain=直跑（带原因 tag）/ blocked=strict 拒绝 */

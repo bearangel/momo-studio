@@ -238,3 +238,33 @@ describe('sandboxInstallHint（blocked 文案按平台分支，主机验收 P0 �
     } finally { desc && Object.defineProperty(process, 'platform', desc); }
   });
 });
+
+describe('resolveShellSpawn 写域接线（2026-11-05 spec §5.5：opts.writeScope 过桥优先 / settings 推导回退）', () => {
+  beforeEach(() => { setPlatform('linux'); });
+  afterEach(restorePlatform);
+
+  it('opts.writeScope=full-disk（settings confined 基线）→ bwrap/net-on/fdw + args 首段 --bind / /', () => {
+    __setSandboxStateForTest(linuxAvail);
+    __setSandboxSettingsForTest(settings('strict', 'allow'));
+    const plan = resolveShellSpawn(tmp, 'x', { networkEnabled: true, extraDirs: [], writeScope: 'full-disk' });
+    if (plan.kind !== 'wrapped') throw new Error('应 wrapped');
+    expect(plan.tag).toBe('bwrap/net-on/fdw');
+    expect(plan.args.slice(0, 3)).toEqual(['--bind', '/', '/']);
+  });
+
+  it('未传 opts.writeScope → settings 双态推导（writePolicy=full-disk → tag 带 /fdw；回退语义与 networkEnabled 同构）', () => {
+    __setSandboxStateForTest(linuxAvail);
+    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'allow', writePolicy: 'full-disk' });
+    const plan = resolveShellSpawn(tmp, 'x');
+    if (plan.kind !== 'wrapped') throw new Error('应 wrapped');
+    expect(plan.tag).toBe('bwrap/net-on/fdw');
+  });
+
+  it('settings confined（默认）→ tag 无 /fdw 后缀（既有断言零改动的反证）', () => {
+    __setSandboxStateForTest(linuxAvail);
+    __setSandboxSettingsForTest(settings('strict', 'allow'));
+    const plan = resolveShellSpawn(tmp, 'x');
+    if (plan.kind !== 'wrapped') throw new Error('应 wrapped');
+    expect(plan.tag).toBe('bwrap/net-on');
+  });
+});

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { buildPolicy, sensitiveCandidates } from '../../src/main/sandbox/policy';
+import { buildPolicy, sensitiveCandidates, FULL_DISK_WRITE_DENY_DARWIN, FULL_DISK_WRITE_DENY_LINUX, FULL_DISK_WRITE_REALLOW } from '../../src/main/sandbox/policy';
 
 describe('buildPolicy', () => {
   // 每用例新建 tmp（原 describe 级单例 + afterEach 删除会让后续用例拿到已删
@@ -58,5 +58,25 @@ describe('buildPolicy', () => {
     const ghost = path.join(tmp, 'toolchain-ghost');
     const policy = buildPolicy(tmp, false, [real, real, ghost, ghost]);
     expect(policy.extraWriteDirs).toEqual([real, ghost]);
+  });
+});
+
+describe('writeScope + 核心目录清单（2026-11-05 全盘可写 spec §5.3）', () => {
+  let tmp: string;
+  beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-ws-')); });
+  afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+
+  it('buildPolicy 第 4 参缺省 confined（既有调用方零改动）', () => {
+    expect(buildPolicy(tmp, false).writeScope).toBe('confined');
+  });
+
+  it('full-disk 透传', () => {
+    expect(buildPolicy(tmp, false, [], 'full-disk').writeScope).toBe('full-disk');
+  });
+
+  it('清单形态锁：darwin 七条 + linux 七条 + re-allow 常量（spec §5.3 定案不得增删）', () => {
+    expect([...FULL_DISK_WRITE_DENY_DARWIN]).toEqual(['/System', '/bin', '/sbin', '/usr', '/etc', '/private/etc', '/Library']);
+    expect([...FULL_DISK_WRITE_DENY_LINUX]).toEqual(['/usr', '/etc', '/bin', '/sbin', '/lib', '/lib64', '/boot']);
+    expect(FULL_DISK_WRITE_REALLOW).toBe('/usr/local');
   });
 });

@@ -141,7 +141,7 @@ function mkSandboxInfo() {
       executionPolicy: null,
       probedAt: 1757500000000,
     },
-    settings: { mode: 'strict' as const, networkPolicy: 'allow' as const },
+    settings: { mode: 'strict' as const, networkPolicy: 'allow' as const, writePolicy: 'confined' as const },
     installCommand: null,
     bwrapPromptDismissed: false,
     winPolicyPromptDismissed: false,

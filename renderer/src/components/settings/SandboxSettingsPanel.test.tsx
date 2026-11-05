@@ -54,7 +54,7 @@ function makeInfo(overrides?: Partial<SandboxInfo>): SandboxInfo {
       executionPolicy: null,
       probedAt: 1757500000000,
     },
-    settings: { mode: 'strict', networkPolicy: 'allow' },
+    settings: { mode: 'strict', networkPolicy: 'allow', writePolicy: 'confined' },
     installCommand: null,
     bwrapPromptDismissed: false,
     winPolicyPromptDismissed: false,
@@ -84,7 +84,7 @@ describe('SandboxSettingsPanel', () => {
     getStateMock.mockResolvedValue(makeInfo());
     render(<SandboxSettingsPanel />);
     await waitFor(() => {
-      expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument();
+      expect(screen.getByText('已启用 · 0.8.0')).toBeInTheDocument();
     });
     expect(getStateMock).toHaveBeenCalledTimes(1);
   });
@@ -106,7 +106,7 @@ describe('SandboxSettingsPanel', () => {
     );
     render(<SandboxSettingsPanel />);
     await waitFor(() => {
-      expect(screen.getByText('seatbelt · 已启用')).toBeInTheDocument();
+      expect(screen.getByText('已启用 · seatbelt')).toBeInTheDocument();
     });
   });
 
@@ -127,7 +127,7 @@ describe('SandboxSettingsPanel', () => {
     );
     render(<SandboxSettingsPanel />);
     await waitFor(() => {
-      expect(screen.getByText('pwsh · 无 OS 沙箱（Windows）')).toBeInTheDocument();
+      expect(screen.getByText('Windows：无系统级防护')).toBeInTheDocument();
     });
   });
 
@@ -148,7 +148,7 @@ describe('SandboxSettingsPanel', () => {
     );
     render(<SandboxSettingsPanel />);
     await waitFor(() => {
-      expect(screen.getByText('不可用：bwrap 未安装')).toBeInTheDocument();
+      expect(screen.getByText('暂不可用：bwrap 未安装')).toBeInTheDocument();
     });
   });
 
@@ -169,7 +169,7 @@ describe('SandboxSettingsPanel', () => {
     );
     render(<SandboxSettingsPanel />);
     await waitFor(() => {
-      expect(screen.getByText('不可用：未知')).toBeInTheDocument();
+      expect(screen.getByText('暂不可用：未知')).toBeInTheDocument();
     });
   });
 
@@ -177,16 +177,16 @@ describe('SandboxSettingsPanel', () => {
     getStateMock.mockResolvedValue(makeInfo({ state: null }));
     render(<SandboxSettingsPanel />);
     await waitFor(() => {
-      expect(screen.getByText('未探测')).toBeInTheDocument();
+      expect(screen.getByText('尚未检测')).toBeInTheDocument();
     });
   });
 
   it('切换模式为 permissive → 调 updateGlobal({ sandboxMode }) 且乐观选中', async () => {
     getStateMock.mockResolvedValue(makeInfo());
     render(<SandboxSettingsPanel />);
-    await waitFor(() => expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('已启用 · 0.8.0')).toBeInTheDocument());
 
-    const permissiveRadio = screen.getByRole('radio', { name: /permissive/ });
+    const permissiveRadio = screen.getByRole('radio', { name: /宽松/ });
     expect(permissiveRadio).not.toBeChecked();
     fireEvent.click(permissiveRadio);
 
@@ -195,52 +195,52 @@ describe('SandboxSettingsPanel', () => {
     });
     // 乐观更新：updateGlobal 挂起（默认 mock）但 radio 已切换
     expect(permissiveRadio).toBeChecked();
-    expect(screen.getByRole('radio', { name: /strict/ })).not.toBeChecked();
+    expect(screen.getByRole('radio', { name: /严格/ })).not.toBeChecked();
   });
 
   it('网络双态：默认选中「永久允许（默认）」+ 两项行内说明常驻', async () => {
     getStateMock.mockResolvedValue(makeInfo());
     render(<SandboxSettingsPanel />);
-    await waitFor(() => expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('已启用 · 0.8.0')).toBeInTheDocument());
 
-    expect(screen.getByRole('radio', { name: '永久允许（默认）' })).toBeChecked();
-    expect(screen.getByRole('radio', { name: '拒绝' })).not.toBeChecked();
-    expect(screen.getByText(/全放行网络/)).toBeInTheDocument();
-    expect(screen.getByText(/一次性引导卡/)).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: '允许联网（默认）' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: '禁止联网' })).not.toBeChecked();
+    expect(screen.getByText(/正常访问网络/)).toBeInTheDocument();
+    expect(screen.getByText(/对话不受影响/)).toBeInTheDocument();
   });
 
   it('网络双态：deny 态点「永久允许（默认）」→ updateGlobal({ sandboxNetworkPolicy: allow }) + 乐观选中', async () => {
-    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'deny' } }));
+    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'deny', writePolicy: 'confined' } }));
     render(<SandboxSettingsPanel />);
-    await waitFor(() => expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('已启用 · 0.8.0')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('radio', { name: '永久允许（默认）' }));
+    fireEvent.click(screen.getByRole('radio', { name: '允许联网（默认）' }));
 
     await waitFor(() => {
       expect(updateGlobalMock).toHaveBeenCalledWith({ sandboxNetworkPolicy: 'allow' });
     });
-    expect(screen.getByRole('radio', { name: '永久允许（默认）' })).toBeChecked();
-    expect(screen.getByRole('radio', { name: '拒绝' })).not.toBeChecked();
+    expect(screen.getByRole('radio', { name: '允许联网（默认）' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: '禁止联网' })).not.toBeChecked();
   });
 
   it('网络双态：点「拒绝」→ updateGlobal({ sandboxNetworkPolicy: deny })', async () => {
     getStateMock.mockResolvedValue(makeInfo());
     render(<SandboxSettingsPanel />);
-    await waitFor(() => expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('已启用 · 0.8.0')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('radio', { name: '拒绝' }));
+    fireEvent.click(screen.getByRole('radio', { name: '禁止联网' }));
 
     await waitFor(() => {
       expect(updateGlobalMock).toHaveBeenCalledWith({ sandboxNetworkPolicy: 'deny' });
     });
-    expect(screen.getByRole('radio', { name: '拒绝' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: '禁止联网' })).toBeChecked();
   });
 
   it('网络三态：deny 态挂载 → 「拒绝」初始选中', async () => {
-    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'deny' } }));
+    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'deny', writePolicy: 'confined' } }));
     render(<SandboxSettingsPanel />);
     await waitFor(() => {
-      expect(screen.getByRole('radio', { name: '拒绝' })).toBeChecked();
+      expect(screen.getByRole('radio', { name: '禁止联网' })).toBeChecked();
     });
   });
 
@@ -257,21 +257,21 @@ describe('SandboxSettingsPanel', () => {
         executionPolicy: null,
         probedAt: 1757500001000,
       },
-      settings: { mode: 'permissive', networkPolicy: 'allow' },
+      settings: { mode: 'permissive', networkPolicy: 'allow', writePolicy: 'confined' },
     });
     reprobeMock.mockResolvedValue(refreshed);
     render(<SandboxSettingsPanel />);
-    await waitFor(() => expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('已启用 · 0.8.0')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: '重新探测' }));
+    fireEvent.click(screen.getByRole('button', { name: '重新检测' }));
 
     await waitFor(() => {
-      expect(screen.getByText('0.9.0 · 已启用')).toBeInTheDocument();
+      expect(screen.getByText('已启用 · 0.9.0')).toBeInTheDocument();
     });
     expect(reprobeMock).toHaveBeenCalledTimes(1);
     // 返回值里的 settings 同步刷新（模式/网络控件跟随）
-    expect(screen.getByRole('radio', { name: /permissive/ })).toBeChecked();
-    expect(screen.getByRole('radio', { name: '永久允许（默认）' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: /宽松/ })).toBeChecked();
+    expect(screen.getByRole('radio', { name: '允许联网（默认）' })).toBeChecked();
   });
 
   it('探测进行中按钮禁用并显示"探测中..."，完成后恢复', async () => {
@@ -283,18 +283,18 @@ describe('SandboxSettingsPanel', () => {
       }),
     );
     render(<SandboxSettingsPanel />);
-    await waitFor(() => expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('已启用 · 0.8.0')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: '重新探测' }));
+    fireEvent.click(screen.getByRole('button', { name: '重新检测' }));
 
-    const busyButton = screen.getByRole('button', { name: '探测中...' });
+    const busyButton = screen.getByRole('button', { name: '检测中...' });
     expect(busyButton).toBeDisabled();
 
     await act(async () => {
       resolveReprobe(makeInfo());
     });
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: '重新探测' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: '重新检测' })).toBeEnabled();
     });
   });
 });
@@ -341,6 +341,61 @@ describe('SandboxSettingsPanel：已授权目录', () => {
     getStateMock.mockResolvedValue(makeInfo());
     listWriteGrantsMock.mockResolvedValue([]);
     render(<SandboxSettingsPanel />);
-    await waitFor(() => expect(screen.getByText('暂无持久授权')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('暂无额外允许的位置')).toBeInTheDocument());
+  });
+});
+
+describe('SandboxSettingsPanel 写域开关（2026-11-05 全盘可写 spec §5.7）', () => {
+  it('渲染写域区块：confined 默认选中', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    render(<SandboxSettingsPanel />);
+    expect(await screen.findByLabelText('仅工作空间（推荐）')).toBeChecked();
+    expect(screen.getByLabelText('整台电脑')).not.toBeChecked();
+  });
+
+  it('选 full-disk → 弹确认对话框；取消 → 不落值不乐观更新', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    render(<SandboxSettingsPanel />);
+    fireEvent.click(await screen.findByLabelText('整台电脑'));
+    // ConfirmDialog 出现（取消钮在场即对话框已开——标题与确认钮同文案，findByText 会多匹配）
+    expect(await screen.findByRole('button', { name: '取消' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    await waitFor(() => {
+      expect(updateGlobalMock).not.toHaveBeenCalledWith(expect.objectContaining({ sandboxWritePolicy: 'full-disk' }));
+    });
+  });
+
+  it('确认 → updateGlobal 落值 full-disk（开启需二次确认）', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    render(<SandboxSettingsPanel />);
+    fireEvent.click(await screen.findByLabelText('整台电脑'));
+    fireEvent.click(await screen.findByRole('button', { name: '允许' }));
+    await waitFor(() => {
+      expect(updateGlobalMock).toHaveBeenCalledWith({ sandboxWritePolicy: 'full-disk' });
+    });
+  });
+
+  it('full-disk 已开 → 选中态渲染；切回 confined 直接落值（关闭无需确认）', async () => {
+    getStateMock.mockResolvedValue(makeInfo({
+      settings: { mode: 'strict', networkPolicy: 'allow', writePolicy: 'full-disk' },
+    }));
+    render(<SandboxSettingsPanel />);
+    expect(await screen.findByLabelText('整台电脑')).toBeChecked();
+    fireEvent.click(screen.getByLabelText('仅工作空间（推荐）'));
+    await waitFor(() => {
+      expect(updateGlobalMock).toHaveBeenCalledWith({ sandboxWritePolicy: 'confined' });
+    });
+  });
+
+  it('win32 → 开关禁用 + 不生效说明（无 OS 沙箱，spec §5.7）', async () => {
+    getStateMock.mockResolvedValue(makeInfo({
+      state: {
+        platform: 'win32', sandboxTool: null, toolVersion: null, available: false,
+        unavailableReason: null, windowsShell: 'pwsh.exe', executionPolicy: 'Restricted', probedAt: 0,
+      },
+    }));
+    render(<SandboxSettingsPanel />);
+    expect(await screen.findByLabelText('整台电脑')).toBeDisabled();
+    expect(screen.getByText(/Windows 上暂不生效/)).toBeInTheDocument();
   });
 });

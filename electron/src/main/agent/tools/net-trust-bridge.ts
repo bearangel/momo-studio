@@ -20,6 +20,7 @@
 //   - process.send 必须以方法调用形式发送（真实 Node 读 this.connected——
 //     2.0.0 主机验收 P0-1 教训：解构裸调用在严格模式下直接抛错）
 import { randomUUID } from 'node:crypto';
+import type { SandboxWritePolicy } from '../../sandbox/types';
 
 /** 超时中文文案（同时覆盖「主进程未接线」情形——两态对子进程不可区分） */
 const TIMEOUT_MESSAGE = '网络策略 IPC 无响应（主进程未接线或超时）';
@@ -36,6 +37,9 @@ export interface EffectiveNetworkDecision {
   /** 通用写授权目录（spec 2026-10-03 §6.1）：主进程 session ∪ workspace 两层合成；
    * 旧主进程应答缺该字段时按 [] 兜底（两端混跑安全） */
   extraDirs: string[];
+  /** 写域（spec 2026-11-05 §5.5）：旧主进程应答缺键/脏值按 'confined' 兜底——
+   *  混跑安全方向铁律：缺字段绝不放大写域 */
+  writePolicy: SandboxWritePolicy;
 }
 
 interface PendingEntry {
@@ -99,6 +103,7 @@ export function requestEffectiveNetwork(
         extraDirs: Array.isArray(p.extraDirs)
           ? p.extraDirs.filter((d): d is string => typeof d === 'string')
           : [],
+        writePolicy: p.writePolicy === 'full-disk' ? 'full-disk' : 'confined',
       };
     });
 }

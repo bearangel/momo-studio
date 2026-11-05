@@ -96,3 +96,25 @@ describe('resolveSandboxedSpawn（任意 argv 包裹，net-off 固定）', () =>
     }
   });
 });
+
+describe('resolveSandboxedSpawn 写域接线（2026-11-05 spec §5.5：主进程直读 settings）', () => {
+  it.skipIf(process.platform !== 'linux')('linux+bwrap + writePolicy=full-disk → bwrap/net-off/fdw + 首段 --bind / /', () => {
+    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny', writePolicy: 'full-disk' });
+    __setSandboxStateForTest(probeState('bwrap', null));
+    const plan = resolveSandboxedSpawn('/ws', ARGV);
+    if (plan.kind !== 'wrapped') throw new Error('应 wrapped');
+    expect(plan.tag).toBe('bwrap/net-off/fdw');
+    expect(plan.args.slice(0, 3)).toEqual(['--bind', '/', '/']);
+  });
+
+  it.skipIf(process.platform !== 'darwin')('darwin+seatbelt + writePolicy=full-disk → seatbelt/net-off/fdw + profile 含全盘写剖面', () => {
+    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny', writePolicy: 'full-disk' });
+    __setSandboxStateForTest(probeState('seatbelt', null));
+    const plan = resolveSandboxedSpawn('/ws', ARGV);
+    if (plan.kind !== 'wrapped') throw new Error('应 wrapped');
+    expect(plan.tag).toBe('seatbelt/net-off/fdw');
+    const profile = fs.readFileSync(plan.args[1]!, 'utf-8');
+    expect(profile).toContain('(allow file-write* (subpath "/"))');
+    try { fs.unlinkSync(plan.args[1]!); } catch { /* 清理容错 */ }
+  });
+});

@@ -153,7 +153,7 @@ async function runBashToCompletion(): Promise<string> {
 
 describe('bash 网络态查询：spawn 前接线（修订 B + v2.5 两字段 payload）', () => {
   it('effective 桥以 ctx.streamSessionId + ctx.workspaceId 查询（跨模块 ID 单点透传；grant 键控）', async () => {
-    effectiveMock.mockResolvedValue({ netOn: false, extraDirs: [] });
+    effectiveMock.mockResolvedValue({ netOn: false, extraDirs: [], writePolicy: 'confined' });
     const tools = new ShellTools();
     const p = tools.execute('bash', { command: 'echo hi' }, ctx);
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
@@ -163,14 +163,14 @@ describe('bash 网络态查询：spawn 前接线（修订 B + v2.5 两字段 pay
   });
 
   it('netOn=true → spawn net-on（无 --unshare-net）+ 结果 tag net-on', async () => {
-    effectiveMock.mockResolvedValue({ netOn: true, extraDirs: [] });
+    effectiveMock.mockResolvedValue({ netOn: true, extraDirs: [], writePolicy: 'confined' });
     const result = await runBashToCompletion();
     expectNet('on');
     expect(result).toContain(`sandbox: ${WRAPPED}/net-on`);
   });
 
   it('netOn=false → spawn net-off + 失败结果原样返回（含原始 stderr，无任何追加提示）', async () => {
-    effectiveMock.mockResolvedValue({ netOn: false, extraDirs: [] });
+    effectiveMock.mockResolvedValue({ netOn: false, extraDirs: [], writePolicy: 'confined' });
     const result = await runBashToCompletion();
     expectNet('off');
     expect(result).toContain(`sandbox: ${WRAPPED}/net-off`);
@@ -194,6 +194,13 @@ describe('bash 网络态查询：spawn 前接线（修订 B + v2.5 两字段 pay
     const result = await runBashToCompletion();
     expectNet('on');
     expect(result).toContain(`sandbox: ${WRAPPED}/net-on`);
+  });
+
+  it('写域过桥：桥答 writePolicy=full-disk → spawn tag 带 /fdw（bash 通道接线锁）', async () => {
+    effectiveMock.mockResolvedValue({ netOn: false, extraDirs: [], writePolicy: 'full-disk' });
+    const result = await runBashToCompletion();
+    expectNet('off');
+    expect(result).toContain(`sandbox: ${WRAPPED}/net-off/fdw`);
   });
 
   it('payload 形状锁：effective 桥返回 {netOn, extraDirs} 两键（v2.5 toolchainOn 字段防复活）', async () => {

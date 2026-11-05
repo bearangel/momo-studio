@@ -392,6 +392,9 @@ export class ShellTools implements ToolModule {
         networkEnabled: net.netOn,
         // 动态授权目录（extraDirs，两层合成）——授权卡放行后下一次 spawn 立即生效
         extraDirs: net.extraDirs,
+        // 写域过桥（spec 2026-11-05 §5.5）：与 networkEnabled 同构——子进程不可见
+        // settings DB，有效写域经桥显式传入
+        writeScope: net.writePolicy,
       },
     );
     if (plan.kind === 'blocked') throw new Error(plan.reason);
