@@ -4,7 +4,23 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { ShellSandboxPolicy } from './types';
+import type { SandboxWritePolicy, ShellSandboxPolicy } from './types';
+
+/**
+ * 全盘可写模式下仍禁写的 OS 核心目录（spec 2026-11-05 §5.3 定案，不得增删）：
+ * /private/var 刻意不进（macOS TMPDIR /var/folders 在内，deny 会打断 tmp 语义）；
+ * /opt/homebrew、~/.nvm、sdkman 等工具链位置刻意不在清单（开关核心价值）；
+ * darwin 同时列 /etc 与 /private/etc（symlink 双形态双保险）。
+ * 导出供单测直接断言清单形态（sensitiveCandidates 先例）。
+ */
+export const FULL_DISK_WRITE_DENY_DARWIN = [
+  '/System', '/bin', '/sbin', '/usr', '/etc', '/private/etc', '/Library',
+] as const;
+export const FULL_DISK_WRITE_DENY_LINUX = [
+  '/usr', '/etc', '/bin', '/sbin', '/lib', '/lib64', '/boot',
+] as const;
+/** 核心目录中的用户工具链例外（Intel homebrew / 手装工具惯常位置）——平台渲染层后置 re-allow */
+export const FULL_DISK_WRITE_REALLOW = '/usr/local';
 
 function realpath(p: string): string {
   try { return fs.realpathSync(p); } catch { return path.resolve(p); }
@@ -31,7 +47,12 @@ export function sensitiveCandidates(home: string): string[] {
   return base;
 }
 
-export function buildPolicy(workspaceDir: string, networkEnabled: boolean, extraWriteDirs: string[] = []): ShellSandboxPolicy {
+export function buildPolicy(
+  workspaceDir: string,
+  networkEnabled: boolean,
+  extraWriteDirs: string[] = [],
+  writeScope: SandboxWritePolicy = 'confined',
+): ShellSandboxPolicy {
   const home = realpath(os.homedir());
   return {
     workspaceDir: realpath(workspaceDir),
@@ -48,5 +69,6 @@ export function buildPolicy(workspaceDir: string, networkEnabled: boolean, extra
     // 保留——pip:user（~/Library/Python 首装前不存在）等场景依赖「授权即生效」
     //（spec §9：安装动作会创建它），全局过滤会让 grant 后写入仍 EPERM
     extraWriteDirs: [...new Set(extraWriteDirs)],
+    writeScope,
   };
 }

@@ -11,7 +11,7 @@ function mkPolicy(over: Partial<ShellSandboxPolicy> = {}): ShellSandboxPolicy {
   createdTmpDirs.push(tmp);
   return {
     workspaceDir: tmp, homeDir: tmp, tmpDir: os.tmpdir(),
-    sensitiveDirs: [], networkEnabled: false, extraWriteDirs: [], ...over,
+    sensitiveDirs: [], networkEnabled: false, extraWriteDirs: [], writeScope: 'confined', ...over,
   };
 }
 
@@ -71,6 +71,7 @@ describe('buildBwrapArgs', () => {
       sensitiveDirs: ['/home/u/.ssh'],
       networkEnabled: false,
       extraWriteDirs: [],
+      writeScope: 'confined',
     };
     expect(buildBwrapArgs(p)).toMatchInlineSnapshot(`
       [

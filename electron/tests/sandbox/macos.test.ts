@@ -13,7 +13,7 @@ function mkPolicy(over: Partial<ShellSandboxPolicy> = {}): ShellSandboxPolicy {
   createdTmpDirs.push(tmp);
   return {
     workspaceDir: tmp, homeDir: '/Users/dev', tmpDir: '/private/var/folders/xx/T',
-    sensitiveDirs: ['/Users/dev/.ssh'], networkEnabled: false, extraWriteDirs: [], ...over,
+    sensitiveDirs: ['/Users/dev/.ssh'], networkEnabled: false, extraWriteDirs: [], writeScope: 'confined', ...over,
   };
 }
 
@@ -64,6 +64,7 @@ describe('renderSeatbeltProfile', () => {
       sensitiveDirs: ['/Users/dev/.ssh'],
       networkEnabled: false,
       extraWriteDirs: [],
+      writeScope: 'confined',
     };
     expect(renderSeatbeltProfile(p)).toMatchInlineSnapshot(`
       "(version 1)
