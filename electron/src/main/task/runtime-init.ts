@@ -6,6 +6,8 @@
 import { TaskScheduler } from './scheduler';
 import { taskExecutor, type ExecutorDeps } from './executor';
 import { sendUserMessage, broadcastSessionListChanged } from '../im/session-service';
+import { isQuotaResumePending } from './quota-resume';
+import { resumeTask } from './resume';
 import { logger } from '../logger';
 
 let scheduler: TaskScheduler | null = null;
@@ -33,6 +35,16 @@ export function initTaskRuntime(opts?: InitTaskRuntimeOpts): void {
 
   taskExecutor.init({
     sendKickoff: opts?.kickoff ?? (async (input) => {
+      // 配额受限自动续跑行（routing_json 带 quotaRetryCount 标记）：不走通用
+      // kickoff——sendUserMessage → ephemeral 回合无 task-driven 生命周期（无
+      // task-end 收尾，续跑轮若再遇配额错误将无人调度、成功也无终态）。改走
+      // resumeTask 的 task-driven 续跑：同任务同会话（executionSessionId 已由
+      // startTask 锁定为 source 会话），task-end 统一收尾——成功转 completed、
+      // 再次配额失败回到 handleQuotaFailureSettle 升级退避。
+      if (isQuotaResumePending(input.taskId)) {
+        await resumeTask(input.taskId);
+        return;
+      }
       await sendUserMessage({
         sessionId: input.sessionId,
         body: input.body,

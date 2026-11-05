@@ -72,6 +72,13 @@ export interface TaskRow {
    * NULL（旧行/未指定创建）读侧兜底 {mode:'local'}——语义单点在 hub/task-routing.ts。
    */
   routing: TaskRouting;
+  /**
+   * routing_json 列原始值（2026-11-04 配额续跑计数等非 hub 附加键的载体）。
+   * routing（解析形态）只承载 hub 路由语义；本字段保留列原文供附加键读写——
+   * rowToCamel 恒填充；手写 TaskRow 字面量可省略（可选，同 blocked? 先例）。
+   * updateTask 未显式写 routing/routingJson 时原样保留列值（见其注释）。
+   */
+  routingJson?: string | null;
   /** hub 委派 id 关联（M2.1 迁移 069；T8 提交链回写 / T9 delegation-sync 消费，本列只落不派生） */
   delegationId: string | null;
   /**
@@ -167,6 +174,7 @@ function rowToCamel(r: SqlRow): TaskRow {
     archivedAt: r.archived_at,
     origin: r.origin === 'dispatch' ? 'dispatch' : 'user',
     routing: parseTaskRouting(r.routing_json),
+    routingJson: r.routing_json,
     delegationId: r.delegation_id,
     parentTaskId: r.parent_task_id,
   };
@@ -295,6 +303,12 @@ export function updateTask(id: string, patch: Partial<Omit<TaskRow, 'id' | 'crea
   const current = getTask(id);
   if (!current) throw new Error(`task ${id} 不存在`);
   const next: TaskRow = { ...current, ...patch, updatedAt: Date.now() };
+  // routing_json 写值三分支：显式 patch.routing（canonical 序列化——hub 契约写侧，
+  // 未知键剥除）> 显式 patch.routingJson（原样透传——配额续跑计数等附加键信封的
+  // 写侧）> 都未触碰（保留列原值——原实现无条件 canonical 重序列化，会把
+  // routing_json 上的非 hub 附加键静默剥除，破坏 quotaRetryCount 等嵌套状态）
+  const routingJsonWrite =
+    patch.routing !== undefined ? serializeTaskRouting(next.routing) : (next.routingJson ?? null);
   db.prepare(
     `UPDATE tasks SET
       workspace_id=?, title=?, description=?, status=?,
@@ -336,7 +350,7 @@ export function updateTask(id: string, patch: Partial<Omit<TaskRow, 'id' | 'crea
     next.updatedAt,
     next.startedAt,
     next.completedAt,
-    serializeTaskRouting(next.routing),
+    routingJsonWrite,
     next.delegationId,
     next.parentTaskId,
     next.origin,
