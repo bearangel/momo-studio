@@ -109,6 +109,12 @@ secrets: {
 
 本插件**不做工作区隔离**：邮箱账号与邮件是用户级资产，缓存键为 `accountId + folder`，跨工作区共享（依据 2026-10-17 spec §4.5）。
 
+### 5.1.0 插件配置（Settings → 插件 → 邮件）
+
+- `archiveRoot`（path）：本地邮件存储目录，留空 = 默认 `~/.momo-plugin/email`（自动创建）；保存后 service 自动重启并按新目录对账（见归档 spec §10）
+- `showRemoteImages`（boolean）：邮件中直接显示远程图片（默认关；面板按钮为会话级覆盖）
+- service 侧路由 `config.get` 供面板读取非敏感配置
+
 ### 5.1.1 保留策略（仅本地缓存）
 
 - 每账号独立配置 `retention ∈ {'1m','6m','1y','forever'}`，缺省 `forever`；月≈30 天、半年≈182 天、年≈365 天（近似值）。
