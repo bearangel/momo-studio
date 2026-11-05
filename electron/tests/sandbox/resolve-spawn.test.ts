@@ -156,6 +156,9 @@ describe('resolveShellSpawn 平台分支（既有基线）', () => {
     Object.defineProperty(process, 'platform', { value: 'win32' });
     try {
       __setSandboxStateForTest(winState);
+      // settings stub（R2 全局隔离补漏）：本用例此前漏 stub——getSandboxSettings
+      // 落到真实 DB（全局隔离前读的是生产 kv_store，隔离后空库抛 no such table）
+      __setSandboxSettingsForTest(settings('strict', 'allow'));
       for (const net of [true, false]) {
         const plan = resolveShellSpawn(tmp, 'x', { networkEnabled: net });
         expect(plan.kind).toBe('plain');

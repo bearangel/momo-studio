@@ -3,7 +3,7 @@
 // IPC 边界锁：通道注册 / 参数透传 / Uint8Array→Buffer / 中文异常透传。
 // 真实安装链由 installer.test.ts / install-dev-dir.test.ts 覆盖，本文件
 // mock 安装函数只锁 handler 调用形状（仓库既有分工惯例，同 resource/ipc-handlers.test.ts）。
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const { appGetVersion } = vi.hoisted(() => ({ appGetVersion: vi.fn() }));
 vi.mock('electron', () => ({
@@ -37,6 +37,10 @@ vi.mock('../../src/main/mcp/host-manager', () => ({
 }));
 
 import { ipcMain } from 'electron';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { closeDb, runMigrations } from '../../src/main/storage/db';
 import { registerPluginHandlers } from '../../src/main/plugin/ipc.handlers';
 
 function handlerOf(channel: string): (...args: unknown[]) => unknown {
@@ -48,10 +52,22 @@ function handlerOf(channel: string): (...args: unknown[]) => unknown {
 }
 
 describe('registerPluginHandlers', () => {
+  // 真库隔离（R2 全局隔离补漏）：setEnabled handler 直查 plugin_enablements 表
+  // （源码 ipc.handlers.ts:110）——全局隔离缺省落地前该查询打的是生产 state.db
+  const tmpRoot = path.join(os.tmpdir(), `plugin-ipc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+
   beforeEach(() => {
+    process.env.AP_USER_DATA_DIR = tmpRoot;
+    runMigrations();
     vi.clearAllMocks();
     appGetVersion.mockReturnValue('2.1.0');
     registerPluginHandlers();
+  });
+
+  afterEach(() => {
+    closeDb();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    delete process.env.AP_USER_DATA_DIR;
   });
 
   it('注册 4 个 plugin 通道', () => {

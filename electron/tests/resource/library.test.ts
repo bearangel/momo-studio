@@ -60,6 +60,14 @@ vi.mock('../../src/main/plugin/resources', () => ({
   listPluginResourceRows: vi.fn(() => []),
 }));
 
+// mock agent 定义行（R2 全局隔离补漏）：catalog-adapter 对 builtin agent 计算
+// agentEnabled 时查 agent_definitions——此前全局隔离缺省落地前该查询打的是生产
+// 库（拿真实 agent 行当 fixture），隔离后空库抛 no such table 使 catalog 合并
+// 整体降级为空。mock 为空数组与本文件「纯合并逻辑」的既定分工一致。
+vi.mock('../../src/main/agent/crud', () => ({
+  listAgentDefinitions: vi.fn(() => []),
+}));
+
 // mock skill zip-uploader（v2.11：library 直接消费其 listInstalled 的 builtin 分支——
 // 本地预置 skill 并入 builtin 源；fixture 含与 marketplace 同 slug 的条目锁去重语义）
 const { skillZipMocks } = vi.hoisted(() => ({
