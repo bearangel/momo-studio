@@ -20,8 +20,12 @@ function useWorkspaceStoreSet(patch: { workspaces: Workspace[]; activeWorkspaceI
 
 const onPanelEvent = vi.fn((_cb: unknown) => () => undefined);
 const callService = vi.fn();
+const pickDirectory = vi.fn();
 vi.mock('../../ipc/client', () => ({
-  ipc: { plugin: { onPanelEvent: (cb: unknown) => onPanelEvent(cb), callService: (...args: unknown[]) => callService(...args) } },
+  ipc: {
+    plugin: { onPanelEvent: (cb: unknown) => onPanelEvent(cb), callService: (...args: unknown[]) => callService(...args) },
+    dialog: { pickDirectory: (...args: unknown[]) => pickDirectory(...args) },
+  },
 }));
 
 const PANEL: PluginPanelInfo = {
@@ -129,6 +133,24 @@ describe('formatTokenValue', () => {
     expect(formatTokenValue(' 94 106 210 ')).toBe('rgb(94,106,210)');
     expect(formatTokenValue('rgba(94, 106, 210, 0.12)')).toBe('rgba(94, 106, 210, 0.12)');
     expect(formatTokenValue('')).toBe('');
+  });
+});
+
+// ── app:pickDirectory 桥（2026-11-05 归档 spec §11）：转发到既有 dialog IPC ──
+describe('PanelHost app:pickDirectory 转发', () => {
+  it('面板经通道请求选目录 → ipc.dialog.pickDirectory 收到净化后的 opts', async () => {
+    pickDirectory.mockClear().mockResolvedValue('/tmp/chosen');
+    renderHost();
+    const frame = document.querySelector('iframe') as HTMLIFrameElement;
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        origin: 'momo-plugin://cg',
+        source: frame.contentWindow,
+        data: { type: 'app:pickDirectory', id: 55, opts: { title: '选择邮件存储目录', evil: 'x' } },
+      }),
+    );
+    await waitFor(() => expect(pickDirectory).toHaveBeenCalledTimes(1));
+    expect(pickDirectory).toHaveBeenCalledWith({ title: '选择邮件存储目录' });
   });
 });
 

@@ -31,6 +31,7 @@ function setup(overrides: Partial<PanelHostHandlers> = {}): void {
     getContext: () => ({ workspaceId: 'ws1', workspaceName: '主仓', sessionId: 's1' }),
     subscribe: vi.fn().mockResolvedValue({ ok: [], rejected: [] }),
     callService: vi.fn().mockResolvedValue({ graph: true }),
+    pickDirectory: vi.fn().mockResolvedValue(null),
     onDisconnect: vi.fn(),
     ...overrides,
   };
@@ -188,6 +189,69 @@ describe('出站', () => {
       expect.objectContaining({ event: 'resourceInstalled' }),
       '*',
     );
+  });
+});
+
+describe('app:pickDirectory（目录选择桥，spec 2026-11-05 归档）', () => {
+  it('白名单放行 → 回包所选绝对路径', async () => {
+    const pick = vi.fn().mockResolvedValue('/tmp/mail-root');
+    setup({ pickDirectory: pick });
+    d({ type: 'app:pickDirectory', id: 20, opts: { title: '选择邮件存储目录' } });
+    await vi.waitFor(() => {
+      expect(fakeIframe.postMessage).toHaveBeenCalledWith(
+        { type: 'rpc:result', id: 20, result: '/tmp/mail-root' },
+        '*',
+      );
+    });
+    expect(pick).toHaveBeenCalledWith({ title: '选择邮件存储目录' });
+  });
+
+  it('用户取消（null）与 handler 抛错都正常回包', async () => {
+    setup({ pickDirectory: vi.fn().mockResolvedValue(null) });
+    d({ type: 'app:pickDirectory', id: 21 });
+    await vi.waitFor(() => {
+      expect(fakeIframe.postMessage).toHaveBeenCalledWith(
+        { type: 'rpc:result', id: 21, result: null },
+        '*',
+      );
+    });
+    setup({ pickDirectory: vi.fn().mockRejectedValue(new Error('对话框不可用')) });
+    d({ type: 'app:pickDirectory', id: 22 });
+    await vi.waitFor(() => {
+      expect(fakeIframe.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'rpc:result', id: 22, error: '对话框不可用' }),
+        '*',
+      );
+    });
+  });
+
+  it('并发第二次直接回错误（模态防刷），首次完成后恢复可用', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    setup({ pickDirectory: vi.fn().mockImplementation(() => gate.then(() => '/x')) });
+    d({ type: 'app:pickDirectory', id: 30 });
+    d({ type: 'app:pickDirectory', id: 31 });
+    await vi.waitFor(() => {
+      expect(fakeIframe.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'rpc:result', id: 31, error: expect.stringContaining('进行中') }),
+        '*',
+      );
+    });
+    release();
+    await vi.waitFor(() => {
+      expect(fakeIframe.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'rpc:result', id: 30, result: '/x' }),
+        '*',
+      );
+    });
+    fakeIframe.postMessage.mockClear();
+    d({ type: 'app:pickDirectory', id: 32 });
+    await vi.waitFor(() => {
+      expect(fakeIframe.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'rpc:result', id: 32 }),
+        '*',
+      );
+    });
   });
 });
 
