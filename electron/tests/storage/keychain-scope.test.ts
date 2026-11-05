@@ -39,6 +39,11 @@ class FakeKeytar implements KeytarLike {
   async deletePassword(service: string, account: string): Promise<boolean> {
     return this.store.delete(this.k(service, account));
   }
+  async findCredentials(service: string): Promise<Array<{ account: string; password: string }>> {
+    return [...this.store.entries()]
+      .filter(([key]) => key.startsWith(`${service}\u0000`))
+      .map(([key, password]) => ({ account: key.slice(service.length + 1), password }));
+  }
 }
 
 // 默认 userData 全路径形态（<appData>/<app.name>）——与生产接线第二参同构
