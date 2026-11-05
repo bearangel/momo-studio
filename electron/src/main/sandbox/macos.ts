@@ -18,14 +18,17 @@ export function renderSeatbeltProfile(policy: ShellSandboxPolicy): string {
   // dev server（listen EPERM，macOS 主机实测）；关闭 = deny default 全禁
   const networkRule = policy.networkEnabled ? '(allow network*)\n' : '';
   // 写剖面两态（spec 2026-11-05 §5.4）：confined = 现行 workspace/tmp + 授权目录
-  // 逐条 allow；full-disk = 全盘 allow → 核心目录 deny 逐条后置 → /usr/local
-  // re-allow 殿后（后匹配优先，次序即正确性——快照测试锁次序非仅集合）。
-  // join('\n') 形态刻意：confined 空 extraDirs 时与既有模板逐字节等价（原模板
-  // `${toolchainSection}(allow …)` 行内拼接——字符串拼接尾部会双换行炸快照）。
+  // 逐条 allow；full-disk = 全盘 allow → 核心目录 deny 逐条后置 → sensitiveDirs
+  // 写 deny（终审 F1：主机实证 file-read* deny 不拦写——新建/覆写/整目录替换
+  // 三向量穿透，authorized_keys 植入面；写 deny 必须在 allow / 之后由后匹配
+  // 优先压过，与 Linux tmpfs 遮蔽语义对齐：凭据目录读写双遮蔽）→ /usr/local
+  // re-allow 殿后。join('\n') 形态刻意：confined 空 extraDirs 时与既有模板逐
+  // 字节等价（字符串拼接尾部会双换行炸快照）。
   const writeSection = policy.writeScope === 'full-disk'
     ? [
         `(allow file-write* (subpath ${escapeSeatbeltString('/')}))`,
         ...FULL_DISK_WRITE_DENY_DARWIN.map((d) => `(deny file-write* (subpath ${escapeSeatbeltString(d)}))`),
+        ...policy.sensitiveDirs.map((d) => `(deny file-write* (subpath ${escapeSeatbeltString(d)}))`),
         `(allow file-write* (subpath ${escapeSeatbeltString(FULL_DISK_WRITE_REALLOW)}))`,
         '(allow file-write* (literal "/dev/null"))',
       ].join('\n')

@@ -19,7 +19,7 @@
 |---|---|
 | 作用面 | **只放开 OS 级**（bash 工具 + 插件受管执行两条通道）；应用层 `WorkspaceFS`（file: 工具/文件树）维持 workspace 内不动 |
 | 粒度 | **全局开关**，挂设置→安全沙箱，与 strict/permissive、网络双态并列；不做 per-workspace 覆盖 |
-| 凭据读遮蔽 | **保留**。`~/.ssh`、`~/.gnupg`、`~/.aws`、`~/.config/gcloud`、`~/.kube`、`~/.docker`、`~/.netrc`、macOS Keychains 的 deny 读与 writeScope 正交，全盘模式下原样生效 |
+| 凭据读遮蔽 | **保留且升级为读写双遮蔽（终审 F1 修订）**。`~/.ssh`、`~/.gnupg`、`~/.aws`、`~/.config/gcloud`、`~/.kube`、`~/.docker`、`~/.netrc`、macOS Keychains 与 writeScope 正交，全盘模式下读遮蔽原样生效、写 deny 追加（主机实证：SBPL `file-read*` deny 不拦写——新建/覆写/整目录替换三向量穿透，`authorized_keys` 植入面；与 Linux tmpfs 遮蔽语义对齐） |
 
 ## 3. 现状基线
 
@@ -137,6 +137,8 @@ Linux `buildBwrapArgs`（`--ro-bind / /` + workspace/extraDirs `--bind` RW）。
 ```
 
 - 读剖面（全盘 allow read + sensitiveDirs deny）、process/network/mach 规则**两态共用**，不动；
+- **sensitiveDirs 写 deny（终审 F1）**：full-disk 分支在全盘 allow 之后对 sensitiveDirs 逐条
+  `deny file-write*`（后匹配优先压过 allow /）——防凭据盲写/篡改，Linux 由 tmpfs 遮蔽天然兜住；
 - full-disk 分支**省略** confined 的 workspace/tmp allow 行（全盘 allow 已覆盖，快照更简洁）；
   `/dev/null` literal allow 保留（literal 与 subpath 语义不同）；
 - sensitiveDirs deny 行位置保持在写剖面规则**之前**（读遮蔽与写域无覆盖关系，顺序无副作用，
@@ -191,7 +193,7 @@ Linux `buildBwrapArgs`（`--ro-bind / /` + workspace/extraDirs `--bind` RW）。
 - 第三开关「全盘可写」，与模式/网络开关同区，语义 token + lucide 图标（设计系统规范）；
 - **开启需一次性确认对话框**（Button 原子组件 + 红色警示 `text-status-error`）文案要点：
   「开启后 agent 可改写系统目录之外的任意用户目录（含 ~/Library 等持久化位面）；凭据目录（~/.ssh 等）
-  仍受读保护；仅影响 bash 与插件执行，文件工具仍限工作空间内」；
+  读写仍受保护；仅影响 bash 与插件执行，文件工具仍限工作空间内」；
 - 说明文字标注：Windows 无 OS 沙箱，开关不生效（win 下开关渲染禁用态 + 说明，避免「找不到开关」困惑）；
 - 写入走 `settings:updateGlobal({ sandboxWritePolicy })`，确认对话框取消则不落值；
 - UI 门禁：P2 豁免（设置面板内单开关行 + 确认弹窗，行为已定案），事后截图验收。

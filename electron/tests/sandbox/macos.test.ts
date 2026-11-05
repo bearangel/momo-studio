@@ -125,6 +125,7 @@ describe('renderSeatbeltProfile full-disk 写域（2026-11-05 spec §5.4）', ()
       (deny file-write* (subpath "/etc"))
       (deny file-write* (subpath "/private/etc"))
       (deny file-write* (subpath "/Library"))
+      (deny file-write* (subpath "/Users/dev/.ssh"))
       (allow file-write* (subpath "/usr/local"))
       (allow file-write* (literal "/dev/null"))
       (allow process-exec process-fork)
@@ -152,5 +153,33 @@ describe('renderSeatbeltProfile full-disk 写域（2026-11-05 spec §5.4）', ()
   it('full-disk 态 extraWriteDirs 授权行不渲染（全盘 allow 已覆盖，spec §5.4 省略语义）', () => {
     const p = renderSeatbeltProfile({ ...fd, extraWriteDirs: ['/Users/dev/.rustup'] });
     expect(p).not.toContain('.rustup');
+  });
+});
+
+describe('renderSeatbeltProfile full-disk 凭据写遮蔽（终审 F1 修复，2026-11-05）', () => {
+  // 主机实证：full-disk 语义下 file-read* deny 不拦写——新建/覆写/整目录替换
+  // 三向量全部穿透（authorized_keys 植入面）。修复：full-disk 分支对 sensitiveDirs
+  // 追加 file-write* deny（后匹配优先压过 allow /），与 Linux tmpfs 遮蔽语义对齐。
+  const fd: ShellSandboxPolicy = {
+    workspaceDir: '/Users/dev/ws', homeDir: '/Users/dev',
+    tmpDir: '/private/var/folders/xx/T', sensitiveDirs: ['/Users/dev/.ssh', '/Users/dev/.gnupg'],
+    networkEnabled: false, extraWriteDirs: [], writeScope: 'full-disk',
+  };
+
+  it('sensitiveDirs 逐条生成 file-write* deny（读写双遮蔽）', () => {
+    const p = renderSeatbeltProfile(fd);
+    expect(p).toContain('(deny file-write* (subpath "/Users/dev/.ssh"))');
+    expect(p).toContain('(deny file-write* (subpath "/Users/dev/.gnupg"))');
+  });
+
+  it('次序锁：写 deny 在全盘 allow 之后（后匹配优先才生效），在读 deny 邻近处', () => {
+    const p = renderSeatbeltProfile(fd);
+    expect(p.indexOf('(deny file-write* (subpath "/Users/dev/.ssh"))'))
+      .toBeGreaterThan(p.indexOf('(allow file-write* (subpath "/"))'));
+  });
+
+  it('confined 态不新增写 deny（deny default 已兜住——既有行为反证）', () => {
+    const p = renderSeatbeltProfile({ ...fd, writeScope: 'confined' as const });
+    expect(p).not.toContain('(deny file-write*');
   });
 });

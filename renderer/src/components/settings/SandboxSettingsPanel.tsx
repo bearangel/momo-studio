@@ -167,7 +167,7 @@ export function SandboxSettingsPanel() {
             {isWin ? '（Windows 无 OS 沙箱，此开关不生效）' : ''}
           </span>
         </label>
-        <p className="text-xs text-tertiary">仅影响 bash 与插件执行；文件工具仍限工作空间内；~/.ssh 等凭据目录读保护不受影响。</p>
+        <p className="text-xs text-tertiary">仅影响 bash 与插件执行；文件工具仍限工作空间内；~/.ssh 等凭据目录读写保护不受影响。</p>
       </fieldset>
 
       <fieldset className="flex flex-col gap-2">
@@ -206,7 +206,7 @@ export function SandboxSettingsPanel() {
       {confirmFullDisk && (
         <ConfirmDialog
           title="开启全盘可写"
-          message={'开启后 agent 可改写系统目录之外的任意用户目录（含 ~/Library 等持久化位面）。\n凭据目录（~/.ssh 等）仍受读保护；仅影响 bash 与插件执行。'}
+          message={'开启后 agent 可改写系统目录之外的任意用户目录（含 ~/Library 等持久化位面）。\n凭据目录（~/.ssh 等）读写仍受保护；仅影响 bash 与插件执行。'}
           confirmLabel="开启全盘可写"
           onConfirm={() => save({ sandboxWritePolicy: 'full-disk' })}
           onClose={() => setConfirmFullDisk(false)}
