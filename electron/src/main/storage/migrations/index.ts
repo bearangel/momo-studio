@@ -46,6 +46,7 @@ import * as migration068 from './068_session_group_color';
 import * as migration069 from './069_m21_task_routing_mirror_registry';
 import * as migration070 from './070_m33_task_dependencies';
 import * as migration071 from './071_task_origin_column';
+import * as migration072 from './072_hub_group_bindings';
 
 export interface Migration {
   version: number;
@@ -1169,6 +1170,12 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
   {
     version: migration071.version,
     sql: migration071.up,
+  },
+  {
+    // 平行模式（spec 2026-11-05 §4.2）：peer 组承接空间绑定本地权威表
+    // （group_id → workspace_id——草稿落点/镜像 applyTo:'binding' 解析键）。
+    version: migration072.version,
+    sql: migration072.up,
   },
 ];
 

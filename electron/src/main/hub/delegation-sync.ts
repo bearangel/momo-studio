@@ -65,8 +65,11 @@ export const DELEGATION_STATUS_TO_TASK: Record<DelegationStatus, TaskStatus> = {
   interrupted: 'pending',
 };
 
-/** worker 本地账本四态 → 行状态（本地无 pending/interrupted 态：首录即 running） */
+/** worker 本地账本六态 → 行状态（1.10.0 平行草稿前置两态：draft=待安排、
+ *  arranged=已安排——行状态同形映射，看板「草稿/待办」列承载） */
 const WORKER_STATE_TO_TASK: Record<DelegationRecord['state'], TaskStatus> = {
+  draft: 'draft',
+  arranged: 'assigned',
   running: 'in_progress',
   done: 'completed',
   failed: 'failed',
@@ -202,8 +205,10 @@ export interface DelegationSync {
    * leader：task.progress 拍 → running 映射 + 进度摘要。
    * kind='waiting-input' → kv waiting 标志（T12）；kind='denied'（M2.2 P2-1
    * 前向预留——hub v0.1.4 剥除该值不透传）→ 不置 waiting，文案由 excerpt 承载。
+   * kind='received'/'arranged'（1.10.0 平行草稿生命周期拍）→ 仅摘要，行不翻
+   * running（发送方行保持 pending 至首 running 拍）。
    */
-  handleProgress(evt: { taskId: string; lastSeq: number; excerpt: string; kind?: 'waiting-input' | 'denied' }): void;
+  handleProgress(evt: { taskId: string; lastSeq: number; excerpt: string; kind?: 'waiting-input' | 'denied' | 'received' | 'arranged' }): void;
   /** leader：task.completed / task.failed / task.interrupted 终态 */
   handleTerminal(status: 'done' | 'failed' | 'interrupted', taskId: string, reason?: string): void;
   /** leader：task.cancel 回执（hub 账本权威 → 本地行同步） */
@@ -244,7 +249,7 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
     delegationId: string,
     excerpt: string,
     lastSeq: number,
-    kind?: 'waiting-input' | 'denied',
+    kind?: 'waiting-input' | 'denied' | 'received' | 'arranged',
   ): void => {
     ports.saveProgress(delegationId, {
       excerpt,
@@ -255,15 +260,18 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
   };
 
   return {
-    handleProgress(evt) {
-      // 摘要与行状态同拍落（摘要先写——行不存在时摘要仍保留，重派后可续显）；
-      // waiting 标志随 kind 翻转：等待拍置 true，恢复拍（无 kind）自然清除
-      saveProgress(evt.taskId, evt.excerpt, evt.lastSeq, evt.kind);
-      const row = ports.findTaskByDelegation(evt.taskId);
-      if (row && !isTerminal(row.status)) {
-        applyMapped(evt.taskId, 'running', { startedAt: row.startedAt ?? ports.now() });
-      }
-    },
+  handleProgress(evt) {
+    // 摘要与行状态同拍落（摘要先写——行不存在时摘要仍保留，重派后可续显）；
+    // waiting 标志随 kind 翻转：等待拍置 true，恢复拍（无 kind）自然清除
+    saveProgress(evt.taskId, evt.excerpt, evt.lastSeq, evt.kind);
+    // 1.10.0 生命周期拍（received/arranged）只更新摘要——行保持 pending（发送方
+    // 视角「已接收/已安排」由摘要行呈现），不提前翻 in_progress（spec §5.1）
+    if (evt.kind === 'received' || evt.kind === 'arranged') return;
+    const row = ports.findTaskByDelegation(evt.taskId);
+    if (row && !isTerminal(row.status)) {
+      applyMapped(evt.taskId, 'running', { startedAt: row.startedAt ?? ports.now() });
+    }
+  },
 
     handleTerminal(status, taskId, reason) {
       if (status === 'done') {
@@ -298,6 +306,9 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
     wrapWorkerStore(store) {
       const ensureRow = (record: DelegationRecord): void => {
         if (ports.findTaskByDelegation(record.taskId)) return; // 幂等：行已存在不重建
+        // 1.10.0 平行草稿：落板由 runner 的 draft 端口负责（绑定空间解析 + draft
+        // 状态 + priority/description——ensureRow 的按名解析与 running 初态不适用）
+        if (record.draft === true) return;
         const ws = ports.findWorkspaceByName(record.workspaceName);
         if (!ws) {
           logger.warn('收委派建看板行跳过：工作空间不存在', {
@@ -355,7 +366,7 @@ export interface RedispatchPorts {
   resolveTarget(
     routing: Exclude<TaskRouting, { mode: 'local' }>,
     workspaceName: string,
-    opts?: { team?: boolean },
+    opts?: { team?: boolean; draft?: boolean },
   ): Promise<string | null>;
   /**
    * M5.3 团队快照展开（与 DispatchSubmitPorts.getTeamSnapshot 同形）：重派行带

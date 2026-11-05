@@ -67,6 +67,7 @@ import {
 import { MIRROR_WIRE, type MirrorApplyPayload, type MirrorApplyOutcome } from '../../src/main/hub/mirror-wire';
 import { VIEW_WIRE } from '../../src/main/hub/view-wire';
 import { TASK_WIRE, type TaskReportPayload } from '../../src/main/hub/delegation-wire';
+import { parseTaskAssigned } from '../../src/main/hub/index';
 import { createHubConfigStore } from '../../src/main/hub/config-store';
 import { setDeviceToken } from '../../src/main/hub/creds';
 import { ViewServer } from '../../src/main/hub/view-server';
@@ -77,6 +78,8 @@ import { createDelegationRunner, type TurnTerminal } from '../../src/main/hub/de
 import { wireDelegationRunnerPorts } from '../../src/main/hub/delegation-ports';
 import { applyMirrorSnapshot } from '../../src/main/hub/mirror-applier';
 import { listMembers } from '../../src/main/agent/agent-queries';
+import { updateTask } from '../../src/main/storage/tasks/repo';
+import { createGroupBindingStore } from '../../src/main/hub/group-binding-store';
 import { listAgentDefinitions } from '../../src/main/agent/crud';
 import { listWorkspaces } from '../../src/main/workspace/crud';
 import { __setHubContextResolverForTest } from '../../src/main/resource/hub/momo-hub';
@@ -148,9 +151,11 @@ interface SimLedgerRow {
 }
 
 function canTransition(from: SimLedgerRow['status'], to: SimLedgerRow['status']): boolean {
+  // 对齐真实 hub DELEGATION_TRANSITIONS（hub delegations.ts）：pending→failed 是
+  // 目标拒派（declined）合法链——1.10.0 平行草稿拒收依赖该迁移
   if (to === 'cancelled') return from === 'pending' || from === 'running' || from === 'interrupted';
   if (to === 'running') return from === 'pending' || from === 'interrupted';
-  if (to === 'done' || to === 'failed') return from === 'running';
+  if (to === 'done' || to === 'failed') return from === 'running' || (from === 'pending' && to === 'failed');
   return false;
 }
 
@@ -160,7 +165,9 @@ class SimHub {
   private sessions = new Map<FakeSocket, { nodeId: string; helloDone: boolean }>();
   private tokenBySock = new Map<FakeSocket, string>();
 
-  private groups = new Map<string, { id: string; name: string; leader: string; members: Set<string> }>();
+  private groups = new Map<string, { id: string; name: string; leader: string; members: Set<string>; mode: 'leader-follower' | 'peer' }>();
+  /** 1.10.0 绑定登记：`${groupId}\0${nodeId}` → { workspaceName, acceptsMirror }（真实 hub group_bindings 语义） */
+  private bindings = new Map<string, { workspaceName: string; acceptsMirror: boolean }>();
   private inviteByCode = new Map<string, string>();
   private groupSeq = 0;
   private inviteSeq = 0;
@@ -289,6 +296,9 @@ class SimHub {
       case RPC.group.list: return this.groupList(sock, nodeId, env.id);
       case RPC.group.invite: return this.groupInvite(sock, nodeId, env.id, req);
       case RPC.group.join: return this.groupJoin(sock, nodeId, env.id, req);
+      case RPC.group.bind: return this.groupBind(sock, nodeId, env.id, req);
+      case RPC.group.unbind: return this.groupUnbind(sock, nodeId, env.id, req);
+      case RPC.group.setMirrorAccept: return this.groupSetMirrorAccept(sock, nodeId, env.id, req);
       case RPC.workspace.mirror: return void this.handleMirror(sock, nodeId, env.id, req);
       case RPC.task.delegate: return void this.handleDelegate(sock, nodeId, env.id, req);
       case RPC.task.cancel: return this.handleCancel(sock, nodeId, env.id, req);
@@ -348,10 +358,62 @@ class SimHub {
       this.reply(sock, reqId, req.method, { ok: false, error: { code: 'bad_request', message: 'groupName 缺失' } });
       return;
     }
+    const p2 = (req.payload ?? {}) as { mode?: unknown; bindWorkspaceName?: unknown };
+    const mode = p2.mode === 'peer' ? ('peer' as const) : ('leader-follower' as const);
+    let bindName: string | null = null;
+    if (mode === 'peer') {
+      bindName = typeof p2.bindWorkspaceName === 'string' && p2.bindWorkspaceName.trim().length > 0 ? p2.bindWorkspaceName.trim() : null;
+      if (!bindName) {
+        this.reply(sock, reqId, req.method, { ok: false, error: { code: 'bad_request', message: '平行组建组必须携带组长绑定空间' } });
+        return;
+      }
+    }
     const id = `g-${++this.groupSeq}`;
-    this.groups.set(id, { id, name: groupName, leader: nodeId, members: new Set([nodeId]) });
+    this.groups.set(id, { id, name: groupName, leader: nodeId, members: new Set([nodeId]), mode });
+    if (mode === 'peer' && bindName !== null) {
+      this.bindings.set(`${id}\u0000${nodeId}`, { workspaceName: bindName, acceptsMirror: false });
+    }
     this.broadcastEvt({ v: 1, kind: 'evt', method: EVT.groupChanged, payload: { groupId: id, kind: 'joined', nodeId } });
     this.reply(sock, reqId, req.method, { ok: true, payload: { groupId: id, nodeId } });
+  }
+
+  /** 1.10.0 绑定三 RPC（真实 hub group.bind/unbind/setMirrorAccept 语义——成员闸 + 幂等） */
+  private groupBind(sock: FakeSocket, nodeId: string, reqId: string, req: RequestEnvelope): void {
+    const p = (req.payload ?? {}) as { groupId?: unknown; workspaceName?: unknown };
+    const groupId = typeof p.groupId === 'string' ? p.groupId : '';
+    const wsName = typeof p.workspaceName === 'string' && p.workspaceName.trim().length > 0 ? p.workspaceName.trim() : null;
+    const g = this.groups.get(groupId);
+    if (!g || !wsName) { this.reply(sock, reqId, req.method, { ok: false, error: { code: 'not_found', message: '工作组不存在' } }); return; }
+    if (g.mode !== 'peer') { this.reply(sock, reqId, req.method, { ok: false, error: { code: 'bad_request', message: '仅平行组支持承接空间绑定' } }); return; }
+    if (!g.members.has(nodeId)) { this.reply(sock, reqId, req.method, { ok: false, error: { code: 'forbidden', message: '仅本组成员可绑定承接空间' } }); return; }
+    const key = `${groupId}\u0000${nodeId}`;
+    const prev = this.bindings.get(key);
+    this.bindings.set(key, { workspaceName: wsName, acceptsMirror: prev?.acceptsMirror ?? false });
+    this.broadcastEvt({ v: 1, kind: 'evt', method: EVT.groupChanged, payload: { groupId, kind: 'bound', nodeId } });
+    this.reply(sock, reqId, req.method, { ok: true, payload: { ok: true } });
+  }
+
+  private groupUnbind(sock: FakeSocket, nodeId: string, reqId: string, req: RequestEnvelope): void {
+    const p = (req.payload ?? {}) as { groupId?: unknown };
+    const groupId = typeof p.groupId === 'string' ? p.groupId : '';
+    const g = this.groups.get(groupId);
+    if (!g) { this.reply(sock, reqId, req.method, { ok: false, error: { code: 'not_found', message: '工作组不存在' } }); return; }
+    this.bindings.delete(`${groupId}\u0000${nodeId}`);
+    this.broadcastEvt({ v: 1, kind: 'evt', method: EVT.groupChanged, payload: { groupId, kind: 'bound', nodeId } });
+    this.reply(sock, reqId, req.method, { ok: true, payload: { ok: true } });
+  }
+
+  private groupSetMirrorAccept(sock: FakeSocket, nodeId: string, reqId: string, req: RequestEnvelope): void {
+    const p = (req.payload ?? {}) as { groupId?: unknown; accepts?: unknown };
+    const groupId = typeof p.groupId === 'string' ? p.groupId : '';
+    const g = this.groups.get(groupId);
+    if (!g || typeof p.accepts !== 'boolean') { this.reply(sock, reqId, req.method, { ok: false, error: { code: 'bad_request', message: '载荷非法' } }); return; }
+    const key = `${groupId}\u0000${nodeId}`;
+    const binding = this.bindings.get(key);
+    if (!binding) { this.reply(sock, reqId, req.method, { ok: false, error: { code: 'bad_request', message: '未绑定承接空间' } }); return; }
+    binding.acceptsMirror = p.accepts;
+    this.broadcastEvt({ v: 1, kind: 'evt', method: EVT.groupChanged, payload: { groupId, kind: 'bound', nodeId } });
+    this.reply(sock, reqId, req.method, { ok: true, payload: { ok: true } });
   }
 
   private groupList(sock: FakeSocket, nodeId: string, reqId: string): void {
@@ -361,7 +423,19 @@ class SimHub {
         groupId: g.id,
         groupName: g.name,
         leaderNodeId: g.leader,
-        members: [...g.members].map((m) => ({ nodeId: m, name: this.nameOf(m), online: this.online.has(m) })),
+        mode: g.mode,
+        members: [...g.members].map((m) => {
+          const base: Record<string, unknown> = {
+            nodeId: m, name: this.nameOf(m), online: this.online.has(m),
+            ...(this.online.has(m) ? { protoVer: PROTOCOL_VERSION } : {}),
+          };
+          if (g.mode === 'peer') {
+            const b = this.bindings.get(`${g.id}\u0000${m}`);
+            base.bound = b !== undefined;
+            if (b !== undefined) { base.boundWorkspaceName = b.workspaceName; base.acceptsMirror = b.acceptsMirror; }
+          }
+          return base;
+        }),
       }));
     this.reply(sock, reqId, RPC.group.list, { ok: true, payload: { groups } });
   }
@@ -490,12 +564,41 @@ class SimHub {
     const g = typeof p.groupId === 'string' ? this.groups.get(p.groupId) : undefined;
     const targetNodeId = typeof p.targetNodeId === 'string' ? p.targetNodeId : '';
     const workspaceName = typeof p.workspaceName === 'string' ? p.workspaceName : '';
-    const t = p.task as { title?: unknown; prompt?: unknown; agentSlug?: unknown } | undefined;
-    if (!g || g.leader !== nodeId || !g.members.has(targetNodeId) || !workspaceName
+    const t = p.task as
+      | { title?: unknown; prompt?: unknown; agentSlug?: unknown; draft?: unknown; priority?: unknown; team?: unknown; dependsOn?: unknown; permissionTier?: unknown }
+      | undefined;
+    // 1.10.0 组模式分流（真实 hub 语义）：peer 组任意成员可委派但仅 draft 载荷
+    // （编排四键互斥整包拒 + 目标须绑定）；lf 组维持 leader-only（现状零变化）
+    if (g?.mode === 'peer') {
+      const memberOk = g.members.has(nodeId);
+      const draftOk = t?.draft === true;
+      const noOrchestration = t !== undefined && t.agentSlug === undefined && t.team === undefined
+        && t.dependsOn === undefined && t.permissionTier === undefined;
+      const targetBound = this.bindings.has(`${g.id}\u0000${targetNodeId}`);
+      if (!memberOk || !g.members.has(targetNodeId) || !workspaceName || !t
+        || typeof t.title !== 'string' || typeof t.prompt !== 'string') {
+        this.reply(sock, reqId, req.method, { ok: false, error: { code: 'forbidden', message: '仅本组成员可向本组成员委派任务' } });
+        return;
+      }
+      if (!draftOk) {
+        this.reply(sock, reqId, req.method, { ok: false, error: { code: 'bad_request', message: '平行组仅接受草稿委派（task.draft=true）' } });
+        return;
+      }
+      if (!noOrchestration) {
+        this.reply(sock, reqId, req.method, { ok: false, error: { code: 'bad_request', message: '平行组草稿载荷不允许携带 agentSlug/team/dependsOn/permissionTier' } });
+        return;
+      }
+      if (!targetBound) {
+        this.reply(sock, reqId, req.method, { ok: false, error: { code: 'forbidden', message: '目标节点未绑定承接空间' } });
+        return;
+      }
+    } else if (!g || g.leader !== nodeId || !g.members.has(targetNodeId) || !workspaceName
       || !t || typeof t.title !== 'string' || typeof t.prompt !== 'string') {
       this.reply(sock, reqId, req.method, { ok: false, error: { code: 'forbidden', message: '仅组长可向本组成员委派任务' } });
       return;
     }
+    const groupMode = g?.mode ?? 'leader-follower';
+    const groupId = typeof p.groupId === 'string' ? p.groupId : '';
     const taskId = `t-${++this.taskSeq}`;
     const now = Date.now();
     this.ledger.set(taskId, {
@@ -506,8 +609,13 @@ class SimHub {
       v: 1, kind: 'evt', method: EVT.taskAssigned,
       payload: {
         taskId, workspaceName,
-        task: { title: t.title, prompt: t.prompt, ...(typeof t.agentSlug === 'string' && t.agentSlug !== '' ? { agentSlug: t.agentSlug } : {}) },
+        task: {
+          title: t.title, prompt: t.prompt,
+          ...(typeof t.agentSlug === 'string' && t.agentSlug !== '' ? { agentSlug: t.agentSlug } : {}),
+          ...(t?.draft === true ? { draft: true as const, ...(typeof t.priority === 'number' ? { priority: t.priority } : {}) } : {}),
+        },
         byNode: nodeId,
+        groupId,
       },
     });
     if (sent === 'offline') {
@@ -557,9 +665,16 @@ class SimHub {
   private acceptReport(fromNodeId: string, res: ResponseEnvelope): void {
     if (!res.ok) return;
     const report = res.payload as Partial<TaskReportPayload> | null;
-    if (!report || (report.status !== 'running' && report.status !== 'done' && report.status !== 'failed')) return;
+    if (!report || (report.status !== 'running' && report.status !== 'done' && report.status !== 'failed' && report.status !== 'pending')) return;
     const row = this.ledger.get(res.id);
     if (!row || fromNodeId !== row.targetNodeId) return;
+
+    // 1.10.0 生命周期拍（received/arranged）：账本状态不动仅转发；终态静默忽略
+    if (report.status === 'pending') {
+      if (row.status === 'done' || row.status === 'failed' || row.status === 'cancelled') return;
+      this.forwardProgress(row, report);
+      return;
+    }
 
     if (report.status === row.status) {
       if (report.status === 'running') {
@@ -596,6 +711,7 @@ class SimHub {
         sessionId: row.sessionId ?? '',
         lastSeq: report.progress?.lastSeq ?? 0,
         excerpt: report.progress?.excerpt || '（无文本增量）',
+        ...(report.progress?.kind !== undefined ? { kind: report.progress.kind } : {}),
       },
     });
   }
@@ -991,6 +1107,12 @@ beforeAll(async () => {
     },
     onEvent: (e) => {
       if (e.method === EVT.taskAssigned) {
+        // 1.10.0：改用生产挑字段路径（draft/priority/groupId 透传——手工构造会丢平行草稿键）
+        const parsed = parseTaskAssigned(e.payload);
+        if (parsed !== null) {
+          void runnerB.handleAssigned(parsed);
+          return;
+        }
         const p = e.payload as { taskId?: unknown; workspaceName?: unknown; byNode?: unknown; task?: { title?: unknown; prompt?: unknown; agentSlug?: unknown } };
         if (typeof p.taskId === 'string' && typeof p.workspaceName === 'string' && typeof p.byNode === 'string'
           && p.task && typeof p.task.title === 'string' && typeof p.task.prompt === 'string') {
@@ -1243,5 +1365,117 @@ describe('M2 三段集成（SimHub 全仿真 + 双实例 headless）', () => {
     await clientB.request(VIEW_WIRE.consent, { allowed: true });
     const restored = await clientA.request<{ overview: { name: string } }>(VIEW_RPC.workspace, { targetNodeId: NODE_B.nodeId, workspaceName: WORKSPACE_NAME });
     expect(restored.overview.name).toBe(WORKSPACE_NAME);
+  });
+});
+// ══════════════════════════════════════════════════════════════════════════
+// 1.10.0 平行模式全链路（SimHub peer 语义 + 双实例真 runner/repo/绑定存储）
+// spec 2026-11-05 §5：建组绑定 → 入组绑定 → 草稿委派 → 落板 → 安排 → 执行
+// 接管 → 完结回传全程拍；守卫矩阵（非 draft 拒/编排键拒/未绑定拒）。
+// ══════════════════════════════════════════════════════════════════════════
+
+describe('平行模式全链路（peer）', () => {
+  let peerGroupId = '';
+  let bBoundWsId = '';
+  let peerTaskId = '';
+
+  it('peer 建组/入组/绑定：组投影带 mode+绑定态；镜像开关 RPC 生效', async () => {
+    const created = await clientA.request<{ groupId: string }>(RPC.group.create, {
+      groupName: '需求研发测试', mode: 'peer', bindWorkspaceName: '需求空间',
+    });
+    peerGroupId = created.groupId;
+    const invite = await clientA.request<{ inviteCode: string }>(RPC.group.invite, { groupId: peerGroupId });
+    await clientB.request(RPC.group.join, { inviteCode: invite.inviteCode });
+
+    // B 绑定（hub 登记）+ 本地权威落库（生产走 hub:groupBind IPC，测试直写同库）
+    const boundWs = listWorkspaces().find((w) => w.name === WORKSPACE_NAME)!;
+    bBoundWsId = boundWs.id;
+    await clientB.request(RPC.group.bind, { groupId: peerGroupId, workspaceName: WORKSPACE_NAME });
+    createGroupBindingStore(getDb()).upsert(peerGroupId, bBoundWsId);
+    await clientB.request(RPC.group.setMirrorAccept, { groupId: peerGroupId, accepts: true });
+
+    const list = await clientA.request<{ groups: Array<{ mode?: string; members: Array<{ nodeId: string; bound?: boolean; boundWorkspaceName?: string; acceptsMirror?: boolean; protoVer?: string }> }> }>(RPC.group.list, {});
+    const g = list.groups.find((x) => x.groupId === peerGroupId)!;
+    expect(g.mode).toBe('peer');
+    const memberB = g.members.find((m) => m.nodeId === NODE_B.nodeId)!;
+    expect(memberB.bound).toBe(true);
+    expect(memberB.boundWorkspaceName).toBe(WORKSPACE_NAME);
+    expect(memberB.acceptsMirror).toBe(true);
+    expect(memberB.protoVer).toBe(PROTOCOL_VERSION);
+    const memberA = g.members.find((m) => m.nodeId === NODE_A.nodeId)!;
+    expect(memberA.boundWorkspaceName).toBe('需求空间'); // 组长建组绑定
+  });
+
+  it('守卫矩阵：peer 组非 draft 拒 / 编排键拒 / 未绑定目标拒 / B 侧成员委派权（下一段落位）', async () => {
+    const base = { groupId: peerGroupId, targetNodeId: NODE_B.nodeId, workspaceName: WORKSPACE_NAME };
+    const nonDraft = await clientA.request(RPC.task.delegate, { ...base, task: { title: 't', prompt: 'p' } }).catch((e: Error) => e);
+    expect((nonDraft as Error).message).toContain('草稿');
+    const withSlug = await clientA.request(RPC.task.delegate, { ...base, task: { title: 't', prompt: 'p', draft: true, agentSlug: 'x' } }).catch((e: Error) => e);
+    expect((withSlug as Error).message).toContain('agentSlug');
+    // 未绑定目标：临时解绑 B → 拒 → 复绑（后续链路依赖绑定态）
+    await clientB.request(RPC.group.unbind, { groupId: peerGroupId });
+    const unbound = await clientA.request(RPC.task.delegate, {
+      ...base, task: { title: 't', prompt: 'p', draft: true },
+    }).catch((e: Error) => e);
+    expect((unbound as Error).message).toContain('未绑定');
+    await clientB.request(RPC.group.bind, { groupId: peerGroupId, workspaceName: WORKSPACE_NAME });
+  });
+
+  it('草稿全链路：委派→落板(draft/peer_draft)→received→安排→arranged→执行→running→完结→done 全程拍', async () => {
+    const aProgressCountBefore = aEvents.filter((e) => e.method === EVT.taskProgress).length;
+    const res = await clientA.request<{ taskId: string }>(RPC.task.delegate, {
+      groupId: peerGroupId, targetNodeId: NODE_B.nodeId, workspaceName: '需求空间',
+      task: { title: '联调登录接口', prompt: '完成登录接口联调并自测', draft: true, priority: 8 },
+    });
+    peerTaskId = res.taskId;
+
+    // B 落板：绑定空间真 DB 行（draft 状态 / origin=peer_draft / delegation_id 挂接）
+    await until(() => {
+      const row = getDb().prepare('SELECT * FROM tasks WHERE delegation_id = ?').get(peerTaskId) as
+        | { id: string; status: string; origin: string; workspace_id: string; priority: number }
+        | undefined;
+      return row !== undefined;
+    }, 10_000, '草稿行落库');
+    const draftRow = getDb().prepare('SELECT * FROM tasks WHERE delegation_id = ?').get(peerTaskId) as {
+      id: string; status: string; origin: string; workspace_id: string; priority: number;
+    };
+    expect(draftRow.status).toBe('draft');
+    expect(draftRow.origin).toBe('peer_draft');
+    expect(draftRow.workspace_id).toBe(bBoundWsId);
+    expect(draftRow.priority).toBe(8);
+
+    // received 拍 → A
+    await until(() => aEvents.some((e) => e.method === EVT.taskProgress
+      && (e.payload as { taskId: string }).taskId === peerTaskId
+      && (e.payload as { kind?: string }).kind === 'received'), 10_000, 'received 拍到达 A');
+
+    // B 安排：指派 agent（第一段镜像的成员）→ assigned → arranged 拍
+    const member = listMembers(bBoundWsId)[0]!;
+    updateTask(draftRow.id, { status: 'assigned', assigneeAgentId: member.instanceId });
+    await until(() => aEvents.some((e) => e.method === EVT.taskProgress
+      && (e.payload as { taskId: string }).kind === 'arranged'), 10_000, 'arranged 拍到达 A');
+
+    // B 执行：本地 startTask 语义（assigned→in_progress + 执行会话）→ 接管 → running 拍
+    updateTask(draftRow.id, { status: 'in_progress', executionSessionId: 'sess-peer-exec' });
+    await until(() => aEvents.some((e) => e.method === EVT.taskProgress
+      && (e.payload as { taskId: string; sessionId?: string }).sessionId === 'sess-peer-exec'), 10_000, 'running 拍（执行接管）到达 A');
+
+    // B 完结（手动完结路径）→ done → A 收 task.completed
+    updateTask(draftRow.id, { status: 'completed', completedAt: Date.now() });
+    await until(() => aEvents.some((e) => e.method === EVT.taskCompleted
+      && (e.payload as { taskId: string }).taskId === peerTaskId), 10_000, 'task.completed 到达 A');
+    expect(aEvents.filter((e) => e.method === EVT.taskProgress).length).toBeGreaterThan(aProgressCountBefore);
+  });
+
+  it('拒收链：B 取消本地行（transition cancelled）→ declined: 上报 → A 收 task.failed 附因', async () => {
+    const res = await clientA.request<{ taskId: string }>(RPC.task.delegate, {
+      groupId: peerGroupId, targetNodeId: NODE_B.nodeId, workspaceName: '需求空间',
+      task: { title: '测试缺陷修复', prompt: '登录页空指针', draft: true },
+    });
+    await until(() => getDb().prepare('SELECT 1 FROM tasks WHERE delegation_id = ?').get(res.taskId) !== undefined, 10_000, '拒收用草稿落库');
+    const row = getDb().prepare('SELECT id FROM tasks WHERE delegation_id = ?').get(res.taskId) as { id: string };
+    updateTask(row.id, { status: 'cancelled' });
+    await until(() => aEvents.some((e) => e.method === EVT.taskFailed
+      && (e.payload as { taskId: string; reason?: string }).taskId === res.taskId
+      && ((e.payload as { reason?: string }).reason ?? '').startsWith('declined:')), 10_000, 'declined task.failed 到达 A');
   });
 });

@@ -31,6 +31,11 @@ export interface MirrorApplyPayload {
   strategy: MirrorStrategy;
   /** 两段式确认（§5.2）：目标工作空间已存在且未 confirm → 回执 conflict + 差异摘要。 */
   confirm?: boolean;
+  /** 1.10.0 平行模式（协议 1.10.0）：'binding'=落组绑定空间（解析键 groupId）；
+   *  缺省按名（lf 组现状，旧载荷零变化）。 */
+  applyTo?: 'binding' | 'name';
+  /** 1.10.0：组归属（applyTo='binding' 判别键；hub 恒置）。 */
+  groupId?: string;
 }
 
 /** mirror.receipt 成功回执载荷（目标节点已应用完毕）。

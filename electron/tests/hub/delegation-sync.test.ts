@@ -761,3 +761,53 @@ describe('delegation-sync — retryDispatch blocked 闸（M3.3）', () => {
     expect(result.dispatched).toBe(true);
   });
 });
+// ── 1.10.0 平行草稿生命周期拍（spec 2026-11-05 §5.1——发送方行不提前翻 running）──
+
+describe('delegation-sync — 平行草稿生命周期拍', () => {
+  it('received/arranged 拍：摘要落 kv，行保持 pending（不写 startedAt 不翻 in_progress）', () => {
+    const w = makeWorld([delegatedRow()]);
+    const sync = createDelegationSync(w.ports);
+    sync.handleProgress({ taskId: 'hub-task-1', lastSeq: 0, excerpt: '草稿已接收，等待节点拥有者安排', kind: 'received' });
+    let row = w.rows.get('T-100')!;
+    expect(row.status).toBe('pending');
+    expect(row.startedAt).toBeNull();
+    let entry = w.progress.get('hub-task-1')!;
+    expect(entry.excerpt).toContain('草稿已接收');
+    expect(entry.waiting).toBeUndefined();
+
+    sync.handleProgress({ taskId: 'hub-task-1', lastSeq: 1, excerpt: '节点拥有者已安排执行', kind: 'arranged' });
+    row = w.rows.get('T-100')!;
+    expect(row.status).toBe('pending');
+    entry = w.progress.get('hub-task-1')!;
+    expect(entry.excerpt).toContain('已安排');
+
+    // 首个真实 running 拍才翻 in_progress（闭环不变）
+    sync.handleProgress({ taskId: 'hub-task-1', lastSeq: 2, excerpt: '执行中' });
+    row = w.rows.get('T-100')!;
+    expect(row.status).toBe('in_progress');
+    expect(row.startedAt).toBe(NOW);
+  });
+
+  it('failed declined: 前缀 → 行 failed + errorMessage 原文（卡片按前缀渲染拒收态）', () => {
+    const w = makeWorld([delegatedRow()]);
+    createDelegationSync(w.ports).handleTerminal('failed', 'hub-task-1', 'declined:需求变更不做');
+    const row = w.rows.get('T-100')!;
+    expect(row.status).toBe('failed');
+    expect(row.errorMessage).toBe('declined:需求变更不做');
+  });
+
+  it('worker 状态映射扩展：draft→draft、arranged→assigned（草稿行生命周期同形映射）', () => {
+    const w = makeWorld([delegatedRow({ status: 'draft' })], 'node-self');
+    const wrapped = createDelegationSync(w.ports).wrapWorkerStore(fakeStore());
+    // 草稿记录 upsert 不经 ensureRow 建行（runner draft 端口负责）——已存在行零重建
+    wrapped.upsert({
+      taskId: 'hub-task-1', sessionId: '', workspaceId: 'ws1', workspaceName: 'ws-main',
+      title: 't', byNode: 'node-x', state: 'draft', draft: true, localTaskId: 'T-100',
+      createdAt: 1, updatedAt: 1,
+    });
+    expect(w.rows.get('T-100')!.status).toBe('draft');
+    expect(w.rows.size).toBe(1); // 无新行（ensureRow 草稿护栏）
+    wrapped.updateState('hub-task-1', 'arranged');
+    expect(w.rows.get('T-100')!.status).toBe('assigned');
+  });
+});

@@ -275,3 +275,22 @@ describe('config 工作空间键无 wsId 拒写（终审 C2）', () => {
     expect(fs.existsSync(dataJson('p-c2'))).toBe(false);
   });
 });
+
+describe('config 属性 type=path（2026-11-05 归档：目录类配置）', () => {
+  it('normalize 放行 path；值按 string 校验、null 删除语义不变', async () => {
+    const schema = normalizeConfigSchema({
+      type: 'object',
+      properties: { archiveRoot: { type: 'path', title: '本地邮件存储目录' } },
+    });
+    expect(schema.properties.archiveRoot!.type).toBe('path');
+    await writePluginConfig('p1', schema, { archiveRoot: '/tmp/mail-root' });
+    expect(readPluginConfigJson('p1').archiveRoot).toBe('/tmp/mail-root');
+    await writePluginConfig('p1', schema, { archiveRoot: null });
+    expect(readPluginConfigJson('p1').archiveRoot).toBeUndefined();
+    await expect(writePluginConfig('p1', schema, { archiveRoot: 123 })).rejects.toThrow(/须 string/);
+  });
+
+  it('非法 type 仍拒绝', () => {
+    expect(() => normalizeConfigSchema({ type: 'object', properties: { x: { type: 'directory' } } })).toThrow(/type 须为/);
+  });
+});

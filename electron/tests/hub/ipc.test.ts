@@ -86,7 +86,10 @@ import { parseRpcErrorCode, RPC_ERROR_ROUNDTRIP_FIXTURES } from '../../../render
 const GROUP_CHANNELS = ['hub:groupCreate', 'hub:groupInvite', 'hub:groupJoin', 'hub:groupLeave', 'hub:groupList', 'hub:groupTransfer'];
 const MIRROR_CHANNELS = ['hub:snapshotBuildUpload', 'hub:mirrorWorkspace', 'hub:mirrorRegistry'];
 const DELEGATION_CHANNELS = ['hub:getDelegationSettings', 'hub:setDelegationSettings'];
-const WS_DIR_CHANNELS = ['hub:getWorkspaceDirSettings', 'hub:setWorkspaceDirSettings'];
+const WS_DIR_CHANNELS = ['hub:getWorkspaceDirSettings',
+    'hub:groupBind',
+    'hub:groupSetMirrorAccept',
+    'hub:groupUnbind', 'hub:setWorkspaceDirSettings'];
 const TASK_CHANNELS = ['hub:taskList', 'hub:taskDelegate', 'hub:taskCancel', 'hub:taskAnswer'];
 const ROUTING_CHANNELS = ['hub:submitRoutedTask', 'hub:routingPrecheck'];
 const BOARD_CHANNELS = ['hub:delegationBoard', 'hub:retryDispatch', 'hub:localWaiting'];
@@ -100,7 +103,7 @@ const VIEW_CHANNELS = [
 beforeEach(() => { handlers.clear(); vi.clearAllMocks(); });
 
 describe('hub IPC 接线', () => {
-  it('注册三十九通道（M2.5 T3 增 hub:getNodes；M3.1 增 hub:taskAnswer；M3.2 增 viewWorkspaces/viewFiles；M3.4 增 hub:unpublishResource）；getStatus 透传 manager', async () => {
+  it('注册四十二通道（1.10.0 平行模式增 groupBind/groupUnbind/groupSetMirrorAccept）（M2.5 T3 增 hub:getNodes；M3.1 增 hub:taskAnswer；M3.2 增 viewWorkspaces/viewFiles；M3.4 增 hub:unpublishResource）；getStatus 透传 manager', async () => {
     registerHubIpc();
     expect([...handlers.keys()].sort()).toEqual([
       ...GROUP_CHANNELS,
@@ -378,7 +381,7 @@ describe('hub IPC 远程查看通道（M2e T14）', () => {
 
 // ── M4.1 错误契约（coded 包裹）───────────────────────────────────────────────
 //
-// 通道清单锁机制（spec Review Focus #3 裁定）：注册面断言（上方「注册三十九通道」
+// 通道清单锁机制（spec Review Focus #3 裁定）：注册面断言（上方「注册四十二通道（1.10.0 平行模式增 groupBind/groupUnbind/groupSetMirrorAccept）」
 // toEqual 锁——新增通道不进清单即红）+ 本处 CODED_RPC_CHANNELS 循环锁（清单内
 // 通道逐一断言 RpcRemoteError→前缀 / 普通 Error→原样）配对。新增 RPC 通道须同时
 // 改两份清单：只进注册锁不进本清单会被 review 拦下；进本清单但实现未包 coded 则

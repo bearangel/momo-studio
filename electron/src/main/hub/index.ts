@@ -274,10 +274,10 @@ function ensureDelegationRunner(nodeId: string | null): DelegationRunner {
 export function parseTaskAssigned(payload: unknown): AssignedTaskEvent | null {
   if (typeof payload !== 'object' || payload === null) return null;
   const p = payload as {
-    taskId?: unknown; workspaceName?: unknown; byNode?: unknown; task?: unknown;
+    taskId?: unknown; workspaceName?: unknown; byNode?: unknown; task?: unknown; groupId?: unknown;
   };
   const t = p.task as
-    | { title?: unknown; prompt?: unknown; agentSlug?: unknown; permissionTier?: unknown; team?: unknown }
+    | { title?: unknown; prompt?: unknown; agentSlug?: unknown; permissionTier?: unknown; team?: unknown; draft?: unknown; priority?: unknown }
     | undefined;
   if (typeof p.taskId !== 'string' || typeof p.workspaceName !== 'string' || typeof p.byNode !== 'string') return null;
   if (!t || typeof t.title !== 'string' || typeof t.prompt !== 'string') return null;
@@ -297,7 +297,14 @@ export function parseTaskAssigned(payload: unknown): AssignedTaskEvent | null {
       // 打 teamInvalid 标记交 runner decline（dependsOn 刻意不透传：worker 零消费）
       ...(isDelegationTeam(t.team) ? { team: t.team } : {}),
       ...(t.team !== undefined && !isDelegationTeam(t.team) ? { teamInvalid: true } : {}),
+      // 1.10.0（协议 1.10.0）：draft/priority 容错透传（draft 字面 true；priority
+      // 0..10 整数——hub 已闸，异形值剥除不抛）；groupId 组归属（绑定解析键）
+      ...(t.draft === true ? { draft: true as const } : {}),
+      ...(typeof t.priority === 'number' && Number.isInteger(t.priority) && t.priority >= 0 && t.priority <= 10
+        ? { priority: t.priority }
+        : {}),
     },
+    ...(typeof p.groupId === 'string' && p.groupId.length > 0 ? { groupId: p.groupId } : {}),
   };
 }
 

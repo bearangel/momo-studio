@@ -23,6 +23,9 @@ import {
 import { retryDispatch, type RedispatchPorts } from './delegation-sync';
 import { assertBoardGroupValid, createTaskFromForm } from '../task/ipc.handlers';
 import { insertTaskWithRelations } from '../task/relations';
+import { getWorkspace } from '../workspace/crud';
+import { getDb } from '../storage/db';
+import { createGroupBindingStore } from './group-binding-store';
 import { blockedDispatchError } from '../task/dependency-gate';
 import { deriveBlockedBy } from '../storage/tasks/dependencies-repo';
 import { updateTask, getTask } from '../storage/tasks/repo';
@@ -83,11 +86,36 @@ export function registerHubIpc(): void {
   // 工作组六通道（M2b spec §3.1）——payload 直接采用 renderer 契约形状；
   // coded 包裹（M4.1）：hub res.ok=false 的 code 编入前缀给 renderer 判别
   ipcMain.handle('hub:groupList', () => coded(() => groups.list()));
-  ipcMain.handle('hub:groupCreate', (_evt, input: { groupName: string }) => coded(() => groups.create(input.groupName)));
+  ipcMain.handle(
+    'hub:groupCreate',
+    (_evt, input: { groupName: string; mode?: 'leader-follower' | 'peer'; bindWorkspaceName?: string }) =>
+      coded(() => groups.create(input.groupName, { mode: input.mode, bindWorkspaceName: input.bindWorkspaceName })),
+  );
   ipcMain.handle('hub:groupInvite', (_evt, input: { groupId: string }) => coded(() => groups.invite(input.groupId)));
   ipcMain.handle('hub:groupJoin', (_evt, input: { inviteCode: string }) => coded(() => groups.join(input.inviteCode)));
   ipcMain.handle('hub:groupLeave', (_evt, input: { groupId: string }) => coded(() => groups.leave(input.groupId)));
   ipcMain.handle('hub:groupTransfer', (_evt, input: { groupId: string; toNodeId: string }) => coded(() => groups.transfer(input.groupId, input.toNodeId)));
+  // 1.10.0 平行模式绑定面（spec 2026-11-05 §6）：bind 同步落本地权威（workspaceId
+  // ——草稿落点/镜像 applyTo 解析键；hub 侧只登记空间名）；unbind 同步清本地。
+  ipcMain.handle('hub:groupBind', (_evt, input: { groupId: string; workspaceId: string }) =>
+    coded(async () => {
+      const ws = getWorkspace(input.workspaceId);
+      if (!ws) throw new Error(`工作空间不存在: ${input.workspaceId}`);
+      const res = await groups.bind(input.groupId, ws.name);
+      createGroupBindingStore(getDb()).upsert(input.groupId, input.workspaceId);
+      return res;
+    }),
+  );
+  ipcMain.handle('hub:groupUnbind', (_evt, input: { groupId: string }) =>
+    coded(async () => {
+      const res = await groups.unbind(input.groupId);
+      createGroupBindingStore(getDb()).remove(input.groupId);
+      return res;
+    }),
+  );
+  ipcMain.handle('hub:groupSetMirrorAccept', (_evt, input: { groupId: string; accepts: boolean }) =>
+    coded(() => groups.setMirrorAccept(input.groupId, input.accepts)),
+  );
   // 镜像发起链（M2c T8b，向导 S2/S4 消费）
   ipcMain.handle('hub:snapshotBuildUpload', (_evt, input: { workspaceId: string }) =>
     buildAndUploadWorkspaceSnapshot(input.workspaceId));
@@ -239,6 +267,8 @@ export function registerHubIpc(): void {
           routing: input.routing,
           // M5.3：团队指向随外派行落库（retryDispatch 重建 team 段的依据）
           targetTeamId: input.targetTeamId ?? null,
+          // 1.10.0：peer 草稿行来源标记（方向判别/看板徽标/boot 对账互斥）
+          ...(input.draft === true ? { origin: 'peer_draft' as const } : {}),
         },
         { dependsOn: input.dependsOn ?? [] },
       );

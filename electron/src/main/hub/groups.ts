@@ -5,7 +5,7 @@
 // 本模块不 import index——避免 index（事件桥消费本模块）↔ 本模块 循环引用。
 import {
   RPC, EVT,
-  type EventEnvelope, type GroupChangedEvent,
+  type EventEnvelope, type GroupChangedEvent, type GroupMode,
   type GroupCreateRes, type GroupJoinRes, type GroupLeaveRes,
   type GroupListReq, type GroupListRes, type GroupTransferRes, type InviteInfo,
 } from './protocol';
@@ -14,11 +14,14 @@ export type HubRequestFn = <T>(method: string, payload: unknown, timeoutMs?: num
 
 export interface GroupClient {
   list(): Promise<GroupListRes>;
-  create(groupName: string): Promise<GroupCreateRes>;
+  create(groupName: string, opts?: { mode?: GroupMode; bindWorkspaceName?: string }): Promise<GroupCreateRes>;
   invite(groupId: string): Promise<InviteInfo>;
   join(inviteCode: string): Promise<GroupJoinRes>;
   leave(groupId: string): Promise<GroupLeaveRes>;
   transfer(groupId: string, toNodeId: string): Promise<GroupTransferRes>;
+  bind(groupId: string, workspaceName: string): Promise<{ ok: boolean }>;
+  unbind(groupId: string): Promise<{ ok: boolean }>;
+  setMirrorAccept(groupId: string, accepts: boolean): Promise<{ ok: boolean }>;
 }
 
 export function createGroupClient(request: HubRequestFn): GroupClient {
@@ -27,11 +30,19 @@ export function createGroupClient(request: HubRequestFn): GroupClient {
       const payload: GroupListReq = {};
       return request<GroupListRes>(RPC.group.list, payload);
     },
-    create: (groupName) => request<GroupCreateRes>(RPC.group.create, { groupName }),
+    create: (groupName, opts) =>
+      request<GroupCreateRes>(RPC.group.create, {
+        groupName,
+        ...(opts?.mode !== undefined ? { mode: opts.mode } : {}),
+        ...(opts?.bindWorkspaceName !== undefined ? { bindWorkspaceName: opts.bindWorkspaceName } : {}),
+      }),
     invite: (groupId) => request<InviteInfo>(RPC.group.invite, { groupId }),
     join: (inviteCode) => request<GroupJoinRes>(RPC.group.join, { inviteCode }),
     leave: (groupId) => request<GroupLeaveRes>(RPC.group.leave, { groupId }),
     transfer: (groupId, toNodeId) => request<GroupTransferRes>(RPC.group.transfer, { groupId, toNodeId }),
+    bind: (groupId, workspaceName) => request<{ ok: boolean }>(RPC.group.bind, { groupId, workspaceName }),
+    unbind: (groupId) => request<{ ok: boolean }>(RPC.group.unbind, { groupId }),
+    setMirrorAccept: (groupId, accepts) => request<{ ok: boolean }>(RPC.group.setMirrorAccept, { groupId, accepts }),
   };
 }
 

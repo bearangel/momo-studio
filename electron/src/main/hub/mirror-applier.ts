@@ -31,11 +31,12 @@ import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
-import { listWorkspaces, createWorkspace, setDefaultAgent } from '../workspace/crud';
+import { listWorkspaces, createWorkspace, setDefaultAgent, getWorkspace } from '../workspace/crud';
 import { listMembers, addMember, removeMember, generateAgentUserId, saveAgentDefinition, updateAgentDefinition } from '../agent/crud';
 import { listAgentDefinitions, getAgentDefinition } from '../agent/agent-queries';
 import { parseAgentManifest } from '../agent/manifest-parser';
 import { listTeams, createTeam, deleteTeam } from '../agent/team';
+import { createGroupBindingStore } from './group-binding-store';
 import { listProviders, getProvider, updateProvider, listProviderModels, type ModelProvider } from '../agent/provider-crud';
 import { listRegistered, setMcpEnabledDefinition } from '../mcp/host-manager';
 import { listInstalled, getSkillsDir } from '../skill/zip-uploader';
@@ -840,22 +841,38 @@ export async function applyMirrorSnapshot(
     }
     const { manifest, stageDir } = fetched;
 
-    // 2. 工作空间分流：不存在 → 创建后直落；存在且未 confirm → conflict + 差异摘要
-    const existing = listWorkspaces().find((w) => w.name === payload.workspaceName);
+    // 2. 工作空间分流（1.10.0 平行模式第三形态 applyTo:'binding'：落组绑定空间
+    //    ——不按名、不创建、目标必须已存在且已绑定；lf 组 applyTo 缺省按名：
+    //    不存在 → 创建后直落；存在且未 confirm → conflict + 差异摘要）
     let workspaceId: string;
-    if (!existing) {
-      const ensured = await ensureWorkspace(payload.workspaceName);
-      workspaceId = ensured.workspaceId;
-    } else if (payload.confirm !== true) {
-      const diffSummary = computeDiffSummary(existing.id, manifest);
-      return {
-        ok: false,
-        code: 'conflict',
-        message: `目标节点已存在同名工作空间「${payload.workspaceName}」，需确认覆盖（差异：+${diffSummary.added} / -${diffSummary.removed} / ±${diffSummary.changed}）`,
-        diffSummary,
-      };
+    if (payload.applyTo === 'binding') {
+      const groupId = typeof payload.groupId === 'string' ? payload.groupId : '';
+      const binding = groupId !== '' ? createGroupBindingStore(getDb()).get(groupId) : null;
+      const bound = binding !== null ? getWorkspace(binding.workspaceId) : null;
+      if (bound === null) {
+        return {
+          ok: false,
+          code: 'bad_request',
+          message: `镜像落点为组绑定空间，但本节点未绑定该组承接空间（groupId=${groupId || '缺失'}）——请先在组设置中绑定`,
+        };
+      }
+      workspaceId = bound.id;
     } else {
-      workspaceId = existing.id;
+      const existing = listWorkspaces().find((w) => w.name === payload.workspaceName);
+      if (!existing) {
+        const ensured = await ensureWorkspace(payload.workspaceName);
+        workspaceId = ensured.workspaceId;
+      } else if (payload.confirm !== true) {
+        const diffSummary = computeDiffSummary(existing.id, manifest);
+        return {
+          ok: false,
+          code: 'conflict',
+          message: `目标节点已存在同名工作空间「${payload.workspaceName}」，需确认覆盖（差异：+${diffSummary.added} / -${diffSummary.removed} / ±${diffSummary.changed}）`,
+          diffSummary,
+        };
+      } else {
+        workspaceId = existing.id;
+      }
     }
 
     // 3. 先资源补装（非 stale 失败中止——配置不落，目标保持原状；已装资源保留

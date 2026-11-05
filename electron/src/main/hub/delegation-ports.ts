@@ -11,8 +11,10 @@ import { createCollabSession } from '../im/session-ops';
 import { sendUserMessage, broadcastSessionListChanged } from '../im/session-service';
 import { getRouterService } from '../agent/router-bootstrap';
 import { getSession } from '../storage/sessions/repo';
+import { insertTask } from '../storage/tasks/repo';
 import { clearSessionGrants, grantWriteDirs } from '../sandbox/write-grant';
 import { listPendingWriteBlocked } from '../sandbox/write-blocked-emit';
+import { createGroupBindingStore } from './group-binding-store';
 import { planRunPolicy, type PermissionTier } from './run-policy';
 import type { DelegationRunPorts, DelegationTail, TurnTerminal } from './delegation-runner';
 import type { HubDelegationSettings } from './delegation-settings';
@@ -321,5 +323,42 @@ export function wireDelegationRunnerPorts(opts: WireDelegationPortsOpts): Delega
         .filter((t) => me === null || t.targetNodeId === me)
         .map((t) => ({ taskId: t.taskId, title: t.title, workspaceName: t.workspaceName }));
     },
+    // ── 1.10.0 平行模式草稿端口（spec 2026-11-05 §5.2）────────────────────────
+    resolveBindingWorkspace(groupId) {
+      const binding = createGroupBindingStore(getDb()).get(groupId);
+      if (binding === null) return null;
+      const ws = getWorkspace(binding.workspaceId);
+      return ws ? { workspaceId: ws.id, workspaceName: ws.name } : null;
+    },
+    insertDraftTaskRow(input) {
+      try {
+        const row = insertTask({
+          workspaceId: input.workspaceId,
+          title: input.title,
+          description: input.description,
+          status: 'draft',
+          priority: input.priority,
+          creatorUserId: 'owner',
+          origin: 'peer_draft',
+          delegationId: input.delegationId,
+          routing: { mode: 'node', groupId: input.groupId, targetNodeId: selfNodeId() ?? '' },
+        });
+        return { localTaskId: row.id };
+      } catch (err) {
+        logger.warn('平行草稿落板失败', {
+          taskId: input.delegationId,
+          workspaceId: input.workspaceId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return null;
+      }
+    },
+    findDraftRow(delegationId) {
+      const row = getDb()
+        .prepare('SELECT id, status, execution_session_id FROM tasks WHERE delegation_id = ?')
+        .get(delegationId) as { id: string; status: string; execution_session_id: string | null } | undefined;
+      return row ? { id: row.id, status: row.status, executionSessionId: row.execution_session_id } : null;
+    },
+    selfNodeId,
   };
 }

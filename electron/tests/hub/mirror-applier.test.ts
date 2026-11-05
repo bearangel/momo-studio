@@ -25,6 +25,7 @@ import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeDb, getDb, runMigrations } from '../../src/main/storage/db';
+import { createGroupBindingStore } from '../../src/main/hub/group-binding-store';
 import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keychain';
 import { saveAgentDefinition, addMember, updateAgentDefinition } from '../../src/main/agent/crud';
 import { createTeam } from '../../src/main/agent/team';
@@ -1514,5 +1515,74 @@ describe('applyMirrorSnapshot catalog 自愈', () => {
     if (!second.ok) return;
     // ghost skill 两轮稳定软失败；catalog agent 两轮幂等补装
     expect(second.unresolvedRefs ?? []).toEqual(['skill:brainstorming']);
+  });
+});
+
+// ── 5. 1.10.0 平行模式 applyTo:'binding'（spec 2026-11-05 §5.3）────────────
+
+describe('applyMirrorSnapshot applyTo:binding', () => {
+  it('applyTo 缺省按名（lf 组现状回归——绑定存在也不改落点）', async () => {
+    const boundWs = await mkWorkspace('研发空间');
+    createGroupBindingStore(getDb()).upsert('g-peer', boundWs);
+
+    const manifest = baseManifest({
+      config: {
+        agentMembers: [{ name: '镜像成员', customDefinition: customYaml('镜像成员', 'mirror-member') }],
+        mcpEnabled: [],
+        prefs: { maxToolCalls: 21 },
+      },
+    });
+    // 载荷 workspaceName=按名目标（不带 applyTo 键——旧 wire 形状）
+    const outcome = await applyMirrorSnapshot(
+      applyPayload({ workspaceName: '按名目标', confirm: true }),
+      makeDeps(await makeArchive(manifest)),
+    );
+    expect(outcome.ok).toBe(true);
+    // 落点是同名新空间「按名目标」，不是绑定空间
+    expect(listWorkspaces().find((w) => w.name === '按名目标')).toBeDefined();
+    expect(listMembers(boundWs)).toHaveLength(0);
+  });
+
+  it('applyTo=binding + groupId：解析绑定空间 replace；载荷 workspaceName（源名）不用于解析', async () => {
+    const wsId = await mkWorkspace('研发空间');
+    createGroupBindingStore(getDb()).upsert('g-peer', wsId);
+
+    const manifest = baseManifest({
+      config: {
+        agentMembers: [{ name: '平行成员', customDefinition: customYaml('平行成员', 'peer-member') }],
+        mcpEnabled: [],
+        prefs: { maxToolCalls: 33 },
+      },
+    });
+    const archive = await makeArchive(manifest);
+    const deps = makeDeps(archive);
+    const payload = {
+      ...applyPayload({ workspaceName: '需求空间（源）' }),
+      applyTo: 'binding' as const,
+      groupId: 'g-peer',
+    };
+    const outcome = await applyMirrorSnapshot(payload, deps);
+    expect(outcome.ok).toBe(true);
+    // 落点是绑定空间（研发空间），且未创建同名「需求空间（源）」
+    expect(listMembers(wsId).map((m) => m.agentName)).toEqual(['平行成员']);
+    expect(listWorkspaces().find((w) => w.name === '需求空间（源）')).toBeUndefined();
+  });
+
+  it('applyTo=binding 但未绑定 → bad_request 人话（深度防御——hub 已闸）', async () => {
+    const manifest = baseManifest({
+      config: { agentMembers: [], mcpEnabled: [], prefs: {} },
+    });
+    const outcome = await applyMirrorSnapshot(
+      {
+        ...applyPayload({ workspaceName: 'x' }),
+        applyTo: 'binding' as const,
+        groupId: 'g-missing',
+      },
+      makeDeps(await makeArchive(manifest)),
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.code).toBe('bad_request');
+    expect(outcome.message).toContain('未绑定');
   });
 });

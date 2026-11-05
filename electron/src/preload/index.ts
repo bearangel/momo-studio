@@ -674,6 +674,9 @@ const api: ApiSurface = {
     groupJoin: (input) => invoke<HubGroupJoinResult>('hub:groupJoin', input),
     groupLeave: (input) => invoke<HubGroupLeaveResult>('hub:groupLeave', input),
     groupTransfer: (input) => invoke<HubGroupTransferResult>('hub:groupTransfer', input),
+    groupBind: (input) => invoke<{ ok: boolean }>('hub:groupBind', input),
+    groupUnbind: (input) => invoke<{ ok: boolean }>('hub:groupUnbind', input),
+    groupSetMirrorAccept: (input) => invoke<{ ok: boolean }>('hub:groupSetMirrorAccept', input),
     onGroupChanged: (callback) => {
       const handler = (_e: IpcRendererEvent, payload: HubGroupChangedEvent): void => callback(payload);
       ipcRenderer.on('hub:groupChanged', handler);
