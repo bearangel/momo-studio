@@ -38,6 +38,7 @@ function harnessUi(handle: HandleRef, props: Partial<RichComposerProps> = {}) {
       onEscape={props.onEscape ?? vi.fn()}
       onNavigate={props.onNavigate}
       onPasteImage={props.onPasteImage}
+      onDropFiles={props.onDropFiles}
     />
   );
 }
@@ -525,5 +526,102 @@ describe('RichComposer 粘贴/拖入图片拦截（spec §10 paste/drop）', () 
       fireEvent.paste(el, { clipboardData: { files: [imageFile()] } }),
     ).not.toThrow();
     expect(getPrevented()).toBe(false);
+  });
+});
+
+// === 视觉空但 DOM 脏自愈（实测 bug 4，2026-11-05）：全选删除残留 <br>/空节点 →
+//     input 时复位纯净——placeholder 回归 + 后续末尾追加不跳行 ===
+describe('RichComposer 视觉空但 DOM 脏自愈', () => {
+  it('segments 为空但残留 <br>/空文本节点 → input 事件时复位纯净', () => {
+    mount();
+    const el = editor();
+    el.appendChild(document.createElement('br'));
+    el.appendChild(document.createTextNode(''));
+    expect(el.childNodes.length).toBeGreaterThan(0);
+    fireEvent.input(el);
+    expect(el.childNodes.length).toBe(0);
+  });
+
+  it('有正文时不清（正常内容不受自愈影响）', () => {
+    mount();
+    const el = editor();
+    el.textContent = 'hello';
+    fireEvent.input(el);
+    expect(el.textContent).toBe('hello');
+  });
+
+  it('仅 pill（含尾部 ZWSP）时不清（pill 会话态不受影响）', () => {
+    const handle = mount();
+    handle.insertPill({ type: 'pill', kind: 'agent', id: 'i1', label: 'coder' }, 0);
+    const el = editor();
+    expect(el.querySelector('[data-kind="agent"]')).not.toBeNull();
+    fireEvent.input(el);
+    expect(el.querySelector('[data-kind="agent"]')).not.toBeNull();
+  });
+});
+// === 拖拽泛化（2026-11-05 预览方案 C）：onDropFiles 接管全部文件（图片/普通
+//     分流在 MentionInput）；未提供时回落旧 image-only 行为 ===
+describe('RichComposer 拖拽全文件路由（onDropFiles）', () => {
+  function capturePrevented(el: HTMLElement): () => boolean {
+    let evt: Event | null = null;
+    el.addEventListener('drop', (e) => {
+      evt = e;
+    });
+    return () => evt?.defaultPrevented ?? false;
+  }
+
+  it('提供 onDropFiles → drop 全部文件整体上抛（含非图片），默认行为阻止', () => {
+    const onDropFiles = vi.fn();
+    mount({ onDropFiles });
+    const el = editor();
+    const getPrevented = capturePrevented(el);
+    const img = new File([new Uint8Array([1])], 'a.png', { type: 'image/png' });
+    const doc = new File([new Uint8Array([2])], '报告.docx');
+    fireEvent.drop(el, { dataTransfer: { files: [img, doc] } });
+    expect(onDropFiles).toHaveBeenCalledTimes(1);
+    expect(onDropFiles).toHaveBeenCalledWith([img, doc]);
+    expect(getPrevented()).toBe(true);
+  });
+
+  it('提供 onDropFiles 时不分流图片（旧 image-only 路径不再触发）', () => {
+    const onDropFiles = vi.fn();
+    const onPasteImage = vi.fn();
+    mount({ onDropFiles, onPasteImage });
+    fireEvent.drop(editor(), { dataTransfer: { files: [new File([new Uint8Array([1])], 'a.png', { type: 'image/png' })] } });
+    expect(onDropFiles).toHaveBeenCalledTimes(1);
+    expect(onPasteImage).not.toHaveBeenCalled();
+  });
+
+  it('未提供 onDropFiles → 回落旧行为：仅图片走 onPasteImage（回归锁）', () => {
+    const onPasteImage = vi.fn();
+    mount({ onPasteImage });
+    const el = editor();
+    const getPrevented = capturePrevented(el);
+    const img = new File([new Uint8Array([1])], 'a.png', { type: 'image/png' });
+    const doc = new File([new Uint8Array([2])], '报告.docx');
+    fireEvent.drop(el, { dataTransfer: { files: [img, doc] } });
+    expect(onPasteImage).toHaveBeenCalledTimes(1);
+    expect(onPasteImage).toHaveBeenCalledWith([img]);
+    expect(getPrevented()).toBe(true);
+  });
+
+  it('空文件列表 drop → 不上抛也不阻止（空输入路径）', () => {
+    const onDropFiles = vi.fn();
+    mount({ onDropFiles });
+    const el = editor();
+    const getPrevented = capturePrevented(el);
+    fireEvent.drop(el, { dataTransfer: { files: [] } });
+    expect(onDropFiles).not.toHaveBeenCalled();
+    expect(getPrevented()).toBe(false);
+  });
+
+  it('粘贴保持仅图片（paste 路径不泛化）——非图片粘贴不上抛 onDropFiles', () => {
+    const onDropFiles = vi.fn();
+    const onPasteImage = vi.fn();
+    mount({ onDropFiles, onPasteImage });
+    const txt = new File([new Uint8Array([1])], 'note.txt', { type: 'text/plain' });
+    fireEvent.paste(editor(), { clipboardData: { files: [txt] } });
+    expect(onDropFiles).not.toHaveBeenCalled();
+    expect(onPasteImage).not.toHaveBeenCalled();
   });
 });

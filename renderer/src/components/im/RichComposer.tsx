@@ -14,9 +14,13 @@ import type { ComposerSegment, PillKind, PillSeg } from './composer-segments';
 /** pill 后随的零宽空格——光标落点；getSegments / 光标前文本一律剥离 */
 const ZWSP = '\u200b';
 
-/** pill 公共类（原子块视觉契约；Tailwind 类需静态字符串书写保证生成） */
+/** pill 公共类（原子块视觉契约；Tailwind 类需静态字符串书写保证生成）。
+ *  align-middle（实测 bug 5，2026-11-05）：inline-flex 的基线取自首个 flex
+ *  item——图片 pill 首项是图标盒（无文字，基线=底缘），文本 pill 首项是文字
+ *  （基线≈文字基线），两类基线差 ~3px → 图片 pill 视觉抬高。改垂直中线对齐，
+ *  各类 pill 等高（leading-5）→ 互相对齐与内部构成无关 */
 const PILL_BASE_CLASS =
-  'rounded px-1.5 text-xs leading-5 inline-flex items-center align-baseline select-none';
+  'rounded px-1.5 text-xs leading-5 inline-flex items-center align-middle select-none';
 
 /**
  * 七类 pill 语义底色（全语义 token，spec D-2 填充底色式）。
@@ -148,6 +152,14 @@ export interface RichComposerProps {
    */
   onPasteImage?(files: File[]): void;
   /**
+   * 拖拽全文件上抛（2026-11-05 拖拽泛化，预览方案 C）：drop 的 dataTransfer
+   * files 非空即整体上抛（含 preventDefault；图片/普通文件分流在上层
+   * MentionInput——图片走降采样管线，其余走 importFile 导入）。未提供时回落
+   * 旧行为：仅 image/* 走 onPasteImage。粘贴（paste）保持仅图片——外部文件的
+   * 主手势是拖拽与文件选择器，粘贴非图片文件无既定语义。
+   */
+  onDropFiles?(files: File[]): void;
+  /**
    * 菜单键盘导航接管（2026-09-26 输入框可用性 P0）：ArrowUp/ArrowDown/Tab
    * 先经上层（MentionInput 菜单）裁决——返回 true = 菜单已消费（移动高亮 /
    * 选中条目），本组件 preventDefault（阻止方向键把光标跳到行首/行尾、Tab
@@ -159,7 +171,7 @@ export interface RichComposerProps {
 
 export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
     function RichComposer(
-      { disabled, placeholder, ariaLabel, onInputText, onEnter, onEscape, onPasteImage, onNavigate },
+      { disabled, placeholder, ariaLabel, onInputText, onEnter, onEscape, onPasteImage, onDropFiles, onNavigate },
       ref,
     ) {
     const rootRef = useRef<HTMLDivElement>(null);
@@ -444,6 +456,17 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
 
     const handleInput = (): void => {
       if (composingRef.current) return;
+      // 视觉空但 DOM 脏自愈（实测 bug 4，2026-11-05）：Chromium 全选删除后
+      // contenteditable 常残留 <br>/<div>/空节点——① data-placeholder 的 :empty
+      // 失效（清空后占位符不回归）；② 后续「末尾追加」型插入（按钮选中/import）
+      // 落在残留节点之后 = 跳行。<br> 折叠为 '\n' 文本段，纯空白=无有效内容。
+      if (rootRef.current && rootRef.current.childNodes.length > 0) {
+        const segs = getSegments();
+        const hasEffective = segs.some(
+          (s) => s.type === 'pill' || (s.type === 'text' && s.text.trim() !== ''),
+        );
+        if (!hasEffective) rootRef.current.textContent = '';
+      }
       emitInput();
     };
 
@@ -507,6 +530,13 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
     };
 
     const handleDrop = (e: React.DragEvent<HTMLDivElement>): void => {
+      const all = Array.from(e.dataTransfer.files);
+      if (all.length === 0) return;
+      if (onDropFiles) {
+        e.preventDefault();
+        onDropFiles(all);
+        return;
+      }
       if (!onPasteImage) return;
       const files = extractImageFiles(e.dataTransfer);
       if (files.length === 0) return;
