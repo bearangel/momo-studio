@@ -192,22 +192,21 @@ archive.write(accountId, folder, uid, raw, msgDate):
   - 索引有、文件无 → `missing`，读时重下
   - 文件有、索引无（或 root 不一致）→ 启动核对时删除孤儿文件（仅限当前 rootId 的账号目录）
 
-## 10. 面板 UI
+## 10. 配置与管理（2026-11-05 再裁定：全部在 设置 → 插件）
 
-「存储」区（与账号表单同风格）：
+**配置面（平台插件 config，Settings → 插件 → 邮件）**：
 
-- 当前路径（只读文本，可复制）
-- 「选择目录」→ `app:pickDirectory` → `archive.setRoot`（服务端校验：绝对路径、存在、可写、不是文件）
-- 统计：文件数 / 占用空间（来自索引聚合）
-- 「清空本地库」→ 二次确认 → `archive.clear`（**仅清当前 `rootId`**；历史根目录的数据需手动清理）
-- 未配置路径时显示「未启用本地邮件库（仅在线读信）」
+- `archiveRoot`（`type: path`，标题「本地邮件存储目录」）：设置页系统目录选择器（`dialog:pickDirectory`）；**留空 = 默认目录 `~/.momo-plugin/email`**（首启自动创建，开箱即归档）
+- `showRemoteImages`（`type: boolean`，默认关）：开 → 面板邮件默认放行远程图片（面板按钮为会话级覆盖）
+- 配置保存后平台自动重启 service → `start()` 对账：路径与当前不同 → `archive.setRoot`（换 rootId，旧库保留）；目录不可用 → warn 降级在线读信
+- **面板无存储入口**（首版曾有「存储…」弹层，随配置迁移一并移除）；面板仅启动读 `config.get`
 
 ### 10.1 服务路由
 
-- `archive.getSettings` → `{ enabled, rootPath, stats: { files, bytes } }`
-- `archive.setRoot` → `{ path }`：校验绝对路径、`realpath` 后存在且为目录、可写、非文件系统根（拒绝 `/`、`C:\`）
-- `archive.clear` → 清当前 rootId 的文件与索引行（返回删除计数）
-- `archive.stats` → 聚合统计（文件数、字节数、`missing`/`corrupt`/`too_large` 计数）
+- `archive.getSettings` → `stats()`：`{ enabled, rootPath, rootId, files, bytes, missing, corrupt, tooLarge }`
+- `archive.setRoot` → `{ path }`：校验绝对路径、`realpath` 后存在且为目录、可写、非文件系统根（拒绝 `/`、`C:\`）——现由 service 启动对账内部调用
+- `archive.clear` → 清当前 rootId 的文件与索引行（返回删除计数；**仅清当前 `rootId`**，历史根目录需手动清理）
+- `config.get` → `{ showRemoteImages, archiveRoot }`（非敏感配置透出给面板/工具）
 
 ## 11. 平台桥 `app:pickDirectory`
 
