@@ -3,11 +3,13 @@
 // DispatchChip 渲染与交互行为测试：
 //   - 5 种状态（queued/executing/completed/failed/aborted）渲染正确的文案 + tone 类
 //   - 头行 Send 图标 + avatar（emoji 数据 / Avatar bot 兜底）+ 子 agent 名字
-//   - 自动展开/折叠默认值（executing/failed 展开；queued/completed/aborted 折叠）
+//   - 自动展开/折叠默认值（仅 failed 展开；executing/queued/completed/aborted 折叠）
 //   - 点击头行切换展开/折叠
 //   - 展开且传入 subStream 时渲染 SubAgentSection（子 agent 正文可见）
 //   - status 变化触发的自动展开/折叠行为
 //   - 用户手动 toggle 后抑制后续自动行为（userToggled 标志）
+//   - 2026-11-04 状态行+结果摘要：忙态头行「工具 N 次」计数；
+//     completed 折叠头行结果摘要（末个 text 段首行）
 //   - B5 链级停止按钮：isBusy（executing/queued）渲染；点击 →
 //     ipc.dispatch.cancelChain({ subStreamSessionId })；stopPropagation 防误触
 //     chip 展开；not_found → toast『子任务已结束』（cancelled 不弹）
@@ -138,12 +140,12 @@ describe('DispatchChip — 状态渲染', () => {
 });
 
 describe('DispatchChip — 自动展开/折叠默认值', () => {
-  it('executing 默认展开（subStream 正文可见）', () => {
+  it('executing 默认折叠（状态行+结果摘要：运行过程靠头行速览）', () => {
     render(
       <DispatchChip child={makeChild({ status: 'executing' })} subStream={makeStream()} />,
     );
-    expect(screen.getByText('子任务输出文本')).toBeInTheDocument();
-    expect(getHeaderButton()).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.queryByText('子任务输出文本')).not.toBeInTheDocument();
+    expect(getHeaderButton()).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('failed 默认展开（便于查看错误细节）', () => {
@@ -154,11 +156,15 @@ describe('DispatchChip — 自动展开/折叠默认值', () => {
     expect(getHeaderButton()).toHaveAttribute('aria-expanded', 'true');
   });
 
-  it('completed 默认折叠（subStream 正文不可见）', () => {
+  it('completed 默认折叠（头行仅摘要首行，正文第二行不可见）', () => {
     render(
-      <DispatchChip child={makeChild({ status: 'completed' })} subStream={makeStream()} />,
+      <DispatchChip
+        child={makeChild({ status: 'completed' })}
+        subStream={makeStream({ status: 'done', text: '摘要首行\n\n正文第二行' })}
+      />,
     );
-    expect(screen.queryByText('子任务输出文本')).not.toBeInTheDocument();
+    expect(screen.getByTestId('dispatch-result-summary')).toHaveTextContent('摘要首行');
+    expect(screen.queryByText('正文第二行')).not.toBeInTheDocument();
     expect(getHeaderButton()).toHaveAttribute('aria-expanded', 'false');
   });
 
@@ -179,33 +185,37 @@ describe('DispatchChip — 自动展开/折叠默认值', () => {
   });
 
   it('展开但未传 subStream 时不渲染 SubAgentSection（不报错）', () => {
-    render(<DispatchChip child={makeChild({ status: 'executing' })} />);
-    // executing 默认展开，但无 subStream → 正文区域为空
+    render(<DispatchChip child={makeChild({ status: 'failed' })} />);
+    // failed 默认展开，但无 subStream → 正文区域为空
     expect(screen.queryByText('子任务输出文本')).not.toBeInTheDocument();
     // 组件本身仍正常渲染（状态文案存在）
-    expect(screen.getByText(/执行中/)).toBeInTheDocument();
+    expect(screen.getByText(/失败/)).toBeInTheDocument();
   });
 });
 
 describe('DispatchChip — 点击 toggle', () => {
   it('completed（折叠）点击后展开', () => {
+    // 空行分段 → MarkdownBody 渲染两个 <p>，第二段仅展开态可见（摘要只取首行）
     render(
-      <DispatchChip child={makeChild({ status: 'completed' })} subStream={makeStream()} />,
+      <DispatchChip
+        child={makeChild({ status: 'completed' })}
+        subStream={makeStream({ status: 'done', text: '摘要首行\n\n正文第二行' })}
+      />,
+    );
+    expect(screen.queryByText('正文第二行')).not.toBeInTheDocument();
+    fireEvent.click(getHeaderButton());
+    expect(screen.getByText('正文第二行')).toBeInTheDocument();
+    expect(getHeaderButton()).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('executing（折叠）点击后展开', () => {
+    render(
+      <DispatchChip child={makeChild({ status: 'executing' })} subStream={makeStream()} />,
     );
     expect(screen.queryByText('子任务输出文本')).not.toBeInTheDocument();
     fireEvent.click(getHeaderButton());
     expect(screen.getByText('子任务输出文本')).toBeInTheDocument();
     expect(getHeaderButton()).toHaveAttribute('aria-expanded', 'true');
-  });
-
-  it('executing（展开）点击后折叠', () => {
-    render(
-      <DispatchChip child={makeChild({ status: 'executing' })} subStream={makeStream()} />,
-    );
-    expect(screen.getByText('子任务输出文本')).toBeInTheDocument();
-    fireEvent.click(getHeaderButton());
-    expect(screen.queryByText('子任务输出文本')).not.toBeInTheDocument();
-    expect(getHeaderButton()).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('连续点击两次回到原状态', () => {
@@ -221,37 +231,35 @@ describe('DispatchChip — 点击 toggle', () => {
 });
 
 describe('DispatchChip — status 变化的自动行为', () => {
-  it('未手动 toggle 时，completed → executing 自动展开', () => {
+  it('未手动 toggle 时，executing → failed 自动展开（错误细节必须第一眼可见）', () => {
     const { rerender } = render(
-      <DispatchChip child={makeChild({ status: 'completed' })} subStream={makeStream()} />,
+      <DispatchChip child={makeChild({ status: 'executing' })} subStream={makeStream()} />,
     );
     expect(screen.queryByText('子任务输出文本')).not.toBeInTheDocument();
     rerender(
-      <DispatchChip child={makeChild({ status: 'executing' })} subStream={makeStream()} />,
+      <DispatchChip child={makeChild({ status: 'failed' })} subStream={makeStream()} />,
     );
     expect(screen.getByText('子任务输出文本')).toBeInTheDocument();
   });
 
-  it('未手动 toggle 时，executing → completed 自动折叠', () => {
+  it('未手动 toggle 时，failed → executing 自动折叠（运行态默认收起）', () => {
     const { rerender } = render(
-      <DispatchChip child={makeChild({ status: 'executing' })} subStream={makeStream()} />,
+      <DispatchChip child={makeChild({ status: 'failed' })} subStream={makeStream()} />,
     );
     expect(screen.getByText('子任务输出文本')).toBeInTheDocument();
     rerender(
-      <DispatchChip child={makeChild({ status: 'completed' })} subStream={makeStream()} />,
+      <DispatchChip child={makeChild({ status: 'executing' })} subStream={makeStream()} />,
     );
     expect(screen.queryByText('子任务输出文本')).not.toBeInTheDocument();
   });
 
-  it('用户手动折叠后，status 变化不再自动展开（userToggled 抑制）', () => {
-    // 初始 executing → 自动展开
+  it('用户手动折叠后，status 变为 failed 也不自动展开（userToggled 抑制）', () => {
+    // executing 默认折叠——两次点击先展开再折叠，落回手动折叠态
     const { rerender } = render(
       <DispatchChip child={makeChild({ status: 'executing' })} subStream={makeStream()} />,
     );
-    expect(screen.getByText('子任务输出文本')).toBeInTheDocument();
-    // 用户手动折叠
-    fireEvent.click(getHeaderButton());
-    expect(screen.queryByText('子任务输出文本')).not.toBeInTheDocument();
+    fireEvent.click(getHeaderButton()); // 手动展开
+    fireEvent.click(getHeaderButton()); // 手动折叠
     // status 变为 failed（自动行为应展开，但用户已手动折叠 → 保持折叠）
     rerender(
       <DispatchChip child={makeChild({ status: 'failed' })} subStream={makeStream()} />,
@@ -260,17 +268,33 @@ describe('DispatchChip — status 变化的自动行为', () => {
   });
 
   it('用户手动展开后，status 变化不再自动折叠（userToggled 抑制）', () => {
-    // 初始 completed → 自动折叠
+    // 初始 completed → 自动折叠（头行仅摘要首行）
+    const twoParas = makeStream({ status: 'done', text: '摘要首行\n\n正文第二行' });
     const { rerender } = render(
-      <DispatchChip child={makeChild({ status: 'completed' })} subStream={makeStream()} />,
+      <DispatchChip child={makeChild({ status: 'completed' })} subStream={twoParas} />,
     );
-    expect(screen.queryByText('子任务输出文本')).not.toBeInTheDocument();
+    expect(screen.queryByText('正文第二行')).not.toBeInTheDocument();
     // 用户手动展开
     fireEvent.click(getHeaderButton());
-    expect(screen.getByText('子任务输出文本')).toBeInTheDocument();
+    expect(screen.getByText('正文第二行')).toBeInTheDocument();
     // status 变为 queued（自动行为应折叠，但用户已手动展开 → 保持展开）
     rerender(
-      <DispatchChip child={makeChild({ status: 'queued' })} subStream={makeStream()} />,
+      <DispatchChip child={makeChild({ status: 'queued' })} subStream={twoParas} />,
+    );
+    expect(screen.getByText('正文第二行')).toBeInTheDocument();
+  });
+
+  it('用户手动展开 executing 后，→ completed 保持展开（userToggled 抑制）', () => {
+    // 2026-11-04 状态行+结果摘要回归锁：executing 默认折叠，用户主动展开的
+    // 观察态不得被完成态自动收起
+    const { rerender } = render(
+      <DispatchChip child={makeChild({ status: 'executing' })} subStream={makeStream()} />,
+    );
+    expect(screen.queryByText('子任务输出文本')).not.toBeInTheDocument();
+    fireEvent.click(getHeaderButton());
+    expect(screen.getByText('子任务输出文本')).toBeInTheDocument();
+    rerender(
+      <DispatchChip child={makeChild({ status: 'completed' })} subStream={makeStream()} />,
     );
     expect(screen.getByText('子任务输出文本')).toBeInTheDocument();
   });
@@ -390,13 +414,13 @@ describe('DispatchChip — 链级停止按钮', () => {
         subStream={makeStream()}
       />,
     );
-    // executing 默认展开——若 stopPropagation 缺失，点击会被外层 handleToggle 折叠
-    expect(getHeaderButton()).toHaveAttribute('aria-expanded', 'true');
+    // executing 默认折叠——若 stopPropagation 缺失，点击会被外层 handleToggle 展开
+    expect(getHeaderButton()).toHaveAttribute('aria-expanded', 'false');
     fireEvent.click(screen.getByRole('button', { name: '停止 码农 的子任务' }));
     await waitFor(() =>
       expect(cancelChainMock).toHaveBeenCalledWith({ subStreamSessionId: 'sub-stream-9' }),
     );
-    expect(getHeaderButton()).toHaveAttribute('aria-expanded', 'true');
+    expect(getHeaderButton()).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('cancelChain 返回 not_found → toast『子任务已结束』', async () => {
@@ -568,4 +592,123 @@ describe('DispatchChip — 最后活动指示（D8）', () => {
     );
     expect(screen.queryByTestId('last-activity')).not.toBeInTheDocument();
   });
+});
+
+// === 2026-11-04 状态行+结果摘要：executing 默认折叠后的头行速览 ===
+// 契约：忙态（executing/queued）+ 有 subStream → 活动提示之后渲染「工具 N 次」
+// （计数 = subStream.toolCalls.length，0 次也如实显示）；终态与派单空窗不渲染。
+describe('DispatchChip — 忙态工具计数', () => {
+  it('executing 折叠头行显示「工具 N 次」（计数含进行中的调用）', () => {
+    render(
+      <DispatchChip
+        child={makeChild({ status: 'executing' })}
+        subStream={makeStream({
+          toolCalls: [
+            { callId: 'c1', toolName: 'read_file', args: {}, result: 'ok', success: true },
+            { callId: 'c2', toolName: 'write_file', args: {}, result: 'ok', success: true },
+            { callId: 'c3', toolName: 'grep', args: {}, result: null, success: null },
+          ],
+        })}
+      />,
+    );
+    expect(getHeaderButton()).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByTestId('dispatch-tool-count')).toHaveTextContent('工具 3 次');
+  });
+
+  it('queued（isBusy）同样渲染；0 次如实显示', () => {
+    render(
+      <DispatchChip
+        child={makeChild({ status: 'queued' })}
+        subStream={makeStream({ segments: [{ kind: 'thinking', text: '排队思考' }] })}
+      />,
+    );
+    expect(screen.getByTestId('dispatch-tool-count')).toHaveTextContent('工具 0 次');
+  });
+
+  it.each(['completed', 'failed', 'aborted', 'delegated'] as const)(
+    '%s（非忙态）不渲染工具计数',
+    (status) => {
+      render(
+        <DispatchChip
+          child={makeChild({ status })}
+          subStream={makeStream({
+            toolCalls: [{ callId: 'c1', toolName: 'read_file', args: {}, result: 'ok', success: true }],
+          })}
+        />,
+      );
+      expect(screen.queryByTestId('dispatch-tool-count')).not.toBeInTheDocument();
+    },
+  );
+
+  it('executing 无 subStream（派单空窗）→ 不渲染工具计数', () => {
+    render(<DispatchChip child={makeChild({ status: 'executing' })} />);
+    expect(screen.queryByTestId('dispatch-tool-count')).not.toBeInTheDocument();
+  });
+});
+
+// === 2026-11-04 状态行+结果摘要：completed 折叠头行的结果摘要 ===
+// 契约：completed 且折叠 → 状态徽标后渲染末个 text 段的首个非空行（单行 truncate）；
+// 展开（摘要让位于完整正文）、无 text 段、非 completed 状态均不渲染。
+describe('DispatchChip — 完成态结果摘要', () => {
+  it('completed 折叠头行显示最后一个 text 段的首行（仅首行 + truncate 单行收口）', () => {
+    render(
+      <DispatchChip
+        child={makeChild({ status: 'completed' })}
+        subStream={makeStream({
+          status: 'done',
+          segments: [
+            { kind: 'thinking', text: '想过' },
+            { kind: 'text', text: '中间结论' },
+            { kind: 'tool_call', callId: 'c1', toolName: 'bash', args: {}, result: 'ok', success: true },
+            { kind: 'text', text: '最终结果第一行\n第二行细节' },
+          ],
+        })}
+      />,
+    );
+    expect(getHeaderButton()).toHaveAttribute('aria-expanded', 'false');
+    const el = screen.getByTestId('dispatch-result-summary');
+    expect(el).toHaveTextContent('最终结果第一行');
+    expect(el).not.toHaveTextContent('第二行细节');
+    expect(el).not.toHaveTextContent('中间结论');
+    expect(el).toHaveClass('truncate');
+  });
+
+  it('无 text 段（仅工具/思考）→ 不渲染摘要', () => {
+    render(
+      <DispatchChip
+        child={makeChild({ status: 'completed' })}
+        subStream={makeStream({
+          status: 'done',
+          segments: [{ kind: 'tool_call', callId: 'c1', toolName: 'bash', args: {}, result: 'ok', success: true }],
+        })}
+      />,
+    );
+    expect(screen.queryByTestId('dispatch-result-summary')).not.toBeInTheDocument();
+  });
+
+  it('用户展开后摘要消失，完整正文（SubAgentSection）接管', () => {
+    render(
+      <DispatchChip
+        child={makeChild({ status: 'completed' })}
+        subStream={makeStream({ status: 'done' })}
+      />,
+    );
+    expect(screen.getByTestId('dispatch-result-summary')).toHaveTextContent('子任务输出文本');
+    fireEvent.click(getHeaderButton());
+    expect(screen.queryByTestId('dispatch-result-summary')).not.toBeInTheDocument();
+    expect(screen.getByText('子任务输出文本')).toBeInTheDocument();
+  });
+
+  it.each(['failed', 'aborted', 'delegated'] as const)(
+    '%s 不渲染结果摘要（failed 自动展开看细节；aborted/delegated 非速览对象）',
+    (status) => {
+      render(
+        <DispatchChip
+          child={makeChild({ status })}
+          subStream={makeStream({ status: 'done' })}
+        />,
+      );
+      expect(screen.queryByTestId('dispatch-result-summary')).not.toBeInTheDocument();
+    },
+  );
 });

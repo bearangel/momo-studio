@@ -521,7 +521,13 @@ describe('AgentStreamBubble — dispatch subStream 接线（子 agent 工作过�
       />,
     );
 
-    // executing 自动展开 → SubAgentSection 渲染子 agent 正文
+    // executing 默认折叠（2026-11-04 状态行+结果摘要）——正文不可见；
+    // 点击 chip 头行展开 → SubAgentSection 渲染子 agent 正文（subStream 接线不破）
+    expect(screen.queryByText('子 agent 正在工作')).not.toBeInTheDocument();
+    const chipHeader = document.querySelector<HTMLElement>('[role=button][aria-expanded]');
+    expect(chipHeader).not.toBeNull();
+    expect(chipHeader).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(chipHeader!);
     expect(await screen.findByText('子 agent 正在工作')).toBeInTheDocument();
 
     useStreamStore.getState().reset();

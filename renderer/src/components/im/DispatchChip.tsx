@@ -8,6 +8,9 @@
 // abort_dispatch 广播 → 子流事件回流驱动（非本地乐观态）。
 // D8（2026-10-31）：isBusy 头行在活动提示与计时器之间渲染「活动 Ns 前」
 // 停滞指示（LastActivity，数据源 subStream.lastEventAt，>30s 转警示）。
+// 2026-11-04（状态行+结果摘要）：executing 改默认折叠——忙态头行加「工具 N 次」
+// 计数、completed 折叠头行加结果摘要（末个 text 段首行，CSS truncate）；
+// failed 仍自动展开（错误细节必须可见），userToggled 语义不变。
 import { useEffect, useState, type KeyboardEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { Brain, ChevronDown, ChevronRight, CircleCheck, CircleSlash, CircleX, Clock, Loader2, PenLine, Send, ShieldQuestion, Square, Timer, Wrench } from 'lucide-react';
@@ -44,9 +47,11 @@ const STATUS_ICON: Record<DispatchStatus, LucideIcon> = {
   delegated: Send,
 };
 
-/** 各状态的自动展开默认值（用户未手动 toggle 前） */
+/** 各状态的自动展开默认值（用户未手动 toggle 前）。
+ *  2026-11-04 起 executing 也默认折叠（头行状态行速览代替实时正文）；
+ *  仅 failed 保持自动展开——错误细节必须第一眼可见。 */
 const AUTO_EXPANDED: Record<DispatchStatus, boolean> = {
-  executing: true,
+  executing: false,
   failed: true,
   completed: false,
   queued: false,
@@ -69,6 +74,22 @@ function deriveActivity(subStream: StreamState | undefined): { icon: LucideIcon;
     case 'dispatch':
       return null;
   }
+}
+
+/** 结果摘要：倒序找最后一个有内容的 text 段，取其首个非空行
+ *  （completed 折叠头行的结果速览；仅首行，超宽由 CSS truncate 收口） */
+function deriveResultSummary(subStream: StreamState | undefined): string | null {
+  if (!subStream) return null;
+  for (let i = subStream.segments.length - 1; i >= 0; i--) {
+    const seg = subStream.segments[i];
+    if (!seg || seg.kind !== 'text') continue;
+    const firstLine = seg.text
+      .split('\n')
+      .map((line) => line.trim())
+      .find((line) => line.length > 0);
+    if (firstLine) return firstLine;
+  }
+  return null;
 }
 
 /** 每秒跳动的耗时显示（executing 期间） */
@@ -99,6 +120,11 @@ export function DispatchChip({ child, subStream, subMessageId }: DispatchChipPro
 
   const [expanded, setExpanded] = useState(() => AUTO_EXPANDED[child.status]);
   const [userToggled, setUserToggled] = useState(false);
+
+  // 折叠速览：忙态工具计数（含 0 次，实时诚实）；completed 折叠时的结果摘要首行
+  const toolCount = isBusy && subStream ? subStream.toolCalls.length : null;
+  const resultSummary =
+    child.status === 'completed' && !expanded ? deriveResultSummary(subStream) : null;
 
   useEffect(() => {
     if (!userToggled) {
@@ -155,6 +181,15 @@ export function DispatchChip({ child, subStream, subMessageId }: DispatchChipPro
             {activity.text}
           </span>
         )}
+        {toolCount !== null && (
+          <span
+            className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap text-[11px] text-tertiary"
+            data-testid="dispatch-tool-count"
+          >
+            <Wrench size={11} strokeWidth={1.75} aria-hidden />
+            工具 {toolCount} 次
+          </span>
+        )}
         {/* D8：最后活动指示（停滞 >30s 转警示）——忙态且子流有实时活动数据才渲染 */}
         {isBusy && subStream?.lastEventAt !== undefined && (
           <LastActivity lastEventAt={subStream.lastEventAt} />
@@ -173,6 +208,15 @@ export function DispatchChip({ child, subStream, subMessageId }: DispatchChipPro
           >
             <Square size={11} strokeWidth={1.75} aria-hidden />
           </button>
+        )}
+        {resultSummary && (
+          <span
+            data-testid="dispatch-result-summary"
+            className="min-w-0 flex-1 truncate text-[11px] text-tertiary"
+            title={resultSummary}
+          >
+            {resultSummary}
+          </span>
         )}
         <span className="ml-auto shrink-0 text-tertiary" aria-hidden>
           {expanded ? <ChevronDown size={12} strokeWidth={1.75} /> : <ChevronRight size={12} strokeWidth={1.75} />}
