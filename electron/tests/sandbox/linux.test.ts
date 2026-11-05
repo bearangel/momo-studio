@@ -126,3 +126,43 @@ describe('buildBwrapArgs', () => {
     expect(args[args.indexOf(real) - 1]).toBe('--bind');
   });
 });
+describe('buildBwrapArgs full-disk 写域（2026-11-05 spec §5.4）', () => {
+  const fd: ShellSandboxPolicy = {
+    workspaceDir: '/tmp/snapshot-ws', homeDir: '/home/snapshot', tmpDir: '/tmp',
+    sensitiveDirs: ['/home/u/.ssh'], networkEnabled: false,
+    extraWriteDirs: [], writeScope: 'full-disk',
+  };
+
+  it('次序锁：--bind / / 前置 → 敏感遮盖 → 核心 ro-bind → /usr/local re-bind 殿后', () => {
+    const args = buildBwrapArgs(fd);
+    const idx = (frag: string): number => args.indexOf(frag);
+    expect(args.slice(0, 3)).toEqual(['--bind', '/', '/']);
+    expect(idx('/home/u/.ssh')).toBeLessThan(idx('/usr/local'));       // 敏感遮盖在核心降级之前
+    expect(idx('/usr/local')).toBeGreaterThan(args.lastIndexOf('--ro-bind')); // re-bind 殿后于全部 ro-bind
+    expect(args.indexOf('/usr', idx('/usr/local'))).toBe(-1);          // /usr ro-bind 在 re-bind 之前且不重复
+    expect(args).toContain('--tmpfs');
+  });
+
+  it('幽灵核心条目跳过：磁盘不存在的核心路径零出现且不抛（usr-merge/CI 无盘形态兜底）', () => {
+    const args = buildBwrapArgs(fd);
+    for (const core of ['/boot', '/lib', '/lib64']) {
+      if (!fs.existsSync(core)) {
+        expect(args.filter((a) => a === core)).toHaveLength(0);
+      }
+    }
+  });
+
+  it('confined 态首参仍为 --ro-bind / /（既有行为反证）', () => {
+    expect(buildBwrapArgs({ ...fd, writeScope: 'confined' as const }).slice(0, 3))
+      .toEqual(['--ro-bind', '/', '/']);
+  });
+
+  it('full-disk 态 extraWriteDirs 不追加独立 bind（全盘 RW 已覆盖，spec §5.4 省略语义）', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bwrap-fd-tc-'));
+    createdTmpDirs.push(tmp);
+    const real = path.join(tmp, '.rustup');
+    fs.mkdirSync(real);
+    const args = buildBwrapArgs({ ...fd, extraWriteDirs: [real] });
+    expect(args.filter((a) => a === real)).toHaveLength(0);
+  });
+});

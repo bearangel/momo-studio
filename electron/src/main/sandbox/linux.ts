@@ -5,10 +5,15 @@
 // 文件挂 tmpfs 会让 bwrap 整体失败），改用 --ro-bind /dev/null 只读遮盖：
 // 读取恒为空内容且不可写。
 import fs from 'node:fs';
+import { FULL_DISK_WRITE_DENY_LINUX, FULL_DISK_WRITE_REALLOW } from './policy';
 import type { ShellSandboxPolicy } from './types';
 
 export function buildBwrapArgs(policy: ShellSandboxPolicy): string[] {
-  const args: string[] = ['--ro-bind', '/', '/'];
+  // 根挂载两态（spec 2026-11-05 §5.4）：confined = 全盘只读；full-disk = 全盘
+  // RW，核心目录随后置 ro-bind 降回只读（bwrap 后挂载覆盖先挂载——次序即正确性）
+  const args: string[] = policy.writeScope === 'full-disk'
+    ? ['--bind', '/', '/']
+    : ['--ro-bind', '/', '/'];
   for (const dir of policy.sensitiveDirs) {
     // 按磁盘类型分派遮盖方式：普通文件 → /dev/null 只读遮盖；目录或不存在
     // （快照测试等无磁盘场景）→ 维持 tmpfs 既有行为
@@ -21,15 +26,29 @@ export function buildBwrapArgs(policy: ShellSandboxPolicy): string[] {
     if (isFile) args.push('--ro-bind', '/dev/null', dir);
     else args.push('--tmpfs', dir);
   }
+  if (policy.writeScope === 'full-disk') {
+    // 核心目录逐条降回只读；存在性过滤在本消费点（extraWriteDirs 先例——单条
+    // 幽灵路径不得打挂整个 spawn；usr-merge symlink 条目 ro-bind 跟随解析无害）
+    for (const core of FULL_DISK_WRITE_DENY_LINUX) {
+      if (!fs.existsSync(core)) continue;
+      args.push('--ro-bind', core, core);
+    }
+    if (fs.existsSync(FULL_DISK_WRITE_REALLOW)) {
+      args.push('--bind', FULL_DISK_WRITE_REALLOW, FULL_DISK_WRITE_REALLOW);
+    }
+  }
   args.push('--bind', policy.workspaceDir, policy.workspaceDir);
   // 工具链目录授权（v2.5 spec §9）：每目录 RW bind 到原路径（包管理器在惯常
-  // 安装位置写入）；空数组零追加。存在性过滤在本消费点做（终审 F1，sensitiveDirs
+  // 安装位置写入）；空数组零追加；full-disk 态不追加独立 bind（全盘 RW 已
+  // 覆盖，spec §5.4 省略语义）。存在性过滤在本消费点做（终审 F1，sensitiveDirs
   // 按磁盘类型分派同款先例——bwrap 特定顾虑在 bwrap 参数构造处解决）：
   // --bind 对不存在路径硬失败，绝不能让单条幽灵路径打挂整个会话的 spawn；
   // policy 层保持全量透传（macOS Seatbelt 对不存在路径 allow 无害）
-  for (const dir of policy.extraWriteDirs) {
-    if (!fs.existsSync(dir)) continue;
-    args.push('--bind', dir, dir);
+  if (policy.writeScope !== 'full-disk') {
+    for (const dir of policy.extraWriteDirs) {
+      if (!fs.existsSync(dir)) continue;
+      args.push('--bind', dir, dir);
+    }
   }
   // tmp 用真实主机 tmp（bind RW）：npm 大构建中间产物落盘而非吃 RAM
   args.push('--bind', '/tmp', '/tmp');
