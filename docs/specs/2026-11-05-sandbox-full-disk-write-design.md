@@ -166,8 +166,16 @@ Linux `buildBwrapArgs`（`--ro-bind / /` + workspace/extraDirs `--bind` RW）。
 
 ### 5.5 入口接线
 
-- `sandbox/index.ts`：`resolveShellSpawn` / `resolveSandboxedSpawn` 均读 `settings.writePolicy`
-  → 作 `buildPolicy` 第 4 参——bash 与插件 run_js 两条通道同步生效。
+- **bash 通道（子进程侧，照 netOn 同款过桥路径）**：`ShellTools.bashOnce` 运行在 runtime 子进程，
+  不可见主进程 settings DB——`writePolicy` 经既有 `net-trust-op effective` 线协议随 payload 下行
+  （`{ netOn, extraDirs }` → `{ netOn, extraDirs, writePolicy }`，只加字段：旧子进程应答缺键按
+  `'confined'` 兜底，`net-trust-bridge` 规范化层处理）；`resolveShellSpawn` 的 `opts` 增
+  `writeScope?: SandboxWritePolicy`，未传（旧调用方/单测）回退 `settings.writePolicy` 双态推导
+  ——与 networkEnabled 完全同构的回退语义。**线协议形状锁测试**
+  （`network-trust.test.ts` payload 恰两键断言、`shell-net-trust.test.ts` 桥形状锁）随字段同 commit
+  扩为三键（momo-boundary-rules：生产者消费者成对）。
+- `sandbox/index.ts`：`resolveSandboxedSpawn`（插件 run_js，主进程侧执行）直读
+  `settings.writePolicy` → `buildPolicy` 第 4 参——两条通道同步生效。
 - spawn tag：full-disk 时追加 `/fdw` 段，如 `seatbelt/net-on/fdw`、`bwrap/net-off/fdw`；
   confined 不追加（**既有 tag 断言零改动**）。LLM 自诊可辨写域。
 - `cacheEnvAdditions` 不变（npm/pip 缓存仍重定向 tmp——全盘下可写用户缓存目录，但保持一致可预测）。
@@ -196,7 +204,9 @@ Linux `buildBwrapArgs`（`--ro-bind / /` + workspace/extraDirs `--bind` RW）。
 | `tests/sandbox/policy.test.ts` | writeScope 第 4 参默认 confined；full-disk 透传；deny 清单常量形态锁（两平台 + re-allow 常量） |
 | `tests/sandbox/macos.test.ts` | **confined 快照字节不变**（回归锁）；full-disk 快照：全盘 allow → 核心 deny 次序 → /usr/local re-allow 殿后；sensitiveDirs 读 deny 共存 |
 | `tests/sandbox/linux.test.ts` | confined 快照字节不变；full-disk：`--bind / /` 前置 + 核心 ro-bind + `/usr/local` bind 殿后；不存在核心条目跳过（无磁盘 fixture 用例） |
-| `tests/sandbox/index 或 shell-tools 侧` | spawn tag：full-disk 追加 `/fdw`、confined 无后缀（既有断言零改动的反证） |
+| `tests/sandbox/network-trust.test.ts` | effective payload 增 `writePolicy` 键：主进程 settings 双态下行；**形状锁两键 → 三键同 commit 扩**；旧子进程不传 workspaceId 等既有兼容用例不回归 |
+| `tests/agent/tools/shell-net-trust.test.ts` | 桥规范化：应答缺 writePolicy / 脏值 → confined 兜底；**桥形状锁两键 → 三键**；bash spawn 传 writeScope 进 opts |
+| `tests/sandbox/resolve-spawn.test.ts` + `sandboxed-spawn.test.ts` | spawn tag：full-disk 追加 `/fdw`、confined 无后缀（既有断言零改动的反证） |
 | `renderer SandboxSettingsPanel.test.tsx` | 开关渲染（含 win 禁用态）；确认对话框开/取消流；确认后 `settings:updateGlobal` 落值 |
 
 单测纪律（momo-test-rules）：快照锁真实渲染产物，不 mock 被测物；错误路径（迁移写失败、脏值）有专项用例。
