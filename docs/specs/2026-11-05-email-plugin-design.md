@@ -102,7 +102,7 @@ secrets: {
 | 文件 | 内容 | 边界 |
 |---|---|---|
 | `accounts.json` | 账号元数据：accountId、email、显示名、imap/smtp host/port/tls 模式、用户名、创建时间、健康状态、`retention`（本地缓存保留时长） | **不含密码**（密码在 keytar，键 `account:<accountId>`）；人可读 |
-| `data.db` | `node:sqlite` 数据库（Electron 44 / Node 24 内置，无原生依赖）：表 `drafts`（草稿登记 + `inputPayload`，对外投影剔除）、`envelope_cache`（信封缓存，每 folder 上限 500、uid 降序）、`envelope_cache_meta`（savedAt）；`PRAGMA user_version` 版本化（当前 1）；WAL + `busy_timeout=5000` | service 是唯一写者；agent 工具子进程严禁直开，一律走 `callService` |
+| `data.db` | `node:sqlite` 数据库（Electron 44 / Node 24 内置，无原生依赖）：表 `drafts`（草稿登记 + `inputPayload`，对外投影剔除）、`envelope_cache`（信封缓存，每 folder 上限 500、uid 降序）、`envelope_cache_meta`（savedAt）、`folder_cache`（文件夹树 + unseen，冷启动秒开）；`PRAGMA user_version` 版本化（当前 2）；WAL + `busy_timeout=5000` | service 是唯一写者；agent 工具子进程严禁直开，一律走 `callService` |
 
 - 研发期一次性重置：启动时清理旧 `drafts.json` 与 `cache/`，**不做数据迁移**（研发阶段无兼容负担）。
 - 正文缓存仍为纯内存 LRU（50 封，键 `accountId\|folder\|uid`），不落盘、重启后按需重拉。
@@ -116,6 +116,15 @@ secrets: {
 - 已发送（Sent）永久保留：即使账号设为 1 个月，Sent 的本地缓存也不清理。
 - sent 文件夹探测失败或找不到 → 一律不清理（fail-safe）。
 - 改小保留期后读缓存即时过滤，不必等下次重写；写缓存时同步回收过期行。
+
+### 5.1.2 列表读取：本地优先 + 后台刷新（SWR）
+
+- `folders.peek` / `mails.peek`：只读内存或 SQLite（`folder_cache` / `envelope_cache`），零 IMAP 往返；无缓存返回空值（`{ value: null }` / 空页）。
+- 面板切换账号/文件夹：先 peek 渲染（秒开），再后台 `folders.list` / `mails.refresh` 静默替换；失败仅状态条「离线：显示上次数据」，保留旧数据、不清空列表。
+- 竞态守卫：每次切换自增 `S.reqSeq`，背景回调仅在 seq、账号、文件夹均未变时应用。
+- 列表重绘保持同 folder/page 的滚动位置。
+- `folders.list` / `mails.list` / `mails.refresh` 语义不变（仍是阻塞远端读写，供按钮与后台刷新使用）。
+- 连接自愈：adapter 暴露 `usable()`；连接不可用，或出现 Connection not available / Not connected / Connection closed / ECONNRESET / socket 类错误时，丢弃连接重建并重试一次；业务错误（认证/邮件不存在等）不重试。
 
 ### 5.2 方法目录（`handle(method, params)`）
 

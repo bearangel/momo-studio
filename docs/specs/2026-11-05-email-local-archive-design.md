@@ -31,7 +31,7 @@
 ## 2. 现状事实（实现依据）
 
 - 插件 service 运行在 Electron 主进程，经 `createRequire` 原生加载，无 fs 沙箱；数据目录为 `<userData>/plugins/data/email/`
-- 现有 `data.db`（`node:sqlite`）schema `user_version=1`：`drafts` / `envelope_cache` / `envelope_cache_meta`
+- 现有 `data.db`（`node:sqlite`）schema `user_version=2`：`drafts` / `envelope_cache` / `envelope_cache_meta` / `folder_cache`
 - 读信用 `mailbox.read()`：IMAP `fetchSource` → mailparser 解析，内存 LRU 50 条
 - 保留策略已实现于 `mailbox.js`：`retentionCutoff()` + `filterByAge()`，Sent 永久、sent 探测失败不清理
 - 面板为 `sandbox="allow-scripts"` iframe，经 `PanelChannel` 五消息协议通信；入站白名单仅 `ready / app:getContext / app:subscribe / plugin:callService`（`renderer/src/lib/plugin/panel-channel.ts`）
@@ -79,9 +79,9 @@
 - 原子写：写入同目录 `.tmp-<pid>-<rand>` → `fsync` 可选 → `rename`
 - 索引存**相对路径**；根目录切换不破坏旧索引语义（见 §8）
 
-## 5. 索引（`data.db` schema v2）
+## 5. 索引（`data.db` schema v3）
 
-`PRAGMA user_version` 1 → 2，仅新增表（研发期无历史数据迁移）：
+`PRAGMA user_version` 2 → 3，仅新增表（研发期无历史数据迁移）。版本占用：**v2 = folder_cache（列表 SWR）；v3 = local_archive（归档）**。
 
 ```sql
 CREATE TABLE IF NOT EXISTS local_archive (
@@ -238,7 +238,7 @@ archive.write(accountId, folder, uid, raw, msgDate):
 
 - `crypto.test.ts`：round-trip；AAD 篡改失败；错误密钥失败；截断/魔数错误
 - `archive.test.ts`：写→读；>25MB 不落盘；原子写（tmp 不残留）；rel_path 消毒（`..`/反斜杠/空段拒绝）；root 切换后旧行不命中
-- `store.test.ts`：schema v2 升级（v1→v2 仅建表）；索引状态机；聚合统计
+- `store.test.ts`：schema v3 升级（v2→v3 仅建表）；索引状态机；聚合统计
 - `mailbox.test.ts`：命中本地不触发 IMAP；缺失回退并补写；corrupt 自愈；Sent 不清理
 - `service-index.test.ts`：`archive.setRoot/clear/stats` 路由；非法路径拒绝
 - `panel-static.test.ts`：存储区元素与 `app:pickDirectory` 调用锚点
@@ -268,7 +268,7 @@ archive.write(accountId, folder, uid, raw, msgDate):
 
 1. 平台桥：`app:pickDirectory`（panel-channel 白名单 + PanelHost handler + 测试）
 2. `crypto.js` + `archive.js`（含 settings.json 与 root_id）
-3. `store` schema v2：`local_archive` 表 + 聚合/状态方法
+3. `store` schema v3：`local_archive` 表 + 聚合/状态方法
 4. 读路径接入：`mailbox.read` / `attachments.get` 本地优先 + 异步回填
 5. 保留清理与自愈（启动核对、孤儿清理）
 6. 面板存储区 UI + 路由（setRoot/clear/stats）
