@@ -24,6 +24,7 @@ vi.mock('electron', () => ({
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { registerWorkspaceHandlers } from '../../src/main/workspace/ipc.handlers';
+import { wirePluginEventSources } from '../../src/main/plugin/event-sources';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-ws-switch-${Date.now()}-${process.pid}`);
 const onSwitched = vi.fn();
@@ -91,5 +92,23 @@ describe('活动工作区单点（插件面消费）', () => {
     const deleteHandler = handlers.get('workspace:delete');
     await deleteHandler?.({} as never, 'ws-1');
     expect(fs.existsSync(`${resolvePluginDataDir('cg')}/config.ws-1.json`)).toBe(false);
+  });
+});
+
+// ── workspaceClosed 插件事件 payload（2026-10-17 spec §4.5：reason 显式化）──
+describe('workspace:delete 插件事件', () => {
+  afterEach(() => {
+    // 断开 spy 接线，避免污染同文件其它用例（生产启动序列会重新注入真实 bus）
+    wirePluginEventSources({} as never, () => undefined);
+  });
+
+  it('删除工作区 → 恰好一次 workspaceClosed { workspaceId, reason: deleted }', async () => {
+    const emitSpy = vi.fn();
+    wirePluginEventSources({} as never, emitSpy);
+    const deleteHandler = handlers.get('workspace:delete');
+    expect(deleteHandler).toBeTypeOf('function');
+    await deleteHandler?.({} as never, 'ws-1');
+    expect(emitSpy).toHaveBeenCalledTimes(1);
+    expect(emitSpy).toHaveBeenCalledWith('workspaceClosed', { workspaceId: 'ws-1', reason: 'deleted' });
   });
 });
