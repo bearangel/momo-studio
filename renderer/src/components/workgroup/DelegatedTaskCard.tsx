@@ -25,7 +25,7 @@
 // 外派卡不接拖拽（useSortable 零注册）：行状态由 hub 账本驱动，本地 move 会
 // 与远端真相打架——列间迁移只能经委派事件回写。
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Ban, Bot, Check, CircleCheck, CircleHelp, CircleX, Lock, RefreshCw, RotateCcw, Users, X, Zap } from 'lucide-react';
+import { Ban, Bot, CalendarCheck, Check, CircleCheck, CircleHelp, CircleSlash, CircleX, Inbox, Lock, RefreshCw, RotateCcw, Users, X, Zap } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useHubStore } from '../../stores/hub.store';
 import { cacheDelegationGroupNames, useHubDelegationStore } from '../../stores/hub-delegation.store';
@@ -38,6 +38,7 @@ import type {
   HubGroupListResult,
   HubReceivedDelegation,
   HubStatus,
+  HubTaskProgressEvent,
   HubTaskRecord,
   TaskRow,
 } from '../../ipc/types';
@@ -58,6 +59,17 @@ function shortGroupId(groupId: string): string {
 /** M3.1 版本过低类错误码（rejection message 前缀 [code]——主进程 ipc.handlers 编码） */
 const ANSWER_VERSION_LOW_CODES = new Set(['unsupported_method', 'unknown_method', 'node_unsupported']);
 
+/**
+ * 1.10.0 平行草稿生命周期拍 kind（spec §3.3 progress 枚举扩值）：received=草稿
+ * 已落接收方看板 / arranged=接收方已指派 agent 或团队。types.d.ts 的
+ * HubDelegationProgressEntry 尚未携带 kind（kv 持久路主进程只记 waiting 标志），
+ * renderer 内部以交叉类型扩展——live 推送路（onTaskProgress）携带时映射进条目。
+ */
+export type PeerProgressEntry = HubDelegationProgressEntry & { kind?: 'received' | 'arranged' };
+
+/** failed 且 reason 携带 `declined:` 前缀（拒收约定，spec §3.3）→ 拒收态渲染 */
+const DECLINED_PREFIX = 'declined:';
+
 /** 看板外派投影上下文（DelegationBoardProvider 注入；缺省空值=离线降级渲染） */
 export interface DelegationBoardContextValue {
   selfNodeId: string | null;
@@ -66,7 +78,7 @@ export interface DelegationBoardContextValue {
   /** hub 委派账本（delegationId → 行——leader 侧六态/目标节点权威） */
   ledger: Record<string, HubTaskRecord>;
   /** 进度摘要（delegationId → 最新条目；kv 持久 + 推送 live 合并；waiting=T12 等待标志） */
-  progress: Record<string, HubDelegationProgressEntry>;
+  progress: Record<string, PeerProgressEntry>;
   /** worker 侧本地委派记录（delegationId → byNode 来源） */
   received: Record<string, HubReceivedDelegation>;
   /** 本机等待确认会话（sessionId → 摘要——worker 等待卡数据源，T12） */
@@ -86,6 +98,11 @@ const EMPTY_BOARD: DelegationBoardContextValue = {
 };
 
 const DelegationBoardContext = createContext<DelegationBoardContextValue>(EMPTY_BOARD);
+
+/** 看板级外派数据消费钩子（BoardCanvas 分发判定等板级消费方共用 provider 数据） */
+export function useDelegationBoard(): DelegationBoardContextValue {
+  return useContext(DelegationBoardContext);
+}
 
 /** localWaiting 拉取节拍：5s 轮询（grant/deny 处置无推送通道，轮询兜底去态） */
 const LOCAL_WAITING_POLL_MS = 5000;
@@ -191,13 +208,17 @@ function useDelegationBoardData(refreshTasks?: () => void): DelegationBoardConte
   useEffect(() => {
     const disposers = [
       ipc.hub.onTaskProgress((evt) => {
+        // 1.10.0 宽容读取：hub 白名单已扩 received/arranged（协议 1.10），
+        // 类型声明暂只列 waiting-input——运行时透传值以 hub 为准（见 PeerProgressEntry）
+        const kind = evt.kind as HubTaskProgressEvent['kind'] | 'received' | 'arranged' | undefined;
         setLiveProgress((prev) => ({
           ...prev,
           [evt.taskId]: {
             excerpt: evt.excerpt,
             lastSeq: evt.lastSeq,
             at: Date.now(),
-            waiting: evt.kind === 'waiting-input',
+            waiting: kind === 'waiting-input',
+            ...(kind === 'received' || kind === 'arranged' ? { kind } : {}),
           },
         }));
       }),
@@ -285,6 +306,10 @@ function inferHubStatus(t: TaskRow): HubDelegationStatus | null {
 }
 
 const RECEIVED_STATE_TO_HUB: Record<HubReceivedDelegation['state'], HubDelegationStatus> = {
+  // 1.10.0 平行草稿前置两态：draft/arranged 映射 pending（发送方行保持待办
+  // ——「已接收/已安排」由进度拍 kind 徽标呈现，不造看板新状态）
+  draft: 'pending',
+  arranged: 'pending',
   running: 'running',
   done: 'done',
   failed: 'failed',
@@ -355,6 +380,15 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
     effectiveWaitingSummary != null && (hubStatus === 'running' || hubStatus === 'pending' || hubStatus === 'waiting');
   const terminal = task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled';
 
+  // 1.10.0 拒收态（spec §3.3）：failed + reason `declined:` 前缀 → 徽标「已拒收」，
+  // 摘要剥前缀呈现；1.10.0 生命周期拍（received/arranged）：pending 行以
+  // 「已接收/已安排」徽标替代「待执行」（样式对齐 waiting 拍：徽标 + 摘要行）
+  const declinedReason =
+    task.status === 'failed' && task.errorMessage != null && task.errorMessage.startsWith(DECLINED_PREFIX)
+      ? task.errorMessage.slice(DECLINED_PREFIX.length)
+      : null;
+  const lifecycleKind = !waiting && declinedReason === null ? (progressEntry?.kind ?? null) : null;
+
   // M3.1 代答留痕行：answered 存在且较新（at ≥ 条目拍时刻）且非终态才显示——
   // 后续进度拍（at 更新）自然隐藏；终态卡不残留
   const answeredEntry = progressEntry?.answered ?? null;
@@ -392,9 +426,14 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
     ledgerGroupId !== null ? (groupNames[ledgerGroupId] ?? shortGroupId(ledgerGroupId)) : null;
 
   // P2-3 reason 链优先级：failed 且 errorMessage 在场 → reason 全文压过一切 running 末拍残留
-  // （delegation-sync 的 progress 快照停在最后一拍「（无文本增量）」，不压过则失败原因永不露面）
+  // （delegation-sync 的 progress 快照停在最后一拍「（无文本增量）」，不压过则失败原因永不露面）；
+  // 1.10.0 拒收态剥 `declined:` 前缀（前缀是协议约定，不是给人看的）
   const progressExcerpt =
-    (task.status === 'failed' && task.errorMessage != null ? task.errorMessage : null) ??
+    (task.status === 'failed' && task.errorMessage != null
+      ? task.errorMessage.startsWith(DECLINED_PREFIX)
+        ? task.errorMessage.slice(DECLINED_PREFIX.length)
+        : task.errorMessage
+      : null) ??
     (delegationId != null ? (board.progress[delegationId]?.excerpt ?? null) : null);
 
   const canCancel = delegationId != null
@@ -535,6 +574,20 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
               <Badge tone="warning" className="h-auto gap-1 px-1.5 py-0.5 text-[10px] leading-none">
                 <CircleHelp size={12} strokeWidth={1.75} aria-hidden />
                 {isWorkerView ? '等你确认' : '等待节点确认'}
+              </Badge>
+            ) : declinedReason !== null ? (
+              <Badge tone="error" className="h-auto gap-1 px-1.5 py-0.5 text-[10px] leading-none">
+                <CircleSlash size={12} strokeWidth={1.75} aria-hidden />
+                已拒收
+              </Badge>
+            ) : lifecycleKind !== null ? (
+              <Badge tone="accent" className="h-auto gap-1 px-1.5 py-0.5 text-[10px] leading-none">
+                {lifecycleKind === 'received' ? (
+                  <Inbox size={12} strokeWidth={1.75} aria-hidden />
+                ) : (
+                  <CalendarCheck size={12} strokeWidth={1.75} aria-hidden />
+                )}
+                {lifecycleKind === 'received' ? '已接收' : '已安排'}
               </Badge>
             ) : (
               <StatusBadge status={hubStatus} />

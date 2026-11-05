@@ -179,6 +179,19 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
 
   const routingAvailable = workspaceName !== undefined && workspaceName !== '';
   const remoteRouting = routing.mode !== 'local';
+  // 1.10.0 平行草稿分流（spec 2026-11-05 §5.1）：routing 组为 peer 时提交形态切换
+  // ——只带 title/description/priority + draft:true（hub peer 白名单互斥编排键），
+  // 执行方式区退场、不传 teamId/permissionTier；批量同口径（整批统一优先级）
+  const selectedPrecheckGroup =
+    routing.mode !== 'local' ? precheck?.groups.find((g) => g.groupId === routing.groupId) : undefined;
+  const peerDraft = remoteRouting && routing.mode === 'node' && selectedPrecheckGroup?.mode === 'peer';
+  const priorityNum = priority === 'high' ? 10 : priority === 'medium' ? 5 : 1;
+  // peer 草稿目标必须已绑定（RunRoutingField 已禁选未绑定项——此处提交闸兜底，
+  // 防值残留：预检刷新后目标行翻未绑定）
+  const peerTargetUnbound =
+    peerDraft &&
+    selectedPrecheckGroup?.members.find((m) => m.nodeId === (routing.mode === 'node' ? routing.targetNodeId : ''))
+      ?.bound !== true;
   const batchLines = batchText.split('\n').map((l) => l.trim()).filter((l) => l !== '');
   const batchCount = batchLines.length;
 
@@ -276,8 +289,8 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
   if (!open) return null;
 
   // team/session 已选类型但未选具体对象时不可提交（按钮禁用 + submit 双保险）；
-  // M5.3：外派团队执行未选团队并入同口径
-  const delegationTeamMissing = remoteRouting && execMode === 'team' && delegationTeamId === '';
+  // M5.3：外派团队执行未选团队并入同口径；peer 草稿无执行方式（团队编排互斥）
+  const delegationTeamMissing = remoteRouting && !peerDraft && execMode === 'team' && delegationTeamId === '';
   const targetMissing =
     (targetKind === 'team' && !targetTeamId) ||
     (targetKind === 'session' && !targetSessionId) ||
@@ -293,12 +306,18 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
         workspaceName,
         title: parsed.title,
         ...(description.trim() !== '' ? { description: description.trim() } : {}),
-        ...(parsed.dependsOn.length > 0 ? { dependsOn: parsed.dependsOn } : {}),
-        // M5.3：团队执行随载荷 teamId（主进程展开成员快照 + 版本闸）；单 agent
-        // 缺省不带键（payload 零变化回归）
-        ...(execMode === 'team' && delegationTeamId !== '' ? { teamId: delegationTeamId } : {}),
+        ...(peerDraft
+          ? // 1.10.0 平行草稿载荷：仅三键 + draft 标记（hub peer 白名单——编排键
+            // 互斥；跨节点 T-id 依赖无意义，dependsOn 不随行）
+            { draft: true, priority: priorityNum }
+          : {
+              ...(parsed.dependsOn.length > 0 ? { dependsOn: parsed.dependsOn } : {}),
+              // M5.3：团队执行随载荷 teamId（主进程展开成员快照 + 版本闸）；单 agent
+              // 缺省不带键（payload 零变化回归）
+              ...(execMode === 'team' && delegationTeamId !== '' ? { teamId: delegationTeamId } : {}),
+              permissionTier,
+            }),
         routing,
-        permissionTier,
       });
       onCreated(result.task.id);
       onClose();
@@ -397,11 +416,15 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
           workspaceId,
           workspaceName,
           title: parsed.title,
-          ...(parsed.dependsOn.length > 0 ? { dependsOn: parsed.dependsOn } : {}),
-          // M5.3 批量团队：整批统一团队，逐行随 teamId（主进程逐行展开快照 + 版本闸）
-          ...(execMode === 'team' && delegationTeamId !== '' ? { teamId: delegationTeamId } : {}),
+          ...(peerDraft
+            ? { draft: true, priority: priorityNum }
+            : {
+                ...(parsed.dependsOn.length > 0 ? { dependsOn: parsed.dependsOn } : {}),
+                // M5.3 批量团队：整批统一团队，逐行随 teamId（主进程逐行展开快照 + 版本闸）
+                ...(execMode === 'team' && delegationTeamId !== '' ? { teamId: delegationTeamId } : {}),
+                permissionTier,
+              }),
           routing,
-          permissionTier,
         });
         lastId = result.task.id;
         successCount += 1;
@@ -452,7 +475,8 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
   };
 
   const canSubmit =
-    mode === 'batch' ? batchCount > 0 && !delegationTeamMissing : Boolean(title.trim()) && !targetMissing;
+    (mode === 'batch' ? batchCount > 0 && !delegationTeamMissing : Boolean(title.trim()) && !targetMissing) &&
+    !peerTargetUnbound;
   const submitLabel =
     mode === 'batch' && batchCount > 0 ? `创建 ${batchCount} 个任务` : '创建任务';
 
@@ -638,8 +662,20 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
                 onPermissionTierChange={setPermissionTier}
               />
             )}
-            {/* M5.3：外派执行方式区（批量分支——整批统一团队，2026-10-31 裁定） */}
-            {routingAvailable && remoteRouting && executionModeSection}
+            {routingAvailable && remoteRouting && peerDraft && (
+              <Select
+                label="优先级（整批草稿统一）"
+                value={priority}
+                onChange={(e) => setPriority(e.target.value as Priority)}
+              >
+                <option value="low">低</option>
+                <option value="medium">中</option>
+                <option value="high">高</option>
+              </Select>
+            )}
+            {/* M5.3：外派执行方式区（批量分支——整批统一团队，2026-10-31 裁定）；
+                peer 草稿退场（无执行编排——接收方自行安排） */}
+            {routingAvailable && remoteRouting && !peerDraft && executionModeSection}
           </>
         ) : (
           <>
@@ -669,8 +705,19 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
                 onPermissionTierChange={setPermissionTier}
               />
             )}
-            {/* M5.3：外派执行方式区（单任务分支） */}
-            {routingAvailable && remoteRouting && executionModeSection}
+            {routingAvailable && remoteRouting && peerDraft && (
+              <Select
+                label="优先级"
+                value={priority}
+                onChange={(e) => setPriority(e.target.value as Priority)}
+              >
+                <option value="low">低</option>
+                <option value="medium">中</option>
+                <option value="high">高</option>
+              </Select>
+            )}
+            {/* M5.3：外派执行方式区（单任务分支）；peer 草稿退场 */}
+            {routingAvailable && remoteRouting && !peerDraft && executionModeSection}
             {!remoteRouting && (
               <>
                 <Select

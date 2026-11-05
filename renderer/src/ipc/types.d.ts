@@ -172,6 +172,11 @@ export interface SubmitRoutedTaskInput {
    * （单 agent 路径零变化）。批量链路不提供
    */
   teamId?: string;
+  /** 1.10.0 平行草稿（peer 组点对点委派）：仅 title/description/priority 随行，
+   *  载荷不带编排键（hub peer 白名单）；仅支持 node 变体路由 */
+  draft?: boolean;
+  /** 草稿优先级（仅 draft=true 合法；0..10） */
+  priority?: number;
 }
 
 /** hub:submitRoutedTask 返回（dispatched=false = 留待处理：无候选或发送瞬断） */
@@ -187,12 +192,18 @@ export interface RoutingMemberSummary {
   name: string;
   online: boolean;
   mirrored: boolean;
+  /** 1.10.0：peer 组成员绑定态（bound=已绑定；boundWorkspaceName=空间名——委派
+   *  选择器「已绑定✓空间名 / 未绑定✗」标记；lf 组不带键） */
+  bound?: boolean;
+  boundWorkspaceName?: string;
 }
 
 /** 路由预检组概要（预检行「N 节点在线 · M 已镜像」数据源） */
 export interface RoutingGroupSummary {
   groupId: string;
   groupName: string;
+  /** 1.10.0：组模式（peer=平行——执行位置按组分流草稿形态；缺省 leader-follower） */
+  mode?: 'leader-follower' | 'peer';
   onlineCount: number;
   mirroredCount: number;
   members: RoutingMemberSummary[];
@@ -210,8 +221,9 @@ export interface RoutingPrecheckResult {
   nodeCaps?: Array<{ nodeId: string; name: string; protoVer: string }>;
 }
 
-/** 任务来源（D4 账本包，迁移 071）——见 TaskRow.origin 注释；与 electron 端 storage/tasks/repo.ts 的 TaskOrigin 对齐 */
-export type TaskOrigin = 'user' | 'dispatch';
+/** 任务来源（D4 账本包，迁移 071）——见 TaskRow.origin 注释；与 electron 端 storage/tasks/repo.ts 的 TaskOrigin 对齐。
+ *  1.10.0 增 'peer_draft'（平行模式草稿委派行——发送方外派行与接收方承接行共用）。 */
+export type TaskOrigin = 'user' | 'dispatch' | 'peer_draft';
 
 /**
  * 任务行（renderer 视图，与 electron 端 storage/tasks/repo.ts 的 TaskRow 完整对齐）。
@@ -2949,10 +2961,11 @@ export interface HubWorkspaceDirView {
   effectiveRootDir: string;
 }
 
-/** hub:groupChanged 推送载荷（协议 GroupChangedEvent 镜像——组成员变动/组长转移的组内广播） */
+/** hub:groupChanged 推送载荷（协议 GroupChangedEvent 镜像——组成员变动/组长转移/
+ * 绑定变化的组内广播；'bound'〔1.10.0〕= 绑定/换绑/解绑/镜像开关翻转→重拉组列表） */
 export interface HubGroupChangedEvent {
   groupId: string;
-  kind: 'joined' | 'left' | 'leaderChanged';
+  kind: 'joined' | 'left' | 'leaderChanged' | 'bound';
   nodeId: string;
 }
 
@@ -2961,6 +2974,11 @@ export interface HubGroupMember {
   nodeId: string;
   name: string;
   online: boolean;
+  protoVer?: string;
+  /** 1.10.0：peer 组绑定态（bound=已绑定承接空间；acceptsMirror=镜像接受开关） */
+  bound?: boolean;
+  boundWorkspaceName?: string;
+  acceptsMirror?: boolean;
 }
 
 /** 工作组信息（协议 GroupInfo 镜像） */
@@ -2968,6 +2986,8 @@ export interface HubGroupInfo {
   groupId: string;
   groupName: string;
   leaderNodeId: string;
+  /** 1.10.0：组模式（旧 hub 不回 → 按 leader-follower 兜底） */
+  mode?: 'leader-follower' | 'peer';
   members: HubGroupMember[];
 }
 
@@ -3164,8 +3184,10 @@ export interface HubTaskProgressEvent {
   lastSeq: number;
   excerpt: string;
   /** 等待确认标注（M2.1 T11b 协议 v0.1.4）：'waiting-input' = worker 等用户确认；
-   *  恢复拍无此字段（leader 摘要 kv waiting 标志随其清除，T12 等待卡消费） */
-  kind?: 'waiting-input';
+   *  恢复拍无此字段（leader 摘要 kv waiting 标志随其清除，T12 等待卡消费）。
+   *  1.10.0 平行模式扩两值：'received'/'arranged' = peer 草稿生命周期拍
+   *  （已落接收方看板 / 接收方已安排——行保持 pending，卡片切对应态） */
+  kind?: 'waiting-input' | 'received' | 'arranged';
 }
 
 /** 终态推送载荷（协议 TaskTerminalEvent 镜像——completed/failed{reason}/interrupted 共用） */
@@ -3189,6 +3211,9 @@ export interface HubDelegationProgressEntry {
   at: number;
   /** 等待确认标志（T12）：等待拍 true；恢复拍清除（字段缺席 = 非等待） */
   waiting?: boolean;
+  /** 1.10.0 平行草稿生命周期标注：received/arranged 拍置——重启后看板卡恢复
+   *  「已接收/已安排」态（行保持 pending 至首 running 拍）；其它拍清除 */
+  kind?: 'received' | 'arranged';
   /** 远程代答留痕（M3.1）：task.answered 事件置；后续进度拍自然清除——
    *  卡片据 answered.at ≥ entry.at 判「较新」才显示 */
   answered?: { decision: 'approve' | 'deny'; at: number };
@@ -3208,7 +3233,8 @@ export interface HubReceivedDelegation {
   workspaceName: string;
   title: string;
   byNode: string;
-  state: 'running' | 'done' | 'failed' | 'cancelled';
+  /** 1.10.0 平行草稿前置两态：draft=已落板待安排、arranged=已安排待执行 */
+  state: 'draft' | 'arranged' | 'running' | 'done' | 'failed' | 'cancelled';
   createdAt: number;
   updatedAt: number;
 }
@@ -3331,8 +3357,12 @@ export interface HubApiSurface {
   onResourceUnpublished(callback: (e: HubResourceUnpublishedEvent) => void): () => void;
   /** 工作组列表（仅自己所在的组；成员在线态由 hub presence 融合） */
   groupList(): Promise<HubGroupListResult>;
-  /** 创建组（创建者即 leader） */
-  groupCreate(input: { groupName: string }): Promise<HubGroupCreateResult>;
+  /** 创建组（创建者即 leader；1.10.0 平行组带 mode='peer' + 组长绑定空间名） */
+  groupCreate(input: {
+    groupName: string;
+    mode?: 'leader-follower' | 'peer';
+    bindWorkspaceName?: string;
+  }): Promise<HubGroupCreateResult>;
   /** 生成组邀请码（再生成即撤销旧码——单组单有效码） */
   groupInvite(input: { groupId: string }): Promise<HubGroupInviteResult>;
   /** 凭码入组（无效/已撤销码 → not_found 人话 rejection；幂等） */
@@ -3341,6 +3371,12 @@ export interface HubApiSurface {
   groupLeave(input: { groupId: string }): Promise<HubGroupLeaveResult>;
   /** 转移组长（仅 leader 可调；目标须为组成员） */
   groupTransfer(input: { groupId: string; toNodeId: string }): Promise<HubGroupTransferResult>;
+  /** 1.10.0 平行组绑定/换绑承接空间（本地 workspaceId → hub 按名登记 + 本地权威落库） */
+  groupBind(input: { groupId: string; workspaceId: string }): Promise<{ ok: boolean }>;
+  /** 1.10.0 解绑（幂等；hub 登记与本地权威一并清除） */
+  groupUnbind(input: { groupId: string }): Promise<{ ok: boolean }>;
+  /** 1.10.0 镜像接受开关翻转（须已绑定；组长镜像界面按此预过滤） */
+  groupSetMirrorAccept(input: { groupId: string; accepts: boolean }): Promise<{ ok: boolean }>;
   /** 构建工作空间配置快照并上传 hub 存档（向导 S2；红线 knownSecrets 复检在主进程） */
   snapshotBuildUpload(input: { workspaceId: string }): Promise<HubSnapshotBuildUploadResult>;
   /** 发起镜像（两段式第一段 → 受理回执 mirrorId；终态经 onMirrorResult 推送） */

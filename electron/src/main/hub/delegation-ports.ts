@@ -92,9 +92,17 @@ function terminalErrorFor(messageId: string): string | undefined {
  * 胜出 → 假 failed 立即回调。基线在 watchTurn 调用（= runner attachWatcher）
  * 时捕获，先于 startTurn 注入，新回合全部行必在基线之后。
  */
-export function watchTurnProduct(sessionId: string, onTerminal: (t: TurnTerminal) => void): () => void {
+export function watchTurnProduct(
+  sessionId: string,
+  onTerminal: (t: TurnTerminal) => void,
+  baselineOverride?: number,
+): () => void {
   let settled = false;
-  const baseline = sessionMaxRowId(sessionId);
+  // 基线覆盖（1.10.0 draft 接管）：缺省 = attach 时刻最大 rowid（F1 回合界定——自动
+  // 执行链 attach 先于 startTurn，基线之上必然只有本回合行）；覆盖 = 显式值（draft
+  // 接管在回合开始后才 attach——warm 池秒级开流，attach 基线会吞掉在途流行；执行
+  // 会话是 startTask 新建的单任务会话，无历史 agent 行，基线 0 安全）
+  const baseline = baselineOverride ?? sessionMaxRowId(sessionId);
   const timer = setInterval(() => {
     if (settled) return;
     const row = latestAgentStreamRow(sessionId, baseline);

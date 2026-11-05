@@ -50,7 +50,7 @@ import { layerTasks } from '../../lib/task-graph';
 import type { GroupRow, TaskRow } from '../../ipc/types';
 import { useTaskStore } from '../../stores/task.store';
 import { BoardCard, type BoardGroupChip } from './BoardCard';
-import { DelegatedTaskCard } from '../workgroup/DelegatedTaskCard';
+import { DelegatedTaskCard, useDelegationBoard } from '../workgroup/DelegatedTaskCard';
 import { Lane } from './Lane';
 import { useBoardDrop, dropConfirmContent } from './useBoardDrop';
 import { AssignTargetDialog } from './AssignTargetDialog';
@@ -260,6 +260,17 @@ const collisionDetectionStrategy: CollisionDetection = (args) => {
 
 export function BoardCanvas({ tasks, groups, laneMode, selectedId, onSelect, workspaceId }: BoardCanvasProps) {
   const setDragging = useTaskStore((s) => s.setDragging);
+  // 1.10.0 平行草稿接收方行（origin='peer_draft' 且落点=本机）：走本地 BoardCard
+  // 路径（安排=编辑、拒收=删除由本地行操作承载）；发送方外派行仍走 DelegatedTaskCard
+  const selfNodeId = useDelegationBoard().selfNodeId;
+  const isPeerDraftReceived = useCallback(
+    (task: TaskRow): boolean =>
+      task.origin === 'peer_draft' &&
+      task.routing.mode === 'node' &&
+      selfNodeId !== null &&
+      task.routing.targetNodeId === selfNodeId,
+    [selfNodeId],
+  );
   // 拖拽刚结束标志：pointerup 后浏览器仍会派发 click 到源卡（pointer capture），
   // capture 阶段拦截防止「拖完一张卡误开详情抽屉」
   const suppressClickRef = useRef(false);
@@ -309,7 +320,7 @@ export function BoardCanvas({ tasks, groups, laneMode, selectedId, onSelect, wor
       // M2.1 T9 外派卡分发：routing≠local → DelegatedTaskCard（静态渲染不接
       // sortable——行状态由 hub 账本驱动，本地拖拽 move 会与远端真相打架）；
       // local 卡零改动走原 SortableBoardCard 路径
-      if (task.routing.mode !== 'local') {
+      if (task.routing.mode !== 'local' && !isPeerDraftReceived(task)) {
         return (
           <DelegatedTaskCard
             key={task.id}
@@ -331,14 +342,14 @@ export function BoardCanvas({ tasks, groups, laneMode, selectedId, onSelect, wor
         />
       );
     },
-    [selectedId, onSelect, interactiveMode, chipByGroup],
+    [selectedId, onSelect, interactiveMode, chipByGroup, isPeerDraftReceived],
   );
 
   // M3.3 dag 只读渲染器：local 卡走静态 BoardCard（不接 sortable——DAG 视图
   // 无拖拽语义）；跨组分层与平铺同口径补组 chip；外派卡同分发规则
   const renderDagCard = useCallback(
     (task: TaskRow): ReactNode => {
-      if (task.routing.mode !== 'local') {
+      if (task.routing.mode !== 'local' && !isPeerDraftReceived(task)) {
         return (
           <DelegatedTaskCard
             key={task.id}
@@ -358,7 +369,7 @@ export function BoardCanvas({ tasks, groups, laneMode, selectedId, onSelect, wor
         />
       );
     },
-    [selectedId, onSelect, chipByGroup],
+    [selectedId, onSelect, chipByGroup, isPeerDraftReceived],
   );
 
   const dagLayering = useMemo(() => layerTasks(tasks), [tasks]);

@@ -1393,7 +1393,7 @@ describe('平行模式全链路（peer）', () => {
     createGroupBindingStore(getDb()).upsert(peerGroupId, bBoundWsId);
     await clientB.request(RPC.group.setMirrorAccept, { groupId: peerGroupId, accepts: true });
 
-    const list = await clientA.request<{ groups: Array<{ mode?: string; members: Array<{ nodeId: string; bound?: boolean; boundWorkspaceName?: string; acceptsMirror?: boolean; protoVer?: string }> }> }>(RPC.group.list, {});
+    const list = await clientA.request<{ groups: Array<{ groupId: string; mode?: string; members: Array<{ nodeId: string; bound?: boolean; boundWorkspaceName?: string; acceptsMirror?: boolean; protoVer?: string }> }> }>(RPC.group.list, {});
     const g = list.groups.find((x) => x.groupId === peerGroupId)!;
     expect(g.mode).toBe('peer');
     const memberB = g.members.find((m) => m.nodeId === NODE_B.nodeId)!;
@@ -1445,19 +1445,19 @@ describe('平行模式全链路（peer）', () => {
 
     // received 拍 → A
     await until(() => aEvents.some((e) => e.method === EVT.taskProgress
-      && (e.payload as { taskId: string }).taskId === peerTaskId
-      && (e.payload as { kind?: string }).kind === 'received'), 10_000, 'received 拍到达 A');
+      && (e.payload as { taskId: string; kind?: string }).taskId === peerTaskId
+      && (e.payload as { taskId: string; kind?: string }).kind === 'received'), 10_000, 'received 拍到达 A');
 
     // B 安排：指派 agent（第一段镜像的成员）→ assigned → arranged 拍
     const member = listMembers(bBoundWsId)[0]!;
     updateTask(draftRow.id, { status: 'assigned', assigneeAgentId: member.instanceId });
     await until(() => aEvents.some((e) => e.method === EVT.taskProgress
-      && (e.payload as { taskId: string }).kind === 'arranged'), 10_000, 'arranged 拍到达 A');
+      && (e.payload as { taskId: string; kind?: string }).kind === 'arranged'), 10_000, 'arranged 拍到达 A');
 
     // B 执行：本地 startTask 语义（assigned→in_progress + 执行会话）→ 接管 → running 拍
     updateTask(draftRow.id, { status: 'in_progress', executionSessionId: 'sess-peer-exec' });
     await until(() => aEvents.some((e) => e.method === EVT.taskProgress
-      && (e.payload as { taskId: string; sessionId?: string }).sessionId === 'sess-peer-exec'), 10_000, 'running 拍（执行接管）到达 A');
+      && (e.payload as { sessionId?: string }).sessionId === 'sess-peer-exec'), 10_000, 'running 拍（执行接管）到达 A');
 
     // B 完结（手动完结路径）→ done → A 收 task.completed
     updateTask(draftRow.id, { status: 'completed', completedAt: Date.now() });
@@ -1475,7 +1475,7 @@ describe('平行模式全链路（peer）', () => {
     const row = getDb().prepare('SELECT id FROM tasks WHERE delegation_id = ?').get(res.taskId) as { id: string };
     updateTask(row.id, { status: 'cancelled' });
     await until(() => aEvents.some((e) => e.method === EVT.taskFailed
-      && (e.payload as { taskId: string; reason?: string }).taskId === res.taskId
-      && ((e.payload as { reason?: string }).reason ?? '').startsWith('declined:')), 10_000, 'declined task.failed 到达 A');
+      && (e.payload as { taskId?: string; reason?: string }).taskId === res.taskId
+      && (((e.payload as { reason?: string }).reason) ?? '').startsWith('declined:')), 10_000, 'declined task.failed 到达 A');
   });
 });

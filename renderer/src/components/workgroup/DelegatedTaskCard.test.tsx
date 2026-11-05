@@ -200,7 +200,8 @@ describe('DelegatedTaskCard — leader 侧六态', () => {
       }),
       boardCtx({ nodeNames: { 'node-b': 'office-mac' } }),
     );
-    expect(screen.getByText('失败')).toBeInTheDocument();
+    // 1.10.0 拒收态：failed + declined: 前缀 → 「已拒收」徽标（剥前缀理由）
+    expect(screen.getByText('已拒收')).toBeInTheDocument();
     expect(screen.getByText('office-mac')).toBeInTheDocument();
     expect(screen.queryByText('未知节点')).not.toBeInTheDocument();
   });
@@ -1077,5 +1078,70 @@ describe('DelegatedTaskCard — blocked 阻塞角标（M3.3 §2.2）', () => {
       </DelegationBoardProvider>,
     );
     expect(screen.queryByText('阻塞', { exact: true })).not.toBeInTheDocument();
+  });
+});
+
+// ── 1.10.0 平行草稿生命周期拍与拒收态（spec §3.3 / §5.1）──────────────────────
+
+describe('DelegatedTaskCard — 平行草稿新态（1.10.0）', () => {
+  it('PD-1. received 拍：pending 行「已接收」徽标 + excerpt 摘要行', () => {
+    renderCard(
+      mkTask({ id: 'T-100', title: '排查生产 500', status: 'pending' }),
+      boardCtx({
+        progress: { 'T-8f21abcd': { excerpt: '草稿已接收，等待节点拥有者安排', lastSeq: 0, at: 3, kind: 'received' } },
+      }),
+    );
+    expect(screen.getByText('已接收')).toBeInTheDocument();
+    expect(screen.getByText('草稿已接收，等待节点拥有者安排')).toBeInTheDocument();
+    expect(screen.queryByText('待执行')).not.toBeInTheDocument();
+  });
+
+  it('PD-2. arranged 拍：「已安排」徽标替换「已接收/待执行」', () => {
+    renderCard(
+      mkTask({ id: 'T-100', title: '排查生产 500', status: 'pending' }),
+      boardCtx({
+        progress: { 'T-8f21abcd': { excerpt: '节点拥有者已安排执行', lastSeq: 0, at: 4, kind: 'arranged' } },
+      }),
+    );
+    expect(screen.getByText('已安排')).toBeInTheDocument();
+    expect(screen.queryByText('已接收')).not.toBeInTheDocument();
+    expect(screen.queryByText('待执行')).not.toBeInTheDocument();
+  });
+
+  it('PD-3. declined：徽标「已拒收」+ 摘要剥 declined: 前缀', () => {
+    renderCard(
+      mkTask({ id: 'T-100', title: '排查生产 500', status: 'failed', errorMessage: 'declined:本节点不承接该需求' }),
+    );
+    expect(screen.getByText('已拒收')).toBeInTheDocument();
+    expect(screen.queryByText('失败')).not.toBeInTheDocument();
+    const line = document.querySelector('[data-progress-line] [title]');
+    expect(line).not.toBeNull();
+    expect(line!.textContent).toBe('本节点不承接该需求');
+    expect(line!.getAttribute('title')).toBe('本节点不承接该需求');
+  });
+
+  it('PD-4. 非 declined 失败零变化：失败徽标 + 原文 errorMessage', () => {
+    renderCard(mkTask({ id: 'T-100', title: '排查生产 500', status: 'failed', errorMessage: '执行失败:沙箱异常' }));
+    expect(screen.getByText('失败')).toBeInTheDocument();
+    expect(screen.getByText('执行失败:沙箱异常')).toBeInTheDocument();
+  });
+
+  it('PD-5. live 推送映射：onTaskProgress kind=received → 卡片即时点亮「已接收」', async () => {
+    await act(async () => {
+      render(
+        <DelegationBoardProvider refreshTasks={() => {}}>
+          <DelegatedTaskCard
+            task={mkTask({ id: 'T-100', title: '排查生产 500', status: 'pending', delegationId: 'T-8f21abcd' })}
+            onSelect={() => {}}
+            waitingSummary={null}
+          />
+        </DelegationBoardProvider>,
+      );
+    });
+    await act(async () => {
+      fire('progress', { taskId: 'T-8f21abcd', sessionId: 's1', lastSeq: 0, excerpt: '草稿已接收，等待节点拥有者安排', kind: 'received' });
+    });
+    expect(await screen.findByText('已接收')).toBeInTheDocument();
+    expect(screen.getByText('草稿已接收，等待节点拥有者安排')).toBeInTheDocument();
   });
 });

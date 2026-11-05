@@ -95,6 +95,9 @@ export interface DelegationProgressEntry {
   /** 等待确认标志（T12）：kind='waiting-input' 拍置 true；恢复拍（无 kind）清除。
    *  可选——T11 前落库的旧条目无此字段（=== true 判定，不误报）。 */
   waiting?: boolean;
+  /** 1.10.0 平行草稿生命周期标注：kind='received'/'arranged' 拍置——重启后
+   *  发送方看板卡恢复「已接收/已安排」态；其它拍清除（与 waiting 同拍位语义）。 */
+  kind?: 'received' | 'arranged';
   /** 远程代答留痕（M3.1）：task.answered 事件置 {decision, at}；后续进度拍
    *  （handleProgress 整条覆写）自然清除——「较新才显示」由消费侧比较 at 判定。
    *  可选——旧条目无此字段（形状不符即弃，保守解析）。 */
@@ -121,12 +124,13 @@ function parseProgress(raw: string | undefined): Record<string, DelegationProgre
       const e = v as Partial<DelegationProgressEntry>;
       if (typeof e.excerpt === 'string' && typeof e.lastSeq === 'number' && typeof e.at === 'number') {
         // waiting 仅 true 落形——旧条目/T12 前数据零改写（toEqual 形状锁不破）；
-        // answered 同款保守纪律（M3.1）
+        // answered 同款保守纪律（M3.1）；kind 同款（1.10.0——枚举外值剥除）
         out[k] = {
           excerpt: e.excerpt,
           lastSeq: e.lastSeq,
           at: e.at,
           ...(e.waiting === true ? { waiting: true } : {}),
+          ...(e.kind === 'received' || e.kind === 'arranged' ? { kind: e.kind } : {}),
           ...(isAnsweredShape(e.answered) ? { answered: e.answered } : {}),
         };
       }
@@ -256,6 +260,7 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
       lastSeq,
       at: ports.now(),
       ...(kind === 'waiting-input' ? { waiting: true } : {}),
+      ...(kind === 'received' || kind === 'arranged' ? { kind } : {}),
     });
   };
 

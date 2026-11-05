@@ -520,11 +520,16 @@ function startClient(
       // 由 task.cancel RPC 回执 + 下一次 task.list 拉取对账），不造无生产者的通道。
       if (evt.method === EVT.taskProgress) {
         // kind（M2.1 T11b 协议 v0.1.4）：'waiting-input' = worker 等用户确认——
-        // 单值枚举校验（异形剥除，permissionTier 先例），leader 摘要 kv 与
-        // renderer 推送两路透传（T12 看板等待卡消费）
+        // 枚举校验（异形剥除，permissionTier 先例），leader 摘要 kv 与
+        // renderer 推送两路透传（T12 看板等待卡消费）。
+        // 1.10.0 平行模式：枚举扩 'received'/'arranged'（peer 草稿生命周期拍——
+        // 发送方行保持 pending、卡片切「已接收/已安排」态，spec §5.1）
         const p = evt.payload as { taskId?: unknown; sessionId?: unknown; lastSeq?: unknown; excerpt?: unknown; kind?: unknown };
         if (typeof p.taskId === 'string' && typeof p.sessionId === 'string' && typeof p.lastSeq === 'number' && typeof p.excerpt === 'string') {
-          const kind = p.kind === 'waiting-input' ? 'waiting-input' : undefined;
+          const kind =
+            p.kind === 'waiting-input' || p.kind === 'received' || p.kind === 'arranged'
+              ? p.kind
+              : undefined;
           // T9 外派投影：进度拍先回写本地行（摘要 + running 映射），再桥 renderer
           ensureDelegationSync().handleProgress({ taskId: p.taskId, lastSeq: p.lastSeq, excerpt: p.excerpt, kind });
           broadcast('hub:taskProgress', {

@@ -107,8 +107,9 @@ export interface DelegationRunPorts {
   startTurn(input: { sessionId: string; body: string; mentionedInstanceIds?: string[] }): Promise<void>;
   /** 会话级急停（既有取消入口 RouterService.stopAll） */
   stopSession(sessionId: string): void;
-  /** 回合终态订阅 → 返回解订阅函数 */
-  watchTurn(sessionId: string, onTerminal: (t: TurnTerminal) => void): () => void;
+  /** 回合终态订阅 → 返回解订阅函数；baselineOverride（1.10.0 draft 接管）：
+   *  接管在回合开始后 attach——传 0 观测会话全部 agent 行（新会话无历史，防基线吞流） */
+  watchTurn(sessionId: string, onTerminal: (t: TurnTerminal) => void, baselineOverride?: number): () => void;
   /** 会话尾部增量（afterRowId 之后）；无增量返回 null */
   sessionTail(sessionId: string, afterRowId: number): DelegationTail | null;
   /** 上行 task.report（res 信封 id=taskId）；离线/失败返回 false（调用方缓冲重试） */
@@ -578,7 +579,13 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
       terminal: null,
     };
     active.set(record.taskId, run);
-    attachWatcher(record.taskId, run);
+    // 基线 0：接管时回合可能已在流中（warm 池秒开流）——attach 时刻基线会吞掉
+    // 在途 agent 行导致终态永不触发；执行会话为 startTask 新建，无历史 agent 行
+    run.unwatch = ports.watchTurn(sessionId, (t) => {
+      const current = active.get(record.taskId);
+      if (!current || current.sessionId !== sessionId) return;
+      settleRun(record.taskId, current, t);
+    }, 0);
     // upsert 全量写（保留 draft/localTaskId/groupId）——updateState 只写 state/reason
     store.upsert({ ...record, sessionId, state: 'running', updatedAt: Date.now() });
     logger.info('平行草稿执行接管', { taskId: record.taskId, sessionId, localTaskId });

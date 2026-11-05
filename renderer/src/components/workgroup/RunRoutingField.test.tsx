@@ -273,3 +273,89 @@ describe('RunRoutingField — 权限档位三选（M2.1 T10）', () => {
     expect(screen.queryByRole('radiogroup', { name: '权限策略' })).not.toBeInTheDocument();
   });
 });
+
+// ── 1.10.0 平行组草稿形态（spec 2026-11-05 §5.1）──────────────────────────────
+
+/** peer 组预检夹具：两成员已绑定（带空间名）、一成员未绑定 */
+function peerPrecheck(overrides: Partial<RoutingPrecheckResult> = {}): RoutingPrecheckResult {
+  return {
+    mirrored: true,
+    groups: [
+      {
+        groupId: 'g-peer',
+        groupName: '产品三人组',
+        mode: 'peer',
+        onlineCount: 3,
+        mirroredCount: 3,
+        members: [
+          { nodeId: 'n-dev', name: '研发工位', online: true, mirrored: true, bound: true, boundWorkspaceName: 'dev-ws' },
+          { nodeId: 'n-qa', name: '测试工位', online: true, mirrored: true, bound: false },
+          { nodeId: 'n-pm', name: '需求工位', online: true, mirrored: true, bound: true, boundWorkspaceName: '需求池' },
+        ],
+      },
+    ],
+    ...overrides,
+  };
+}
+
+describe('RunRoutingField — 平行组草稿形态（1.10.0）', () => {
+  it('P-1. peer 组：组内调度行与权限档位区退场，仅本机/指定节点两选项', () => {
+    render(
+      <RunRoutingField permissionTier="confirm" onPermissionTierChange={() => {}} precheck={peerPrecheck()} value={{ mode: 'local' }} onChange={() => {}} />,
+    );
+    expect(screen.getByRole('radio', { name: '本机执行' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: '指定节点' })).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: '组内调度' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup', { name: '权限策略' })).not.toBeInTheDocument();
+  });
+
+  it('P-2. 成员下拉绑定态标注：已绑定·空间名；未绑定 disabled 不可选', () => {
+    render(
+      <RunRoutingField permissionTier="confirm" onPermissionTierChange={() => {}} precheck={peerPrecheck()} value={{ mode: 'node', groupId: 'g-peer', targetNodeId: 'n-dev' }} onChange={() => {}} />,
+    );
+    const sel = screen.getByLabelText('目标成员') as HTMLSelectElement;
+    expect(sel.selectedOptions[0]?.textContent).toBe('研发工位（已绑定 · dev-ws）');
+    const qa = [...sel.options].find((o) => o.value === 'n-qa');
+    expect(qa?.disabled).toBe(true);
+    expect(qa?.textContent).toBe('测试工位（未绑定，不可选）');
+    const pm = [...sel.options].find((o) => o.value === 'n-pm');
+    expect(pm?.disabled).toBe(false);
+  });
+
+  it('P-3. 点指定节点 → 默认锁定首个已绑定成员（跳过未绑定）', () => {
+    const onChange = vi.fn();
+    render(
+      <RunRoutingField permissionTier="confirm" onPermissionTierChange={() => {}} precheck={peerPrecheck()} value={{ mode: 'local' }} onChange={onChange} />,
+    );
+    fireEvent.click(screen.getByRole('radio', { name: '指定节点' }));
+    expect(onChange).toHaveBeenCalledWith({ mode: 'node', groupId: 'g-peer', targetNodeId: 'n-dev' });
+  });
+
+  it('P-4. value 残留 group 变体（peer 组）→ 回退本机展示不崩溃', () => {
+    render(
+      <RunRoutingField permissionTier="confirm" onPermissionTierChange={() => {}} precheck={peerPrecheck()} value={{ mode: 'group', groupId: 'g-peer' }} onChange={() => {}} />,
+    );
+    expect(screen.getByRole('radio', { name: '本机执行' })).toBeChecked();
+    expect(screen.queryByRole('radio', { name: '组内调度' })).not.toBeInTheDocument();
+  });
+
+  it('P-5. 全员未绑定 → 无可选目标 + 警示文案（提交闸在 CreateTaskDialog 层）', () => {
+    const precheck = peerPrecheck();
+    precheck.groups[0]!.members = precheck.groups[0]!.members.map((m) => ({ ...m, bound: false, boundWorkspaceName: undefined }));
+    render(
+      <RunRoutingField permissionTier="confirm" onPermissionTierChange={() => {}} precheck={precheck} value={{ mode: 'node', groupId: 'g-peer', targetNodeId: 'n-dev' }} onChange={() => {}} />,
+    );
+    const sel = screen.getByLabelText('目标成员') as HTMLSelectElement;
+    expect([...sel.options].every((o) => o.disabled)).toBe(true);
+    expect(sel.value).toBe('');
+    expect(screen.getByText(/组内暂无已绑定承接空间的成员/)).toBeInTheDocument();
+  });
+
+  it('P-6. lf 组（mode 缺省）零变化：三选项与权限档位照常', () => {
+    render(
+      <RunRoutingField permissionTier="confirm" onPermissionTierChange={() => {}} precheck={makePrecheck()} value={{ mode: 'group', groupId: 'g1' }} onChange={() => {}} />,
+    );
+    expect(screen.getByRole('radio', { name: '组内调度' })).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: '权限策略' })).toBeInTheDocument();
+  });
+});

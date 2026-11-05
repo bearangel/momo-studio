@@ -18,7 +18,8 @@ import { useHubStore } from '../../stores/hub.store';
 import { useHubGroupStore } from '../../stores/hub-group.store';
 import { useHubDelegationStore } from '../../stores/hub-delegation.store';
 import { useHubViewStore } from '../../stores/hub-view.store';
-import type { HubGroupInfo, HubStatus, HubTaskRecord } from '../../ipc/types';
+import { useWorkspaceStore } from '../../stores/workspace.store';
+import type { HubGroupInfo, HubStatus, HubTaskRecord, Workspace } from '../../ipc/types';
 
 const api = {
   hub: {
@@ -26,6 +27,8 @@ const api = {
     groupCreate: vi.fn(),
     groupJoin: vi.fn(),
     groupInvite: vi.fn(),
+    groupBind: vi.fn(),
+    groupSetMirrorAccept: vi.fn(),
     onGroupChanged: vi.fn(() => () => undefined),
     taskList: vi.fn(),
     onTaskProgress: vi.fn(() => () => undefined),
@@ -33,6 +36,7 @@ const api = {
     onTaskFailed: vi.fn(() => () => undefined),
     onTaskInterrupted: vi.fn(() => () => undefined),
   },
+  workspace: { list: vi.fn().mockResolvedValue([]) },
 };
 
 const ONLINE: HubStatus = {
@@ -235,5 +239,137 @@ describe('WorkgroupSidebar', () => {
     });
     render(<WorkgroupSidebar />);
     expect(screen.queryByText('查看中')).not.toBeInTheDocument();
+  });
+});
+
+// ── 1.10.0 平行模式：建组模式卡 + 版本门 + 两步式入组 ─────────────────────────
+
+function ws(id: string, name: string): Workspace {
+  return { id, name, description: '', directoryPath: '/tmp/x', gitInitialized: false, createdAt: '2026-01-01', ownerId: 'owner', iconEmoji: '', defaultAgentInstanceId: null };
+}
+
+const WORKSPACES = [ws('ws-dev', '研发空间'), ws('ws-pm', '需求池')];
+
+const GROUP_PEER: HubGroupInfo = {
+  groupId: 'g-peer',
+  groupName: '产品三人组',
+  leaderNodeId: 'other-node',
+  mode: 'peer',
+  members: [
+    { nodeId: 'other-node', name: 'pm-seat', online: true },
+    { nodeId: SELF_ID, name: 'mac-main', online: true },
+  ],
+};
+
+describe('WorkgroupSidebar — 平行模式建组（1.10.0）', () => {
+  beforeEach(() => {
+    useWorkspaceStore.setState({ workspaces: WORKSPACES, activeWorkspaceId: null, loading: false, error: null });
+    api.hub.groupCreate.mockResolvedValue({ groupId: 'g-new' });
+  });
+
+  it('PM-1. hub 协议 1.9：平行模式卡禁用 + title 提示；主从可建', () => {
+    useHubStore.setState({ status: { ...ONLINE, hubProtoVer: '1.9.0' }, nodes: [], loadError: null });
+    useHubGroupStore.setState({ groups: [GROUP_DEV] });
+    render(<WorkgroupSidebar />);
+    fireEvent.click(screen.getByRole('button', { name: '创建工作组' }));
+    const peerRadio = screen.getByRole('radio', { name: '平行模式' });
+    expect(peerRadio).toBeDisabled();
+    expect(
+      within(screen.getByRole('radiogroup', { name: '工作组模式' })).getByTitle('hub 服务器协议过旧（需 1.10.0+）'),
+    ).toBeInTheDocument();
+  });
+
+  it('PM-2. hub 协议 1.10：选平行必选组长绑定空间，未选不可提交', () => {
+    useHubStore.setState({ status: { ...ONLINE, hubProtoVer: '1.10.0' }, nodes: [], loadError: null });
+    render(<WorkgroupSidebar />);
+    fireEvent.change(screen.getByLabelText('组名'), { target: { value: '小组' } });
+    fireEvent.click(screen.getByRole('radio', { name: '平行模式' }));
+    expect(screen.getByLabelText('组长绑定空间*')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '创建' })).toBeDisabled();
+  });
+
+  it('PM-3. 选平行+空间 → 提交带 mode 与 bindWorkspaceName', async () => {
+    useHubStore.setState({ status: { ...ONLINE, hubProtoVer: '1.10.0' }, nodes: [], loadError: null });
+    render(<WorkgroupSidebar />);
+    fireEvent.change(screen.getByLabelText('组名'), { target: { value: '小组' } });
+    fireEvent.click(screen.getByRole('radio', { name: '平行模式' }));
+    fireEvent.change(screen.getByLabelText('组长绑定空间*'), { target: { value: 'ws-dev' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建' }));
+    await waitFor(() => {
+      expect(api.hub.groupCreate).toHaveBeenCalledWith({ groupName: '小组', mode: 'peer', bindWorkspaceName: '研发空间' });
+    });
+  });
+
+  it('PM-4. hubProtoVer 未知（null）：平行卡同样禁用（保守门）', () => {
+    useHubGroupStore.setState({ groups: [GROUP_DEV] });
+    render(<WorkgroupSidebar />);
+    fireEvent.click(screen.getByRole('button', { name: '创建工作组' }));
+    expect(screen.getByRole('radio', { name: '平行模式' })).toBeDisabled();
+  });
+});
+
+describe('WorkgroupSidebar — 两步式入组（1.10.0）', () => {
+  beforeEach(() => {
+    useWorkspaceStore.setState({ workspaces: WORKSPACES, activeWorkspaceId: null, loading: false, error: null });
+    api.hub.groupBind.mockResolvedValue({ ok: true });
+    api.hub.groupSetMirrorAccept.mockResolvedValue({ ok: true });
+  });
+
+  it('PJ-1. join 返回 peer 组 → 追加绑定承接空间弹窗；提交走 groupBind + groupSetMirrorAccept', async () => {
+    api.hub.groupJoin.mockResolvedValue({ groupId: 'g-peer' });
+    api.hub.groupList.mockResolvedValue({ groups: [GROUP_PEER] });
+    render(<WorkgroupSidebar />);
+    fireEvent.change(screen.getByLabelText('邀请码'), { target: { value: 'PEER-CODE' } });
+    fireEvent.click(screen.getByRole('button', { name: '入组' }));
+    expect(await screen.findByRole('dialog', { name: /绑定承接空间/ })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('承接空间*'), { target: { value: 'ws-dev' } });
+    fireEvent.click(screen.getByLabelText('接受本组镜像同步'));
+    expect(screen.getByText('接受后组长的统一镜像将覆盖此空间内容')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '绑定' }));
+    await waitFor(() => {
+      expect(api.hub.groupBind).toHaveBeenCalledWith({ groupId: 'g-peer', workspaceId: 'ws-dev' });
+      expect(api.hub.groupSetMirrorAccept).toHaveBeenCalledWith({ groupId: 'g-peer', accepts: true });
+    });
+  });
+
+  it('PJ-2. 不接受镜像 → 只 groupBind，不动开关', async () => {
+    api.hub.groupJoin.mockResolvedValue({ groupId: 'g-peer' });
+    api.hub.groupList.mockResolvedValue({ groups: [GROUP_PEER] });
+    render(<WorkgroupSidebar />);
+    fireEvent.change(screen.getByLabelText('邀请码'), { target: { value: 'PEER-CODE' } });
+    fireEvent.click(screen.getByRole('button', { name: '入组' }));
+    await screen.findByRole('dialog', { name: /绑定承接空间/ });
+    fireEvent.change(screen.getByLabelText('承接空间*'), { target: { value: 'ws-pm' } });
+    fireEvent.click(screen.getByRole('button', { name: '绑定' }));
+    await waitFor(() => {
+      expect(api.hub.groupBind).toHaveBeenCalledWith({ groupId: 'g-peer', workspaceId: 'ws-pm' });
+    });
+    expect(api.hub.groupSetMirrorAccept).not.toHaveBeenCalled();
+  });
+
+  it('PJ-3. 「稍后再绑」跳过 → 关闭弹窗，不调 groupBind（未绑定成员）', async () => {
+    api.hub.groupJoin.mockResolvedValue({ groupId: 'g-peer' });
+    api.hub.groupList.mockResolvedValue({ groups: [GROUP_PEER] });
+    render(<WorkgroupSidebar />);
+    fireEvent.change(screen.getByLabelText('邀请码'), { target: { value: 'PEER-CODE' } });
+    fireEvent.click(screen.getByRole('button', { name: '入组' }));
+    await screen.findByRole('button', { name: '稍后再绑' });
+    fireEvent.click(screen.getByRole('button', { name: '稍后再绑' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /绑定承接空间/ })).not.toBeInTheDocument();
+    });
+    expect(api.hub.groupBind).not.toHaveBeenCalled();
+  });
+
+  it('PJ-4. join 返回 lf 组 → 不弹绑定弹窗（两步式仅平行组）', async () => {
+    api.hub.groupJoin.mockResolvedValue({ groupId: 'g-dev' });
+    api.hub.groupList.mockResolvedValue({ groups: [GROUP_DEV] });
+    render(<WorkgroupSidebar />);
+    fireEvent.change(screen.getByLabelText('邀请码'), { target: { value: 'LF-CODE' } });
+    fireEvent.click(screen.getByRole('button', { name: '入组' }));
+    await waitFor(() => {
+      expect(api.hub.groupJoin).toHaveBeenCalledWith({ inviteCode: 'LF-CODE' });
+    });
+    expect(screen.queryByRole('dialog', { name: /绑定承接空间/ })).not.toBeInTheDocument();
   });
 });

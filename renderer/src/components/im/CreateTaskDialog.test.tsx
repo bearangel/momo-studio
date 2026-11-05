@@ -1324,3 +1324,97 @@ describe('CreateTaskDialog — 外派团队执行（M5.3 X3）', () => {
     expect(screen.getByRole('button', { name: '创建 1 个任务' })).toBeDisabled();
   });
 });
+
+// ── 1.10.0 平行草稿分流（spec 2026-11-05 §5.1：peer 组执行位置草稿形态）────────
+
+function peerPrecheckFixture(): RoutingPrecheckResult {
+  return {
+    mirrored: true,
+    groups: [
+      {
+        groupId: 'g-peer',
+        groupName: '产品三人组',
+        mode: 'peer',
+        onlineCount: 2,
+        mirroredCount: 2,
+        members: [
+          { nodeId: 'node-a', name: 'office-mac', online: true, mirrored: true, bound: true, boundWorkspaceName: 'dev-ws' },
+          { nodeId: 'node-b', name: 'lab-node', online: true, mirrored: true, bound: false },
+        ],
+      },
+    ],
+  };
+}
+
+describe('CreateTaskDialog — 平行草稿分流（1.10.0）', () => {
+  beforeEach(() => {
+    mockTaskCreate.mockReset().mockResolvedValue({ id: 'T-100' });
+    mockListAssignments.mockReset().mockResolvedValue([]);
+    mockTeamList.mockReset().mockResolvedValue([]);
+    mockSessionList.mockReset().mockResolvedValue([]);
+    mockTaskGroupList.mockReset().mockResolvedValue([]);
+    useGroupStore.setState({ groups: [], loading: false, error: null, currentWorkspaceId: 'ws1', selectedGroupId: null });
+    mockRoutingPrecheck.mockReset().mockResolvedValue(peerPrecheckFixture());
+    mockSubmitRoutedTask.mockReset().mockResolvedValue({ task: { id: 'T-rem' }, dispatched: true, nodeId: 'node-a' });
+  });
+
+  it('PD-1. peer 组指定节点：执行方式区退场 + 优先级下拉在场；提交带 draft/priority，无 permissionTier/teamId', async () => {
+    render(
+      <CreateTaskDialog open={true} onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.change(screen.getByLabelText(/标题/), { target: { value: '交接需求 PRD' } });
+    fireEvent.click(await screen.findByRole('radio', { name: '指定节点' }));
+    expect(screen.queryByRole('radiogroup', { name: '执行方式' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('优先级')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('优先级'), { target: { value: 'high' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
+    await waitFor(() => expect(mockSubmitRoutedTask).toHaveBeenCalled());
+    const call = mockSubmitRoutedTask.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(call.draft).toBe(true);
+    expect(call.priority).toBe(10);
+    expect('permissionTier' in call).toBe(false);
+    expect('teamId' in call).toBe(false);
+    expect('dependsOn' in call).toBe(false);
+  });
+
+  it('PD-2. 优先级映射沿用现有换算：low=1 / 缺省 medium=5', async () => {
+    render(
+      <CreateTaskDialog open={true} onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.change(screen.getByLabelText(/标题/), { target: { value: '低优先草稿' } });
+    fireEvent.click(await screen.findByRole('radio', { name: '指定节点' }));
+    fireEvent.change(screen.getByLabelText('优先级'), { target: { value: 'low' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
+    await waitFor(() => expect(mockSubmitRoutedTask).toHaveBeenCalled());
+    expect((mockSubmitRoutedTask.mock.calls[0]?.[0] as Record<string, unknown>).priority).toBe(1);
+  });
+
+  it('PD-3. 全员未绑定 → 指定节点无合法目标，创建按钮禁用', async () => {
+    const precheck = peerPrecheckFixture();
+    precheck.groups[0]!.members = precheck.groups[0]!.members.map((m) => ({ ...m, bound: false, boundWorkspaceName: undefined }));
+    mockRoutingPrecheck.mockResolvedValue(precheck);
+    render(
+      <CreateTaskDialog open={true} onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.change(screen.getByLabelText(/标题/), { target: { value: '无处可交' } });
+    fireEvent.click(await screen.findByRole('radio', { name: '指定节点' }));
+    expect(screen.getByRole('button', { name: '创建任务' })).toBeDisabled();
+  });
+
+  it('PD-4. 批量 peer：逐行提交 draft 载荷（整批统一优先级）', async () => {
+    render(
+      <CreateTaskDialog open={true} onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(screen.getByRole('radio', { name: '批量' }));
+    fireEvent.change(screen.getByLabelText(/批量任务书/), { target: { value: '任务一\n任务二' } });
+    fireEvent.click(await screen.findByRole('radio', { name: '指定节点' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建 2 个任务' }));
+    await waitFor(() => expect(mockSubmitRoutedTask).toHaveBeenCalledTimes(2));
+    for (const c of mockSubmitRoutedTask.mock.calls) {
+      const call = c[0] as Record<string, unknown>;
+      expect(call.draft).toBe(true);
+      expect(call.priority).toBe(5);
+      expect('permissionTier' in call).toBe(false);
+    }
+  });
+});

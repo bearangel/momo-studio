@@ -9,6 +9,11 @@
 //
 // M2.1 T10：外派模式（group/node）下追加「权限策略」档位三选 chip（默认 confirm）——
 // 只读 / 沙箱全权 / 执行端确认；本机模式与守门降级退场（权限档位只随委派载荷有意义）。
+//
+// 1.10.0 平行模式（spec 2026-11-05 §5.1）：所选组 mode='peer' 时渲染草稿形态——
+// 仅「本机执行 / 指定节点」两选项（平行组无 least-busy 组内调度）；成员下拉标注
+// 绑定态（已绑定✓空间名 / 未绑定✗ disabled——peer 委派要求目标已绑定）；权限
+// 档位区退场（平行草稿无档位，执行档位由接收方本地决定）。
 import { useId } from 'react';
 import { cn } from '../../lib/cn';
 import { Badge } from '../ui/Badge';
@@ -36,16 +41,32 @@ interface RadioRowProps {
   badge?: string;
   onSelect: () => void;
   children?: React.ReactNode;
+  /** 平行模式建组卡等复用场景：整行禁用（title 提示禁用原因） */
+  disabled?: boolean;
+  disabledTitle?: string;
 }
 
-function RadioRow({ checked, title, hint, name, badge, onSelect, children }: RadioRowProps) {
+export function RadioRow({
+  checked,
+  title,
+  hint,
+  name,
+  badge,
+  onSelect,
+  children,
+  disabled = false,
+  disabledTitle,
+}: RadioRowProps) {
   return (
     <div
-      // 仅在未选中时整行可点（已选行内点成员下拉不重复触发选择）
-      onClick={checked ? undefined : onSelect}
+      // 仅在未选中时整行可点（已选行内点成员下拉不重复触发选择）；禁用行不可点
+      onClick={checked || disabled ? undefined : onSelect}
+      title={disabled && disabledTitle !== undefined ? disabledTitle : undefined}
       className={cn(
-        'flex cursor-pointer flex-col gap-1.5 rounded-[10px] border p-2.5 transition-colors',
+        'flex flex-col gap-1.5 rounded-[10px] border p-2.5 transition-colors',
         checked ? 'border-focus bg-surface-2' : 'border-subtle hover:border-focus',
+        disabled && 'cursor-not-allowed opacity-50 hover:border-subtle',
+        !disabled && !checked && 'cursor-pointer',
       )}
     >
       <div className="flex items-start gap-2.5">
@@ -55,8 +76,9 @@ function RadioRow({ checked, title, hint, name, badge, onSelect, children }: Rad
             name={name}
             aria-label={title}
             checked={checked}
+            disabled={disabled}
             onChange={onSelect}
-            className="peer h-4 w-4 appearance-none rounded-full border border-strong bg-surface-2 checked:border-accent-500"
+            className="peer h-4 w-4 appearance-none rounded-full border border-strong bg-surface-2 checked:border-accent-500 disabled:cursor-not-allowed"
           />
           <span className="pointer-events-none absolute inset-0 m-auto h-2 w-2 rounded-full bg-accent-500 opacity-0 peer-checked:opacity-100" />
         </span>
@@ -112,13 +134,17 @@ export function RunRoutingField({
         : '未镜像到任何工作组——先在监控台镜像工作空间后可外派';
   const gated = precheck === null || precheck.mirrored === false || groups.length === 0;
 
-  // 数据失配防御：value 引用的组已不在清单 → 展示回退本机
+  // 数据失配防御：value 引用的组已不在清单 → 展示回退本机；peer 组无组内调度
+  // （value 残留 group 变体时同样回退本机展示——提交侧另有校验）
   const valueGroupKnown =
     value.mode === 'local' || groups.some((g) => g.groupId === value.groupId);
-  const effectiveMode: TaskRouting['mode'] = valueGroupKnown ? value.mode : 'local';
   const currentGroup =
     groups.find((g) => g.groupId === (value.mode === 'local' ? undefined : value.groupId)) ??
     groups[0];
+  // 1.10.0：平行组草稿形态（无组内调度行/权限档位；成员下拉标绑定态）
+  const peerForm = currentGroup?.mode === 'peer';
+  const effectiveMode: TaskRouting['mode'] =
+    valueGroupKnown && !(peerForm && value.mode === 'group') ? value.mode : 'local';
 
   const localHint = gated ? gateHint : batch ? '按本机并发上限排队' : '默认 · 你在场盯进度，人在环';
   const groupHint = currentGroup
@@ -126,9 +152,12 @@ export function RunRoutingField({
       ? `预检：${currentGroup.onlineCount} 节点在线 · ${currentGroup.mirroredCount} 已镜像 · 依次派给空闲节点`
       : '按负载自动选择空闲节点'
     : '';
-  const nodeHint = '高级 · 手动选组成员执行（忽略自动调度）';
+  const nodeHint = peerForm ? '选择承接成员 · 草稿由对方自行安排执行' : '高级 · 手动选组成员执行（忽略自动调度）';
 
-  const firstMemberId = currentGroup?.members[0]?.nodeId ?? '';
+  // peer 形态下合法目标 = 已绑定成员（hub 委派闸：未绑定 → forbidden）
+  const firstMemberId = peerForm
+    ? currentGroup?.members.find((m) => m.bound)?.nodeId ?? ''
+    : currentGroup?.members[0]?.nodeId ?? '';
   // TS 收窄辅助：目标成员 select 的受控值（node 模式外不访问 targetNodeId）
   const selectedNodeId = value.mode === 'node' ? value.targetNodeId : '';
 
@@ -145,7 +174,7 @@ export function RunRoutingField({
           hint={localHint}
           onSelect={() => onChange({ mode: 'local' })}
         />
-        {!gated && currentGroup && (
+        {!gated && currentGroup && !peerForm && (
           <RadioRow
             name={nameBase}
             checked={effectiveMode === 'group'}
@@ -194,6 +223,9 @@ export function RunRoutingField({
                         mode: 'node',
                         groupId: e.target.value,
                         targetNodeId:
+                          groups.find((g) => g.groupId === e.target.value)?.members.find(
+                            (m) => m.bound,
+                          )?.nodeId ??
                           groups.find((g) => g.groupId === e.target.value)?.members[0]?.nodeId ??
                           '',
                       })
@@ -209,7 +241,7 @@ export function RunRoutingField({
                 <Select
                   label="目标成员"
                   value={
-                    currentGroup.members.some((m) => m.nodeId === selectedNodeId)
+                    currentGroup.members.some((m) => m.nodeId === selectedNodeId && (!peerForm || m.bound))
                       ? selectedNodeId
                       : firstMemberId
                   }
@@ -222,17 +254,28 @@ export function RunRoutingField({
                   }
                 >
                   {currentGroup.members.map((m) => (
-                    <option key={m.nodeId} value={m.nodeId}>
-                      {m.online ? m.name : `${m.name}（离线）`}
+                    <option key={m.nodeId} value={m.nodeId} disabled={peerForm && !m.bound}>
+                      {peerForm
+                        ? m.bound
+                          ? `${m.name}（已绑定 · ${m.boundWorkspaceName ?? '未知空间'}）`
+                          : `${m.name}（未绑定，不可选）`
+                        : m.online
+                          ? m.name
+                          : `${m.name}（离线）`}
                     </option>
                   ))}
                 </Select>
+                {peerForm && firstMemberId === '' && (
+                  <p className="text-xs leading-relaxed text-status-warning">
+                    组内暂无已绑定承接空间的成员——对方需在组设置中绑定后才可接收草稿
+                  </p>
+                )}
               </div>
             )}
           </RadioRow>
         )}
       </div>
-      {effectiveMode !== 'local' && (
+      {effectiveMode !== 'local' && !peerForm && (
         <div className="flex flex-col gap-1 pl-1 pt-0.5">
           <div className="flex items-center gap-2.5">
             <span className="shrink-0 text-xs text-tertiary">权限策略</span>

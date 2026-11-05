@@ -18,6 +18,15 @@ import { ipc } from '../ipc/client';
 import { rpcErrorMessage } from '../lib/rpc-error';
 import type { HubGroupInfo } from '../ipc/types';
 
+/**
+ * create 可选项（1.10.0 平行模式）：mode='peer' 建平行组（hub 建组闸要求
+ * 同时带组长绑定空间名）；lf 组两键缺省不带（载荷零变化）。
+ */
+export interface GroupCreateOptions {
+  mode?: 'leader-follower' | 'peer';
+  bindWorkspaceName?: string;
+}
+
 interface HubGroupState {
   groups: HubGroupInfo[];
   loading: boolean;
@@ -36,11 +45,19 @@ interface HubGroupState {
   /** 权威拉取组列表（loading 门闸防并发重入） */
   load(): Promise<void>;
   selectGroup(groupId: string): void;
-  create(groupName: string): Promise<void>;
+  /** 建组（1.10.0：peer 组带 mode + 组长绑定空间名） */
+  create(groupName: string, opts?: GroupCreateOptions): Promise<void>;
   invite(groupId: string): Promise<string>;
-  join(inviteCode: string): Promise<void>;
+  /** 入组；成功返回 groupId（调用方查组列表判定 mode==='peer' 走两步式绑定） */
+  join(inviteCode: string): Promise<string>;
   leave(groupId: string): Promise<void>;
   transfer(groupId: string, toNodeId: string): Promise<void>;
+  /** 1.10.0 平行组绑定/换绑承接空间（本地 workspaceId——主进程按名登记 hub + 本地落库） */
+  bind(groupId: string, workspaceId: string): Promise<void>;
+  /** 1.10.0 解绑（hub 登记与本地权威一并清除） */
+  unbind(groupId: string): Promise<void>;
+  /** 1.10.0 镜像接受开关翻转（须已绑定） */
+  setMirrorAccept(groupId: string, accepts: boolean): Promise<void>;
 }
 
 /**
@@ -80,9 +97,10 @@ export const useHubGroupStore = create<HubGroupState>((set) => {
     }
   };
 
-  const runAction = async (op: () => Promise<unknown>): Promise<void> => {
+  const runAction = async <T>(op: () => Promise<T>): Promise<T> => {
+    let result: T;
     try {
-      await op();
+      result = await op();
     } catch (err) {
       // 先重拉对账再呈现错误——refresh 成功分支清 error，顺序颠倒会覆盖错误呈现
       await refresh();
@@ -90,6 +108,7 @@ export const useHubGroupStore = create<HubGroupState>((set) => {
       throw err;
     }
     await refresh();
+    return result;
   };
 
   return {
@@ -113,8 +132,14 @@ export const useHubGroupStore = create<HubGroupState>((set) => {
       set({ selectedGroupId: groupId });
     },
 
-    async create(groupName) {
-      await runAction(() => ipc.hub.groupCreate({ groupName }));
+    async create(groupName, opts) {
+      await runAction(() =>
+        ipc.hub.groupCreate({
+          groupName,
+          ...(opts?.mode !== undefined ? { mode: opts.mode } : {}),
+          ...(opts?.bindWorkspaceName !== undefined ? { bindWorkspaceName: opts.bindWorkspaceName } : {}),
+        }),
+      );
     },
 
     async invite(groupId) {
@@ -124,7 +149,8 @@ export const useHubGroupStore = create<HubGroupState>((set) => {
     },
 
     async join(inviteCode) {
-      await runAction(() => ipc.hub.groupJoin({ inviteCode }));
+      const { groupId } = await runAction(() => ipc.hub.groupJoin({ inviteCode }));
+      return groupId;
     },
 
     async leave(groupId) {
@@ -133,6 +159,18 @@ export const useHubGroupStore = create<HubGroupState>((set) => {
 
     async transfer(groupId, toNodeId) {
       await runAction(() => ipc.hub.groupTransfer({ groupId, toNodeId }));
+    },
+
+    async bind(groupId, workspaceId) {
+      await runAction(() => ipc.hub.groupBind({ groupId, workspaceId }));
+    },
+
+    async unbind(groupId) {
+      await runAction(() => ipc.hub.groupUnbind({ groupId }));
+    },
+
+    async setMirrorAccept(groupId, accepts) {
+      await runAction(() => ipc.hub.groupSetMirrorAccept({ groupId, accepts }));
     },
   };
 });

@@ -12,18 +12,26 @@
 // - 无组空态：创建/加入表单直接展开（引导优先，无折叠入口）
 // - 数据源：组/委派 store 的订阅与拉取由 WorkgroupView 统一 init（视图级生命周期），
 //   本组件只消费——侧栏与主区共享同一份组列表与选中态
-import { useState, type FormEvent } from 'react';
+// - 1.10.0 平行模式（spec 2026-11-05 §6）：创建表单带模式单选卡（主从=现状 /
+//   平行=团队协作，hub 协议 < 1.10 整卡禁用）；平行组必选组长绑定空间。入组两步式：
+//   join 成功且组 mode='peer' → 追加 BindingDialog（绑定承接空间 + 接受镜像单选）
+import { useEffect, useState, type FormEvent } from 'react';
 import { ExternalLink, Eye, Plus, Users } from 'lucide-react';
 import { effectiveSelectedGroup, useHubGroupStore } from '../../stores/hub-group.store';
 import { useHubDelegationStore } from '../../stores/hub-delegation.store';
 import { useHubStore } from '../../stores/hub.store';
 import { useHubViewStore } from '../../stores/hub-view.store';
+import { useWorkspaceStore } from '../../stores/workspace.store';
+import { hubSupportsMinor } from '../../lib/hub-capability';
 import type { HubGroupInfo, HubGroupMember, HubTaskRecord } from '../../ipc/types';
 import { cn } from '../../lib/cn';
 import { rpcErrorMessage } from '../../lib/rpc-error';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
+import { Select } from '../ui/Select';
+import { RadioRow } from './RunRoutingField';
+import { BindingDialog } from './BindingDialog';
 
 function runningCountOf(tasks: HubTaskRecord[], nodeId: string): number {
   return tasks.filter((t) => t.targetNodeId === nodeId && (t.status === 'running' || t.status === 'pending')).length;
@@ -44,6 +52,9 @@ export function WorkgroupSidebar() {
   // S4 侧栏「查看中」态：查看态（open 且非 picking 前置步）定向的目标成员行
   const viewingNodeId = useHubViewStore((s) => (s.open && !s.picking ? s.targetNodeId : null));
   const [openForm, setOpenForm] = useState<'create' | 'join' | null>(null);
+  // 两步式入组第二步（1.10.0）：状态挂侧栏根——JoinForm 在空态分支里，首个组
+  // join 成功即切组列表形态卸载表单，弹窗态随组件丢失会跳过绑定引导
+  const [bindStep, setBindStep] = useState<{ groupId: string; groupName: string } | null>(null);
 
   const group = effectiveSelectedGroup(groups, selectedGroupId);
 
@@ -65,7 +76,7 @@ export function WorkgroupSidebar() {
             {online && (
               <>
                 <CreateForm />
-                <JoinForm />
+                <JoinForm onPeerJoined={(groupId, groupName) => setBindStep({ groupId, groupName })} />
               </>
             )}
           </div>
@@ -138,7 +149,7 @@ export function WorkgroupSidebar() {
             />
             {openForm === 'join' && (
               <div className="px-1.5 pb-1">
-                <JoinForm />
+                <JoinForm onPeerJoined={(groupId, groupName) => setBindStep({ groupId, groupName })} />
               </div>
             )}
           </div>
@@ -147,6 +158,14 @@ export function WorkgroupSidebar() {
             连接建立后可创建或加入工作组
           </p>
         ))}
+
+      <BindingDialog
+        open={bindStep !== null}
+        onClose={() => setBindStep(null)}
+        groupId={bindStep?.groupId ?? ''}
+        groupName={bindStep?.groupName}
+        joinFlavor
+      />
     </div>
   );
 }
@@ -234,20 +253,45 @@ function SidebarActionRow({
 
 // ── 组操作表单（自 GroupPanel CreateForm/JoinForm 迁移；trim + 错误原文呈现语义不变）──
 
+type CreateMode = 'leader-follower' | 'peer';
+
 function CreateForm() {
   const create = useHubGroupStore((s) => s.create);
+  const hubProtoVer = useHubStore((s) => s.status?.hubProtoVer ?? null);
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const loadWorkspaces = useWorkspaceStore((s) => s.load);
   const [groupName, setGroupName] = useState('');
+  const [mode, setMode] = useState<CreateMode>('leader-follower');
+  const [bindWorkspaceId, setBindWorkspaceId] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  // 平行组协议门槛 minor 10（spec §3.5 PEER_DELEGATION_REQUIRED_MINOR——hub 建组闸）
+  const peerAllowed = hubSupportsMinor(hubProtoVer, 10);
+
+  useEffect(() => {
+    if (useWorkspaceStore.getState().workspaces.length === 0) {
+      void loadWorkspaces().catch(() => {});
+    }
+  }, [loadWorkspaces]);
+
+  const bindWorkspaceName = workspaces.find((w) => w.id === bindWorkspaceId)?.name;
+  const canSubmit = groupName.trim() !== '' && (mode === 'leader-follower' || bindWorkspaceName !== undefined);
 
   const onSubmit = async (e: FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
-    if (submitting || groupName.trim() === '') return;
+    if (submitting || !canSubmit) return;
     setSubmitting(true);
     setFormError(null);
     try {
-      await create(groupName.trim());
+      await create(
+        groupName.trim(),
+        mode === 'peer' && bindWorkspaceName !== undefined
+          ? { mode: 'peer', bindWorkspaceName }
+          : undefined,
+      );
       setGroupName('');
+      setMode('leader-follower');
+      setBindWorkspaceId('');
     } catch (err) {
       // store 动作 rethrow 原始 rejection（保留错误身份）——展示层剥 `[code]` 前缀
       setFormError(rpcErrorMessage(err));
@@ -265,7 +309,45 @@ function CreateForm() {
         onChange={(e) => setGroupName(e.target.value)}
         placeholder="家庭工作组"
       />
-      <Button type="submit" size="sm" className="self-start" disabled={submitting || groupName.trim() === ''}>
+      <div role="radiogroup" aria-label="工作组模式" className="flex flex-col gap-1.5">
+        <RadioRow
+          name="workgroup-mode"
+          checked={mode === 'leader-follower'}
+          title="主从模式"
+          hint="一个用户的多台设备，组长统一调度执行"
+          onSelect={() => setMode('leader-follower')}
+        />
+        <RadioRow
+          name="workgroup-mode"
+          checked={mode === 'peer'}
+          title="平行模式"
+          hint="多人团队协作，成员间点对点交接任务草稿"
+          disabled={!peerAllowed}
+          disabledTitle="hub 服务器协议过旧（需 1.10.0+）"
+          onSelect={() => setMode('peer')}
+        >
+          {mode === 'peer' && (
+            <div className="pl-6">
+              <Select
+                label="组长绑定空间*"
+                value={bindWorkspaceId}
+                onChange={(e) => setBindWorkspaceId(e.target.value)}
+              >
+                <option value="">请选择工作空间</option>
+                {workspaces.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.name}
+                  </option>
+                ))}
+              </Select>
+              <p className="mt-1 text-[11px] leading-relaxed text-tertiary">
+                外来草稿与组镜像将落到该空间；模式建组后不可切换
+              </p>
+            </div>
+          )}
+        </RadioRow>
+      </div>
+      <Button type="submit" size="sm" className="self-start" disabled={submitting || !canSubmit}>
         {submitting ? '创建中…' : '创建'}
       </Button>
       {formError !== null && (
@@ -277,7 +359,7 @@ function CreateForm() {
   );
 }
 
-function JoinForm() {
+function JoinForm({ onPeerJoined }: { onPeerJoined: (groupId: string, groupName: string) => void }) {
   const join = useHubGroupStore((s) => s.join);
   const [inviteCode, setInviteCode] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -289,8 +371,11 @@ function JoinForm() {
     setSubmitting(true);
     setFormError(null);
     try {
-      await join(inviteCode.trim());
+      const groupId = await join(inviteCode.trim());
       setInviteCode('');
+      // join 内 runAction 已重拉组列表——此处查 store 即得该组 mode
+      const joined = useHubGroupStore.getState().groups.find((g) => g.groupId === groupId);
+      if (joined?.mode === 'peer') onPeerJoined(groupId, joined.groupName);
     } catch (err) {
       // 同上：store rethrow 原始 rejection，展示层剥 `[code]` 前缀
       setFormError(rpcErrorMessage(err));
