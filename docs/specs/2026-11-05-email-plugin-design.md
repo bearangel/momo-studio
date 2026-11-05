@@ -106,6 +106,8 @@ secrets: {
 | `drafts.json` | 草稿登记：draftId、accountId、状态 pending/sent/discarded、创建时间、收件人摘要 + `inputPayload`（正文/附件 base64，仅服务端存储，用于发送失败重试；对外投影剔除） | 24h 过期作废 |
 | 正文缓存 | 纯内存 LRU（50 封，键 `accountId\|folder\|uid`），不落盘 | 重启后按需重拉 |
 
+本插件**不做工作区隔离**：邮箱账号与邮件是用户级资产，缓存键为 `accountId + folder`，跨工作区共享（依据 2026-10-17 spec §4.5）。
+
 ### 5.2 方法目录（`handle(method, params)`）
 
 - **accounts**：`list`（脱敏）/ `add` / `update` / `delete` / `test`（IMAP login + SMTP verify；panel 添加账号「测试连接」用，通过才允许保存——表单任一改动即重置测试态）
