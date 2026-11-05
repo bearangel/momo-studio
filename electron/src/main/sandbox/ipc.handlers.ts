@@ -18,11 +18,11 @@ import { detectPackageManager } from './windows';
 import { grantWriteDirs, revokeWriteDir, listWorkspaceGrants } from './write-grant';
 import { clearPendingOnDeny, clearPendingOnGrant } from './write-blocked-emit';
 import { broadcastWriteGrantDenied } from '../agent/runtime-registry';
-import type { SandboxMode } from './types';
+import type { SandboxMode, SandboxWritePolicy } from './types';
 
 export interface SandboxInfo {
   state: SandboxProbeState | null;
-  settings: { mode: SandboxMode; networkPolicy: NetworkPolicy };
+  settings: { mode: SandboxMode; networkPolicy: NetworkPolicy; writePolicy: SandboxWritePolicy };
   installCommand: string | null;
   bwrapPromptDismissed: boolean;
   winPolicyPromptDismissed: boolean;

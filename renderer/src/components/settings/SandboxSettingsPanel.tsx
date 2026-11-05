@@ -10,7 +10,7 @@
 // 全语义 token；lucide ShieldCheck 图标由 SettingsNav 持有。
 import { useEffect, useState } from 'react';
 import { ipc } from '../../ipc/client';
-import type { SandboxInfo, SandboxMode, NetworkPolicy } from '../../ipc/types';
+import type { SandboxInfo, SandboxMode, NetworkPolicy, SandboxWritePolicy } from '../../ipc/types';
 import { Button } from '../ui/Button';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 
@@ -31,6 +31,8 @@ export function SandboxSettingsPanel() {
   const [grants, setGrants] = useState<WorkspaceGrantEntry[]>([]);
   // 待撤销确认项（2026-10-04）：撤销是破坏性操作（该目录写入重新被拦）——红色按钮 + 二次确认
   const [pendingRevoke, setPendingRevoke] = useState<{ entry: WorkspaceGrantEntry; dir: string } | null>(null);
+  // 全盘可写待确认（2026-11-05 spec §5.7）：开启是放大写域的危险操作——先弹确认
+  const [confirmFullDisk, setConfirmFullDisk] = useState(false);
 
   useEffect(() => {
     void ipc.sandbox.getState().then(setInfo);
@@ -41,6 +43,7 @@ export function SandboxSettingsPanel() {
   const save = (patch: {
     sandboxMode?: SandboxMode;
     sandboxNetworkPolicy?: NetworkPolicy;
+    sandboxWritePolicy?: SandboxWritePolicy;
   }): void => {
     if (!info) return;
     setInfo({
@@ -48,6 +51,7 @@ export function SandboxSettingsPanel() {
       settings: {
         mode: patch.sandboxMode ?? info.settings.mode,
         networkPolicy: patch.sandboxNetworkPolicy ?? info.settings.networkPolicy,
+        writePolicy: patch.sandboxWritePolicy ?? info.settings.writePolicy,
       },
     });
     // IPC 拒绝不冒泡 unhandled rejection（乐观 UI 弱一致，下次拉取自然校正）
@@ -76,6 +80,7 @@ export function SandboxSettingsPanel() {
   if (!info) return <div className="p-4 text-secondary text-sm">加载中...</div>;
 
   const st = info.state;
+  const isWin = st?.platform === 'win32';
   const statusText =
     st === null
       ? '未探测'
@@ -135,6 +140,37 @@ export function SandboxSettingsPanel() {
       </fieldset>
 
       <fieldset className="flex flex-col gap-2">
+        <legend className="text-sm font-medium text-primary">写域（全盘可写）</legend>
+        <label className="flex items-start gap-2 text-sm text-secondary">
+          <input
+            type="radio"
+            name="sandbox-write-policy"
+            checked={info.settings.writePolicy === 'confined'}
+            onChange={() => save({ sandboxWritePolicy: 'confined' })}
+            className="mt-1"
+            aria-label="仅工作空间（默认）"
+          />
+          <span>仅工作空间（默认）——工作空间 / tmp / 已授权目录可写，越界弹授权卡</span>
+        </label>
+        <label className="flex items-start gap-2 text-sm text-secondary">
+          <input
+            type="radio"
+            name="sandbox-write-policy"
+            checked={info.settings.writePolicy === 'full-disk'}
+            onChange={() => setConfirmFullDisk(true)}
+            className="mt-1"
+            aria-label="全盘可写"
+            disabled={isWin}
+          />
+          <span>
+            全盘可写——除操作系统核心目录（/System、/usr、/etc 等）外全部可读写，不再弹授权卡
+            {isWin ? '（Windows 无 OS 沙箱，此开关不生效）' : ''}
+          </span>
+        </label>
+        <p className="text-xs text-tertiary">仅影响 bash 与插件执行；文件工具仍限工作空间内；~/.ssh 等凭据目录读保护不受影响。</p>
+      </fieldset>
+
+      <fieldset className="flex flex-col gap-2">
         <legend className="text-sm font-medium text-primary">已授权目录（工作空间持久）</legend>
         {grants.length === 0 ? (
           <p className="text-xs text-tertiary">暂无持久授权</p>
@@ -164,6 +200,16 @@ export function SandboxSettingsPanel() {
           confirmLabel="撤销授权"
           onConfirm={() => revokeGrant(pendingRevoke.entry, pendingRevoke.dir)}
           onClose={() => setPendingRevoke(null)}
+        />
+      )}
+
+      {confirmFullDisk && (
+        <ConfirmDialog
+          title="开启全盘可写"
+          message={'开启后 agent 可改写系统目录之外的任意用户目录（含 ~/Library 等持久化位面）。\n凭据目录（~/.ssh 等）仍受读保护；仅影响 bash 与插件执行。'}
+          confirmLabel="开启全盘可写"
+          onConfirm={() => save({ sandboxWritePolicy: 'full-disk' })}
+          onClose={() => setConfirmFullDisk(false)}
         />
       )}
 

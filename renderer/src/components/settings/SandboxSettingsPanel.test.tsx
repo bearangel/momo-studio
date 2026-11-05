@@ -54,7 +54,7 @@ function makeInfo(overrides?: Partial<SandboxInfo>): SandboxInfo {
       executionPolicy: null,
       probedAt: 1757500000000,
     },
-    settings: { mode: 'strict', networkPolicy: 'allow' },
+    settings: { mode: 'strict', networkPolicy: 'allow', writePolicy: 'confined' },
     installCommand: null,
     bwrapPromptDismissed: false,
     winPolicyPromptDismissed: false,
@@ -210,7 +210,7 @@ describe('SandboxSettingsPanel', () => {
   });
 
   it('网络双态：deny 态点「永久允许（默认）」→ updateGlobal({ sandboxNetworkPolicy: allow }) + 乐观选中', async () => {
-    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'deny' } }));
+    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'deny', writePolicy: 'confined' } }));
     render(<SandboxSettingsPanel />);
     await waitFor(() => expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument());
 
@@ -237,7 +237,7 @@ describe('SandboxSettingsPanel', () => {
   });
 
   it('网络三态：deny 态挂载 → 「拒绝」初始选中', async () => {
-    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'deny' } }));
+    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'deny', writePolicy: 'confined' } }));
     render(<SandboxSettingsPanel />);
     await waitFor(() => {
       expect(screen.getByRole('radio', { name: '拒绝' })).toBeChecked();
@@ -257,7 +257,7 @@ describe('SandboxSettingsPanel', () => {
         executionPolicy: null,
         probedAt: 1757500001000,
       },
-      settings: { mode: 'permissive', networkPolicy: 'allow' },
+      settings: { mode: 'permissive', networkPolicy: 'allow', writePolicy: 'confined' },
     });
     reprobeMock.mockResolvedValue(refreshed);
     render(<SandboxSettingsPanel />);
@@ -342,5 +342,60 @@ describe('SandboxSettingsPanel：已授权目录', () => {
     listWriteGrantsMock.mockResolvedValue([]);
     render(<SandboxSettingsPanel />);
     await waitFor(() => expect(screen.getByText('暂无持久授权')).toBeInTheDocument());
+  });
+});
+
+describe('SandboxSettingsPanel 写域开关（2026-11-05 全盘可写 spec §5.7）', () => {
+  it('渲染写域区块：confined 默认选中', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    render(<SandboxSettingsPanel />);
+    expect(await screen.findByLabelText('仅工作空间（默认）')).toBeChecked();
+    expect(screen.getByLabelText('全盘可写')).not.toBeChecked();
+  });
+
+  it('选 full-disk → 弹确认对话框；取消 → 不落值不乐观更新', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    render(<SandboxSettingsPanel />);
+    fireEvent.click(await screen.findByLabelText('全盘可写'));
+    // ConfirmDialog 出现（取消钮在场即对话框已开——标题与确认钮同文案，findByText 会多匹配）
+    expect(await screen.findByRole('button', { name: '取消' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    await waitFor(() => {
+      expect(updateGlobalMock).not.toHaveBeenCalledWith(expect.objectContaining({ sandboxWritePolicy: 'full-disk' }));
+    });
+  });
+
+  it('确认 → updateGlobal 落值 full-disk（开启需二次确认）', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    render(<SandboxSettingsPanel />);
+    fireEvent.click(await screen.findByLabelText('全盘可写'));
+    fireEvent.click(await screen.findByRole('button', { name: '开启全盘可写' }));
+    await waitFor(() => {
+      expect(updateGlobalMock).toHaveBeenCalledWith({ sandboxWritePolicy: 'full-disk' });
+    });
+  });
+
+  it('full-disk 已开 → 选中态渲染；切回 confined 直接落值（关闭无需确认）', async () => {
+    getStateMock.mockResolvedValue(makeInfo({
+      settings: { mode: 'strict', networkPolicy: 'allow', writePolicy: 'full-disk' },
+    }));
+    render(<SandboxSettingsPanel />);
+    expect(await screen.findByLabelText('全盘可写')).toBeChecked();
+    fireEvent.click(screen.getByLabelText('仅工作空间（默认）'));
+    await waitFor(() => {
+      expect(updateGlobalMock).toHaveBeenCalledWith({ sandboxWritePolicy: 'confined' });
+    });
+  });
+
+  it('win32 → 开关禁用 + 不生效说明（无 OS 沙箱，spec §5.7）', async () => {
+    getStateMock.mockResolvedValue(makeInfo({
+      state: {
+        platform: 'win32', sandboxTool: null, toolVersion: null, available: false,
+        unavailableReason: null, windowsShell: 'pwsh.exe', executionPolicy: 'Restricted', probedAt: 0,
+      },
+    }));
+    render(<SandboxSettingsPanel />);
+    expect(await screen.findByLabelText('全盘可写')).toBeDisabled();
+    expect(screen.getByText(/Windows 无 OS 沙箱，此开关不生效/)).toBeInTheDocument();
   });
 });

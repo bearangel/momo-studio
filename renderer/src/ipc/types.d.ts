@@ -888,6 +888,8 @@ export interface GlobalSettings {
    * （默认——三态时代的 ask 已并入 allow，读时懒迁移收敛）。
    */
   sandboxNetworkPolicy?: 'deny' | 'allow';
+  /** 沙箱写域（2026-11-05 全盘可写 spec §5.1）：confined=workspace+tmp+动态授权（默认安全缺省）；full-disk=除 OS 核心目录外全盘可写 */
+  sandboxWritePolicy?: 'confined' | 'full-disk';
   /**
    * v2.5：沙箱工具链目录写入策略。**2026-10-04 随工具链机制整体移除**（硬门控
    * 授权卡取代）：本字段不再被生产消费；存量 JSON 键留存不读不写（回滚安全）。
@@ -1910,6 +1912,9 @@ export type SandboxMode = 'strict' | 'permissive';
 /** 沙箱网络出站双态策略，与 electron 端 sandbox/settings.ts 的 NetworkPolicy 对齐（2026-09-13 修订 B） */
 export type NetworkPolicy = 'deny' | 'allow';
 
+/** 沙箱写域，与 electron 端 sandbox/types.ts 的 SandboxWritePolicy 对齐（2026-11-05 全盘可写） */
+export type SandboxWritePolicy = 'confined' | 'full-disk';
+
 /**
  * v2.4 沙箱聚合信息（sandbox:getState / sandbox:reprobe 返回）。
  * 与 electron 端 sandbox/ipc.handlers.ts 的 SandboxInfo 对齐。
@@ -1920,6 +1925,7 @@ export interface SandboxInfo {
   settings: {
     mode: SandboxMode;
     networkPolicy: NetworkPolicy;
+    writePolicy: SandboxWritePolicy;
   };
   /** 手动安装指引命令（包管理器探测失败为 null） */
   installCommand: string | null;
