@@ -556,13 +556,23 @@ describe('session.store — 只读态与聚焦信号（v25 spec §7「会话只�
     expect(useSessionStore.getState().inputFocusTick).toBe(1);
   });
 
-  it('bumpFileTrigger → fileTriggerTick +1；reset() 归零（Task 10 📎 聚焦通道）', () => {
-    expect(useSessionStore.getState().fileTriggerTick).toBe(0);
-    useSessionStore.getState().bumpFileTrigger();
-    useSessionStore.getState().bumpFileTrigger();
-    expect(useSessionStore.getState().fileTriggerTick).toBe(2);
+  it('bumpMentionTrigger → mentionTrigger {kind,tick+1} 且 mentionScope 同步置位；closeMentionScope 清空；reset() 归零（2026-11-05 工具条五按钮通道）', () => {
+    expect(useSessionStore.getState().mentionTrigger).toBeNull();
+    expect(useSessionStore.getState().mentionScope).toBeNull();
+    useSessionStore.getState().bumpMentionTrigger('skill');
+    useSessionStore.getState().bumpMentionTrigger('file');
+    const t = useSessionStore.getState().mentionTrigger;
+    expect(t).toEqual({ kind: 'file', tick: 2 });
+    expect(useSessionStore.getState().mentionScope).toBe('file');
+    // 一次性消费语义（实测 bug 3）：开菜单后回写清空信号，scope 不受影响
+    useSessionStore.getState().consumeMentionTrigger();
+    expect(useSessionStore.getState().mentionTrigger).toBeNull();
+    expect(useSessionStore.getState().mentionScope).toBe('file');
+    useSessionStore.getState().closeMentionScope();
+    expect(useSessionStore.getState().mentionScope).toBeNull();
     useSessionStore.getState().reset();
-    expect(useSessionStore.getState().fileTriggerTick).toBe(0);
+    expect(useSessionStore.getState().mentionTrigger).toBeNull();
+    expect(useSessionStore.getState().mentionScope).toBeNull();
   });
 });
 

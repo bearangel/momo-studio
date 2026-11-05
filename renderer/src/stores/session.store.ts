@@ -52,8 +52,19 @@ interface SessionState {
   activeSessionReadOnly: boolean;
   /** 输入框聚焦请求信号：新建会话成功后 +1，MentionInput 订阅后聚焦（spec §6.2 ⚡ 直达） */
   inputFocusTick: number;
-  /** 文件引用触发信号：MentionInput 容器内 📎 按钮 +1（v2.11.1 起移入；Task 10 信号机制不变） */
-  fileTriggerTick: number;
+  /**
+   * 工具条选择按钮触发信号（2026-11-05 工具条可视化）：bump 时 {kind, tick+1}；
+   * MentionInput 订阅后聚焦 + 直开对应菜单（零文本侵入），**消费完即清空**
+   * （consumeMentionTrigger）——信号一次性，防面板切换重挂载回放旧菜单。
+   */
+  mentionTrigger: { kind: MentionTriggerKind; tick: number } | null;
+  /**
+   * 按钮限定菜单的组（2026-11-05）：bumpMentionTrigger 同步置位；菜单关闭
+   * （选中 / Esc / 切会话 / 发送 / 触发符失配）由 MentionInput 经
+   * closeMentionScope 清空；InputToolbar 订阅它渲染按钮激活态。
+   * null=非限定（手动键入统一菜单，路径不变）。
+   */
+  mentionScope: MentionTriggerKind | null;
   /** 分页加载状态——sessionId → 是否正在加载更早消息（防抖） */
   loadingOlderBySession: Map<string, boolean>;
   /** 分页是否还有更早历史——sessionId → boolean；undefined 视为 true（初始） */
@@ -153,11 +164,21 @@ interface SessionState {
    * stream 聚合态）
    */
   reloadMessages: (sessionId: string) => Promise<void>;
-  /** 递增 fileTriggerTick（MentionInput 容器内 📎 按钮，v2.11.1 起移入；Task 10 信号机制不变） */
-  bumpFileTrigger: () => void;
+  /**
+   * 工具条选择按钮触发（2026-11-05）：递增 mentionTrigger.tick 并同步置位
+   * mentionScope（InputToolbar 五按钮消费；触发符映射在 MentionInput）。
+   */
+  bumpMentionTrigger: (kind: MentionTriggerKind) => void;
+  /** 消费触发信号（MentionInput 开菜单后回写清空；一次性语义防重挂载回放） */
+  consumeMentionTrigger: () => void;
+  /** 清空按钮限定菜单的组（菜单生命周期结束） */
+  closeMentionScope: () => void;
   /** 重置全部状态（登出时调用） */
   reset: () => void;
 }
+
+/** 工具条选择按钮的五类触发（2026-11-05 预览合同定序：Agent/技能/文件/会话/任务） */
+export type MentionTriggerKind = 'agent' | 'skill' | 'file' | 'session' | 'task';
 
 export const useSessionStore = create<SessionState>((set, get) => ({
   sessions: [],
@@ -171,7 +192,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   needsDefaultAgent: false,
   activeSessionReadOnly: false,
   inputFocusTick: 0,
-  fileTriggerTick: 0,
+  mentionTrigger: null,
+  mentionScope: null,
   loadingOlderBySession: new Map(),
   hasMoreBySession: new Map(),
   loadOlderError: null,
@@ -531,7 +553,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
-  bumpFileTrigger: () => set((s) => ({ fileTriggerTick: s.fileTriggerTick + 1 })),
+  bumpMentionTrigger: (kind) =>
+    set((s) => ({
+      mentionTrigger: { kind, tick: (s.mentionTrigger?.tick ?? 0) + 1 },
+      mentionScope: kind,
+    })),
+
+  consumeMentionTrigger: () => set({ mentionTrigger: null }),
+
+  closeMentionScope: () => set({ mentionScope: null }),
 
   reset: () => {
     set({
@@ -548,7 +578,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       inputFocusTick: 0,
       pendingCreateGroupId: null,
       revealSessionId: null,
-      fileTriggerTick: 0,
+      mentionTrigger: null,
+      mentionScope: null,
       loadingOlderBySession: new Map(),
       hasMoreBySession: new Map(),
       loadOlderError: null,
