@@ -165,6 +165,7 @@ secrets: {
 ```
 
 - 账号表单：邮箱地址/显示名/IMAP host/port/SMTP host/port/用户名/授权码（不回显）/预设下拉/「测试连接」/「本地缓存保留时长」下拉（永久/一年/半年/一个月）
+- 编辑当前账号：可修改服务器端点与保留时长；密码留空表示不修改（keychain 原值保留）；邮箱地址只读。
 - 写邮件：工具栏「写邮件」→ 收件人/抄送/主题/正文/附件（FileReader → base64，总量 ≤25MB）→「发送」经会话确认后复用 `drafts.save` → `drafts.send` 直发 SMTP；「存草稿」仅登记；发送/放弃后对应文件夹缓存失效
 - 无构建静态 HTML/JS（codegraph 模式）；PanelChannel：`callService` 交互、`getTheme` 主题跟随、`getContext` 上下文
 - 列表数据流：打开即拉 `mails.list`（缓存秒开，TTL 5min 后全量重拉）+ 60s 定时轮询；未读数角标（收件箱/草稿/已发送，`folders.unseen`）
