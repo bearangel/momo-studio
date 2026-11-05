@@ -19,7 +19,7 @@
 - 密码/授权码只进 keytar（`ctx.secrets`）；`accounts.json` / 日志 / 工具返回值永不出现明文凭据
 - dataDir JSON 一律 tmp+rename 原子写；读侧损坏一律丢弃重建不抛
 - 加密强制：`tlsMode ∈ {'tls','starttls'}`，明文端口（裸 25/143）双守门拒绝
-- 数值上限（spec §6/§10）：save_attachment 单附件 ≤10MB；draft 附件总量 ≤25MB；list_mails pageSize 缺省 20 上限 50；信封缓存每 folder 500 条 FIFO；正文截断 200KB；read_mail 拒收 source >2MB；草稿 24h 过期；IMAP 单操作超时 30s（可注入缩短供测试）
+- 数值上限（spec §6/§10）：save_attachment 单附件 ≤10MB；draft 附件总量 ≤25MB；list_mails pageSize 缺省 20 上限 50；信封缓存每 folder 500 条（uid 降序）；正文 text/html 均截断 200KB；read_mail 拒收 source >2MB；草稿 24h 过期；IMAP 单操作超时 30s + 单次 service 调用整链总预算 8s（可注入缩短供测试）
 - 测试位置：moo-studio → `electron/tests/plugin|storage/`（DB 重度目录跑加 `--pool=forks`）；momo-plugin → `tests/email/`（宿主校验器经 `tests/host.ts` 动态 import，`describe.skipIf(!HOST_READY)` 容忍宿主缺失）
 - Conventional Commits；两仓库都不动版本号；`momo-plugin.json` 版本固定 `0.1.0`
 - 插件 dev 装载流：宿主「插件设置 → 开发目录装载」指向 `<momo-plugin>/plugins/email`（`installPluginDevDir` 直读源目录，改码→重载即生效）
@@ -2094,7 +2094,7 @@ git commit -m "feat(email): 写侧工具×3——附件存工作区/起草/确�
 - Test: `tests/email/preset.test.ts`
 
 **Interfaces:**
-- Produces: skill slug `email-ops`；agent slug `email-assistant`（**spec 层** defaultTools 七工具 + defaultSkills email-ops；`spec.declarative.model` 为宿主 parser 必需的「建议块」，真正的模型绑定由 resolveModelBinding 走全局默认）
+- Produces: skill slug `email-ops`；agent slug `email-assistant`（**spec 层** defaultTools 8 条——七插件工具 + read_file；defaultSkills email-ops；`spec.declarative.model` 为宿主 parser 必需的「建议块」，真正的模型绑定由 resolveModelBinding 走全局默认）
 
 - [ ] **Step 1: 写失败测试**
 
@@ -2765,7 +2765,7 @@ git commit -m "test(email): dev 装载全链路冒烟——manifest/工具装配
 
 走查清单（全部通过后在 README 验收记录表打勾填日期）：
 1. dev 装载 → 活动栏「邮件」页出现；无账号空态
-2. QQ/163 真授权码添加账号 → 测试连接 ✓ → 列表秒开（缓存）→ 强制刷新增量
+2. QQ/163 真授权码添加账号 → 测试连接 ✓（通过才允许保存）→ 列表秒开（缓存，TTL 5min 后全量重拉）
 3. 读信：纯文本直显；HTML 邮件惰性 iframe（无脚本执行/无远程图片）
 4. 会话：「总结今天的新邮件」→ 摘要含发件人分组 + 未读优先标注
 5. 会话：「给 xx 回一封…」→ agent 展示全文征确认 → 回复「确认发送」→ 面板已发送出现该邮件

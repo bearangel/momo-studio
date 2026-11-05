@@ -66,8 +66,7 @@ plugins/email/
 │   └── email-ops/SKILL.md    # 邮箱操作方法论，见 §9.1
 └── panel/
     ├── panel.json            # [{id: mail, title: 邮件, icon: lucide:mail, location: page, entry: ./index.html}]
-    ├── index.html            # 三栏 UI，无构建静态文件（codegraph 模式）
-    └── app.js / mail.css
+    └── index.html            # 三栏 UI 单文件（内联样式与脚本，无 app.js / mail.css）
 ```
 
 ## 3. 平台扩展：`PluginServiceCtx.secrets`（moo-studio 侧唯一改动）
@@ -104,15 +103,15 @@ secrets: {
 |---|---|---|
 | `accounts.json` | 账号元数据：accountId、email、显示名、imap/smtp host/port/tls 模式、用户名、创建时间、健康状态 | **不含密码**（密码在 keytar，键 `account:<accountId>`） |
 | `cache/<accountId>/<folder>.json` | 信封缓存：uid、subject、from、to、date、flags、hasAttachments、size | 每 folder 有界 500 条 FIFO；可丢弃重建 |
-| `drafts.json` | 草稿登记：draftId、accountId、状态 pending/sent/discarded、创建时间、收件人摘要 | 24h 过期作废 |
-| 正文缓存 | 纯内存 LRU（50 封），不落盘 | 重启后按需重拉 |
+| `drafts.json` | 草稿登记：draftId、accountId、状态 pending/sent/discarded、创建时间、收件人摘要 + `inputPayload`（正文/附件 base64，仅服务端存储，用于发送失败重试；对外投影剔除） | 24h 过期作废 |
+| 正文缓存 | 纯内存 LRU（50 封，键 `accountId\|folder\|uid`），不落盘 | 重启后按需重拉 |
 
 ### 5.2 方法目录（`handle(method, params)`）
 
-- **accounts**：`list`（脱敏）/ `add` / `update` / `delete` / `test`（IMAP login + SMTP verify；panel 添加账号「测试连接」用，通过才允许保存）
-- **mails**：`list`（缓存优先，stale 时 IMAP 拉增量信封）/ `get`（按需拉正文 + mailparser 解析）/ `refresh`（强制刷新）
-- **drafts**：`save`（RFC822 生成 + APPEND）/ `list` / `send` / `discard`
-- **attachments**：`getContent`（base64，≤10MB 上限）
+- **accounts**：`list`（脱敏）/ `add` / `update` / `delete` / `test`（IMAP login + SMTP verify；panel 添加账号「测试连接」用，通过才允许保存——表单任一改动即重置测试态）
+- **mails**：`list`（缓存优先，TTL 5min 过期后**全量重拉**，非增量）/ `get`（按需拉正文 + mailparser 解析）/ `refresh`（强制刷新）
+- **drafts**：`save`（RFC822 生成 + APPEND）/ `list` / `send` / `discard`（`save`/`list`/`send` 返回投影，不含 `inputPayload`/base64）
+- **attachments**：`get`（base64，≤10MB 上限）
 
 ### 5.3 连接与并发
 
@@ -124,10 +123,10 @@ secrets: {
 
 | 工具 | 语义 | 关键约束 |
 |---|---|---|
-| `list_accounts` | 已配置邮箱清单 | 脱敏（无凭据）；带账号健康状态（ok / error+原因） |
+| `list_accounts` | 已配置邮箱清单 | 脱敏（无凭据）；带账号健康状态（ok / error+原因，含操作失败时自动标记） |
 | `list_folders` | 账号文件夹树 | special-use 探测 + 中文常用名 fallback（草稿箱/已发送） |
 | `list_mails` | 列邮件（分页+过滤） | filter：since / unreadOnly / from / subject 关键词；页大小默认 20 上限 50 |
-| `read_mail` | 读单封全文 | text/plain 优先、text/html 降级提取；200KB 截断并标注；附件清单（文件名/大小/partId） |
+| `read_mail` | 读单封全文 | text/plain 优先、text/html 降级提取；text 与 html 均 200KB 截断并标注；附件清单（文件名/大小/partId） |
 | `save_attachment` | 附件存工作区 | 经 ToolContext.wsFs 写 + `recordFileChange` 记账；单附件 ≤10MB（RPC base64 通道上限），超限明确报错 |
 | `draft_mail` | 起草邮件 | to/cc/subject/body（纯文本）/attachments（工作区相对路径[]，工具侧 wsFs 读取）；总量 ≤25MB；service APPEND Drafts + 登记 pending |
 | `send_draft` | 发送已确认草稿 | **仅接受 draft_id**（不可凭空指定收件人）；行为契约见 §7 |
@@ -156,7 +155,7 @@ secrets: {
 
 - 账号表单：邮箱地址/显示名/IMAP host/port/SMTP host/port/用户名/授权码（不回显）/预设下拉/「测试连接」
 - 无构建静态 HTML/JS（codegraph 模式）；PanelChannel：`callService` 交互、`getTheme` 主题跟随、`getContext` 上下文
-- 列表数据流：打开 → `mails.list`（缓存秒开）→ 后台 `refresh` 增量；未读数角标
+- 列表数据流：打开即拉 `mails.list`（缓存秒开，TTL 5min 后全量重拉）+ 60s 定时轮询；未读数角标（收件箱/草稿/已发送，`folders.unseen`）
 - panel 附件区仅展示清单（沙箱 iframe 无文件系统能力；存工作区走 agent 工具 `save_attachment`，与「专业 agent」定位自洽）
 
 ## 9. skill 与 agent
@@ -168,7 +167,7 @@ secrets: {
 ### 9.2 agent（`agents/email-assistant.yaml`）
 
 - 定位：邮件助手——读邮析信、生成摘要、按要求起草并发送
-- `defaultTools`：`plugin:email/*` 七工具全量；`defaultSkills`：`email-ops`
+- `defaultTools`：8 条——`plugin:email/*` 七工具全量 + 内置 `read_file`；`defaultSkills`：`email-ops`
 - 模型绑定：宿主 `manifest-parser` 硬性要求 `spec.declarative.model` 块（provider 仅 openai/anthropic），该块仅作「建议位」（解析后 `modelProviderId` 为 null）；真正绑定由 agent-sync 的 `resolveModelBinding` 走全局默认聊天模型（装完即用；无全局默认时 spawn 报错指路资源库配置）。`defaultTools` / `defaultSkills` 必须写在 **spec 层**（parser 与 cross-ref 校验的唯一读取位置）
 - system prompt 承载 §7 发送行为契约
 
@@ -178,11 +177,12 @@ secrets: {
 |---|---|
 | 账号认证失败 | 账号 state=error（panel 红点 + 原因）；工具返回结构化错误 + 中文指引（授权码过期 / IMAP 服务未开启） |
 | 单账号拉取失败 | `list_mails` 聚合时单失败不拖全局：成功账号正常返回 + 失败账号带原因 |
-| 网络超时 | IMAP 操作 30s 超时；工具返回超时语义；缓存仍可读（降级体验） |
+| 网络超时 | IMAP 单操作 30s + 单次 service 调用整链总预算 8s（先于宿主 callService 桥 10s 落定）；SMTP/verify 8s；工具返回超时语义；缓存仍可读（降级体验） |
+| 读取上限 | `read_mail` 全源 >2MB 拒收（提示改用 `save_attachment`） |
 | 缓存 JSON 损坏 | 丢弃重建（缓存非真相源） |
 | 附件超限 | 工具参数校验 + service 双守门（save ≤10MB / 发送总量 ≤25MB），超限明确报错不静默 |
 | 发送失败 | 草稿保留不删；SMTP 错误原样透出（退信线索）；panel 显示原因可重试 |
-| 正文超大 | `read_mail` 200KB 截断 + 标注「已截断」 |
+| 正文超大 | `read_mail` text/html 均 200KB 截断 + 标注「已截断」 |
 
 ## 11. 安全清单
 
