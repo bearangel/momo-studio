@@ -34,9 +34,9 @@ vi.mock('../../../src/main/sandbox/path-resolve', async (importOriginal) => {
   return { ...actual, resolveLoginShellPath: vi.fn(async () => '/opt/momo-login-test/bin') };
 });
 
-/** 测试用 settings 构造器：v2.5 起 SandboxSettings 仅含 mode/networkPolicy */
+/** 测试用 settings 构造器：2026-11-05 起 SandboxSettings 含 mode/networkPolicy/writePolicy（默认 confined） */
 function settings(mode: 'strict' | 'permissive', networkPolicy: 'deny' | 'allow') {
-  return { mode, networkPolicy };
+  return { mode, networkPolicy, writePolicy: 'confined' as const };
 }
 
 let tmpRoot: string;

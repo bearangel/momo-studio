@@ -55,9 +55,9 @@ const IS_DARWIN = process.platform === 'darwin';
 /** 当前平台 wrapped 分支名（结果 sandbox tag 前缀） */
 const WRAPPED = IS_DARWIN ? 'seatbelt' : 'bwrap';
 
-/** 测试用 settings 构造器：v2.5 起 SandboxSettings 仅含 mode/networkPolicy */
+/** 测试用 settings 构造器：2026-11-05 起 SandboxSettings 含 mode/networkPolicy/writePolicy（默认 confined） */
 function settings(mode: 'strict' | 'permissive', networkPolicy: 'deny' | 'allow') {
-  return { mode, networkPolicy };
+  return { mode, networkPolicy, writePolicy: 'confined' as const };
 }
 
 /** 构造 fake 子进程：capture spawn 后由测试驱动 close（带 stderr 网络 failure 签名） */

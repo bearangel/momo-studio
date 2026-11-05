@@ -25,7 +25,7 @@ const ENV = { ELECTRON_RUN_AS_NODE: '1' };
 const tmpWs = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-sbxexec-'));
 
 beforeEach(() => {
-  __setSandboxSettingsForTest({ mode: 'permissive', networkPolicy: 'deny' });
+  __setSandboxSettingsForTest({ mode: 'permissive', networkPolicy: 'deny', writePolicy: 'confined' });
   __setSandboxStateForTest({ platform: process.platform, sandboxTool: null, toolVersion: null, available: false, unavailableReason: '单测钉 plain', windowsShell: null, executionPolicy: null, probedAt: 0 });
 });
 
@@ -91,7 +91,7 @@ describe('execSandboxed（plain 路径行为锁）', () => {
 
   it('strict + 沙箱不可用 → blocked 抛错（不静默降级）', async () => {
     __setSandboxStateForTest({ platform: process.platform, sandboxTool: null, toolVersion: null, available: false, unavailableReason: '单测模拟不可用', windowsShell: null, executionPolicy: null, probedAt: 0 });
-    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny' });
+    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny', writePolicy: 'confined' });
     await expect(execSandboxed({ argv: [NODE, '-e', ''], cwd: tmpWs, timeoutMs: 1_000, maxOutputBytes: 1_000 })).rejects.toThrow('沙箱');
   });
 });

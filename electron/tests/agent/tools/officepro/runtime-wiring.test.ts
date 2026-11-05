@@ -117,7 +117,7 @@ beforeEach(() => {
     creatorUserId: 'test-user',
     toolModules: [probeModule(), loadRunJsModule()],
   };
-  __setSandboxSettingsForTest({ mode: 'permissive', networkPolicy: 'deny' });
+  __setSandboxSettingsForTest({ mode: 'permissive', networkPolicy: 'deny', writePolicy: 'confined' });
   __setSandboxStateForTest({
     platform: process.platform, sandboxTool: null, toolVersion: null,
     available: false, unavailableReason: '单测钉 plain', windowsShell: null,

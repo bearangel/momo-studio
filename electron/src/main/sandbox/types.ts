@@ -5,6 +5,9 @@
 
 export type SandboxMode = 'strict' | 'permissive';
 
+/** 沙箱写域（2026-11-05 全盘可写 spec §5.3）：confined=workspace+tmp+动态授权（现行，默认安全方向）；full-disk=除 OS 核心目录外全盘可写 */
+export type SandboxWritePolicy = 'confined' | 'full-disk';
+
 /** platform 无关沙箱策略（buildPolicy 产出；所有路径均为 realpath 解析后的绝对路径） */
 export interface ShellSandboxPolicy {
   workspaceDir: string;

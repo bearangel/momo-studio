@@ -125,6 +125,7 @@ describe('sandbox:getState', () => {
     expect(info.settings).toEqual({
       mode: 'strict',
       networkPolicy: 'allow',
+      writePolicy: 'confined',
     });
     expect(info.state).toBeNull();
     expect(info.installCommand).toBe('sudo apt install bubblewrap');

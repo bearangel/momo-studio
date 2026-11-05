@@ -50,11 +50,16 @@ export interface GlobalSettings {
    * sandboxNetwork 墓碑先例，回滚安全）。
    */
   sandboxToolchainPolicy?: 'deny' | 'allow';
-  /**
-   * v2.5：可授权写入的工具链目录清单。**2026-10-04 随工具链机制整体移除**：
+  /** v2.5：可授权写入的工具链目录清单。**2026-10-04 随工具链机制整体移除**：
    * 本字段不再被生产消费；存量 JSON 键留存不读不写。
    */
   sandboxToolchainDirs?: string[];
+  /**
+   * 沙箱写域策略（2026-11-05 全盘可写 spec §5.1）。读侧只在 kv 有行时透传
+   * （缺省 undefined），迁移收敛在 sandbox/settings.ts——此处给默认值会被
+   * updateGlobalSettings 读改写合并烤进 JSON，污染迁移判定（sandboxNetworkPolicy 先例）。
+   */
+  sandboxWritePolicy?: 'confined' | 'full-disk';
   /** v2.5：变更账本 workspace 级 blob 配额（MB，按 1024² 换算）；默认 200。 */
   journalQuotaMb?: number;
 }
@@ -114,6 +119,7 @@ export function getGlobalSettings(): GlobalSettings {
     sandboxNetworkPolicy: parsed.sandboxNetworkPolicy,
     sandboxToolchainPolicy: parsed.sandboxToolchainPolicy,
     sandboxToolchainDirs: parsed.sandboxToolchainDirs,
+    sandboxWritePolicy: parsed.sandboxWritePolicy,
     journalQuotaMb: parsed.journalQuotaMb ?? DEFAULT_JOURNAL_QUOTA_MB,
   };
 }

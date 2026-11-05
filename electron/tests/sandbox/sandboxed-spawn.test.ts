@@ -22,7 +22,7 @@ function probeState(sandboxTool: 'seatbelt' | 'bwrap' | null, unavailableReason:
 
 beforeEach(() => {
   // 语义默认：strict + 拒网（blocked 分支依赖；permissive 用例内显式覆盖）
-  __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny' });
+  __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny', writePolicy: 'confined' });
 });
 
 afterEach(() => {
@@ -44,7 +44,7 @@ describe('resolveSandboxedSpawn（任意 argv 包裹，net-off 固定）', () =>
 
   it('沙箱不可用 + permissive → plain 直跑（tag 标注 unsandboxed）', () => {
     __setSandboxStateForTest(probeState(null, '单测模拟不可用'));
-    __setSandboxSettingsForTest({ mode: 'permissive', networkPolicy: 'deny' });
+    __setSandboxSettingsForTest({ mode: 'permissive', networkPolicy: 'deny', writePolicy: 'confined' });
     const plan = resolveSandboxedSpawn('/ws', ARGV);
     expect(plan.kind).toBe('plain');
     if (plan.kind === 'plain') {

@@ -30,9 +30,9 @@ import type { RuntimeConfig } from '../../src/main/agent/runtime-config';
 import { __setSandboxStateForTest } from '../../src/main/sandbox/probe';
 import { __setSandboxSettingsForTest } from '../../src/main/sandbox/settings';
 
-/** 测试用 settings 构造器：v2.5 起 SandboxSettings 仅含 mode/networkPolicy */
+/** 测试用 settings 构造器：2026-11-05 起 SandboxSettings 含 mode/networkPolicy/writePolicy（默认 confined） */
 function settings(mode: 'strict' | 'permissive', networkPolicy: 'deny' | 'allow') {
-  return { mode, networkPolicy };
+  return { mode, networkPolicy, writePolicy: 'confined' as const };
 }
 
 let tmpDir: string;

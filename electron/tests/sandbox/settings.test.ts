@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
-import { updateGlobalSettings } from '../../src/main/settings/crud';
+import { updateGlobalSettings, getGlobalSettings } from '../../src/main/settings/crud';
 import {
   getSandboxSettings,
   __setSandboxSettingsForTest,
@@ -60,19 +60,22 @@ describe('sandbox/settings（testOverride）', () => {
     __setSandboxSettingsForTest({
       mode: 'permissive',
       networkPolicy: 'deny',
+      writePolicy: 'confined',
     });
     expect(getSandboxSettings()).toEqual({
       mode: 'permissive',
       networkPolicy: 'deny',
+      writePolicy: 'confined',
     });
     expect(readRawGlobal().sandboxNetworkPolicy).toBeUndefined();
   });
 
-  it('override 置 null 后走 DB，缺省 strict / allow（双态时代新默认）', () => {
+  it('override 置 null 后走 DB，缺省 strict / allow / confined（双态时代新默认 + 写域安全缺省）', () => {
     __setSandboxSettingsForTest(null);
     expect(getSandboxSettings()).toEqual({
       mode: 'strict',
       networkPolicy: 'allow',
+      writePolicy: 'confined',
     });
   });
 });
@@ -91,6 +94,7 @@ describe('sandbox/settings kv 懒迁移（修订 B：双态收敛）', () => {
     expect(getSandboxSettings()).toEqual({
       mode: 'strict',
       networkPolicy: 'allow',
+      writePolicy: 'confined',
     });
     const raw = readRawGlobal();
     expect(raw.sandboxNetworkPolicy).toBe('allow'); // 新键已写
@@ -154,24 +158,58 @@ describe('sandbox/settings 既有行为保持（v2.4 基线）', () => {
   });
 });
 
-describe('sandbox/settings 形状锁（v2.5 工具链机制移除）', () => {
-  // 抗复活锁：v2.5 移除后 SandboxSettings 应严格保持两字段形状。任何回潮
-  // （如新增 toolchainPolicy/toolchainDirs/toolchainEnabled 等字段）会被
-  // toHaveProperty 截住。测试同时覆盖 testOverride 与 DB 两条读路径，确保
-  // 双源同形。
-  it('testOverride 注入的 SandboxSettings 仅含 mode/networkPolicy 两键', () => {
-    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny' });
+describe('sandbox/settings 形状锁（v2.5 工具链机制移除 + 2026-11-05 写域三键化）', () => {
+  // 抗复活锁：v2.5 移除后 SandboxSettings 不再出现 toolchain* 字段（保留防回潮）；
+  // 2026-11-05 全盘可写（spec §5.1）起合法形状扩为三键 mode/networkPolicy/writePolicy。
+  // 测试同时覆盖 testOverride 与 DB 两条读路径，确保双源同形。
+  it('testOverride 注入的 SandboxSettings 恰含 mode/networkPolicy/writePolicy 三键', () => {
+    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny', writePolicy: 'full-disk' });
     const s = getSandboxSettings();
-    expect(Object.keys(s).sort()).toEqual(['mode', 'networkPolicy']);
+    expect(Object.keys(s).sort()).toEqual(['mode', 'networkPolicy', 'writePolicy']);
     expect(s).not.toHaveProperty('toolchainPolicy');
     expect(s).not.toHaveProperty('toolchainDirs');
   });
 
-  it('DB 通路读出的 SandboxSettings 仅含 mode/networkPolicy 两键', () => {
+  it('DB 通路读出的 SandboxSettings 恰含 mode/networkPolicy/writePolicy 三键', () => {
     __setSandboxSettingsForTest(null);
     const s = getSandboxSettings();
-    expect(Object.keys(s).sort()).toEqual(['mode', 'networkPolicy']);
+    expect(Object.keys(s).sort()).toEqual(['mode', 'networkPolicy', 'writePolicy']);
     expect(s).not.toHaveProperty('toolchainPolicy');
     expect(s).not.toHaveProperty('toolchainDirs');
+  });
+});
+
+describe('sandbox/settings writePolicy（2026-11-05 全盘可写 spec §5.1）', () => {
+  it('kv 缺省（新装/老库）→ confined 且写回新键（安全缺省落盘）', () => {
+    __setSandboxSettingsForTest(null);
+    expect(getSandboxSettings().writePolicy).toBe('confined');
+    expect(readRawGlobal().sandboxWritePolicy).toBe('confined'); // 迁移已落库
+    expect(getGlobalSettings().sandboxWritePolicy).toBe('confined'); // crud 透传可读
+  });
+
+  it('脏值（"FULL-DISK" 大写脏库）→ 收敛 confined 并写回，不抛错', () => {
+    writeRawGlobal({ sandboxWritePolicy: 'FULL-DISK' });
+    __setSandboxSettingsForTest(null);
+    expect(getSandboxSettings().writePolicy).toBe('confined');
+    expect(readRawGlobal().sandboxWritePolicy).toBe('confined');
+  });
+
+  it('合法值 confined 透传（命中快路径，不触发写）', () => {
+    updateGlobalSettings({ sandboxWritePolicy: 'confined' });
+    expect(getSandboxSettings().writePolicy).toBe('confined');
+  });
+
+  it('合法值 full-disk 透传（设置面板写入路径）', () => {
+    updateGlobalSettings({ sandboxWritePolicy: 'full-disk' });
+    expect(getSandboxSettings().writePolicy).toBe('full-disk');
+  });
+
+  it('testOverride 携带 writePolicy（shell-tools 等无 DB fixture 场景）', () => {
+    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'allow', writePolicy: 'full-disk' });
+    try {
+      expect(getSandboxSettings().writePolicy).toBe('full-disk');
+    } finally {
+      __setSandboxSettingsForTest(null);
+    }
   });
 });

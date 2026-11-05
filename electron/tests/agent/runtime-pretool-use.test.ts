@@ -21,7 +21,7 @@ beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-pretool-'));
   process.env.AP_USER_DATA_DIR = tmpDir; // 隔离 DB（journal 账本会开库——不可碰真实库）
   __setSandboxStateForTest({ available: true, tool: 'none' } as never);
-  __setSandboxSettingsForTest({ mode: 'permissive', networkPolicy: 'deny' });
+  __setSandboxSettingsForTest({ mode: 'permissive', networkPolicy: 'deny', writePolicy: 'confined' });
   const toolCtxBase = {
     wsFs: new WorkspaceFS(tmpDir),
     workspaceId: 'ws1',

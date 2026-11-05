@@ -11,8 +11,12 @@
 // 硬门控授权卡按实际被拦目录授权（会话/工作空间持久 KV），预置机制无存在
 // 必要。存量 JSON 键 sandboxToolchainPolicy / sandboxToolchainDirs 留存不读
 // 不写（同 sandboxNetwork 墓碑先例，回滚安全）。
+//
+// 2026-11-05（全盘可写 spec §5.1）：新增 writePolicy 写域维度。读时懒迁移
+// 同 networkPolicy 手法：缺失（新装/老库）/脏值 → 收敛 'confined'（安全缺省）
+// 并写回新键；合法值透传不写。写失败不阻断读取。
 import { getGlobalSettings, updateGlobalSettings } from '../settings/crud';
-import type { SandboxMode } from './types';
+import type { SandboxMode, SandboxWritePolicy } from './types';
 
 /** 网络出站双态策略（修订 B）：deny 一律禁网 / allow 全放行（默认） */
 export type NetworkPolicy = 'deny' | 'allow';
@@ -20,6 +24,7 @@ export type NetworkPolicy = 'deny' | 'allow';
 export interface SandboxSettings {
   mode: SandboxMode;
   networkPolicy: NetworkPolicy;
+  writePolicy: SandboxWritePolicy;
 }
 
 let testOverride: SandboxSettings | null = null;
@@ -32,11 +37,24 @@ export function getSandboxSettings(): SandboxSettings {
   if (testOverride) return { ...testOverride };
   const g = getGlobalSettings();
   const mode: SandboxMode = g.sandboxMode === 'permissive' ? 'permissive' : 'strict';
+  // 写域懒迁移（spec §5.1，networkPolicy 先例）：缺失（新装/老库）/脏值一律
+  // 收敛 'confined' 并写回（安全缺省落盘）；合法值透传不写。写失败不阻断读取。
+  let writePolicy: SandboxWritePolicy;
+  if (g.sandboxWritePolicy === 'confined' || g.sandboxWritePolicy === 'full-disk') {
+    writePolicy = g.sandboxWritePolicy;
+  } else {
+    writePolicy = 'confined';
+    try {
+      updateGlobalSettings({ sandboxWritePolicy: 'confined' });
+    } catch {
+      // 迁移写失败（DB 异常等）：按推导值继续返回
+    }
+  }
   if (g.sandboxNetworkPolicy === 'deny') {
-    return { mode, networkPolicy: 'deny' };
+    return { mode, networkPolicy: 'deny', writePolicy };
   }
   if (g.sandboxNetworkPolicy === 'allow') {
-    return { mode, networkPolicy: 'allow' };
+    return { mode, networkPolicy: 'allow', writePolicy };
   }
   // 懒迁移（修订 B）：遗留 'ask'（三态时代值）/ 非法脏值 / 旧布尔键（true 与
   // false 均同向——旧语义 false→ask，而 ask 已并入 allow，故布尔两值殊途同归）/
@@ -47,5 +65,5 @@ export function getSandboxSettings(): SandboxSettings {
   } catch {
     // 迁移写失败（DB 异常等）：按推导值继续返回
   }
-  return { mode, networkPolicy: 'allow' };
+  return { mode, networkPolicy: 'allow', writePolicy };
 }
