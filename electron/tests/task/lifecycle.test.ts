@@ -208,7 +208,8 @@ describe('cancelTask', () => {
     await cancelTask(taskId);
 
     expect(getTask(taskId)?.status).toBe('cancelled');
-    expect(abortSpy).toHaveBeenCalledWith('sess-cancel');
+    // 旁系隔离（2026-11-05）：广播携带 taskId（他链豁免键）
+    expect(abortSpy).toHaveBeenCalledWith('sess-cancel', taskId);
   });
 
   it('无执行会话的任务取消 → 不触发中断', async () => {
@@ -239,8 +240,9 @@ describe('abortTaskExecution（Task 7 铺路：只 abort 运行时流，不 tran
 
     // DB 侧：状态原样保持（cancelTask 之外的独立调用不携带 transition）
     expect(getTask(taskId)?.status).toBe('in_progress');
-    // 运行时侧：车道无记录 → 回退按 executionSessionId 广播（K7-4 兜底语义）
-    expect(abortSpy).toHaveBeenCalledWith('sess-abort');
+    // 运行时侧：车道无记录 → 回退按 executionSessionId 广播（K7-4 兜底语义，
+    // 携带 taskId 做旁系隔离）
+    expect(abortSpy).toHaveBeenCalledWith('sess-abort', taskId);
   });
 
   it('无执行会话的任务 → 静默 no-op', () => {

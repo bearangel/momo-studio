@@ -27,8 +27,10 @@ export type { StartTaskOpts, StartTaskResult } from './starter';
 /**
  * K7-4 + v2.3 精确中止（spec §6）：任务转 paused / cancelled 时联动中断 agent 执行。
  * 优先按 taskId 反查车道流精确 abort——同会话 dispatch 子流（未注册车道）
- * 与其他任务的流不受影响；车道无记录（流未注册的窗口 / 旧数据）回退按
- * executionSessionId 广播（原 K7-4 语义兜底）。
+ * 与其他任务的流不受影响；车道无记录（两回合空档 / session_queued / 已暂停后
+ * 再取消 / 旧数据）回退按 executionSessionId 广播（原 K7-4 语义兜底）——
+ * 广播携带 taskId 做旁系隔离（2026-11-05，R1 相邻发现收口）：他链在途
+ * dispatch 流豁免，本任务自有流与无链认领流照杀。
  *
  * Task 7 铺路：只 abort 运行时流，不携带任何 transition——调用方自行决定
  * 状态迁移（cancelTask = transition cancelled 后调它）。
@@ -44,7 +46,7 @@ export function abortTaskExecution(taskId: string): void {
   if (!abortTaskStreamByLane(taskId)) {
     const row = getTask(taskId);
     if (row?.executionSessionId) {
-      abortTasksBySessionEverywhere(row.executionSessionId);
+      abortTasksBySessionEverywhere(row.executionSessionId, taskId);
     }
   }
   settleDispatchChainOnUserAction(taskId);

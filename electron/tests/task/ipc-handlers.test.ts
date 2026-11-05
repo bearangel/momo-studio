@@ -155,7 +155,8 @@ describe('任务暂停/取消 ↔ agent 执行联动（K7-4/K7-5）', () => {
     await handler(null, t.id, 'paused');
 
     expect(getTask(t.id)!.status).toBe('paused');
-    expect(abortSpy).toHaveBeenCalledWith('sess-lex');
+    // 旁系隔离（2026-11-05）：广播携带 taskId（他链豁免键）
+    expect(abortSpy).toHaveBeenCalledWith('sess-lex', t.id);
   });
 
   it('K7-4: task:cancel → 联动中断', async () => {
@@ -172,7 +173,8 @@ describe('任务暂停/取消 ↔ agent 执行联动（K7-4/K7-5）', () => {
     await handler(null, t.id);
 
     expect(getTask(t.id)!.status).toBe('cancelled');
-    expect(abortSpy).toHaveBeenCalledWith('sess-cex');
+    // 旁系隔离（2026-11-05）：广播携带 taskId（他链豁免键）
+    expect(abortSpy).toHaveBeenCalledWith('sess-cex', t.id);
   });
 
   it('K7-4: transition 到无关状态（如 assigned）不触发中断', async () => {

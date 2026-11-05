@@ -852,11 +852,22 @@ export class AgentRunner {
    * ephemeral（routeUserChat taskId=null），taskId 匹配不到；同一执行会话
    * 内的活跃流都属该任务的执行语境。不清理活跃表：abort 后由
    * end/task-end 正常收尾（与 abortStream 同语义）。返回是否命中。
+   *
+   * 旁系隔离（2026-11-05）：exemptStreamIds 为他链在途 dispatch 流 id集（由
+   * abortTasksBySessionEverywhere 从链注册表算出）——命中的流跳过不发 abort；
+   * 未提供（旧调用方 / stopAll 关停全杀）不过滤。
    */
-  abortTasksBySession(executionSessionId: string): boolean {
+  abortTasksBySession(executionSessionId: string, exemptStreamIds?: Set<string>): boolean {
     let hit = false;
     for (const active of this.activeTasks.values()) {
       if (active.executionSessionId !== executionSessionId) continue;
+      if (exemptStreamIds?.has(active.streamSessionId)) {
+        logger.info('fallback 会话广播豁免他链 dispatch 流', {
+          streamSessionId: active.streamSessionId,
+          executionSessionId,
+        });
+        continue;
+      }
       this.safeSend(active.runtime.child, { type: 'abort', streamSessionId: active.streamSessionId }, 'abort-by-session');
       hit = true;
     }

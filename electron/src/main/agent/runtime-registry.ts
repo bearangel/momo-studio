@@ -34,6 +34,7 @@ import { handleStreamChunk, setAbortResolver } from './stream-relay';
 import { WarmPool } from './warm-pool';
 import { AgentRunner, markShuttingDown, __resetShuttingDownForTest } from './agent-runner';
 import { notifyRunnerIdle, notifyAgentStopped } from './router-service';
+import { dispatchRegistry } from './dispatch-registry';
 import { spawnForAgent, type SpawnedRuntime } from './runtime-spawner';
 import { ProviderTokenBucket } from './llm/token-bucket';
 
@@ -292,11 +293,29 @@ function pauseRunningTasksForAgent(instanceId: string): void {
 /**
  * K7-4：任务暂停/取消联动中断入口——遍历全部 runner，按执行会话匹配活跃流
  * 发 abort。fire-and-forget 语义：无匹配（agent 未在跑该任务）返回 false。
+ *
+ * 旁系隔离（2026-11-05，R1 相邻发现收口）：车道未命中的 fallback 广播历史上
+ * 按会话全杀——同会话在途 dispatch 链的子流 / PM 源流属另一任务链，被误杀后
+ * 233 秒遭 sweepDead 误判「心跳超时」（错误死因 + 僵尸窗口）。ownedTaskId 提供
+ * 时，他链（taskId ≠ 本任务）在途流的 id 组成豁免集下传 runner 逐流跳过；
+ * 本任务名下链不豁免（取消 dispatch 任务本尊 = 其子流该杀，链终态由
+ * settleChainForTaskUserAction 落）。未提供（旧调用方）豁免集为空，行为不变。
  */
-export function abortTasksBySessionEverywhere(executionSessionId: string): boolean {
+export function abortTasksBySessionEverywhere(
+  executionSessionId: string,
+  ownedTaskId?: string,
+): boolean {
+  const exemptStreamIds = new Set<string>();
+  if (ownedTaskId !== undefined) {
+    for (const chain of dispatchRegistry.listInFlight()) {
+      if (chain.taskId === ownedTaskId) continue;
+      if (chain.subStreamSessionId !== undefined) exemptStreamIds.add(chain.subStreamSessionId);
+      if (chain.pmStreamSessionId !== undefined) exemptStreamIds.add(chain.pmStreamSessionId);
+    }
+  }
   let hit = false;
   for (const runner of agentRunners.values()) {
-    if (runner.abortTasksBySession(executionSessionId)) hit = true;
+    if (runner.abortTasksBySession(executionSessionId, exemptStreamIds)) hit = true;
   }
   return hit;
 }
