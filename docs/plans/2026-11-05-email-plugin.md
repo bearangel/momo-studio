@@ -2092,7 +2092,7 @@ git commit -m "feat(email): 写侧工具×3——附件存工作区/起草/确�
 - Test: `tests/email/preset.test.ts`
 
 **Interfaces:**
-- Produces: skill slug `email-ops`；agent slug `email-assistant`（defaultTools 七工具 + defaultSkills email-ops；YAML 不带 model 绑定 → 落全局默认聊天模型）
+- Produces: skill slug `email-ops`；agent slug `email-assistant`（**spec 层** defaultTools 七工具 + defaultSkills email-ops；`spec.declarative.model` 为宿主 parser 必需的「建议块」，真正的模型绑定由 resolveModelBinding 走全局默认）
 
 - [ ] **Step 1: 写失败测试**
 
@@ -2124,19 +2124,45 @@ describe.skipIf(!HOST_READY)('email 预置 skill/agent/manifest', () => {
     expect(def.body).toContain('错误处置');
   });
 
-  it('agent YAML：七工具 ref 齐全 + defaultSkills=[email-ops] + 无 model 绑定', () => {
+  it('agent YAML：spec 层七工具 ref + defaultSkills=[email-ops] + model 建议块', () => {
     const raw = yamlLoad!(fs.readFileSync(path.join(PLUGIN_ROOT, 'agents/email-assistant.yaml'), 'utf-8')) as {
       metadata?: { slug?: string };
-      spec?: { declarative?: { systemPrompt?: string; model?: unknown; defaultTools?: Array<{ ref?: string }>; defaultSkills?: Array<{ ref?: string }> } };
+      spec?: {
+        declarative?: { systemPrompt?: string; model?: { provider?: string; model?: string } };
+        defaultTools?: Array<{ ref?: string }>;
+        defaultSkills?: Array<{ ref?: string }>;
+      };
     };
     expect(raw.metadata?.slug).toBe('email-assistant');
-    expect(raw.spec?.declarative?.model).toBeUndefined();
-    const refs = (raw.spec?.declarative?.defaultTools ?? []).map((t) => t.ref ?? '');
+    // 宿主跨引用校验（plugin/manifest.ts:216）与 parser（agent/manifest-parser.ts:86）都读 spec 层
+    const refs = (raw.spec?.defaultTools ?? []).map((t) => t.ref ?? '');
     for (const t of ['list_accounts', 'list_folders', 'list_mails', 'read_mail', 'save_attachment', 'draft_mail', 'send_draft']) {
       expect(refs).toContain(`plugin:email/${t}`);
     }
-    expect(raw.spec?.declarative?.defaultSkills?.map((s) => s.ref)).toEqual(['email-ops']);
+    expect(raw.spec?.defaultSkills?.map((s) => s.ref)).toEqual(['email-ops']);
+    expect(raw.spec?.declarative?.model).toMatchObject({ provider: 'anthropic' });
     expect(raw.spec?.declarative?.systemPrompt).toContain('确认');
+  });
+
+  it('宿主 parseAgentManifestWithSuggestion 实解析：八工具入库 + 模型绑定留空（走全局默认）', async () => {
+    const mod = (await hostImport('agent/manifest-parser.ts')) as unknown as {
+      parseAgentManifestWithSuggestion(yaml: string): {
+        def: {
+          slug: string;
+          defaultTools: Array<{ ref: string }>;
+          defaultSkills: Array<{ ref: string }>;
+          modelProviderId: string | null;
+        };
+      };
+    };
+    const { def } = mod.parseAgentManifestWithSuggestion(
+      fs.readFileSync(path.join(PLUGIN_ROOT, 'agents/email-assistant.yaml'), 'utf-8'),
+    );
+    expect(def.slug).toBe('email-assistant');
+    expect(def.defaultTools).toHaveLength(8); // read_file + 七个 plugin:email/* 工具
+    expect(def.defaultTools.map((t) => t.ref)).toContain('plugin:email/send_draft');
+    expect(def.defaultSkills.map((s) => s.ref)).toEqual(['email-ops']);
+    expect(def.modelProviderId).toBeNull(); // 绑定留空 → resolveModelBinding 走全局默认聊天模型
   });
 
   it('manifest 通过完整 validateManifest（cross-ref：工具文件名 ↔ defaultTools、skills 子目录）', () => {
@@ -2229,29 +2255,36 @@ spec:
       硬规则：
       - NEVER: 未经用户明确确认就调用 send_draft；谎称已发送；在输出中出现任何授权码/密码
       - ALWAYS: 多账号任务单账号失败继续其余并如实报告失败原因；回复邮件先读原信拿上下文
-    defaultTools:
-      - kind: builtin
-        ref: read_file
-      - kind: builtin
-        ref: plugin:email/list_accounts
-      - kind: builtin
-        ref: plugin:email/list_folders
-      - kind: builtin
-        ref: plugin:email/list_mails
-      - kind: builtin
-        ref: plugin:email/read_mail
-      - kind: builtin
-        ref: plugin:email/save_attachment
-      - kind: builtin
-        ref: plugin:email/draft_mail
-      - kind: builtin
-        ref: plugin:email/send_draft
-    defaultSkills:
-      - kind: skill
-        ref: email-ops
+    # 宿主 manifest-parser 硬性要求 model 块（provider 仅 openai/anthropic）。
+    # 它是「建议位」不是绑定：modelProviderId 保持 null，真正绑定由
+    # agent-sync 的 resolveModelBinding 走全局默认聊天模型。
+    model:
+      provider: anthropic
+      model: claude-sonnet-4-5
+  # defaultTools / defaultSkills 必须在 spec 层——宿主 parser 与 cross-ref 校验都只读这里
+  defaultTools:
+    - kind: builtin
+      ref: read_file
+    - kind: builtin
+      ref: plugin:email/list_accounts
+    - kind: builtin
+      ref: plugin:email/list_folders
+    - kind: builtin
+      ref: plugin:email/list_mails
+    - kind: builtin
+      ref: plugin:email/read_mail
+    - kind: builtin
+      ref: plugin:email/save_attachment
+    - kind: builtin
+      ref: plugin:email/draft_mail
+    - kind: builtin
+      ref: plugin:email/send_draft
+  defaultSkills:
+    - kind: skill
+      ref: email-ops
 ```
 
-（YAML 不带 model 绑定——平台 `resolveModelBinding` 落全局默认聊天模型，装完即用。）
+（宿主契约：`model` 块必需但仅作 suggestion（`modelProviderId` 解析为 null → resolveModelBinding 落全局默认聊天模型）；`defaultTools/defaultSkills` 必须在 spec 层，否则 parser 不注入工具且 cross-ref 校验空转。）
 
 - [ ] **Step 4: 跑测试确认通过**
 

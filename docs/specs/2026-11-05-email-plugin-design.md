@@ -168,7 +168,7 @@ secrets: {
 
 - 定位：邮件助手——读邮析信、生成摘要、按要求起草并发送
 - `defaultTools`：`plugin:email/*` 七工具全量；`defaultSkills`：`email-ops`
-- 模型绑定：YAML 不携带 → 平台 `resolveModelBinding` 落全局默认聊天模型（装完即用；无绑定时 spawn 报错指路资源库配置）
+- 模型绑定：宿主 `manifest-parser` 硬性要求 `spec.declarative.model` 块（provider 仅 openai/anthropic），该块仅作「建议位」（解析后 `modelProviderId` 为 null）；真正绑定由 agent-sync 的 `resolveModelBinding` 走全局默认聊天模型（装完即用；无全局默认时 spawn 报错指路资源库配置）。`defaultTools` / `defaultSkills` 必须写在 **spec 层**（parser 与 cross-ref 校验的唯一读取位置）
 - system prompt 承载 §7 发送行为契约
 
 ## 10. 错误处理
