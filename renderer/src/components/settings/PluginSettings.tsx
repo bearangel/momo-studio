@@ -269,6 +269,37 @@ function ConfigField(props: ConfigFieldProps) {
           checked={props.value === true}
           onChange={(e) => props.onChange(e.currentTarget.checked)}
         />
+      ) : decl.type === 'path' ? (
+        <div className="flex items-center gap-2">
+          <Input
+            id={`cfg-${fieldKey}`}
+            type="text"
+            readOnly
+            placeholder="未配置（使用默认目录）"
+            value={props.value === undefined ? '' : String(props.value)}
+            className="font-mono"
+          />
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              void ipc.dialog
+                .pickDirectory({ title: `选择${label}` })
+                .then((p) => {
+                  if (p) props.onChange(p);
+                })
+                .catch(ipcErrorMessage);
+            }}
+          >
+            选择目录…
+          </Button>
+          {props.value !== undefined && String(props.value) !== '' && (
+            <Button type="button" variant="secondary" size="sm" onClick={() => props.onChange('')}>
+              清除
+            </Button>
+          )}
+        </div>
       ) : decl.enum ? (
         <Select
           id={`cfg-${fieldKey}`}

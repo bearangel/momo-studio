@@ -21,7 +21,7 @@ import { getSecret, setSecret, deleteSecret } from '../storage/keychain';
 
 /** 属性级 Schema（v1 子集，多收拒绝） */
 export interface ConfigPropertyDecl {
-  type: 'string' | 'number' | 'boolean';
+  type: 'string' | 'number' | 'boolean' | 'path';
   title?: string;
   sensitive?: boolean;
   /** 工作空间维度 v1.1（spec 2026-10-17 §4.1）：声明式作用域，缺省 global；
@@ -86,8 +86,8 @@ export function normalizeConfigSchema(raw: unknown): NormalizedConfigSchema {
     for (const field of Object.keys(d)) {
       if (!allowed.has(field)) throw new Error(`config 属性含 v1 不支持字段: ${key}.${field}`);
     }
-    if (d.type !== 'string' && d.type !== 'number' && d.type !== 'boolean') {
-      throw new Error(`config 属性 type 须为 string/number/boolean: ${key}`);
+    if (d.type !== 'string' && d.type !== 'number' && d.type !== 'boolean' && d.type !== 'path') {
+      throw new Error(`config 属性 type 须为 string/number/boolean/path: ${key}`);
     }
     if (d.scope !== undefined && d.scope !== 'workspace' && d.scope !== 'global') {
       throw new Error(`config.scope 须为 workspace/global: ${key}`);
@@ -210,7 +210,9 @@ export async function warmPluginConfigCache(
 
 /** 值类型校验（写入面） */
 function checkValue(key: string, decl: ConfigPropertyDecl, v: unknown): void {
-  if (decl.type === 'string' && typeof v !== 'string') throw new Error(`config 值类型不符（须 string）: ${key}`);
+  if ((decl.type === 'string' || decl.type === 'path') && typeof v !== 'string') {
+    throw new Error(`config 值类型不符（须 string）: ${key}`);
+  }
   if (decl.type === 'number' && (typeof v !== 'number' || !Number.isFinite(v))) {
     throw new Error(`config 值类型不符（须 number）: ${key}`);
   }

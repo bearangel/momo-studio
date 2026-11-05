@@ -10,6 +10,7 @@ import type { PluginConfigView, ResourceItem } from '../../ipc/types';
 const resourceList = vi.fn();
 const getConfig = vi.fn();
 const setConfig = vi.fn();
+const pickDirectory = vi.fn();
 vi.mock('../../ipc/client', () => ({
   ipc: {
     resource: { list: (f: unknown) => resourceList(f) },
@@ -17,6 +18,7 @@ vi.mock('../../ipc/client', () => ({
       getConfig: (id: string) => getConfig(id),
       setConfig: (id: string, v: unknown) => setConfig(id, v),
     },
+    dialog: { pickDirectory: (o: unknown) => pickDirectory(o) },
   },
 }));
 vi.mock('../../lib/ipc-error', () => ({
@@ -153,5 +155,51 @@ describe('workspace 作用域徽标与迁移提示（工作空间维度 v1.1）'
     render(<PluginSettings />);
     expect(screen.queryByText(/按工作空间的配置项独立保存/)).not.toBeInTheDocument();
     localStorage.removeItem('momo.pluginWsConfigHint.v1');
+  });
+});
+
+
+describe('path 类型配置项（2026-11-05 归档：目录选择）', () => {
+  it('渲染只读输入 + 选择目录按钮；选择后回填并可保存；取消不变', async () => {
+    getConfig.mockResolvedValue({
+      ...VIEW,
+      schema: { properties: { archiveRoot: { type: 'path', title: '本地邮件存储目录' } }, required: [] },
+      values: {},
+      sensitiveConfigured: {},
+      scopes: {},
+    });
+    pickDirectory.mockResolvedValue('/Users/x/.momo-plugin/email');
+    resourceList.mockResolvedValue(PLUGINS);
+    pickDirectory.mockClear();
+    const { unmount } = render(<PluginSettings />);
+    await waitFor(() => expect(screen.getByText('本地邮件存储目录')).toBeTruthy());
+    const input = document.getElementById('cfg-archiveRoot') as HTMLInputElement;
+    expect(input).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '选择目录…' }));
+    await waitFor(() => expect(pickDirectory).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(input.value).toBe('/Users/x/.momo-plugin/email'));
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() =>
+      expect(setConfig).toHaveBeenCalledWith('cg', { archiveRoot: '/Users/x/.momo-plugin/email' }),
+    );
+    unmount();
+  });
+
+  it('用户取消选择 → 值不变', async () => {
+    getConfig.mockResolvedValue({
+      ...VIEW,
+      schema: { properties: { archiveRoot: { type: 'path', title: '本地邮件存储目录' } }, required: [] },
+      values: { archiveRoot: '/tmp/kept' },
+      sensitiveConfigured: {},
+      scopes: {},
+    });
+    pickDirectory.mockReset().mockResolvedValue(null);
+    resourceList.mockResolvedValue(PLUGINS);
+    const { unmount } = render(<PluginSettings />);
+    await waitFor(() => expect(document.getElementById('cfg-archiveRoot')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: '选择目录…' }));
+    await waitFor(() => expect(pickDirectory).toHaveBeenCalledTimes(1));
+    expect((document.getElementById('cfg-archiveRoot') as HTMLInputElement).value).toBe('/tmp/kept');
+    unmount();
   });
 });
