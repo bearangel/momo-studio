@@ -82,8 +82,9 @@ secrets: {
 }
 ```
 
-- 实现：keytar，条目命名对齐现有 `sensitiveRef` 风格（`<pluginId>:<key>` 域内命名，实现时与 config-store 现有 keytar service 命名收敛为同一先例）
-- 卸载 `keepData=false`：按前缀经 `keytar.findCredentials` 枚举清理插件自管 secrets（与既有 sensitive config 键清理同事务语义）
+- 实现：keytar，条目命名 `plugin/<id>/secret/<key>`（key 本体限 `[A-Za-z0-9_.:-]`，总长 ≤128）
+- 键域分隔符用 `/` 而非 `.`：插件 slug 允许 `.`（宿主 `SLUG_PATTERN = /^[a-z0-9][a-z0-9-._]*$/`），点分隔会让含点插件 id 与其父 id 前缀碰撞——插件 `email.secret` 的键 `plugin.email.secret.secret.account` 会被卸载插件 `email` 时按前缀 `plugin.email.secret.` 误删（跨插件凭据丢失）；`/` 不在 slug 字符集内，域段边界唯一
+- 卸载 `keepData=false`：按前缀 `plugin/<id>/secret/` 经 `keytar.findCredentials` 枚举清理插件自管 secrets（与既有 sensitive config 键清理同事务语义）
 - 改动面：service-manager.ts ctx 组装 + 类型 + `electron/tests/plugin/service-manager.test.ts` 增例；预计 <100 行
 - 无此项则授权码只能明文落 dataDir——安全红线，不可接受
 

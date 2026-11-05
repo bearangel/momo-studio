@@ -51,15 +51,15 @@
 
 ```ts
 it('findSecretKeysByPrefix 按服务名前缀枚举账号键（插件自管 secrets 清理依赖）', async () => {
-  await setSecret('plugin.email.secret.account:acc1', 'x');
-  await setSecret('plugin.email.secret.account:acc2', 'y');
-  await setSecret('plugin.other.secret.k', 'z');
-  const keys = await findSecretKeysByPrefix('plugin.email.secret.');
+  await setSecret('plugin/email/secret/account:acc1', 'x');
+  await setSecret('plugin/email/secret/account:acc2', 'y');
+  await setSecret('plugin/other/secret/k', 'z');
+  const keys = await findSecretKeysByPrefix('plugin/email/secret/');
   expect([...keys].sort()).toEqual([
-    'plugin.email.secret.account:acc1',
-    'plugin.email.secret.account:acc2',
+    'plugin/email/secret/account:acc1',
+    'plugin/email/secret/account:acc2',
   ]);
-  expect(await findSecretKeysByPrefix('plugin.none.secret.')).toEqual([]);
+  expect(await findSecretKeysByPrefix('plugin/none/secret/')).toEqual([]);
 });
 ```
 
@@ -108,7 +108,7 @@ git commit -m "feat: keychain 门面支持前缀枚举（插件自管 secrets �
 - [ ] **Step 1: 写失败测试**（service-manager.test.ts 追加；沿用该文件既有假插件 harness——其 service/index.js 的 createService 捕获 ctx 到测试全局）
 
 ```ts
-it('ctx.secrets：set/get/delete 走 keytar，键域 plugin.<id>.secret.<key>；非法键拒绝', async () => {
+it('ctx.secrets：set/get/delete 走 keytar，键域 plugin/<id>/secret/<key>；非法键拒绝', async () => {
   const writes: Array<[string, string, string]> = [];
   setKeytarBackendForTest({
     async setPassword(service, account, password) { writes.push([service, account, password]); },
@@ -122,7 +122,7 @@ it('ctx.secrets：set/get/delete 走 keytar，键域 plugin.<id>.secret.<key>；
   const secrets = capturedCtx!.secrets;
   await secrets.set('account:acc1:pw', 'raw-pw');
   expect(writes[0]![0]).toBe(keychainServiceName());
-  expect(writes[0]![1]).toBe('plugin.secrets-demo.secret.account:acc1:pw');
+  expect(writes[0]![1]).toBe('plugin/secrets-demo/secret/account:acc1:pw');
   expect(await secrets.get('account:acc1:pw')).toBe('secret-v');
   await expect(secrets.set('bad key!')).rejects.toThrow('非法 secret 键');
   await expect(secrets.get('../escape')).rejects.toThrow('非法 secret 键');
@@ -141,9 +141,11 @@ Expected: FAIL（ctx.secrets 为 undefined）
 config-store.ts（紧邻 `sensitiveRef`）：
 
 ```ts
-/** 插件自管 secret 键（service ctx.secrets 面）：与 config 敏感键同域点分惯例，域后缀区分 */
+/** 插件自管 secret 键（service ctx.secrets 面）：域段用 `/` 分隔——插件 slug 允许 `.`，
+ *  点分隔会前缀碰撞（插件 `email.secret` 的键命中卸载 `email` 的前缀 → 跨插件凭据误删）；
+ *  `/` 不在 slug 字符集 `[a-z0-9-._]` 内，域段边界唯一 */
 export function pluginSecretRef(pluginId: string, key: string): string {
-  return `plugin.${pluginId}.secret.${key}`;
+  return `plugin/${pluginId}/secret/${key}`;
 }
 
 /** secret 键白名单：字母数字开头，主体 [A-Za-z0-9_.:-]，总长 ≤128（拒 glob/路径注入面） */
@@ -155,7 +157,7 @@ export function isValidPluginSecretKey(key: string): boolean {
 service-manager.ts 接口区新增：
 
 ```ts
-/** 插件自管 secrets（邮件插件起）：keytar 代理，键域 plugin.<id>.secret.<key> */
+/** 插件自管 secrets（邮件插件起）：keytar 代理，键域 plugin/<id>/secret/<key> */
 export interface PluginSecretsApi {
   get(key: string): Promise<string | null>;
   set(key: string, value: string): Promise<void>;
@@ -199,7 +201,7 @@ git commit -m "feat: PluginServiceCtx.secrets——插件自管凭据 keytar 代
 - Test: `electron/tests/plugin/installer.test.ts`（追加）
 
 **Interfaces:**
-- Consumes: Task 1 `findSecretKeysByPrefix`；键域约定 `plugin.<id>.secret.`
+- Consumes: Task 1 `findSecretKeysByPrefix`；键域约定 `plugin/<id>/secret/`
 
 - [ ] **Step 1: 写失败测试**
 
@@ -212,9 +214,9 @@ it('卸载 keepData=false 前缀级联清理自管 secrets；keepData=true 不�
     async deletePassword(_s, account) { deleted.push(account); },
     async findCredentials() {
       return [
-        { account: 'plugin.email.secret.account:acc1', password: 'x' },
-        { account: 'plugin.email.secret.account:acc2', password: 'y' },
-        { account: 'plugin.other.secret.k', password: 'z' },
+        { account: 'plugin/email/secret/account:acc1', password: 'x' },
+        { account: 'plugin/email/secret/account:acc2', password: 'y' },
+        { account: 'plugin/other/secret/k', password: 'z' },
       ];
     },
   });
@@ -224,8 +226,8 @@ it('卸载 keepData=false 前缀级联清理自管 secrets；keepData=true 不�
   installPluginDevDir(devDir, '9.9.9', wsId);
   uninstallPlugin('email-cascade', false);
   expect([...deleted].sort()).toEqual([
-    'plugin.email.secret.account:acc1',
-    'plugin.email.secret.account:acc2',
+    'plugin/email/secret/account:acc1',
+    'plugin/email/secret/account:acc2',
   ]);
   __resetKeychainImplForTest();
 });
@@ -242,7 +244,7 @@ Expected: FAIL（deleted 为空）
 // 插件自管 secrets（service ctx.secrets 面）前缀级联：keytar 枚举，无注册表依赖；
 // 失败不阻断卸载（残留键无外送面——仅本机 keychain）
 {
-  const prefix = `plugin.${id}.secret.`;
+  const prefix = `plugin/${id}/secret/`;
   void findSecretKeysByPrefix(prefix)
     .then((keys) => Promise.allSettled(keys.map((k) => deleteSecret(k))))
     .catch(() => undefined);
@@ -2769,7 +2771,7 @@ git commit -m "test(email): dev 装载全链路冒烟——manifest/工具装配
 5. 会话：「给 xx 回一封…」→ agent 展示全文征确认 → 回复「确认发送」→ 面板已发送出现该邮件
 6. 面板草稿箱直接发送（不经会话）→ 同样落 Sent
 7. 附件：让 agent 把某封邮件附件存工作区（变更账本可见）；起草带工作区附件并发送
-8. 停用插件 → 面板消失、agent 工具不可用；卸载（keepData=false）→ keytar 凭据清空（钥匙串访问.app 验证 `plugin.email.secret.*`）
+8. 停用插件 → 面板消失、agent 工具不可用；卸载（keepData=false）→ keytar 凭据清空（钥匙串访问.app 验证 `plugin/email/secret/*`）
 
 - [ ] **Step 3: Commit**
 

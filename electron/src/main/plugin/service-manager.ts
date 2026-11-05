@@ -29,7 +29,7 @@ export interface PluginServiceCtx {
   };
 }
 
-/** 插件自管 secrets（邮件插件起）：keytar 代理，键域 plugin.<id>.secret.<key> */
+/** 插件自管 secrets（邮件插件起）：keytar 代理，键域 plugin/<id>/secret/<key> */
 export interface PluginSecretsApi {
   get(key: string): Promise<string | null>;
   set(key: string, value: string): Promise<void>;

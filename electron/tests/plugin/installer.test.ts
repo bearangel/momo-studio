@@ -348,9 +348,9 @@ describe('卸载级联清理自管 secrets', () => {
       async deletePassword(_s, account) { deleted.push(account); return true; },
       async findCredentials() {
         return [
-          { account: 'plugin.email-cascade.secret.account:acc1', password: 'x' },
-          { account: 'plugin.email-cascade.secret.account:acc2', password: 'y' },
-          { account: 'plugin.other.secret.k', password: 'z' },
+          { account: 'plugin/email-cascade/secret/account:acc1', password: 'x' },
+          { account: 'plugin/email-cascade/secret/account:acc2', password: 'y' },
+          { account: 'plugin/other/secret/k', password: 'z' },
         ];
       },
     });
@@ -368,8 +368,8 @@ describe('卸载级联清理自管 secrets', () => {
     uninstallPlugin('email-cascade', false);
     await new Promise((r) => setTimeout(r, 50));
     expect([...deleted].sort()).toEqual([
-      'plugin.email-cascade.secret.account:acc1',
-      'plugin.email-cascade.secret.account:acc2',
+      'plugin/email-cascade/secret/account:acc1',
+      'plugin/email-cascade/secret/account:acc2',
     ]);
     fs.rmSync(devDir, { recursive: true, force: true });
     setKeytarBackendForTest(null);

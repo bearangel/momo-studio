@@ -43,9 +43,11 @@ export function sensitiveRef(pluginId: string, key: string): string {
   return `plugin.${pluginId}.config.${key}`;
 }
 
-/** 插件自管 secret 键（service ctx.secrets 面）：与 config 敏感键同域点分惯例，域后缀区分 */
+/** 插件自管 secret 键（service ctx.secrets 面）：域段用 `/` 分隔——插件 slug 允许 `.`，
+ *  点分隔会前缀碰撞（插件 `email.secret` 的键命中卸载 `email` 的前缀 → 跨插件凭据误删）；
+ *  `/` 不在 slug 字符集 `[a-z0-9-._]` 内，域段边界唯一 */
 export function pluginSecretRef(pluginId: string, key: string): string {
-  return `plugin.${pluginId}.secret.${key}`;
+  return `plugin/${pluginId}/secret/${key}`;
 }
 
 /** secret 键白名单：字母数字开头，主体 [A-Za-z0-9_.:-]，总长 ≤128（拒 glob/路径注入面） */

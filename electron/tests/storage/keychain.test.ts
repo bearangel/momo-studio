@@ -79,14 +79,14 @@ describe('findSecretKeysByPrefix（插件自管 secrets 卸载级联依赖）', 
   });
 
   it('findSecretKeysByPrefix 按服务名前缀枚举账号键（插件自管 secrets 清理依赖）', async () => {
-    await setSecret('plugin.email.secret.account:acc1', 'x');
-    await setSecret('plugin.email.secret.account:acc2', 'y');
-    await setSecret('plugin.other.secret.k', 'z');
-    const keys = await findSecretKeysByPrefix('plugin.email.secret.');
+    await setSecret('plugin/email/secret/account:acc1', 'x');
+    await setSecret('plugin/email/secret/account:acc2', 'y');
+    await setSecret('plugin/other/secret/k', 'z');
+    const keys = await findSecretKeysByPrefix('plugin/email/secret/');
     expect([...keys].sort()).toEqual([
-      'plugin.email.secret.account:acc1',
-      'plugin.email.secret.account:acc2',
+      'plugin/email/secret/account:acc1',
+      'plugin/email/secret/account:acc2',
     ]);
-    expect(await findSecretKeysByPrefix('plugin.none.secret.')).toEqual([]);
+    expect(await findSecretKeysByPrefix('plugin/none/secret/')).toEqual([]);
   });
 });

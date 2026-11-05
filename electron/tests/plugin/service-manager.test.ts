@@ -337,7 +337,7 @@ describe('lazy start 单飞（终审 I1）', () => {
   });
 });
 
-// ── 插件自管 secrets（ctx.secrets——邮件插件起）：keytar 代理，键域 plugin.<id>.secret.<key> ──
+// ── 插件自管 secrets（ctx.secrets——邮件插件起）：keytar 代理，键域 plugin/<id>/secret/<key> ──
 import {
   setKeytarBackendForTest,
   __resetKeychainImplForTest,
@@ -357,7 +357,7 @@ describe('ctx.secrets（插件自管 secrets keytar 代理）', () => {
     delete (globalThis as { __capturedCtx?: PluginServiceCtx }).__capturedCtx;
   });
 
-  it('ctx.secrets：set/get/delete 走 keytar，键域 plugin.<id>.secret.<key>；非法键拒绝', async () => {
+  it('ctx.secrets：set/get/delete 走 keytar，键域 plugin/<id>/secret/<key>；非法键拒绝', async () => {
     const writes: Array<[string, string, string]> = [];
     setKeytarBackendForTest({
       async setPassword(service, account, password) { writes.push([service, account, password]); },
@@ -373,7 +373,7 @@ describe('ctx.secrets（插件自管 secrets keytar 代理）', () => {
     const secrets = capturedCtx!.secrets;
     await secrets.set('account:acc1:pw', 'raw-pw');
     expect(writes[0]![0]).toBe(keychainServiceName());
-    expect(writes[0]![1]).toBe('plugin.secrets-demo.secret.account:acc1:pw');
+    expect(writes[0]![1]).toBe('plugin/secrets-demo/secret/account:acc1:pw');
     expect(await secrets.get('account:acc1:pw')).toBe('secret-v');
     await expect(secrets.set('bad key!', 'v')).rejects.toThrow('非法 secret 键');
     await expect(secrets.get('../escape')).rejects.toThrow('非法 secret 键');
