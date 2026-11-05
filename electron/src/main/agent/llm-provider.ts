@@ -43,11 +43,22 @@ export interface LLMToolDef {
   inputSchema: Record<string, unknown>;
 }
 
+/**
+ * provider 上报的单次请求 token 用量（R3 真实 token 遥测，2026-11-05）。
+ * 只承载 provider 报文里的真实数据——缺席即 undefined，本地不做任何估算。
+ */
+export interface LLMUsage {
+  promptTokens: number;
+  completionTokens: number;
+}
+
 /** provider.chat 的返回值（已归一化，屏蔽 OpenAI / Anthropic 的差异） */
 export interface LLMResponse {
   content: string;
   toolCalls: LLMToolCall[];
   finishReason: 'stop' | 'tool_use';
+  /** provider 响应携带 usage 时归一化输出；缺席为 undefined（不伪造 0） */
+  usage?: LLMUsage;
 }
 
 /** 流式 delta（从 SSE stream 归一化） */
@@ -55,7 +66,7 @@ export type StreamDelta =
   | { type: 'thinking'; content: string }
   | { type: 'text'; content: string }
   | { type: 'tool_use'; toolCall: LLMToolCall }
-  | { type: 'done'; finishReason: 'stop' | 'tool_use' };
+  | { type: 'done'; finishReason: 'stop' | 'tool_use'; usage?: LLMUsage };
 
 /** 统一 provider 接口 */
 export interface LLMProvider {
@@ -319,6 +330,33 @@ function detectPlatform(baseUrl?: string): 'openai' | 'anthropic' {
   return 'openai';
 }
 
+/**
+ * usage 单值校验：有限非负整数（Number.isInteger 已蕴含 finite）；非法返回 undefined。
+ */
+function parseNonNegInt(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : undefined;
+}
+
+/**
+ * usage 对象整体校验（R3）：兼容 OpenAI（prompt_tokens/completion_tokens）与
+ * Anthropic（input_tokens/output_tokens）两种字段命名，双字段齐备且合法才返回
+ * 归一化形状；任何缺失/类型不符（字符串、负数、NaN、小数）一律 undefined——
+ * 单轮坏报文只损失本轮遥测，绝不抛错影响回合。
+ */
+export function parseUsageObject(raw: unknown): LLMUsage | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const u = raw as {
+    prompt_tokens?: unknown;
+    completion_tokens?: unknown;
+    input_tokens?: unknown;
+    output_tokens?: unknown;
+  };
+  const prompt = parseNonNegInt(u.prompt_tokens ?? u.input_tokens);
+  const completion = parseNonNegInt(u.completion_tokens ?? u.output_tokens);
+  if (prompt === undefined || completion === undefined) return undefined;
+  return { promptTokens: prompt, completionTokens: completion };
+}
+
 /** 把统一 LLMMessage 映射为 OpenAI 的 messages 元素格式 */
 function toOpenAIMessage(m: LLMMessage, codec: ToolNameCodec): Record<string, unknown> {
   if (m.role === 'tool' && m.toolCallId) {
@@ -490,6 +528,7 @@ class OpenAIProvider implements LLMProvider {
         };
         finish_reason: string;
       }>;
+      usage?: unknown;
     };
 
     const choice = data.choices[0]!;
@@ -498,11 +537,13 @@ class OpenAIProvider implements LLMProvider {
       name: nameCodec.decode(tc.function.name),
       arguments: JSON.parse(tc.function.arguments) as Record<string, unknown>,
     }));
+    const usage = parseUsageObject(data.usage);
 
     return {
       content: choice.message.content ?? '',
       toolCalls,
       finishReason: choice.finish_reason === 'tool_calls' ? 'tool_use' : 'stop',
+      ...(usage ? { usage } : {}),
     };
   }
 
@@ -572,10 +613,12 @@ class AnthropicProvider implements LLMProvider {
         | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
       >;
       stop_reason: string;
+      usage?: unknown;
     };
 
     const textParts = data.content.filter((c) => c.type === 'text').map((c) => (c as { text: string }).text);
     const toolUses = data.content.filter((c) => c.type === 'tool_use');
+    const usage = parseUsageObject(data.usage);
 
     return {
       content: textParts.join('\n'),
@@ -584,6 +627,7 @@ class AnthropicProvider implements LLMProvider {
         return { id: t.id, name: nameCodec.decode(t.name), arguments: t.input };
       }),
       finishReason: data.stop_reason === 'tool_use' ? 'tool_use' : 'stop',
+      ...(usage ? { usage } : {}),
     };
   }
 
@@ -662,10 +706,12 @@ async function* chatStreamOpenAI(
   if (!contentType.includes('text/event-stream')) {
     const json = (await response.json()) as {
       choices?: { message?: { content?: string }; finish_reason?: string }[];
+      usage?: unknown;
     };
     const content = json.choices?.[0]?.message?.content ?? '';
     if (content) yield { type: 'text', content };
-    yield { type: 'done', finishReason: 'stop' };
+    const fallbackUsage = parseUsageObject(json.usage);
+    yield { type: 'done', finishReason: 'stop', ...(fallbackUsage ? { usage: fallbackUsage } : {}) };
     return;
   }
 
@@ -675,6 +721,10 @@ async function* chatStreamOpenAI(
   // tool_calls 累积器：按 index 合并 arguments fragment（OpenAI 把参数拆成多个 delta 发送）
   const toolCallMap = new Map<number, { id: string; name: string; argsBuffer: string }>();
   let finishReason: 'stop' | 'tool_use' = 'stop';
+  // usage 机会式解析（R3）：请求刻意不带 stream_options: {include_usage: true}——
+  // OpenAI 兼容网关（智谱等 15 家预设共用本适配器）对未知请求字段可能整请求 400，
+  // 且本层无 per-provider 请求塑形机制，安全起见只解析网关主动携带的末包 usage
+  let usage: LLMUsage | undefined;
 
   const abortPromise = buildAbortPromise(signal);
   const idle = createIdleWatchdog(STREAM_IDLE_TIMEOUT_MS); // D2：死 socket 判死
@@ -692,12 +742,16 @@ async function* chatStreamOpenAI(
         if (!line.startsWith('data: ')) continue;
         const data = line.slice(6).trim();
         if (data === '[DONE]') continue;
-        let parsed: { choices?: { delta?: Record<string, unknown>; finish_reason?: string }[] };
+        let parsed: { choices?: { delta?: Record<string, unknown>; finish_reason?: string }[]; usage?: unknown };
         try {
           parsed = JSON.parse(data);
         } catch {
           continue;
         }
+        // usage 解析须先于下方 choice 空数组短路——usage-only 末包（stream_options
+        // 或网关主动携带）的 choices 为 []，走 choice 守卫会被整包跳过
+        const chunkUsage = parseUsageObject(parsed.usage);
+        if (chunkUsage) usage = chunkUsage;
         const choice = parsed.choices?.[0];
         if (!choice) continue;
 
@@ -755,7 +809,7 @@ async function* chatStreamOpenAI(
     yield { type: 'tool_use', toolCall: { id: tc.id, name: nameCodec.decode(tc.name), arguments: args } };
   }
 
-  yield { type: 'done', finishReason };
+  yield { type: 'done', finishReason, ...(usage ? { usage } : {}) };
 }
 
 /**
@@ -825,10 +879,11 @@ async function* chatStreamAnthropic(
   // 非 SSE → 降级
   const contentType = response.headers.get('content-type') ?? '';
   if (!contentType.includes('text/event-stream')) {
-    const json = (await response.json()) as { content?: { type: string; text?: string }[] };
+    const json = (await response.json()) as { content?: { type: string; text?: string }[]; usage?: unknown };
     const text = json.content?.find((b) => b.type === 'text')?.text ?? '';
     if (text) yield { type: 'text', content: text };
-    yield { type: 'done', finishReason: 'stop' };
+    const fallbackUsage = parseUsageObject(json.usage);
+    yield { type: 'done', finishReason: 'stop', ...(fallbackUsage ? { usage: fallbackUsage } : {}) };
     return;
   }
 
@@ -838,6 +893,11 @@ async function* chatStreamAnthropic(
   // tool_use 累积：content_block index → { id, name, argsBuffer }
   const toolUseMap = new Map<number, { id: string; name: string; argsBuffer: string }>();
   let finishReason: 'stop' | 'tool_use' = 'stop';
+  // usage 双事件累积（R3）：message_start 报 input_tokens，message_delta 报
+  // output_tokens（累计值，后到覆盖）；任一在场即产出 usage，缺席一侧按 0
+  // （真实缺席语义，非估算）
+  let usagePrompt: number | undefined;
+  let usageCompletion: number | undefined;
 
   const abortPromise = buildAbortPromise(signal);
   const idle = createIdleWatchdog(STREAM_IDLE_TIMEOUT_MS); // D2：死 socket 判死
@@ -886,6 +946,21 @@ async function* chatStreamAnthropic(
           }
         }
 
+        // usage（R3）：message_start.message.usage.input_tokens +
+        // message_delta.usage.output_tokens（累计值，后到覆盖）
+        if (event.type === 'message_start') {
+          const input = parseNonNegInt(
+            ((event as { message?: { usage?: { input_tokens?: unknown } } }).message?.usage)?.input_tokens,
+          );
+          if (input !== undefined) usagePrompt = input;
+        }
+        if (event.type === 'message_delta') {
+          const output = parseNonNegInt(
+            (event as { usage?: { output_tokens?: unknown } }).usage?.output_tokens,
+          );
+          if (output !== undefined) usageCompletion = output;
+        }
+
         // tool_use 块开始——记录 id / name，后续 input_json_delta 填充 arguments
         if (event.type === 'content_block_start' && event.content_block) {
           const cb = event.content_block as { type?: string; id?: string; name?: string };
@@ -915,7 +990,11 @@ async function* chatStreamAnthropic(
     yield { type: 'tool_use', toolCall: { id: tc.id, name: nameCodec.decode(tc.name), arguments: args } };
   }
 
-  yield { type: 'done', finishReason };
+  const anthropicUsage: LLMUsage | undefined =
+    usagePrompt !== undefined || usageCompletion !== undefined
+      ? { promptTokens: usagePrompt ?? 0, completionTokens: usageCompletion ?? 0 }
+      : undefined;
+  yield { type: 'done', finishReason, ...(anthropicUsage ? { usage: anthropicUsage } : {}) };
 }
 
 /**
