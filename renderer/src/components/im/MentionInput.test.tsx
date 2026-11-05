@@ -14,7 +14,9 @@
 //   6. 失败恢复：发送失败 → setSegments 快照，pill 原位恢复
 //   7. 会话草稿：segments JSON 往返（切走清空、切回 pill 与正文不丢）
 //   8. IME 组字期 Enter 不发送（守卫在 RichComposer 内，此处锁集成层不误发）
-//   9. 📎 fileTriggerTick：focus + insertTextAtEnd('@') 直开菜单 + 防粘连空格
+//   9. 工具条触发（2026-11-05 mentionTrigger；当日实测修订为零文本侵入）：
+//      聚焦 + 直开限定菜单，输入框不插入任何触发符（放弃零残留 / 不跳行）；
+//      mentionScope 锁单组 / 空态行 / scope 生命周期；📎 直接导入按钮 + importFile
 //  10. F3 容器：pill 在编辑器内（pills-in-editor）、📎 仍在 .rounded-lg 容器框内
 //  11. 菜单键盘导航（2026-09-26 可用性 P0）：↑↓ 循环高亮 / Enter·Tab 选中 /
 //      Esc 关闭 / 零命中 Enter 照发 / IME compositionend 提交补偿（过滤立即生效）
@@ -47,14 +49,26 @@ const { sessionState, taskState, workspaceState } = vi.hoisted(() => ({
     loadSessions: vi.fn(),
     activeSessionReadOnly: false,
     inputFocusTick: 0,
-    fileTriggerTick: 0,
+    // 工具条选择按钮触发信号 + 限定组（2026-11-05；仿真真实 store 语义：
+    // bump 同步置位 scope，close 置 null）
+    mentionTrigger: null as { kind: 'agent' | 'skill' | 'file' | 'session' | 'task'; tick: number } | null,
+    mentionScope: null as string | null,
     // 斜杠命令提示 + 命令执行中键控 Map（仿真真实 store 字段形状）
     commandHint: null as string | null,
     commandPendingBySession: new Map<string, string>(),
-    // 仿真真实 store 的 bumpFileTrigger 语义（fileTriggerTick +1）；
     // 箭头体在调用时才执行，sessionState 届时已初始化
-    bumpFileTrigger: vi.fn(() => {
-      sessionState.fileTriggerTick += 1;
+    bumpMentionTrigger: vi.fn((kind: 'agent' | 'skill' | 'file' | 'session' | 'task') => {
+      sessionState.mentionTrigger = {
+        kind,
+        tick: (sessionState.mentionTrigger?.tick ?? 0) + 1,
+      };
+      sessionState.mentionScope = kind;
+    }),
+    closeMentionScope: vi.fn(() => {
+      sessionState.mentionScope = null;
+    }),
+    consumeMentionTrigger: vi.fn(() => {
+      sessionState.mentionTrigger = null;
     }),
   },
   taskState: {
@@ -104,6 +118,8 @@ const mockApi = {
   asset: {
     // Task 4 契约：saveImage(workspaceId, data, ext) → { path }
     saveImage: vi.fn(),
+    // 2026-11-05 导入管线契约：importFile(workspaceId, data, name) → { path }
+    importFile: vi.fn(),
   },
 };
 
@@ -253,6 +269,10 @@ function resetState(): void {
   ]);
   mockApi.asset.saveImage.mockReset();
   mockApi.asset.saveImage.mockResolvedValue({ path: '.momo/assets/abc123def456.png' });
+  mockApi.asset.importFile.mockReset();
+  mockApi.asset.importFile.mockImplementation(
+    async (_ws: string, _data: Uint8Array, name: string) => ({ path: `imports/${name}` }),
+  );
   // downscale 真实产物形状：降采样后字节 + 目标尺寸 + 扩展名
   downscaleMock.mockReset();
   downscaleMock.mockResolvedValue({ data: new Uint8Array([1, 2, 3]), w: 800, h: 600, ext: 'png' as const });
@@ -267,12 +287,23 @@ function resetState(): void {
   sessionState.loadSessions = vi.fn().mockResolvedValue(undefined);
   sessionState.activeSessionReadOnly = false;
   sessionState.inputFocusTick = 0;
-  sessionState.fileTriggerTick = 0;
+  sessionState.mentionTrigger = null;
+  sessionState.mentionScope = null;
   sessionState.commandHint = null;
   sessionState.commandPendingBySession = new Map();
-  // 每用例还原 bumpFileTrigger 实现——防上个用例替换实现或跨用例残留影响递增语义
-  sessionState.bumpFileTrigger = vi.fn(() => {
-    sessionState.fileTriggerTick += 1;
+  // 每用例还原 bump/close 实现——防上个用例替换实现或跨用例残留影响递增语义
+  sessionState.bumpMentionTrigger = vi.fn((kind: 'agent' | 'skill' | 'file' | 'session' | 'task') => {
+    sessionState.mentionTrigger = {
+      kind,
+      tick: (sessionState.mentionTrigger?.tick ?? 0) + 1,
+    };
+    sessionState.mentionScope = kind;
+  });
+  sessionState.closeMentionScope = vi.fn(() => {
+    sessionState.mentionScope = null;
+  });
+  sessionState.consumeMentionTrigger = vi.fn(() => {
+    sessionState.mentionTrigger = null;
   });
   taskState.tasks = [];
   taskState.load = vi.fn().mockResolvedValue(undefined);
@@ -295,7 +326,7 @@ describe('MentionInput 空态与挂载接线', () => {
     render(<MentionInput />);
     const el = editor();
     expect(el).toHaveAttribute('contenteditable', 'true');
-    expect(el).toHaveAttribute('data-placeholder', '输入消息，Enter 发送。@ 引用 agent 或文件，# 引用任务');
+    expect(el).toHaveAttribute('data-placeholder', '输入消息，Enter 发送。也可以点上方按钮选择引用');
   });
 
   it('挂载时拉取当前 workspace 的任务列表（# 菜单数据源）', () => {
@@ -672,12 +703,16 @@ describe('MentionInput @ 统一菜单（v2.11.1 F2）', () => {
     expect(mockApi.file.searchNames).not.toHaveBeenCalled();
   });
 
-  it('📎 点击直开菜单：insertTextAtEnd 追加 @ + 默认列表可见', async () => {
-    sessionState.fileTriggerTick = 1;
-    mockApi.file.list.mockResolvedValue([{ name: 'README.md', isDirectory: false, size: 1 }]);
+  it('工具条 file 触发 → 直开文件限定菜单：全量递归列表 + 固定导入条目，编辑器零侵入', async () => {
+    sessionState.mentionTrigger = { kind: 'file', tick: 1 };
+    sessionState.mentionScope = 'file';
+    mockApi.file.searchNames.mockResolvedValue([{ path: 'README.md', isDirectory: false }]);
     render(<MentionInput />);
-    await waitFor(() => expect(visibleText(editor())).toBe('@'));
+    await waitFor(() => expect(mockApi.file.searchNames).toHaveBeenCalledWith('ws-1', ''));
     await waitFor(() => expect(screen.getByText('README.md')).toBeTruthy());
+    expect(screen.getByText('从电脑导入…')).toBeTruthy();
+    // 零文本侵入（2026-11-05 实测 bug 1/2 回归锁）：不插 @、不产生换行
+    expect(visibleText(editor())).toBe('');
   });
 
   it('searchNames 失败 → 文件组静默不渲染且不崩（错误路径）', async () => {
@@ -1032,70 +1067,338 @@ describe('MentionInput / 菜单（命令 + 技能两组）', () => {
   });
 });
 
-describe('MentionInput 📎 文件触发（fileTriggerTick）', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  const advanceDebounce = async (): Promise<void> => {
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(200);
-    });
-  };
-
-  it('fileTriggerTick 递增 → 聚焦 + 空编辑器插入 @；继续输入即出文件菜单', async () => {
-    vi.useFakeTimers();
-    mockApi.file.searchNames.mockResolvedValue([{ path: 'src/a.ts', isDirectory: false }]);
+describe('MentionInput 工具条触发（mentionTrigger，2026-11-05 零文本侵入）', () => {
+  it('mentionTrigger 变更 → 聚焦 + 直开菜单；输入框零文本侵入（残留/跳行回归锁）', async () => {
+    mockApi.file.searchNames.mockResolvedValue([
+      { path: 'README.md', isDirectory: false },
+      { path: 'src/a.ts', isDirectory: false },
+    ]);
     const { rerender } = render(<MentionInput />);
     const el = editor();
     expect(document.activeElement).not.toBe(el);
 
-    sessionState.fileTriggerTick = 1;
+    sessionState.mentionTrigger = { kind: 'file', tick: 1 };
+    sessionState.mentionScope = 'file';
     rerender(<MentionInput />);
-    expect(document.activeElement).toBe(el);
-    expect(visibleText(el)).toBe('@');
-    // @ 就位后用户继续输入查询词 → @ 统一菜单文件组接管（atMatch 包含 /）
-    typeInEditor(el, '@/a');
-    await advanceDebounce();
-    expect(screen.getByText('引用文件')).toBeInTheDocument();
-    expect(screen.getByText('src/a.ts')).toBeInTheDocument();
+    // 焦点落菜单内搜索框（编辑器不抢焦）；零文本侵入：不插 @、不产生换行——
+    // 实测 bug 1/2 回归锁
+    expect(document.activeElement).not.toBe(el);
+    expect(visibleText(el)).toBe('');
+    expect(el.querySelector('br')).toBeNull();
+    await waitFor(() => expect(screen.getByText('引用文件')).toBeInTheDocument());
+    expect(screen.getByText('README.md')).toBeInTheDocument();
   });
 
-  it('已有正文以非空白收尾 → 追加空格防粘连（hello → hello @）', () => {
+  it('skill 触发 → 直开技能组菜单（命令组隐藏，预览 ② 卡6），编辑器零侵入', async () => {
+    sessionState.mentionTrigger = { kind: 'skill', tick: 1 };
+    sessionState.mentionScope = 'skill';
     const { rerender } = render(<MentionInput />);
-    const el = editor();
-    typeInEditor(el, 'hello');
-    sessionState.fileTriggerTick = 1;
     rerender(<MentionInput />);
-    expect(visibleText(el)).toBe('hello @');
+    expect(visibleText(editor())).toBe('');
+    // waitFor 内重查（findByText 的元素引用会被数据到达后的重渲染替换成陈旧节点）
+    await waitFor(() => expect(screen.getByText('技能')).toBeInTheDocument());
+    expect(screen.getByText('代码审查工作流')).toBeInTheDocument();
+    expect(screen.queryByText('命令')).not.toBeInTheDocument();
+    expect(screen.queryByText('compact')).not.toBeInTheDocument();
   });
 
-  it('已有正文以空白收尾 → 直接追加不产生双空格（"hello " → "hello @"）', () => {
-    const { rerender } = render(<MentionInput />);
-    const el = editor();
-    typeInEditor(el, 'hello ');
-    sessionState.fileTriggerTick = 1;
-    rerender(<MentionInput />);
-    expect(visibleText(el)).toBe('hello @');
-  });
-
-  it('insertTextAtEnd 内部触发 detectTrigger：命令菜单打开时点 📎 → 旧菜单立即关闭（@ 菜单接管）', async () => {
+  it('命令菜单打开时点 Agent 按钮 → 跨类型 bump 直接覆盖 menuType，旧菜单让位', async () => {
     const { rerender } = render(<MentionInput />);
     const el = editor();
     typeInEditor(el, '/');
     expect(await screen.findByText('命令')).toBeInTheDocument();
 
-    sessionState.fileTriggerTick = 1;
+    sessionState.mentionTrigger = { kind: 'agent', tick: 1 };
+    sessionState.mentionScope = 'agent';
     rerender(<MentionInput />);
-    // '/' 以非空白收尾 → '/ @'；detectTrigger 同步刷新菜单态：命令菜单让位
-    expect(visibleText(el)).toBe('/ @');
     expect(screen.queryByText('命令')).not.toBeInTheDocument();
+    // agent 组空（无在线成员）→ 空态行可感知（手输的 '/' 是用户自己的正文，保留）
+    expect(await screen.findByText('暂无在线 agent')).toBeInTheDocument();
+    expect(visibleText(el)).toBe('/');
   });
 
-  it('tick=0（初始）不插入 @ 也不抢焦点', () => {
+  it('限定菜单打开时键入任意字符 → 菜单关闭、字符留作正文（无触发符残留）', async () => {
+    sessionState.mentionTrigger = { kind: 'skill', tick: 1 };
+    sessionState.mentionScope = 'skill';
+    const { rerender } = render(<MentionInput />);
+    rerender(<MentionInput />);
+    await waitFor(() => expect(screen.getByText('技能')).toBeInTheDocument());
+
+    typeInEditor(editor(), '好');
+    await waitFor(() => expect(screen.queryByText('技能')).toBeNull());
+    expect(sessionState.mentionScope).toBeNull();
+    expect(visibleText(editor())).toBe('好');
+  });
+
+  it('mentionTrigger=null（初始）不开菜单也不抢焦点', () => {
     render(<MentionInput />);
     expect(visibleText(editor())).toBe('');
     expect(document.activeElement).not.toBe(editor());
+  });
+
+  it('面板切换重挂载不回放旧菜单（实测 bug 3 回归锁）：信号一次性 + 卸载清 scope', async () => {
+    mockApi.file.searchNames.mockResolvedValue([{ path: 'README.md', isDirectory: false }]);
+    sessionState.mentionTrigger = { kind: 'file', tick: 1 };
+    sessionState.mentionScope = 'file';
+    const { unmount } = render(<MentionInput />);
+    await waitFor(() => expect(screen.getByText('README.md')).toBeTruthy());
+    // 触发信号已消费（一次性语义——滞留即重挂载回放）
+    expect(sessionState.mentionTrigger).toBeNull();
+    // 面板切走（组件卸载，菜单未选择未关闭）→ scope 随卸载清空（工具条高亮不残留）
+    unmount();
+    expect(sessionState.mentionScope).toBeNull();
+    // 切回会话（重挂载）→ 菜单不自动弹出、不抢焦点、输入框干净
+    render(<MentionInput />);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(screen.queryByText('引用文件')).toBeNull();
+    expect(visibleText(editor())).toBe('');
+    expect(document.activeElement).not.toBe(editor());
+  });
+});
+
+// === 按钮限定菜单（mentionScope）生命周期与空态（2026-11-05 预览 ② 卡2/卡3）===
+describe('MentionInput 按钮限定菜单（mentionScope）', () => {
+  it('agent 限定 + 无在线成员 → 空态行（主行 + 引导副行），菜单可感知', async () => {
+    sessionState.members = [];
+    sessionState.mentionTrigger = { kind: 'agent', tick: 1 };
+    sessionState.mentionScope = 'agent';
+    const { rerender } = render(<MentionInput />);
+    rerender(<MentionInput />);
+    expect(await screen.findByText('暂无在线 agent')).toBeInTheDocument();
+    expect(screen.getByText('在「成员」面板启动 agent 后即可引用')).toBeInTheDocument();
+    // 空态期间限定不显示文件组（统一菜单被锁到 agent 单组）
+    expect(screen.queryByText('引用文件')).not.toBeInTheDocument();
+  });
+
+  it('file 限定 + 空工作空间 → 空态行 + 固定导入条目仍可见', async () => {
+    mockApi.file.list.mockResolvedValue([]);
+    sessionState.mentionTrigger = { kind: 'file', tick: 1 };
+    sessionState.mentionScope = 'file';
+    const { rerender } = render(<MentionInput />);
+    rerender(<MentionInput />);
+    expect(await screen.findByText('工作空间暂无文件')).toBeInTheDocument();
+    expect(screen.getByText('从电脑导入…')).toBeInTheDocument();
+  });
+
+  it('选中条目 → closeMentionScope；pill 追加到末尾且无触发符残留', async () => {
+    sessionState.members = [makeMember({ instanceId: 'inst-1', agentName: '程序员' })];
+    sessionState.mentionTrigger = { kind: 'agent', tick: 1 };
+    sessionState.mentionScope = 'agent';
+    const { rerender } = render(<MentionInput />);
+    rerender(<MentionInput />);
+    fireEvent.click(await screen.findByText('程序员'));
+    expect(sessionState.closeMentionScope).toHaveBeenCalled();
+    expect(editor().querySelector('[data-kind="agent"][data-id="inst-1"]')).not.toBeNull();
+    // 零残留：编辑器内容恰为 pill 显示文本（@程序员），无游离触发符
+    expect(visibleText(editor())).toBe('@程序员');
+  });
+
+  it('触发符失配（scope=agent 却键入 #）→ scope 清空、回统一任务菜单', async () => {
+    taskState.tasks = [makeTask({ id: 'T-9', title: '修复登录' })];
+    sessionState.mentionTrigger = { kind: 'agent', tick: 1 };
+    sessionState.mentionScope = 'agent';
+    const { rerender } = render(<MentionInput />);
+    rerender(<MentionInput />);
+    // 键入 #（scope 生命周期：菜单类型与 scope 失配即结束限定）
+    typeInEditor(editor(), '#');
+    await waitFor(() => expect(sessionState.closeMentionScope).toHaveBeenCalled());
+    expect(sessionState.mentionScope).toBeNull();
+    // scope 已清空 → 手动 # 的统一任务菜单（非 agent 空态）
+    await waitFor(() => expect(screen.getByText('选择要引用的任务')).toBeInTheDocument());
+  });
+
+  it('Esc → 菜单关闭且 scope 清空；输入框零残留（实测 bug 1 回归锁）', async () => {
+    sessionState.mentionTrigger = { kind: 'skill', tick: 1 };
+    sessionState.mentionScope = 'skill';
+    const { rerender } = render(<MentionInput />);
+    rerender(<MentionInput />);
+    await waitFor(() => expect(screen.getByText('技能')).toBeInTheDocument());
+    fireEvent.keyDown(editor(), { key: 'Escape' });
+    expect(sessionState.closeMentionScope).toHaveBeenCalled();
+    expect(sessionState.mentionScope).toBeNull();
+    expect(visibleText(editor())).toBe('');
+  });
+
+  it('手动键入（scope=null）@ 仍出统一菜单：agent+文件+会话三组（回归锁）', async () => {
+    sessionState.members = [makeMember({ instanceId: 'inst-1', agentName: '程序员' })];
+    sessionState.sessions = [
+      { id: 'sess-2', title: '别的会话' } as SessionSummary,
+    ];
+    mockApi.file.list.mockResolvedValue([{ name: 'a.md', isDirectory: false, size: 1 }]);
+    render(<MentionInput />);
+    typeInEditor(editor(), '@');
+    expect(await screen.findByText('选择要 @ 的 agent')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('a.md')).toBeTruthy());
+    expect(screen.getByText('引用会话')).toBeInTheDocument();
+  });
+});
+
+// === 按钮限定菜单数据完整性（2026-11-05 实测修订）：按钮流 = 完整浏览器，
+//     不受手动过滤菜单的 8/10 条截断；文件限定空 query 走全量递归 ===
+describe('MentionInput 按钮限定菜单数据完整性', () => {
+  /** 按钮触发并等待菜单打开的公共前奏 */
+  async function openScoped(kind: 'agent' | 'skill' | 'file' | 'session' | 'task'): Promise<void> {
+    sessionState.mentionTrigger = { kind, tick: 1 };
+    sessionState.mentionScope = kind;
+    const { rerender } = render(<MentionInput />);
+    rerender(<MentionInput />);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+  }
+
+  it('file 限定空 query → searchNames("") 全量递归（非根目录默认列表），>8 条全显', async () => {
+    mockApi.file.searchNames.mockResolvedValue(
+      Array.from({ length: 12 }, (_, i) => ({ path: `src/deep/f${i}.ts`, isDirectory: false })),
+    );
+    await openScoped('file');
+    await waitFor(() => expect(mockApi.file.searchNames).toHaveBeenCalledWith('ws-1', ''));
+    expect(mockApi.file.list).not.toHaveBeenCalled();
+    // 第 12 条可见 = 不受 FILE_MENU_LIMIT=8 截断
+    await waitFor(() => expect(screen.getByText('src/deep/f11.ts')).toBeInTheDocument());
+  });
+
+  it('agent 限定：12 个在线成员全显（不受 MENU_LIMIT=10 截断）', async () => {
+    sessionState.members = Array.from({ length: 12 }, (_, i) =>
+      makeMember({ instanceId: `inst-${i}`, agentName: `成员${i}` }),
+    );
+    await openScoped('agent');
+    await waitFor(() => expect(screen.getByText('成员0')).toBeInTheDocument());
+    expect(screen.getByText('成员11')).toBeInTheDocument();
+  });
+
+  it('skill 限定：10 个已装技能全显（不受 COMMAND_MENU_LIMIT=8 截断）', async () => {
+    mockApi.resource.list.mockResolvedValue(
+      Array.from({ length: 10 }, (_, i) => makeSkillResource({ slug: `skill-${i}`, name: `技能${i}` })),
+    );
+    await openScoped('skill');
+    await waitFor(() => expect(screen.getByText('技能0')).toBeInTheDocument());
+    expect(screen.getByText('技能9')).toBeInTheDocument();
+  });
+
+  it('session 限定：10 个其他会话全显（不受 SESSION_MENU_LIMIT=8 截断）', async () => {
+    sessionState.sessions = Array.from({ length: 10 }, (_, i) =>
+      ({ id: `sess-x${i}`, title: `历史会话${i}` }) as SessionSummary,
+    );
+    await openScoped('session');
+    await waitFor(() => expect(screen.getByText('历史会话0')).toBeInTheDocument());
+    expect(screen.getByText('历史会话9')).toBeInTheDocument();
+  });
+
+  it('task 限定：12 条可激活任务全显（不受 MENU_LIMIT=10 截断）', async () => {
+    taskState.tasks = Array.from({ length: 12 }, (_, i) =>
+      makeTask({ id: `T-${100 + i}`, title: `任务${i}`, status: 'pending' }),
+    );
+    await openScoped('task');
+    await waitFor(() => expect(screen.getByText(/任务0/)).toBeInTheDocument());
+    expect(screen.getByText(/任务11/)).toBeInTheDocument();
+  });
+});
+
+// === 菜单内搜索框（2026-11-05 用户定案）：按钮限定菜单顶部独立搜索框——
+//     输入即过滤（不经会话框）、键盘闭环（↑↓/Enter/Tab/Esc）、无匹配空态 ===
+describe('MentionInput 限定菜单内搜索框', () => {
+  /** 打开 agent 限定菜单（两个成员）并等列表就绪 */
+  async function openAgentMenuWithMembers(): Promise<HTMLInputElement> {
+    sessionState.members = [
+      makeMember({ instanceId: 'inst-甲', agentName: '成员甲' }),
+      makeMember({ instanceId: 'inst-乙', agentName: '成员乙' }),
+    ];
+    sessionState.mentionTrigger = { kind: 'agent', tick: 1 };
+    sessionState.mentionScope = 'agent';
+    const { rerender } = render(<MentionInput />);
+    rerender(<MentionInput />);
+    const input = (await screen.findByTestId('scope-search')) as HTMLInputElement;
+    await waitFor(() => expect(screen.getByText('成员甲')).toBeInTheDocument());
+    return input;
+  }
+
+  it('菜单打开即有搜索框并承接焦点（编辑器不被抢焦）', async () => {
+    const input = await openAgentMenuWithMembers();
+    expect(input.placeholder).toBe('搜索 agent');
+    expect(document.activeElement).toBe(input);
+    expect(document.activeElement).not.toBe(editor());
+  });
+
+  it('搜索框输入即过滤列表（不经会话框——编辑器零残留）', async () => {
+    const input = await openAgentMenuWithMembers();
+    fireEvent.change(input, { target: { value: '甲' } });
+    await waitFor(() => expect(screen.queryByText('成员乙')).toBeNull());
+    expect(screen.getByText('成员甲')).toBeInTheDocument();
+    expect(visibleText(editor())).toBe('');
+  });
+
+  it('Enter 选中当前高亮条目 → pill 插入、菜单关闭、焦点交还编辑器', async () => {
+    const input = await openAgentMenuWithMembers();
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    // 高亮第 2 条（成员乙）被选中
+    await waitFor(() =>
+      expect(editor().querySelector('[data-kind="agent"][data-id="inst-乙"]')).not.toBeNull(),
+    );
+    expect(screen.queryByTestId('scope-search')).toBeNull();
+    expect(document.activeElement).toBe(editor());
+  });
+
+  it('Esc 关闭菜单 + 输入框零残留 + 焦点交还编辑器', async () => {
+    const input = await openAgentMenuWithMembers();
+    fireEvent.change(input, { target: { value: '甲' } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.queryByTestId('scope-search')).toBeNull();
+    expect(visibleText(editor())).toBe('');
+    expect(document.activeElement).toBe(editor());
+    expect(sessionState.mentionScope).toBeNull();
+  });
+
+  it('清空残留 <br> 的脏编辑器上选中 → 复位纯净再插 pill，不跳行（实测 bug 4 回归锁）', async () => {
+    sessionState.members = [makeMember({ instanceId: 'inst-1', agentName: '程序员' })];
+    sessionState.mentionTrigger = { kind: 'agent', tick: 1 };
+    sessionState.mentionScope = 'agent';
+    const { rerender } = render(<MentionInput />);
+    rerender(<MentionInput />);
+    // 仿真 Chromium「输入过再全选删除」残留 <br> 的脏 DOM（jsdom 不自然产生）
+    const el = editor();
+    el.appendChild(document.createElement('br'));
+    fireEvent.click(await screen.findByText('程序员'));
+    const pill = el.querySelector('[data-kind="agent"][data-id="inst-1"]');
+    expect(pill).not.toBeNull();
+    // 残留 <br> 已被复位清除——pill 为首个子节点，无跳行
+    expect(el.querySelector('br')).toBeNull();
+    expect(el.firstChild).toBe(pill);
+  });
+
+  it('搜索无命中 → 「无匹配」空态（与组空态区分）', async () => {
+    const input = await openAgentMenuWithMembers();
+    fireEvent.change(input, { target: { value: '不存在的名字' } });
+    await waitFor(() => expect(screen.getByText(/无匹配「不存在的名字」/)).toBeInTheDocument());
+    expect(screen.queryByText('成员甲')).toBeNull();
+  });
+
+  it('文件限定：搜索框输入走 debounce searchNames（会话框 query 不参与）', async () => {
+    mockApi.file.searchNames.mockResolvedValue([{ path: 'src/a.ts', isDirectory: false }]);
+    sessionState.mentionTrigger = { kind: 'file', tick: 1 };
+    sessionState.mentionScope = 'file';
+    const { rerender } = render(<MentionInput />);
+    rerender(<MentionInput />);
+    await waitFor(() => expect(mockApi.file.searchNames).toHaveBeenCalledWith('ws-1', ''));
+    const input = (await screen.findByTestId('scope-search')) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'a.t' } });
+    // debounce 200ms（真实时钟等待——fake timers 会冻结 waitFor 轮询导致挂起）
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 300));
+    });
+    expect(mockApi.file.searchNames).toHaveBeenLastCalledWith('ws-1', 'a.t');
+    expect(screen.getByText('src/a.ts')).toBeInTheDocument();
+  });
+
+  it('手动路径无搜索框（@ 统一菜单保持原形态）', async () => {
+    sessionState.members = [makeMember({ instanceId: 'inst-1', agentName: '成员甲' })];
+    render(<MentionInput />);
+    typeInEditor(editor(), '@');
+    expect(await screen.findByText('成员甲')).toBeInTheDocument();
+    expect(screen.queryByTestId('scope-search')).toBeNull();
   });
 });
 
@@ -1211,23 +1514,143 @@ describe('MentionInput Kimi 式容器（pill 时代形态）', () => {
     typeInEditor(editor(), '@a');
     fireEvent.click(await screen.findByText('a.ts'));
     expect(editor().querySelector('[data-kind="file"]')).not.toBeNull();
-    expect(screen.getByLabelText('引用文件').closest('.rounded-lg')).toBeTruthy();
+    expect(screen.getByLabelText('从电脑导入').closest('.rounded-lg')).toBeTruthy();
   });
 
-  it('📎 在输入框容器内左下角且触发 bumpFileTrigger', () => {
+  it('📎（从电脑导入）点击打开系统文件选择器（hidden input），不再走菜单触发', () => {
+    const clickSpy = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {});
     render(<MentionInput />);
-    const btn = screen.getByLabelText('引用文件');
+    const btn = screen.getByLabelText('从电脑导入');
     expect(btn.closest('.rounded-lg')).toBeTruthy();
     fireEvent.click(btn);
-    // bumpFileTrigger 经真实 store mock 生效（getState + tick 递增语义）
-    expect(sessionState.fileTriggerTick).toBe(1);
+    // 语义转换（2026-11-05 预览）：直接开文件选择器，不 bump 菜单触发
+    expect(clickSpy).toHaveBeenCalledOnce();
+    expect(sessionState.bumpMentionTrigger).not.toHaveBeenCalled();
+    clickSpy.mockRestore();
   });
 
   it('readOnly → 📎 禁用；chip 行退役后底行仅 📎', () => {
     sessionState.activeSessionReadOnly = true;
     render(<MentionInput />);
-    expect((screen.getByLabelText('引用文件') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByLabelText('从电脑导入') as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByLabelText(/移除/)).toBeNull();
+  });
+});
+
+// === 外部文件导入管线（2026-11-05 预览方案 A/C）：📎 / 文件菜单固定条目 / 拖拽
+//     三入口同管线——图片扩展名走 image pill 通道，其余 importFile 复制进
+//     imports/ 后插 file pill（id=路径进序列化、label=文件名显示）===
+describe('MentionInput 文件导入（importFile 管线）', () => {
+  /**
+   * 模拟文件选择：jsdom 的 input.files 是只读 getter——fireEvent 的
+   * target 普通赋值静默失败（handler 拿到空 FileList），必须 defineProperty。
+   */
+  function pickFiles(input: HTMLInputElement, files: File[]): void {
+    Object.defineProperty(input, 'files', { value: files, configurable: true });
+    fireEvent.change(input);
+  }
+
+  /**
+   * jsdom 的 Blob 无 arrayBuffer（生产为真浏览器 API）——实例级 polyfill：
+   * bytes.slice() 取独占 buffer，与真实 arrayBuffer 字节语义一致。
+   */
+  function makeFile(bytes: Uint8Array<ArrayBuffer>, name: string, type?: string): File {
+    const f = new File([bytes], name, type !== undefined ? { type } : undefined);
+    if (typeof f.arrayBuffer !== 'function') {
+      Object.defineProperty(f, 'arrayBuffer', {
+        value: async (): Promise<ArrayBuffer> => bytes.slice().buffer as ArrayBuffer,
+        configurable: true,
+      });
+    }
+    return f;
+  }
+
+  it('选择非图片文件 → importFile(ws, data, name) → file pill（id=imports 路径、label=文件名）', async () => {
+    render(<MentionInput />);
+    const input = screen.getByTestId('import-file-input') as HTMLInputElement;
+    pickFiles(input, [makeFile(new Uint8Array([1, 2, 3]), '需求文档 v2.docx')]);
+    await waitFor(() => {
+      expect(mockApi.asset.importFile).toHaveBeenCalledWith(
+        'ws-1',
+        expect.any(Uint8Array),
+        '需求文档 v2.docx',
+      );
+    });
+    await waitFor(() => {
+      const pill = editor().querySelector('[data-kind="file"]');
+      expect(pill).not.toBeNull();
+      expect(pill?.getAttribute('data-id')).toBe('imports/需求文档 v2.docx');
+      expect(pill?.getAttribute('data-label')).toBe('需求文档 v2.docx');
+    });
+  });
+
+  it('图片扩展名分流：走降采样 + saveImage 的 image pill 通道，不经 importFile', async () => {
+    render(<MentionInput />);
+    const input = screen.getByTestId('import-file-input') as HTMLInputElement;
+    const file = new File([new Uint8Array([1])], '截图.png', { type: 'image/png' });
+    pickFiles(input, [file]);
+    await waitFor(() => {
+      expect(mockApi.asset.saveImage).toHaveBeenCalledWith('ws-1', expect.any(Uint8Array), 'png');
+    });
+    await waitFor(() => {
+      expect(editor().querySelector('[data-kind="image"]')).not.toBeNull();
+    });
+    expect(mockApi.asset.importFile).not.toHaveBeenCalled();
+  });
+
+  it('拖入悬停 → 容器虚线强调框 + 居中提示（预览 ③ 卡B）；离开/放下复位', async () => {
+    render(<MentionInput />);
+    const wrap = editor().parentElement as HTMLElement;
+    expect(wrap.className).toContain('border-subtle');
+    fireEvent.dragEnter(wrap, { dataTransfer: { types: ['Files'] } });
+    expect(wrap.className).toContain('border-dashed');
+    const hint = screen.getByTestId('drop-hint');
+    expect(hint.textContent).toContain('松开鼠标 · 文件将复制到工作空间 imports/');
+    // overlay 不挡事件（drop 仍落在编辑器）
+    expect(hint.className).toContain('pointer-events-none');
+    fireEvent.dragLeave(wrap, { dataTransfer: { types: ['Files'] } });
+    await waitFor(() => expect(screen.queryByTestId('drop-hint')).toBeNull());
+    expect(wrap.className).toContain('border-subtle');
+  });
+
+  it('拖拽非图片文件到编辑器（方案 C）→ 同管线导入并插 file pill', async () => {
+    render(<MentionInput />);
+    const file = makeFile(new Uint8Array([9]), '报表.xlsx');
+    fireEvent.drop(editor(), { dataTransfer: { files: [file] } });
+    await waitFor(() => {
+      expect(mockApi.asset.importFile).toHaveBeenCalledWith('ws-1', expect.any(Uint8Array), '报表.xlsx');
+    });
+    await waitFor(() => {
+      expect(editor().querySelector('[data-kind="file"][data-id="imports/报表.xlsx"]')).not.toBeNull();
+    });
+  });
+
+  it('importFile 失败 → 内联错误提示 + 不插 pill，输入不受影响（错误路径）', async () => {
+    mockApi.asset.importFile.mockRejectedValueOnce(new Error('磁盘已满'));
+    render(<MentionInput />);
+    const input = screen.getByTestId('import-file-input') as HTMLInputElement;
+    pickFiles(input, [makeFile(new Uint8Array([1]), 'a.pdf')]);
+    await waitFor(() => expect(screen.getByText(/导入失败：磁盘已满/)).toBeTruthy());
+    expect(editor().querySelector('[data-kind="file"]')).toBeNull();
+    expect(visibleText(editor())).toBe('');
+  });
+
+  it('超过 64MB → 拦截提示且不调 importFile（守门前置）', async () => {
+    render(<MentionInput />);
+    const input = screen.getByTestId('import-file-input') as HTMLInputElement;
+    const file = new File([new Uint8Array([1])], '大视频.mov');
+    Object.defineProperty(file, 'size', { value: 64 * 1024 * 1024 + 1 });
+    pickFiles(input, [file]);
+    await waitFor(() => expect(screen.getByText(/超过 64MB 上限/)).toBeTruthy());
+    expect(mockApi.asset.importFile).not.toHaveBeenCalled();
+  });
+
+  it('空文件列表（取消选择）→ 无 IPC 无 pill（空输入路径）', () => {
+    render(<MentionInput />);
+    const input = screen.getByTestId('import-file-input') as HTMLInputElement;
+    pickFiles(input, []);
+    expect(mockApi.asset.importFile).not.toHaveBeenCalled();
+    expect(mockApi.asset.saveImage).not.toHaveBeenCalled();
   });
 });
 

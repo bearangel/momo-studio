@@ -2256,6 +2256,13 @@ export interface ApiSurface {
      * 未知 workspace → 抛中文错误（渲染端降级「图片不可用」占位，spec §11）。
      */
     readDataUrl(workspaceId: string, path: string): Promise<string>;
+    /**
+     * 从电脑导入外部文件（2026-11-05 工具条预览方案 A）：字节复制进 workspace
+     * 顶层 imports/（重名自动加 " (N)" 后缀），返回相对路径 `imports/<文件名>`。
+     * 失败语义：未知 workspace / 文件名非法（空 / 含路径分隔符）/ 超 64MB →
+     * 抛中文错误（renderer 不插 pill + 内联提示，输入不受影响）。
+     */
+    importFile(workspaceId: string, data: Uint8Array, name: string): Promise<{ path: string }>;
   };
   agent: {
     /** v25：成员加入（无 role/parent；同 ws 同 def 重复加入报错） */

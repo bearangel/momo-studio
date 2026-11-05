@@ -34,9 +34,20 @@
 //     裁决 + onEnter 让位）；菜单有条目时 Enter 不发送
 //   - Kimi 式单一容器（v2.11.1 F3→v3）：RichComposer 无边框置于容器内，
 //     框内底行仅剩 📎 左下角（chips 已由编辑器内联 pill 取代）
-import { Fragment, useEffect, useRef, useState } from 'react';
-import { Bot, EyeOff, FileText, Image as ImageIcon, Loader2, Lock, MessagesSquare, Paperclip, Pin, Terminal, Zap } from 'lucide-react';
-import { useSessionStore } from '../../stores/session.store';
+//   - 工具条选择按钮（2026-11-05 定案：零文本侵入 + 菜单内搜索）：InputToolbar
+//     五按钮经 session.store mentionTrigger 触发——直开对应菜单类型
+//     （agent/file/session→@ 统一菜单型、task→#、skill→/ 仅技能组），不向
+//     输入框插入任何触发符（放弃选择零残留）；限定菜单顶部有独立搜索框
+//     （scopeQuery，输入即过滤 + 键盘闭环），手动键入 @/#// 仍在会话框过滤
+//     （query 路径不变）；scope 随菜单生命周期清空（选中/Esc/发送/切会话/
+//     触发符失配），信号一次性消费防重挂载回放
+//   - 文件导入（预览方案 A/C）：📎 转为直接导入按钮 + 文件限定菜单底部固定
+//     「从电脑导入…」条目 + 拖拽泛化（onDropFiles 全文件路由）——同一管线：
+//     图片扩展名走 image pill（降采样 + saveImage），其余 asset:importFile
+//     复制进 imports/ 后插 file pill（id=相对路径进序列化、label=文件名显示）
+import { Fragment, useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
+import { Bot, EyeOff, FileText, Image as ImageIcon, Loader2, Lock, MessagesSquare, Paperclip, Pin, Terminal, Upload, Zap } from 'lucide-react';
+import { useSessionStore, type MentionTriggerKind } from '../../stores/session.store';
 import { useTaskStore } from '../../stores/task.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { ipc } from '../../ipc/client';
@@ -113,6 +124,13 @@ const MENU_LIMIT = 10;
 const FILE_MENU_LIMIT = 8;
 /** @ 菜单会话组最多展示条目数（会话列表通常较长，与文件组限额同量级；spec 2026-09-30 §5） */
 const SESSION_MENU_LIMIT = 8;
+
+/**
+ * 按钮限定菜单的数据上限（2026-11-05 实测修订）：手动过滤菜单是「打字快速
+ * 选择」，短列表合理；按钮限定菜单是小白的主浏览器——只受此防御性上限
+ * （菜单本体 max-h-48 滚动承载），不受手动路径的 8/10 条截断。
+ */
+const SCOPED_MENU_LIMIT = 100;
 /** / 菜单命令组 / 技能组各自最多展示条目数（与 @ 菜单分组限额对齐） */
 const COMMAND_MENU_LIMIT = 8;
 /** 文件搜索防抖间隔（毫秒），与 FileTree 的 SEARCH_DEBOUNCE_MS 对齐 */
@@ -124,6 +142,45 @@ const FILE_SEARCH_DEBOUNCE_MS = 200;
 const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp)$/i;
 /** 内联图片提示自动消失间隔（毫秒） */
 const IMAGE_HINT_TIMEOUT_MS = 4000;
+
+/**
+ * scope 对应菜单类型（按钮直开 + detectTrigger 失配判定共用：键入的触发符
+ * 与 scope 不符即结束限定）
+ */
+const SCOPE_MENU_TYPE: Record<MentionTriggerKind, MenuKind> = {
+  agent: 'agent',
+  file: 'agent',
+  session: 'agent',
+  task: 'task',
+  skill: 'command',
+};
+
+/** scope 限定菜单的空态文案（预览合同 ② 卡2：按钮点击必须有可感知反馈） */
+const SCOPE_EMPTY: Record<MentionTriggerKind, { p1: string; p2: string }> = {
+  agent: { p1: '暂无在线 agent', p2: '在「成员」面板启动 agent 后即可引用' },
+  skill: { p1: '暂未安装技能', p2: '可在资源库安装技能后引用' },
+  file: { p1: '工作空间暂无文件', p2: '可从电脑导入' },
+  session: { p1: '暂无其他会话', p2: '切换或新建会话后即可引用' },
+  task: { p1: '暂无可引用的任务', p2: '仅 draft / pending / assigned 状态可引用' },
+};
+
+/** 按钮限定菜单内搜索框的占位文案 */
+const SCOPE_SEARCH_PLACEHOLDER: Record<MentionTriggerKind, string> = {
+  agent: '搜索 agent',
+  skill: '搜索技能',
+  file: '搜索文件',
+  session: '搜索会话',
+  task: '搜索任务',
+};
+
+/** 菜单内搜索无命中的空态（与组空态区分——有数据但关键词不中） */
+const noMatchHint = (q: string): { p1: string; p2: string } => ({
+  p1: `无匹配「${q}」`,
+  p2: '换个关键词试试',
+});
+
+/** 导入单文件上限：与主进程 asset-ipc.ts MAX_IMPORT_BYTES 同值（注释互指，改必两处） */
+const IMPORT_MAX_BYTES = 64 * 1024 * 1024;
 
 /** pending 已耗时（秒）：active 上升沿复位归零，1s tick 给「仍在执行」信号 */
 function useElapsedSeconds(active: boolean): number {
@@ -143,6 +200,9 @@ function useElapsedSeconds(active: boolean): number {
 export function MentionInput() {
   const [menuType, setMenuType] = useState<MenuKind | null>(null);
   const [query, setQuery] = useState('');
+  // 按钮限定菜单的菜单内搜索词（2026-11-05 用户定案）：手动路径在会话框键入
+  // 过滤（query，不变）；按钮菜单顶部有独立搜索框（scopeQuery），输入即过滤
+  const [scopeQuery, setScopeQuery] = useState('');
   // 菜单键盘导航高亮索引（跨组扁平序列；query/菜单类型变化回顶，条目缩水渲染期 clamp）
   const [activeIndex, setActiveIndex] = useState(0);
   const menuListRef = useRef<HTMLDivElement>(null);
@@ -172,8 +232,11 @@ export function MentionInput() {
   // 只读态（有效成员全失效，spec §7）与聚焦信号（新建会话后聚焦，spec §6.2）
   const readOnly = useSessionStore((s) => s.activeSessionReadOnly);
   const inputFocusTick = useSessionStore((s) => s.inputFocusTick);
-  // 📎 文件引用触发信号：框内 📎 点击递增
-  const fileTriggerTick = useSessionStore((s) => s.fileTriggerTick);
+  // 工具条选择按钮触发信号（2026-11-05）：InputToolbar 五按钮 bump
+  const mentionTrigger = useSessionStore((s) => s.mentionTrigger);
+  // 按钮限定菜单的组：null=手动键入统一菜单（路径不变）
+  const mentionScope = useSessionStore((s) => s.mentionScope);
+  const closeMentionScope = useSessionStore((s) => s.closeMentionScope);
   // 斜杠命令提示（spec §5.4）：成功 message 或失败 Error.message；下一次正常
   // 发消息时 store 自动置 null
   const commandHint = useSessionStore((s) => s.commandHint);
@@ -209,6 +272,8 @@ export function MentionInput() {
     composerRef.current?.setSegments(draftToSegments(next));
     setMenuType(null);
     setQuery('');
+    setScopeQuery('');
+    closeMentionScope();
     // 跨 workspace 陈旧命中防闪现（终审 M1）：menuType 同步置 null 后文件 effect
     // 会跳过分支不清 fileHits；切会话时显式清空，下一次 @ 触发前菜单条件
     // (filteredMembers.length > 0 || fileHits.length > 0) 不会拿旧 ws 数据渲染
@@ -217,9 +282,10 @@ export function MentionInput() {
     prevSessionRef.current = activeSessionId;
   }, [activeSessionId]);
 
-  // @ 统一菜单文件组：query 双源之一。空 query → file.list('.') 根目录默认
-  // 列表（仅文件截 FILE_MENU_LIMIT）；非空 → debounce 200ms searchNames
-  // （FileTree 同形态）。seqRef 竞态守卫覆盖两路径。
+  // @ 统一菜单文件组。手动路径：空 query → file.list('.') 根目录默认列表，
+  // 非空 → debounce searchNames。按钮限定（scope='file'）：菜单内搜索框
+  // scopeQuery 驱动——空 → searchNames('') match-all 全量递归，非空 →
+  // debounce searchNames。seqRef 竞态守卫覆盖全部路径。
   const workspaceId = workspace?.id;
   useEffect(() => {
     if (menuType !== 'agent') {
@@ -227,9 +293,24 @@ export function MentionInput() {
       return;
     }
     if (!workspaceId) return;
-    const trimmed = query.trim();
+    const scoped = mentionScope === 'file';
+    const trimmed = (scoped ? scopeQuery : query).trim();
+    const fileLimit = scoped ? SCOPED_MENU_LIMIT : FILE_MENU_LIMIT;
     if (trimmed === '') {
       const seq = ++fileSearchSeqRef.current;
+      if (mentionScope === 'file') {
+        void ipc.file
+          .searchNames(workspaceId, '')
+          .then((hits) => {
+            if (fileSearchSeqRef.current !== seq) return;
+            setFileHits(hits.filter((h) => !h.isDirectory).slice(0, fileLimit));
+          })
+          .catch(() => {
+            if (fileSearchSeqRef.current !== seq) return;
+            setFileHits((prev) => (prev.length > 0 ? [] : prev));
+          });
+        return;
+      }
       void ipc.file
         .list(workspaceId, '.')
         .then((entries) => {
@@ -237,7 +318,7 @@ export function MentionInput() {
           setFileHits(
             entries
               .filter((e) => !e.isDirectory)
-              .slice(0, FILE_MENU_LIMIT)
+              .slice(0, fileLimit)
               .map((e) => ({ path: e.name, isDirectory: false })),
           );
         })
@@ -253,7 +334,7 @@ export function MentionInput() {
         .searchNames(workspaceId, trimmed)
         .then((hits) => {
           if (fileSearchSeqRef.current !== seq) return;
-          setFileHits(hits.filter((h) => !h.isDirectory).slice(0, FILE_MENU_LIMIT));
+          setFileHits(hits.filter((h) => !h.isDirectory).slice(0, fileLimit));
         })
         .catch(() => {
           if (fileSearchSeqRef.current !== seq) return;
@@ -261,7 +342,7 @@ export function MentionInput() {
         });
     }, FILE_SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [menuType, query, workspaceId]);
+  }, [menuType, query, scopeQuery, workspaceId, mentionScope]);
 
   // # 菜单数据接线：task.store 此前仅 TaskBoardView 加载，IM 视图挂载时
   // 主动拉取当前 workspace 的任务（可激活态过滤由上方 MENU_STATUSES 承载）
@@ -287,16 +368,22 @@ export function MentionInput() {
       .catch(() => {});
   }, [workspace?.id]);
 
-  // 在线成员判定与 MembersPanel 同源：lastRunning = 用户最近运行意图
+  // 生效过滤词（2026-11-05 双路定案）：手动路径消费编辑器 query（键入即过滤）；
+  // 按钮限定菜单消费菜单内搜索框的 scopeQuery
+  const effQuery = mentionScope === null ? query : scopeQuery;
+
+  // 在线成员判定与 MembersPanel 同源：lastRunning = 用户最近运行意图。
+  // 上限分路（2026-11-05）：手动过滤维持 MENU_LIMIT 短列表；按钮限定菜单
+  // （scope='agent'）= 完整浏览器语义，SCOPED_MENU_LIMIT 承载
   const filteredMembers =
     menuType === 'agent'
       ? members
           .filter((m) => m.lastRunning)
           .filter((m) => {
-            if (!query) return true;
-            return m.agentName.toLowerCase().includes(query.toLowerCase());
+            if (!effQuery) return true;
+            return m.agentName.toLowerCase().includes(effQuery.toLowerCase());
           })
-          .slice(0, MENU_LIMIT)
+          .slice(0, mentionScope === 'agent' ? SCOPED_MENU_LIMIT : MENU_LIMIT)
       : [];
 
   const filteredTasks =
@@ -305,11 +392,11 @@ export function MentionInput() {
           .filter(
             (t) =>
               MENU_STATUSES.includes(t.status) &&
-              (!query ||
-                t.id.toLowerCase().includes(query.toLowerCase()) ||
-                t.title.toLowerCase().includes(query.toLowerCase())),
+              (!effQuery ||
+                t.id.toLowerCase().includes(effQuery.toLowerCase()) ||
+                t.title.toLowerCase().includes(effQuery.toLowerCase())),
           )
-          .slice(0, MENU_LIMIT)
+          .slice(0, mentionScope === 'task' ? SCOPED_MENU_LIMIT : MENU_LIMIT)
       : [];
 
   const filteredCommands =
@@ -324,23 +411,23 @@ export function MentionInput() {
       ? skillItems
           .filter(
             (s) =>
-              !query ||
-              s.slug.toLowerCase().includes(query.toLowerCase()) ||
-              s.name.toLowerCase().includes(query.toLowerCase()),
+              !effQuery ||
+              s.slug.toLowerCase().includes(effQuery.toLowerCase()) ||
+              s.name.toLowerCase().includes(effQuery.toLowerCase()),
           )
-          .slice(0, COMMAND_MENU_LIMIT)
+          .slice(0, mentionScope === 'skill' ? SCOPED_MENU_LIMIT : COMMAND_MENU_LIMIT)
       : [];
 
   // @ 菜单会话组（跨会话引用 spec 2026-09-30 §5）：
   //   - 排除当前会话（读自己无意义）
   //   - 标题子串过滤（与其它组同形态，零额外 IPC）
-  //   - SESSION_MENU_LIMIT 截取（会话列表通常较长）
+  //   - 手动路径 SESSION_MENU_LIMIT 截取；按钮限定菜单 SCOPED_MENU_LIMIT
   const filteredSessions: SessionSummary[] =
     menuType === 'agent'
       ? sessions
           .filter((s) => s.id !== activeSessionId)
           .filter((s) => !query || s.title.toLowerCase().includes(query.toLowerCase()))
-          .slice(0, SESSION_MENU_LIMIT)
+          .slice(0, mentionScope === 'session' ? SCOPED_MENU_LIMIT : SESSION_MENU_LIMIT)
       : [];
 
   /**
@@ -359,25 +446,33 @@ export function MentionInput() {
     // 语义不受影响：store 侧只拦纯命令 body（/^\/([A-Za-z0-9-]+)\s*$/），
     // 句中选命令 pill 序列化为混排正文按普通消息发送（spec §3）。
     const cmdMatch = before.match(/(?:^|\s)\/([^\s/]*)$/);
-    if (cmdMatch) {
-      setMenuType('command');
-      setQuery(cmdMatch[1] ?? '');
-      return;
-    }
     // 字符集 [^\s#]（非空白且非 #）——支持中文 agent 名过滤，含 '/' 是
     // 统一菜单的前置条件（selectFile 复插 @路径 局部）
     const atMatch = before.match(/(?:^|\s)@([^\s#]*)$/);
     // 字符集 [^\s@]（非空白且非 @）——支持中文任务标题过滤
     const taskMatch = before.match(/(?:^|\s)#([^\s@]*)$/);
-    if (atMatch) {
-      setMenuType('agent');
-      setQuery(atMatch[1] ?? '');
+    // 优先级 cmd > at > task（cmd 命中即短路——Task 8 教训：新分支不短路会
+    // 落入后续 else 清空 menuType）
+    let next: MenuKind | null = null;
+    let q = '';
+    if (cmdMatch) {
+      next = 'command';
+      q = cmdMatch[1] ?? '';
+    } else if (atMatch) {
+      next = 'agent';
+      q = atMatch[1] ?? '';
     } else if (taskMatch) {
-      setMenuType('task');
-      setQuery(taskMatch[1] ?? '');
-    } else {
-      setMenuType(null);
-      setQuery('');
+      next = 'task';
+      q = taskMatch[1] ?? '';
+    }
+    setMenuType(next);
+    setQuery(q);
+    // scope 生命周期（2026-11-05）：触发符消失或菜单类型失配（scope=agent 却
+    // 键入 #）→ 结束限定；同菜单类型（含 scope=skill 的 /）保留——按钮限定
+    // 期间的键入过滤不误杀。工具条触发路径：bump 已置 scope，insertTextAtEnd
+    // 派发本函数走同类型分支，scope 保留到菜单自然关闭。
+    if (mentionScope !== null && (next === null || SCOPE_MENU_TYPE[mentionScope] !== next)) {
+      closeMentionScope();
     }
     // 能力提示行随 pill 增删刷新：input 事件 + RichComposer removePill 的补发
     // onInputText 都汇入此处（pill 删除无原生 input 事件——RichComposer 侧补发）
@@ -452,31 +547,119 @@ export function MentionInput() {
     }
   };
 
-  // 📎 文件引用触发：fileTriggerTick 递增 → 聚焦 + insertTextAtEnd('@')
-  // 直开统一菜单（成员组空 + 文件组根目录默认列表）。insertTextAtEnd 内部
-  // 派发 onInputText → detectTrigger 同步刷新菜单态——旧菜单（如已打开的
-  // 命令菜单）立即让位，不残留到下一次输入。防粘连空格是 insertTextAtEnd
-  // 自身语义（末可见字符非空白时补一个空格）。
+  /**
+   * 外部文件导入管线（2026-11-05 预览方案 A/C；📎 按钮 / 文件菜单固定条目 /
+   * 拖拽三入口共用）：图片扩展名分流进 handlePasteImages（降采样 + saveImage
+   * 的 image pill 通道），其余 asset:importFile 复制进 imports/ 后插 file pill
+   * （id=相对路径进 body `@路径` 与 context.files；label=文件名仅显示——序列
+   * 化契约见 composer-segments）。逐张 await 串行保插入顺序；单张失败内联
+   * 提示不中断其余（与图片管线 spec §11 同语义）。
+   */
+  const importExternalFiles = async (files: File[]): Promise<void> => {
+    const images = files.filter((f) => IMAGE_EXT_RE.test(f.name));
+    const others = files.filter((f) => !IMAGE_EXT_RE.test(f.name));
+    if (images.length > 0) await handlePasteImages(images);
+    for (const f of others) {
+      try {
+        if (f.size > IMPORT_MAX_BYTES) {
+          showImageHint('warn', `「${f.name}」超过 64MB 上限，未导入`);
+          continue;
+        }
+        if (!workspaceId) return;
+        const data = new Uint8Array(await f.arrayBuffer());
+        const { path } = await ipc.asset.importFile(workspaceId, data, f.name);
+        resetIfDirtyEmpty();
+        composerRef.current?.insertPill({ type: 'pill', kind: 'file', id: path, label: f.name }, 0);
+        composerRef.current?.focus();
+        syncImageHint();
+      } catch (err) {
+        showImageHint('error', `「${f.name}」导入失败：${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  };
+
+  // 系统文件选择器入口（hidden input，多选；change 后复位 value 允许重选同文件）
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const openImportPicker = (): void => {
+    if (!activeSessionId || readOnly) return;
+    fileInputRef.current?.click();
+  };
+  const handleImportChange = (e: ChangeEvent<HTMLInputElement>): void => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = '';
+    if (files.length === 0) return;
+    void importExternalFiles(files);
+  };
+
+  // 拖拽悬停态（2026-11-05 预览 ③ 卡B）：dragenter/leave 计数法防子元素抖动；
+  // drop/dragend 复位。overlay 置 pointer-events-none——drop 事件仍落在编辑器
+  // （RichComposer onDropFiles 管线），此处只管视觉
+  const [dragOver, setDragOver] = useState(false);
+  const dragDepthRef = useRef(0);
+  const hasFiles = (dt: DataTransfer | null): boolean =>
+    dt !== null && Array.from(dt.types).includes('Files');
+  const endDragVisual = (): void => {
+    dragDepthRef.current = 0;
+    setDragOver(false);
+  };
+
+  // 工具条选择按钮触发（2026-11-05；零文本侵入 + 一次性信号 + 菜单内搜索）：
+  // mentionTrigger 变更 → 复位搜索词 + 直接置对应菜单类型（mentionScope 已由
+  // bump 同步置位），消费完立即 consumeMentionTrigger 清空——否则面板切走时
+  // 组件卸载、信号滞留 store，切回会话重挂载时 effect 在 mount 再消费同一
+  // 信号 → 菜单自动弹出（实测 bug 3）。焦点不抢编辑器：菜单内搜索框
+  // （autoFocus）承接，输入即过滤；键盘闭环在搜索框 onKeyDown。旧菜单让位
+  // 语义保留：跨类型 bump 直接覆盖 menuType。
   useEffect(() => {
-    if (fileTriggerTick === 0) return;
-    composerRef.current?.focus();
-    composerRef.current?.insertTextAtEnd('@');
-  }, [fileTriggerTick]);
+    if (mentionTrigger === null) return;
+    setScopeQuery('');
+    setMenuType(SCOPE_MENU_TYPE[mentionTrigger.kind]);
+    useSessionStore.getState().consumeMentionTrigger();
+  }, [mentionTrigger]);
+
+  // 卸载（面板切走）时菜单随之消亡：清 scope，防工具条高亮与重挂载后限定态
+  // 残留（触发信号已被上面的消费语义清空，无需此处处理）
+  useEffect(() => {
+    return () => {
+      useSessionStore.getState().closeMentionScope();
+    };
+  }, []);
 
   /**
    * 菜单选择统一形：把光标前的触发局部（sigil + 查询词，共
    * `1 + query.length` 字符）替换为原子 pill。insertPill 是静默的（不触发
    * onInputText）——必须显式关菜单清 query，并同步能力提示行。
    */
+  /**
+   * 程序化插入前的脏 DOM 守门（实测 bug 4）：输入过再清空后 Chromium 常残留
+   * <br>/空节点，末尾追加型插入（按钮选中/导入）会落在残留节点后 = 跳行。
+   * segments 为空（无 pill 无正文）时先复位纯净再追加。输入路径的自愈在
+   * RichComposer handleInput（placeholder 回归同源问题）。
+   */
+  const resetIfDirtyEmpty = (): void => {
+    const segs = composerRef.current?.getSegments() ?? [];
+    const hasContent = segs.some((s) => s.type === 'pill' || (s.type === 'text' && s.text.trim() !== ''));
+    if (!hasContent) composerRef.current?.clear();
+  };
+
   const selectWithPill = (pill: Omit<PillSeg, 'type'>): void => {
-    const replaceLen = 1 + query.length;
-    composerRef.current?.insertPill({ type: 'pill', ...pill }, replaceLen);
+    if (mentionScope !== null) {
+      // 按钮限定菜单：输入框无触发符局部可替换——pill 追加到末尾（按钮流无
+      // 用户光标上下文，末尾追加最可预期；replaceLen 0 = 不吞任何正文）
+      resetIfDirtyEmpty();
+      composerRef.current?.moveCaretToEnd();
+      composerRef.current?.insertPill({ type: 'pill', ...pill }, 0);
+    } else {
+      composerRef.current?.insertPill({ type: 'pill', ...pill }, 1 + query.length);
+    }
     // 菜单 button 的 mousedown 偷走焦点（v2.11.1 insertMention 同款问题）——
     // 选择后显式恢复，否则键盘输入落空。insertPill 已设好 selection，focus
-    // 保留元素内既有选区；勿用 moveCaretToEnd——中段插入场景会错误跳末尾
+    // 保留元素内既有选区；手动路径勿用 moveCaretToEnd——中段插入场景会错跳末尾
     composerRef.current?.focus();
     setMenuType(null);
     setQuery('');
+    setScopeQuery('');
+    closeMentionScope();
     syncImageHint();
   };
 
@@ -519,11 +702,11 @@ export function MentionInput() {
     selectWithPill({ kind: 'file', id: f.path, label: f.path });
   };
 
-  /** 当前菜单的跨组扁平条目（渲染与键盘导航共用同一序列） */
-  const menuEntries: MenuEntry[] = [];
+  /** 按菜单类型聚合的原始条目（scope 过滤前；三分支就地填充） */
+  const rawEntries: MenuEntry[] = [];
   if (menuType === 'agent') {
     for (const m of filteredMembers) {
-      menuEntries.push({
+      rawEntries.push({
         key: `agent:${m.instanceId}`,
         group: 'agent',
         primary: m.agentName,
@@ -532,7 +715,7 @@ export function MentionInput() {
       });
     }
     for (const f of fileHits) {
-      menuEntries.push({
+      rawEntries.push({
         key: `file:${f.path}`,
         group: 'file',
         primary: f.path,
@@ -543,7 +726,7 @@ export function MentionInput() {
     // 会话组追加在 file 之后（spec agent → file → session 顺序）——
     // 选 session pill 走 selectWithPill，复用 replaceLen 局部替换 + focus 恢复
     for (const s of filteredSessions) {
-      menuEntries.push({
+      rawEntries.push({
         key: `session:${s.id}`,
         group: 'session',
         primary: s.title,
@@ -552,7 +735,7 @@ export function MentionInput() {
     }
   } else if (menuType === 'task') {
     for (const t of filteredTasks) {
-      menuEntries.push({
+      rawEntries.push({
         key: `task:${t.id}`,
         group: 'task',
         primary: `#${t.id} · ${t.title}`,
@@ -561,7 +744,7 @@ export function MentionInput() {
     }
   } else if (menuType === 'command') {
     for (const c of filteredCommands) {
-      menuEntries.push({
+      rawEntries.push({
         key: `command:${c.name}`,
         group: 'command',
         primary: `/${c.name}`,
@@ -570,17 +753,39 @@ export function MentionInput() {
       });
     }
     for (const s of filteredSkills) {
-      menuEntries.push({ key: `skill:${s.slug}`, group: 'skill', primary: s.name, select: () => selectSkill(s) });
+      rawEntries.push({ key: `skill:${s.slug}`, group: 'skill', primary: s.name, select: () => selectSkill(s) });
     }
   }
-  const menuOpen = menuEntries.length > 0;
+  // 工具条按钮限定（2026-11-05 预览合同「一个按钮一件事」）：scope 非空 →
+  // 过滤至单组；手动键入（scope=null）统一菜单不变。渲染与键盘导航消费过滤后序列
+  const menuEntries: MenuEntry[] =
+    mentionScope === null ? rawEntries : rawEntries.filter((e) => e.group === mentionScope);
+  // 文件限定菜单底部固定「从电脑导入…」条目（预览 ② 卡3：不随 query 过滤隐藏，
+  // 分隔线隔开）。刻意不进 menuEntries：键盘导航圈保持纯数据条目，导入是动作
+  // 入口（该按钮自身可 Tab 聚焦，鼠标为主路径）
+  const pinnedImportVisible = mentionScope === 'file' && menuType === 'agent';
+  // 空态行分路（预览 ② 卡2 + 菜单内搜索）：搜索词非空且零命中 → 「无匹配」
+  // （有数据但关键词不中）；搜索词空 → 组空态（真的没有数据）。file 组看真实
+  // 文件命中（pinned 不算数）
+  const scopedEmptyHint = (() => {
+    if (mentionScope === null) return null;
+    const q = scopeQuery.trim();
+    if (mentionScope === 'file') {
+      if (fileHits.length > 0) return null;
+      return q === '' ? SCOPE_EMPTY.file : noMatchHint(q);
+    }
+    if (menuEntries.length > 0) return null;
+    return q === '' ? SCOPE_EMPTY[mentionScope] : noMatchHint(q);
+  })();
+  const menuOpen =
+    menuEntries.length > 0 || scopedEmptyHint !== null || pinnedImportVisible;
   // 文件命中异步到达会缩列表：clamp 防越界（高亮粘到末条）
   const activeIdx = menuEntries.length === 0 ? 0 : Math.min(activeIndex, menuEntries.length - 1);
 
   // 过滤词/菜单类型变化 → 高亮回顶（新序列语义上已是另一份列表）
   useEffect(() => {
     setActiveIndex(0);
-  }, [menuType, query]);
+  }, [menuType, query, scopeQuery]);
 
   // 高亮项滚入视野（jsdom 无 scrollIntoView——optional call 守卫）
   useEffect(() => {
@@ -605,6 +810,34 @@ export function MentionInput() {
     return true;
   };
 
+  /**
+   * 菜单内搜索框键盘闭环（2026-11-05 用户定案）：↑↓ 循环高亮 / Enter·Tab
+   * 选中 / Esc 关闭并焦点交还编辑器。IME 组字期不误触发（isComposing 守卫）。
+   */
+  const handleScopeSearchKeyDown = (e: KeyboardEvent<HTMLInputElement>): void => {
+    if (e.nativeEvent.isComposing) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const len = menuEntries.length;
+      if (len === 0) return;
+      setActiveIndex(e.key === 'ArrowDown' ? (activeIdx + 1) % len : (activeIdx - 1 + len) % len);
+      return;
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      selectActive();
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      setMenuType(null);
+      setQuery('');
+      setScopeQuery('');
+      closeMentionScope();
+      composerRef.current?.focus();
+    }
+  };
+
   const handleSend = async (): Promise<void> => {
     // 发送前快照（失败恢复用）+ 序列化三参（body/mentions/context——
     // IPC 形状与 v2.11 完全一致，主进程零感知）
@@ -621,6 +854,8 @@ export function MentionInput() {
     syncImageHint();
     setMenuType(null);
     setQuery('');
+    setScopeQuery('');
+    closeMentionScope();
     try {
       await sendMessage(trimmed, payload.mentions, payload.context);
       await loadSessions();
@@ -640,6 +875,28 @@ export function MentionInput() {
           ref={menuListRef}
           className="absolute bottom-full left-3 right-3 mb-1 border border-subtle bg-surface-1 rounded-lg shadow-lg py-1 max-h-48 overflow-auto z-50"
         >
+          {mentionScope !== null && (
+            <div className="px-2.5 py-1.5 border-b border-subtle sticky top-0 bg-surface-1">
+              <input
+                autoFocus
+                data-testid="scope-search"
+                type="text"
+                value={scopeQuery}
+                onChange={(e) => setScopeQuery(e.target.value)}
+                onKeyDown={handleScopeSearchKeyDown}
+                placeholder={SCOPE_SEARCH_PLACEHOLDER[mentionScope]}
+                aria-label={SCOPE_SEARCH_PLACEHOLDER[mentionScope]}
+                className="w-full text-sm bg-surface-2 border border-subtle rounded px-2 py-1.5 text-primary placeholder:text-tertiary focus:outline-none focus:border-focus"
+              />
+            </div>
+          )}
+          {scopedEmptyHint !== null && mentionScope !== null && (
+            <Fragment>
+              <div className="px-3 py-1 text-xs text-tertiary">{GROUP_LABEL[mentionScope]}</div>
+              <div className="px-3 py-1.5 text-sm text-secondary">{scopedEmptyHint.p1}</div>
+              <div className="px-3 pb-2 pl-10 -mt-1 text-xs text-tertiary">{scopedEmptyHint.p2}</div>
+            </Fragment>
+          )}
           {menuEntries.map((entry, i) => (
             <Fragment key={entry.key}>
               {(i === 0 || menuEntries[i - 1]?.group !== entry.group) && (
@@ -668,6 +925,19 @@ export function MentionInput() {
               </button>
             </Fragment>
           ))}
+          {pinnedImportVisible && (
+            <div className="border-t border-subtle mt-1">
+              <button
+                type="button"
+                onClick={openImportPicker}
+                className="w-full text-left px-3 py-2 text-sm hover:bg-surface-3 flex items-center gap-2 text-secondary"
+              >
+                <Upload size={12} strokeWidth={1.75} aria-hidden />
+                <span>从电脑导入…</span>
+                <span className="text-xs text-tertiary">复制进 imports/ 后引用</span>
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -740,8 +1010,40 @@ export function MentionInput() {
         })()}
 
       {/* Kimi 式单一容器（v3）：RichComposer 编辑面无边框置顶，pill 内联取代
-          chips；框内底行仅剩 📎 左下角；focus 态上移容器边框 */}
-      <div className="rounded-lg border border-subtle bg-surface-2 focus-within:border-focus transition-colors">
+          chips；框内底行仅剩 📎 左下角；focus 态上移容器边框；拖入文件时
+          切换预览 ③ 卡B 悬停态（虚线强调框 + 居中提示，overlay 不挡事件） */}
+      <div
+        className={`relative rounded-lg border bg-surface-2 focus-within:border-focus transition-colors ${
+          dragOver ? 'border-dashed border-focus' : 'border-subtle'
+        }`}
+        onDragEnter={(e) => {
+          if (!hasFiles(e.dataTransfer)) return;
+          dragDepthRef.current += 1;
+          setDragOver(true);
+        }}
+        onDragLeave={(e) => {
+          if (!hasFiles(e.dataTransfer)) return;
+          dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+          if (dragDepthRef.current === 0) setDragOver(false);
+        }}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={endDragVisual}
+        onDragEnd={endDragVisual}
+      >
+        {dragOver && (
+          <div
+            data-testid="drop-hint"
+            className="absolute inset-0 z-10 rounded-lg bg-surface-active flex items-center justify-center gap-2 text-sm text-primary pointer-events-none"
+          >
+            <Upload
+              size={16}
+              strokeWidth={1.75}
+              aria-hidden
+              className="text-accent-500 dark:text-accent-300"
+            />
+            松开鼠标 · 文件将复制到工作空间 imports/
+          </div>
+        )}
         <RichComposer
           ref={composerRef}
           disabled={!activeSessionId || readOnly}
@@ -749,7 +1051,7 @@ export function MentionInput() {
             readOnly
               ? '会话只读'
               : activeSessionId
-                ? '输入消息，Enter 发送。@ 引用 agent 或文件，# 引用任务'
+                ? '输入消息，Enter 发送。也可以点上方按钮选择引用'
                 : '请先选择房间'
           }
           ariaLabel="消息输入框"
@@ -757,6 +1059,9 @@ export function MentionInput() {
           onNavigate={handleNavigate}
           onPasteImage={(files) => {
             void handlePasteImages(files);
+          }}
+          onDropFiles={(files) => {
+            void importExternalFiles(files);
           }}
           onEnter={() => {
             // 菜单有条目：Enter = 选中高亮项（不发送）；无条目/未开：正常发送。
@@ -769,17 +1074,29 @@ export function MentionInput() {
           }}
           onEscape={() => {
             setMenuType(null);
+            setScopeQuery('');
+            closeMentionScope();
           }}
         />
         <div className="flex items-end gap-2 px-2 pb-2">
+          {/* 📎 语义转换（2026-11-05 预览）：引用文件 → 从电脑导入——直接开系统
+              文件选择器（不再打开 @ 菜单）；图标保持 Paperclip 附件心智 */}
           <IconButton
-            aria-label="引用文件"
-            title="引用文件"
+            aria-label="从电脑导入"
+            title="从电脑导入"
             disabled={!activeSessionId || readOnly}
-            onClick={() => useSessionStore.getState().bumpFileTrigger()}
+            onClick={openImportPicker}
           >
             <Paperclip size={16} strokeWidth={1.75} aria-hidden />
           </IconButton>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            hidden
+            data-testid="import-file-input"
+            onChange={handleImportChange}
+          />
         </div>
       </div>
     </div>

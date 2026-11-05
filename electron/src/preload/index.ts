@@ -160,6 +160,10 @@ const api: ApiSurface = {
     // 2026-09-26 多模态（spec §10）：气泡缩略图读图——`.momo/assets/` 白名单路径 → data URL
     readDataUrl: (workspaceId: string, path: string) =>
       invoke<string>('asset:readDataUrl', workspaceId, path),
+    // 2026-11-05 工具条文件导入（预览方案 A）：外部文件复制进 workspace imports/
+    //（重名加 " (N)" 后缀）——安全范式与 saveImage 同层（路径囚禁/原子写/守门前置）
+    importFile: (workspaceId: string, data: Uint8Array, name: string) =>
+      invoke<{ path: string }>('asset:importFile', workspaceId, data, name),
   },
   // v25 Task 6（spec §5）：assignment 系列通道平移更名 member；角色指派/
   // 改角色通道随 role 概念退役删除（preload 悬空绑定一并清理）。
