@@ -91,7 +91,7 @@ secrets: {
 
 **摘要**：用户「总结今天所有邮箱的新邮件」→ agent `list_accounts` → 逐账号 `list_mails(filter: since=今天)` → 挑重点 `read_mail`（200KB 截断）→ LLM 汇总回复。单账号失败不拖全局（聚合结果带 per-account error）。
 
-**代发（含会话确认）**：用户「给 xx 回信说…」→ agent（可先 `read_mail` 取上下文）→ `draft_mail(to, subject, body, attachments[])` → service 生成 RFC822 → IMAP APPEND Drafts + `drafts.json` 登记（pending）→ agent **在会话内展示完整邮件内容并询问「确认发送？」** → 用户回复确认 → agent `send_draft(draft_id)` → service：SMTP 外发 + APPEND Sent + 删 Drafts + 状态 sent → agent 如实报告发送结果。
+**代发（含会话确认）**：用户「给 xx 回信说…」→ agent（可先 `read_mail` 取上下文）→ `draft_mail(to, subject, body, attachments[])` → service 生成 RFC822 → IMAP APPEND Drafts + sqlite `drafts` 表登记（pending）→ agent **在会话内展示完整邮件内容并询问「确认发送？」** → 用户回复确认 → agent `send_draft(draft_id)` → service：SMTP 外发 + APPEND Sent + 删 Drafts + 状态 sent → agent 如实报告发送结果。
 
 **面板直发（并行通道）**：panel 草稿箱预览 → 点「发送」→ 同一 `drafts.send` 方法。
 
@@ -101,12 +101,21 @@ secrets: {
 
 | 文件 | 内容 | 边界 |
 |---|---|---|
-| `accounts.json` | 账号元数据：accountId、email、显示名、imap/smtp host/port/tls 模式、用户名、创建时间、健康状态 | **不含密码**（密码在 keytar，键 `account:<accountId>`） |
-| `cache/<accountId>/<folder>.json` | 信封缓存：uid、subject、from、to、date、flags、hasAttachments、size | 每 folder 有界 500 条 FIFO；可丢弃重建 |
-| `drafts.json` | 草稿登记：draftId、accountId、状态 pending/sent/discarded、创建时间、收件人摘要 + `inputPayload`（正文/附件 base64，仅服务端存储，用于发送失败重试；对外投影剔除） | 24h 过期作废 |
-| 正文缓存 | 纯内存 LRU（50 封，键 `accountId\|folder\|uid`），不落盘 | 重启后按需重拉 |
+| `accounts.json` | 账号元数据：accountId、email、显示名、imap/smtp host/port/tls 模式、用户名、创建时间、健康状态、`retention`（本地缓存保留时长） | **不含密码**（密码在 keytar，键 `account:<accountId>`）；人可读 |
+| `data.db` | `node:sqlite` 数据库（Electron 44 / Node 24 内置，无原生依赖）：表 `drafts`（草稿登记 + `inputPayload`，对外投影剔除）、`envelope_cache`（信封缓存，每 folder 上限 500、uid 降序）、`envelope_cache_meta`（savedAt）；`PRAGMA user_version` 版本化（当前 1）；WAL + `busy_timeout=5000` | service 是唯一写者；agent 工具子进程严禁直开，一律走 `callService` |
+
+- 研发期一次性重置：启动时清理旧 `drafts.json` 与 `cache/`，**不做数据迁移**（研发阶段无兼容负担）。
+- 正文缓存仍为纯内存 LRU（50 封，键 `accountId\|folder\|uid`），不落盘、重启后按需重拉。
 
 本插件**不做工作区隔离**：邮箱账号与邮件是用户级资产，缓存键为 `accountId + folder`，跨工作区共享（依据 2026-10-17 spec §4.5）。
+
+### 5.1.1 保留策略（仅本地缓存）
+
+- 每账号独立配置 `retention ∈ {'1m','6m','1y','forever'}`，缺省 `forever`；月≈30 天、半年≈182 天、年≈365 天（近似值）。
+- **只清理本地缓存，绝不删除服务器邮件。**
+- 已发送（Sent）永久保留：即使账号设为 1 个月，Sent 的本地缓存也不清理。
+- sent 文件夹探测失败或找不到 → 一律不清理（fail-safe）。
+- 改小保留期后读缓存即时过滤，不必等下次重写；写缓存时同步回收过期行。
 
 ### 5.2 方法目录（`handle(method, params)`）
 
@@ -155,7 +164,8 @@ secrets: {
 └─────────┴──────────────────┴──────────────────────┘
 ```
 
-- 账号表单：邮箱地址/显示名/IMAP host/port/SMTP host/port/用户名/授权码（不回显）/预设下拉/「测试连接」
+- 账号表单：邮箱地址/显示名/IMAP host/port/SMTP host/port/用户名/授权码（不回显）/预设下拉/「测试连接」/「本地缓存保留时长」下拉（永久/一年/半年/一个月）
+- 写邮件：工具栏「写邮件」→ 收件人/抄送/主题/正文/附件（FileReader → base64，总量 ≤25MB）→「发送」经会话确认后复用 `drafts.save` → `drafts.send` 直发 SMTP；「存草稿」仅登记；发送/放弃后对应文件夹缓存失效
 - 无构建静态 HTML/JS（codegraph 模式）；PanelChannel：`callService` 交互、`getTheme` 主题跟随、`getContext` 上下文
 - 列表数据流：打开即拉 `mails.list`（缓存秒开，TTL 5min 后全量重拉）+ 60s 定时轮询；未读数角标（收件箱/草稿/已发送，`folders.unseen`）
 - panel 附件区仅展示清单（沙箱 iframe 无文件系统能力；存工作区走 agent 工具 `save_attachment`，与「专业 agent」定位自洽）
