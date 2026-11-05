@@ -19,7 +19,7 @@
 - 密码/授权码只进 keytar（`ctx.secrets`）；`accounts.json` / 日志 / 工具返回值永不出现明文凭据
 - dataDir JSON 一律 tmp+rename 原子写；读侧损坏一律丢弃重建不抛
 - 加密强制：`tlsMode ∈ {'tls','starttls'}`，明文端口（裸 25/143）双守门拒绝
-- 数值上限（spec §6/§10）：save_attachment 单附件 ≤10MB；draft 附件总量 ≤25MB；list_mails pageSize 缺省 20 上限 50；信封缓存每 folder 500 条（uid 降序）；正文 text/html 均截断 200KB；read_mail 拒收 source >2MB；草稿 24h 过期；IMAP 单操作超时 30s + 单次 service 调用整链总预算 8s（可注入缩短供测试）
+- 数值上限（spec §6/§10）：save_attachment 单附件 ≤10MB；draft 附件总量 ≤25MB；list_mails pageSize 缺省 20 上限 50；信封缓存每 folder 500 条（uid 降序）；正文 text/html 均截断 200KB；read_mail 拒收 source >2MB；草稿 24h 过期；单次 service 调用（含 folders/read/attachment/drafts 链）总预算 8s（callService 桥 10s 硬上限；mailbox 库默认 30s 仅测试注入用）
 - 测试位置：moo-studio → `electron/tests/plugin|storage/`（DB 重度目录跑加 `--pool=forks`）；momo-plugin → `tests/email/`（宿主校验器经 `tests/host.ts` 动态 import，`describe.skipIf(!HOST_READY)` 容忍宿主缺失）
 - Conventional Commits；两仓库都不动版本号；`momo-plugin.json` 版本固定 `0.1.0`
 - 插件 dev 装载流：宿主「插件设置 → 开发目录装载」指向 `<momo-plugin>/plugins/email`（`installPluginDevDir` 直读源目录，改码→重载即生效）

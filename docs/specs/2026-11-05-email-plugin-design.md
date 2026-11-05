@@ -177,7 +177,7 @@ secrets: {
 |---|---|
 | 账号认证失败 | 账号 state=error（panel 红点 + 原因）；工具返回结构化错误 + 中文指引（授权码过期 / IMAP 服务未开启） |
 | 单账号拉取失败 | `list_mails` 聚合时单失败不拖全局：成功账号正常返回 + 失败账号带原因 |
-| 网络超时 | IMAP 单操作 30s + 单次 service 调用整链总预算 8s（先于宿主 callService 桥 10s 落定）；SMTP/verify 8s；工具返回超时语义；缓存仍可读（降级体验） |
+| 网络超时 | 单次 service 调用（含 folders/read/attachment/drafts 链）总预算 8s；callService 桥 10s 为硬上限；mailbox 库默认 30s 仅测试注入用；SMTP/verify 8s；工具返回超时语义；缓存仍可读（降级体验） |
 | 读取上限 | `read_mail` 全源 >2MB 拒收（提示改用 `save_attachment`） |
 | 缓存 JSON 损坏 | 丢弃重建（缓存非真相源） |
 | 附件超限 | 工具参数校验 + service 双守门（save ≤10MB / 发送总量 ≤25MB），超限明确报错不静默 |
