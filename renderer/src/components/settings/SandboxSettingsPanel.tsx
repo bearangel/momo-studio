@@ -15,8 +15,8 @@ import { Button } from '../ui/Button';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 
 const NETWORK_POLICY_OPTIONS: readonly { value: NetworkPolicy; label: string; hint: string }[] = [
-  { value: 'allow', label: '永久允许（默认）', hint: '沙箱内 bash 全放行网络（含端口监听）' },
-  { value: 'deny', label: '拒绝', hint: '沙箱内 bash 一律禁网，网络失败时显示一次性引导卡' },
+  { value: 'allow', label: '允许联网（默认）', hint: 'Agent 执行命令时可正常访问网络' },
+  { value: 'deny', label: '禁止联网', hint: '命令一律不能访问网络；与 AI 模型的对话不受影响' },
 ];
 
 interface WorkspaceGrantEntry {
@@ -83,24 +83,24 @@ export function SandboxSettingsPanel() {
   const isWin = st?.platform === 'win32';
   const statusText =
     st === null
-      ? '未探测'
+      ? '尚未检测'
       : st.available
-        ? `${st.toolVersion ?? st.sandboxTool} · 已启用`
+        ? `已启用 · ${st.toolVersion ?? st.sandboxTool}`
         : st.platform === 'win32'
-          ? `${st.windowsShell ?? 'powershell'} · 无 OS 沙箱（Windows）`
-          : `不可用：${st.unavailableReason ?? '未知'}`;
+          ? 'Windows：无系统级防护'
+          : `暂不可用：${st.unavailableReason ?? '未知'}`;
 
   return (
     <section className="flex flex-col gap-6" aria-label="安全沙箱设置">
       <div>
         <h2 className="text-base text-primary mb-1">安全沙箱</h2>
         <p className="text-sm text-secondary">
-          bash 工具的 OS 级隔离（macOS Seatbelt / Linux bubblewrap；Windows 无 OS 沙箱）。
+          控制 Agent 在电脑上执行命令时的权限边界：能改哪些文件、能否联网。
         </p>
       </div>
 
       <fieldset className="flex flex-col gap-2">
-        <legend className="text-sm font-medium text-primary">沙箱模式</legend>
+        <legend className="text-sm font-medium text-primary">防护级别</legend>
         {(['strict', 'permissive'] as const).map((m) => (
           <label key={m} className="flex items-start gap-2 text-sm text-secondary">
             <input
@@ -112,15 +112,15 @@ export function SandboxSettingsPanel() {
             />
             <span>
               {m === 'strict'
-                ? 'strict（推荐）——沙箱不可用时 bash 拒绝执行'
-                : 'permissive——沙箱不可用时降级运行（无 OS 隔离，审计标记 unsandboxed）'}
+                ? '严格（推荐）——电脑缺少防护组件时，Agent 的命令将直接拒绝执行，绝不在无防护状态下运行'
+                : '宽松——缺少防护组件时命令照常运行（此时没有额外防护，会做记录标记）'}
             </span>
           </label>
         ))}
       </fieldset>
 
       <fieldset className="flex flex-col gap-2">
-        <legend className="text-sm font-medium text-primary">沙箱内网络出站</legend>
+        <legend className="text-sm font-medium text-primary">联网权限</legend>
         {NETWORK_POLICY_OPTIONS.map((o) => (
           <label key={o.value} className="flex items-start gap-2 text-sm text-secondary">
             <input
@@ -136,11 +136,11 @@ export function SandboxSettingsPanel() {
             </span>
           </label>
         ))}
-        <p className="text-xs text-tertiary">仅影响沙箱内 bash；LLM API 调用不受影响。</p>
+        <p className="text-xs text-tertiary">只作用于 Agent 执行的命令，不影响应用本身的联网。</p>
       </fieldset>
 
       <fieldset className="flex flex-col gap-2">
-        <legend className="text-sm font-medium text-primary">写域（全盘可写）</legend>
+        <legend className="text-sm font-medium text-primary">文件写入范围</legend>
         <label className="flex items-start gap-2 text-sm text-secondary">
           <input
             type="radio"
@@ -148,9 +148,9 @@ export function SandboxSettingsPanel() {
             checked={info.settings.writePolicy === 'confined'}
             onChange={() => save({ sandboxWritePolicy: 'confined' })}
             className="mt-1"
-            aria-label="仅工作空间（默认）"
+            aria-label="仅工作空间（推荐）"
           />
-          <span>仅工作空间（默认）——工作空间 / tmp / 已授权目录可写，越界弹授权卡</span>
+          <span>仅工作空间（推荐）——Agent 只能改动本项目文件夹里的文件；要写到其他位置时会先征求你的同意</span>
         </label>
         <label className="flex items-start gap-2 text-sm text-secondary">
           <input
@@ -159,21 +159,21 @@ export function SandboxSettingsPanel() {
             checked={info.settings.writePolicy === 'full-disk'}
             onChange={() => setConfirmFullDisk(true)}
             className="mt-1"
-            aria-label="全盘可写"
+            aria-label="整台电脑"
             disabled={isWin}
           />
           <span>
-            全盘可写——除操作系统核心目录（/System、/usr、/etc 等）外全部可读写，不再弹授权卡
-            {isWin ? '（Windows 无 OS 沙箱，此开关不生效）' : ''}
+            整台电脑——Agent 可直接读写电脑上绝大多数位置（桌面、下载、文稿等），不再逐次询问；系统关键位置与密钥类敏感信息仍受保护
+            {isWin ? '（Windows 上暂不生效）' : ''}
           </span>
         </label>
-        <p className="text-xs text-tertiary">仅影响 bash 与插件执行；文件工具仍限工作空间内；~/.ssh 等凭据目录读写保护不受影响。</p>
+        <p className="text-xs text-tertiary">更改立即对所有会话生效；聊天附件与文件列表始终限于工作空间内。</p>
       </fieldset>
 
       <fieldset className="flex flex-col gap-2">
-        <legend className="text-sm font-medium text-primary">已授权目录（工作空间持久）</legend>
+        <legend className="text-sm font-medium text-primary">已允许写入的位置</legend>
         {grants.length === 0 ? (
-          <p className="text-xs text-tertiary">暂无持久授权</p>
+          <p className="text-xs text-tertiary">暂无额外允许的位置</p>
         ) : (
           grants.map((g) => (
             <div key={g.workspaceId} className="flex flex-col gap-1">
@@ -190,7 +190,7 @@ export function SandboxSettingsPanel() {
             </div>
           ))
         )}
-        <p className="text-xs text-tertiary">会话级授权随会话删除自动清理，不在此展示。</p>
+        <p className="text-xs text-tertiary">这里列出你此前点过「允许」的文件夹；删除后，Agent 再往里写文件时会重新询问。</p>
       </fieldset>
 
       {pendingRevoke !== null && (
@@ -205,9 +205,9 @@ export function SandboxSettingsPanel() {
 
       {confirmFullDisk && (
         <ConfirmDialog
-          title="开启全盘可写"
-          message={'开启后 agent 可改写系统目录之外的任意用户目录（含 ~/Library 等持久化位面）。\n凭据目录（~/.ssh 等）读写仍受保护；仅影响 bash 与插件执行。'}
-          confirmLabel="开启全盘可写"
+          title="允许写入整台电脑？"
+          message={'开启后，Agent 无需逐次确认，即可修改这台电脑上大部分位置的文件（包括桌面、下载、文稿等个人文件夹）。\n系统关键位置与 SSH 密钥、钥匙串等敏感信息仍受保护。'}
+          confirmLabel="允许"
           onConfirm={() => save({ sandboxWritePolicy: 'full-disk' })}
           onClose={() => setConfirmFullDisk(false)}
         />
@@ -219,7 +219,7 @@ export function SandboxSettingsPanel() {
           <span className="font-mono text-xs text-secondary">{statusText}</span>
         </div>
         <Button onClick={() => void reprobe()} disabled={busy}>
-          {busy ? '探测中...' : '重新探测'}
+          {busy ? '检测中...' : '重新检测'}
         </Button>
       </div>
     </section>
