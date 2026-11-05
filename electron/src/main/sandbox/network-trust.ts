@@ -17,10 +17,12 @@
 // 铁律：只删字段需两端同 commit，本仓库单仓双端同发）：ShellTools 在 runtime
 // 子进程执行，策略读取必须代理回主进程（子进程不可见 DB 单例）。
 import { getSandboxSettings } from './settings';
+import type { SandboxWritePolicy } from './types';
 import { getGrantedDirs } from './write-grant';
 import { resolveStreamOwner } from '../storage/messages/repo';
 
 export type { NetworkPolicy } from './settings';
+export type { SandboxWritePolicy } from './types';
 
 interface NetTrustOpMsg {
   type: 'net-trust-op';
@@ -32,7 +34,7 @@ interface NetTrustOpMsg {
 }
 
 export type NetTrustOpResult =
-  | { ok: true; payload: { netOn: boolean; extraDirs: string[] } }
+  | { ok: true; payload: { netOn: boolean; extraDirs: string[]; writePolicy: SandboxWritePolicy } }
   | { ok: false; error: string };
 
 function parseNetTrustOpMsg(msg: unknown): NetTrustOpMsg | null {
@@ -77,7 +79,8 @@ export async function handleNetTrustOp(msg: unknown): Promise<NetTrustOpResult> 
     // hard-gate §4.1 的三层合成回退两层——会话 ∪ 工作空间。授权卡按实际
     // 被拦目录授权，预置机制无存在必要）。字段形状不变。
     const extraDirs = getGrantedDirs(sessionId, parsed.workspaceId ?? null);
-    return { ok: true, payload: { netOn, extraDirs } };
+    // writePolicy（spec §5.5 写域过桥）：settings 单点下行，子进程桥规范化兜底 confined
+    return { ok: true, payload: { netOn, extraDirs, writePolicy: settings.writePolicy } };
   } catch (err) {
     return { ok: false, error: `网络策略读取失败: ${err instanceof Error ? err.message : String(err)}` };
   }

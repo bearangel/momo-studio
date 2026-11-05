@@ -94,7 +94,7 @@ describe('runWithWriteGrant（spec §7）', () => {
   it('越界 → covered → setExtraRootDirs(extraDirs 注入) → 重执行成功', async () => {
     const setExtra = vi.fn();
     __setWriteGrantToolForTest({
-      net: async () => ({ netOn: false, extraDirs: ['/granted-root'] }),
+      net: async () => ({ netOn: false, extraDirs: ['/granted-root'], writePolicy: 'confined' }),
       wait: async () => ({ kind: 'covered' as const }),
     });
     let calls = 0;
@@ -117,7 +117,7 @@ describe('runWithWriteGrant（spec §7）', () => {
 
   it('covered 后重执行仍越界（授权与目标不匹配）→ 轮次收敛：3 次等待后原始错误上抛（不无限循环）', async () => {
     __setWriteGrantToolForTest({
-      net: async () => ({ netOn: false, extraDirs: [] }),
+      net: async () => ({ netOn: false, extraDirs: [], writePolicy: 'confined' }),
       wait: async () => ({ kind: 'covered' as const }),
     });
     let calls = 0;

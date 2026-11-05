@@ -337,11 +337,11 @@ describe('bash 写授权硬门控等待（spec hard-gate §5）', () => {
       available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0,
     });
     // 桥替身：首查无授权（真拦截），等待回调翻转 extraDirs（= 用户点了授权卡）
-    __setNetQueryForTest(async () => ({ netOn: false, extraDirs: [] }));
+    __setNetQueryForTest(async () => ({ netOn: false, extraDirs: [], writePolicy: 'confined' }));
     __setBashWriteWaitForTest({
       wait: async (o) => {
         // 模拟授权落地：下一次 effective 返回已授权目录
-        __setNetQueryForTest(async () => ({ netOn: false, extraDirs: [path.join(os.homedir(), path.basename(HOME_TARGET))] }));
+        __setNetQueryForTest(async () => ({ netOn: false, extraDirs: [path.join(os.homedir(), path.basename(HOME_TARGET))], writePolicy: 'confined' }));
         void o.isCovered();
         return { kind: 'covered' as const };
       },
@@ -365,7 +365,7 @@ describe('bash 写授权硬门控等待（spec hard-gate §5）', () => {
       platform: 'darwin', sandboxTool: 'seatbelt', toolVersion: 'sandbox-exec',
       available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0,
     });
-    __setNetQueryForTest(async () => ({ netOn: false, extraDirs: [] }));
+    __setNetQueryForTest(async () => ({ netOn: false, extraDirs: [], writePolicy: 'confined' }));
     __setBashWriteWaitForTest({ wait: async () => ({ kind: 'denied' as const }) });
     const tools = new ShellTools();
     const result = await tools.execute('bash', { command: WRITE_BLOCKED_CMD }, ctx);
@@ -381,7 +381,7 @@ describe('bash 写授权硬门控等待（spec hard-gate §5）', () => {
       platform: 'darwin', sandboxTool: 'seatbelt', toolVersion: 'sandbox-exec',
       available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0,
     });
-    __setNetQueryForTest(async () => ({ netOn: false, extraDirs: [] }));
+    __setNetQueryForTest(async () => ({ netOn: false, extraDirs: [], writePolicy: 'confined' }));
     let waitCalls = 0;
     __setBashWriteWaitForTest({
       wait: async () => {
@@ -405,7 +405,7 @@ describe('bash 写授权硬门控等待（spec hard-gate §5）', () => {
     // v2.5 工具链机制移除后 net-trust payload 仅 {netOn, extraDirs}——无 toolchainOn
     // 字段。被拦目录不在 extraDirs 时 isCovered 必须为 false（纯成员判定），否则
     // 任何被拦目录都会瞬判 covered 零询问用户（bug ① 的根因形态）。
-    __setNetQueryForTest(async () => ({ netOn: false, extraDirs: [] }));
+    __setNetQueryForTest(async () => ({ netOn: false, extraDirs: [], writePolicy: 'confined' }));
     let probe: boolean | undefined;
     __setBashWriteWaitForTest({
       wait: async (o) => {

@@ -1,8 +1,9 @@
 // electron/tests/sandbox/network-trust.test.ts
 // handleNetTrustOp（effective 单 op，修订 B 双态 + v2.5 两字段 payload +
 // 2026-10-03 extraDirs）。v2.5 工具链授权机制（policy 开关 + 预置清单）已整体
-// 移除：effective payload = { netOn, extraDirs } 两字段；extraDirs = 会话 ∪ 工
-// 作空间两层动态授权目录合成（write-grant KV）。toolchainOn 字段已从契约下线。
+// 移除：toolchainOn 字段已从契约下线；2026-11-05 全盘可写（spec §5.5）起
+// payload = { netOn, extraDirs, writePolicy } 三字段——writePolicy 随 settings
+// 下行，子进程桥规范化兜底 confined（新旧混跑安全）。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -57,13 +58,13 @@ describe('handleNetTrustOp（effective 单 op 路由，修订 B 双态 + v2.5 �
   it('policy=allow → { ok:true, payload:{ netOn:true, extraDirs:[] } }', async () => {
     __setSandboxSettingsForTest(settings('strict', 'allow'));
     const r = await handleNetTrustOp({ type: 'net-trust-op', requestId: 'r1', op: 'effective', streamSessionId: SSN });
-    expect(r).toEqual({ ok: true, payload: { netOn: true, extraDirs: [] } });
+    expect(r).toEqual({ ok: true, payload: { netOn: true, extraDirs: [], writePolicy: 'confined' } });
   });
 
   it('policy=deny → { ok:true, payload:{ netOn:false, extraDirs:[] } }', async () => {
     __setSandboxSettingsForTest(settings('strict', 'deny'));
     const r = await handleNetTrustOp({ type: 'net-trust-op', requestId: 'r2', op: 'effective', streamSessionId: SSN });
-    expect(r).toEqual({ ok: true, payload: { netOn: false, extraDirs: [] } });
+    expect(r).toEqual({ ok: true, payload: { netOn: false, extraDirs: [], writePolicy: 'confined' } });
   });
 
   it('载荷非对象 → ok:false（中文错误，不裸抛）', async () => {
@@ -111,7 +112,7 @@ describe('effective extraDirs 两层合成（spec §6.1，2026-10-04 工具链�
       type: 'net-trust-op', requestId: 'e1', op: 'effective',
       streamSessionId: SSN, workspaceId: 'ws-a',
     });
-    expect(r).toEqual({ ok: true, payload: { netOn: true, extraDirs: ['/tmp/ws-grant'] } });
+    expect(r).toEqual({ ok: true, payload: { netOn: true, extraDirs: ['/tmp/ws-grant'], writePolicy: 'confined' } });
   });
 
   it('streamSessionId 经 messages 映射命中 → session 层参与合成', async () => {
@@ -152,7 +153,7 @@ describe('effective extraDirs 两层合成（spec §6.1，2026-10-04 工具链�
   it('旧载荷（无 workspaceId）→ extraDirs 恒空数组不抛错（兼容铁律）', async () => {
     grantWriteDirs('workspace', 'ws-a', ['/tmp/ws-grant']);
     const r = await handleNetTrustOp({ type: 'net-trust-op', requestId: 'e3', op: 'effective', streamSessionId: SSN });
-    expect(r).toEqual({ ok: true, payload: { netOn: true, extraDirs: [] } });
+    expect(r).toEqual({ ok: true, payload: { netOn: true, extraDirs: [], writePolicy: 'confined' } });
   });
 
   it('session ∪ workspace 两层并集去重（同一路径双源 → 单条）', async () => {
@@ -178,16 +179,24 @@ describe('effective extraDirs 两层合成（spec §6.1，2026-10-04 工具链�
     }
   });
 
-  it('payload 形状锁：恰好 {netOn, extraDirs} 两键——抗复活锁（v2.5 工具链机制移除后，toolchainOn 不应再现）', async () => {
+  it('payload 形状锁：恰好 {netOn, extraDirs, writePolicy} 三键——抗复活锁（toolchainOn 不应再现；writePolicy 2026-11-05 起为合法第三键）', async () => {
     const r = await handleNetTrustOp({
       type: 'net-trust-op', requestId: 'shape-lock', op: 'effective',
       streamSessionId: SSN, workspaceId: 'ws-a',
     });
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(Object.keys(r.payload).sort()).toEqual(['extraDirs', 'netOn']);
+      expect(Object.keys(r.payload).sort()).toEqual(['extraDirs', 'netOn', 'writePolicy']);
       expect(r.payload).not.toHaveProperty('toolchainOn');
     }
+  });
+
+  it('settings writePolicy=full-disk → payload 下行 full-disk（设置翻转经桥即生效）', async () => {
+    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'allow', writePolicy: 'full-disk' });
+    const r = await handleNetTrustOp({
+      type: 'net-trust-op', requestId: 'fdw-down', op: 'effective', streamSessionId: SSN, workspaceId: 'ws-a',
+    });
+    expect(r).toEqual({ ok: true, payload: { netOn: true, extraDirs: [], writePolicy: 'full-disk' } });
   });
 });
 // === 2026-10-15 会话验收 P1-3 回归锁：子链流（parent 非 NULL 行）的 session 层

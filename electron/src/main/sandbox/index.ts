@@ -10,7 +10,7 @@ import { buildPolicy } from './policy';
 import { buildBwrapArgs } from './linux';
 import { renderSeatbeltProfile } from './macos';
 import { buildWindowsCommandLine } from './windows';
-import type { SpawnPlan } from './types';
+import type { SandboxWritePolicy, SpawnPlan } from './types';
 
 /** wrapped 模式缓存 env：npm/pip 缓存重定向到 tmp（写剖面自洽，spec §5.7） */
 function cacheEnvAdditions(tmpDir: string): Record<string, string> {
@@ -34,7 +34,7 @@ export function sandboxInstallHint(platform: NodeJS.Platform): string {
 export function resolveShellSpawn(
   workspaceDir: string,
   command: string,
-  opts?: { networkEnabled?: boolean; extraDirs?: string[] },
+  opts?: { networkEnabled?: boolean; extraDirs?: string[]; writeScope?: SandboxWritePolicy },
 ): SpawnPlan {
   const settings = getSandboxSettings();
   // v2.4.x 网络态（2026-09-13 修订 B 双态化）：有效网络态 netOn =
@@ -43,10 +43,14 @@ export function resolveShellSpawn(
   //（既有调用方/单测）按设置双态推导：allow → 开，deny → 关。各平台 profile
   // builder 继续收布尔值（spec §7 平台矩阵）。
   const networkEnabled = opts?.networkEnabled ?? (settings.networkPolicy === 'allow');
+  // 写域（spec 2026-11-05 §5.5）：子进程调用方（shell-tools）经 net-trust 桥以
+  // opts.writeScope 显式传入（与 networkEnabled 同构）；未传（既有调用方/单测）
+  // 按 settings 双态推导回退
+  const writeScope = opts?.writeScope ?? settings.writePolicy;
   // 写授权目录（2026-10-04 修订：v2.5 预置清单随工具链机制移除，仅剩动态
   // 授权层 extraDirs——主进程两层合成回传，卡授权后下一次 spawn 立即生效）。
   const extraWriteDirs = opts?.extraDirs ?? [];
-  const policy = buildPolicy(workspaceDir, networkEnabled, extraWriteDirs);
+  const policy = buildPolicy(workspaceDir, networkEnabled, extraWriteDirs, writeScope);
 
   if (process.platform === 'win32') {
     const shell = getSandboxState()?.windowsShell ?? 'powershell.exe';
@@ -64,11 +68,14 @@ export function resolveShellSpawn(
   // wrapped tag 携带网络态（net-off/net-on）：网络关时监听/出网在沙箱内必败，
   // 让 LLM 从结果行一步自诊（「开 设置→安全沙箱→网络」）而非多轮 bind/curl 试探
   const netTag = networkEnabled ? 'net-on' : 'net-off';
+  // full-disk 写域 tag 段（spec §5.5）：confined 不追加（既有 tag 断言零改动），
+  // LLM 从结果行一步自诊写域
+  const fdwTag = writeScope === 'full-disk' ? '/fdw' : '';
   if (process.platform === 'linux' && state?.sandboxTool === 'bwrap') {
     return {
       kind: 'wrapped', shell: 'bwrap',
       args: [...buildBwrapArgs(policy), '/bin/bash', '-c', command],
-      tag: `bwrap/${netTag}`, envAdditions: cacheEnvAdditions(policy.tmpDir), cleanupFiles: [],
+      tag: `bwrap/${netTag}${fdwTag}`, envAdditions: cacheEnvAdditions(policy.tmpDir), cleanupFiles: [],
     };
   }
   if (process.platform === 'darwin' && state?.sandboxTool === 'seatbelt') {
@@ -79,7 +86,7 @@ export function resolveShellSpawn(
       // -f 从文件读 profile（-p 会把参数整串当 SBPL 源码解析——传路径即
       // 「unbound variable」exit 65，macOS 主机实测；probe 冒烟的 -p 是内联字符串，语义不同）
       args: ['-f', profilePath, '/bin/bash', '-c', command],
-      tag: `seatbelt/${netTag}`, envAdditions: cacheEnvAdditions(policy.tmpDir), cleanupFiles: [profilePath],
+      tag: `seatbelt/${netTag}${fdwTag}`, envAdditions: cacheEnvAdditions(policy.tmpDir), cleanupFiles: [profilePath],
     };
   }
 
@@ -104,17 +111,19 @@ export function resolveShellSpawn(
 export function resolveSandboxedSpawn(workspaceDir: string, argv: string[]): SpawnPlan {
   if (argv.length === 0) throw new Error('resolveSandboxedSpawn: argv 不能为空');
   const settings = getSandboxSettings();
-  const policy = buildPolicy(workspaceDir, false, []);
+  const policy = buildPolicy(workspaceDir, false, [], settings.writePolicy);
   if (process.platform === 'win32') {
     // Windows 无 OS 沙箱（与 resolveShellSpawn win32 分支同基线）：直跑 + tag 标注
     return { kind: 'plain', shell: argv[0]!, args: argv.slice(1), tag: 'win-plain/net-off' };
   }
   const state = getSandboxState();
+  // full-disk 写域 tag 段（spec §5.5）：主进程侧直读 settings；confined 不追加
+  const fdwTag = settings.writePolicy === 'full-disk' ? '/fdw' : '';
   if (process.platform === 'linux' && state?.sandboxTool === 'bwrap') {
     return {
       kind: 'wrapped', shell: 'bwrap',
       args: [...buildBwrapArgs(policy), ...argv],
-      tag: 'bwrap/net-off', envAdditions: cacheEnvAdditions(policy.tmpDir), cleanupFiles: [],
+      tag: `bwrap/net-off${fdwTag}`, envAdditions: cacheEnvAdditions(policy.tmpDir), cleanupFiles: [],
     };
   }
   if (process.platform === 'darwin' && state?.sandboxTool === 'seatbelt') {
@@ -123,7 +132,7 @@ export function resolveSandboxedSpawn(workspaceDir: string, argv: string[]): Spa
     return {
       kind: 'wrapped', shell: 'sandbox-exec',
       args: ['-f', profilePath, ...argv],
-      tag: 'seatbelt/net-off', envAdditions: cacheEnvAdditions(policy.tmpDir), cleanupFiles: [profilePath],
+      tag: `seatbelt/net-off${fdwTag}`, envAdditions: cacheEnvAdditions(policy.tmpDir), cleanupFiles: [profilePath],
     };
   }
   const reason = state?.unavailableReason ?? '沙箱未探测';
