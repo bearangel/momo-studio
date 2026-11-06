@@ -22,7 +22,7 @@ import { parseManifest, validateManifest } from './manifest';
 import type { PluginManifest } from './types';
 import { validatePanelsAtRoot, notifyPanelsChanged } from './panel-sync';
 import { normalizeConfigSchema, sensitiveRef, evictPluginConfigCache } from './config-store';
-import { deleteSecret } from '../storage/keychain';
+import { deleteSecret, findSecretKeysByPrefix } from '../storage/keychain';
 import { upsertPlugin, getPlugin, removePluginRecord, setPluginEnabled } from './registry';
 import { uninstallPackage } from '../marketplace/installer';
 import { hubPackageItemId } from '../resource/hub/momo-hub';
@@ -380,6 +380,14 @@ export function uninstallPlugin(id: string, keepData: boolean): void {
       }
     } catch {
       // manifest 损坏——按无敏感键处理
+    }
+    // 插件自管 secrets（service ctx.secrets 面）前缀级联：keytar 枚举，无注册表依赖；
+    // 失败不阻断卸载（残留键无外送面——仅本机 keychain）
+    {
+      const prefix = `plugin/${id}/secret/`;
+      void findSecretKeysByPrefix(prefix)
+        .then((keys) => Promise.allSettled(keys.map((k) => deleteSecret(k))))
+        .catch(() => undefined);
     }
   }
   evictPluginConfigCache(id); // 缓存恒清（keepData=true 时下次激活边界重预热）

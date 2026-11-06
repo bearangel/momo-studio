@@ -10,6 +10,7 @@ import { beforeEach, afterEach, describe, expect, it } from 'vitest';
 import { closeDb, runMigrations, getDb } from '../../src/main/storage/db';
 import {
   installPluginZip,
+  installPluginDevDir,
   uninstallPlugin,
   compareVersionLoose,
   isSafeEntryRelPath,
@@ -329,5 +330,49 @@ describe('审查修复 I1/I2/I3', () => {
     const panels = listPluginPanels('ws1');
     expect(panels.some((p) => p.pluginId === 'pp')).toBe(true);
     void seen; void orig;
+  });
+});
+
+// ── 插件自管 secrets 卸载级联（keepData=false 前缀清理；ctx.secrets 面） ──
+import {
+  setKeytarBackendForTest,
+  __resetKeychainImplForTest,
+} from '../../src/main/storage/keychain';
+
+describe('卸载级联清理自管 secrets', () => {
+  it('卸载 keepData=false 前缀级联清理自管 secrets；keepData=true 不清', async () => {
+    const deleted: string[] = [];
+    setKeytarBackendForTest({
+      async setPassword() {},
+      async getPassword() { return null; },
+      async deletePassword(_s, account) { deleted.push(account); return true; },
+      async findCredentials() {
+        return [
+          { account: 'plugin/email-cascade/secret/account:acc1', password: 'x' },
+          { account: 'plugin/email-cascade/secret/account:acc2', password: 'y' },
+          { account: 'plugin/other/secret/k', password: 'z' },
+        ];
+      },
+    });
+    __resetKeychainImplForTest();
+    const devDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-devcascade-'));
+    fs.writeFileSync(
+      path.join(devDir, 'momo-plugin.json'),
+      JSON.stringify({ id: 'email-cascade', name: 'E', version: '9.9.9', description: '', components: {} }),
+    );
+    installPluginDevDir(devDir, '2.1.0', 'ws-t');
+    uninstallPlugin('email-cascade', true);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(deleted).toEqual([]);
+    installPluginDevDir(devDir, '2.1.0', 'ws-t');
+    uninstallPlugin('email-cascade', false);
+    await new Promise((r) => setTimeout(r, 50));
+    expect([...deleted].sort()).toEqual([
+      'plugin/email-cascade/secret/account:acc1',
+      'plugin/email-cascade/secret/account:acc2',
+    ]);
+    fs.rmSync(devDir, { recursive: true, force: true });
+    setKeytarBackendForTest(null);
+    __resetKeychainImplForTest();
   });
 });

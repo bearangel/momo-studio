@@ -14,7 +14,10 @@ import { logger } from '../logger';
 const SERVICE_NAME = 'Momo Studio';
 
 /** keytar 最小消费面形状（服务名 + 账户键 + 值）——测试缝注入点同此形状 */
-export type KeytarLike = Pick<typeof Keytar, 'setPassword' | 'getPassword' | 'deletePassword'>;
+export type KeytarLike = Pick<
+  typeof Keytar,
+  'setPassword' | 'getPassword' | 'deletePassword' | 'findCredentials'
+>;
 
 export interface KeychainImpl {
   setSecret(key: string, value: string): Promise<void>;
@@ -98,4 +101,10 @@ export async function getSecret(key: string): Promise<string | null> {
 export async function deleteSecret(key: string): Promise<void> {
   logger.debug('deleteSecret', { key });
   await impl.deleteSecret(key);
+}
+
+/** 前缀枚举（插件自管 secrets 卸载级联用）：返回命中前缀的账号键列表 */
+export async function findSecretKeysByPrefix(prefix: string): Promise<string[]> {
+  const creds = await loadKeytar().findCredentials(keychainServiceName());
+  return creds.map((c) => c.account).filter((a) => a.startsWith(prefix));
 }

@@ -8,7 +8,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { logger } from '../logger';
-import { readPluginConfigJson, sensitiveOverlaySync, normalizeConfigSchema } from './config-store';
+import { readPluginConfigJson, sensitiveOverlaySync, normalizeConfigSchema, pluginSecretRef, isValidPluginSecretKey } from './config-store';
+import { getSecret, setSecret, deleteSecret } from '../storage/keychain';
 import { resolvePluginsDir, resolvePluginDataDir } from '../paths';
 import { getPlugin, isPluginEnabled } from './registry';
 import { getDb } from '../storage/db';
@@ -20,11 +21,19 @@ export interface PluginServiceCtx {
   getConfig(): Record<string, unknown>;
   getDataDir(): string;
   workspace?: { id: string; directoryPath: string };
+  secrets: PluginSecretsApi;
   logger: {
     warn(msg: string, meta?: unknown): void;
     info(msg: string, meta?: unknown): void;
     error(msg: string, meta?: unknown): void;
   };
+}
+
+/** 插件自管 secrets（邮件插件起）：keytar 代理，键域 plugin/<id>/secret/<key> */
+export interface PluginSecretsApi {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string): Promise<void>;
+  delete(key: string): Promise<void>;
 }
 
 export interface PluginServiceInstance {
@@ -114,6 +123,10 @@ async function doStartPluginService(
     }
     const dataDir = resolvePluginDataDir(rec.id);
     const wsDir = multi && workspaceId ? workspaceDirOf(workspaceId) : null;
+    const guard = (key: string): string => {
+      if (!isValidPluginSecretKey(key)) throw new Error(`非法 secret 键: ${key}`);
+      return pluginSecretRef(rec.id, key);
+    };
     const ctx: PluginServiceCtx = {
       getConfig: () => ({
         ...readPluginConfigJson(rec.id),
@@ -122,6 +135,11 @@ async function doStartPluginService(
       }),
       getDataDir: () => dataDir,
       ...(multi && workspaceId && wsDir ? { workspace: { id: workspaceId, directoryPath: wsDir } } : {}),
+      secrets: {
+        get: async (key) => getSecret(guard(key)),
+        set: async (key, value) => setSecret(guard(key), value),
+        delete: async (key) => deleteSecret(guard(key)),
+      },
       logger: {
         warn: (msg, meta) => logger.warn(`[plugin:${rec.id}] ${msg}`, meta),
         info: (msg, meta) => logger.info(`[plugin:${rec.id}] ${msg}`, meta),

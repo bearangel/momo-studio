@@ -83,6 +83,16 @@ readPluginConfigJson(pluginId, workspaceId?)                 // 单文件读（�
 - codegraph service 取根：`root = cfg.workspaceRoot ?? ctx.workspace.directoryPath`（**留空即跟随**，平台只提供事实，默认语义由插件自定）。
 - codegraph manifest：`workspaceRoot` 改声明 `scope: 'workspace'` 且**从 required 移除**（留空合法 = 用默认）。
 
+### 4.5 插件数据隔离约定（插件决定，平台不强制）
+
+`getDataDir()` 是插件级单目录，平台不提供工作区维度的数据目录——**是否需要按工作区隔离数据，由插件开发者依据插件语义决定**（与 config 的 `scope: 'workspace'` 同为「插件声明、平台执行」哲学：想隔离就声明 ws scope 的 config 并在数据中自行带键）。
+
+约定（平台不校验，属开发者契约）：
+- 需要隔离时以 `workspaceId` 为键（建表列 / 子目录名均可）；**不得用工作区目录路径作键**（路径会迁移、重命名）
+- 平台仅在删除工作区时发出 `workspaceClosed { workspaceId, reason: 'deleted' }`，随后停止该 ws 的 multi 实例；**不代管插件数据清理**（`deleteWorkspacePluginConfig` 只删 `config.<wsId>.json`）
+- 卸载 `keepData` 的粒度是**插件级**整体数据目录，与工作区无关
+- 敏感值（keychain secrets）为插件级全局，不随工作区隔离；若插件数据按 ws 隔离而凭据需要区分，由插件自行在值内编码 workspaceId
+
 ## 5. service 多实例生命周期
 
 ### 5.1 实例键

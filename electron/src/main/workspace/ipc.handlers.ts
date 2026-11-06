@@ -85,7 +85,9 @@ export function registerWorkspaceHandlers(opts: WorkspaceIpcOpts = {}): void {
       // 孤儿文件不参与读取（按 wsId 寻址天然跳过），物理残留无害
     }
     void stopAllWorkspaceInstances(id).catch(() => undefined);
-    emitPluginEvent('workspaceClosed', { workspaceId: id });
+    // 插件面契约：closed 目前仅由「删除」发出；reason 显式化，供插件清理按 ws 隔离的数据
+    // （2026-10-17 spec §4.5 —— 平台不代管孤儿数据，只提供信号）
+    emitPluginEvent('workspaceClosed', { workspaceId: id, reason: 'deleted' });
     return;
   });
 

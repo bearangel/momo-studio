@@ -251,6 +251,8 @@ module.exports.createTools = function (pluginCtx) {
 ### 5.2 hooks.json 与 handler
 
 > 事件语义补注（2026-10-16 实施裁定）：任务终态会**双发** `taskStatusChanged` + `taskCompleted`（同 payload，后者是便利别名）；`workspaceOpened` 在「创建」与「切换」时都会发出，payload 带 `reason: 'created' | 'switched'` 区分。
+>
+> `workspaceClosed` 目前仅在工作区**删除**时发出，payload `{ workspaceId, reason: 'deleted' }`——插件清理按工作区隔离的数据依赖此信号。
 
 ```jsonc
 { "hooks": {

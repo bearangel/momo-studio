@@ -48,12 +48,14 @@ export interface PanelHostHandlers {
   subscribe(events: string[]): Promise<{ ok: string[]; rejected: string[] }>;
   /** RPC 透传到本插件 service（pluginId 由组装层闭包绑定） */
   callService(method: string, params: unknown): Promise<unknown>;
+  /** 系统目录选择（app:pickDirectory）——返回绝对路径，用户取消 null */
+  pickDirectory(opts?: { title?: string; defaultPath?: string }): Promise<string | null>;
   /** 三振断开回调（宿主切断开态 UI） */
   onDisconnect(): void;
 }
 
 /** 面板→host 白名单 */
-const INBOUND_TYPES = new Set(['ready', 'app:getContext', 'app:subscribe', 'plugin:callService']);
+const INBOUND_TYPES = new Set(['ready', 'app:getContext', 'app:subscribe', 'plugin:callService', 'app:pickDirectory']);
 
 /** 单条消息大小上限（256KB） */
 const MAX_MESSAGE_BYTES = 256 * 1024;
@@ -70,6 +72,7 @@ interface InboundMsg {
   events?: string[];
   method?: string;
   params?: unknown;
+  opts?: unknown;
   [key: string]: unknown;
 }
 
@@ -96,6 +99,7 @@ export class PanelChannel {
   private violations = 0;
   private disconnected = false;
   private readonly subscribed = new Set<string>();
+  private picking = false;
 
   // 令牌桶状态
   private tokens = RATE_LIMIT_PER_SEC;
@@ -237,6 +241,29 @@ export class PanelChannel {
           this.pushResult(id, result ?? null);
         } catch (err) {
           this.pushResult(id, undefined, err instanceof Error ? err.message : String(err));
+        }
+        return;
+      }
+      case 'app:pickDirectory': {
+        // 模态对话框防刷：进行中再次请求直接拒绝（不排队）
+        if (this.picking) {
+          this.pushResult(id, undefined, '目录选择进行中，请先完成或取消');
+          return;
+        }
+        const opts =
+          data.opts && typeof data.opts === 'object'
+            ? (data.opts as { title?: unknown; defaultPath?: unknown })
+            : {};
+        const clean: { title?: string; defaultPath?: string } = {};
+        if (typeof opts.title === 'string') clean.title = opts.title;
+        if (typeof opts.defaultPath === 'string') clean.defaultPath = opts.defaultPath;
+        this.picking = true;
+        try {
+          this.pushResult(id, await this.handlers.pickDirectory(clean));
+        } catch (err) {
+          this.pushResult(id, undefined, err instanceof Error ? err.message : String(err));
+        } finally {
+          this.picking = false;
         }
         return;
       }

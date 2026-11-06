@@ -1179,7 +1179,7 @@ export interface PluginPanelInfo {
 
 /** config 属性声明（主进程归一化后形状；v1 子集） */
 export interface PluginConfigPropertyDecl {
-  type: 'string' | 'number' | 'boolean';
+  type: 'string' | 'number' | 'boolean' | 'path';
   title?: string;
   sensitive?: boolean;
   /** 工作空间维度 v1.1：缺省 global（设置页「按工作空间」徽标依据） */
