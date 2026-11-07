@@ -10,7 +10,7 @@
 // 1.8.0：HubResourceMeta.ownerNodeId? / ResourcePublishedEvent.ownerNodeId? /
 // hello nodeName? 语义注释 + 错误码 name_conflict（403 not_owner 为 HTTP 端点
 // 错误体扩展，不走 ws 错误码表），PROTOCOL_VERSION 对齐——锁八件事：
-// ① pin 生效：node_modules 实装 momo-hub-protocol 版本 = pin 目标（0.6.0）——
+// ① pin 生效：node_modules 实装 momo-hub-protocol 版本 = pin 目标（0.6.1）——
 //    防「lockfile-only 更新后未 install」/「pin 漂移」两类事故（构建新鲜度红线）
 // ② v0.1.5 语义目录样本（hub 乱序发布产物，形状锚自 hub 仓 resources-latest-semver.test.ts
 //    与裁定书 §1 curl 实录）过 validateHubCatalog——生产消费链（momo-hub.ts load）同校验器
@@ -108,9 +108,9 @@ function manifestSample(resources: unknown): unknown {
   };
 }
 
-describe('hub pin v0.6.0（1.10.0 平行模式——本地 link override 过渡，tag v0.6.0 后零改动）', () => {
-  it('pin 生效：实装 momo-hub-protocol 版本 = 0.6.0（electron/package.json #v0.6.0）', () => {
-    expect(pkg.version).toBe('0.6.0');
+describe('hub pin v0.6.1（1.10.0 平行模式 + 单节点解散修复）', () => {
+  it('pin 生效：实装 momo-hub-protocol 版本 = 0.6.1（electron/package.json #v0.6.1）', () => {
+    expect(pkg.version).toBe('0.6.1');
   });
 
   it('v0.1.5 语义目录样本过 validateHubCatalog（生产消费链同校验器）', () => {
