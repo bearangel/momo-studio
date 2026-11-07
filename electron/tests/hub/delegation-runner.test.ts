@@ -1357,3 +1357,26 @@ describe('平行草稿生命周期监督器', () => {
     expect(h.store.get('t-r1')?.state).toBe('draft');
   });
 });
+
+// ── 降级防护（2026-11-07 双会话事故）：executor 快路径不触发 arranged 回写 ──
+
+describe('平行草稿快路径（安排即启动竞态）', () => {
+  it('行从 draft 直接 in_progress（executor 先于监督器）：不发 arranged 拍，直接接管', async () => {
+    const h = makeHarness();
+    h.setBinding('g-peer', 'ws-bind-1', '研发空间');
+    await h.runner.handleAssigned(draftEvt('t-f1'));
+    await vi.advanceTimersByTimeAsync(0);
+
+    // 跳过 assigned 中间态——executor 自动放行直接推到 in_progress + 执行会话
+    h.setDraftStatus('t-f1', 'in_progress', 'sess-fast-1');
+    await vi.advanceTimersByTimeAsync(500);
+
+    const arranged = h.log.reports.filter((r) => r.payload.progress?.kind === 'arranged');
+    expect(arranged).toHaveLength(0);
+    const running = h.log.reports.filter((r) => r.payload.status === 'running');
+    expect(running).toHaveLength(1);
+    expect(running[0]!.payload.sessionId).toBe('sess-fast-1');
+    // record 态仍推进离开 draft（防下拍重复评估）
+    expect(h.store.get('t-f1')?.state).toBe('running');
+  });
+});

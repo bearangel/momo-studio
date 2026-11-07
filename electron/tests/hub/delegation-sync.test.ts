@@ -811,3 +811,24 @@ describe('delegation-sync — 平行草稿生命周期拍', () => {
     expect(w.rows.get('T-100')!.status).toBe('assigned');
   });
 });
+
+// ── 1.10.0 回归锁：arranged 同步不得降级已启动行（2026-11-07 双会话事故）──
+// 事故链：executor 先于监督器 arranged 检测启动任务（in_progress）→ syncState
+// 把 'arranged'→'assigned' 写回 → 运行中行被降级 → crash 后 executor 再次
+// 放行 → 双执行会话。锁：arranged 映射仅对仍处 draft 的行生效。
+
+describe('delegation-sync — arranged 同步降级防护', () => {
+  it('行已 in_progress 时 updateState(arranged) 不得写回 assigned（防降级）', () => {
+    const w = makeWorld([delegatedRow({ status: 'in_progress' })], 'node-self');
+    const wrapped = createDelegationSync(w.ports).wrapWorkerStore(fakeStore());
+    wrapped.updateState('hub-task-1', 'arranged');
+    expect(w.rows.get('T-100')!.status).toBe('in_progress');
+  });
+
+  it('行仍为 draft 时 arranged → assigned 正常映射（原语义保留）', () => {
+    const w = makeWorld([delegatedRow({ status: 'draft' })], 'node-self');
+    const wrapped = createDelegationSync(w.ports).wrapWorkerStore(fakeStore());
+    wrapped.updateState('hub-task-1', 'arranged');
+    expect(w.rows.get('T-100')!.status).toBe('assigned');
+  });
+});

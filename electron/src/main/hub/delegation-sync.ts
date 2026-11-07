@@ -336,6 +336,11 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
         if (!row) return;
         const next = WORKER_STATE_TO_TASK[state];
         if (isTerminal(row.status) && row.status !== next) return; // 终态粘滞
+        // 1.10.0 降级防护（2026-11-07 双会话事故）：arranged→assigned 仅对仍处
+        // draft 的行生效——executor 可能在监督器 arranged 检测前就已启动任务
+        // （in_progress），此时写回 assigned 会把运行中行降级出候选池，crash 后
+        // executor 二次放行 → 双执行会话。updateTask 绕过状态机断言，须在此自守。
+        if (state === 'arranged' && row.status !== 'draft') return;
         const extra: Partial<TaskRow> =
           state === 'done' && row.completedAt === null ? { completedAt: ports.now() } : {};
         // P2-1 worker 侧对称面：failed 附因落 errorMessage（leader handleTerminal 同款

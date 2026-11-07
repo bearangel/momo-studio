@@ -537,12 +537,21 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
         continue;
       }
       const arranged = row.status !== 'draft';
-      if (arranged && record.state === 'draft') {
+      // arranged 拍仅限「安排后待执行」中间态——executor 快路径（安排即启动，
+      // 监督器首拍已 in_progress）不发 arranged、直接进入接管（发送方收到
+      // received→running，诚实反映；且避免 record.state 走 arranged 后 syncState
+      // 对运行中行的任何回写窗口）
+      const arrangedPending =
+        arranged && row.status !== 'in_progress' && record.state === 'draft';
+      if (arrangedPending) {
         store.updateState(record.taskId, 'arranged');
         void sendReport(record.taskId, {
           status: 'pending',
           progress: { lastSeq: 0, excerpt: '节点拥有者已安排执行', kind: 'arranged' },
         });
+      } else if (arranged && record.state === 'draft') {
+        // 快路径仍推进 record 态（离开 draft），但不发拍不回写行
+        store.updateState(record.taskId, 'arranged');
       }
       const rec = store.get(record.taskId);
       if (rec === null) continue;
