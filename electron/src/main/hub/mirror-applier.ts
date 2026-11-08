@@ -39,6 +39,7 @@ import { listTeams, createTeam, deleteTeam } from '../agent/team';
 import { createGroupBindingStore } from './group-binding-store';
 import { listProviders, getProvider, updateProvider, listProviderModels, type ModelProvider } from '../agent/provider-crud';
 import { listRegistered, setMcpEnabledDefinition } from '../mcp/host-manager';
+import { readBuiltinManifestBySlug } from '../agent/builtin';
 import { listInstalled, getSkillsDir } from '../skill/zip-uploader';
 import { listPlugins, getPlugin, isPluginEnabled, setPluginEnabled } from '../plugin/registry';
 import { updateGlobalSettings, getGlobalSettings } from '../settings/crud';
@@ -47,7 +48,7 @@ import { resolveTmpDir } from '../paths';
 import { HubCatalogStaleError, HubPinnedVersionUnavailableError, HubSlugConflictError, installHubPackage } from '../resource/hub-install';
 import { installPackage } from '../marketplace/installer';
 import { readBundledCatalog } from '../marketplace/client';
-import type { MarketplaceItem } from '../marketplace/types';
+import { isValidSlug, type MarketplaceItem } from '../marketplace/types';
 import type { ResourceType } from '../resource/types';
 import { compareVersions } from '../resource/version-compare';
 import { agentManifestYaml } from './publish';
@@ -590,7 +591,35 @@ async function applyConfig(
         }
       }
       if (!existing) {
-        // 本机已装 → 内置市场目录 → catalog 自愈 → 失败提示（软失败）
+        // builtin 预设自愈（2026-11-08）：源侧 source='builtin' 的预设 agent
+        // （resources/agents/*.yaml——随 app 分发，目标机必然在位）按 YAML 逐字
+        // 重建：确定性 id builtin-<slug> + source='builtin'，与源侧语义一致；
+        // 模型字段留空（绑定交 balanceMemberModelBinding 四级配平链）。
+        // 修前缺口：重建链只有「本地已装 → catalog」两腿，catalog 仅
+        // general-assistant——builtin 预设引用全灭软失败并连锁 team（实测
+        // ws2 → yyyy-1 十一条 unresolved）。
+        if (isValidSlug(m.slug)) {
+          try {
+            const { def: parsed } = readBuiltinManifestBySlug(m.slug);
+            if (parsed.slug === m.slug) {
+              saveAgentDefinition({
+                ...parsed,
+                id: `builtin-${parsed.slug}`,
+                source: 'builtin',
+                workspaceId: null,
+                modelProviderId: null,
+                modelName: parsed.modelName ?? '',
+                thinkingJson: parsed.thinkingJson ?? null,
+              });
+              existing = listAgentDefinitions().find((d) => d.slug === m.slug);
+            }
+          } catch {
+            // YAML 不存在（非 builtin 预设的私有 slug）→ 维持软失败
+          }
+        }
+      }
+      if (!existing) {
+        // 本机已装 → 内置市场目录 → catalog 自愈 → builtin 预设 → 失败提示（软失败）
         unresolved.push(`agent:${m.slug}`);
         continue;
       }

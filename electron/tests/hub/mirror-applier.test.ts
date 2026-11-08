@@ -28,6 +28,7 @@ import { closeDb, getDb, runMigrations } from '../../src/main/storage/db';
 import { createGroupBindingStore } from '../../src/main/hub/group-binding-store';
 import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keychain';
 import { saveAgentDefinition, addMember, updateAgentDefinition } from '../../src/main/agent/crud';
+import { setBuiltinAgentsDir } from '../../src/main/agent/builtin';
 import { createTeam } from '../../src/main/agent/team';
 import { createProvider, listProviders, providerApiKeyRef, upsertProviderModel } from '../../src/main/agent/provider-crud';
 import { registerMcpDefinition, setMcpEnabledDefinition, listRegistered } from '../../src/main/mcp/host-manager';
@@ -1515,6 +1516,87 @@ describe('applyMirrorSnapshot catalog 自愈', () => {
     if (!second.ok) return;
     // ghost skill 两轮稳定软失败；catalog agent 两轮幂等补装
     expect(second.unresolvedRefs ?? []).toEqual(['skill:brainstorming']);
+  });
+});
+
+// ── builtin 预设自愈（2026-11-08：主从同步 unresolvedRefs 11 条修复回归锁）──
+// 病灶：源侧 source='builtin' 的预设 agent（resources/agents/*.yaml）随快照按
+// slug 引用携带；目标重建链此前只有「本地已装 → catalog 自愈」两腿，而内置
+// catalog 仅 general-assistant——builtin YAML 预设（coder/pm-agent/…）在目标
+// 全灭 → agent+team 连锁软失败（实测 ws2 → yyyy-1 十一条）。
+describe('applyMirrorSnapshot builtin 预设自愈', () => {
+  const builtinDir = path.join(tmpRoot, 'builtin-agents-fixture');
+
+  beforeEach(() => {
+    fs.mkdirSync(builtinDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(builtinDir, 'coder.yaml'),
+      customYaml('编程助手', 'coder'),
+    );
+    setBuiltinAgentsDir(builtinDir);
+  });
+  afterEach(() => {
+    setBuiltinAgentsDir(null);
+  });
+
+  it('builtin slug 引用目标未装、catalog 亦无 → YAML 逐字重建（source=builtin / 确定性 id / 模型留空）+ 成员落地', async () => {
+    const archive = await makeArchive(baseManifest({
+      workspaceName: 'builtin-heal',
+      config: {
+        agentMembers: [
+          { name: 'coder', slug: 'coder' },
+          { name: '幽灵', slug: 'ghost-agent' }, // YAML 也没有 → 维持软失败
+        ],
+        teams: [], mcpEnabled: [], skills: [], pluginsEnabled: [], providerRefs: [], prefs: {},
+      },
+    }));
+    const outcome = await applyMirrorSnapshot(
+      applyPayload({ workspaceName: 'builtin-heal' }),
+      { fetchSnapshotArchive: async () => ({ bytes: archive.bytes, checksum: archive.checksum }), installResource: async () => undefined },
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    // 幽灵维持软失败；coder 不再入列（修复前为 ['agent:coder', 'agent:ghost-agent']）
+    expect(outcome.unresolvedRefs).toEqual(['agent:ghost-agent']);
+
+    // 定义形态契约：确定性 id + source=builtin + 模型字段留空（绑定交四级配平链）
+    const def = listAgentDefinitions().find((d) => d.slug === 'coder');
+    expect(def).toBeDefined();
+    expect(def!.id).toBe('builtin-coder');
+    expect(def!.source).toBe('builtin');
+    expect(def!.modelProviderId).toBeNull();
+
+    // 成员落地（身份契约=slug——显示名随目标侧定义，catalog 自愈用例同款）
+    const members = listMembers(listWorkspaces().find((w) => w.name === 'builtin-heal')!.id);
+    expect(members).toHaveLength(1);
+    expect(getAgentDefinition(members[0]!.agentDefinitionId)?.slug).toBe('coder');
+    expect(members[0]!.agentName).toBe('编程助手');
+  });
+
+  it('自愈的 builtin 成员可进团队：连锁 team unresolved 一并消除', async () => {
+    const archive = await makeArchive(baseManifest({
+      workspaceName: 'builtin-team',
+      config: {
+        agentMembers: [
+          { name: 'coder', slug: 'coder' },
+          { name: 'Momo', slug: 'general-assistant' }, // catalog 腿（真实内置目录）
+        ],
+        teams: [{ name: '研发组', leader: 'coder', members: ['coder', 'Momo'] }],
+        mcpEnabled: [], skills: [], pluginsEnabled: [], providerRefs: [], prefs: {},
+      },
+    }));
+    const outcome = await applyMirrorSnapshot(
+      applyPayload({ workspaceName: 'builtin-team' }),
+      { fetchSnapshotArchive: async () => ({ bytes: archive.bytes, checksum: archive.checksum }), installResource: async () => undefined },
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    // 修复前：agent:coder + team:研发组:coder + team:研发组 三连软失败
+    expect(outcome.unresolvedRefs ?? []).toEqual([]);
+    const teams = listTeams(listWorkspaces().find((w) => w.name === 'builtin-team')!.id);
+    expect(teams).toHaveLength(1);
+    // 成员名随目标侧定义名（编程助手=coder YAML 名）；团队按 manifest 名对齐成功
+    expect(teams[0]!.members.map((m) => m.agentName).sort()).toEqual(['Momo', '编程助手']);
   });
 });
 
