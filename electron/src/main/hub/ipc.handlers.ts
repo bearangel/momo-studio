@@ -293,8 +293,12 @@ export function registerHubIpc(): void {
     getTask: (taskId) => getTask(taskId),
     workspaceNameOf: (workspaceId) => listWorkspaces().find((w) => w.id === workspaceId)?.name ?? null,
     resolveTarget: (routing, workspaceName, opts) =>
-      // M5.3：团队重派走与首派同一版本闸（resolveRemoteTarget opts.team 透传）
+      // M5.3：团队重派走与首派同一版本闸（resolveRemoteTarget opts.team 透传）；
+      // 1.10.0：opts.draft 透传（peer 草稿重派——目标绑定/版本门同闸）
       resolveRemoteTarget(routing, workspaceName, dispatchSubmitPorts, opts),
+    // 1.10.0 平行组判定：组模型 mode（草稿重派分流）
+    isPeerGroup: async (groupId) =>
+      (await dispatchSubmitPorts.listGroups()).find((g) => g.groupId === groupId)?.mode === 'peer',
     // M5.3 团队重派：与首派同一快照展开端口（listTeams 当前成员 + leader）
     getTeamSnapshot: (workspaceId, teamId) => dispatchSubmitPorts.getTeamSnapshot(workspaceId, teamId),
     // 同上：delegate rejection 被 retryDispatch 吞掉（dispatched=false 留待处理），不包

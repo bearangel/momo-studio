@@ -832,3 +832,60 @@ describe('delegation-sync — arranged 同步降级防护', () => {
     expect(w.rows.get('T-100')!.status).toBe('assigned');
   });
 });
+
+// ── 1.10.0 retryDispatch 平行草稿分支（编辑对齐：改道 peer 组节点）──────────
+
+describe('retryDispatch — peer 草稿重派', () => {
+  it('peer 组 node 行：draft 白名单载荷（无 tier/team/agent）+ origin=peer_draft + resolveTarget 带 draft 闸', async () => {
+    const row = delegatedRow({
+      status: 'pending',
+      routing: { mode: 'node', groupId: 'g-peer', targetNodeId: 'node-peer-1' },
+      priority: 7,
+    });
+    const w = makeRedispatchWorld(row);
+    w.ports.isPeerGroup = async (groupId) => groupId === 'g-peer';
+    const result = await retryDispatch(row.id, w.ports);
+    expect(result.dispatched).toBe(true);
+    const brief = w.delegateBriefs[0]!;
+    expect(brief.task).toEqual({
+      title: row.title,
+      prompt: row.description.trim() !== '' ? row.description : row.title,
+      draft: true,
+      priority: 7,
+    });
+    expect(w.resolveCalls[0]).toMatchObject({ draft: true });
+    // 复位段 origin 标记（发送方行方向判别）
+    expect(w.updates.some((u) => u.patch.origin === 'peer_draft')).toBe(true);
+  });
+
+  it('peer 组行带执行编排（team/agent）→ 行 failed 人话，零派发', async () => {
+    const row = delegatedRow({
+      status: 'pending',
+      routing: { mode: 'node', groupId: 'g-peer', targetNodeId: 'node-peer-1' },
+      targetTeamId: 'team-1',
+    });
+    const w = makeRedispatchWorld(row);
+    w.ports.isPeerGroup = async () => true;
+    const result = await retryDispatch(row.id, w.ports);
+    expect(result.dispatched).toBe(false);
+    expect(w.delegateBriefs).toHaveLength(0);
+    expect(w.updates.some((u) => u.patch.status === 'failed' && typeof u.patch.errorMessage === 'string')).toBe(true);
+  });
+
+  it('lf 组 node 行（isPeerGroup=false）：旧语义零变化（tier 载荷 + 无 origin 标记）', async () => {
+    const row = delegatedRow({
+      status: 'pending',
+      routing: { mode: 'node', groupId: 'g-lf', targetNodeId: 'node-b' },
+    });
+    const w = makeRedispatchWorld(row);
+    w.ports.isPeerGroup = async () => false;
+    await retryDispatch(row.id, w.ports);
+    const brief = w.delegateBriefs[0]!;
+    expect(brief.task).toEqual({
+      title: row.title,
+      prompt: row.description.trim() !== '' ? row.description : row.title,
+      permissionTier: 'confirm',
+    });
+    expect(w.updates.some((u) => u.patch.origin === 'peer_draft')).toBe(false);
+  });
+});

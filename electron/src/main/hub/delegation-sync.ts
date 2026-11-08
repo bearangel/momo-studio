@@ -389,6 +389,8 @@ export interface RedispatchPorts {
   ): { name: string; members: Array<{ agentName: string; isLeader: boolean }> } | null;
   /** 既有委派管道（leader-only；目标离线即拒 node_offline） */
   delegate(brief: DelegationTaskBrief): Promise<{ taskId: string }>;
+  /** 1.10.0 平行组判定（组模型 mode==='peer'）——草稿重派分流的数据源；可选 */
+  isPeerGroup?(groupId: string): Promise<boolean>;
   updateTask(id: string, patch: Partial<TaskRow>): void;
   now(): number;
 }
@@ -435,6 +437,20 @@ export async function retryDispatch(
   if (!workspaceName) {
     throw new Error(`任务 ${taskId} 的工作空间已不存在，无法重派`);
   }
+  // 1.10.0 平行模式：node 变体 + peer 组 → 草稿重派（draft 变体白名单载荷，
+  // 无 agentSlug/team/tier——与 submitRoutedTask 首派同形；origin 标 peer_draft
+  // 供看板方向判别。检测端口可选：缺省视为非 peer（旧接线零变化））
+  const peerTarget =
+    row.routing.mode === 'node' &&
+    (await ports.isPeerGroup?.(row.routing.groupId)) === true;
+  if (peerTarget && (row.targetTeamId !== null || row.assigneeAgentId !== null)) {
+    ports.updateTask(taskId, {
+      status: 'failed',
+      errorMessage: '平行组草稿不能携带执行编排（团队/agent 指派），请编辑清空后重派',
+      completedAt: ports.now(),
+    });
+    return { dispatched: false, nodeId: null, delegationId: null };
+  }
   // M5.3 团队展开先于复位（错误路径零副作用——解散/形态失效不闪 pending）：
   // 展开失败均为永久性失败 → 行转 failed 人话，不派不分流
   let teamPayload: { members: Array<{ name: string; isLeader: boolean }> } | undefined;
@@ -462,11 +478,18 @@ export async function retryDispatch(
       return { dispatched: false, nodeId: null, delegationId: null };
     }
   }
-  // 复位先行：旧 delegation_id 属旧账本行，重派=换 id（一义一名，禁续用）
-  ports.updateTask(taskId, { status: 'pending', errorMessage: null, delegationId: null });
+  // 复位先行：旧 delegation_id 属旧账本行，重派=换 id（一义一名，禁续用）；
+  // peer 草稿重派同步标 origin（看板方向判别/回归语义与首派一致）
+  ports.updateTask(taskId, {
+    status: 'pending',
+    errorMessage: null,
+    delegationId: null,
+    ...(peerTarget ? { origin: 'peer_draft' as const } : {}),
+  });
 
   const targetNodeId = await ports.resolveTarget(row.routing, workspaceName, {
     team: teamPayload !== undefined,
+    ...(peerTarget ? { draft: true } : {}),
   });
   if (targetNodeId === null) {
     return { dispatched: false, nodeId: null, delegationId: null }; // 无候选：留待处理
@@ -476,13 +499,21 @@ export async function retryDispatch(
       groupId: row.routing.groupId,
       targetNodeId,
       workspaceName,
-      task: {
-        title: row.title,
-        prompt: row.description.trim() !== '' ? row.description : row.title,
-        permissionTier,
-        // M5.3：team 段随重派载荷重建（不带 agentSlug——协议互斥）
-        ...(teamPayload !== undefined ? { team: teamPayload } : {}),
-      },
+      task: peerTarget
+        ? {
+            // 平行组草稿重派：draft 白名单载荷（无编排四键——hub peer 守卫）
+            title: row.title,
+            prompt: row.description.trim() !== '' ? row.description : row.title,
+            draft: true,
+            ...(row.priority > 0 ? { priority: row.priority } : {}),
+          }
+        : {
+            title: row.title,
+            prompt: row.description.trim() !== '' ? row.description : row.title,
+            permissionTier,
+            // M5.3：team 段随重派载荷重建（不带 agentSlug——协议互斥）
+            ...(teamPayload !== undefined ? { team: teamPayload } : {}),
+          },
     });
     // D5：重派同样回写已解析目标（group 变体换新 targetNodeId）
     const resolvedRouting: TaskRouting =

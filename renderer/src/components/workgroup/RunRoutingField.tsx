@@ -132,7 +132,16 @@ export function RunRoutingField({
       : precheck.mirrored
         ? '工作组不可达（hub 离线？），当前仅可本机执行'
         : '未镜像到任何工作组——先在监控台镜像工作空间后可外派';
-  const gated = precheck === null || precheck.mirrored === false || groups.length === 0;
+  // 1.10.0 修正：镜像前置仅约束 lf 委派（worker 按名解析镜像副本）；平行组
+  // 草稿落接收方绑定空间、与镜像无关——存在 peer 组（或当前值即 peer 节点）
+  // 时不再整体降级仅本机（否则未镜像环境永远选不了节点，spec §2 裁定 4）
+  const peerReachable =
+    groups.some((g) => g.mode === 'peer') ||
+    (value.mode !== 'local' && groups.find((g) => g.groupId === value.groupId)?.mode === 'peer');
+  const gated =
+    precheck === null ||
+    groups.length === 0 ||
+    (precheck.mirrored === false && !peerReachable);
 
   // 数据失配防御：value 引用的组已不在清单 → 展示回退本机；peer 组无组内调度
   // （value 残留 group 变体时同样回退本机展示——提交侧另有校验）

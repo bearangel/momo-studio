@@ -8,8 +8,16 @@
 // 仅非终态任务渲染入口（终态任务的执行事实已定，编辑元数据无意义）。
 import { useEffect, useState, type FormEvent } from 'react';
 import { useTaskStore } from '../../stores/task.store';
+import { RunRoutingField } from '../workgroup/RunRoutingField';
 import { ipc } from '../../ipc/client';
-import type { TaskRow, WorkspaceAgentMember } from '../../ipc/types';
+import { useWorkspaceStore } from '../../stores/workspace.store';
+import type {
+  PermissionTier,
+  RoutingPrecheckResult,
+  TaskRow,
+  TaskRouting,
+  WorkspaceAgentMember,
+} from '../../ipc/types';
 import { parseRecurrence, serializeRecurrence, type RecurrencePreset } from '../../lib/recurrence';
 import { Dialog } from '../ui/Dialog';
 import { Button } from '../ui/Button';
@@ -68,6 +76,15 @@ export function EditTaskDialog({ open, onClose, onSaved, task, workspaceId }: Ed
   const [sessions, setSessions] = useState<Array<{ id: string; title: string }>>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 1.10.0 编辑对齐：执行位置（与新建任务同款 RunRoutingField）。仅「未派发态」
+  // 可改道（无 delegation_id 或已失败）；已派发在账行隐藏（改道走失败重派语义）
+  const [routing, setRouting] = useState<TaskRouting>(task.routing ?? { mode: 'local' });
+  const [permissionTier, setPermissionTier] = useState<PermissionTier>('confirm');
+  const [precheck, setPrecheck] = useState<RoutingPrecheckResult | null>(null);
+  const canRoute = task.delegationId == null || task.status === 'failed';
+  const peerNodeSelected =
+    routing.mode === 'node' &&
+    precheck?.groups.find((g) => g.groupId === routing.groupId)?.mode === 'peer';
 
   // 预填是「打开瞬间的快照」——依赖收窄到 open：父组件（TaskDetailPanel）
   // 5s 轮询会用新对象引用刷新 task prop，若 task 留在依赖里，用户填写中的
@@ -91,7 +108,19 @@ export function EditTaskDialog({ open, onClose, onSaved, task, workspaceId }: Ed
     setEveryUnit(p.everyUnit ?? 'm');
     setRecTime(p.time ?? '09:00');
     setWeekday(String(p.weekday ?? 1));
+    setRouting(task.routing ?? { mode: 'local' });
+    setPermissionTier('confirm');
     setError(null);
+    // 预检失败（hub 离线等）→ null：RunRoutingField 呈仅本机态，编辑退化为旧行为
+    const wsName = useWorkspaceStore
+      .getState()
+      .workspaces.find((w) => w.id === workspaceId)?.name ?? '';
+    if (wsName !== '') {
+      ipc.hub
+        .routingPrecheck({ workspaceName: wsName })
+        .then((r) => setPrecheck(r))
+        .catch(() => setPrecheck(null));
+    }
     ipc.agent.listMembers(workspaceId).then((list: WorkspaceAgentMember[]) => {
       setAssignments(list.map((a) => ({ instanceId: a.instanceId, agentName: a.agentName })));
     });
@@ -102,10 +131,12 @@ export function EditTaskDialog({ open, onClose, onSaved, task, workspaceId }: Ed
 
   if (!open) return null;
 
+  // peer 草稿无执行编排目标——委派目标校验豁免（目标区已退场）
   const targetMissing =
-    (targetKind === 'agent' && !assigneeAgentId) ||
-    (targetKind === 'team' && !targetTeamId) ||
-    (targetKind === 'session' && !targetSessionId);
+    !peerNodeSelected &&
+    ((targetKind === 'agent' && !assigneeAgentId) ||
+      (targetKind === 'team' && !targetTeamId) ||
+      (targetKind === 'session' && !targetSessionId));
 
   const handleSubmit = async (e: FormEvent): Promise<void> => {
     e.preventDefault();
@@ -126,12 +157,19 @@ export function EditTaskDialog({ open, onClose, onSaved, task, workspaceId }: Ed
         title: title.trim(),
         description,
         priority: priorityNum,
-        assigneeAgentId: targetKind === 'agent' ? assigneeAgentId : null,
-        targetTeamId: targetKind === 'team' ? targetTeamId : null,
-        targetSessionId: targetKind === 'session' ? targetSessionId : null,
+        ...(canRoute ? { routing } : {}),
+        // peer 草稿不带执行编排（hub 白名单互斥）——三目标置空
+        assigneeAgentId: peerNodeSelected ? null : targetKind === 'agent' ? assigneeAgentId : null,
+        targetTeamId: peerNodeSelected ? null : targetKind === 'team' ? targetTeamId : null,
+        targetSessionId: peerNodeSelected ? null : targetKind === 'session' ? targetSessionId : null,
         recurrenceRule: serializeRecurrence(rulePreset),
         scheduledAt: scheduledAt ? new Date(scheduledAt).getTime() : null,
       });
+      // 外派路由：保存后立即派发（与新建任务的提交即派发同节奏；失败行留
+      // 待派发卡重试——重派入口语义不变）
+      if (canRoute && routing.mode !== 'local') {
+        await ipc.hub.retryDispatch({ taskId: task.id });
+      }
       onSaved();
       onClose();
     } catch (err) {
@@ -156,6 +194,17 @@ export function EditTaskDialog({ open, onClose, onSaved, task, workspaceId }: Ed
             className="mt-1 min-h-[80px] w-full rounded border border-subtle bg-surface-2 px-3 py-2 text-[13px] text-primary focus:border-focus focus:outline-none"
           />
         </div>
+        {canRoute && precheck !== null && (
+          <RunRoutingField
+            precheck={precheck}
+            value={routing}
+            onChange={setRouting}
+            permissionTier={permissionTier}
+            onPermissionTierChange={setPermissionTier}
+          />
+        )}
+        {!peerNodeSelected && (
+        <>
         <Select
           label="委派目标类型"
           value={targetKind}
@@ -203,6 +252,8 @@ export function EditTaskDialog({ open, onClose, onSaved, task, workspaceId }: Ed
               </option>
             ))}
           </Select>
+        )}
+        </>
         )}
         <Select label="优先级" value={priority} onChange={(e) => setPriority(e.target.value as Priority)}>
           <option value="low">低</option>
