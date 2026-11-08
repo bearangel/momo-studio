@@ -341,7 +341,7 @@ describe('GroupMonitor — 平行组（1.10.0）', () => {
     });
   });
 
-  it('PR-1. peer 组：查看按钮全组退场；节点卡 mono 行带绑定态；平行模式徽标在场', () => {
+  it('PR-1. peer 组：查看按钮全组退场；节点卡 mono 行带绑定态；模式徽标在场（两模式都出）', () => {
     useHubGroupStore.setState({ groups: [GROUP_PEER] });
     render(<GroupMonitor onOpenView={onOpenView} />);
     expect(screen.getByText('平行模式')).toBeInTheDocument();
@@ -350,9 +350,10 @@ describe('GroupMonitor — 平行组（1.10.0）', () => {
     expect(screen.getByText(/已绑定 · 测试空间/)).toBeInTheDocument();
   });
 
-  it('PR-2. lf 组零变化：查看按钮在场，无绑定态行与统一镜像', () => {
+  it('PR-2. lf 组：查看按钮在场，无绑定态行；主从模式徽标在场（2026-11-08 两模式都出）', () => {
     useHubGroupStore.setState({ groups: [GROUP_DEV] });
     render(<GroupMonitor onOpenView={onOpenView} />);
+    expect(screen.getByText('主从模式')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: '查看' }).length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: '同步配置' })).toBeInTheDocument(); // lf 组长同名入口（开 lf 向导）
     expect(screen.queryByText(/已绑定 ·/)).not.toBeInTheDocument();

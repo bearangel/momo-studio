@@ -110,11 +110,12 @@ export function GroupMonitor({ onOpenView }: GroupMonitorProps) {
     <div className="flex min-w-0 flex-1 flex-col bg-canvas">
       <div className="flex items-center gap-2.5 border-b border-subtle px-4 py-3">
         <h2 className="text-base font-medium text-primary">{group.groupName}</h2>
-        {peer && (
-          <Badge tone="violet" className="h-auto shrink-0 px-1.5 py-0.5 text-[10px] leading-none">
-            平行模式
-          </Badge>
-        )}
+        <Badge
+          tone={peer ? 'violet' : 'neutral'}
+          className="h-auto shrink-0 px-1.5 py-0.5 text-[10px] leading-none"
+        >
+          {peer ? '平行模式' : '主从模式'}
+        </Badge>
         {code !== undefined && (
           <span className="flex min-w-0 items-center gap-1.5">
             <Badge className="font-mono">邀请码 {code}</Badge>
