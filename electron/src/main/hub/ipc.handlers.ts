@@ -21,6 +21,7 @@ import {
   type SubmitRoutedTaskInput,
 } from './dispatch-submit';
 import { retryDispatch, type RedispatchPorts } from './delegation-sync';
+import { buildDispatchSubmitPorts } from './dispatch-ports';
 import { assertBoardGroupValid, createTaskFromForm } from '../task/ipc.handlers';
 import { insertTaskWithRelations } from '../task/relations';
 import { getWorkspace } from '../workspace/crud';
@@ -214,72 +215,10 @@ export function registerHubIpc(): void {
   // 路由提交链两通道（M2.1 T8）：三模式统一落点 submitRoutedTask（local 委托
   // createTaskFromForm；group 走 pickWorker+既有委派管道+delegation_id 回写；
   // node 直发）+ 预检概要（弹窗「执行位置」区数据源）。编排见 dispatch-submit.ts。
-  const dispatchSubmitPorts: DispatchSubmitPorts = {
-    listGroups: async () => (await groups.list()).groups,
-    // M5.3 团队快照展开：listTeams 当前成员 + leader 标记（name=agentName——外派
-    // team 段名单与镜像按名对齐同口径）；派发时刻快照定型（在途调组票桶）
-    getTeamSnapshot: (workspaceId, teamId) => {
-      const team = listTeams(workspaceId).find((t) => t.id === teamId);
-      if (!team) return null;
-      return {
-        name: team.name,
-        members: team.members.map((m) => ({
-          agentName: m.agentName,
-          isLeader: m.instanceId === team.leaderInstanceId,
-        })),
-      };
-    },
-    // M5.3 hub 闸数据源：协商协议版本直读（client 版本管道——无副作用单点）
-    hubProtoVer: () => hubProtoVer(),
-    listDelegations: async (groupId) =>
-      (await hubRequest<{ tasks: Array<{ taskId: string; targetNodeId: string; status: string }> }>(
-        TASK_RPC.list,
-        { groupId },
-        undefined,
-      )).tasks,
-    listMirrorRegistry: (workspaceName) => hubListMirrorRegistry(workspaceName),
-    // M4.1 裁定：delegate 端口不包 coded——两处消费方（submitRoutedTask /
-    // retryDispatch）对 delegate rejection 一律吞掉落 dispatched=false（RM-M21-5
-    // 瞬断留待处理，错误不达 renderer 直抛面），包了也无人消费前缀；会经
-    // resolveRemoteTarget 上抛的 listGroups/listDelegations rejection 由通道级
-    // coded 覆盖（hub:submitRoutedTask / hub:retryDispatch 处）。
-    delegate: (brief) => hubRequest(TASK_RPC.delegate, brief, undefined),
-    createLocalTask: (input) =>
-      createTaskFromForm({
-        workspaceId: input.workspaceId,
-        title: input.title,
-        description: input.description,
-        groupId: input.groupId,
-        routing: input.routing,
-      }),
-    createRemoteTask: (input) => {
-      if (input.groupId !== undefined) assertBoardGroupValid(input.workspaceId, input.groupId);
-      // M4.3：外派行 `::` 建链走 insertTaskWithRelations（存在 + 环检测 + 插行
-      // 插边同事务——与 task.create / createBatch 同源；无依赖时退回 insertTask 零变化）
-      return insertTaskWithRelations(
-        {
-          workspaceId: input.workspaceId,
-          title: input.title,
-          creatorUserId: 'owner',
-          status: input.status,
-          description: input.description,
-          groupId: input.groupId,
-          routing: input.routing,
-          // M5.3：团队指向随外派行落库（retryDispatch 重建 team 段的依据）
-          targetTeamId: input.targetTeamId ?? null,
-          // 1.10.0：peer 草稿行来源标记（方向判别/看板徽标/boot 对账互斥）
-          ...(input.draft === true ? { origin: 'peer_draft' as const } : {}),
-        },
-        { dependsOn: input.dependsOn ?? [] },
-      );
-    },
-    // M4.3 派发闸数据源：M3.3 blocked 派生单源（仅 completed 解锁）
-    deriveBlockedBy: (taskId) => deriveBlockedBy([taskId]).get(taskId) ?? [],
-    updateDelegationLink: (taskId, delegationId, routing) => {
-      updateTask(taskId, { delegationId, routing });
-    },
-  };
-  ipcMain.handle('hub:submitRoutedTask', (_evt, input: SubmitRoutedTaskInput) =>
+  // 端口装配抽出 dispatch-ports.ts（2026-11-08：agent 工具面 create_task 路由
+  // 分支与 IPC 通道共用同一装配，防两处分叉漂移——行为零变化）
+  const dispatchSubmitPorts = buildDispatchSubmitPorts();
+    ipcMain.handle('hub:submitRoutedTask', (_evt, input: SubmitRoutedTaskInput) =>
     coded(() => submitRoutedTask(input, dispatchSubmitPorts)));
   ipcMain.handle('hub:routingPrecheck', (_evt, input: { workspaceName: string }) =>
     coded(() => routingPrecheck(input.workspaceName, dispatchSubmitPorts)));

@@ -138,6 +138,8 @@ export interface DispatchSubmitPorts {
       groupId: string;
       groupName: string;
       mode?: 'leader-follower' | 'peer';
+      /** 组长节点（1.10.1 agent 路由面——非组长早拒判定；旧 hub 缺省不带） */
+      leaderNodeId?: string;
       members: Array<{
         nodeId: string;
         name: string;

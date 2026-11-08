@@ -25,9 +25,12 @@ function listTsFiles(dir: string): string[] {
   return out;
 }
 
-/** 字面发送点：直接书写 TASK_RPC.delegate 的文件（相对 electron/src 的 POSIX 路径） */
+/** 字面发送点：直接书写 TASK_RPC.delegate 的文件（相对 electron/src 的 POSIX 路径）。
+ *  2026-11-08：ipc.handlers 的端口装配抽 dispatch-ports.ts（agent create_task
+ *  路由分支共用）——字面点随之迁移，非新增第四入口 */
 const LITERAL_SENDERS = new Set([
   'main/hub/dispatch-submit.ts',
+  'main/hub/dispatch-ports.ts',
   'main/hub/ipc.handlers.ts',
 ]);
 
@@ -38,7 +41,7 @@ const LITERAL_SENDERS = new Set([
 const PORTS_CONSUMER = 'main/hub/delegation-sync.ts';
 
 describe('M4.3 外派委派入口清单锁（TASK_RPC.delegate sweep）', () => {
-  it('字面发送点全集 = 已知两文件（第四字面入口出现即红）', () => {
+  it('字面发送点全集 = 已知三文件（第四字面入口出现即红）', () => {
     const hits = new Set<string>();
     for (const file of listTsFiles(SRC_ROOT)) {
       if (readFileSync(file, 'utf8').includes('TASK_RPC.delegate')) {

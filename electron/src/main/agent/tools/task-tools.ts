@@ -39,6 +39,9 @@ import {
   type MessageEventRow,
 } from '../../storage/messages/events-repo';
 import { getGroup, listGroups } from '../../storage/task-groups/repo';
+import { getWorkspace } from '../../workspace/crud';
+import { submitRoutedTask, type DispatchSubmitPorts } from '../../hub/dispatch-submit';
+import { createHubConfigStore } from '../../hub/config-store';
 import { getDb } from '../../storage/db';
 import { spawnNextInstanceIfRecurring } from '../../task/recurrence';
 import { notifyExecutor } from '../../task/executor';
@@ -165,6 +168,25 @@ export interface CreateTaskInput {
   groupId?: string;
   /** M3.3：直接依赖任务 id 列表；逐个校验存在 + 环检测后同事务插边（与表单路径同源校验） */
   dependsOn?: string[];
+  /**
+   * 1.10.1：hub 工作组路由（UI CreateTaskDialog「执行位置」同词汇——2026-11-08
+   * agent 路由面补齐）。缺省 = 本机（既有路径零变化）。mode='group' 组内调度
+   * （主从）；'node' 指定节点（平行组唯一合法形态——提交侧自动转草稿白名单）。
+   */
+  routing?: { mode: 'group'; groupId: string } | { mode: 'node'; groupId: string; targetNodeId: string };
+}
+
+/** create_task 注入缝（测试收窄：只换端口装配——hub 边界替身，业务逻辑全真） */
+export interface CreateTaskDeps {
+  ports?: DispatchSubmitPorts;
+}
+
+/** 默认端口装配经动态 import 解析——hub/dispatch-ports 静态链经 task/
+ *  ipc.handlers → memory → spawn-helpers → agent/tools 回指本模块（构造期
+ *  TaskTools undefined 的模块环）；运行期解析时全模块已就绪，环即断 */
+async function defaultPorts(): Promise<DispatchSubmitPorts> {
+  const { buildDispatchSubmitPorts } = await import('../../hub/dispatch-ports');
+  return buildDispatchSubmitPorts();
 }
 
 /**
@@ -179,7 +201,15 @@ export interface CreateTaskInput {
  *
  * description / priority 缺省取 '' / 0；返回插入后的 TaskRow（含自动生成的 id）。
  */
-export async function createTask(input: CreateTaskInput): Promise<TaskRow> {
+export async function createTask(
+  input: CreateTaskInput,
+  deps: CreateTaskDeps = {},
+): Promise<TaskRow & { dispatched?: boolean; nodeId?: string | null }> {
+  // 1.10.1 跨节点路由分支：submitRoutedTask 单源管线（与 CreateTaskDialog /
+  // EditTaskDialog 同一条链——peer 草稿白名单、lf 编排、派发闸、RM-M21-5 兜底全复用）
+  if (input.routing !== undefined) {
+    return createTaskRouted(input, deps.ports ?? (await defaultPorts()));
+  }
   // 分组校验（看板重构 Task 8）：组存在 + 同 ws + 未归档，任一不满足即拒绝落库
   // ——防 LLM 幻觉 ID 产出孤儿分组引用 / 跨 ws 落组 / 落进已归档组复活语义
   if (input.groupId != null) {
@@ -225,6 +255,115 @@ export async function createTask(input: CreateTaskInput): Promise<TaskRow> {
   // assigned 落态即时触发放行评估（100ms 去抖合并；丢了有 30s 兜底扫描自愈）
   if (row.status === 'assigned') notifyExecutor();
   return row;
+}
+
+/**
+ * create_task 路由分支（1.10.1）：查组定形态（peer→draft / lf→编排）后走
+ * submitRoutedTask。人话早期拒绝（组不存在/hub 离线/互斥键）都在查组后立即抛
+ * ——不给 LLM 留「落了行却派不出去」的半态。返回 TaskRow + dispatched/nodeId
+ * （agent 可如实汇报派发去向）。
+ */
+async function createTaskRouted(
+  input: CreateTaskInput,
+  ports: DispatchSubmitPorts,
+): Promise<TaskRow & { dispatched?: boolean; nodeId?: string | null }> {
+  const routing = input.routing!;
+  if (input.assigneeAgentId != null || input.targetSessionId != null) {
+    throw new Error('跨节点路由与本机指派互斥——routing 存在时不可携带 assigneeAgentId / targetSessionId');
+  }
+  const ws = getWorkspace(input.workspaceId);
+  if (!ws) throw new Error(`工作空间 ${input.workspaceId} 不存在`);
+  const groups = await ports.listGroups().catch(() => {
+    throw new Error('hub 未连接——无法提交跨节点任务。可稍后重试，或省略 routing 改为本机执行');
+  });
+  const group = groups.find((g) => g.groupId === routing.groupId);
+  if (!group) {
+    throw new Error(`工作组 ${routing.groupId} 不存在——先调用 list_workgroups 获取真实组 ID`);
+  }
+  // delegate 通道 leader-only——不早拒会落 dispatched=false 黑洞（行 pending 无去向）
+  const selfId = selfNodeIdOrNull();
+  if (group.leaderNodeId !== undefined && selfId !== null && group.leaderNodeId !== selfId) {
+    throw new Error('跨节点任务须由组长节点发起——本机是该组普通成员，无法派发到组内节点');
+  }
+  const peer = group.mode === 'peer';
+  if (peer && routing.mode !== 'node') {
+    throw new Error('平行组仅支持指定节点（点对点草稿交接），不支持组内调度——routing.mode 用 node');
+  }
+  if (peer && input.targetTeamId != null) {
+    throw new Error('平行组草稿不能携带团队执行编排（接收方自行安排）——去掉 targetTeamId');
+  }
+  if (peer && input.dependsOn !== undefined && input.dependsOn.length > 0) {
+    throw new Error('平行组草稿不支持跨节点依赖（dependsOn）——去掉后重试');
+  }
+  const result = await submitRoutedTask(
+    {
+      workspaceId: input.workspaceId,
+      workspaceName: ws.name,
+      title: input.title,
+      description: input.description,
+      ...(input.groupId !== undefined ? { groupId: input.groupId } : {}),
+      routing,
+      ...(input.targetTeamId != null ? { teamId: input.targetTeamId } : {}),
+      ...(input.dependsOn !== undefined && input.dependsOn.length > 0 ? { dependsOn: input.dependsOn } : {}),
+      ...(peer ? { draft: true, ...(input.priority !== undefined ? { priority: input.priority } : {}) } : {}),
+    },
+    ports,
+  );
+  return { ...result.task, dispatched: result.dispatched, nodeId: result.nodeId };
+}
+
+/**
+ * list_workgroups（1.10.1）：hub 工作组发现入口——模式（主从/平行）、本机是否
+ * 组长、成员在线/绑定态。与 list_task_groups（看板任务列）是不同域；create_task
+ * 路由入参（groupId/targetNodeId）的真实值从这里查。
+ */
+export async function listWorkgroups(
+  deps: CreateTaskDeps = {},
+): Promise<
+  Array<{
+    groupId: string;
+    groupName: string;
+    mode: 'leader-follower' | 'peer';
+    modeLabel: string;
+    isLeader: boolean;
+    members: Array<{
+      nodeId: string;
+      name: string;
+      online: boolean;
+      bound: boolean;
+      boundWorkspaceName?: string;
+    }>;
+  }>
+> {
+  const ports = deps.ports ?? (await defaultPorts());
+  const groups = await ports.listGroups().catch(() => {
+    throw new Error('hub 未连接——无法获取工作组清单。连接恢复后重试');
+  });
+  const selfNodeId = selfNodeIdOrNull();
+  return groups.map((g) => ({
+    groupId: g.groupId,
+    groupName: g.groupName,
+    mode: g.mode ?? 'leader-follower',
+    modeLabel: g.mode === 'peer' ? '平行模式' : '主从模式',
+    isLeader: g.leaderNodeId !== undefined && selfNodeId !== null && g.leaderNodeId === selfNodeId,
+    members: g.members.map((m) => ({
+      nodeId: m.nodeId,
+      name: m.name,
+      online: m.online,
+      bound: m.bound === true,
+      ...(m.boundWorkspaceName !== undefined ? { boundWorkspaceName: m.boundWorkspaceName } : {}),
+    })),
+  }));
+}
+
+/** 本机 nodeId（hub 配置单源——hub/index 桶文件会拉入 BrowserManager 环，
+ *  此处走叶子 config-store 直读；未配置为 null） */
+function selfNodeIdOrNull(): string | null {
+  try {
+    return createHubConfigStore(getDb()).read()?.nodeId ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -354,6 +493,39 @@ function parseStringArgOptional(value: unknown, name: string): string | undefine
 }
 
 /** M3.3：把 unknown 归一化为字符串数组；缺失返回 undefined，存在但非字符串数组抛错 */
+/** routing 入参解析：缺省/null → undefined（本机）；异形人话抛错；
+ *  mode='local' 拒绝并引导省略（本机=缺省语义，防 LLM 冗余键漂移） */
+function parseRoutingArg(
+  value: unknown,
+): { mode: 'group'; groupId: string } | { mode: 'node'; groupId: string; targetNodeId: string } | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('routing 形状非法：须为 {mode:"group"|"node", groupId, targetNodeId?} 对象');
+  }
+  const rec = value as Record<string, unknown>;
+  const mode = rec['mode'];
+  if (mode === 'local') {
+    throw new Error('routing.mode="local" 冗余——本机执行请直接省略 routing');
+  }
+  if (mode !== 'group' && mode !== 'node') {
+    throw new Error('routing.mode 非法：须为 "group"（组内调度）或 "node"（指定节点）');
+  }
+  const groupId = rec['groupId'];
+  if (typeof groupId !== 'string' || groupId.length === 0) {
+    throw new Error('routing.groupId 缺失——先调用 list_workgroups 获取真实组 ID');
+  }
+  const targetNodeId = rec['targetNodeId'];
+  if (targetNodeId !== undefined && typeof targetNodeId !== 'string') {
+    throw new Error('routing.targetNodeId 非法：须为节点 ID 字符串（list_workgroups 查询）');
+  }
+  if (mode === 'node' && (typeof targetNodeId !== 'string' || targetNodeId.length === 0)) {
+    throw new Error('routing.mode="node" 必须携带 targetNodeId（从 list_workgroups 查询）');
+  }
+  return mode === 'node'
+    ? { mode, groupId, targetNodeId: targetNodeId as string }
+    : { mode, groupId };
+}
+
 function parseStringArrayArgOptional(value: unknown, name: string): string[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
@@ -387,6 +559,7 @@ const TASK_CATALOG_META: Record<string, ToolMeta> = {
   list_tasks: { displayName: '任务列表', category: '任务', categoryEmoji: '🗃️', defaultOn: true },
   // brief/spec Tier 表未及的既有工具（getDefs 一一对应契约强制补齐；只读、不入 Tier 1）：
   list_task_groups: { displayName: '任务分组', category: '任务', categoryEmoji: '🗃️', defaultOn: false },
+  list_workgroups: { displayName: '工作组清单', category: '任务', categoryEmoji: '🗃️', defaultOn: false },
   create_task: { displayName: '创建任务', category: '任务', categoryEmoji: '🗃️', defaultOn: false, riskNote: '任务板状态变更' },
   complete_task: { displayName: '完成任务', category: '任务', categoryEmoji: '🗃️', defaultOn: false, riskNote: '任务板状态变更' },
   fail_task: { displayName: '标记失败', category: '任务', categoryEmoji: '🗃️', defaultOn: false, riskNote: '任务板状态变更' },
@@ -443,7 +616,7 @@ export class TaskTools implements ToolModule {
       {
         name: 'create_task',
         description:
-          '创建新任务。返回刚创建的 TaskRow（含 id / status=draft；未指派委派目标时返回对象额外含 warning 字段——任务不会被调度执行）。workspaceId 与 creatorUserId 由工具上下文自动注入（LLM 无需填、也不应填——args 中的同名键会被忽略以防 FK 违约与跨用户冒名）。assigneeAgentId / targetTeamId / targetSessionId 三者必须提供其一，创建前先调用 list_delegation_targets 获取真实 ID。',
+          '创建新任务（本机指派或跨节点路由二选一）。返回刚创建的 TaskRow（含 id / status=draft；未指派委派目标时返回对象额外含 warning 字段——任务不会被调度执行）。workspaceId 与 creatorUserId 由工具上下文自动注入（LLM 无需填、也不应填——args 中的同名键会被忽略以防 FK 违约与跨用户冒名）。本机指派：assigneeAgentId / targetTeamId / targetSessionId 三者提供其一（先 list_delegation_targets 查真实 ID）。跨节点执行（用户要求派给某工作组/某节点时）：传 routing（先 list_workgroups 查组与节点），返回含 dispatched / nodeId 派发去向。',
         inputSchema: {
           type: 'object',
           properties: {
@@ -463,7 +636,18 @@ export class TaskTools implements ToolModule {
             },
             assigneeAgentId: {
               type: 'string',
-              description: '指派目标 agent 的 instance ID（从 list_delegation_targets 查询）。三者必须提供其一——系统没有自动指派机制，无指派任务将永远停留在 draft 不会被调度执行',
+              description: '指派目标 agent 的 instance ID（从 list_delegation_targets 查询）。三者必须提供其一——系统没有自动指派机制，无指派任务将永远停留在 draft 不会被调度执行。与 routing 互斥',
+            },
+            routing: {
+              type: 'object',
+              description:
+                '跨节点执行位置（缺省=本机执行）。先调用 list_workgroups 查真实 groupId/nodeId。mode="group"=组内调度（主从组）；mode="node"=指定节点（平行组唯一合法形态，系统自动转草稿交接）。routing 存在时不可携带 assigneeAgentId / targetSessionId；平行组另不可携带 targetTeamId / dependsOn。仅组长节点可跨节点派发',
+              properties: {
+                mode: { type: 'string', enum: ['group', 'node'], description: '"group"=组内调度（主从）；"node"=指定节点' },
+                groupId: { type: 'string', description: '工作组 ID（从 list_workgroups 查询）' },
+                targetNodeId: { type: 'string', description: '目标节点 ID（mode="node" 时必填，从 list_workgroups 查询）' },
+              },
+              required: ['mode', 'groupId'],
             },
             targetTeamId: {
               type: 'string',
@@ -563,7 +747,13 @@ export class TaskTools implements ToolModule {
       {
         name: 'list_task_groups',
         description:
-          '列出当前工作空间的任务分组（看板泳道，含 ID / 名称 / 颜色）。create_task 传 groupId 落组前先调用本工具获取真实 ID——组不存在或已归档会被拒绝；仅返回活跃组。',
+          '列出当前工作空间的任务分组（看板泳道列，含 ID / 名称 / 颜色）——注意这是看板分组，不是 hub 工作组（跨节点协作域用 list_workgroups）。create_task 传 groupId 落组前先调用本工具获取真实 ID——组不存在或已归档会被拒绝；仅返回活跃组。',
+        inputSchema: { type: 'object', properties: {} },
+      },
+      {
+        name: 'list_workgroups',
+        description:
+          '列出本机加入的 hub 工作组（跨节点协作域：含模式 主从/平行、本机是否组长、各成员节点在线与空间绑定态）。用户要求把任务「派到某工作组/某节点」时：先调用本工具查真实 groupId / nodeId，再 create_task 传 routing。注意与 list_task_groups（看板任务列）是不同域。',
         inputSchema: { type: 'object', properties: {} },
       },
     ];
@@ -583,7 +773,8 @@ export class TaskTools implements ToolModule {
       name === 'complete_task' ||
       name === 'fail_task' ||
       name === 'list_tasks' ||
-      name === 'list_task_groups'
+      name === 'list_task_groups' ||
+      name === 'list_workgroups'
     );
   }
 
@@ -597,6 +788,9 @@ export class TaskTools implements ToolModule {
     switch (name) {
       case 'list_delegation_targets': {
         return JSON.stringify(listDelegationTargets(ctx.workspaceId, ctx.roomId));
+      }
+      case 'list_workgroups': {
+        return JSON.stringify(await listWorkgroups());
       }
       case 'read_task': {
         const taskId = parseStringArg(args.taskId, 'taskId');
@@ -642,12 +836,18 @@ export class TaskTools implements ToolModule {
           groupId: parseStringArgOptional(args.groupId, 'groupId') || undefined,
           // M3.3 依赖列表：字符串数组；异形人话抛错（与 parseStringArg 同反馈风格）
           dependsOn: parseStringArrayArgOptional(args.dependsOn, 'dependsOn'),
+          // 1.10.1 跨节点路由：异形人话抛错；mode='local' 引导省略（本机=缺省）
+          routing: parseRoutingArg(args.routing),
         };
         const result = await createTask(input);
         // 委派信息闭环 ③：无指派 → TaskRow 顶层附加 warning（形状向后兼容，
         // 有指派时返回纯 TaskRow——现有消费方直接 parse 顶层字段不破坏）。
         // 谓词统一走 starter.hasDelegationTarget——与 createTask 内部落态决策
         // 同义（终审 N1/M6：谓词分叉导致双重新话回归锁）
+        // 路由分支自带派发去向（dispatched/nodeId）——本机两条 warning 不适用
+        if (input.routing !== undefined) {
+          return JSON.stringify(result);
+        }
         if (!hasDelegationTarget(input)) {
           return JSON.stringify({ ...result, warning: NO_ASSIGNMENT_WARNING });
         }
