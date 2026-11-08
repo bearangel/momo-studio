@@ -1681,15 +1681,14 @@ export async function runChatLoop(
           success: true,
         });
 
-        // tool_result 推回 LLM，提示继续
-        messages.push({
-          role: 'assistant',
-          content: summary,
-          toolCalls: [tc],
-        });
+        // tool_result 推回 LLM，提示继续。
+        // 不补 push assistant(toolCalls)——响应级 push（上方 messages.push({
+        // role:'assistant', content, toolCalls })）已含全量 tool_calls；此处再插
+        // 一条 assistant 会阻断其 tool 响应序列，DeepSeek 等严格校验 provider
+        // 直接 400（2026-11-08 事故，回归锁 runtime-history-toolcalls.test.ts）
         messages.push({
           role: 'tool',
-          content: `第 ${segmentCount}/${MAX_TASK_SEGMENTS} 段已发送。${nextStep ? `下一步：${nextStep}` : '请继续输出当前回复的下一段，输出到合适段落时再次调用 task_complete'}`,
+          content: `第 ${segmentCount}/${MAX_TASK_SEGMENTS} 段已发送。${nextStep ? `下一步：${nextStep}` : '请继续输出当前回复的下一段'}`,
           toolCallId: tc.id,
         });
         toolCallCount++;
@@ -1734,15 +1733,17 @@ export async function runChatLoop(
             success: true,
           });
           // 回填 LLM：恰一条 tool result（旧实现的第二份前进指令消息已删，
-          // spec §5.6 #4——指令合并进压缩条尾部指令 + 本条回执）
-          messages.push({ role: 'assistant', content: '', toolCalls: [tc] });
+          // spec §5.6 #4——指令合并进压缩条尾部指令 + 本条回执）。
+          // 不补 push assistant(toolCalls)——响应级 push 已含全量 tool_calls，
+          // 穿插第二条 assistant 会被 DeepSeek 等严格校验 provider 拒 400
+          // （2026-11-08 事故，回归锁 runtime-history-toolcalls.test.ts）
           messages.push({
             role: 'tool',
             content: `上下文已压缩：${before} → 1+尾部 ${result.tailCount} 条消息。${stateMsg}`,
             toolCallId: tc.id,
           });
         } else {
-          // 失败路径（spec §6.1 #5 / §9）：报错可重试，messages 原样不动
+          // 失败路径（spec §6.1 #5 / §9）：报错可重试，压缩不生效
           sendStreamChunk({
             type: 'tool_result',
             streamSessionId,
@@ -1751,7 +1752,6 @@ export async function runChatLoop(
             result: `压缩失败：${result.error}，可重试`,
             success: false,
           });
-          messages.push({ role: 'assistant', content: '', toolCalls: [tc] });
           messages.push({
             role: 'tool',
             content: `压缩失败：${result.error}，可重试。消息历史未改动${note ? `（备注：${note}）` : ''}。`,
