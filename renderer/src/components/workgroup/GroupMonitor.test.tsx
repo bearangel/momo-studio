@@ -208,7 +208,7 @@ describe('GroupMonitor', () => {
   it('无组空态：引导去侧栏创建/加入', () => {
     render(<GroupMonitor onOpenView={onOpenView} />);
     expect(screen.getByText('尚未加入任何工作组')).toBeInTheDocument();
-    expect(screen.getByText(/在左侧创建工作组，或凭邀请码加入/)).toBeInTheDocument();
+    expect(screen.getByText(/在左侧创建工作组，或用邀请码加入/)).toBeInTheDocument();
   });
 });
 

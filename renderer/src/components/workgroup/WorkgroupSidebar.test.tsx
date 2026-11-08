@@ -8,7 +8,7 @@
 //   本机/组长 → 「本机 · leader」文本注记（负载优先于注记）
 // - 组行在线徽标：选中 success / 未选中 neutral，计数 hub presence 融合值
 // - 创建工作组表单：入口展开 → 提交走 groupCreate（trim 入参）
-// - 凭邀请码加入表单：入口展开 → 提交走 groupJoin（trim 入参）
+// - 加入工作组（凭邀请码）表单：入口展开 → 提交走 groupJoin（trim 入参）
 // - 离线态（configured 但非 online）：「连接建立后可…」注记，无创建/加入入口
 // - 无组空态：0 组 → 创建/加入引导直接展开（无折叠入口）
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -175,11 +175,11 @@ describe('WorkgroupSidebar', () => {
     });
   });
 
-  it('凭邀请码加入：入口展开表单，提交走 groupJoin（trim 入参）', async () => {
+  it('加入工作组：入口展开表单，提交走 groupJoin（trim 入参）', async () => {
     useHubGroupStore.setState({ groups: [GROUP_DEV] });
     api.hub.groupJoin.mockResolvedValue({ groupId: 'g-x' });
     render(<WorkgroupSidebar />);
-    fireEvent.click(screen.getByRole('button', { name: '凭邀请码加入' }));
+    fireEvent.click(screen.getByRole('button', { name: '加入工作组' }));
     fireEvent.change(screen.getByLabelText('邀请码'), { target: { value: ' D3VX-824F ' } });
     fireEvent.click(screen.getByRole('button', { name: '入组' }));
     await waitFor(() => {
@@ -193,7 +193,7 @@ describe('WorkgroupSidebar', () => {
     render(<WorkgroupSidebar />);
     expect(screen.getByText('连接建立后可创建或加入工作组')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '创建工作组' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '凭邀请码加入' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '加入工作组' })).not.toBeInTheDocument();
   });
 
   it('无组空态：0 组 → 创建/加入引导直接展开，无折叠入口与成员区', () => {

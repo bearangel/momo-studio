@@ -70,7 +70,7 @@ export function GroupMonitor({ onOpenView }: GroupMonitorProps) {
         <EmptyState
           icon={Users}
           title="尚未加入任何工作组"
-          description="在左侧创建工作组，或凭邀请码加入"
+          description="在左侧创建工作组，或用邀请码加入"
           role="status"
         />
       </div>

@@ -7,7 +7,7 @@
 // - 成员区（生效选中组）：presence 点 7px + 负载徽标——「在跑 N」计 running+pending
 //   两态（与节点卡在跑行同口径）；空闲在线 → 「空闲」；本机/组长 → 「本机 · leader」
 //   文本注记（负载优先于注记——在跑信息更关键）；离线成员无徽标
-// - 底部组操作：「创建工作组」/「凭邀请码加入」折叠入口（互斥展开）；离线态
+// - 底部组操作：「创建工作组」/「加入工作组」折叠入口（互斥展开）；离线态
 //   （configured 但非 online）替换为「连接建立后可…」注记（GroupPanel 迁移语义）
 // - 无组空态：创建/加入表单直接展开（引导优先，无折叠入口）
 // - 数据源：组/委派 store 的订阅与拉取由 WorkgroupView 统一 init（视图级生命周期），
@@ -70,7 +70,7 @@ export function WorkgroupSidebar() {
           <div className="flex flex-col gap-3 px-1.5 pt-1">
             <p className="text-[11px] leading-relaxed text-tertiary">
               {online
-                ? '尚未加入任何工作组——创建一个，或凭邀请码加入'
+                ? '尚未加入任何工作组——创建一个，或用邀请码加入'
                 : '尚未加入任何工作组'}
             </p>
             {online && (
@@ -143,7 +143,7 @@ export function WorkgroupSidebar() {
             )}
             <SidebarActionRow
               icon={<ExternalLink size={12} strokeWidth={1.75} aria-hidden />}
-              label="凭邀请码加入"
+              label="加入工作组"
               open={openForm === 'join'}
               onToggle={() => setOpenForm(openForm === 'join' ? null : 'join')}
             />
