@@ -5,8 +5,10 @@
 //   不接受）+ 护栏文案（接受后组长的统一镜像将覆盖此空间内容）
 // - 提交 = hub-group-store bind（groupBind：主进程按名登记 hub + 本地权威落库）
 //   + 接受时 setMirrorAccept({accepts:true})
-// - 入组态（joinFlavor）提供「稍后再绑」跳过——成为未绑定成员（无法接收草稿，
+//   - 入组态（joinFlavor）提供「稍后再绑」跳过——成为未绑定成员（无法接收草稿，
 //   监控台组设置可补绑）；换绑态缺省开关取自己成员行当前 acceptsMirror
+//   - hideAccepts（组长换绑）：隐藏接受勾选与警示——组长是统一镜像的源，
+//   「接受自己的镜像」语义不适用（2026-11-08 验收修正）
 import { useEffect, useState, type FormEvent } from 'react';
 import { TriangleAlert } from 'lucide-react';
 import { useHubGroupStore } from '../../stores/hub-group.store';
@@ -27,6 +29,8 @@ interface BindingDialogProps {
   initialAccepts?: boolean;
   /** 入组第二步形态：出「稍后再绑」跳过按钮 */
   joinFlavor?: boolean;
+  /** 隐藏「接受本组镜像同步」勾选（组长换绑=换镜像源空间，接受语义不适用） */
+  hideAccepts?: boolean;
 }
 
 export function BindingDialog({
@@ -36,6 +40,7 @@ export function BindingDialog({
   groupName,
   initialAccepts = false,
   joinFlavor = false,
+  hideAccepts = false,
 }: BindingDialogProps) {
   const bind = useHubGroupStore((s) => s.bind);
   const setMirrorAccept = useHubGroupStore((s) => s.setMirrorAccept);
@@ -65,7 +70,7 @@ export function BindingDialog({
     setFormError(null);
     try {
       await bind(groupId, workspaceId);
-      if (accepts) await setMirrorAccept(groupId, true);
+      if (accepts && !hideAccepts) await setMirrorAccept(groupId, true);
       onClose();
     } catch (err) {
       // store 动作 rethrow 原始 rejection——展示层剥 `[code]` 前缀
@@ -93,19 +98,21 @@ export function BindingDialog({
             </option>
           ))}
         </Select>
-        <div className="flex flex-col gap-1.5">
-          <Checkbox
-            label="接受本组镜像同步"
-            checked={accepts}
-            onChange={(e) => setAccepts(e.target.checked)}
-          />
-          {accepts && (
-            <div className="flex items-start gap-1.5 rounded-md bg-status-warning-tint px-2.5 py-2 text-xs leading-relaxed text-status-warning">
-              <TriangleAlert size={14} strokeWidth={1.75} aria-hidden className="mt-0.5 shrink-0" />
-              <span>接受后组长的统一镜像将覆盖此空间内容</span>
-            </div>
-          )}
-        </div>
+        {!hideAccepts && (
+          <div className="flex flex-col gap-1.5">
+            <Checkbox
+              label="接受本组镜像同步"
+              checked={accepts}
+              onChange={(e) => setAccepts(e.target.checked)}
+            />
+            {accepts && (
+              <div className="flex items-start gap-1.5 rounded-md bg-status-warning-tint px-2.5 py-2 text-xs leading-relaxed text-status-warning">
+                <TriangleAlert size={14} strokeWidth={1.75} aria-hidden className="mt-0.5 shrink-0" />
+                <span>接受后组长的统一镜像将覆盖此空间内容</span>
+              </div>
+            )}
+          </div>
+        )}
         {formError !== null && (
           <p className="text-xs text-status-error" role="alert">
             {formError}

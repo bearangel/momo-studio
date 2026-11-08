@@ -13,6 +13,7 @@ import { GroupMonitor } from './GroupMonitor';
 import { useHubStore } from '../../stores/hub.store';
 import { useHubGroupStore } from '../../stores/hub-group.store';
 import { useHubDelegationStore } from '../../stores/hub-delegation.store';
+import { useUnifiedMirrorStore } from '../../stores/unified-mirror.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import type { HubGroupInfo, HubStatus, HubTaskRecord, Workspace } from '../../ipc/types';
 
@@ -324,12 +325,20 @@ const GROUP_PEER: HubGroupInfo = {
 describe('GroupMonitor — 平行组（1.10.0）', () => {
   beforeEach(() => {
     // 配置顶层 api 既有 fn（重赋值会脱离 ipc 代理的命名空间缓存包裹）
-    api.hub.snapshotBuildUpload.mockReset().mockResolvedValue({ snapshotId: 'snap-1' });
+    api.hub.snapshotBuildUpload.mockReset().mockResolvedValue({
+      snapshotId: 'snap-1', checksum: '9c4f21e0'.padEnd(64, '0'), version: '3',
+      sizeBytes: 2400 * 1024, excludedPlugins: [],
+      summary: { members: 2, embeddedMembers: 0, teams: 1, mcp: 1, skills: 2, skillResources: 2, skillEmbedded: 0, plugins: 1, providers: 1, modelBinding: false, resources: 4 },
+    });
     api.hub.mirrorWorkspace.mockReset().mockResolvedValue({ accepted: true, mirrorId: 'm-1' });
     api.hub.groupBind.mockReset().mockResolvedValue({ ok: true });
     api.hub.groupSetMirrorAccept.mockReset().mockResolvedValue({ ok: true });
     api.workspace.list.mockReset().mockResolvedValue([]);
     useWorkspaceStore.setState({ workspaces: [ws('ws-dev', '研发空间')], activeWorkspaceId: null, loading: false, error: null });
+    useUnifiedMirrorStore.setState({
+      open: false, groupId: null, groupName: null, sourceWorkspaceId: null, sourceWorkspaceName: null,
+      buildStatus: 'idle', buildError: null, snapshot: null, rows: [], launched: false, launching: false,
+    });
   });
 
   it('PR-1. peer 组：查看按钮全组退场；节点卡 mono 行带绑定态；平行模式徽标在场', () => {
@@ -361,13 +370,18 @@ describe('GroupMonitor — 平行组（1.10.0）', () => {
     expect(btn).toHaveAttribute('title', '请先绑定自己的承接空间');
   });
 
-  it('PR-4. 统一镜像：只对 acceptsMirror ∧ bound ∧ online 的成员逐一发起（源=组长绑定空间）', async () => {
+  it('PR-4. 统一镜像：打开对话框即构建快照；不达标成员逐行可见；发起仅对就绪成员逐一派发', async () => {
     useHubGroupStore.setState({ groups: [GROUP_PEER] });
     render(<GroupMonitor onOpenView={onOpenView} />);
     fireEvent.click(screen.getByRole('button', { name: /统一镜像/ }));
+    const dlg = await screen.findByRole('dialog', { name: '统一镜像' });
     await waitFor(() => {
       expect(api.hub.snapshotBuildUpload).toHaveBeenCalledWith({ workspaceId: 'ws-dev' });
     });
+    // 隐形过滤根治：lab-node（未接受）与 home-nas（离线）原因在对话框里可见
+    expect(await within(dlg).findByText(/未接受镜像/)).toBeInTheDocument();
+    expect(within(dlg).getAllByText(/离线/).length).toBeGreaterThan(0);
+    fireEvent.click(within(dlg).getByRole('button', { name: /向 1 个成员发起镜像/ }));
     await waitFor(() => {
       // office-mac 唯一合格（lab-node 未接受、home-nas 离线、组长自己排除）
       expect(api.hub.mirrorWorkspace).toHaveBeenCalledTimes(1);
@@ -380,23 +394,21 @@ describe('GroupMonitor — 平行组（1.10.0）', () => {
     });
   });
 
-  it('PR-5. 换绑入口 → BindingDialog 提交走 groupBind；镜像开关写 groupSetMirrorAccept', async () => {
+  it('PR-5. 组长换绑 → BindingDialog 提交走 groupBind；组长不见「接受」勾选与监控台开关（2026-11-08 修正）', async () => {
     // bind 动作后 store refresh——groupList 须回传同组，否则组清空进空态
     api.hub.groupList.mockResolvedValue({ groups: [GROUP_PEER] });
     useHubGroupStore.setState({ groups: [GROUP_PEER] });
     render(<GroupMonitor onOpenView={onOpenView} />);
+    // 组长视角：监控台开关退场（组长是镜像源，接受语义不适用）
+    expect(screen.queryByRole('switch', { name: '接受本组镜像' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '换绑' }));
-    expect(await screen.findByRole('dialog', { name: /绑定承接空间/ })).toBeInTheDocument();
+    const bindDlg = await screen.findByRole('dialog', { name: /绑定承接空间/ });
+    // 换绑弹窗同样无「接受本组镜像同步」勾选
+    expect(within(bindDlg).queryByRole('checkbox', { name: /接受本组镜像同步/ })).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('承接空间*'), { target: { value: 'ws-dev' } });
-    fireEvent.click(screen.getByRole('button', { name: '绑定' }));
+    fireEvent.click(within(bindDlg).getByRole('button', { name: '绑定' }));
     await waitFor(() => {
       expect(api.hub.groupBind).toHaveBeenCalledWith({ groupId: 'g-peer', workspaceId: 'ws-dev' });
-    });
-
-    const sw = screen.getByRole('switch', { name: '接受本组镜像' });
-    fireEvent.click(sw);
-    await waitFor(() => {
-      expect(api.hub.groupSetMirrorAccept).toHaveBeenCalledWith({ groupId: 'g-peer', accepts: true });
     });
   });
 

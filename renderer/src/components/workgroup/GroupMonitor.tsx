@@ -17,9 +17,11 @@
 // - 组选择与侧栏共用 effectiveSelectedGroup 推导（手选组在场 → 手选；否则第一组）
 // - 无组空态：引导去侧栏创建/加入（表单在 WorkgroupSidebar）
 // - 1.10.0 平行组（spec 2026-11-05 §6）：查看入口全组隐藏（NodeCard hideView）；
-//   逐节点「镜像工作空间…」让位组长「统一镜像」批量动作（源=组长绑定空间，对
-//   acceptsMirror ∧ bound ∧ online 成员逐一 mirrorWorkspace）；头部追加换绑入口
-//   与镜像接受开关（读自己成员行，写 groupSetMirrorAccept）
+//   逐节点「镜像工作空间…」让位组长「统一镜像」批量动作（源=组长绑定空间；
+//   UnifiedMirrorDialog 承载构建/多选/逐行终态——unified-mirror.store，2026-11-08
+//   对话形态预览批准稿）；「接受本组镜像」开关仅非组长成员可见（组长是镜像源，
+//   接受语义不适用——换绑 BindingDialog 同步隐藏勾选）；头部追加换绑入口
+//   （读自己成员行，写 groupSetMirrorAccept）
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { HardDriveDownload, Kanban, Layers, MoreHorizontal, RefreshCw, Users } from 'lucide-react';
@@ -27,9 +29,8 @@ import { effectiveSelectedGroup, useHubGroupStore } from '../../stores/hub-group
 import { useHubDelegationStore } from '../../stores/hub-delegation.store';
 import { useHubMirrorStore } from '../../stores/hub-mirror.store';
 import { useHubStore } from '../../stores/hub.store';
+import { useUnifiedMirrorStore } from '../../stores/unified-mirror.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
-import { ipc } from '../../ipc/client';
-import { rpcErrorMessage } from '../../lib/rpc-error';
 import type { HubGroupInfo } from '../../ipc/types';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
@@ -40,6 +41,7 @@ import { showToast } from '../ui/Toast';
 import { MirrorWizard } from '../hub/MirrorWizard';
 import { NodeCard } from './NodeCard';
 import { BindingDialog } from './BindingDialog';
+import { UnifiedMirrorDialog } from './UnifiedMirrorDialog';
 import { useArmedConfirm } from './useArmedConfirm';
 
 interface GroupMonitorProps {
@@ -58,7 +60,7 @@ export function GroupMonitor({ onOpenView }: GroupMonitorProps) {
   const selfNodeId = useHubStore((s) => s.status?.nodeId ?? null);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const [rebindOpen, setRebindOpen] = useState(false);
-  const [mirrorBusy, setMirrorBusy] = useState(false);
+  const openUnifiedMirror = useUnifiedMirrorStore((s) => s.openDialog);
 
   const group = effectiveSelectedGroup(groups, selectedGroupId);
 
@@ -81,10 +83,10 @@ export function GroupMonitor({ onOpenView }: GroupMonitorProps) {
   const selfMember = group.members.find((m) => m.nodeId === selfNodeId) ?? null;
   const leaderMember = group.members.find((m) => m.nodeId === group.leaderNodeId) ?? null;
 
-  /** 平行组「统一镜像」：源=组长绑定空间（本地按名解析 id 构建快照）→ 对
-   *  acceptsMirror ∧ bound ∧ online 的成员逐一发起两段式镜像第一段；终态经
-   *  hub:mirrorResult 推送（与 MirrorWizard 同通道，批量场景不进向导） */
-  const handleUnifiedMirror = async (): Promise<void> => {
+  /** 平行组「统一镜像」入口：源=组长绑定空间（本机按名解析 id）；解析失败
+   *  仅 toast（不打开对话框）——构建/多选/终态全在 UnifiedMirrorDialog */
+  const openUnified = (): void => {
+    if (group === null) return;
     const sourceName = leaderMember?.boundWorkspaceName;
     if (sourceName === undefined) return;
     const sourceWs = workspaces.find((w) => w.name === sourceName);
@@ -92,41 +94,14 @@ export function GroupMonitor({ onOpenView }: GroupMonitorProps) {
       showToast(`本地找不到组长的承接空间「${sourceName}」`);
       return;
     }
-    const targets = group.members.filter(
-      (m) => m.nodeId !== group.leaderNodeId && m.online && m.bound && m.acceptsMirror,
-    );
-    if (targets.length === 0) {
-      showToast('没有可接收镜像的成员（需在线、已绑定且已接受本组镜像）');
-      return;
-    }
-    setMirrorBusy(true);
-    try {
-      const snap = await ipc.hub.snapshotBuildUpload({ workspaceId: sourceWs.id });
-      const failures: string[] = [];
-      let launched = 0;
-      for (const m of targets) {
-        try {
-          await ipc.hub.mirrorWorkspace({
-            groupId: group.groupId,
-            targetNodeId: m.nodeId,
-            workspaceName: sourceName,
-            snapshotId: snap.snapshotId,
-          });
-          launched += 1;
-        } catch (err) {
-          failures.push(`${m.name}：${rpcErrorMessage(err)}`);
-        }
-      }
-      showToast(
-        failures.length === 0
-          ? `已向 ${launched} 个成员发起统一镜像`
-          : `统一镜像：${launched} 个已受理，${failures.length} 个失败——${failures.join('；')}`,
-      );
-    } catch (err) {
-      showToast(`快照构建失败: ${rpcErrorMessage(err)}`);
-    } finally {
-      setMirrorBusy(false);
-    }
+    openUnifiedMirror({
+      groupId: group.groupId,
+      groupName: group.groupName,
+      leaderNodeId: group.leaderNodeId,
+      members: group.members,
+      sourceWorkspaceId: sourceWs.id,
+      sourceWorkspaceName: sourceName,
+    });
   };
 
   const leaderUnboundTitle = '请先绑定自己的承接空间';
@@ -163,31 +138,33 @@ export function GroupMonitor({ onOpenView }: GroupMonitorProps) {
               <Button
                 variant="secondary"
                 size="sm"
-                disabled={mirrorBusy || leaderMember?.bound !== true}
+                disabled={leaderMember?.bound !== true}
                 title={leaderMember?.bound === true ? undefined : leaderUnboundTitle}
-                onClick={() => void handleUnifiedMirror()}
+                onClick={openUnified}
               >
                 <Layers size={14} strokeWidth={1.75} aria-hidden />
-                {mirrorBusy ? '镜像中…' : '统一镜像'}
+                统一镜像
               </Button>
             )}
             <Button variant="ghost" size="sm" onClick={() => setRebindOpen(true)}>
               <RefreshCw size={14} strokeWidth={1.75} aria-hidden />
               {selfMember?.bound === true ? '换绑' : '绑定空间'}
             </Button>
-            <span className="flex items-center gap-1.5" title={selfMember?.bound === true ? undefined : '绑定承接空间后可开关'}>
-              <span className="text-xs text-tertiary">接受本组镜像</span>
-              <Switch
-                aria-label="接受本组镜像"
-                checked={selfMember?.acceptsMirror === true}
-                disabled={selfMember?.bound !== true}
-                onChange={(next) => {
-                  void setMirrorAccept(group.groupId, next).catch(() => {
-                    // 人话错误已落 hub-group-store.error——侧栏错误行呈现
-                  });
-                }}
-              />
-            </span>
+            {!isLeader && (
+              <span className="flex items-center gap-1.5" title={selfMember?.bound === true ? undefined : '绑定承接空间后可开关'}>
+                <span className="text-xs text-tertiary">接受本组镜像</span>
+                <Switch
+                  aria-label="接受本组镜像"
+                  checked={selfMember?.acceptsMirror === true}
+                  disabled={selfMember?.bound !== true}
+                  onChange={(next) => {
+                    void setMirrorAccept(group.groupId, next).catch(() => {
+                      // 人话错误已落 hub-group-store.error——侧栏错误行呈现
+                    });
+                  }}
+                />
+              </span>
+            )}
           </span>
         )}
         <GroupActionsMenu
@@ -228,12 +205,14 @@ export function GroupMonitor({ onOpenView }: GroupMonitorProps) {
         </div>
       </div>
       <MirrorWizard />
+      <UnifiedMirrorDialog />
       <BindingDialog
         open={rebindOpen}
         onClose={() => setRebindOpen(false)}
         groupId={group.groupId}
         groupName={group.groupName}
         initialAccepts={selfMember?.acceptsMirror === true}
+        hideAccepts={isLeader}
       />
     </div>
   );
