@@ -324,7 +324,7 @@ describe('WorkgroupSidebar — 两步式入组（1.10.0）', () => {
     expect(await screen.findByRole('dialog', { name: /绑定承接空间/ })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('承接空间*'), { target: { value: 'ws-dev' } });
     fireEvent.click(screen.getByLabelText('接受本组镜像同步'));
-    expect(screen.getByText('接受后组长的统一镜像将覆盖此空间内容')).toBeInTheDocument();
+    expect(screen.getByText('接受后组长的同步配置将覆盖此空间内容')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '绑定' }));
     await waitFor(() => {
       expect(api.hub.groupBind).toHaveBeenCalledWith({ groupId: 'g-peer', workspaceId: 'ws-dev' });

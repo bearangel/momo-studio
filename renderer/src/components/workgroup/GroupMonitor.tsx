@@ -5,7 +5,7 @@
 // - 组头：组名 16px + 邀请码 Badge + CopyButton（本机最近生成的码——hub-group-store
 //   inviteCodes）；无码不设独立按钮——组菜单「重新生成邀请码」是唯一入口（成员级语义：
 //   hub invite 为成员级 RPC，不设 leader 门槛；M2.1 T5 评审收口）
-// - 「镜像工作空间…」仅 leader 可见（GroupPanel 同语义），点击挂既有 MirrorWizard 原样
+// - 「同步配置」（原「镜像工作空间…」）仅 leader 可见（GroupPanel 同语义），点击挂既有 MirrorWizard 原样
 // - 组操作菜单（MoreHorizontal 下拉，自 settings/GroupPanel 收口迁移——删面板前逐
 //   操作面核对归宿，缺失三项补齐）：重新生成邀请码〔成员级，全员可见可点〕/
 //   转移组长〔仅 leader，展开可选成员子列表〕/ 退出工作组〔菜单内两步确认——「再次点击确认」3s 回落范式〕
@@ -17,7 +17,7 @@
 // - 组选择与侧栏共用 effectiveSelectedGroup 推导（手选组在场 → 手选；否则第一组）
 // - 无组空态：引导去侧栏创建/加入（表单在 WorkgroupSidebar）
 // - 1.10.0 平行组（spec 2026-11-05 §6）：查看入口全组隐藏（NodeCard hideView）；
-//   逐节点「镜像工作空间…」让位组长「统一镜像」批量动作（源=组长绑定空间；
+//   逐节点「镜像工作空间…」让位组长「同步配置」批量动作（1.10.1 与 lf 入口同名——2026-11-08 用户裁定）（源=组长绑定空间；
 //   UnifiedMirrorDialog 承载构建/多选/逐行终态——unified-mirror.store，2026-11-08
 //   对话形态预览批准稿）；「接受本组镜像」开关仅非组长成员可见（组长是镜像源，
 //   接受语义不适用——换绑 BindingDialog 同步隐藏勾选）；头部追加换绑入口
@@ -129,11 +129,11 @@ export function GroupMonitor({ onOpenView }: GroupMonitorProps) {
             onClick={() => openMirrorWizard(group.groupId, group.groupName)}
           >
             <HardDriveDownload size={14} strokeWidth={1.75} aria-hidden />
-            镜像工作空间…
+            同步配置
           </Button>
         )}
         {peer && (
-          <span className={`flex shrink-0 items-center gap-2 ${isLeader ? 'ml-auto' : ''}`}>
+          <span className="ml-auto flex shrink-0 items-center gap-2">
             {isLeader && (
               <Button
                 variant="secondary"
@@ -143,7 +143,7 @@ export function GroupMonitor({ onOpenView }: GroupMonitorProps) {
                 onClick={openUnified}
               >
                 <Layers size={14} strokeWidth={1.75} aria-hidden />
-                统一镜像
+                同步配置
               </Button>
             )}
             <Button variant="ghost" size="sm" onClick={() => setRebindOpen(true)}>

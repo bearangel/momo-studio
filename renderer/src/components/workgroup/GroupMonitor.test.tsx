@@ -136,14 +136,14 @@ describe('GroupMonitor', () => {
   it('镜像入口仅 leader：本机 leader 点击挂起既有 MirrorWizard 弹层', async () => {
     useHubGroupStore.setState({ groups: [GROUP_DEV] });
     render(<GroupMonitor onOpenView={onOpenView} />);
-    fireEvent.click(screen.getByRole('button', { name: '镜像工作空间…' }));
+    fireEvent.click(screen.getByRole('button', { name: '同步配置' }));
     expect(await screen.findByRole('dialog', { name: '镜像工作空间向导' })).toBeInTheDocument();
   });
 
   it('非 leader（本机是普通成员）：无镜像入口（邀请码为成员级能力，菜单入口不设限）', () => {
     useHubGroupStore.setState({ groups: [GROUP_OTHER_LEADER] });
     render(<GroupMonitor onOpenView={onOpenView} />);
-    expect(screen.queryByRole('button', { name: '镜像工作空间…' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '同步配置' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '组操作菜单 other-team' }));
     expect(screen.getByRole('button', { name: '重新生成邀请码' })).toBeInTheDocument();
   });
@@ -354,7 +354,7 @@ describe('GroupMonitor — 平行组（1.10.0）', () => {
     useHubGroupStore.setState({ groups: [GROUP_DEV] });
     render(<GroupMonitor onOpenView={onOpenView} />);
     expect(screen.getAllByRole('button', { name: '查看' }).length).toBeGreaterThan(0);
-    expect(screen.queryByText('统一镜像')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '同步配置' })).toBeInTheDocument(); // lf 组长同名入口（开 lf 向导）
     expect(screen.queryByText(/已绑定 ·/)).not.toBeInTheDocument();
   });
 
@@ -365,7 +365,7 @@ describe('GroupMonitor — 平行组（1.10.0）', () => {
     };
     useHubGroupStore.setState({ groups: [unbound] });
     render(<GroupMonitor onOpenView={onOpenView} />);
-    const btn = screen.getByRole('button', { name: /统一镜像/ });
+    const btn = screen.getByRole('button', { name: /同步配置/ });
     expect(btn).toBeDisabled();
     expect(btn).toHaveAttribute('title', '请先绑定自己的承接空间');
   });
@@ -373,8 +373,8 @@ describe('GroupMonitor — 平行组（1.10.0）', () => {
   it('PR-4. 统一镜像：打开对话框即构建快照；不达标成员逐行可见；发起仅对就绪成员逐一派发', async () => {
     useHubGroupStore.setState({ groups: [GROUP_PEER] });
     render(<GroupMonitor onOpenView={onOpenView} />);
-    fireEvent.click(screen.getByRole('button', { name: /统一镜像/ }));
-    const dlg = await screen.findByRole('dialog', { name: '统一镜像' });
+    fireEvent.click(screen.getByRole('button', { name: /同步配置/ }));
+    const dlg = await screen.findByRole('dialog', { name: '同步配置' });
     await waitFor(() => {
       expect(api.hub.snapshotBuildUpload).toHaveBeenCalledWith({ workspaceId: 'ws-dev' });
     });
@@ -416,7 +416,7 @@ describe('GroupMonitor — 平行组（1.10.0）', () => {
     const notLeader: HubGroupInfo = { ...GROUP_PEER, leaderNodeId: '8f3a00000000c21e' };
     useHubGroupStore.setState({ groups: [notLeader] });
     render(<GroupMonitor onOpenView={onOpenView} />);
-    expect(screen.queryByRole('button', { name: /统一镜像/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /同步配置/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /绑定空间|换绑/ })).toBeInTheDocument();
     expect(screen.getByRole('switch', { name: '接受本组镜像' })).toBeInTheDocument();
   });

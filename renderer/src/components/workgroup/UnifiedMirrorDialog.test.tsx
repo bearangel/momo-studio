@@ -61,8 +61,8 @@ describe('UnifiedMirrorDialog', () => {
   it('快照就绪：七行真实计数 + 版本/大小/checksum 芯片 + 红线注记；源空间副题在场', async () => {
     useUnifiedMirrorStore.getState().openDialog(OPEN_INPUT);
     render(<UnifiedMirrorDialog />);
-    const dlg = await screen.findByRole('dialog', { name: '统一镜像' });
-    expect(within(dlg).getByText('统一镜像 · 产品三人组')).toBeInTheDocument();
+    const dlg = await screen.findByRole('dialog', { name: '同步配置' });
+    expect(within(dlg).getByText('同步配置 · 产品三人组')).toBeInTheDocument();
     expect(within(dlg).getByText(/源空间：研发空间（组长绑定空间）/)).toBeInTheDocument();
     expect(await within(dlg).findByText('6 定义 · 4 引用 + 2 内嵌')).toBeInTheDocument();
     expect(within(dlg).getByText('5 补装 + 1 内嵌')).toBeInTheDocument();
@@ -86,7 +86,7 @@ describe('UnifiedMirrorDialog', () => {
     expect(screen.getByRole('button', { name: '向 1 个成员发起镜像' })).toBeInTheDocument();
     fireEvent.click(ckOk);
     expect(screen.getByRole('button', { name: '向 0 个成员发起镜像' })).toBeDisabled();
-    expect(within(screen.getByRole('dialog', { name: '统一镜像' })).getByText('不参与')).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog', { name: '同步配置' })).getByText('不参与')).toBeInTheDocument();
   });
 
   it('发起 → 逐行在途徽标；终态成功行显示资源数；全终态后「完成」可关', async () => {

@@ -2,7 +2,7 @@
 //
 // 平行组「绑定承接空间」弹窗（spec 2026-11-05 §6 两步式入组第二步 / 组设置换绑共用）：
 // - 空间下拉（useWorkspaceStore 本地清单，必选）+「接受本组镜像同步」单选（默认
-//   不接受）+ 护栏文案（接受后组长的统一镜像将覆盖此空间内容）
+//   不接受）+ 护栏文案（接受后组长的同步配置将覆盖此空间内容）
 // - 提交 = hub-group-store bind（groupBind：主进程按名登记 hub + 本地权威落库）
 //   + 接受时 setMirrorAccept({accepts:true})
 //   - 入组态（joinFlavor）提供「稍后再绑」跳过——成为未绑定成员（无法接收草稿，
@@ -108,7 +108,7 @@ export function BindingDialog({
             {accepts && (
               <div className="flex items-start gap-1.5 rounded-md bg-status-warning-tint px-2.5 py-2 text-xs leading-relaxed text-status-warning">
                 <TriangleAlert size={14} strokeWidth={1.75} aria-hidden className="mt-0.5 shrink-0" />
-                <span>接受后组长的统一镜像将覆盖此空间内容</span>
+                <span>接受后组长的同步配置将覆盖此空间内容</span>
               </div>
             )}
           </div>

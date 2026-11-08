@@ -139,7 +139,7 @@ export function UnifiedMirrorDialog() {
       <div
         role="dialog"
         aria-modal="true"
-        aria-label="统一镜像"
+        aria-label="同步配置"
         className="fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100vh-2rem)] w-[560px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-[10px] border border-subtle bg-canvas shadow-2xl"
       >
         <div className="px-5 pb-3 pt-4">
@@ -148,14 +148,14 @@ export function UnifiedMirrorDialog() {
               <Layers size={16} strokeWidth={1.75} aria-hidden />
             </span>
             <div className="min-w-0">
-              <h2 className="text-sm font-semibold text-primary">统一镜像 · {st.groupName}</h2>
+              <h2 className="text-sm font-semibold text-primary">同步配置 · {st.groupName}</h2>
               <p className="mt-0.5 text-xs leading-relaxed text-secondary">
                 源空间：{st.sourceWorkspaceName}（组长绑定空间）→ 覆盖各成员的承接空间
               </p>
             </div>
             <button
               type="button"
-              aria-label="关闭统一镜像"
+              aria-label="关闭同步配置"
               className="ml-auto shrink-0 rounded-md p-1 text-tertiary hover:bg-surface-3 hover:text-primary"
               onClick={() => useUnifiedMirrorStore.getState().close()}
             >
