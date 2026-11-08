@@ -213,7 +213,7 @@ describe('buildWorkspaceSnapshot 清单全量', () => {
       source: 'marketplace',
       slug: 'market-agent',
     });
-    await seedMember(wsId, 'def-builtin', '内置丙', { source: 'builtin', slug: 'builtin-agent' });
+    await seedMember(wsId, 'def-builtin', '内置丙', { source: 'builtin', slug: 'general-assistant' });
     seedHubAccounting('agent', 'market-agent');
 
     // 团队（leader = 市场乙；成员名对齐定义名）
@@ -290,7 +290,7 @@ describe('buildWorkspaceSnapshot 清单全量', () => {
     expect(marketEntry).toMatchObject({ slug: 'market-agent' });
     expect(marketEntry.customDefinition).toBeUndefined();
     const builtinEntry = cfg.agentMembers.find((m) => m.name === '内置丙')!;
-    expect(builtinEntry).toMatchObject({ slug: 'builtin-agent' });
+    expect(builtinEntry).toMatchObject({ slug: 'general-assistant' }); // 随包可重建 → 引用
 
     // —— teams：名字对齐（leader/members 均 agent 定义名）——
     expect(cfg.teams).toEqual([
@@ -326,7 +326,7 @@ describe('buildWorkspaceSnapshot 清单全量', () => {
         { type: 'plugin', slug: 'hub-plugin', version: '1.0.0' },
       ]),
     );
-    expect(r.manifest.resources).not.toContainEqual({ type: 'agent', slug: 'builtin-agent' });
+    expect(r.manifest.resources).not.toContainEqual({ type: 'agent', slug: 'general-assistant' });
     expect(r.manifest.resources).toHaveLength(4);
 
     // —— tar 形态：manifest.json 在根 + custom skill 内嵌（安装标记排除）——
@@ -341,6 +341,22 @@ describe('buildWorkspaceSnapshot 清单全量', () => {
     // —— checksum = 归档 sha256 ——
     const expectHash = crypto.createHash('sha256').update(fs.readFileSync(r.archivePath)).digest('hex');
     expect(r.checksum).toBe(expectHash);
+  });
+
+  it('legacy builtin（06e5cd93 裁撤遗留，随包/catalog 均不可重建）→ customDefinition 内嵌随快照走', async () => {
+    const wsId = await mkWorkspace('legacy-builtin');
+    await seedMember(wsId, 'def-legacy', '编程助手', { source: 'builtin', slug: 'coder' });
+    const r = await buildWorkspaceSnapshot(wsId);
+    const cfg = r.manifest.config;
+    const entry = cfg.agentMembers.find((m) => m.name === '编程助手')!;
+    // 修复前：{ slug: 'coder' } 裸引用——目标侧任何自愈链均无法解析（十一条 unresolved 病灶）
+    expect(entry.slug).toBeUndefined();
+    expect(entry.customDefinition).toBeDefined();
+    const reparsed = parseAgentManifest(entry.customDefinition!);
+    expect(reparsed.slug).toBe('coder');
+    expect(reparsed.systemPrompt).toContain('编程助手');
+    // 内嵌不占 resources 补装位
+    expect(r.manifest.resources).not.toContainEqual({ type: 'agent', slug: 'coder' });
   });
 
   it('空工作空间：空清单合法过自检，归档仅 manifest.json', async () => {
