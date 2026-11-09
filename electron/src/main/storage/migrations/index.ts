@@ -51,6 +51,7 @@ import { migration073 } from './073_list_workgroups_backfill';
 import { migration074 } from './074_momo_all_builtin_tools';
 import { migration075 } from './075_global_tool_budget_default_unlimited';
 import { migration076 } from './076_browser_evaluate_default_on';
+import { migration077 } from './077_momo_resource_creation_tools';
 
 export interface Migration {
   version: number;
@@ -1203,6 +1204,13 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // （0 大概率为旧默认烤入而非主动关闭，主动关闭者重关一次即可）。
     version: migration076.version,
     sql: migration076.up,
+  },
+  {
+    // Momo 默认工具全集 58 → 64（spec 2026-11-09 资源创建）：资源创建六工具
+    // 整列替换进存量 Momo 行（074 同式替换语义；新装库 no-op——迁移先于
+    // 内置定义落库执行）。SQL 住在独立模块 077_momo_resource_creation_tools.ts。
+    version: migration077.version,
+    sql: migration077.sql,
   },
 ];
 

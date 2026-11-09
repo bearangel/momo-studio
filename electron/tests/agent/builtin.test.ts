@@ -14,6 +14,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { runMigrations, closeDb } from '../../src/main/storage/db';
 import { listAgentDefinitions } from '../../src/main/agent/crud';
+import { parseAgentManifestWithSuggestion } from '../../src/main/agent/manifest-parser';
 import {
   registerBuiltinAgents,
   setBuiltinAgentsDir,
@@ -22,6 +23,15 @@ import {
 } from '../../src/main/agent/builtin';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-builtin-test-${Date.now()}`);
+
+// 真身仓库资源目录（引用一致性锁对仓库内 YAML / skills 目录生效，不进 tmp 沙盒）
+const AGENTS_DIR = path.resolve(__dirname, '../../resources/agents');
+const SKILLS_ROOT = path.resolve(__dirname, '../../resources/skills');
+
+/** 读取仓库内真实 general-assistant.yaml（Momo v2.1.0 挂载锁的数据源） */
+function readGeneralAssistantYaml(): string {
+  return fs.readFileSync(path.join(AGENTS_DIR, 'general-assistant.yaml'), 'utf-8');
+}
 
 const VALID_YAML = `
 apiVersion: v1
@@ -236,5 +246,30 @@ spec:
 
     clearBuiltinSuggestionsForTest();
     expect(Object.keys(getBuiltinSuggestionsMap())).toHaveLength(0);
+  });
+});
+
+describe('general-assistant v2.1.0 资源创建挂载', () => {
+  it('版本 2.1.0 且六工具在目录全集内', () => {
+    const { def } = parseAgentManifestWithSuggestion(readGeneralAssistantYaml());
+    expect(def.version).toBe('2.1.0');
+    const refs = def.defaultTools.map((t) => t.ref);
+    for (const t of ['resource_list', 'create_agent', 'add_agent_member', 'create_skill', 'create_mcp', 'create_team']) {
+      expect(refs, `缺工具 ${t}`).toContain(t);
+    }
+  });
+
+  it('四个 defaultSkills 引用在 skills 目录存在（引用一致性锁，防契约漂移）', () => {
+    const { def } = parseAgentManifestWithSuggestion(readGeneralAssistantYaml());
+    const refs = def.defaultSkills.map((s) => s.ref);
+    expect(refs.sort()).toEqual(['build-team', 'create-agent', 'create-mcp', 'create-skill']);
+    for (const s of refs) {
+      expect(fs.existsSync(path.join(SKILLS_ROOT, s, 'SKILL.md')), `skill ${s} 目录缺失`).toBe(true);
+    }
+  });
+
+  it('systemPrompt 含资源创建引导段', () => {
+    const { def } = parseAgentManifestWithSuggestion(readGeneralAssistantYaml());
+    expect(def.systemPrompt).toContain('资源创建');
   });
 });

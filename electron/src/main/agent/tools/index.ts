@@ -37,7 +37,7 @@ import { OfficeTools } from './office-tools';
 import { SessionTools } from './session-tools';
 import { ResourceTools } from './resource-tools';
 
-/** 13 个无条件注册模块（buildToolRegistry 与 catalog 派生共用——单一清单防漂移） */
+/** 14 个无条件注册模块（buildToolRegistry 与 catalog 派生共用——单一清单防漂移） */
 export function unconditionalModules(): ToolModule[] {
   return [
     new FileTools(),

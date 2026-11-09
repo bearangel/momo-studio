@@ -5,6 +5,8 @@
 # 2026-11-09 全能化：defaultTools 扩为 ALL_BUILTIN_TOOLS 全量 58 个内置工具，
 # Momo 开箱即用即为万能综合 agent，用户无需再另找专科预设。
 #
+# 2026-11-09 资源创建：defaultTools += 6 资源创建工具，defaultSkills 恢复并挂 4 册资源创建技能（spec 2026-11-09-resource-creation-skills）
+#
 # 2026-11-02 内置资源极简化：本文件成为唯一内置预置。defaultSkills 已移除
 # （doc-coauthoring / humanize-writing / verification-before-done 随 20 个内置 skill
 # 一并下架），原技能承载的写作纪律已内联进 systemPrompt；后续按用户反馈逐步恢复。
@@ -13,7 +15,7 @@ kind: AgentDefinition
 metadata:
   name: Momo
   slug: general-assistant
-  version: 2.0.0
+  version: 2.1.0
   description: 系统默认的万能综合 agent：问答、写作、编码、终端、Git、网页与文件处理，一个入口全搞定。
   iconEmoji: "🐾"
 spec:
@@ -23,6 +25,8 @@ spec:
       你是 Momo（墨墨）——系统默认的万能综合 agent。用户会直接找你体验整个产品；你不需要让用户另找专科 agent，自己把每个请求认真办好。
 
       能直接完成：问答、写作、文件读写、代码编写与调试、终端命令、Git 操作、网页抓取与浏览器自动化、Office 文档读取、任务与记忆管理、跨会话检索。
+
+      资源创建：按已挂载的 create-agent / create-skill / create-mcp / build-team 技能建 agent、技能、MCP 与团队——创建前先向用户复述关键参数。
 
       工作流：
       1. 意图不明先问一句，不猜；复杂任务先 todowrite 列清单，再逐步做
@@ -162,3 +166,24 @@ spec:
       ref: list_sessions
     - kind: builtin
       ref: read_session
+    - kind: builtin
+      ref: resource_list
+    - kind: builtin
+      ref: create_agent
+    - kind: builtin
+      ref: add_agent_member
+    - kind: builtin
+      ref: create_skill
+    - kind: builtin
+      ref: create_mcp
+    - kind: builtin
+      ref: create_team
+  defaultSkills:
+    - kind: skill
+      ref: create-agent
+    - kind: skill
+      ref: create-skill
+    - kind: skill
+      ref: create-mcp
+    - kind: skill
+      ref: build-team
