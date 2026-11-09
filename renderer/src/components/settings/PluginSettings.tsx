@@ -283,14 +283,16 @@ function ConfigField(props: ConfigFieldProps) {
         </div>
       ) : decl.type === 'path' ? (
         <div className="flex items-center gap-2">
-          <Input
-            id={`cfg-${fieldKey}`}
-            type="text"
-            readOnly
-            placeholder="未配置（使用默认目录）"
-            value={props.value === undefined ? '' : String(props.value)}
-            className="min-w-0 flex-1 font-mono"
-          />
+          <div className="min-w-0 flex-1">
+            <Input
+              id={`cfg-${fieldKey}`}
+              type="text"
+              readOnly
+              placeholder="未配置（使用默认目录）"
+              value={props.value === undefined ? '' : String(props.value)}
+              className="w-full font-mono"
+            />
+          </div>
           <Button
             type="button"
             variant="secondary"
