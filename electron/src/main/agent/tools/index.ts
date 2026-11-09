@@ -15,6 +15,8 @@
 //     office_read_cells / office_copy；office 生成类六工具已下线，能力由
 //     office-pro 插件（run_js 代码工坊）承接——无条件注册）。
 //   + SessionTools（跨会话引用：list_sessions / read_session）
+//   + ResourceTools（资源创建六工具：resource_list / create_agent / add_agent_member /
+//     create_skill / create_mcp / create_team——经 resource-ops 桥主进程执行）
 // 通用前置处理（权限 / 审计）仍在 runtime-entry 入口处，不在本注册中心做。
 
 import type { LLMToolDef } from '../llm-provider';
@@ -33,6 +35,7 @@ import { MemoryTools } from './memory-tools';
 import { BrowserTools } from './browser-tools';
 import { OfficeTools } from './office-tools';
 import { SessionTools } from './session-tools';
+import { ResourceTools } from './resource-tools';
 
 /** 13 个无条件注册模块（buildToolRegistry 与 catalog 派生共用——单一清单防漂移） */
 export function unconditionalModules(): ToolModule[] {
@@ -50,6 +53,7 @@ export function unconditionalModules(): ToolModule[] {
     new BrowserTools(),
     new OfficeTools(),
     new SessionTools(),
+    new ResourceTools(),
   ];
 }
 
