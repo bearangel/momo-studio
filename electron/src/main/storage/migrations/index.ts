@@ -49,6 +49,8 @@ import * as migration071 from './071_task_origin_column';
 import * as migration072 from './072_hub_group_bindings';
 import { migration073 } from './073_list_workgroups_backfill';
 import { migration074 } from './074_momo_all_builtin_tools';
+import { migration075 } from './075_global_tool_budget_default_unlimited';
+import { migration076 } from './076_browser_evaluate_default_on';
 
 export interface Migration {
   version: number;
@@ -1189,6 +1191,18 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 全集为准，旧引用一并清理）。SQL 住在独立模块 074_momo_all_builtin_tools.ts。
     version: migration074.version,
     sql: migration074.sql,
+  },
+  {
+    // 设置优化（2026-11-09）：全局工具预算默认 50 → -1 无限——仅升旧默认
+    // 痕迹（=50），显式自定义值不动（054 同款先例）。
+    version: migration075.version,
+    sql: migration075.up,
+  },
+  {
+    // 设置优化（2026-11-09）：浏览器页面脚本执行默认开启——存量行 0 全翻 1
+    // （0 大概率为旧默认烤入而非主动关闭，主动关闭者重关一次即可）。
+    version: migration076.version,
+    sql: migration076.up,
   },
 ];
 
