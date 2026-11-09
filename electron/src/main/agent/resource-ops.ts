@@ -11,10 +11,13 @@ import { parseAgentManifest } from './manifest-parser';
 import { createTeam, listTeams } from './team';
 import { getSkillsDir, listInstalled as listInstalledSkills } from '../skill/zip-uploader';
 import { parseSkillMd } from '../skill/loader';
-import { listRegistered } from '../mcp/host-manager';
+import { listRegistered, registerMcpDefinition } from '../mcp/host-manager';
+import { McpClient } from '../mcp/client';
+import { HttpMcpClient } from '../mcp/http-client';
+import type { McpServerConfig, McpToolInfo } from '../mcp/types';
 import { getDb } from '../storage/db';
 import { isValidSlug } from '../marketplace/types';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { logger } from '../logger';
@@ -57,6 +60,13 @@ export interface CreateSkillResult {
   name: string;
 }
 
+/** create_mcp 返回（toolNames 为首层工具名摘要，截断至前 20） */
+export interface CreateMcpResult {
+  name: string;
+  toolCount: number;
+  toolNames: string[];
+}
+
 /** create_team 返回（team.ts 原事务，错误信息原样透出） */
 export interface CreateTeamResult {
   teamId: string;
@@ -69,6 +79,7 @@ export async function executeResourceOp(
   op: string,
   args: unknown,
   workspaceId: string,
+  deps?: ResourceOpDeps,
 ): Promise<unknown> {
   if (!(RESOURCE_OP_NAMES as readonly string[]).includes(op)) {
     throw new Error(`未知 resource op: ${op}`);
@@ -79,7 +90,7 @@ export async function executeResourceOp(
     case 'createAgent': return opCreateAgent(a, workspaceId);
     case 'addMember': return opAddMember(a, workspaceId);
     case 'createSkill': return opCreateSkill(a);
-    case 'createMcp': throw new Error('createMcp 未实现');
+    case 'createMcp': return opCreateMcp(a, deps);
     case 'createTeam': return opCreateTeam(a, workspaceId);
     default: throw new Error(`未知 resource op: ${op}`);
   }
@@ -232,6 +243,96 @@ function opCreateSkill(a: Record<string, unknown>): CreateSkillResult {
   return { slug, name: def.name };
 }
 
+// ── createMcp（先测后落库，spec §5.5：瞬态客户端不经进程池、失败零落库）──
+
+/** MCP 连通握手超时——对齐 mcp-bridge 既有 30s 常量 */
+export const MCP_TEST_TIMEOUT_MS = 30_000;
+
+/** 瞬态客户端最小面（McpClient / HttpMcpClient 均满足） */
+export interface TransientMcpClient {
+  connect(): Promise<void>;
+  listTools(): Promise<McpToolInfo[]>;
+  disconnect(): Promise<void>;
+}
+
+/** 测试注入点（makeClient）：生产缺省真实工厂（stdio→McpClient / http→HttpMcpClient） */
+export interface ResourceOpDeps {
+  makeClient: (config: McpServerConfig) => TransientMcpClient;
+}
+
+function opCreateMcp(a: Record<string, unknown>, deps?: ResourceOpDeps): Promise<CreateMcpResult> {
+  const name = str(a['name'], 'name');
+  if (!isValidSlug(name)) throw new Error(`非法 MCP name: ${name}`);
+  const taken = getDb().prepare('SELECT 1 FROM mcp_definitions WHERE name = ?').get(name);
+  if (taken) throw new Error(`MCP 已存在: ${name}`);
+  const raw = a['transport'];
+  if (typeof raw !== 'object' || raw === null) {
+    throw new Error('transport 必须为 { kind: "stdio", command, args?, env? } 或 { kind: "http", url, headers? }');
+  }
+  const t = raw as Record<string, unknown>;
+  const kind = t['kind'];
+  if (kind !== 'stdio' && kind !== 'http') {
+    throw new Error('transport 必须为 { kind: "stdio", command, args?, env? } 或 { kind: "http", url, headers? }');
+  }
+
+  // 配置形状：逐字段对齐 resource/ipc.handlers.ts resource:registerMcp 的 RegisterMcpInput
+  // 组装（id/version 主进程补全、source 固定 'custom'；http 形态 command 空串占位）
+  let config: McpServerConfig;
+  if (kind === 'stdio') {
+    config = {
+      id: randomUUID(),
+      name,
+      version: '1.0.0',
+      transport: 'stdio',
+      command: str(t['command'], 'transport.command'),
+      args: t['args'] === undefined ? [] : strArray(t['args'], 'transport.args'),
+      env: optStrMap(t['env'], 'transport.env') ?? {},
+      source: 'custom',
+    };
+  } else {
+    config = {
+      id: randomUUID(),
+      name,
+      version: '1.0.0',
+      transport: 'streamable_http',
+      command: '',
+      url: str(t['url'], 'transport.url'),
+      headers: optStrMap(t['headers'], 'transport.headers') ?? {},
+      source: 'custom',
+    };
+  }
+
+  return (async (): Promise<CreateMcpResult> => {
+    const makeClient =
+      deps?.makeClient ??
+      ((cfg: McpServerConfig): TransientMcpClient =>
+        cfg.transport === 'streamable_http' ? new HttpMcpClient(cfg) : new McpClient(cfg));
+    const client = makeClient(config);
+    let toolNames: string[];
+    try {
+      await withTimeout(client.connect(), MCP_TEST_TIMEOUT_MS, `MCP ${name} 连接超时`);
+      const tools = await withTimeout(client.listTools(), MCP_TEST_TIMEOUT_MS, `MCP ${name} 工具发现超时`);
+      toolNames = tools.map((tool) => tool.name);
+    } finally {
+      await client.disconnect().catch(() => undefined);
+    }
+    registerMcpDefinition(config);
+    logger.info('会话内注册 MCP', { name, toolCount: toolNames.length });
+    return { name, toolCount: toolNames.length, toolNames: toolNames.slice(0, 20) };
+  })();
+}
+
+/** Promise 竞速超时（定时器 unref——不阻塞进程退出） */
+function withTimeout<T>(p: Promise<T>, ms: number, msg: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => {
+      const timer = setTimeout(() => reject(new Error(msg)), ms);
+      timer.unref?.();
+    }),
+  ]);
+}
+
 // ── createTeam（复用 team.ts 事务，错误原样透出）──
 function opCreateTeam(a: Record<string, unknown>, workspaceId: string): CreateTeamResult {
   const name = str(a['name'], 'name');
@@ -252,4 +353,14 @@ function strArray(v: unknown, field: string): string[] {
     throw new Error(`${field} 必须为字符串数组`);
   }
   return v as string[];
+}
+function optStrMap(v: unknown, field: string): Record<string, string> | undefined {
+  if (v === undefined) return undefined;
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw new Error(`${field} 必须为字符串键值对象`);
+  }
+  for (const val of Object.values(v)) {
+    if (typeof val !== 'string') throw new Error(`${field} 必须为字符串键值对象`);
+  }
+  return v as Record<string, string>;
 }

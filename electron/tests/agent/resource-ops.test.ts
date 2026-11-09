@@ -14,6 +14,7 @@ import { addMember } from '../../src/main/agent/crud';
 import { createProvider } from '../../src/main/agent/provider-crud';
 import { updateGlobalSettings } from '../../src/main/settings/crud';
 import { getSkillsDir, listInstalled } from '../../src/main/skill/zip-uploader';
+import type { McpToolInfo } from '../../src/main/mcp/types';
 import { executeResourceOp } from '../../src/main/agent/resource-ops';
 
 // 与 crud-custom-def.test.ts 同款 mock：crud.ts 引入的 runtime 依赖在测试环境不可用
@@ -240,5 +241,57 @@ description: 写结构化报告时使用
     const installed = listInstalled().find((s) => s.slug === 'ref-skill');
     expect(installed?.source).toBe('custom');
     expect(installed?.name).toBe('报告撰写');
+  });
+});
+
+describe('createMcp', () => {
+  it('非法 name 拒绝', async () => {
+    await expect(
+      executeResourceOp('createMcp', { name: 'Bad Name', transport: { kind: 'http', url: 'https://x' } }, wsId),
+    ).rejects.toThrow('非法');
+  });
+
+  it('同名冲突拒绝', async () => {
+    // 种子：mcp_definitions 预插 name=demo 行（直接 SQL，mirror mcp 既有测试）
+    getDb()
+      .prepare(
+        `INSERT INTO mcp_definitions (id, name, version, transport, command)
+         VALUES ('mcp-seed-demo', 'demo', '1.0.0', 'stdio', 'echo')`,
+      )
+      .run();
+    await expect(
+      executeResourceOp('createMcp', { name: 'demo', transport: { kind: 'http', url: 'https://x' } }, wsId),
+    ).rejects.toThrow('MCP 已存在');
+  });
+
+  it('连通失败零落库并回传错误', async () => {
+    const failingClient = {
+      connect: async () => { throw new Error('connection refused'); },
+      listTools: async () => [],
+      disconnect: async () => undefined,
+    };
+    await expect(
+      executeResourceOp('createMcp', { name: 'dead-server', transport: { kind: 'stdio', command: 'no-such-bin' } }, wsId, {
+        makeClient: () => failingClient,
+      }),
+    ).rejects.toThrow('connection refused');
+    const row = getDb().prepare('SELECT 1 FROM mcp_definitions WHERE name = ?').get('dead-server');
+    expect(row).toBeUndefined();
+  });
+
+  it('连通成功后落库并返回工具名摘要（截断至 20）', async () => {
+    const okClient = {
+      connect: async () => undefined,
+      listTools: async () =>
+        Array.from({ length: 25 }, (_, i): McpToolInfo => ({ name: `t${i}`, description: '', inputSchema: {} })),
+      disconnect: async () => undefined,
+    };
+    const r = (await executeResourceOp(
+      'createMcp', { name: 'live-server', transport: { kind: 'http', url: 'https://x' } }, wsId,
+      { makeClient: () => okClient },
+    )) as { toolCount: number; toolNames: string[] };
+    expect(r.toolCount).toBe(25);
+    expect(r.toolNames).toHaveLength(20);
+    expect(getDb().prepare('SELECT 1 FROM mcp_definitions WHERE name = ?').get('live-server')).toBeTruthy();
   });
 });
