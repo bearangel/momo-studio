@@ -6,6 +6,8 @@
 // workspaceId——子进程不可伪造归属。
 import { createCustomDef, addMember, generateAgentUserId } from './crud';
 import { listAgentDefinitions, getAgentDefinition, listMembers } from './agent-queries';
+import { getProvider } from './provider-crud';
+import { parseAgentManifest } from './manifest-parser';
 import { createTeam, listTeams } from './team';
 import { getSkillsDir, listInstalled as listInstalledSkills } from '../skill/zip-uploader';
 import { listRegistered } from '../mcp/host-manager';
@@ -30,6 +32,13 @@ export interface ResourceListResult {
   skills?: Array<{ slug: string; name: string; source: string }>;
   mcps?: Array<{ name: string }>;
   teams?: Array<{ id: string; name: string; leaderInstanceId: string; memberInstanceIds: string[] }>;
+}
+
+/** create_agent 返回（addToWorkspace=true 时附带成员 instanceId） */
+export interface CreateAgentResult {
+  definitionId: string;
+  slug: string;
+  member?: { instanceId: string };
 }
 
 /** add_agent_member 返回（幂等：同 ws 同 def 已存在时返回既有成员） */
@@ -57,7 +66,7 @@ export async function executeResourceOp(
   const a = (args ?? {}) as Record<string, unknown>;
   switch (op) {
     case 'list': return opList(a['type'], workspaceId);
-    case 'createAgent': throw new Error('createAgent 未实现');
+    case 'createAgent': return opCreateAgent(a, workspaceId);
     case 'addMember': return opAddMember(a, workspaceId);
     case 'createSkill': throw new Error('createSkill 未实现');
     case 'createMcp': throw new Error('createMcp 未实现');
@@ -101,6 +110,47 @@ function opList(typeFilter: unknown, workspaceId: string): ResourceListResult {
     }));
   }
   return result;
+}
+
+// ── createAgent（与 UI 导入链 agent.createFromYaml 同语义：parse → 冲突拒绝 →
+//    createCustomDef（含 defaultChatModel 兜底 + SAFE_MINIMUM_TOOLS 缺省））──
+async function opCreateAgent(a: Record<string, unknown>, workspaceId: string): Promise<CreateAgentResult> {
+  const manifestYaml = str(a['manifestYaml'], 'manifestYaml');
+  const addToWorkspace = a['addToWorkspace'] === true;
+  const parsed = parseAgentManifest(manifestYaml); // 校验失败抛逐字段错误（agent 可修后重试）
+  if (!isValidSlug(parsed.slug)) throw new Error(`非法 slug: ${parsed.slug}`);
+  // v25 定义全局化：任何 source 同 slug 即冲突（spec §5.2）——不做静默后缀
+  const clash = listAgentDefinitions().find((d) => d.slug === parsed.slug);
+  if (clash) {
+    throw new Error(`slug 已存在: ${parsed.slug}（id=${clash.id}, source=${clash.source}）——请换 slug 或先在资源库管理既有定义`);
+  }
+  // 显式模型入参可选；providerId 显式时校验存在（友好报错优于 FK 中止）
+  let modelProviderId = '';
+  let modelName = '';
+  if (typeof a['modelProviderId'] === 'string' && a['modelProviderId']) {
+    modelProviderId = a['modelProviderId'];
+    modelName = str(a['modelName'], 'modelName');
+    if (!getProvider(modelProviderId)) throw new Error(`供应商不存在: ${modelProviderId}`);
+  }
+  const def = createCustomDef(null, {
+    name: parsed.name,
+    slug: parsed.slug,
+    description: parsed.description,
+    systemPrompt: parsed.systemPrompt,
+    iconEmoji: parsed.iconEmoji,
+    modelProviderId, // 空 → createCustomDef 走 defaultChatModel 兜底
+    modelName,
+    defaultTools: parsed.defaultTools,
+    defaultMcps: parsed.defaultMcps,
+    defaultSkills: parsed.defaultSkills,
+  });
+  let member: { instanceId: string } | undefined;
+  if (addToWorkspace) {
+    const m = await opAddMember({ definitionIdOrSlug: def.id }, workspaceId);
+    member = { instanceId: m.instanceId };
+  }
+  logger.info('会话内创建 agent 定义', { slug: def.slug, id: def.id, addToWorkspace });
+  return { definitionId: def.id, slug: def.slug, member };
 }
 
 // ── addMember（幂等：同 ws 同 def 已存在返回既有成员）──

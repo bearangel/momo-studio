@@ -11,6 +11,8 @@ import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keychain';
 import { addMember } from '../../src/main/agent/crud';
+import { createProvider } from '../../src/main/agent/provider-crud';
+import { updateGlobalSettings } from '../../src/main/settings/crud';
 import { executeResourceOp } from '../../src/main/agent/resource-ops';
 
 // 与 crud-custom-def.test.ts 同款 mock：crud.ts 引入的 runtime 依赖在测试环境不可用
@@ -34,6 +36,9 @@ let wsId = '';
 let m1 = '';
 let m2 = '';
 let defSlug = '';
+// 供应商行（defaultChatModel 兜底的前提）；defaultChatModel 本身按用例需要再设
+// （definition-default-model.test.ts 同款手法：不设 = 「未配置」路径）
+let provId = '';
 
 beforeEach(async () => {
   fs.mkdirSync(tmpRoot, { recursive: true });
@@ -58,6 +63,7 @@ beforeEach(async () => {
   seedDef.run('def-c', '丙', 'agent-c');
   m1 = (await addMember('ws-r', 'def-a', 'agent-a-x')).instanceId;
   m2 = (await addMember('ws-r', 'def-b', 'agent-b-x')).instanceId;
+  provId = (await createProvider({ name: 'GLM', baseUrl: 'https://example/v1', apiKey: 'k' })).id;
   wsId = 'ws-r';
   defSlug = 'agent-c';
 });
@@ -119,5 +125,60 @@ describe('addMember（幂等）', () => {
     await expect(
       executeResourceOp('addMember', { definitionIdOrSlug: 'no-such' }, wsId),
     ).rejects.toThrow('未找到 agent 定义');
+  });
+});
+
+describe('createAgent', () => {
+  const validYaml = `apiVersion: v1
+kind: AgentDefinition
+metadata:
+  name: 翻译agent
+  slug: translator
+  version: 1.0.0
+  description: 中英互译
+spec:
+  runtime: declarative
+  declarative:
+    systemPrompt: 你是翻译。
+    model:
+      provider: anthropic
+      model: claude-sonnet-4-5
+  defaultTools:
+    - kind: builtin
+      ref: read_file
+`;
+  const yamlWithOtherSlug = validYaml.replace('slug: translator', 'slug: translator-2');
+
+  it('非法 manifest 逐字段透出 parser 错误', async () => {
+    await expect(
+      executeResourceOp('createAgent', { manifestYaml: 'apiVersion: v9\nkind: X' }, wsId),
+    ).rejects.toThrow('manifest 校验失败');
+  });
+
+  it('slug 与既有定义冲突拒绝并带既有信息', async () => {
+    // 种子：先建 slug=translator 的定义（defaultChatModel 兜底供模型绑定）
+    updateGlobalSettings({ defaultChatModel: { providerId: provId, modelId: 'glm-5.3' } });
+    await executeResourceOp('createAgent', { manifestYaml: validYaml }, wsId);
+    await expect(
+      executeResourceOp('createAgent', { manifestYaml: validYaml }, wsId),
+    ).rejects.toThrow(/slug 已存在.*translator/);
+  });
+
+  it('全局无默认模型时报错指路设置', async () => {
+    // 不设 defaultChatModel 且入参不带 modelProviderId → createCustomDef 兜底缺失
+    await expect(
+      executeResourceOp('createAgent', { manifestYaml: yamlWithOtherSlug }, wsId),
+    ).rejects.toThrow('defaultChatModel');
+  });
+
+  it('addToWorkspace=true 返回成员 instanceId', async () => {
+    updateGlobalSettings({ defaultChatModel: { providerId: provId, modelId: 'glm-5.3' } });
+    const r = (await executeResourceOp(
+      'createAgent',
+      { manifestYaml: yamlWithOtherSlug, addToWorkspace: true },
+      wsId,
+    )) as { definitionId: string; member?: { instanceId: string } };
+    expect(r.definitionId).toBeTruthy();
+    expect(r.member?.instanceId).toBeTruthy();
   });
 });
