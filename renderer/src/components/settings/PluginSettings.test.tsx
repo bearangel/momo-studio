@@ -87,6 +87,7 @@ describe('PluginSettings', () => {
   it('保存：非敏感全量 + 敏感仅非空输入（空 = 不变，overlay 语义）', async () => {
     render(<PluginSettings />);
     await waitFor(() => expect(screen.getByRole('button', { name: '保存' })).toBeTruthy());
+    expect(input.className).toContain('flex-1');
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => expect(setConfig).toHaveBeenCalled());
     const payload = setConfig.mock.calls[0]![1] as Record<string, unknown>;

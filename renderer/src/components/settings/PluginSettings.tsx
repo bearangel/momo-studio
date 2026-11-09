@@ -289,7 +289,7 @@ function ConfigField(props: ConfigFieldProps) {
             readOnly
             placeholder="未配置（使用默认目录）"
             value={props.value === undefined ? '' : String(props.value)}
-            className="font-mono"
+            className="min-w-0 flex-1 font-mono"
           />
           <Button
             type="button"
