@@ -159,6 +159,27 @@ describe('expandMcpTemplate', () => {
     expect(e.env).toEqual({ T: 'token=sk-live', M: 'plain' });
   });
 
+  it('⑨ win32 布局：${engineNode}→node.exe、${engineBin}→codegraph.cmd（上游 win32 包没有 .exe 启动器）', async () => {
+    const root = seedPlugin();
+    seedDb(root);
+    // 上游 win32 引擎包的真实布局：engine/node.exe + engine/bin/codegraph.cmd（无 .exe/codegraph）
+    fs.writeFileSync(path.join(root, 'engine', 'node.exe'), 'bin');
+    fs.writeFileSync(path.join(root, 'engine', 'bin', 'codegraph.cmd'), '@echo off\r\n');
+    const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      const node = await expandMcpTemplate(
+        mkConfig({ command: '${engineNode}', args: ['${pluginRoot}/bin/boot.js'] }),
+        'ws-1',
+      );
+      expect(node.command).toBe(path.join(root, 'engine', 'node.exe'));
+      const bin = await expandMcpTemplate(mkConfig({ command: '${engineBin}' }), 'ws-1');
+      expect(bin.command).toBe(path.join(root, 'engine', 'bin', 'codegraph.cmd'));
+    } finally {
+      Object.defineProperty(process, 'platform', original);
+    }
+  });
+
   it('⑧ ${engineNode}：展开为引擎自带 Node 二进制（缺失可读报错）', async () => {
     const root = seedPlugin();
     seedDb(root);

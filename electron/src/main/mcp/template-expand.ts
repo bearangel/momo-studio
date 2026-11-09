@@ -68,10 +68,33 @@ function workspaceDirectory(workspaceId: string): string | null {
   return typeof dir === 'string' && dir.trim() !== '' ? dir : null;
 }
 
-/** 引擎启动器：插件根下 engine/bin/codegraph（win32 为 .exe） */
-function engineBinPath(pluginRoot: string): string {
-  const bin = process.platform === 'win32' ? 'codegraph.exe' : 'codegraph';
-  return path.join(pluginRoot, 'engine', 'bin', bin);
+/**
+ * 引擎启动器候选（win32 平台差异）：
+ *   上游 win32 引擎包只给 `bin/codegraph.cmd`（cmd 包装）与 `bin/codegraph`（sh 包装），
+ *   **没有 `codegraph.exe`**；darwin/linux 才有无扩展名的 `codegraph`。
+ *   旧实现按 win32 只认 `.exe`，导致 Windows 上 `${engineBin}` 展开必抛「引擎缺失」。
+ */
+function engineBinCandidates(pluginRoot: string): string[] {
+  const dir = path.join(pluginRoot, 'engine', 'bin');
+  return process.platform === 'win32'
+    ? [path.join(dir, 'codegraph.exe'), path.join(dir, 'codegraph.cmd'), path.join(dir, 'codegraph')]
+    : [path.join(dir, 'codegraph')];
+}
+
+/** 引擎自带 Node 运行时候选：上游 win32 是 `node.exe`，darwin/linux 是无扩展名 `node` */
+function engineNodeCandidates(pluginRoot: string): string[] {
+  const dir = path.join(pluginRoot, 'engine');
+  return process.platform === 'win32'
+    ? [path.join(dir, 'node.exe'), path.join(dir, 'node')]
+    : [path.join(dir, 'node'), path.join(dir, 'node.exe')];
+}
+
+/** 候选集里第一个存在的路径；都不存在返回首个（供错误信息展示规范位置） */
+function firstExisting(candidates: string[]): { path: string; exists: boolean } {
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return { path: candidate, exists: true };
+  }
+  return { path: candidates[0]!, exists: false };
 }
 
 /** spawn 期展开。展开失败（缺值/缺引擎/插件记录缺失）一律 throw——错误可见。 */
@@ -98,20 +121,20 @@ export async function expandMcpTemplate(
         return runtime.root;
       }
       if (name === 'engineNode') {
-        const nodeBin = path.join(runtime.root, 'engine', 'node');
-        if (!fs.existsSync(nodeBin)) {
-          throw new Error(`插件引擎 Node 运行时缺失（${nodeBin}）——请在资源库重装该插件恢复引擎`);
+        const node = firstExisting(engineNodeCandidates(runtime.root));
+        if (!node.exists) {
+          throw new Error(`插件引擎 Node 运行时缺失（${node.path}）——请在资源库重装该插件恢复引擎`);
         }
-        return nodeBin;
+        return node.path;
       }
       if (name === 'engineBin') {
-        const bin = engineBinPath(runtime.root);
-        if (!fs.existsSync(bin)) {
+        const bin = firstExisting(engineBinCandidates(runtime.root));
+        if (!bin.exists) {
           throw new Error(
-            `插件引擎缺失（${bin}）——请在资源库重装该插件恢复引擎，或重新解压 engine 目录`,
+            `插件引擎缺失（${bin.path}）——请在资源库重装该插件恢复引擎，或重新解压 engine 目录`,
           );
         }
-        return bin;
+        return bin.path;
       }
       if (!name.startsWith('config.')) {
         throw new Error(`MCP 模板占位符不支持: ${whole}（仅支持 ${config.pluginId} 的 config.* 与 ${'${engineBin}'}）`);
