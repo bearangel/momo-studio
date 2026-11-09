@@ -41,6 +41,20 @@ describe('skill/loader', () => {
     expect(def.body).toContain('读取代码文件');
   });
 
+  it('CRLF 行尾同样可解析（Windows 检出 / 用户自建技能）', () => {
+    // 回归锁：core.autocrlf=true 的检出与 Windows 编辑器保存的 SKILL.md 都是 CRLF；
+    // 正则按 \n 切分曾直接判「缺少 frontmatter」——插件装上但技能列表空。
+    const crlf = VALID_SKILL_MD.replace(/\n/g, '\r\n');
+    const def = parseSkillMd(crlf, '/cache/code-review');
+    expect(def.slug).toBe('code-review');
+    expect(def.name).toBe('code-review-workflow');
+    expect(def.description).toBe('执行标准的代码审查流程');
+    expect(def.allowedTools).toEqual(['read_file', 'write_file']);
+    expect(def.body).toContain('# 代码审查工作流');
+    // 正文里不得残留 CR（归一后与 LF 版本等价）
+    expect(def.body).not.toContain('\r');
+  });
+
   it('缺少 version 时默认 1.0.0', () => {
     const md = `---
 name: no-version

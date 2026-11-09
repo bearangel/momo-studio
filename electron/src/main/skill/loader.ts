@@ -16,9 +16,20 @@ import type { SkillDefinition, SkillFrontmatter } from './types';
 /** 匹配 --- 包围的 YAML frontmatter + 其后的 Markdown 正文 */
 const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/;
 
+/**
+ * 行尾归一：SKILL.md 可能来自 Windows 检出（core.autocrlf=true）或用户自建的
+ * CRLF 文件。frontmatter 正则按 \n 切分，CRLF 会直接判成「缺少 frontmatter」
+ * （症状：插件装上了但技能列表空）。统一折成 \n 后再解析——YAML 与正文都不受
+ * 行尾形态影响，也只是纯粹的输入归一，不放松任何字段校验。
+ */
+function normalizeLineEndings(text: string): string {
+  if (!text.includes('\r')) return text;
+  return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
 /** 解析 SKILL.md 文本为 SkillDefinition。格式错误或缺少必填字段会抛错。 */
 export function parseSkillMd(content: string, cachePath: string): SkillDefinition {
-  const match = content.match(FRONTMATTER_RE);
+  const match = normalizeLineEndings(content).match(FRONTMATTER_RE);
   if (!match) {
     throw new Error('SKILL.md 格式错误：缺少 YAML frontmatter（--- 包围）');
   }
