@@ -133,3 +133,44 @@ describe('NodeCard', () => {
     expect(within(card).getByText('本机')).toBeInTheDocument();
   });
 });
+
+// ── 1.10.0 平行组：绑定态行 + 查看退场 ────────────────────────────────────────
+
+describe('NodeCard — 平行组绑定态（1.10.0）', () => {
+  it('NC-1. showBinding：已绑定成员 mono 行追加「已绑定 · 空间名」', () => {
+    render(
+      <NodeCard
+        node={{ ...OFFICE, bound: true, boundWorkspaceName: 'dev-ws' }}
+        tasks={[]}
+        isLeader={false}
+        isSelf={false}
+        canView={false}
+        onOpenView={onOpenView}
+        showBinding
+      />,
+    );
+    expect(screen.getByText('node:8f3a…c21e · 已绑定 · dev-ws')).toBeInTheDocument();
+  });
+
+  it('NC-2. showBinding：未绑定成员显示「未绑定承接空间」', () => {
+    render(
+      <NodeCard node={{ ...LAB, bound: false }} tasks={[]} isLeader={false} isSelf={false} canView={false} onOpenView={onOpenView} showBinding />,
+    );
+    expect(screen.getByText(/未绑定承接空间/)).toBeInTheDocument();
+  });
+
+  it('NC-3. hideView：查看按钮整枚退场（peer 组隐私裁定）；缺省照常渲染', () => {
+    const { rerender } = render(
+      <NodeCard node={OFFICE} tasks={[]} isLeader={false} isSelf={false} canView onOpenView={onOpenView} hideView />,
+    );
+    expect(screen.queryByRole('button', { name: '查看' })).not.toBeInTheDocument();
+    rerender(<NodeCard node={OFFICE} tasks={[]} isLeader={false} isSelf={false} canView onOpenView={onOpenView} />);
+    expect(screen.getByRole('button', { name: '查看' })).toBeInTheDocument();
+  });
+
+  it('NC-4. 缺省（lf 组）：mono 行无绑定态段（零变化）', () => {
+    render(<NodeCard node={{ ...OFFICE, bound: true, boundWorkspaceName: 'dev-ws' }} tasks={[]} isLeader={false} isSelf={false} canView onOpenView={onOpenView} />);
+    expect(screen.getByText('node:8f3a…c21e')).toBeInTheDocument();
+    expect(screen.queryByText(/已绑定/)).not.toBeInTheDocument();
+  });
+});

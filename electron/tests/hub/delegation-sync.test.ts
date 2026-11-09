@@ -761,3 +761,131 @@ describe('delegation-sync — retryDispatch blocked 闸（M3.3）', () => {
     expect(result.dispatched).toBe(true);
   });
 });
+// ── 1.10.0 平行草稿生命周期拍（spec 2026-11-05 §5.1——发送方行不提前翻 running）──
+
+describe('delegation-sync — 平行草稿生命周期拍', () => {
+  it('received/arranged 拍：摘要落 kv，行保持 pending（不写 startedAt 不翻 in_progress）', () => {
+    const w = makeWorld([delegatedRow()]);
+    const sync = createDelegationSync(w.ports);
+    sync.handleProgress({ taskId: 'hub-task-1', lastSeq: 0, excerpt: '草稿已接收，等待节点拥有者安排', kind: 'received' });
+    let row = w.rows.get('T-100')!;
+    expect(row.status).toBe('pending');
+    expect(row.startedAt).toBeNull();
+    let entry = w.progress.get('hub-task-1')!;
+    expect(entry.excerpt).toContain('草稿已接收');
+    expect(entry.waiting).toBeUndefined();
+
+    sync.handleProgress({ taskId: 'hub-task-1', lastSeq: 1, excerpt: '节点拥有者已安排执行', kind: 'arranged' });
+    row = w.rows.get('T-100')!;
+    expect(row.status).toBe('pending');
+    entry = w.progress.get('hub-task-1')!;
+    expect(entry.excerpt).toContain('已安排');
+
+    // 首个真实 running 拍才翻 in_progress（闭环不变）
+    sync.handleProgress({ taskId: 'hub-task-1', lastSeq: 2, excerpt: '执行中' });
+    row = w.rows.get('T-100')!;
+    expect(row.status).toBe('in_progress');
+    expect(row.startedAt).toBe(NOW);
+  });
+
+  it('failed declined: 前缀 → 行 failed + errorMessage 原文（卡片按前缀渲染拒收态）', () => {
+    const w = makeWorld([delegatedRow()]);
+    createDelegationSync(w.ports).handleTerminal('failed', 'hub-task-1', 'declined:需求变更不做');
+    const row = w.rows.get('T-100')!;
+    expect(row.status).toBe('failed');
+    expect(row.errorMessage).toBe('declined:需求变更不做');
+  });
+
+  it('worker 状态映射扩展：draft→draft、arranged→assigned（草稿行生命周期同形映射）', () => {
+    const w = makeWorld([delegatedRow({ status: 'draft' })], 'node-self');
+    const wrapped = createDelegationSync(w.ports).wrapWorkerStore(fakeStore());
+    // 草稿记录 upsert 不经 ensureRow 建行（runner draft 端口负责）——已存在行零重建
+    wrapped.upsert({
+      taskId: 'hub-task-1', sessionId: '', workspaceId: 'ws1', workspaceName: 'ws-main',
+      title: 't', byNode: 'node-x', state: 'draft', draft: true, localTaskId: 'T-100',
+      createdAt: 1, updatedAt: 1,
+    });
+    expect(w.rows.get('T-100')!.status).toBe('draft');
+    expect(w.rows.size).toBe(1); // 无新行（ensureRow 草稿护栏）
+    wrapped.updateState('hub-task-1', 'arranged');
+    expect(w.rows.get('T-100')!.status).toBe('assigned');
+  });
+});
+
+// ── 1.10.0 回归锁：arranged 同步不得降级已启动行（2026-11-07 双会话事故）──
+// 事故链：executor 先于监督器 arranged 检测启动任务（in_progress）→ syncState
+// 把 'arranged'→'assigned' 写回 → 运行中行被降级 → crash 后 executor 再次
+// 放行 → 双执行会话。锁：arranged 映射仅对仍处 draft 的行生效。
+
+describe('delegation-sync — arranged 同步降级防护', () => {
+  it('行已 in_progress 时 updateState(arranged) 不得写回 assigned（防降级）', () => {
+    const w = makeWorld([delegatedRow({ status: 'in_progress' })], 'node-self');
+    const wrapped = createDelegationSync(w.ports).wrapWorkerStore(fakeStore());
+    wrapped.updateState('hub-task-1', 'arranged');
+    expect(w.rows.get('T-100')!.status).toBe('in_progress');
+  });
+
+  it('行仍为 draft 时 arranged → assigned 正常映射（原语义保留）', () => {
+    const w = makeWorld([delegatedRow({ status: 'draft' })], 'node-self');
+    const wrapped = createDelegationSync(w.ports).wrapWorkerStore(fakeStore());
+    wrapped.updateState('hub-task-1', 'arranged');
+    expect(w.rows.get('T-100')!.status).toBe('assigned');
+  });
+});
+
+// ── 1.10.0 retryDispatch 平行草稿分支（编辑对齐：改道 peer 组节点）──────────
+
+describe('retryDispatch — peer 草稿重派', () => {
+  it('peer 组 node 行：draft 白名单载荷（无 tier/team/agent）+ origin=peer_draft + resolveTarget 带 draft 闸', async () => {
+    const row = delegatedRow({
+      status: 'pending',
+      routing: { mode: 'node', groupId: 'g-peer', targetNodeId: 'node-peer-1' },
+      priority: 7,
+    });
+    const w = makeRedispatchWorld(row);
+    w.ports.isPeerGroup = async (groupId) => groupId === 'g-peer';
+    const result = await retryDispatch(row.id, w.ports);
+    expect(result.dispatched).toBe(true);
+    const brief = w.delegateBriefs[0]!;
+    expect(brief.task).toEqual({
+      title: row.title,
+      prompt: row.description.trim() !== '' ? row.description : row.title,
+      draft: true,
+      priority: 7,
+    });
+    expect(w.resolveCalls[0]).toMatchObject({ draft: true });
+    // 复位段 origin 标记（发送方行方向判别）
+    expect(w.updates.some((u) => u.patch.origin === 'peer_draft')).toBe(true);
+  });
+
+  it('peer 组行带执行编排（team/agent）→ 行 failed 人话，零派发', async () => {
+    const row = delegatedRow({
+      status: 'pending',
+      routing: { mode: 'node', groupId: 'g-peer', targetNodeId: 'node-peer-1' },
+      targetTeamId: 'team-1',
+    });
+    const w = makeRedispatchWorld(row);
+    w.ports.isPeerGroup = async () => true;
+    const result = await retryDispatch(row.id, w.ports);
+    expect(result.dispatched).toBe(false);
+    expect(w.delegateBriefs).toHaveLength(0);
+    expect(w.updates.some((u) => u.patch.status === 'failed' && typeof u.patch.errorMessage === 'string')).toBe(true);
+  });
+
+  it('lf 组 node 行（isPeerGroup=false）：旧语义零变化（tier 载荷 + 无 origin 标记）', async () => {
+    const row = delegatedRow({
+      status: 'pending',
+      routing: { mode: 'node', groupId: 'g-lf', targetNodeId: 'node-b' },
+    });
+    const w = makeRedispatchWorld(row);
+    w.ports.isPeerGroup = async () => false;
+    await retryDispatch(row.id, w.ports);
+    const brief = w.delegateBriefs[0]!;
+    expect(brief.task).toEqual({
+      title: row.title,
+      prompt: row.description.trim() !== '' ? row.description : row.title,
+      permissionTier: 'confirm',
+    });
+    expect(w.updates.some((u) => u.patch.origin === 'peer_draft')).toBe(false);
+  });
+});

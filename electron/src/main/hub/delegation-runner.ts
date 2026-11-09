@@ -34,6 +34,10 @@ setWriteDeniedBroadcaster(broadcastWriteGrantDenied);
  * 本地任务 id——worker 零消费（不进本类型消费面，hub/index.parseTaskAssigned
  * 挑字段时丢弃）：依赖闸在 leader 侧派发前置，blocked 任务不会到达 worker；
  * 若 worker 按其拦截将制造跨节点不可解析的假闸（leader 本地 id 对 worker 无意义）。
+ *
+ * 1.10.0 平行模式（hub 0.6.0 / 协议 1.10.0）：task.draft?/priority? 透传（peer
+ * 组草稿——落绑定空间看板不自动执行，spec 2026-11-05 §5.2）；groupId? 透传
+ * （组级绑定解析的判别键——多 peer 组各有绑定）。
  */
 export type AssignedTaskEvent = Omit<TaskAssignedEvent, 'task'> & {
   task: TaskAssignedEvent['task'] & {
@@ -42,6 +46,8 @@ export type AssignedTaskEvent = Omit<TaskAssignedEvent, 'task'> & {
      *  runner 按此 decline，不再回落单 agent（静默换班防线） */
     teamInvalid?: true;
   };
+  /** 1.10.0：组归属（hub 恒置）——draft 落点绑定解析键 */
+  groupId?: string;
 };
 
 /** 回合终态（watchTurn 回调载荷——映射 messages.status 终态语义） */
@@ -101,14 +107,39 @@ export interface DelegationRunPorts {
   startTurn(input: { sessionId: string; body: string; mentionedInstanceIds?: string[] }): Promise<void>;
   /** 会话级急停（既有取消入口 RouterService.stopAll） */
   stopSession(sessionId: string): void;
-  /** 回合终态订阅 → 返回解订阅函数 */
-  watchTurn(sessionId: string, onTerminal: (t: TurnTerminal) => void): () => void;
+  /** 回合终态订阅 → 返回解订阅函数；baselineOverride（1.10.0 draft 接管）：
+   *  接管在回合开始后 attach——传 0 观测会话全部 agent 行（新会话无历史，防基线吞流） */
+  watchTurn(sessionId: string, onTerminal: (t: TurnTerminal) => void, baselineOverride?: number): () => void;
   /** 会话尾部增量（afterRowId 之后）；无增量返回 null */
   sessionTail(sessionId: string, afterRowId: number): DelegationTail | null;
   /** 上行 task.report（res 信封 id=taskId）；离线/失败返回 false（调用方缓冲重试） */
   report(taskId: string, payload: TaskReportPayload): Promise<boolean>;
   /** hub 侧中断任务清单（task.list{status:interrupted}，已按本机 targetNodeId 过滤） */
   listInterruptedDelegations(): Promise<Array<{ taskId: string; title: string; workspaceName: string }>>;
+  /**
+   * 1.10.0 平行模式草稿端口（spec 2026-11-05 §5.2）——生产接线 delegation-ports：
+   *  - resolveBindingWorkspace：groupId → 本地绑定空间（hub_group_bindings 权威；
+   *    null = 未绑定 → decline 深度防御）
+   *  - insertDraftTaskRow：草稿落绑定空间看板（status='draft' / origin='peer_draft' /
+   *    delegation_id 挂接）；null = 落板失败（如空间已被删除）→ decline
+   *  - findDraftRow：delegation_id 反查本地行（监督器状态机数据源）；null = 行已删
+   *  - selfNodeId：routing.targetNodeId 本机视角
+   */
+  resolveBindingWorkspace(groupId: string): { workspaceId: string; workspaceName: string } | null;
+  insertDraftTaskRow(input: {
+    workspaceId: string;
+    groupId: string;
+    title: string;
+    description: string;
+    priority: number;
+    delegationId: string;
+  }): { localTaskId: string } | null;
+  findDraftRow(delegationId: string): {
+    id: string;
+    status: string;
+    executionSessionId: string | null;
+  } | null;
+  selfNodeId(): string | null;
 }
 
 interface ActiveRun {
@@ -349,6 +380,8 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
         if (run.pendingBeat && run.pendingBeat.lastSeq <= beat.lastSeq) run.pendingBeat = null;
       });
     }
+    // 1.10.0：草稿生命周期监督（与进度拍同频——draft/arranged/接管/终态/删除）
+    superviseDrafts();
   };
 
   const startRun = async (
@@ -431,6 +464,165 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
     timer.unref?.();
   };
 
+  /**
+   * 1.10.0 平行模式：草稿落板（spec 2026-11-05 §5.2）。闸序：acceptTasks 已过 →
+   * 组绑定解析（本地深度防御——hub 已闸未绑定）→ 落 draft 行（origin='peer_draft'）
+   * → received 拍。并发闸不适用（草稿不执行不占槽）。落板/绑定失败 → decline
+   * （发送方行 failed 人话，不留幽灵账）。
+   */
+  const handleDraftAssigned = async (
+    evt: AssignedTaskEvent,
+    _maxConcurrent: number,
+  ): Promise<void> => {
+    const groupId = evt.groupId ?? null;
+    const binding = groupId !== null ? ports.resolveBindingWorkspace(groupId) : null;
+    if (groupId === null || binding === null) {
+      await decline(evt.taskId, 'declined:本节点未绑定承接空间（组设置中可绑定）');
+      return;
+    }
+    const row = ports.insertDraftTaskRow({
+      workspaceId: binding.workspaceId,
+      groupId,
+      title: evt.task.title,
+      description: evt.task.prompt,
+      priority: evt.task.priority ?? 0,
+      delegationId: evt.taskId,
+    });
+    if (row === null) {
+      await decline(evt.taskId, `declined:草稿落板失败（绑定空间 ${binding.workspaceName} 不可用）`);
+      return;
+    }
+    const now = Date.now();
+    store.upsert({
+      taskId: evt.taskId,
+      sessionId: '',
+      workspaceId: binding.workspaceId,
+      workspaceName: binding.workspaceName,
+      title: evt.task.title,
+      byNode: evt.byNode,
+      state: 'draft',
+      draft: true,
+      localTaskId: row.localTaskId,
+      groupId,
+      createdAt: now,
+      updatedAt: now,
+    });
+    logger.info('平行草稿已落板', {
+      taskId: evt.taskId,
+      workspaceId: binding.workspaceId,
+      localTaskId: row.localTaskId,
+      byNode: evt.byNode,
+    });
+    await sendReport(evt.taskId, {
+      status: 'pending',
+      progress: { lastSeq: 0, excerpt: '草稿已接收，等待节点拥有者安排', kind: 'received' },
+    });
+  };
+
+  /**
+   * 1.10.0 草稿生命周期监督器（tick 驱动，与进度拍同频）：按本地行状态机推进——
+   *   draft（等待安排）→ 非 draft 且未通知（arranged 拍）→ in_progress 且未接管
+   *   （建 ActiveRun 复用既有进度拍/终态链）→ 终态（done/failed 上报）→ 行删除
+   *   （declined:对方已删除——杜绝发送方行永挂）。
+   * 单一机制覆盖安排/接管/完结/删除四边界（任意更新路径生效，无 IPC 挂钩面）；
+   * 幂等锚 = record.state（draft→arranged→running→终态 单向推进，重拍无害）。
+   */
+  const superviseDrafts = (): void => {
+    for (const record of store.list()) {
+      if (record.draft !== true || isLocalTerminal(record.state)) continue;
+      const row = ports.findDraftRow(record.taskId);
+      if (row === null) {
+        void sendReport(record.taskId, { status: 'failed', reason: 'declined:对方已删除任务' })
+          .then(() => store.updateState(record.taskId, 'failed', 'declined:对方已删除任务'));
+        continue;
+      }
+      const arranged = row.status !== 'draft';
+      // arranged 拍仅限「安排后待执行」中间态——executor 快路径（安排即启动，
+      // 监督器首拍已 in_progress）不发 arranged、直接进入接管（发送方收到
+      // received→running，诚实反映；且避免 record.state 走 arranged 后 syncState
+      // 对运行中行的任何回写窗口）
+      const arrangedPending =
+        arranged && row.status !== 'in_progress' && record.state === 'draft';
+      if (arrangedPending) {
+        store.updateState(record.taskId, 'arranged');
+        void sendReport(record.taskId, {
+          status: 'pending',
+          progress: { lastSeq: 0, excerpt: '节点拥有者已安排执行', kind: 'arranged' },
+        });
+      } else if (arranged && record.state === 'draft') {
+        // 快路径仍推进 record 态（离开 draft），但不发拍不回写行
+        store.updateState(record.taskId, 'arranged');
+      }
+      const rec = store.get(record.taskId);
+      if (rec === null) continue;
+      if (row.status === 'in_progress' && !active.has(record.taskId)) {
+        const sessionId = row.executionSessionId;
+        if (sessionId === null || sessionId === '') continue; // 执行会话未定：下一拍再看
+        adoptDraftExecution(rec, sessionId, row.id);
+        continue;
+      }
+      if ((row.status === 'completed' || row.status === 'failed' || row.status === 'cancelled')) {
+        // 在跑回合先行清算（手动完结先于回合终态：unwatch 防迟到回调二次结算）
+        const live = active.get(record.taskId);
+        if (live) {
+          live.unwatch();
+          live.terminal = { status: row.status === 'completed' ? 'done' : 'aborted' };
+          active.delete(record.taskId);
+        }
+        settleDraftTerminal(rec, row.status);
+      }
+    }
+  };
+
+  /** 草稿执行接管：建 ActiveRun 挂回既有进度拍/终态链（sessionTail 数据源同款）。 */
+  const adoptDraftExecution = (record: DelegationRecord, sessionId: string, localTaskId: string): void => {
+    const run: ActiveRun = {
+      taskId: record.taskId,
+      sessionId,
+      cursor: 0,
+      pendingBeat: null,
+      promptExcerpt: excerptOfPrompt(record.title),
+      waitingSince: null,
+      hitlInjectedAt: null,
+      unwatch: () => undefined,
+      terminal: null,
+    };
+    active.set(record.taskId, run);
+    // 基线 0：接管时回合可能已在流中（warm 池秒开流）——attach 时刻基线会吞掉
+    // 在途 agent 行导致终态永不触发；执行会话为 startTask 新建，无历史 agent 行
+    run.unwatch = ports.watchTurn(sessionId, (t) => {
+      const current = active.get(record.taskId);
+      if (!current || current.sessionId !== sessionId) return;
+      settleRun(record.taskId, current, t);
+    }, 0);
+    // upsert 全量写（保留 draft/localTaskId/groupId）——updateState 只写 state/reason
+    store.upsert({ ...record, sessionId, state: 'running', updatedAt: Date.now() });
+    logger.info('平行草稿执行接管', { taskId: record.taskId, sessionId, localTaskId });
+    void sendReport(record.taskId, {
+      status: 'running',
+      sessionId,
+      progress: { lastSeq: 0, excerpt: excerptOfPrompt(record.title) },
+    });
+  };
+
+  /** 草稿终态直报（手动完结/本地取消/失败路径；有在跑回合时调用方已先行清算）。
+   *  sessionId 仅非空携带（未安排过的记录为 ''——hub 侧有界串校验拒空值）。 */
+  const settleDraftTerminal = (record: DelegationRecord, rowStatus: string): void => {
+    const sessionId = record.sessionId !== '' ? record.sessionId : undefined;
+    if (rowStatus === 'completed') {
+      store.updateState(record.taskId, 'done');
+      void sendReport(record.taskId, { status: 'done', ...(sessionId !== undefined ? { sessionId } : {}) });
+      return;
+    }
+    const reason = rowStatus === 'cancelled' ? 'declined:本地任务已取消' : '执行失败（本地）';
+    store.updateState(record.taskId, 'failed', reason);
+    void sendReport(record.taskId, { status: 'failed', ...(sessionId !== undefined ? { sessionId } : {}), reason });
+  };
+
+  /** 本地账本态是否终态（done/failed/cancelled——draft/arranged/running 在途）。 */
+  const isLocalTerminal = (state: DelegationRecord['state']): boolean =>
+    state === 'done' || state === 'failed' || state === 'cancelled';
+
   return {
     async handleAssigned(evt) {
       // 幂等：已受理/已终态的任务不重复建会
@@ -441,6 +633,14 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
       const settings = ports.settings();
       if (!settings.acceptTasks) {
         await decline(evt.taskId, '本节点已关闭任务委派接受');
+        return;
+      }
+      // 1.10.0 平行模式草稿分支（spec 2026-11-05 §5.2）：不建会不执行——落绑定
+      // 空间看板 draft 行 + received 拍；后续 arranged/执行接管/终态全由监督器
+      // （superviseDrafts，tick 驱动）按本地行状态机推进。
+      if (evt.task.draft === true) {
+        await handleDraftAssigned(evt, settings.maxConcurrent);
+        ensureTimer();
         return;
       }
       if (active.size >= settings.maxConcurrent) {
@@ -570,6 +770,9 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
           await sendReport(task.taskId, { status: 'failed', reason: 'local_session_lost' });
           continue;
         }
+        // 1.10.0 平行草稿不走回合续传：执行是接收方本地任务系统的事——监督器按
+        // 本地行状态重新接管上报（in_progress 行经 adoptDraftExecution 续拍）
+        if (record.draft === true) continue;
         // 续传首拍必发 running（T9 状态机：interrupted→running 唯一续传入口）
         const tail = ports.sessionTail(record.sessionId, 0);
         await sendReport(record.taskId, {

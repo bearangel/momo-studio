@@ -44,9 +44,12 @@ export interface TaskAnswerWorkerRes {
   sessionId?: string;
 }
 
-/** task.report 载荷——值形状与 hub 协议包 TaskReportPayload 逐字对齐。 */
+/** task.report 载荷——值形状与 hub 协议包 TaskReportPayload 逐字对齐。
+ *  status 'pending'（1.10.0 平行模式）= 生命周期拍专用值：不改 hub 账本状态、
+ *  不回填 sessionId，仅转发 progress（承载 received/arranged 拍）——hub 侧
+ *  acceptReport 对终态账本静默忽略该值。 */
 export interface TaskReportPayload {
-  status: 'running' | 'done' | 'failed';
+  status: 'running' | 'done' | 'failed' | 'pending';
   /** 委派会话 id（MC1 独立委派会话——首次 running 上报建立，hub 回填账本 session_id）。 */
   sessionId?: string;
   /** failed 附因（约定值：'declined'=目标拒派；'local_session_lost'=续传时本地会话已丢失）。 */
@@ -67,9 +70,14 @@ export interface TaskReportPayload {
  *  白名单收 progress.kind + 单值枚举校验（非法剥除不抛，先例 permissionTier），
  *  task.progress 转发形状 TaskProgressEvent 同步扩展 kind?。本端上行经
  *  delegation-runner.test.ts「kind 全链」用例与 hub delegations.test.ts
- *  「task.report kind 透传（T11b）」两用例跨仓对齐锁定。 */
+ *  「task.report kind 透传（T11b）」两用例跨仓对齐锁定。
+ *
+ *  1.10.0 平行模式（hub 0.6.0）：'received' / 'arranged' = peer 草稿生命周期拍
+ *  （已落板 / 已指派）——随 status:'pending' 拍上行（hub 1.10.0 起新增的第四个
+ *  status 值：不改账本只转 progress）。'denied' 仍在 hub 白名单外（前向预留），
+ *  received/arranged 已入 hub 白名单（PROGRESS_KINDS）。 */
 export interface TaskReportProgress {
   lastSeq: number;
   excerpt: string;
-  kind?: 'waiting-input' | 'denied';
+  kind?: 'waiting-input' | 'denied' | 'received' | 'arranged';
 }

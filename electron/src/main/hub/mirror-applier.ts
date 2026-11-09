@@ -31,13 +31,15 @@ import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
-import { listWorkspaces, createWorkspace, setDefaultAgent } from '../workspace/crud';
+import { listWorkspaces, createWorkspace, setDefaultAgent, getWorkspace } from '../workspace/crud';
 import { listMembers, addMember, removeMember, generateAgentUserId, saveAgentDefinition, updateAgentDefinition } from '../agent/crud';
 import { listAgentDefinitions, getAgentDefinition } from '../agent/agent-queries';
 import { parseAgentManifest } from '../agent/manifest-parser';
 import { listTeams, createTeam, deleteTeam } from '../agent/team';
+import { createGroupBindingStore } from './group-binding-store';
 import { listProviders, getProvider, updateProvider, listProviderModels, type ModelProvider } from '../agent/provider-crud';
 import { listRegistered, setMcpEnabledDefinition } from '../mcp/host-manager';
+import { readBuiltinManifestBySlug } from '../agent/builtin';
 import { listInstalled, getSkillsDir } from '../skill/zip-uploader';
 import { listPlugins, getPlugin, isPluginEnabled, setPluginEnabled } from '../plugin/registry';
 import { updateGlobalSettings, getGlobalSettings } from '../settings/crud';
@@ -46,7 +48,7 @@ import { resolveTmpDir } from '../paths';
 import { HubCatalogStaleError, HubPinnedVersionUnavailableError, HubSlugConflictError, installHubPackage } from '../resource/hub-install';
 import { installPackage } from '../marketplace/installer';
 import { readBundledCatalog } from '../marketplace/client';
-import type { MarketplaceItem } from '../marketplace/types';
+import { isValidSlug, type MarketplaceItem } from '../marketplace/types';
 import type { ResourceType } from '../resource/types';
 import { compareVersions } from '../resource/version-compare';
 import { agentManifestYaml } from './publish';
@@ -589,7 +591,35 @@ async function applyConfig(
         }
       }
       if (!existing) {
-        // 本机已装 → 内置市场目录 → catalog 自愈 → 失败提示（软失败）
+        // builtin 预设自愈（2026-11-08）：源侧 source='builtin' 的预设 agent
+        // （resources/agents/*.yaml——随 app 分发，目标机必然在位）按 YAML 逐字
+        // 重建：确定性 id builtin-<slug> + source='builtin'，与源侧语义一致；
+        // 模型字段留空（绑定交 balanceMemberModelBinding 四级配平链）。
+        // 修前缺口：重建链只有「本地已装 → catalog」两腿，catalog 仅
+        // general-assistant——builtin 预设引用全灭软失败并连锁 team（实测
+        // ws2 → yyyy-1 十一条 unresolved）。
+        if (isValidSlug(m.slug)) {
+          try {
+            const { def: parsed } = readBuiltinManifestBySlug(m.slug);
+            if (parsed.slug === m.slug) {
+              saveAgentDefinition({
+                ...parsed,
+                id: `builtin-${parsed.slug}`,
+                source: 'builtin',
+                workspaceId: null,
+                modelProviderId: null,
+                modelName: parsed.modelName ?? '',
+                thinkingJson: parsed.thinkingJson ?? null,
+              });
+              existing = listAgentDefinitions().find((d) => d.slug === m.slug);
+            }
+          } catch {
+            // YAML 不存在（非 builtin 预设的私有 slug）→ 维持软失败
+          }
+        }
+      }
+      if (!existing) {
+        // 本机已装 → 内置市场目录 → catalog 自愈 → builtin 预设 → 失败提示（软失败）
         unresolved.push(`agent:${m.slug}`);
         continue;
       }
@@ -840,22 +870,38 @@ export async function applyMirrorSnapshot(
     }
     const { manifest, stageDir } = fetched;
 
-    // 2. 工作空间分流：不存在 → 创建后直落；存在且未 confirm → conflict + 差异摘要
-    const existing = listWorkspaces().find((w) => w.name === payload.workspaceName);
+    // 2. 工作空间分流（1.10.0 平行模式第三形态 applyTo:'binding'：落组绑定空间
+    //    ——不按名、不创建、目标必须已存在且已绑定；lf 组 applyTo 缺省按名：
+    //    不存在 → 创建后直落；存在且未 confirm → conflict + 差异摘要）
     let workspaceId: string;
-    if (!existing) {
-      const ensured = await ensureWorkspace(payload.workspaceName);
-      workspaceId = ensured.workspaceId;
-    } else if (payload.confirm !== true) {
-      const diffSummary = computeDiffSummary(existing.id, manifest);
-      return {
-        ok: false,
-        code: 'conflict',
-        message: `目标节点已存在同名工作空间「${payload.workspaceName}」，需确认覆盖（差异：+${diffSummary.added} / -${diffSummary.removed} / ±${diffSummary.changed}）`,
-        diffSummary,
-      };
+    if (payload.applyTo === 'binding') {
+      const groupId = typeof payload.groupId === 'string' ? payload.groupId : '';
+      const binding = groupId !== '' ? createGroupBindingStore(getDb()).get(groupId) : null;
+      const bound = binding !== null ? getWorkspace(binding.workspaceId) : null;
+      if (bound === null) {
+        return {
+          ok: false,
+          code: 'bad_request',
+          message: `镜像落点为组绑定空间，但本节点未绑定该组承接空间（groupId=${groupId || '缺失'}）——请先在组设置中绑定`,
+        };
+      }
+      workspaceId = bound.id;
     } else {
-      workspaceId = existing.id;
+      const existing = listWorkspaces().find((w) => w.name === payload.workspaceName);
+      if (!existing) {
+        const ensured = await ensureWorkspace(payload.workspaceName);
+        workspaceId = ensured.workspaceId;
+      } else if (payload.confirm !== true) {
+        const diffSummary = computeDiffSummary(existing.id, manifest);
+        return {
+          ok: false,
+          code: 'conflict',
+          message: `目标节点已存在同名工作空间「${payload.workspaceName}」，需确认覆盖（差异：+${diffSummary.added} / -${diffSummary.removed} / ±${diffSummary.changed}）`,
+          diffSummary,
+        };
+      } else {
+        workspaceId = existing.id;
+      }
     }
 
     // 3. 先资源补装（非 stale 失败中止——配置不落，目标保持原状；已装资源保留

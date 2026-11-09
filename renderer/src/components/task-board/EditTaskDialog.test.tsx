@@ -10,8 +10,10 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { EditTaskDialog } from './EditTaskDialog';
 import type { TaskRow } from '../../ipc/types';
 import { useTaskStore } from '../../stores/task.store';
+import { useWorkspaceStore } from '../../stores/workspace.store';
 
 const mockApi = {
+  hub: undefined as unknown,
   task: {
     update: vi.fn().mockResolvedValue(undefined),
     list: vi.fn().mockResolvedValue([]),
@@ -259,5 +261,79 @@ describe('EditTaskDialog 提交', () => {
 
     expect(await screen.findByText(/任务不存在/)).toBeInTheDocument();
     expect(onSaved).not.toHaveBeenCalled();
+  });
+});
+
+// ── 1.10.0 编辑对齐：执行位置（与新建任务同款 RunRoutingField）──────────────
+
+const peerPrecheck = {
+  mirrored: false,
+  groups: [
+    {
+      groupId: 'g-peer', groupName: '平行组', mode: 'peer' as const,
+      onlineCount: 1, mirroredCount: 0,
+      members: [
+        { nodeId: 'node-peer-1', name: '研发工位', online: true, mirrored: false, bound: true, boundWorkspaceName: '研发空间' },
+      ],
+    },
+    {
+      groupId: 'g-lf', groupName: '主从组',
+      onlineCount: 1, mirroredCount: 1,
+      members: [{ nodeId: 'node-lf-1', name: '设备1', online: true, mirrored: true }],
+    },
+  ],
+};
+
+describe('EditTaskDialog 执行位置（编辑对齐）', () => {
+  function seedRoutingEnv(): void {
+    useWorkspaceStore.setState({ workspaces: [{ id: 'ws-1', name: 'dev-ws' } as never] });
+    mockApi.hub = {
+      routingPrecheck: vi.fn().mockResolvedValue(peerPrecheck),
+      retryDispatch: vi.fn().mockResolvedValue({ dispatched: true, nodeId: 'node-peer-1', delegationId: 'hub-x' }),
+    } as never;
+  }
+
+  it('未派发行渲染执行位置；在账行（已派发 pending）不渲染', async () => {
+    seedRoutingEnv();
+    const first = render(
+      <EditTaskDialog open onClose={() => {}} onSaved={vi.fn()} task={makeTask({ delegationId: null })} workspaceId="ws-1" />,
+    );
+    expect(await screen.findByText('指定节点')).toBeInTheDocument();
+    first.unmount();
+
+    renderDialog(makeTask({ delegationId: 'hub-1', status: 'pending' }));
+    await waitFor(() => expect(screen.getByLabelText('标题*')).toBeInTheDocument());
+    expect(screen.queryByText('指定节点')).not.toBeInTheDocument();
+  });
+
+  it('peer 节点路由：委派目标区退场 + 提交带 routing/draft 语义（三目标置空）+ retryDispatch 触发', async () => {
+    seedRoutingEnv();
+    renderDialog(makeTask({
+      status: 'draft',
+      assigneeAgentId: null,
+      routing: { mode: 'node', groupId: 'g-peer', targetNodeId: 'node-peer-1' },
+    }));
+    await screen.findByText('指定节点');
+    // peer 草稿：委派目标类型退场
+    expect(screen.queryByLabelText('委派目标类型')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(mockApi.task.update).toHaveBeenCalled());
+    const patch = mockApi.task.update.mock.calls[0]![1] as Record<string, unknown>;
+    expect(patch.routing).toEqual({ mode: 'node', groupId: 'g-peer', targetNodeId: 'node-peer-1' });
+    expect(patch.assigneeAgentId).toBeNull();
+    expect(patch.targetTeamId).toBeNull();
+    expect(patch.targetSessionId).toBeNull();
+    await waitFor(() => expect((mockApi.hub as never as { retryDispatch: ReturnType<typeof vi.fn> }).retryDispatch).toHaveBeenCalledWith({ taskId: 'T-001' }));
+  });
+
+  it('本机路由：提交不带 retryDispatch（routing 透传 local）', async () => {
+    seedRoutingEnv();
+    renderDialog(makeTask({}));
+    await screen.findByText('指定节点');
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(mockApi.task.update).toHaveBeenCalled());
+    const patch = mockApi.task.update.mock.calls[0]![1] as Record<string, unknown>;
+    expect(patch.routing).toEqual({ mode: 'local' });
+    expect((mockApi.hub as never as { retryDispatch: ReturnType<typeof vi.fn> }).retryDispatch).not.toHaveBeenCalled();
   });
 });

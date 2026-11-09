@@ -12,13 +12,18 @@
 //     TaskDetailPanel 先例）；执行管线中间态（assigned/session_queued/
 //     in_progress/paused）无编辑无归档——仅顶置；终态保留「归档」（spec
 //     §5.2）：调 task.store.archive（成功即本地剔除，卡片消失）；失败 toast
-import { Archive, Bot, Calendar, Clock, Lock, MessagesSquare, Pencil, Pin, PinOff, Repeat, Users } from 'lucide-react';
+//   - 1.10.0 平行草稿接收方行（origin='peer_draft'——BoardCanvas 分发到本卡）：
+//     violet「平行草稿」来源徽标；draft 态追加「拒收」（确认即删——取消 +
+//     归档两级既有动作承载行消失，主进程监督器上报 declined 给发送方）；
+//     「安排」= 现有编辑入口（EditTaskDialog 指派 agent/团队，无新代码）
+import { Archive, Bot, Calendar, CircleSlash, Clock, Inbox, Lock, MessagesSquare, Pencil, Pin, PinOff, Repeat, Users } from 'lucide-react';
 import { useState, type CSSProperties } from 'react';
 import type { TaskRow } from '../../ipc/types';
 import { BLOCKED_STYLE, PENDING_WRAP_UP_STYLE, taskStatusStyle } from '../../lib/task-status';
 import { isEditableStatus, isTerminalStatus } from '../../lib/board';
 import { humanizeRecurrence } from '../../lib/recurrence';
 import { useTaskStore } from '../../stores/task.store';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { showToast } from '../ui/Toast';
 import { EditTaskDialog } from './EditTaskDialog';
 import { useTaskEntityNames } from './useTaskEntityNames';
@@ -63,8 +68,23 @@ export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   // 可编辑态卡的内嵌编辑对话框开关（打开瞬间的 task 快照喂给 EditTaskDialog）
   const [editOpen, setEditOpen] = useState(false);
+  // 1.10.0 平行草稿拒收确认弹窗开关
+  const [rejectOpen, setRejectOpen] = useState(false);
   const canArchive = isTerminalStatus(task.status);
   const canEdit = isEditableStatus(task.status);
+  const canReject = task.origin === 'peer_draft' && task.status === 'draft';
+
+  const handleReject = async (): Promise<void> => {
+    try {
+      // 拒收 = 行离场 + 发送方 declined 上报：transition cancelled 触发主进程监督器
+      // 上报 declined:本地任务已取消；archive 使行从看板消失（既有两级动作承载
+      // 「删除该行」——renderer 无独立删除 IPC，见实施报告契约缺口）
+      await useTaskStore.getState().transition(task.id, 'cancelled');
+      await useTaskStore.getState().archive(task.id);
+    } catch (err) {
+      showToast(`拒收失败: ${(err as Error).message}`);
+    }
+  };
 
   const handleArchive = async (): Promise<void> => {
     try {
@@ -120,6 +140,13 @@ export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps
             <span className="inline-flex items-center gap-0.5 text-[11px] leading-none px-1 py-[3px] rounded text-status-violet bg-status-violet-tint whitespace-nowrap shrink-0">
               <Bot size={11} strokeWidth={1.75} aria-hidden />
               编排
+            </span>
+          )}
+          {task.origin === 'peer_draft' && (
+            /* 1.10.0 平行草稿来源徽标（violet tint——对齐 hub 外来任务徽标样式） */
+            <span className="inline-flex items-center gap-0.5 text-[11px] leading-none px-1 py-[3px] rounded text-status-violet bg-status-violet-tint whitespace-nowrap shrink-0">
+              <Inbox size={11} strokeWidth={1.75} aria-hidden />
+              平行草稿
             </span>
           )}
           <span className={status.className}>{status.label}</span>
@@ -244,6 +271,21 @@ export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps
                 {task.pinnedAt === null ? '顶置' : '取消顶置'}
               </button>
             </li>
+            {canReject && (
+              <li>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenu(null);
+                    setRejectOpen(true);
+                  }}
+                  className="flex w-full items-center gap-1.5 px-3 py-1 text-left text-status-error hover:bg-surface-3"
+                >
+                  <CircleSlash size={12} strokeWidth={1.75} aria-hidden />
+                  拒收
+                </button>
+              </li>
+            )}
             {canArchive ? (
               <li>
                 <button
@@ -285,6 +327,15 @@ export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps
           }}
           task={task}
           workspaceId={task.workspaceId}
+        />
+      )}
+      {rejectOpen && (
+        <ConfirmDialog
+          title="拒收平行草稿"
+          message={`拒收后该草稿将从看板移除，发送方将收到拒收通知。「${task.title}」`}
+          confirmLabel="拒收"
+          onConfirm={() => void handleReject()}
+          onClose={() => setRejectOpen(false)}
         />
       )}
     </>

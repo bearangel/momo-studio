@@ -289,6 +289,29 @@ export function registerTaskHandlers(): void {
           );
         }
         applied = rest;
+        // 1.10.0 编辑对齐（spec §6）：执行位置（routing）可在「未派发态」修改——
+        // 校验形状（异形人话拒）+ 在账行（delegation_id 非空且非 failed）拒改道
+        // （重派换道走既有失败重派语义）。切到外派路由的 draft 行原子提级 pending
+        // （与 createRemoteTask 同语义；status 专属通道纪律不变——此为服务端派生）
+        if (Object.prototype.hasOwnProperty.call(patchRecord, 'routing')) {
+          const t = getTask(id);
+          if (patchRecord.routing === undefined) {
+            delete (applied as Partial<TaskRow>).routing;
+          } else if (t && t.delegationId !== null && t.status !== 'failed') {
+            throw new Error('任务已派发在账，不能改执行位置（失败后可重派换道）');
+          } else {
+            const routing = validateTaskRoutingInput(patchRecord.routing) ?? { mode: 'local' as const };
+            (applied as Partial<TaskRow>).routing = routing;
+            const wasDraft = t?.status === 'draft';
+            updateTask(id, applied);
+            if (wasDraft && routing.mode !== 'local') {
+              transitionTaskStatus(id, 'pending');
+            }
+            applied = {};
+            notifyExecutor();
+            return;
+          }
+        }
       } else {
         applied = patch;
       }

@@ -274,10 +274,10 @@ function ensureDelegationRunner(nodeId: string | null): DelegationRunner {
 export function parseTaskAssigned(payload: unknown): AssignedTaskEvent | null {
   if (typeof payload !== 'object' || payload === null) return null;
   const p = payload as {
-    taskId?: unknown; workspaceName?: unknown; byNode?: unknown; task?: unknown;
+    taskId?: unknown; workspaceName?: unknown; byNode?: unknown; task?: unknown; groupId?: unknown;
   };
   const t = p.task as
-    | { title?: unknown; prompt?: unknown; agentSlug?: unknown; permissionTier?: unknown; team?: unknown }
+    | { title?: unknown; prompt?: unknown; agentSlug?: unknown; permissionTier?: unknown; team?: unknown; draft?: unknown; priority?: unknown }
     | undefined;
   if (typeof p.taskId !== 'string' || typeof p.workspaceName !== 'string' || typeof p.byNode !== 'string') return null;
   if (!t || typeof t.title !== 'string' || typeof t.prompt !== 'string') return null;
@@ -297,7 +297,14 @@ export function parseTaskAssigned(payload: unknown): AssignedTaskEvent | null {
       // 打 teamInvalid 标记交 runner decline（dependsOn 刻意不透传：worker 零消费）
       ...(isDelegationTeam(t.team) ? { team: t.team } : {}),
       ...(t.team !== undefined && !isDelegationTeam(t.team) ? { teamInvalid: true } : {}),
+      // 1.10.0（协议 1.10.0）：draft/priority 容错透传（draft 字面 true；priority
+      // 0..10 整数——hub 已闸，异形值剥除不抛）；groupId 组归属（绑定解析键）
+      ...(t.draft === true ? { draft: true as const } : {}),
+      ...(typeof t.priority === 'number' && Number.isInteger(t.priority) && t.priority >= 0 && t.priority <= 10
+        ? { priority: t.priority }
+        : {}),
     },
+    ...(typeof p.groupId === 'string' && p.groupId.length > 0 ? { groupId: p.groupId } : {}),
   };
 }
 
@@ -513,11 +520,16 @@ function startClient(
       // 由 task.cancel RPC 回执 + 下一次 task.list 拉取对账），不造无生产者的通道。
       if (evt.method === EVT.taskProgress) {
         // kind（M2.1 T11b 协议 v0.1.4）：'waiting-input' = worker 等用户确认——
-        // 单值枚举校验（异形剥除，permissionTier 先例），leader 摘要 kv 与
-        // renderer 推送两路透传（T12 看板等待卡消费）
+        // 枚举校验（异形剥除，permissionTier 先例），leader 摘要 kv 与
+        // renderer 推送两路透传（T12 看板等待卡消费）。
+        // 1.10.0 平行模式：枚举扩 'received'/'arranged'（peer 草稿生命周期拍——
+        // 发送方行保持 pending、卡片切「已接收/已安排」态，spec §5.1）
         const p = evt.payload as { taskId?: unknown; sessionId?: unknown; lastSeq?: unknown; excerpt?: unknown; kind?: unknown };
         if (typeof p.taskId === 'string' && typeof p.sessionId === 'string' && typeof p.lastSeq === 'number' && typeof p.excerpt === 'string') {
-          const kind = p.kind === 'waiting-input' ? 'waiting-input' : undefined;
+          const kind =
+            p.kind === 'waiting-input' || p.kind === 'received' || p.kind === 'arranged'
+              ? p.kind
+              : undefined;
           // T9 外派投影：进度拍先回写本地行（摘要 + running 映射），再桥 renderer
           ensureDelegationSync().handleProgress({ taskId: p.taskId, lastSeq: p.lastSeq, excerpt: p.excerpt, kind });
           broadcast('hub:taskProgress', {

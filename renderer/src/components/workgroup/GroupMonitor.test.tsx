@@ -13,8 +13,9 @@ import { GroupMonitor } from './GroupMonitor';
 import { useHubStore } from '../../stores/hub.store';
 import { useHubGroupStore } from '../../stores/hub-group.store';
 import { useHubDelegationStore } from '../../stores/hub-delegation.store';
+import { useUnifiedMirrorStore } from '../../stores/unified-mirror.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
-import type { HubGroupInfo, HubStatus, HubTaskRecord } from '../../ipc/types';
+import type { HubGroupInfo, HubStatus, HubTaskRecord, Workspace } from '../../ipc/types';
 
 const onOpenView = vi.fn();
 
@@ -24,6 +25,10 @@ const api = {
     groupInvite: vi.fn(),
     groupTransfer: vi.fn(),
     groupLeave: vi.fn(),
+    groupBind: vi.fn(),
+    groupSetMirrorAccept: vi.fn(),
+    snapshotBuildUpload: vi.fn(),
+    mirrorWorkspace: vi.fn(),
     onGroupChanged: vi.fn(() => () => undefined),
     taskList: vi.fn(),
     onTaskProgress: vi.fn(() => () => undefined),
@@ -32,6 +37,8 @@ const api = {
     onTaskInterrupted: vi.fn(() => () => undefined),
     onMirrorResult: vi.fn(() => () => undefined),
   },
+  // ipc 代理命名空间缓存按首次访问拷贝——全部键必须先于首个用例存在
+  workspace: { list: vi.fn().mockResolvedValue([]) },
 };
 
 const ONLINE: HubStatus = {
@@ -129,14 +136,14 @@ describe('GroupMonitor', () => {
   it('镜像入口仅 leader：本机 leader 点击挂起既有 MirrorWizard 弹层', async () => {
     useHubGroupStore.setState({ groups: [GROUP_DEV] });
     render(<GroupMonitor onOpenView={onOpenView} />);
-    fireEvent.click(screen.getByRole('button', { name: '镜像工作空间…' }));
+    fireEvent.click(screen.getByRole('button', { name: '同步配置' }));
     expect(await screen.findByRole('dialog', { name: '镜像工作空间向导' })).toBeInTheDocument();
   });
 
   it('非 leader（本机是普通成员）：无镜像入口（邀请码为成员级能力，菜单入口不设限）', () => {
     useHubGroupStore.setState({ groups: [GROUP_OTHER_LEADER] });
     render(<GroupMonitor onOpenView={onOpenView} />);
-    expect(screen.queryByRole('button', { name: '镜像工作空间…' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '同步配置' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '组操作菜单 other-team' }));
     expect(screen.getByRole('button', { name: '重新生成邀请码' })).toBeInTheDocument();
   });
@@ -201,7 +208,7 @@ describe('GroupMonitor', () => {
   it('无组空态：引导去侧栏创建/加入', () => {
     render(<GroupMonitor onOpenView={onOpenView} />);
     expect(screen.getByText('尚未加入任何工作组')).toBeInTheDocument();
-    expect(screen.getByText(/在左侧创建工作组，或凭邀请码加入/)).toBeInTheDocument();
+    expect(screen.getByText(/在左侧创建工作组，或用邀请码加入/)).toBeInTheDocument();
   });
 });
 
@@ -292,5 +299,126 @@ describe('GroupMonitor 组操作菜单（M2.1 Task 5 自 settings/GroupPanel 收
       expect(api.hub.groupInvite).toHaveBeenCalledWith({ groupId: 'g-other' }),
     );
     expect(await screen.findByText('邀请码 OTH5-11BC')).toBeInTheDocument();
+  });
+});
+
+// ── 1.10.0 平行组监控台：查看退场 / 绑定态行 / 统一镜像 / 换绑与开关 ───────────
+
+function ws(id: string, name: string): Workspace {
+  return { id, name, description: '', directoryPath: '/tmp/x', gitInitialized: false, createdAt: '2026-01-01', ownerId: 'owner', iconEmoji: '', defaultAgentInstanceId: null };
+}
+
+/** peer 组夹具：本机=组长已绑定；office-mac 可收镜像；lab-node 未开镜像；home-nas 离线 */
+const GROUP_PEER: HubGroupInfo = {
+  groupId: 'g-peer',
+  groupName: '产品三人组',
+  leaderNodeId: SELF_ID,
+  mode: 'peer',
+  members: [
+    { nodeId: SELF_ID, name: 'mac-main', online: true, bound: true, boundWorkspaceName: '研发空间', acceptsMirror: false },
+    { nodeId: '8f3a00000000c21e', name: 'office-mac', online: true, bound: true, boundWorkspaceName: '测试空间', acceptsMirror: true },
+    { nodeId: '2b77000000009af0', name: 'lab-node', online: true, bound: true, boundWorkspaceName: '需求池', acceptsMirror: false },
+    { nodeId: '515100000000eeee', name: 'home-nas', online: false, bound: true, boundWorkspaceName: '备份区', acceptsMirror: true },
+  ],
+};
+
+describe('GroupMonitor — 平行组（1.10.0）', () => {
+  beforeEach(() => {
+    // 配置顶层 api 既有 fn（重赋值会脱离 ipc 代理的命名空间缓存包裹）
+    api.hub.snapshotBuildUpload.mockReset().mockResolvedValue({
+      snapshotId: 'snap-1', checksum: '9c4f21e0'.padEnd(64, '0'), version: '3',
+      sizeBytes: 2400 * 1024, excludedPlugins: [],
+      summary: { members: 2, embeddedMembers: 0, teams: 1, mcp: 1, skills: 2, skillResources: 2, skillEmbedded: 0, plugins: 1, providers: 1, modelBinding: false, resources: 4 },
+    });
+    api.hub.mirrorWorkspace.mockReset().mockResolvedValue({ accepted: true, mirrorId: 'm-1' });
+    api.hub.groupBind.mockReset().mockResolvedValue({ ok: true });
+    api.hub.groupSetMirrorAccept.mockReset().mockResolvedValue({ ok: true });
+    api.workspace.list.mockReset().mockResolvedValue([]);
+    useWorkspaceStore.setState({ workspaces: [ws('ws-dev', '研发空间')], activeWorkspaceId: null, loading: false, error: null });
+    useUnifiedMirrorStore.setState({
+      open: false, groupId: null, groupName: null, sourceWorkspaceId: null, sourceWorkspaceName: null,
+      buildStatus: 'idle', buildError: null, snapshot: null, rows: [], launched: false, launching: false,
+    });
+  });
+
+  it('PR-1. peer 组：查看按钮全组退场；节点卡 mono 行带绑定态；模式徽标在场（两模式都出）', () => {
+    useHubGroupStore.setState({ groups: [GROUP_PEER] });
+    render(<GroupMonitor onOpenView={onOpenView} />);
+    expect(screen.getByText('平行模式')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '查看' })).not.toBeInTheDocument();
+    expect(screen.getByText(/已绑定 · 研发空间/)).toBeInTheDocument();
+    expect(screen.getByText(/已绑定 · 测试空间/)).toBeInTheDocument();
+  });
+
+  it('PR-2. lf 组：查看按钮在场，无绑定态行；主从模式徽标在场（2026-11-08 两模式都出）', () => {
+    useHubGroupStore.setState({ groups: [GROUP_DEV] });
+    render(<GroupMonitor onOpenView={onOpenView} />);
+    expect(screen.getByText('主从模式')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: '查看' }).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: '同步配置' })).toBeInTheDocument(); // lf 组长同名入口（开 lf 向导）
+    expect(screen.queryByText(/已绑定 ·/)).not.toBeInTheDocument();
+  });
+
+  it('PR-3. 组长未绑定 → 统一镜像禁用 + title 提示先绑定', () => {
+    const unbound: HubGroupInfo = {
+      ...GROUP_PEER,
+      members: GROUP_PEER.members.map((m) => (m.nodeId === SELF_ID ? { ...m, bound: false, boundWorkspaceName: undefined } : m)),
+    };
+    useHubGroupStore.setState({ groups: [unbound] });
+    render(<GroupMonitor onOpenView={onOpenView} />);
+    const btn = screen.getByRole('button', { name: /同步配置/ });
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute('title', '请先绑定自己的承接空间');
+  });
+
+  it('PR-4. 统一镜像：打开对话框即构建快照；不达标成员逐行可见；发起仅对就绪成员逐一派发', async () => {
+    useHubGroupStore.setState({ groups: [GROUP_PEER] });
+    render(<GroupMonitor onOpenView={onOpenView} />);
+    fireEvent.click(screen.getByRole('button', { name: /同步配置/ }));
+    const dlg = await screen.findByRole('dialog', { name: '同步配置' });
+    await waitFor(() => {
+      expect(api.hub.snapshotBuildUpload).toHaveBeenCalledWith({ workspaceId: 'ws-dev' });
+    });
+    // 隐形过滤根治：lab-node（未接受）与 home-nas（离线）原因在对话框里可见
+    expect(await within(dlg).findByText(/未接受镜像/)).toBeInTheDocument();
+    expect(within(dlg).getAllByText(/离线/).length).toBeGreaterThan(0);
+    fireEvent.click(within(dlg).getByRole('button', { name: /向 1 个成员发起镜像/ }));
+    await waitFor(() => {
+      // office-mac 唯一合格（lab-node 未接受、home-nas 离线、组长自己排除）
+      expect(api.hub.mirrorWorkspace).toHaveBeenCalledTimes(1);
+      expect(api.hub.mirrorWorkspace).toHaveBeenCalledWith({
+        groupId: 'g-peer',
+        targetNodeId: '8f3a00000000c21e',
+        workspaceName: '研发空间',
+        snapshotId: 'snap-1',
+      });
+    });
+  });
+
+  it('PR-5. 组长换绑 → BindingDialog 提交走 groupBind；组长不见「接受」勾选与监控台开关（2026-11-08 修正）', async () => {
+    // bind 动作后 store refresh——groupList 须回传同组，否则组清空进空态
+    api.hub.groupList.mockResolvedValue({ groups: [GROUP_PEER] });
+    useHubGroupStore.setState({ groups: [GROUP_PEER] });
+    render(<GroupMonitor onOpenView={onOpenView} />);
+    // 组长视角：监控台开关退场（组长是镜像源，接受语义不适用）
+    expect(screen.queryByRole('switch', { name: '接受本组镜像' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '换绑' }));
+    const bindDlg = await screen.findByRole('dialog', { name: /绑定承接空间/ });
+    // 换绑弹窗同样无「接受本组镜像同步」勾选
+    expect(within(bindDlg).queryByRole('checkbox', { name: /接受本组镜像同步/ })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('承接空间*'), { target: { value: 'ws-dev' } });
+    fireEvent.click(within(bindDlg).getByRole('button', { name: '绑定' }));
+    await waitFor(() => {
+      expect(api.hub.groupBind).toHaveBeenCalledWith({ groupId: 'g-peer', workspaceId: 'ws-dev' });
+    });
+  });
+
+  it('PR-6. 非组长 peer 成员：无统一镜像按钮；换绑与开关在场（自己成员行）', () => {
+    const notLeader: HubGroupInfo = { ...GROUP_PEER, leaderNodeId: '8f3a00000000c21e' };
+    useHubGroupStore.setState({ groups: [notLeader] });
+    render(<GroupMonitor onOpenView={onOpenView} />);
+    expect(screen.queryByRole('button', { name: /同步配置/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /绑定空间|换绑/ })).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: '接受本组镜像' })).toBeInTheDocument();
   });
 });

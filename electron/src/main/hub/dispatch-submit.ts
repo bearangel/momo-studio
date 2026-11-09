@@ -19,7 +19,7 @@ import { isTaskRouting, type TaskRouting } from './task-routing';
 import type { PermissionTier } from './run-policy';
 import { blockedDispatchError } from '../task/dependency-gate';
 import type { TaskRow } from '../storage/tasks/repo';
-import { TEAM_DELEGATION_REQUIRED_MINOR } from './protocol';
+import { PEER_DELEGATION_REQUIRED_MINOR, TEAM_DELEGATION_REQUIRED_MINOR } from './protocol';
 import { logger } from '../logger';
 
 /**
@@ -53,6 +53,14 @@ export interface SubmitRoutedTaskInput {
    * agentSlug——协议互斥）；单 agent 路径缺省不带键（零变化）。批量链路不提供。
    */
   teamId?: string;
+  /**
+   * 1.10.0 平行模式草稿（spec 2026-11-05 §5.1）：true 时载荷仅 title/prompt/
+   * priority（peer 组委派唯一合法形态——hub 白名单拒编排四键）；仅支持 node
+   * 变体路由（指定节点点对点）；行 origin='peer_draft'。
+   */
+  draft?: boolean;
+  /** 草稿优先级（仅 draft=true 合法；0..10 整数） */
+  priority?: number;
 }
 
 export interface SubmitRoutedTaskResult {
@@ -72,7 +80,8 @@ export interface DelegationTaskBrief {
   task: {
     title: string;
     prompt: string;
-    permissionTier: PermissionTier;
+    /** 档位（lf 委派必带；draft 变体禁止——hub peer 白名单互斥键，缺省不带） */
+    permissionTier?: PermissionTier;
     /**
      * M4.3 协议 1.7.0：leader 本地依赖 id 清单——纯透传（展示/审计），hub 不
      * 校验存在性、worker 零消费（语义裁定 spec §2.1）；缺省不带键（1.6 兼容）
@@ -83,6 +92,13 @@ export interface DelegationTaskBrief {
      * isLeader）；与 agentSlug 互斥（同场 hub 整包拒）；缺省不带键（1.8 兼容）
      */
     team?: { members: Array<{ name: string; isLeader: boolean }> };
+    /**
+     * 1.10.0 协议 1.10.0 平行模式：draft=true 时编排四键（agentSlug/team/
+     * dependsOn/permissionTier）一律不带（hub peer 白名单整包拒）；priority
+     * 仅 draft 在场合法。
+     */
+    draft?: true;
+    priority?: number;
   };
 }
 
@@ -102,6 +118,8 @@ export interface RemoteCreateInput {
    * 重建 team 段，防「重派团队任务静默退化为单 agent 载荷」）。单 agent 缺省
    */
   targetTeamId?: string;
+  /** 1.10.0：peer 草稿行标 origin='peer_draft'（方向判别/看板徽标/boot 对账互斥） */
+  draft?: boolean;
 }
 
 /**
@@ -113,12 +131,23 @@ export interface RemoteCreateInput {
  */
 export interface DispatchSubmitPorts {
   /** 本节点所在组清单（presence 融合后的成员在线态；protoVer 为 1.9.0 起在线
-   *  成员携带的协议版本——M5.3 派发闸 / nodeCaps 数据源，离线成员缺省不带） */
+   *  成员携带的协议版本——M5.3 派发闸 / nodeCaps 数据源，离线成员缺省不带；
+   *  1.10.0 起 peer 组另带 mode 与成员绑定态——draft 派发闸数据源） */
   listGroups(): Promise<
     Array<{
       groupId: string;
       groupName: string;
-      members: Array<{ nodeId: string; name: string; online: boolean; protoVer?: string }>;
+      mode?: 'leader-follower' | 'peer';
+      /** 组长节点（1.10.1 agent 路由面——非组长早拒判定；旧 hub 缺省不带） */
+      leaderNodeId?: string;
+      members: Array<{
+        nodeId: string;
+        name: string;
+        online: boolean;
+        protoVer?: string;
+        bound?: boolean;
+        boundWorkspaceName?: string;
+      }>;
     }>
   >;
   /**
@@ -179,6 +208,12 @@ export function supportsTeamDelegation(protoVer: string | undefined): boolean {
   return minor !== null && minor >= TEAM_DELEGATION_REQUIRED_MINOR;
 }
 
+/** 节点是否支持平行草稿接收（1.10.0 minor ≥ 10；缺省/异形视为旧——draft 能力门） */
+export function supportsPeerDelegation(protoVer: string | undefined): boolean {
+  const minor = protoVerMinor(protoVer);
+  return minor !== null && minor >= PEER_DELEGATION_REQUIRED_MINOR;
+}
+
 /** 版本门人话（文案口径对齐 hub node_unsupported：含节点名与对方版本） */
 function nodeTooOldMessage(nodeName: string, protoVer: string | undefined): string {
   return `目标节点 ${nodeName} 版本过旧（协议 ${protoVer ?? '未知'}），不支持团队派发——需对方升级到 v0.5.0+`;
@@ -225,6 +260,18 @@ export async function submitRoutedTask(
     return { task, dispatched: false, nodeId: null };
   }
 
+  // 1.10.0 平行草稿分流（spec 2026-11-05 §5.1）：仅 node 变体（指定节点点对
+  // 对）；teamId 与草稿互斥（团队执行编排与「接收方自定安排」语义矛盾）；
+  // draft 变体不携带 dependsOn（跨节点 T-id 无意义，协议已互斥）。
+  if (input.draft === true) {
+    if (input.routing.mode !== 'node') {
+      throw new Error('平行组草稿委派仅支持指定节点（点对点交接给人，无组内调度）');
+    }
+    if (input.teamId !== undefined) {
+      throw new Error('草稿委派不能携带团队执行编排（接收方自行安排）');
+    }
+  }
+
   // M5.3 团队展开（提交时早失败——团队不存在/形态非法零落库零派发）
   const teamPayload =
     input.teamId !== undefined
@@ -235,6 +282,7 @@ export async function submitRoutedTask(
       : undefined;
   const targetNodeId = await resolveRemoteTarget(input.routing, input.workspaceName, ports, {
     team: teamPayload !== undefined,
+    ...(input.draft === true ? { draft: true } : {}),
   });
   // 行先落库再派发：外派前先有账，发送失败不丢单（RM-M21-5 手动重试面）；
   // M4.3：dependsOn 随行建链（存在 + 环检测在 relations 单源）
@@ -251,6 +299,7 @@ export async function submitRoutedTask(
     // M5.3：团队指向随行落库（重派重建 team 段的依据——expandTeamPayload 已
     // 在上方 throw，走到此处 teamId 必为有效团队）
     ...(input.teamId !== undefined ? { targetTeamId: input.teamId } : {}),
+    ...(input.draft === true ? { draft: true } : {}),
   });
   // M4.3 派发闸（spec §2.3.1 核心）：建链后 blocked 派生 → 拒绝委派。行保留
   // pending 待处理（建链账不回滚——重试入口在待派发卡，依赖完成后放行）；
@@ -266,18 +315,28 @@ export async function submitRoutedTask(
       groupId: input.routing.groupId,
       targetNodeId,
       workspaceName: input.workspaceName,
-      task: {
-        title: input.title,
-        prompt: input.description?.trim() || input.title,
-        permissionTier: input.permissionTier ?? 'confirm',
-        // M4.3 协议 1.7.0：依赖元数据随任务书透传（hub 不校验存在性——展示/审计）
-        ...(input.dependsOn !== undefined && input.dependsOn.length > 0
-          ? { dependsOn: input.dependsOn }
-          : {}),
-        // M5.3 协议 1.9.0：团队段随任务书透传（不带 agentSlug——协议互斥；
-        // 单 agent 路径缺省不带键，1.8 载荷零变化）
-        ...(teamPayload !== undefined ? { team: teamPayload } : {}),
-      },
+      task:
+        input.draft === true
+          ? {
+              // 平行草稿载荷：仅三键（hub peer 白名单——任何编排键整包拒，
+              // permissionTier 亦省略——草稿执行档位由接收方本地决定）
+              title: input.title,
+              prompt: input.description?.trim() || input.title,
+              draft: true,
+              ...(typeof input.priority === 'number' ? { priority: input.priority } : {}),
+            }
+          : {
+              title: input.title,
+              prompt: input.description?.trim() || input.title,
+              permissionTier: input.permissionTier ?? 'confirm',
+              // M4.3 协议 1.7.0：依赖元数据随任务书透传（hub 不校验存在性——展示/审计）
+              ...(input.dependsOn !== undefined && input.dependsOn.length > 0
+                ? { dependsOn: input.dependsOn }
+                : {}),
+              // M5.3 协议 1.9.0：团队段随任务书透传（不带 agentSlug——协议互斥；
+              // 单 agent 路径缺省不带键，1.8 载荷零变化）
+              ...(teamPayload !== undefined ? { team: teamPayload } : {}),
+            },
     });
     // D5：已解析目标随 delegation_id 一并回写行（group 变体补 targetNodeId；
     // node 变体本就携带——幂等同值）
@@ -315,7 +374,7 @@ export async function resolveRemoteTarget(
   routing: Exclude<TaskRouting, { mode: 'local' }>,
   workspaceName: string,
   ports: DispatchSubmitPorts,
-  opts?: { team?: boolean },
+  opts?: { team?: boolean; draft?: boolean },
 ): Promise<string | null> {
   // M5.3 hub 闸（先于节点闸——指定节点离线时节点闸无 protoVer 可查会放行，
   // 而旧 hub 白名单剥 team 段的静默换班只有 hub 协商版本能揭示；组内调度同因
@@ -324,6 +383,17 @@ export async function resolveRemoteTarget(
     throw new Error(
       `hub 服务器协议过旧（${ports.hubProtoVer() ?? '未知'}，需 1.${TEAM_DELEGATION_REQUIRED_MINOR}.0 及以上），不支持团队派发——请先升级 momo-hub 到 v0.5.0+`,
     );
+  }
+  // 1.10.0 平行草稿 hub 闸（同 team 门前移理据）：旧 hub 不识 draft 键——载荷
+  // 到达旧 worker 会被当普通任务书自动执行（静默换班），hub 协商版本先拒。
+  if (opts?.draft === true) {
+    const hubVer = ports.hubProtoVer();
+    const minor = hubVer === null ? null : protoVerMinor(hubVer);
+    if (minor === null || minor < PEER_DELEGATION_REQUIRED_MINOR) {
+      throw new Error(
+        `hub 服务器协议过旧（${hubVer ?? '未知'}，需 1.${PEER_DELEGATION_REQUIRED_MINOR}.0 及以上），不支持平行组草稿委派——请先升级 momo-hub`,
+      );
+    }
   }
   const groups = await ports.listGroups();
   const group = groups.find((g) => g.groupId === routing.groupId);
@@ -339,6 +409,18 @@ export async function resolveRemoteTarget(
     }
     if (opts?.team === true && member.online && !supportsTeamDelegation(member.protoVer)) {
       throw new Error(nodeTooOldMessage(member.name, member.protoVer));
+    }
+    // 1.10.0 平行草稿节点闸：版本门（draft 能力——旧节点自动执行即静默换班）+
+    // 绑定预检（hub 会权威拒；此处早失败省一轮 RPC，错误更早更便宜）
+    if (opts?.draft === true) {
+      if (member.online && !supportsPeerDelegation(member.protoVer)) {
+        throw new Error(
+          `目标节点 ${member.name} 版本过旧（协议 ${member.protoVer ?? '未知'}），不支持接收草稿——需对方升级到 v0.6.0+`,
+        );
+      }
+      if (member.bound !== true) {
+        throw new Error(`目标节点 ${member.name} 未绑定承接空间，无法接收草稿（提醒对方在组设置中绑定）`);
+      }
     }
     return routing.targetNodeId;
   }
@@ -399,11 +481,17 @@ export interface RoutingMemberSummary {
   online: boolean;
   /** 该节点是否已镜像本工作空间（登记表按空间名口径，与调度 mirroredBy 同源） */
   mirrored: boolean;
+  /** 1.10.0：组模式为 peer 时的绑定态（bound=已绑定；boundWorkspaceName=空间名——
+   *  委派选择器「已绑定✓空间名 / 未绑定✗」标记；lf 组不带键） */
+  bound?: boolean;
+  boundWorkspaceName?: string;
 }
 
 export interface RoutingGroupSummary {
   groupId: string;
   groupName: string;
+  /** 1.10.0：组模式（peer=平行——创建弹窗执行位置按组分流草稿形态；缺省 lf 兜底） */
+  mode?: 'leader-follower' | 'peer';
   /** 在线成员数（预检行「N 节点在线」） */
   onlineCount: number;
   /** 已镜像本空间的成员数（预检行「M 已镜像」；与在线口径独立——离线已镜像也计入） */
@@ -459,10 +547,15 @@ export async function routingPrecheck(
         name: m.name,
         online: m.online,
         mirrored: mirroredNodes.has(m.nodeId),
+        // 1.10.0：peer 组成员带绑定态（lf 组投影不带键——旧消费方零影响）
+        ...(g.mode === 'peer'
+          ? { bound: m.bound === true, ...(typeof m.boundWorkspaceName === 'string' ? { boundWorkspaceName: m.boundWorkspaceName } : {}) }
+          : {}),
       }));
       return {
         groupId: g.groupId,
         groupName: g.groupName,
+        ...(g.mode !== undefined ? { mode: g.mode } : {}),
         onlineCount: members.filter((m) => m.online).length,
         mirroredCount: members.filter((m) => m.mirrored).length,
         members,

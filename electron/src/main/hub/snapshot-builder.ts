@@ -54,11 +54,13 @@ import type { AgentDefinition } from '../agent/types';
 import { listTeams } from '../agent/team';
 import { listProviders, getProvider } from '../agent/provider-crud';
 import { parseAgentManifest } from '../agent/manifest-parser';
+import { readBuiltinManifestBySlug } from '../agent/builtin';
 import { listRegistered } from '../mcp/host-manager';
 import { listInstalled, getSkillsDir } from '../skill/zip-uploader';
 import { listPlugins, isPluginEnabled } from '../plugin/registry';
 import { getGlobalSettings, DEFAULT_JOURNAL_QUOTA_MB } from '../settings/crud';
 import { agentManifestYaml, collectRegularFiles, tarDirectory } from './publish';
+import { readBundledCatalog } from '../marketplace/client';
 import { loadHubAccountingSet } from './accounting';
 import { resolveTmpDir } from '../paths';
 import { SECRET_VALUE_PATTERNS } from '../util/redact';
@@ -285,7 +287,39 @@ function memberModelBindingOf(def: AgentDefinition): SnapshotMemberModelBinding 
  *                     在此拒绝，不穿透进 manifest）
  *   marketplace/hub → slug 引用（hub 有记账则另占 resources 补装位）
  *   builtin/plugin  → slug 引用不占 resources（builtin 目标节点同有；plugin 由插件镜像重建）
+ *
+ *   builtin 例外（2026-11-08）：06e5cd93 极简化裁撤后仅存于源库 DB 的 legacy
+ *   builtin（随包不分发 YAML、内置 catalog 亦无）——slug 引用在目标不可解析
+ *   （实测 ws2 → yyyy-1 五 agent 连锁 team 共十一条 unresolved）→ 降级内嵌，
+ *   定义内容随快照走（目标按 customDefinition 逐字重建）。
  */
+function embedMember(
+  def: AgentDefinition,
+  modelBinding: SnapshotMemberModelBinding | undefined,
+): { member: SnapshotAgentMember & { modelBinding?: SnapshotMemberModelBinding }; resource: SnapshotResourceRef | null } {
+  const yaml = agentManifestYaml(def);
+  try {
+    parseAgentManifest(yaml);
+  } catch (err) {
+    throw new Error(
+      `agent 定义「${def.name}」为历史脏定义（YAML 内嵌反序列化校验失败），拒绝入快照: ${(err as Error).message}`,
+    );
+  }
+  return { member: { name: def.name, customDefinition: yaml, ...(modelBinding !== undefined ? { modelBinding } : {}) }, resource: null };
+}
+
+/** legacy builtin 判定：slug 在随包 resources/agents/*.yaml 或内置 catalog 任一处
+ *  可重建 → true（引用安全）；仅存于源库 DB 的裁撤遗留 → false（须内嵌）。 */
+function builtinReconstructable(slug: string): boolean {
+  try {
+    readBuiltinManifestBySlug(slug);
+    return true;
+  } catch {
+    // 目录缺该 YAML → 再查内置 catalog（catalog-install 类引用目标可自愈落装）
+  }
+  return readBundledCatalog().items.some((c) => c.type === 'agent' && c.slug === slug);
+}
+
 function splitAgentMember(
   def: AgentDefinition | null,
   fallbackName: string,
@@ -294,15 +328,10 @@ function splitAgentMember(
   if (!def) return { member: { name: fallbackName }, resource: null }; // 并发删除防御：引用键悬空退化为名字行
   const modelBinding = memberModelBindingOf(def);
   if (def.source === 'custom') {
-    const yaml = agentManifestYaml(def);
-    try {
-      parseAgentManifest(yaml);
-    } catch (err) {
-      throw new Error(
-        `agent 定义「${def.name}」为历史脏定义（YAML 内嵌反序列化校验失败），拒绝入快照: ${(err as Error).message}`,
-      );
-    }
-    return { member: { name: def.name, customDefinition: yaml, ...(modelBinding !== undefined ? { modelBinding } : {}) }, resource: null };
+    return embedMember(def, modelBinding);
+  }
+  if (def.source === 'builtin' && def.slug && !builtinReconstructable(def.slug)) {
+    return embedMember(def, modelBinding);
   }
   if (!def.slug) return { member: { name: def.name, ...(modelBinding !== undefined ? { modelBinding } : {}) }, resource: null };
   const resource = acc.has('agent', def.slug) ? resourceRef('agent', def.slug, acc) : null;

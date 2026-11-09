@@ -65,8 +65,11 @@ export const DELEGATION_STATUS_TO_TASK: Record<DelegationStatus, TaskStatus> = {
   interrupted: 'pending',
 };
 
-/** worker 本地账本四态 → 行状态（本地无 pending/interrupted 态：首录即 running） */
+/** worker 本地账本六态 → 行状态（1.10.0 平行草稿前置两态：draft=待安排、
+ *  arranged=已安排——行状态同形映射，看板「草稿/待办」列承载） */
 const WORKER_STATE_TO_TASK: Record<DelegationRecord['state'], TaskStatus> = {
+  draft: 'draft',
+  arranged: 'assigned',
   running: 'in_progress',
   done: 'completed',
   failed: 'failed',
@@ -92,6 +95,9 @@ export interface DelegationProgressEntry {
   /** 等待确认标志（T12）：kind='waiting-input' 拍置 true；恢复拍（无 kind）清除。
    *  可选——T11 前落库的旧条目无此字段（=== true 判定，不误报）。 */
   waiting?: boolean;
+  /** 1.10.0 平行草稿生命周期标注：kind='received'/'arranged' 拍置——重启后
+   *  发送方看板卡恢复「已接收/已安排」态；其它拍清除（与 waiting 同拍位语义）。 */
+  kind?: 'received' | 'arranged';
   /** 远程代答留痕（M3.1）：task.answered 事件置 {decision, at}；后续进度拍
    *  （handleProgress 整条覆写）自然清除——「较新才显示」由消费侧比较 at 判定。
    *  可选——旧条目无此字段（形状不符即弃，保守解析）。 */
@@ -118,12 +124,13 @@ function parseProgress(raw: string | undefined): Record<string, DelegationProgre
       const e = v as Partial<DelegationProgressEntry>;
       if (typeof e.excerpt === 'string' && typeof e.lastSeq === 'number' && typeof e.at === 'number') {
         // waiting 仅 true 落形——旧条目/T12 前数据零改写（toEqual 形状锁不破）；
-        // answered 同款保守纪律（M3.1）
+        // answered 同款保守纪律（M3.1）；kind 同款（1.10.0——枚举外值剥除）
         out[k] = {
           excerpt: e.excerpt,
           lastSeq: e.lastSeq,
           at: e.at,
           ...(e.waiting === true ? { waiting: true } : {}),
+          ...(e.kind === 'received' || e.kind === 'arranged' ? { kind: e.kind } : {}),
           ...(isAnsweredShape(e.answered) ? { answered: e.answered } : {}),
         };
       }
@@ -202,8 +209,10 @@ export interface DelegationSync {
    * leader：task.progress 拍 → running 映射 + 进度摘要。
    * kind='waiting-input' → kv waiting 标志（T12）；kind='denied'（M2.2 P2-1
    * 前向预留——hub v0.1.4 剥除该值不透传）→ 不置 waiting，文案由 excerpt 承载。
+   * kind='received'/'arranged'（1.10.0 平行草稿生命周期拍）→ 仅摘要，行不翻
+   * running（发送方行保持 pending 至首 running 拍）。
    */
-  handleProgress(evt: { taskId: string; lastSeq: number; excerpt: string; kind?: 'waiting-input' | 'denied' }): void;
+  handleProgress(evt: { taskId: string; lastSeq: number; excerpt: string; kind?: 'waiting-input' | 'denied' | 'received' | 'arranged' }): void;
   /** leader：task.completed / task.failed / task.interrupted 终态 */
   handleTerminal(status: 'done' | 'failed' | 'interrupted', taskId: string, reason?: string): void;
   /** leader：task.cancel 回执（hub 账本权威 → 本地行同步） */
@@ -244,26 +253,30 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
     delegationId: string,
     excerpt: string,
     lastSeq: number,
-    kind?: 'waiting-input' | 'denied',
+    kind?: 'waiting-input' | 'denied' | 'received' | 'arranged',
   ): void => {
     ports.saveProgress(delegationId, {
       excerpt,
       lastSeq,
       at: ports.now(),
       ...(kind === 'waiting-input' ? { waiting: true } : {}),
+      ...(kind === 'received' || kind === 'arranged' ? { kind } : {}),
     });
   };
 
   return {
-    handleProgress(evt) {
-      // 摘要与行状态同拍落（摘要先写——行不存在时摘要仍保留，重派后可续显）；
-      // waiting 标志随 kind 翻转：等待拍置 true，恢复拍（无 kind）自然清除
-      saveProgress(evt.taskId, evt.excerpt, evt.lastSeq, evt.kind);
-      const row = ports.findTaskByDelegation(evt.taskId);
-      if (row && !isTerminal(row.status)) {
-        applyMapped(evt.taskId, 'running', { startedAt: row.startedAt ?? ports.now() });
-      }
-    },
+  handleProgress(evt) {
+    // 摘要与行状态同拍落（摘要先写——行不存在时摘要仍保留，重派后可续显）；
+    // waiting 标志随 kind 翻转：等待拍置 true，恢复拍（无 kind）自然清除
+    saveProgress(evt.taskId, evt.excerpt, evt.lastSeq, evt.kind);
+    // 1.10.0 生命周期拍（received/arranged）只更新摘要——行保持 pending（发送方
+    // 视角「已接收/已安排」由摘要行呈现），不提前翻 in_progress（spec §5.1）
+    if (evt.kind === 'received' || evt.kind === 'arranged') return;
+    const row = ports.findTaskByDelegation(evt.taskId);
+    if (row && !isTerminal(row.status)) {
+      applyMapped(evt.taskId, 'running', { startedAt: row.startedAt ?? ports.now() });
+    }
+  },
 
     handleTerminal(status, taskId, reason) {
       if (status === 'done') {
@@ -298,6 +311,9 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
     wrapWorkerStore(store) {
       const ensureRow = (record: DelegationRecord): void => {
         if (ports.findTaskByDelegation(record.taskId)) return; // 幂等：行已存在不重建
+        // 1.10.0 平行草稿：落板由 runner 的 draft 端口负责（绑定空间解析 + draft
+        // 状态 + priority/description——ensureRow 的按名解析与 running 初态不适用）
+        if (record.draft === true) return;
         const ws = ports.findWorkspaceByName(record.workspaceName);
         if (!ws) {
           logger.warn('收委派建看板行跳过：工作空间不存在', {
@@ -320,6 +336,11 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
         if (!row) return;
         const next = WORKER_STATE_TO_TASK[state];
         if (isTerminal(row.status) && row.status !== next) return; // 终态粘滞
+        // 1.10.0 降级防护（2026-11-07 双会话事故）：arranged→assigned 仅对仍处
+        // draft 的行生效——executor 可能在监督器 arranged 检测前就已启动任务
+        // （in_progress），此时写回 assigned 会把运行中行降级出候选池，crash 后
+        // executor 二次放行 → 双执行会话。updateTask 绕过状态机断言，须在此自守。
+        if (state === 'arranged' && row.status !== 'draft') return;
         const extra: Partial<TaskRow> =
           state === 'done' && row.completedAt === null ? { completedAt: ports.now() } : {};
         // P2-1 worker 侧对称面：failed 附因落 errorMessage（leader handleTerminal 同款
@@ -355,7 +376,7 @@ export interface RedispatchPorts {
   resolveTarget(
     routing: Exclude<TaskRouting, { mode: 'local' }>,
     workspaceName: string,
-    opts?: { team?: boolean },
+    opts?: { team?: boolean; draft?: boolean },
   ): Promise<string | null>;
   /**
    * M5.3 团队快照展开（与 DispatchSubmitPorts.getTeamSnapshot 同形）：重派行带
@@ -368,6 +389,8 @@ export interface RedispatchPorts {
   ): { name: string; members: Array<{ agentName: string; isLeader: boolean }> } | null;
   /** 既有委派管道（leader-only；目标离线即拒 node_offline） */
   delegate(brief: DelegationTaskBrief): Promise<{ taskId: string }>;
+  /** 1.10.0 平行组判定（组模型 mode==='peer'）——草稿重派分流的数据源；可选 */
+  isPeerGroup?(groupId: string): Promise<boolean>;
   updateTask(id: string, patch: Partial<TaskRow>): void;
   now(): number;
 }
@@ -414,6 +437,20 @@ export async function retryDispatch(
   if (!workspaceName) {
     throw new Error(`任务 ${taskId} 的工作空间已不存在，无法重派`);
   }
+  // 1.10.0 平行模式：node 变体 + peer 组 → 草稿重派（draft 变体白名单载荷，
+  // 无 agentSlug/team/tier——与 submitRoutedTask 首派同形；origin 标 peer_draft
+  // 供看板方向判别。检测端口可选：缺省视为非 peer（旧接线零变化））
+  const peerTarget =
+    row.routing.mode === 'node' &&
+    (await ports.isPeerGroup?.(row.routing.groupId)) === true;
+  if (peerTarget && (row.targetTeamId !== null || row.assigneeAgentId !== null)) {
+    ports.updateTask(taskId, {
+      status: 'failed',
+      errorMessage: '平行组草稿不能携带执行编排（团队/agent 指派），请编辑清空后重派',
+      completedAt: ports.now(),
+    });
+    return { dispatched: false, nodeId: null, delegationId: null };
+  }
   // M5.3 团队展开先于复位（错误路径零副作用——解散/形态失效不闪 pending）：
   // 展开失败均为永久性失败 → 行转 failed 人话，不派不分流
   let teamPayload: { members: Array<{ name: string; isLeader: boolean }> } | undefined;
@@ -441,11 +478,18 @@ export async function retryDispatch(
       return { dispatched: false, nodeId: null, delegationId: null };
     }
   }
-  // 复位先行：旧 delegation_id 属旧账本行，重派=换 id（一义一名，禁续用）
-  ports.updateTask(taskId, { status: 'pending', errorMessage: null, delegationId: null });
+  // 复位先行：旧 delegation_id 属旧账本行，重派=换 id（一义一名，禁续用）；
+  // peer 草稿重派同步标 origin（看板方向判别/回归语义与首派一致）
+  ports.updateTask(taskId, {
+    status: 'pending',
+    errorMessage: null,
+    delegationId: null,
+    ...(peerTarget ? { origin: 'peer_draft' as const } : {}),
+  });
 
   const targetNodeId = await ports.resolveTarget(row.routing, workspaceName, {
     team: teamPayload !== undefined,
+    ...(peerTarget ? { draft: true } : {}),
   });
   if (targetNodeId === null) {
     return { dispatched: false, nodeId: null, delegationId: null }; // 无候选：留待处理
@@ -455,13 +499,21 @@ export async function retryDispatch(
       groupId: row.routing.groupId,
       targetNodeId,
       workspaceName,
-      task: {
-        title: row.title,
-        prompt: row.description.trim() !== '' ? row.description : row.title,
-        permissionTier,
-        // M5.3：team 段随重派载荷重建（不带 agentSlug——协议互斥）
-        ...(teamPayload !== undefined ? { team: teamPayload } : {}),
-      },
+      task: peerTarget
+        ? {
+            // 平行组草稿重派：draft 白名单载荷（无编排四键——hub peer 守卫）
+            title: row.title,
+            prompt: row.description.trim() !== '' ? row.description : row.title,
+            draft: true,
+            ...(row.priority > 0 ? { priority: row.priority } : {}),
+          }
+        : {
+            title: row.title,
+            prompt: row.description.trim() !== '' ? row.description : row.title,
+            permissionTier,
+            // M5.3：team 段随重派载荷重建（不带 agentSlug——协议互斥）
+            ...(teamPayload !== undefined ? { team: teamPayload } : {}),
+          },
     });
     // D5：重派同样回写已解析目标（group 变体换新 targetNodeId）
     const resolvedRouting: TaskRouting =

@@ -13,6 +13,8 @@
 // - 在跑行：running → violet spinner +「执行中」；pending / running×waiting 集
 //   （T12 kind waiting-input 拍）→ 警示图标 +「等待节点确认」
 //   （「在跑」语义同侧栏负载计数：两态同计）；终态任务不进行
+// - 1.10.0 平行组：mono 行追加绑定态段（已绑定 · 空间名 / 未绑定承接空间）；
+//   节点查看全组禁用（spec §9 裁定 2——隐私）→ hideView 时查看按钮整枚退场
 import { CircleHelp, Eye, Monitor } from 'lucide-react';
 import type { HubGroupMember, HubTaskRecord } from '../../ipc/types';
 import { cn } from '../../lib/cn';
@@ -31,13 +33,17 @@ interface NodeCardProps {
   canView: boolean;
   /** T4 接入：进入成员工作空间只读视图 */
   onOpenView: (nodeId: string, nodeName: string) => void;
+  /** 1.10.0 平行组：查看入口整组禁用（canView 之外的整体退场开关） */
+  hideView?: boolean;
+  /** 1.10.0 平行组：mono 行追加绑定态段（读 node.bound/boundWorkspaceName） */
+  showBinding?: boolean;
 }
 
 function shortNodeId(nodeId: string): string {
   return nodeId.length > 8 ? `${nodeId.slice(0, 4)}…${nodeId.slice(-4)}` : nodeId;
 }
 
-export function NodeCard({ node, isLeader, isSelf, tasks, waiting = {}, canView, onOpenView }: NodeCardProps) {
+export function NodeCard({ node, isLeader, isSelf, tasks, waiting = {}, canView, onOpenView, hideView = false, showBinding = false }: NodeCardProps) {
   const runningTasks = tasks.filter((t) => t.status === 'running' || t.status === 'pending');
   const mirroredNames = [...new Set(tasks.map((t) => t.workspaceName))];
   const idle = runningTasks.length === 0;
@@ -65,6 +71,10 @@ export function NodeCard({ node, isLeader, isSelf, tasks, waiting = {}, canView,
           <span className="truncate font-mono text-[10.5px] text-tertiary">
             node:{shortNodeId(node.nodeId)}
             {mirroredNames.length > 0 && ` · 已镜像 ${mirroredNames.join(' · ')}`}
+            {showBinding &&
+              (node.bound
+                ? ` · 已绑定 · ${node.boundWorkspaceName ?? '未知空间'}`
+                : ' · 未绑定承接空间')}
           </span>
         </div>
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
@@ -76,17 +86,19 @@ export function NodeCard({ node, isLeader, isSelf, tasks, waiting = {}, canView,
             ) : (
               <Badge className="h-auto px-1.5 py-0.5 text-[10px] leading-none">离线</Badge>
             ))}
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 px-2 text-xs"
-            disabled={!canView}
-            title={canView ? undefined : viewDisabledReason}
-            onClick={() => onOpenView(node.nodeId, node.name)}
-          >
-            <Eye size={12} strokeWidth={1.75} aria-hidden />
-            查看
-          </Button>
+          {!hideView && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              disabled={!canView}
+              title={canView ? undefined : viewDisabledReason}
+              onClick={() => onOpenView(node.nodeId, node.name)}
+            >
+              <Eye size={12} strokeWidth={1.75} aria-hidden />
+              查看
+            </Button>
+          )}
         </span>
       </div>
       {runningTasks.map((t) => (

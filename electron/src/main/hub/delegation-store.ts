@@ -5,12 +5,13 @@
 // （config-store 同款纪律），会话行本身保持普通 collab 会话（标题=任务书摘要）。
 import type { Database } from 'better-sqlite3';
 
-/** 本地运行态（与 hub 账本六态不同——本地只有「在跑/终态」语义） */
-export type DelegationLocalState = 'running' | 'done' | 'failed' | 'cancelled';
+/** 本地运行态（与 hub 账本六态不同——本地只有「在跑/终态」语义；
+ *  1.10.0 平行模式前置两态：draft=草稿已落板待安排、arranged=已安排待执行） */
+export type DelegationLocalState = 'draft' | 'arranged' | 'running' | 'done' | 'failed' | 'cancelled';
 
 export interface DelegationRecord {
   taskId: string;
-  /** MC1 委派会话 id（本机 sessions 表行） */
+  /** MC1 委派会话 id（本机 sessions 表行）；平行草稿落板时为 ''（安排执行后回填） */
   sessionId: string;
   workspaceId: string;
   workspaceName: string;
@@ -18,6 +19,15 @@ export interface DelegationRecord {
   /** 派单节点 id（审计留痕） */
   byNode: string;
   state: DelegationLocalState;
+  /**
+   * 1.10.0 平行模式草稿标记（spec 2026-11-05 §5.2）：draft=true 时 sessionId
+   * 允许为 ''（未安排无会话）；监督器按 localTaskId 行状态机推进。
+   */
+  draft?: true;
+  /** 1.10.0：草稿对应的本地 tasks 行 id（监督器定位锚） */
+  localTaskId?: string;
+  /** 1.10.0：组归属（绑定解析/审计） */
+  groupId?: string;
   /**
    * failed 终态人话原因（M2.3 P2-1）——与 runner 上报 hub 的 failed 载荷 reason
    * 同源（本机落值不经 hub 中转），worker 本机看板卡 title 全文数据源。
@@ -50,13 +60,24 @@ function parseAll(raw: string | undefined): Map<string, DelegationRecord> {
         typeof r.taskId === 'string' && typeof r.sessionId === 'string' &&
         typeof r.workspaceId === 'string' && typeof r.workspaceName === 'string' &&
         typeof r.title === 'string' && typeof r.byNode === 'string' &&
-        (r.state === 'running' || r.state === 'done' || r.state === 'failed' || r.state === 'cancelled') &&
+        (r.state === 'draft' || r.state === 'arranged' || r.state === 'running' || r.state === 'done' || r.state === 'failed' || r.state === 'cancelled') &&
         typeof r.createdAt === 'number' && typeof r.updatedAt === 'number'
       ) {
         // reason 仅字符串落形（P2-1——progress store waiting 同款纪律：老数据无
         // 此字段零改写，异形值剥除不渗入持久化面）
         const rec = r as DelegationRecord;
         if (typeof rec.reason !== 'string') delete rec.reason;
+        // 1.10.0 草稿三可选字段保守落形（非草稿记录剥除；draft 记录 sessionId
+        // 允许 ''——形态见 DelegationRecord.draft 注释）
+        if (rec.draft === true) {
+          rec.draft = true;
+          if (typeof rec.localTaskId !== 'string') delete rec.localTaskId;
+          if (typeof rec.groupId !== 'string') delete rec.groupId;
+        } else {
+          delete rec.draft;
+          delete rec.localTaskId;
+          delete rec.groupId;
+        }
         out.set(r.taskId, rec);
       }
     }

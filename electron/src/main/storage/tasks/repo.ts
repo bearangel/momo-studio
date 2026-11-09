@@ -27,8 +27,11 @@ import { deriveBlockedBy } from './dependencies-repo';
 
 export type { TaskStatus } from './state-machine';
 
-/** 任务来源（D4 账本包，迁移 071）——见 TaskRow.origin 注释 */
-export type TaskOrigin = 'user' | 'dispatch';
+/** 任务来源（D4 账本包，迁移 071）——见 TaskRow.origin 注释。
+ *  1.10.0 增 'peer_draft'（平行模式，spec 2026-11-05 §4.2）：平行组草稿委派行——
+ *  发送方外派行与接收方承接行共用（方向由 routing.targetNodeId 是否本机判别）；
+ *  接收方行带「来自 X」徽标 + 拒收/安排操作，boot 对账与编排簿记语义互斥。 */
+export type TaskOrigin = 'user' | 'dispatch' | 'peer_draft';
 
 export interface TaskRow {
   id: string;
@@ -172,7 +175,7 @@ function rowToCamel(r: SqlRow): TaskRow {
     groupId: r.group_id,
     pinnedAt: r.pinned_at,
     archivedAt: r.archived_at,
-    origin: r.origin === 'dispatch' ? 'dispatch' : 'user',
+    origin: r.origin === 'dispatch' ? 'dispatch' : r.origin === 'peer_draft' ? 'peer_draft' : 'user',
     routing: parseTaskRouting(r.routing_json),
     routingJson: r.routing_json,
     delegationId: r.delegation_id,

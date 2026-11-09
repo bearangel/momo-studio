@@ -64,6 +64,12 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
   setAgent: (slug: string | undefined, instanceId: string) => void;
   setAgentByName: (name: string, instanceId: string) => void;
   setStartTurnFailures: (attemptsWithin: number) => void;
+  /** 1.10.0 平行草稿测试面：组绑定/草稿行状态机驱动 */
+  setBinding: (groupId: string, workspaceId: string, workspaceName: string) => void;
+  clearBinding: (groupId: string) => void;
+  draftRow: (delegationId: string) => { id: string; status: string; executionSessionId: string | null } | null;
+  setDraftStatus: (delegationId: string, status: string, executionSessionId?: string) => void;
+  deleteDraftRow: (delegationId: string) => void;
 } {
   const db = new Database(':memory:');
   db.exec('CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT)');
@@ -77,6 +83,9 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
 
   // 可变测试台状态
   const workspaces = new Map<string, string>();           // name → id
+  const bindings = new Map<string, { workspaceId: string; workspaceName: string }>(); // groupId → 绑定空间
+  const draftRows = new Map<string, { id: string; status: string; executionSessionId: string | null; input: { title: string } }>(); // delegationId → 本地行
+  let draftSeq = 0;
   const agents = new Map<string, string>();               // slug|'__default__' → instanceId
   const agentsByName = new Map<string, string>();         // M5.3：agentName → instanceId
   const tailQueue = new Map<string, DelegationTail[]>();  // sessionId → 待消费尾部增量
@@ -144,6 +153,15 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
       return reportOnline;
     },
     listInterruptedDelegations: async () => interrupted,
+    resolveBindingWorkspace: (groupId) => bindings.get(groupId) ?? null,
+    insertDraftTaskRow: (input) => {
+      const localTaskId = `t-${++draftSeq}`;
+      draftRows.set(input.delegationId, { id: localTaskId, status: 'draft', executionSessionId: null, input });
+      log.order.push(`insertDraft:${input.title}`);
+      return { localTaskId };
+    },
+    findDraftRow: (delegationId) => draftRows.get(delegationId) ?? null,
+    selfNodeId: () => 'node-self',
     ...overrides,
   };
 
@@ -164,6 +182,20 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
     setAgent: (slug, instanceId) => { agents.set(slug ?? '__default__', instanceId); },
     setAgentByName: (name, instanceId) => { agentsByName.set(name, instanceId); },
     setStartTurnFailures: (within) => { startTurnFailWithin = within; },
+    // 1.10.0 平行草稿测试面
+    setBinding: (groupId, workspaceId, workspaceName) => bindings.set(groupId, { workspaceId, workspaceName }),
+    clearBinding: (groupId) => bindings.delete(groupId),
+    draftRow: (delegationId) => {
+      const row = draftRows.get(delegationId);
+      return row ? { id: row.id, status: row.status, executionSessionId: row.executionSessionId } : null;
+    },
+    setDraftStatus: (delegationId, status, executionSessionId) => {
+      const row = draftRows.get(delegationId);
+      if (!row) return;
+      row.status = status;
+      if (executionSessionId !== undefined) row.executionSessionId = executionSessionId;
+    },
+    deleteDraftRow: (delegationId) => { draftRows.delete(delegationId); },
   };
 }
 
@@ -1159,5 +1191,192 @@ describe('readonly 即时拒（M2.2 P2-1）', () => {
     await vi.advanceTimersByTimeAsync(15 * 60_000 + 1_000);
     expect(h.log.injectedSteers).toHaveLength(1);
     expect(isReadonlySession('sess-1')).toBe(true);
+  });
+});
+// ── 1.10.0 平行草稿生命周期（spec 2026-11-05 §5.2）─────────────────────────
+
+function draftEvt(taskId: string, overrides?: Partial<AssignedTaskEvent>): AssignedTaskEvent {
+  return assignedEvt(taskId, {
+    groupId: 'g-peer',
+    task: { title: '联调登录接口', prompt: '完成登录接口联调并自测', draft: true, priority: 8 },
+    ...overrides,
+  });
+}
+
+describe('平行草稿接收（draft 分支）', () => {
+  it('已绑定：落 draft 行（不建会不执行）+ received 拍；priority 透传', async () => {
+    const h = makeHarness();
+    h.setBinding('g-peer', 'ws-bind-1', '研发空间');
+    await h.runner.handleAssigned(draftEvt('t-d1'));
+    await vi.advanceTimersByTimeAsync(0);
+
+    const row = h.draftRow('t-d1');
+    expect(row).not.toBeNull();
+    expect(row!.status).toBe('draft');
+    // 草稿分支零会话零回合（与自动执行链的本质区别）
+    expect(h.log.createdSessions).toHaveLength(0);
+    expect(h.log.startedTurns).toHaveLength(0);
+    const record = h.store.get('t-d1');
+    expect(record?.draft).toBe(true);
+    expect(record?.state).toBe('draft');
+    expect(record?.sessionId).toBe('');
+
+    const beats = h.log.reports.filter((r) => r.payload.status === 'pending');
+    expect(beats).toHaveLength(1);
+    expect(beats[0]!.payload.progress?.kind).toBe('received');
+    expect(beats[0]!.taskId).toBe('t-d1');
+  });
+
+  it('未绑定组 → declined 深度防御（hub 已闸，本地兜底），零落板', async () => {
+    const h = makeHarness();
+    await h.runner.handleAssigned(draftEvt('t-d2'));
+    await vi.advanceTimersByTimeAsync(0);
+    const failed = h.log.reports.find((r) => r.payload.status === 'failed');
+    expect(failed?.payload.reason).toContain('declined:');
+    expect(failed?.payload.reason).toContain('未绑定承接空间');
+    expect(h.draftRow('t-d2')).toBeNull();
+    expect(h.store.get('t-d2')).toBeNull();
+  });
+
+  it('无 groupId 载荷（异形防御）→ declined，零落板', async () => {
+    const h = makeHarness();
+    h.setBinding('g-peer', 'ws-bind-1', '研发空间');
+    await h.runner.handleAssigned(draftEvt('t-d3', { groupId: undefined }));
+    await vi.advanceTimersByTimeAsync(0);
+    const failed = h.log.reports.find((r) => r.payload.status === 'failed');
+    expect(failed?.payload.reason).toContain('declined:');
+    expect(h.draftRow('t-d3')).toBeNull();
+  });
+
+  it('接受开关关闭 → declined（前置闸对草稿同样生效）', async () => {
+    const h = makeHarness();
+    h.settings.write({ acceptTasks: false, maxConcurrent: 2, hitlTimeoutMinutes: 15 });
+    h.setBinding('g-peer', 'ws-bind-1', '研发空间');
+    await h.runner.handleAssigned(draftEvt('t-d4'));
+    await vi.advanceTimersByTimeAsync(0);
+    const failed = h.log.reports.find((r) => r.payload.status === 'failed');
+    expect(failed?.payload.reason).toContain('已关闭任务委派接受');
+    expect(h.draftRow('t-d4')).toBeNull();
+  });
+});
+
+describe('平行草稿生命周期监督器', () => {
+  it('安排（draft→assigned）→ arranged 拍一次，不重复', async () => {
+    const h = makeHarness();
+    h.setBinding('g-peer', 'ws-bind-1', '研发空间');
+    await h.runner.handleAssigned(draftEvt('t-a1'));
+    await vi.advanceTimersByTimeAsync(0);
+
+    h.setDraftStatus('t-a1', 'assigned');
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(500);
+    const arranged = h.log.reports.filter((r) => r.payload.progress?.kind === 'arranged');
+    expect(arranged).toHaveLength(1);
+    expect(h.store.get('t-a1')?.state).toBe('arranged');
+  });
+
+  it('执行接管：in_progress + 执行会话 → 首拍 running + 进度拍 + 终态 done 全链', async () => {
+    const h = makeHarness();
+    h.setBinding('g-peer', 'ws-bind-1', '研发空间');
+    await h.runner.handleAssigned(draftEvt('t-e1'));
+    await vi.advanceTimersByTimeAsync(0);
+    h.setDraftStatus('t-e1', 'assigned');
+    await vi.advanceTimersByTimeAsync(500);
+
+    h.setDraftStatus('t-e1', 'in_progress', 'sess-exec-1');
+    await vi.advanceTimersByTimeAsync(500);
+    const running = h.log.reports.filter((r) => r.payload.status === 'running');
+    expect(running).toHaveLength(1);
+    expect(running[0]!.payload.sessionId).toBe('sess-exec-1');
+    expect(h.store.get('t-e1')?.state).toBe('running');
+    expect(h.store.get('t-e1')?.sessionId).toBe('sess-exec-1');
+
+    // 进度拍：sessionTail 增量经既有 tick 链转发
+    h.pushTail('sess-exec-1', { lastSeq: 3, excerpt: '正在联调' });
+    await vi.advanceTimersByTimeAsync(500);
+    const beats = h.log.reports.filter((r) => r.payload.status === 'running' && r.payload.progress?.lastSeq === 3);
+    expect(beats).toHaveLength(1);
+
+    // 回合终态 → done 上报 + 账本 done
+    h.fireTerminal('sess-exec-1', { status: 'done' });
+    await vi.advanceTimersByTimeAsync(0);
+    const done = h.log.reports.find((r) => r.payload.status === 'done');
+    expect(done?.taskId).toBe('t-e1');
+    expect(h.store.get('t-e1')?.state).toBe('done');
+  });
+
+  it('手动完结（无在跑回合，如拆子任务后）→ 直接 done 上报', async () => {
+    const h = makeHarness();
+    h.setBinding('g-peer', 'ws-bind-1', '研发空间');
+    await h.runner.handleAssigned(draftEvt('t-m1'));
+    await vi.advanceTimersByTimeAsync(0);
+    h.setDraftStatus('t-m1', 'assigned');
+    await vi.advanceTimersByTimeAsync(500);
+    h.setDraftStatus('t-m1', 'completed');
+    await vi.advanceTimersByTimeAsync(500);
+    const done = h.log.reports.find((r) => r.payload.status === 'done');
+    expect(done?.taskId).toBe('t-m1');
+    expect(h.store.get('t-m1')?.state).toBe('done');
+  });
+
+  it('行删除 → declined:对方已删除任务（杜绝发送方永挂 pending）', async () => {
+    const h = makeHarness();
+    h.setBinding('g-peer', 'ws-bind-1', '研发空间');
+    await h.runner.handleAssigned(draftEvt('t-x1'));
+    await vi.advanceTimersByTimeAsync(0);
+    h.deleteDraftRow('t-x1');
+    await vi.advanceTimersByTimeAsync(500);
+    const failed = h.log.reports.find((r) => r.payload.status === 'failed');
+    expect(failed?.payload.reason).toBe('declined:对方已删除任务');
+    expect(h.store.get('t-x1')?.state).toBe('failed');
+  });
+
+  it('本地取消（行 cancelled 无回合）→ failed 上报附因', async () => {
+    const h = makeHarness();
+    h.setBinding('g-peer', 'ws-bind-1', '研发空间');
+    await h.runner.handleAssigned(draftEvt('t-c1'));
+    await vi.advanceTimersByTimeAsync(0);
+    h.setDraftStatus('t-c1', 'cancelled');
+    await vi.advanceTimersByTimeAsync(500);
+    const failed = h.log.reports.find((r) => r.payload.status === 'failed');
+    expect(failed?.payload.reason).toContain('本地任务已取消');
+  });
+
+  it('重连 handleOnline：草稿记录跳过回合续传（不注入续跑回合、不发空 sessionId 拍）', async () => {
+    const h = makeHarness();
+    h.setBinding('g-peer', 'ws-bind-1', '研发空间');
+    await h.runner.handleAssigned(draftEvt('t-r1'));
+    await vi.advanceTimersByTimeAsync(0);
+    h.setInterrupted([{ taskId: 't-r1', title: '联调登录接口', workspaceName: '研发空间' }]);
+    await h.runner.handleOnline();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.log.startedTurns).toHaveLength(0);
+    const resumed = h.log.reports.filter((r) => r.payload.status === 'running');
+    expect(resumed).toHaveLength(0);
+    // 记录仍在（监督器按本地行接管，不被 local_session_lost 误杀）
+    expect(h.store.get('t-r1')?.state).toBe('draft');
+  });
+});
+
+// ── 降级防护（2026-11-07 双会话事故）：executor 快路径不触发 arranged 回写 ──
+
+describe('平行草稿快路径（安排即启动竞态）', () => {
+  it('行从 draft 直接 in_progress（executor 先于监督器）：不发 arranged 拍，直接接管', async () => {
+    const h = makeHarness();
+    h.setBinding('g-peer', 'ws-bind-1', '研发空间');
+    await h.runner.handleAssigned(draftEvt('t-f1'));
+    await vi.advanceTimersByTimeAsync(0);
+
+    // 跳过 assigned 中间态——executor 自动放行直接推到 in_progress + 执行会话
+    h.setDraftStatus('t-f1', 'in_progress', 'sess-fast-1');
+    await vi.advanceTimersByTimeAsync(500);
+
+    const arranged = h.log.reports.filter((r) => r.payload.progress?.kind === 'arranged');
+    expect(arranged).toHaveLength(0);
+    const running = h.log.reports.filter((r) => r.payload.status === 'running');
+    expect(running).toHaveLength(1);
+    expect(running[0]!.payload.sessionId).toBe('sess-fast-1');
+    // record 态仍推进离开 draft（防下拍重复评估）
+    expect(h.store.get('t-f1')?.state).toBe('running');
   });
 });

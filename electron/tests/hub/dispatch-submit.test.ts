@@ -62,7 +62,15 @@ interface PortOverrides {
   groups?: Array<{
     groupId: string;
     groupName: string;
-    members: Array<{ nodeId: string; name: string; online: boolean; protoVer?: string }>;
+    mode?: 'leader-follower' | 'peer';
+    members: Array<{
+      nodeId: string;
+      name: string;
+      online: boolean;
+      protoVer?: string;
+      bound?: boolean;
+      boundWorkspaceName?: string;
+    }>;
   }>;
   delegations?: Array<{ taskId: string; targetNodeId: string; status: string }>;
   registry?: Array<{ groupId: string; targetNodeId: string; workspaceName: string }>;
@@ -752,5 +760,103 @@ describe('routingPrecheck — 预检概要', () => {
       { nodeId: 'node-b', name: 'lab-node', protoVer: '1.10.2' },
       { nodeId: 'node-old', name: 'legacy-box', protoVer: '1.8.0' },
     ]);
+  });
+});
+// ── 1.10.0 平行草稿分支（spec 2026-11-05 §5.1）────────────────────────────
+
+function peerGroup(): NonNullable<PortOverrides['groups']> {
+  return [
+    {
+      groupId: 'g-peer',
+      groupName: '需求研发测试',
+      mode: 'peer',
+      members: [
+        { nodeId: 'node-b', name: '研发工位', online: true, protoVer: '1.10.0', bound: true, boundWorkspaceName: '研发空间' },
+        { nodeId: 'node-c', name: '测试工位', online: true, protoVer: '1.10.0', bound: false },
+        { nodeId: 'node-old', name: '旧节点', online: true, protoVer: '1.9.0', bound: true, boundWorkspaceName: '旧空间' },
+      ],
+    },
+  ];
+}
+
+function draftInput(routing: TaskRouting, extra: Partial<SubmitRoutedTaskInput> = {}): SubmitRoutedTaskInput {
+  return { ...baseInput(routing), draft: true, priority: 5, ...extra };
+}
+
+describe('submitRoutedTask — 平行草稿分支', () => {
+  it('peer 组点对点：载荷仅 title/prompt/draft/priority（零编排键）；行 origin=peer_draft', async () => {
+    const ports = makePorts({ groups: peerGroup(), hubProtoVer: '1.10.0' });
+    const routing: TaskRouting = { mode: 'node', groupId: 'g-peer', targetNodeId: 'node-b' };
+    const result = await submitRoutedTask(draftInput(routing), ports);
+    expect(result.dispatched).toBe(true);
+    expect(result.nodeId).toBe('node-b');
+    const brief = ports.delegate.mock.calls[0]![0] as DelegationTaskBrief;
+    expect(brief.task).toEqual({
+      title: '排查 WebSocket 断连',
+      prompt: '分析 gateway 日志定位 1006 根因',
+      draft: true,
+      priority: 5,
+    });
+    expect(ports.createRemoteTask.mock.calls[0]![0]).toMatchObject({ draft: true });
+  });
+
+  it('group 变体路由 → 人话拒（平行草稿仅指定节点）', async () => {
+    const ports = makePorts({ groups: peerGroup(), hubProtoVer: '1.10.0' });
+    await expect(
+      submitRoutedTask(draftInput({ mode: 'group', groupId: 'g-peer' }), ports),
+    ).rejects.toThrow('仅支持指定节点');
+  });
+
+  it('teamId 与草稿互斥 → 人话拒', async () => {
+    const ports = makePorts({ groups: peerGroup(), hubProtoVer: '1.10.0' });
+    await expect(
+      submitRoutedTask(
+        draftInput({ mode: 'node', groupId: 'g-peer', targetNodeId: 'node-b' }, { teamId: 'team-1' }),
+        ports,
+      ),
+    ).rejects.toThrow('不能携带团队执行编排');
+  });
+
+  it('目标未绑定 → 早失败人话拒（零落库零派发）', async () => {
+    const ports = makePorts({ groups: peerGroup(), hubProtoVer: '1.10.0' });
+    await expect(
+      submitRoutedTask(draftInput({ mode: 'node', groupId: 'g-peer', targetNodeId: 'node-c' }), ports),
+    ).rejects.toThrow('未绑定承接空间');
+    expect(ports.createRemoteTask).not.toHaveBeenCalled();
+    expect(ports.delegate).not.toHaveBeenCalled();
+  });
+
+  it('目标节点版本过旧（1.9.0 < 1.10.0）→ 人话拒', async () => {
+    const ports = makePorts({ groups: peerGroup(), hubProtoVer: '1.10.0' });
+    await expect(
+      submitRoutedTask(draftInput({ mode: 'node', groupId: 'g-peer', targetNodeId: 'node-old' }), ports),
+    ).rejects.toThrow('不支持接收草稿');
+  });
+
+  it('hub 协议过旧（1.9.0 hub 不识 draft 键）→ 人话拒（静默换班防线）', async () => {
+    const ports = makePorts({ groups: peerGroup(), hubProtoVer: '1.9.0' });
+    await expect(
+      submitRoutedTask(draftInput({ mode: 'node', groupId: 'g-peer', targetNodeId: 'node-b' }), ports),
+    ).rejects.toThrow('hub 服务器协议过旧');
+  });
+
+  it('routingPrecheck：peer 组投影 mode + 成员绑定态；lf 组不带键（旧形状零变化）', async () => {
+    const lfGroup: NonNullable<PortOverrides['groups']> = [
+      { groupId: 'g-lf', groupName: '主从组', members: [{ nodeId: 'node-a', name: '设备1', online: true }] },
+    ];
+    const peer = await routingPrecheck('ws-main', makePorts({ groups: peerGroup() }));
+    const peerSummary = peer.groups.find((g) => g.groupId === 'g-peer')!;
+    expect(peerSummary.mode).toBe('peer');
+    const bound = peerSummary.members.find((m) => m.nodeId === 'node-b')!;
+    expect(bound.bound).toBe(true);
+    expect(bound.boundWorkspaceName).toBe('研发空间');
+    const unbound = peerSummary.members.find((m) => m.nodeId === 'node-c')!;
+    expect(unbound.bound).toBe(false);
+    expect(unbound.boundWorkspaceName).toBeUndefined();
+
+    const lf = await routingPrecheck('ws-main', makePorts({ groups: lfGroup }));
+    const lfSummary = lf.groups.find((g) => g.groupId === 'g-lf')!;
+    expect(lfSummary.mode).toBeUndefined();
+    expect(lfSummary.members[0]!.bound).toBeUndefined();
   });
 });

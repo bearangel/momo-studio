@@ -5,7 +5,7 @@
 // - 组头：组名 16px + 邀请码 Badge + CopyButton（本机最近生成的码——hub-group-store
 //   inviteCodes）；无码不设独立按钮——组菜单「重新生成邀请码」是唯一入口（成员级语义：
 //   hub invite 为成员级 RPC，不设 leader 门槛；M2.1 T5 评审收口）
-// - 「镜像工作空间…」仅 leader 可见（GroupPanel 同语义），点击挂既有 MirrorWizard 原样
+// - 「同步配置」（原「镜像工作空间…」）仅 leader 可见（GroupPanel 同语义），点击挂既有 MirrorWizard 原样
 // - 组操作菜单（MoreHorizontal 下拉，自 settings/GroupPanel 收口迁移——删面板前逐
 //   操作面核对归宿，缺失三项补齐）：重新生成邀请码〔成员级，全员可见可点〕/
 //   转移组长〔仅 leader，展开可选成员子列表〕/ 退出工作组〔菜单内两步确认——「再次点击确认」3s 回落范式〕
@@ -16,20 +16,32 @@
 // - 底部 callout：监控台无创建任务入口——引导回看板（执行位置「组内调度」自动派发）
 // - 组选择与侧栏共用 effectiveSelectedGroup 推导（手选组在场 → 手选；否则第一组）
 // - 无组空态：引导去侧栏创建/加入（表单在 WorkgroupSidebar）
+// - 1.10.0 平行组（spec 2026-11-05 §6）：查看入口全组隐藏（NodeCard hideView）；
+//   逐节点「镜像工作空间…」让位组长「同步配置」批量动作（1.10.1 与 lf 入口同名——2026-11-08 用户裁定）（源=组长绑定空间；
+//   UnifiedMirrorDialog 承载构建/多选/逐行终态——unified-mirror.store，2026-11-08
+//   对话形态预览批准稿）；「接受本组镜像」开关仅非组长成员可见（组长是镜像源，
+//   接受语义不适用——换绑 BindingDialog 同步隐藏勾选）；头部追加换绑入口
+//   （读自己成员行，写 groupSetMirrorAccept）
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { HardDriveDownload, Kanban, MoreHorizontal, Users } from 'lucide-react';
+import { HardDriveDownload, Kanban, Layers, MoreHorizontal, RefreshCw, Users } from 'lucide-react';
 import { effectiveSelectedGroup, useHubGroupStore } from '../../stores/hub-group.store';
 import { useHubDelegationStore } from '../../stores/hub-delegation.store';
 import { useHubMirrorStore } from '../../stores/hub-mirror.store';
 import { useHubStore } from '../../stores/hub.store';
+import { useUnifiedMirrorStore } from '../../stores/unified-mirror.store';
+import { useWorkspaceStore } from '../../stores/workspace.store';
 import type { HubGroupInfo } from '../../ipc/types';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { CopyButton } from '../ui/CopyButton';
 import { EmptyState } from '../ui/EmptyState';
+import { Switch } from '../ui/Switch';
+import { showToast } from '../ui/Toast';
 import { MirrorWizard } from '../hub/MirrorWizard';
 import { NodeCard } from './NodeCard';
+import { BindingDialog } from './BindingDialog';
+import { UnifiedMirrorDialog } from './UnifiedMirrorDialog';
 import { useArmedConfirm } from './useArmedConfirm';
 
 interface GroupMonitorProps {
@@ -41,10 +53,14 @@ export function GroupMonitor({ onOpenView }: GroupMonitorProps) {
   const groups = useHubGroupStore((s) => s.groups);
   const selectedGroupId = useHubGroupStore((s) => s.selectedGroupId);
   const inviteCodes = useHubGroupStore((s) => s.inviteCodes);
+  const setMirrorAccept = useHubGroupStore((s) => s.setMirrorAccept);
   const openMirrorWizard = useHubMirrorStore((s) => s.openWizard);
   const tasks = useHubDelegationStore((s) => s.tasks);
   const waiting = useHubDelegationStore((s) => s.waiting);
   const selfNodeId = useHubStore((s) => s.status?.nodeId ?? null);
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const [rebindOpen, setRebindOpen] = useState(false);
+  const openUnifiedMirror = useUnifiedMirrorStore((s) => s.openDialog);
 
   const group = effectiveSelectedGroup(groups, selectedGroupId);
 
@@ -54,7 +70,7 @@ export function GroupMonitor({ onOpenView }: GroupMonitorProps) {
         <EmptyState
           icon={Users}
           title="尚未加入任何工作组"
-          description="在左侧创建工作组，或凭邀请码加入"
+          description="在左侧创建工作组，或用邀请码加入"
           role="status"
         />
       </div>
@@ -62,19 +78,51 @@ export function GroupMonitor({ onOpenView }: GroupMonitorProps) {
   }
 
   const isLeader = selfNodeId === group.leaderNodeId;
+  const peer = group.mode === 'peer';
   const code = inviteCodes[group.groupId];
+  const selfMember = group.members.find((m) => m.nodeId === selfNodeId) ?? null;
+  const leaderMember = group.members.find((m) => m.nodeId === group.leaderNodeId) ?? null;
+
+  /** 平行组「统一镜像」入口：源=组长绑定空间（本机按名解析 id）；解析失败
+   *  仅 toast（不打开对话框）——构建/多选/终态全在 UnifiedMirrorDialog */
+  const openUnified = (): void => {
+    if (group === null) return;
+    const sourceName = leaderMember?.boundWorkspaceName;
+    if (sourceName === undefined) return;
+    const sourceWs = workspaces.find((w) => w.name === sourceName);
+    if (sourceWs === undefined) {
+      showToast(`本地找不到组长的承接空间「${sourceName}」`);
+      return;
+    }
+    openUnifiedMirror({
+      groupId: group.groupId,
+      groupName: group.groupName,
+      leaderNodeId: group.leaderNodeId,
+      members: group.members,
+      sourceWorkspaceId: sourceWs.id,
+      sourceWorkspaceName: sourceName,
+    });
+  };
+
+  const leaderUnboundTitle = '请先绑定自己的承接空间';
 
   return (
     <div className="flex min-w-0 flex-1 flex-col bg-canvas">
       <div className="flex items-center gap-2.5 border-b border-subtle px-4 py-3">
         <h2 className="text-base font-medium text-primary">{group.groupName}</h2>
+        <Badge
+          tone={peer ? 'violet' : 'neutral'}
+          className="h-auto shrink-0 px-1.5 py-0.5 text-[10px] leading-none"
+        >
+          {peer ? '平行模式' : '主从模式'}
+        </Badge>
         {code !== undefined && (
           <span className="flex min-w-0 items-center gap-1.5">
             <Badge className="font-mono">邀请码 {code}</Badge>
             <CopyButton text={code} label="复制邀请码" />
           </span>
         )}
-        {isLeader && (
+        {isLeader && !peer && (
           <Button
             variant="secondary"
             size="sm"
@@ -82,14 +130,49 @@ export function GroupMonitor({ onOpenView }: GroupMonitorProps) {
             onClick={() => openMirrorWizard(group.groupId, group.groupName)}
           >
             <HardDriveDownload size={14} strokeWidth={1.75} aria-hidden />
-            镜像工作空间…
+            同步配置
           </Button>
+        )}
+        {peer && (
+          <span className="ml-auto flex shrink-0 items-center gap-2">
+            {isLeader && (
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={leaderMember?.bound !== true}
+                title={leaderMember?.bound === true ? undefined : leaderUnboundTitle}
+                onClick={openUnified}
+              >
+                <Layers size={14} strokeWidth={1.75} aria-hidden />
+                同步配置
+              </Button>
+            )}
+            <Button variant="ghost" size="sm" onClick={() => setRebindOpen(true)}>
+              <RefreshCw size={14} strokeWidth={1.75} aria-hidden />
+              {selfMember?.bound === true ? '换绑' : '绑定空间'}
+            </Button>
+            {!isLeader && (
+              <span className="flex items-center gap-1.5" title={selfMember?.bound === true ? undefined : '绑定承接空间后可开关'}>
+                <span className="text-xs text-tertiary">接受本组镜像</span>
+                <Switch
+                  aria-label="接受本组镜像"
+                  checked={selfMember?.acceptsMirror === true}
+                  disabled={selfMember?.bound !== true}
+                  onChange={(next) => {
+                    void setMirrorAccept(group.groupId, next).catch(() => {
+                      // 人话错误已落 hub-group-store.error——侧栏错误行呈现
+                    });
+                  }}
+                />
+              </span>
+            )}
+          </span>
         )}
         <GroupActionsMenu
           group={group}
           isLeader={isLeader}
           selfNodeId={selfNodeId}
-          className={isLeader ? undefined : 'ml-auto'}
+          className={isLeader || peer ? undefined : 'ml-auto'}
         />
       </div>
 
@@ -104,6 +187,8 @@ export function GroupMonitor({ onOpenView }: GroupMonitorProps) {
             isSelf={m.nodeId === selfNodeId}
             canView={isLeader && m.nodeId !== selfNodeId && m.online}
             onOpenView={onOpenView}
+            hideView={peer}
+            showBinding={peer}
           />
         ))}
         <div className="flex items-start gap-2 rounded-lg bg-surface-2 px-2.5 py-2 text-[11.5px] leading-relaxed text-secondary">
@@ -114,11 +199,22 @@ export function GroupMonitor({ onOpenView }: GroupMonitorProps) {
             aria-hidden
           />
           <span>
-            编队监控台：任务统一在<b>看板</b>创建（执行位置选「组内调度」即自动派发）；「查看」进入成员工作空间只读视图。
+            {peer
+              ? '平行组监控台：任务在看板创建（执行位置选「指定节点」即向对方交接草稿，由对方自行安排执行）。'
+              : '编队监控台：任务统一在看板创建（执行位置选「组内调度」即自动派发）；「查看」进入成员工作空间只读视图。'}
           </span>
         </div>
       </div>
       <MirrorWizard />
+      <UnifiedMirrorDialog />
+      <BindingDialog
+        open={rebindOpen}
+        onClose={() => setRebindOpen(false)}
+        groupId={group.groupId}
+        groupName={group.groupName}
+        initialAccepts={selfMember?.acceptsMirror === true}
+        hideAccepts={isLeader}
+      />
     </div>
   );
 }

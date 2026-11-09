@@ -286,6 +286,10 @@ function makeRunnerHarness(): {
       return true;
     },
     listInterruptedDelegations: async () => [],
+    resolveBindingWorkspace: () => null,
+    insertDraftTaskRow: () => null,
+    findDraftRow: () => null,
+    selfNodeId: () => 'node-self',
   };
 
   const runner = createDelegationRunner({ ports, store, tickMs: 500 });

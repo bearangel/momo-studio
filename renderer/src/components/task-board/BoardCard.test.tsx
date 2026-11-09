@@ -27,7 +27,8 @@ const mockApi = {
   agent: { listMembers: vi.fn().mockRejectedValue(new Error('no ipc')) },
   team: { list: vi.fn().mockRejectedValue(new Error('no ipc')) },
   session: { list: vi.fn().mockRejectedValue(new Error('no ipc')) },
-  task: { archive: vi.fn(), setPinned: vi.fn() },
+  // ipc 代理命名空间缓存按首次访问拷贝——transition 键必须先于首个用例存在
+  task: { archive: vi.fn(), setPinned: vi.fn(), transition: vi.fn() },
 };
 
 const base: TaskRow = {
@@ -531,5 +532,62 @@ describe('BoardCard 编排徽标与 dispatch 只读（D4）', () => {
     render(<BoardCard task={{ ...base, status: 'in_progress' }} selected={false} onClick={() => {}} />);
     fireEvent.contextMenu(screen.getByRole('button', { name: /任务A/ }));
     expect(screen.getByRole('button', { name: /^顶置$/ })).toBeInTheDocument();
+  });
+});
+
+// ── 1.10.0 平行草稿接收方行：来源徽标 + 拒收（BoardCanvas 分发到本卡）──────────
+
+describe('BoardCard — 平行草稿行（1.10.0）', () => {
+  beforeEach(() => {
+    mockApi.task.transition.mockReset().mockResolvedValue({ ...base, status: 'cancelled' });
+    mockApi.task.archive.mockClear();
+  });
+
+  const draft: TaskRow = {
+    ...base,
+    id: 'T-201',
+    title: '外来草稿：排查登录超时',
+    status: 'draft',
+    origin: 'peer_draft',
+    routing: { mode: 'node', groupId: 'g-peer', targetNodeId: 'node-self' },
+    delegationId: 'T-hub01',
+  };
+
+  it('BD-1. origin=peer_draft → violet「平行草稿」徽标', () => {
+    render(<BoardCard task={draft} selected={false} onClick={() => {}} />);
+    expect(screen.getByText('平行草稿')).toBeInTheDocument();
+  });
+
+  it('BD-2. draft 态右键菜单：「拒收」+「编辑」并存（安排=编辑入口不被禁用）', () => {
+    render(<BoardCard task={draft} selected={false} onClick={() => {}} />);
+    fireEvent.contextMenu(screen.getByRole('button', { name: /外来草稿/ }));
+    expect(screen.getByRole('button', { name: '拒收' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '编辑' })).toBeInTheDocument();
+  });
+
+  it('BD-3. 拒收两步确认：确认 → 行取消（transition cancelled）+ 归档（行消失）；取消则不动', async () => {
+    const transition = mockApi.task.transition;
+    render(<BoardCard task={draft} selected={false} onClick={() => {}} />);
+    fireEvent.contextMenu(screen.getByRole('button', { name: /外来草稿/ }));
+    fireEvent.click(screen.getByRole('button', { name: '拒收' }));
+    // 确认弹窗在场（菜单已关——同名按钮仅确认钮一枚）；先走取消路径
+    expect(await screen.findByRole('dialog', { name: '拒收平行草稿' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(transition).not.toHaveBeenCalled();
+    // 再走确认路径
+    fireEvent.contextMenu(screen.getByRole('button', { name: /外来草稿/ }));
+    fireEvent.click(screen.getByRole('button', { name: '拒收' }));
+    fireEvent.click(screen.getByRole('button', { name: '拒收' }));
+    await waitFor(() => {
+      // store.transition 透传第三参 extraPatch=undefined
+      expect(transition).toHaveBeenCalledWith('T-201', 'cancelled', undefined);
+      expect(mockApi.task.archive).toHaveBeenCalledWith('T-201');
+    });
+  });
+
+  it('BD-4. 非 draft 态 peer_draft 行：无拒收项（已安排/执行中不可拒收）', () => {
+    render(<BoardCard task={{ ...draft, status: 'in_progress' }} selected={false} onClick={() => {}} />);
+    fireEvent.contextMenu(screen.getByRole('button', { name: /外来草稿/ }));
+    expect(screen.queryByRole('button', { name: '拒收' })).not.toBeInTheDocument();
   });
 });

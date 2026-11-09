@@ -25,8 +25,10 @@ import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeDb, getDb, runMigrations } from '../../src/main/storage/db';
+import { createGroupBindingStore } from '../../src/main/hub/group-binding-store';
 import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keychain';
 import { saveAgentDefinition, addMember, updateAgentDefinition } from '../../src/main/agent/crud';
+import { setBuiltinAgentsDir } from '../../src/main/agent/builtin';
 import { createTeam } from '../../src/main/agent/team';
 import { createProvider, listProviders, providerApiKeyRef, upsertProviderModel } from '../../src/main/agent/provider-crud';
 import { registerMcpDefinition, setMcpEnabledDefinition, listRegistered } from '../../src/main/mcp/host-manager';
@@ -1514,5 +1516,155 @@ describe('applyMirrorSnapshot catalog 自愈', () => {
     if (!second.ok) return;
     // ghost skill 两轮稳定软失败；catalog agent 两轮幂等补装
     expect(second.unresolvedRefs ?? []).toEqual(['skill:brainstorming']);
+  });
+});
+
+// ── builtin 预设自愈（2026-11-08：主从同步 unresolvedRefs 11 条修复回归锁）──
+// 病灶：源侧 source='builtin' 的预设 agent（resources/agents/*.yaml）随快照按
+// slug 引用携带；目标重建链此前只有「本地已装 → catalog 自愈」两腿，而内置
+// catalog 仅 general-assistant——builtin YAML 预设（coder/pm-agent/…）在目标
+// 全灭 → agent+team 连锁软失败（实测 ws2 → yyyy-1 十一条）。
+describe('applyMirrorSnapshot builtin 预设自愈', () => {
+  const builtinDir = path.join(tmpRoot, 'builtin-agents-fixture');
+
+  beforeEach(() => {
+    fs.mkdirSync(builtinDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(builtinDir, 'coder.yaml'),
+      customYaml('编程助手', 'coder'),
+    );
+    setBuiltinAgentsDir(builtinDir);
+  });
+  afterEach(() => {
+    setBuiltinAgentsDir(null);
+  });
+
+  it('builtin slug 引用目标未装、catalog 亦无 → YAML 逐字重建（source=builtin / 确定性 id / 模型留空）+ 成员落地', async () => {
+    const archive = await makeArchive(baseManifest({
+      workspaceName: 'builtin-heal',
+      config: {
+        agentMembers: [
+          { name: 'coder', slug: 'coder' },
+          { name: '幽灵', slug: 'ghost-agent' }, // YAML 也没有 → 维持软失败
+        ],
+        teams: [], mcpEnabled: [], skills: [], pluginsEnabled: [], providerRefs: [], prefs: {},
+      },
+    }));
+    const outcome = await applyMirrorSnapshot(
+      applyPayload({ workspaceName: 'builtin-heal' }),
+      { fetchSnapshotArchive: async () => ({ bytes: archive.bytes, checksum: archive.checksum }), installResource: async () => undefined },
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    // 幽灵维持软失败；coder 不再入列（修复前为 ['agent:coder', 'agent:ghost-agent']）
+    expect(outcome.unresolvedRefs).toEqual(['agent:ghost-agent']);
+
+    // 定义形态契约：确定性 id + source=builtin + 模型字段留空（绑定交四级配平链）
+    const def = listAgentDefinitions().find((d) => d.slug === 'coder');
+    expect(def).toBeDefined();
+    expect(def!.id).toBe('builtin-coder');
+    expect(def!.source).toBe('builtin');
+    expect(def!.modelProviderId).toBeNull();
+
+    // 成员落地（身份契约=slug——显示名随目标侧定义，catalog 自愈用例同款）
+    const members = listMembers(listWorkspaces().find((w) => w.name === 'builtin-heal')!.id);
+    expect(members).toHaveLength(1);
+    expect(getAgentDefinition(members[0]!.agentDefinitionId)?.slug).toBe('coder');
+    expect(members[0]!.agentName).toBe('编程助手');
+  });
+
+  it('自愈的 builtin 成员可进团队：连锁 team unresolved 一并消除', async () => {
+    const archive = await makeArchive(baseManifest({
+      workspaceName: 'builtin-team',
+      config: {
+        agentMembers: [
+          { name: 'coder', slug: 'coder' },
+          { name: 'Momo', slug: 'general-assistant' }, // catalog 腿（真实内置目录）
+        ],
+        teams: [{ name: '研发组', leader: 'coder', members: ['coder', 'Momo'] }],
+        mcpEnabled: [], skills: [], pluginsEnabled: [], providerRefs: [], prefs: {},
+      },
+    }));
+    const outcome = await applyMirrorSnapshot(
+      applyPayload({ workspaceName: 'builtin-team' }),
+      { fetchSnapshotArchive: async () => ({ bytes: archive.bytes, checksum: archive.checksum }), installResource: async () => undefined },
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    // 修复前：agent:coder + team:研发组:coder + team:研发组 三连软失败
+    expect(outcome.unresolvedRefs ?? []).toEqual([]);
+    const teams = listTeams(listWorkspaces().find((w) => w.name === 'builtin-team')!.id);
+    expect(teams).toHaveLength(1);
+    // 成员名随目标侧定义名（编程助手=coder YAML 名）；团队按 manifest 名对齐成功
+    expect(teams[0]!.members.map((m) => m.agentName).sort()).toEqual(['Momo', '编程助手']);
+  });
+});
+
+// ── 5. 1.10.0 平行模式 applyTo:'binding'（spec 2026-11-05 §5.3）────────────
+
+describe('applyMirrorSnapshot applyTo:binding', () => {
+  it('applyTo 缺省按名（lf 组现状回归——绑定存在也不改落点）', async () => {
+    const boundWs = await mkWorkspace('研发空间');
+    createGroupBindingStore(getDb()).upsert('g-peer', boundWs);
+
+    const manifest = baseManifest({
+      config: {
+        agentMembers: [{ name: '镜像成员', customDefinition: customYaml('镜像成员', 'mirror-member') }],
+        mcpEnabled: [],
+        prefs: { maxToolCalls: 21 },
+      },
+    });
+    // 载荷 workspaceName=按名目标（不带 applyTo 键——旧 wire 形状）
+    const outcome = await applyMirrorSnapshot(
+      applyPayload({ workspaceName: '按名目标', confirm: true }),
+      makeDeps(await makeArchive(manifest)),
+    );
+    expect(outcome.ok).toBe(true);
+    // 落点是同名新空间「按名目标」，不是绑定空间
+    expect(listWorkspaces().find((w) => w.name === '按名目标')).toBeDefined();
+    expect(listMembers(boundWs)).toHaveLength(0);
+  });
+
+  it('applyTo=binding + groupId：解析绑定空间 replace；载荷 workspaceName（源名）不用于解析', async () => {
+    const wsId = await mkWorkspace('研发空间');
+    createGroupBindingStore(getDb()).upsert('g-peer', wsId);
+
+    const manifest = baseManifest({
+      config: {
+        agentMembers: [{ name: '平行成员', customDefinition: customYaml('平行成员', 'peer-member') }],
+        mcpEnabled: [],
+        prefs: { maxToolCalls: 33 },
+      },
+    });
+    const archive = await makeArchive(manifest);
+    const deps = makeDeps(archive);
+    const payload = {
+      ...applyPayload({ workspaceName: '需求空间（源）' }),
+      applyTo: 'binding' as const,
+      groupId: 'g-peer',
+    };
+    const outcome = await applyMirrorSnapshot(payload, deps);
+    expect(outcome.ok).toBe(true);
+    // 落点是绑定空间（研发空间），且未创建同名「需求空间（源）」
+    expect(listMembers(wsId).map((m) => m.agentName)).toEqual(['平行成员']);
+    expect(listWorkspaces().find((w) => w.name === '需求空间（源）')).toBeUndefined();
+  });
+
+  it('applyTo=binding 但未绑定 → bad_request 人话（深度防御——hub 已闸）', async () => {
+    const manifest = baseManifest({
+      config: { agentMembers: [], mcpEnabled: [], prefs: {} },
+    });
+    const outcome = await applyMirrorSnapshot(
+      {
+        ...applyPayload({ workspaceName: 'x' }),
+        applyTo: 'binding' as const,
+        groupId: 'g-missing',
+      },
+      makeDeps(await makeArchive(manifest)),
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.code).toBe('bad_request');
+    expect(outcome.message).toContain('未绑定');
   });
 });
