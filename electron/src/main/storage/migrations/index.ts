@@ -48,6 +48,7 @@ import * as migration070 from './070_m33_task_dependencies';
 import * as migration071 from './071_task_origin_column';
 import * as migration072 from './072_hub_group_bindings';
 import { migration073 } from './073_list_workgroups_backfill';
+import { migration074 } from './074_momo_all_builtin_tools';
 
 export interface Migration {
   version: number;
@@ -1181,6 +1182,13 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
   {
     version: migration073.version,
     sql: migration073.sql,
+  },
+  {
+    // Momo 默认持有全部内置工具（58 项）：存量 builtin + general-assistant 行
+    // 的 default_tools 整列替换（052/073 只加不减的反例——Momo 以 catalog
+    // 全集为准，旧引用一并清理）。SQL 住在独立模块 074_momo_all_builtin_tools.ts。
+    version: migration074.version,
+    sql: migration074.sql,
   },
 ];
 
