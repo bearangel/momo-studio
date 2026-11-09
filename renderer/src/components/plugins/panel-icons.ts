@@ -13,6 +13,7 @@ import {
   Workflow,
   FileSearch,
   TerminalSquare,
+  Mail,
 } from 'lucide-react';
 
 export const PANEL_ICONS: Record<string, LucideIcon> = {
@@ -25,6 +26,7 @@ export const PANEL_ICONS: Record<string, LucideIcon> = {
   workflow: Workflow,
   'file-search': FileSearch,
   terminal: TerminalSquare,
+  mail: Mail,
 };
 
 export function panelIconOf(icon: string): LucideIcon {

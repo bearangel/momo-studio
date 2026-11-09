@@ -203,3 +203,23 @@ describe('path 类型配置项（2026-11-05 归档：目录选择）', () => {
     unmount();
   });
 });
+
+describe('boolean 配置行布局（2026-11-05 反馈：说明在前、勾选框同行）', () => {
+  it('标题与勾选框同行（label 关联可点击），不再是孤行勾选', async () => {
+    getConfig.mockResolvedValue({
+      ...VIEW,
+      values: { ...VIEW.values, enableWatch: true },
+    });
+    resourceList.mockResolvedValue(PLUGINS);
+    const { unmount } = render(<PluginSettings />);
+    await waitFor(() => expect(screen.getByText('启用文件监听')).toBeTruthy());
+    const input = document.getElementById('cfg-enableWatch') as HTMLInputElement;
+    expect(input).toBeTruthy();
+    expect(input.checked).toBe(true);
+    expect(input.labels?.[0]?.textContent).toContain('启用文件监听');
+    const row = input.closest('div');
+    expect(row?.className).toContain('items-center');
+    expect(row?.className).not.toContain('flex-col');
+    unmount();
+  });
+});

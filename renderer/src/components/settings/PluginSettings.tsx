@@ -230,6 +230,24 @@ interface ConfigFieldProps {
 function ConfigField(props: ConfigFieldProps) {
   const { fieldKey, decl, required } = props;
   const label = decl.title ?? fieldKey;
+  if (decl.type === 'boolean' && !decl.sensitive) {
+    return (
+      <div className="flex items-center justify-between gap-3 rounded-md border border-subtle bg-surface-1 px-3 py-2">
+        <label htmlFor={`cfg-${fieldKey}`} className="cursor-pointer select-none text-[13px] text-secondary">
+          {label}
+          {required && <span className="ml-0.5 text-status-error">*</span>}
+          {decl.scope === 'workspace' && (
+            <span className="ml-1.5 rounded bg-surface-3 px-1.5 py-px text-[10px] text-tertiary">按工作空间</span>
+          )}
+        </label>
+        <Checkbox
+          id={`cfg-${fieldKey}`}
+          checked={props.value === true}
+          onChange={(e) => props.onChange(e.currentTarget.checked)}
+        />
+      </div>
+    );
+  }
   return (
     <div className="flex flex-col gap-1.5">
       <label htmlFor={`cfg-${fieldKey}`} className="text-[13px] text-secondary">
@@ -263,12 +281,6 @@ function ConfigField(props: ConfigFieldProps) {
             </Button>
           )}
         </div>
-      ) : decl.type === 'boolean' ? (
-        <Checkbox
-          id={`cfg-${fieldKey}`}
-          checked={props.value === true}
-          onChange={(e) => props.onChange(e.currentTarget.checked)}
-        />
       ) : decl.type === 'path' ? (
         <div className="flex items-center gap-2">
           <Input
