@@ -62,6 +62,26 @@ describe('installPluginZip', () => {
     expect(getPlugin('cg')?.source).toBe('zip');
   });
 
+  it('vendor 内置 npm 依赖规模（5000+ entry）正常安装——条目上限不误杀真实插件', async () => {
+    // 回归锁：office-pro 这类带 vendor/node_modules 的插件有 7000+ 文件，
+    // 旧上限 5000 直接拒装（zip 条目数超限）。zip bomb 主防线是累计解压 200MB。
+    const zip = new AdmZip();
+    zip.addFile(
+      'momo-plugin.json',
+      Buffer.from(
+        JSON.stringify({ id: 'bigpkg', name: 'B', version: '0.1.0', description: '', components: { tools: './tools' } }),
+      ),
+    );
+    zip.addFile('tools/big.js', Buffer.from('module.exports.createTools = () => ({});'));
+    for (let i = 0; i < 5100; i += 1) {
+      zip.addFile(`vendor/node_modules/pkg${i % 40}/lib/m${i}.js`, Buffer.from('// x'));
+    }
+    const rec = await installPluginZip(zip.toBuffer(), '2.1.0', 'ws-t');
+    expect(rec.id).toBe('bigpkg');
+    const dir = resolvePluginInstalledDir('bigpkg', '0.1.0');
+    expect(fs.existsSync(path.join(dir, 'vendor', 'node_modules', 'pkg0', 'lib', 'm0.js'))).toBe(true);
+  });
+
   it('zip bomb：累计解压超上限拒装（3×80MB > 200MB）', async () => {
     const zip = new AdmZip();
     zip.addFile(

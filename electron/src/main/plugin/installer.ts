@@ -38,8 +38,14 @@ import type { PluginRecord } from './types';
 
 /** zip bomb 守卫：累计解压上限 200MB（zip 链与 hub tar 链共用——单源导出防两链上限漂移） */
 export const MAX_TOTAL_UNCOMPRESSED = 200 * 1024 * 1024;
-/** entry 数量上限（单源导出，同上） */
-export const MAX_ENTRIES = 5000;
+/**
+ * entry 数量上限（单源导出，同上）。
+ * 20000 与 vendor 归档条目上限（manifest.vendor.archives[].maxEntries 默认 20000）对齐：
+ * 5000 曾把「vendor 内置 npm 依赖」的真实插件误杀（office-pro 7628 条：224 个 npm 包
+ * 的 7611 个文件），而 zip bomb 的主防线是上面的累计解压上限（200MB），条目数只需
+ * 挡住 inode 爆炸级滥用。
+ */
+export const MAX_ENTRIES = 20000;
 const MANIFEST_NAME = 'momo-plugin.json';
 
 /** 宽松版本比较：数字三元组，prerelease 忽略。a<b → -1，a>b → 1，相等 → 0 */
