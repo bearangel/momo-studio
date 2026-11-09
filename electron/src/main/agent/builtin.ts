@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseAgentManifestWithSuggestion } from './manifest-parser';
-import { saveAgentDefinition, listAgentDefinitions } from './crud';
+import { saveAgentDefinition, getAgentDefinition, listAgentDefinitions } from './crud';
 import { logger } from '../logger';
 import type { BuiltinSuggestion, BuiltinSuggestionMap, AgentDefinition } from './types';
 
@@ -214,6 +214,62 @@ export function loadBuiltinSuggestionsOnly(): void {
       });
     }
   }
+}
+
+/**
+ * builtin 预置启动再同步（spec 2026-11-09 §8，P0 防线）：启动不再全量落库，
+ * 存量已启用预置的 DB 行不会自动获得新工具/技能面。本钩子对每个 builtin YAML：
+ * DB 行存在且版本落后时走无 DELETE 的受控 upsert（saveAgentDefinition 的
+ * ON CONFLICT DO UPDATE——同 enablePresetDef UPDATE 分支语义：不触发成员
+ * CASCADE、不重置 created_at；不走 updateAgentDefinition 是因其 UPDATE 语句
+ * 不含 version 列，无法完成版本推进），**用户已配模型三字段与 thinkingJson、
+ * deniedTools 取 DB 行现值原样保留**（与 enablePresetDef 的关键差异——启用链
+ * 以入参覆盖模型字段，再同步以用户现值为准）。
+ * 幂等：版本一致 / 无行 / YAML 版本更低（理论不可达）均跳过、零写入。
+ * 通用语义：不限定 slug——未来任何 builtin YAML 升版，存量行自动跟进。
+ */
+export function syncBuiltinPresetVersions(): void {
+  for (const item of listBuiltinPresetAgents()) {
+    try {
+      const defId = `builtin-${item.slug}`;
+      const existing = getAgentDefinition(defId);
+      if (!existing) continue;
+      const { def: preset } = readBuiltinManifestBySlug(item.slug);
+      if (compareVersionStrings(existing.version, preset.version) >= 0) continue;
+      saveAgentDefinition({
+        ...preset,
+        id: defId,
+        source: 'builtin',
+        workspaceId: null,
+        // 用户配置保留：模型三字段 + thinkingJson + 工具禁用取 DB 行现值
+        modelProviderId: existing.modelProviderId,
+        modelName: existing.modelName,
+        thinkingJson: existing.thinkingJson ?? null,
+        deniedTools: existing.deniedTools ?? [],
+      });
+      logger.info('builtin 预置已再同步', {
+        slug: item.slug,
+        from: existing.version,
+        to: preset.version,
+      });
+    } catch (err) {
+      logger.warn('builtin 预置再同步失败（不阻塞启动）', {
+        slug: item.slug,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+}
+
+/** 简易语义化版本比较（数字段逐位），返回 -1/0/1 */
+function compareVersionStrings(a: string, b: string): number {
+  const pa = a.split('.').map((x) => parseInt(x, 10) || 0);
+  const pb = b.split('.').map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d > 0 ? 1 : -1;
+  }
+  return 0;
 }
 
 // 向下兼容：listAgentDefinitions 引用保留（虽然本文件未直接使用，旧测试可能调用）

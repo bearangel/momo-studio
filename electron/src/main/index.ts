@@ -26,7 +26,7 @@ import { logger } from './logger';
 import { destroyAllTaskDrivenRuntimes } from './agent/runtime-registry';
 import { initTaskDrivenRuntime } from './agent/init-runtime';
 import { destroyRouterService } from './agent/router-bootstrap';
-import { loadBuiltinSuggestionsOnly } from './agent/builtin';
+import { loadBuiltinSuggestionsOnly, syncBuiltinPresetVersions } from './agent/builtin';
 import { tokenizeForIndex } from './storage/memories/tokenize';
 import { reprobeSandbox } from './sandbox/probe';
 import { enforceQuota } from './journal/quota';
@@ -93,6 +93,18 @@ if (!app.requestSingleInstanceLock()) {
       }
 
       runMigrations();
+
+      // builtin 预置版本再同步（spec 2026-11-09 §8）：存量已启用 Momo 升级拿新
+      // 工具/技能面；失败只 warn 不阻塞启动（reactivatePluginsOnBoot 同风格，
+      // 钩子内部另有 per-preset try/catch，此处外层兜底是双保险）
+      try {
+        syncBuiltinPresetVersions();
+      } catch (err) {
+        logger.warn('builtin 预置再同步失败（不阻塞启动）', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+
   // 插件系统 P3：HookBus 单例 + hook_calls 审计接线（spec §5.4）
   wireHookBridgeAudit(initPluginBus());
   // C3：15 事件源接线（emit 不再缺省 no-op）+ C1：重启再激活 hooks/service
