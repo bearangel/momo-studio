@@ -14,6 +14,7 @@
 // setDefaultAgent 在 workspace.store（Task 6 已实现）——单一入口防漂移。
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
+import { useWorkspaceStore } from './workspace.store';
 import type {
   AgentDefinition,
   AssignmentDeltas,
@@ -69,8 +70,19 @@ interface AgentState {
   addTeamMember: (teamId: string, instanceId: string) => Promise<void>;
   removeTeamMember: (teamId: string, instanceId: string) => Promise<void>;
 
+  /**
+   * 资源创建六工具 Task 8：订阅 resource:changed 推送——资源域写操作可能改变
+   * agent 定义面（经工具创建/安装 agent），成员与团队视图据此重拉。幂等：
+   * 模块级 flag 防重复订阅，订阅生命周期 = 应用进程。无活跃 workspace 时跳过
+   * （members/teams 均 per-workspace，无 ws 可拉即空操作）。
+   */
+  initResourceChanged: () => void;
+
   reset: () => void;
 }
+
+/** resource:changed 是否已订阅（幂等防重复订阅——见 initResourceChanged） */
+let agentResourceChangedSubscribed = false;
 
 export const useAgentStore = create<AgentState>((set, get) => ({
   definitions: [],
@@ -289,6 +301,17 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       set({ error: (err as Error).message });
       throw err;
     }
+  },
+
+  initResourceChanged: () => {
+    if (agentResourceChangedSubscribed) return;
+    agentResourceChangedSubscribed = true;
+    ipc.resource.onResourceChanged(() => {
+      const wsId = useWorkspaceStore.getState().activeWorkspaceId;
+      if (!wsId) return;
+      void get().loadMembers(wsId);
+      void get().loadTeams(wsId);
+    });
   },
 
   reset: () =>

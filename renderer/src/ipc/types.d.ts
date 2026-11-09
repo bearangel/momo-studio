@@ -2685,6 +2685,12 @@ export interface ApiSurface {
      * 目录+.sha256 / mcp/agent=DB custom 行），部分失败续删逐条报错。
      */
     pluginDupCleanup(targets: PluginDupTarget[]): Promise<PluginDupCleanupResult>;
+    /**
+     * 资源创建六工具 Task 8：订阅资源域变更推送（主进程资源域任何写操作成功后
+     * 广播，载荷仅 { at } 时间戳——回调不消费载荷）。返回退订函数（对齐
+     * plugin.onPanelsChanged 形状）。
+     */
+    onResourceChanged(callback: () => void): () => void;
   };
   task: TaskApiSurface;
   /** 看板重构 Task 7：任务组通道面（taskGroup:*，groups.ipc.handlers.ts） */

@@ -42,6 +42,8 @@ const mockApi = {
   resource: {
     // v2.11 Task 9：同上——/ 菜单技能组挂载拉取（resource:list filter 形态）
     list: vi.fn().mockResolvedValue([]),
+    // 资源创建六工具 Task 8：agent.store initResourceChanged 挂载订阅
+    onResourceChanged: vi.fn().mockReturnValue(() => {}),
   },
   agent: {
     onRuntimeChanged: vi.fn().mockReturnValue(() => {}),

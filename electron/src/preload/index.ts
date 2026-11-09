@@ -542,6 +542,16 @@ const api: ApiSurface = {
     pluginDupScan: () => invoke<PluginDupIssue[]>('resource:pluginDupScan'),
     pluginDupCleanup: (targets: PluginDupTarget[]) =>
       invoke<PluginDupCleanupResult>('resource:pluginDupCleanup', targets),
+    // 资源创建六工具 Task 8：资源域任何写操作成功后主进程广播（changed-emit.ts
+    // 的 RESOURCE_CHANGED_CHANNEL——跨层字符串双写是 preload 既有模式），载荷
+    // 仅 { at } 时间戳，回调形状对齐 plugin.onPanelsChanged
+    onResourceChanged: (callback: () => void) => {
+      const handler = (): void => callback();
+      ipcRenderer.on('resource:changed', handler);
+      return () => {
+        ipcRenderer.off('resource:changed', handler);
+      };
+    },
   },
   task: {
     create: (input) => invoke<TaskRow>('task:create', input),
