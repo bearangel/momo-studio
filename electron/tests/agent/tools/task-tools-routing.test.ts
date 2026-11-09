@@ -15,8 +15,7 @@ import type { DispatchSubmitPorts } from '../../../src/main/hub/dispatch-submit'
 import { insertTaskWithRelations } from '../../../src/main/task/relations';
 import { deriveBlockedBy } from '../../../src/main/storage/tasks/dependencies-repo';
 import { updateTask } from '../../../src/main/storage/tasks/repo';
-import type { DelegationTaskBrief } from '../../../src/main/hub/protocol';
-import type { TaskRow } from '../../../src/main/storage/tasks/repo';
+import type { DelegationTaskBrief } from '../../../src/main/hub/dispatch-submit';
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }));
 vi.mock('../../../src/main/logger', () => ({
@@ -73,7 +72,7 @@ function makePorts(opts: { delegateOk?: boolean; groups?: ReturnType<typeof fixt
     createLocalTask: (input) => insertTaskWithRelations({
       workspaceId: input.workspaceId, title: input.title, creatorUserId: 'owner',
       status: 'draft', description: input.description ?? '', groupId: input.groupId,
-    }),
+    }, { dependsOn: input.dependsOn ?? [] }),
     createRemoteTask: (input) => insertTaskWithRelations({
       workspaceId: input.workspaceId, title: input.title, creatorUserId: 'owner',
       status: input.status, description: input.description, groupId: input.groupId,
@@ -86,8 +85,9 @@ function makePorts(opts: { delegateOk?: boolean; groups?: ReturnType<typeof fixt
   return { ports, briefs };
 }
 
-function taskRow(id: string): TaskRow | undefined {
-  return getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow | undefined;
+/** 原始 DB 行（snake_case 列名——测试直读库，不经 repo 的 camel 映射） */
+function taskRow(id: string): Record<string, unknown> | undefined {
+  return getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> | undefined;
 }
 
 beforeEach(() => {
@@ -144,7 +144,7 @@ describe('create_task 路由分支', () => {
     const row = taskRow(result.id);
     expect(row?.status).toBe('pending');
     expect(row?.origin).toBe('peer_draft');
-    expect(row?.delegation_id).toBe('del-1');
+    expect(row?.['delegation_id']).toBe('del-1');
   });
 
   it('lf 组内调度 → 编排载荷（permissionTier=confirm）+ 行 pending', async () => {
@@ -209,7 +209,7 @@ describe('create_task 路由分支', () => {
     expect(result.dispatched).toBe(false);
     const row = taskRow(result.id);
     expect(row?.status).toBe('pending');
-    expect(row?.delegation_id).toBeNull();
+    expect(row?.['delegation_id']).toBeNull();
   });
 
   it('无 routing → 既有本机路径零变化（draft + warning 由 execute 层负责）', async () => {

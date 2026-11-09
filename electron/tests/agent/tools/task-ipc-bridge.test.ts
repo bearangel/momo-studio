@@ -65,7 +65,10 @@ describe('task-ipc-bridge', () => {
 
   it('create_routed 失败透传：ok:false error 文本成 Error（LLM 可见人话）', async () => {
     const cap = stubProcessSend();
-    const p = requestCreateRouted({ title: 't', routing: { mode: 'group', groupId: 'g-none' } });
+    const p = requestCreateRouted({
+      workspaceId: 'ws1', title: 't', creatorUserId: 'u',
+      routing: { mode: 'group', groupId: 'g-none' },
+    });
     await vi.waitFor(() => expect(cap.calls.length).toBe(1));
     cap.reply({ type: 'task-op:result', requestId: cap.calls[0]!['requestId'], ok: false, error: '工作组 g-none 不存在——先调用 list_workgroups 获取真实组 ID' });
     await expect(p).rejects.toThrow('list_workgroups');
