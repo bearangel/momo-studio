@@ -48,11 +48,11 @@ afterEach(() => {
 });
 
 describe('BrowserSettingsStore.read', () => {
-  it('未知 wsId → 全默认（ask / false / [] / [] / false / 380 / 120000 / 90000）', () => {
+  it('未知 wsId → 全默认（ask / true / [] / [] / false / 380 / 120000 / 90000）', () => {
     const store = createBrowserSettingsStore(db);
     expect(store.read('ws-unknown')).toEqual({
       trust: 'ask',
-      evaluateEnabled: false,
+      evaluateEnabled: true,
       blacklist: [],
       whitelist: [],
       sidebarCollapsed: false,
@@ -147,7 +147,7 @@ describe('BrowserSettingsStore.write', () => {
     const settings = store.read('ws-A');
     expect(settings.trust).toBe('deny'); // 第一次写保持
     expect(settings.sidebarWidth).toBe(420); // 第二次写生效
-    expect(settings.evaluateEnabled).toBe(false); // 未动 → 默认
+    expect(settings.evaluateEnabled).toBe(true); // 未动 → 默认（2026-11-09 起开启）
     expect(settings.blacklist).toEqual([]); // 未动 → 默认
     expect(settings.sidebarCollapsed).toBe(false); // 未动 → 默认
     expect(settings.agentWaitMs).toBe(120_000); // 未动 → 默认（终审 I1：120s）

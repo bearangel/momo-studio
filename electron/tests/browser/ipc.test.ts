@@ -774,7 +774,7 @@ describe('browser:getSettings', () => {
     // toEqual 全量比对 = 字段集锁死（与 BrowserSettings 八字段一一对应）
     expect(s).toEqual({
       trust: 'ask',
-      evaluateEnabled: false,
+      evaluateEnabled: true,
       blacklist: [],
       whitelist: [],
       sidebarCollapsed: false,

@@ -33,10 +33,12 @@ export type BrowserSettings = WorkspaceBrowserSettings & {
 /** write 的 patch 形态：任意字段子集，未给字段保持既有值 */
 export type BrowserSettingsPatch = Partial<BrowserSettings>;
 
-/** 默认值（spec §9 + §4.4 DEFAULT 的 TS 镜像；缺失行 / 脏数据回退到此） */
+/** 默认值（spec §9 + §4.4 DEFAULT 的 TS 镜像；缺失行 / 脏数据回退到此）。
+ *  evaluateEnabled 2026-11-09 起默认 true（设置优化决策）——存量行 0 由
+ *  migration 076 全翻 1，此处只管缺行/脏数据回退。 */
 export const DEFAULT_BROWSER_SETTINGS: BrowserSettings = {
   trust: 'ask',
-  evaluateEnabled: false,
+  evaluateEnabled: true,
   blacklist: [],
   whitelist: [],
   sidebarCollapsed: false,
