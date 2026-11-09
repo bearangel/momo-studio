@@ -296,6 +296,7 @@ function opCreateMcp(a: Record<string, unknown>, deps?: ResourceOpDeps): Promise
       version: '1.0.0',
       transport: 'streamable_http',
       command: '',
+      args: [], // http 形态无启动参数——handler 同款空数组占位（args 列 NOT NULL）
       url: str(t['url'], 'transport.url'),
       headers: optStrMap(t['headers'], 'transport.headers') ?? {},
       source: 'custom',
