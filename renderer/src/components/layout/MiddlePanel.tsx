@@ -51,10 +51,10 @@ export function MiddlePanel() {
     return <WorkgroupView />;
   }
 
-  // settings 视图（M2.2 P2-8）：设置页不依赖工作空间（12 分类中 8 个为全局：
-  // 模型服务/默认模型/会话设置/插件/外观/安全沙箱/节点互联/关于）——分发必须
+  // settings 视图（M2.2 P2-8）：设置页不依赖工作空间（11 分类中 8 个为全局：
+  // 模型服务/默认模型/会话设置/插件/外观/安全沙箱/momo-hub/关于）——分发必须
   // 先于 workspace 守卫，0-ws 态可进设置；workspace 级分类（记忆/浏览器/
-  // Git 策略/审计日志）由 SettingsView 内部占位提示
+  // 审计日志）由 SettingsView 内部占位提示（Git 策略 2026-11-09 下线）
   if (activeView === 'settings') {
     return <SettingsView />;
   }

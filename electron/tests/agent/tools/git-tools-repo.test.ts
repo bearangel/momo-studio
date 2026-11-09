@@ -534,8 +534,8 @@ describe('git_commit + GitPolicy 跨仓（Task 4）', () => {
     const err = await tools
       .execute('git_commit', { message: 'feat: x', repo: 'services/api' }, ctx)
       .then(() => null, (e: unknown) => e as Error);
-    // 指引：去哪开启 + 关闭时的替代路径。
-    expect(err?.message).toContain('设置');
+    // 指引：关闭时的替代路径（2026-11-09 起设置页 Git 策略面板下线，文案不再指向设置入口）
+    expect(err?.message).not.toContain('设置');
     expect(err?.message).toContain('git_diff');
 
     await expect(

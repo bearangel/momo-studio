@@ -2,8 +2,9 @@
 // 设置左侧分类导航：宽度 190px（inline style 规避 Tailwind 任意值 class 失效问题）。
 // v2.1：图标 lucide 化（emoji 禁用），新增「外观」分类。v2.2：新增「记忆」分类。v2.4：新增「安全沙箱」分类。v2.7：新增「浏览器」分类（spec §6.2 与安全沙箱并列）。
 // momo-hub M0（2026-10-23）：「节点互联」以 hub 语境回归（browser 后第 12 项）。
+// 2026-11-09 设置优化：「节点互联」更名「momo-hub」；「Git 策略」下线（入口隐藏，面板与 IPC 保留待后续讨论）。
 import type { LucideIcon } from 'lucide-react';
-import { Building2, Target, MessageSquare, Puzzle, Brain, SunMoon, ShieldCheck, AppWindow, Network, GitBranch, ScrollText, Info } from 'lucide-react';
+import { Building2, Target, MessageSquare, Puzzle, Brain, SunMoon, ShieldCheck, AppWindow, Network, ScrollText, Info } from 'lucide-react';
 import { useSettingsStore, type SettingsCategory } from '../../stores/settings.store';
 import { cn } from '../../lib/cn';
 
@@ -18,8 +19,7 @@ const CATEGORIES: { key: SettingsCategory; label: string; icon: LucideIcon }[] =
   { key: 'appearance', label: '外观', icon: SunMoon },
   { key: 'sandbox', label: '安全沙箱', icon: ShieldCheck },
   { key: 'browser', label: '浏览器', icon: AppWindow },
-  { key: 'hub', label: '节点互联', icon: Network },
-  { key: 'git_policy', label: 'Git 策略', icon: GitBranch },
+  { key: 'hub', label: 'momo-hub', icon: Network },
   { key: 'audit_log', label: '审计日志', icon: ScrollText },
   { key: 'about', label: '关于', icon: Info },
 ];

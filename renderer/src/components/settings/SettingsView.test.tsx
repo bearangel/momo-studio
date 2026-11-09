@@ -2,8 +2,9 @@
 //
 // SettingsView 行为测试（P2 Task 4；v2.2 P1 记忆分类入列后为 9 分类；v2.4 安全沙箱入列后为 10 分类；
 // v2.7 浏览器入列后为 11 分类；「语言服务」已随 LSP 子系统下架摘除（2026-10-08）；
-// momo-hub M0（2026-10-23）「节点互联」以 hub 语境回归（browser 后插入）→ 12 分类）：
-// - 渲染 12 个分类菜单项（顺序：模型服务/默认模型/会话设置/插件/记忆/外观/安全沙箱/浏览器/节点互联/Git 策略/审计日志/关于）
+// momo-hub M0（2026-10-23）「节点互联」以 hub 语境回归 → 12 分类；
+// 2026-11-09 设置优化：「节点互联」更名「momo-hub」、「Git 策略」下线摘除 → 11 分类）：
+// - 渲染 11 个分类菜单项（顺序：模型服务/默认模型/会话设置/插件/记忆/外观/安全沙箱/浏览器/momo-hub/审计日志/关于）
 // - 已删除 account 分类
 // - 顶部「← 返回」按钮点击后 setActiveView('im')
 // - 全局 Esc 键返回 im 视图（仅 settings 视图挂载时生效）
@@ -123,11 +124,11 @@ describe('SettingsView', () => {
     vi.clearAllMocks();
   });
 
-  it('渲染 12 个分类菜单项且顺序符合规范（lucide 图标无 emoji；节点互联以 hub 语境回归）', () => {
+  it('渲染 11 个分类菜单项且顺序符合规范（lucide 图标无 emoji；hub 分类名 momo-hub；Git 策略已下线）', () => {
     render(<SettingsView />);
     const nav = screen.getByRole('navigation', { name: '设置分类' });
     const navButtons = Array.from(nav.querySelectorAll('button'));
-    expect(navButtons.length).toBe(12);
+    expect(navButtons.length).toBe(11);
     const labels = navButtons.map((b) => b.textContent ?? '');
     expect(labels).toEqual([
       '模型服务',
@@ -138,21 +139,22 @@ describe('SettingsView', () => {
       '外观',
       '安全沙箱',
       '浏览器',
-      '节点互联',
-      'Git 策略',
+      'momo-hub',
       '审计日志',
       '关于',
     ]);
+    // Git 策略 2026-11-09 下线：导航不再渲染该入口
+    expect(screen.queryByText('Git 策略')).not.toBeInTheDocument();
     // 分类图标均为 SVG（lucide），断言 nav 内不存在 emoji 文本
-    expect(nav.querySelectorAll('svg').length).toBe(12);
+    expect(nav.querySelectorAll('svg').length).toBe(11);
   });
 
-  it('点击「节点互联」分类切换 activeCategory 并渲染面板（订阅推送 + 拉快照）', async () => {
+  it('点击「momo-hub」分类切换 activeCategory 并渲染面板（订阅推送 + 拉快照）', async () => {
     render(<SettingsView />);
-    fireEvent.click(screen.getByRole('button', { name: '节点互联' }));
+    fireEvent.click(screen.getByRole('button', { name: 'momo-hub' }));
     expect(useSettingsStore.getState().activeCategory).toBe('hub');
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: '节点互联' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'momo-hub' })).toBeInTheDocument();
     });
     expect(mockApi.hub.getStatus).toHaveBeenCalled();
     expect(mockApi.hub.onStateChanged).toHaveBeenCalled();
@@ -265,11 +267,11 @@ describe('SettingsView', () => {
       expect(screen.queryByText('请先选择一个 workspace')).not.toBeInTheDocument();
     });
 
-    it('0-ws 态全局分类（节点互联）面板正常渲染', async () => {
+    it('0-ws 态全局分类（momo-hub）面板正常渲染', async () => {
       render(<SettingsView />);
-      fireEvent.click(screen.getByRole('button', { name: '节点互联' }));
+      fireEvent.click(screen.getByRole('button', { name: 'momo-hub' }));
       await waitFor(() => {
-        expect(screen.getByRole('heading', { name: '节点互联' })).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: 'momo-hub' })).toBeInTheDocument();
       });
     });
 

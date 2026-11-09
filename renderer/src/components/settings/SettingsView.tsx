@@ -4,10 +4,11 @@
 // - 全屏化：左 SettingsNav 190px + 右内容区，顶部标题栏「← 返回」+「设置」
 // - Esc 键全局返回会话视图（仅当 SettingsView 挂载时生效——MiddlePanel
 //   的 settings 分支是唯一挂载点，视图切换自动卸载监听）
-// - 12 个分类：模型服务 / 默认模型 / 会话设置 / 插件 / 记忆 / 外观 / 安全沙箱 / 浏览器 / 节点互联 / Git 策略 / 审计日志 / 关于
-//   （「节点互联」随 p2p 下架摘除后，momo-hub M0 2026-10-23 以 hub 语境回归）
+// - 11 个分类：模型服务 / 默认模型 / 会话设置 / 插件 / 记忆 / 外观 / 安全沙箱 / 浏览器 / momo-hub / 审计日志 / 关于
+//   （「节点互联」2026-11-09 更名「momo-hub」；「Git 策略」同日下线——入口隐藏，
+//   GitPolicySettings 组件 / ipc.gitPolicy / 策略运行时保留，后续再讨论处置）
 // - M2.2 P2-8：0-ws 态整页可达（全局分类直接可用）；workspace 级分类
-//   （记忆 / 浏览器 / Git 策略 / 审计日志）在 0-ws 态渲染占位提示
+//   （记忆 / 浏览器 / 审计日志）在 0-ws 态渲染占位提示
 import { useEffect } from 'react';
 import type { ReactElement } from 'react';
 import { FolderPlus } from 'lucide-react';
@@ -15,7 +16,6 @@ import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useSettingsStore } from '../../stores/settings.store';
 import { useUiStore } from '../../stores/ui.store';
 import { SettingsNav } from './SettingsNav';
-import { GitPolicySettings } from './GitPolicySettings';
 import { AuditLog } from './AuditLog';
 import { ProviderSettings } from './ProviderSettings';
 import { ConversationSettings } from './ConversationSettings';
@@ -89,8 +89,6 @@ export function SettingsView() {
           {active === 'browser' &&
             (workspace ? <BrowserSettings workspaceId={workspace.id} /> : wsRequired())}
           {active === 'hub' && <HubSettingsPanel />}
-          {active === 'git_policy' &&
-            (workspace ? <GitPolicySettings workspaceId={workspace.id} /> : wsRequired())}
           {active === 'audit_log' &&
             (workspace ? <AuditLog workspaceId={workspace.id} /> : wsRequired())}
           {active === 'plugins' && <PluginSettings />}

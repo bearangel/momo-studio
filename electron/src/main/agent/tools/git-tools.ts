@@ -599,11 +599,13 @@ async function executeCommit(args: Record<string, unknown>, ctx: ToolContext): P
 
   const policy = getGitPolicy(ctx.workspaceId);
 
-  // 第一层：总开关（仓无关——workspace 级单源，根仓与内层仓同拒）
+  // 第一层：总开关（仓无关——workspace 级单源，根仓与内层仓同拒）。
+  // 2026-11-09 起设置页 Git 策略面板下线（入口隐藏、策略与 IPC 保留），错误文案
+  // 不再指引「去设置开启」——改经 workspace GitPolicy 配置（ipc.gitPolicy.set）。
   if (!policy.allowAgentCommits) {
     throw new Error(
       'GitPolicy 禁止 agent 自动提交（allowAgentCommits=false）。' +
-        '如需允许，请在设置的 Git 策略中开启；否则请用 git_diff 呈现变更交由人工审查提交。',
+        '请用 git_diff 呈现变更交由人工审查提交。',
     );
   }
 
