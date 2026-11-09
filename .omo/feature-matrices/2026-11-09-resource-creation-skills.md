@@ -112,17 +112,17 @@ grep -rnE "getCatalog|useToolCatalog|listInstalled|listResources|unconditionalMo
 | # | 消费面（W1 命中引用） | 新建 | 存量 | builtin 只读 |
 |---|---|---|---|---|
 | R1 | 工具目录聚合链 G1：`tools/types.ts:81`、`index.ts:38,57`、`catalog.ts:7,8,13`、`catalog-entry.ts:7,39`、`agent/ipc.handlers.ts:343` | **改**：resource-tools.ts 新模块注册进 unconditionalModules 清单（index.ts:38）+ catalog-entry meta 表登记 6 条目（catalog-entry.ts:39 缺 meta 即抛错，强制项）；getCatalog 聚合与 tools:getCatalog handler（catalog.ts:13、ipc.handlers.ts:343）零改动即自动携带 58→64 | **不改**：聚合数据驱动，存量行经再同步获得新工具后同一 handler 自动出 64 项 | **不改**：接口与聚合逻辑不变，启用时经 manifest 原生获得 |
-| R2 | 既有 14 工具模块 getCatalog G2（file/task/git/search/memory/process/office/web/shell/browser/todo/session/apply-patch/plugin-tools，15 命中） | **不改**：作为 resource-tools.ts 的实现模式参照（零改动），插件工具目录透传（plugin-tools.ts:88,113）不受影响 | 不改 | 不改 |
-| R3 | 注释引用 G3：`agent-queries.ts:9` | **不改**：历史教训注释，无行为面 | 不改 | 不改 |
-| R4 | renderer 目录桥 G6：`useToolCatalog.ts:1,2,49,61`、`ipc/types.d.ts:557,929,2407,2661` | **不改**：hook 与契约条目形状不变（64 项数据驱动流过）；types.d.ts:929（InstalledSkill 镜像）与 2661（getCatalogStatus）与本特性无关 | 不改 | 不改 |
-| R8 | hub 降级态链 G5：`hub-install.ts:30,119,463`、`hub/ownership.ts:28,31,76,96,152,168`、`hub/momo-hub.ts:11,112,482,487`、`resource/ipc.handlers.ts:418,423`、`resource.store.ts:56,66,272` | **不改**：hub 域与 builtin skill / 新工具无交集；getCatalogStatus 降级态语义不变（resource.store 订阅新增见 R22，本行仅指降级态读取面） | 不改 | 不改 |
-| R9 | `resource/library.ts` listResources 多源聚合 G4（10 命中，含 :84,94 skill builtin 扫描分支） | **不改**（代码）：:84,94 的 builtin 目录扫描数据驱动，新 4 册落 `electron/resources/skills/` 后自动拾取（该目录现不存在，落盘即生效）；listResources 聚合逻辑零改动 | 不改 | 不改 |
-| R10 | `resource/ipc.handlers.ts:50,135,250,268,291` resource:list / registerMcp / uploadSkill handler | **不改**：listResources 聚合自动出现新资源；resource:registerMcp / uploadSkill 为 UI 链不动（会话创建走 resource-op 桥复用同链校验，不经这两条 handler）；`resource:changed` 为**新增**通道非改既有面（spec §2 不动 IPC 通道契约面） | 不改 | 不改 |
-| R11 | `resource/custom.ts:5,14,107` custom 源 | **不改**：custom 源过滤逻辑（source==='custom'）与新 builtin 4 册无交集（4 册走 builtin 源） | 不改 | 不改 |
-| R12 | `resource/plugin-dedup.ts:5,30,113` 插件源归并 | **不改**：插件源归并与 builtin skill 无交集；仅验收时确认新 slug 不与插件源撞名 | 不改 | 不改 |
-| R13 | `resource/catalog-adapter.ts:8,12,13,19,31` marketplace installed 判断 | **不改**：installed 判断逻辑不变；catalog.json +4 条目为 builtin 内联新条目（见 R18），不改判定代码 | 不改 | 不改 |
+| R2 | 既有 14 工具模块 getCatalog G2（file/task/git/search/memory/process/office/web/shell/browser/todo/session/apply-patch/plugin-tools，15 命中） | **不改**：作为 resource-tools.ts 的实现模式参照（零改动），插件工具目录透传（plugin-tools.ts:88,113）不受影响 | **不改**：14 模块的自描述目录项与存量行版本无关，存量获得新工具走 R1 聚合 + §8 再同步，不触及这些模块 | **不改**：模块零改动，builtin 预置启用时经 manifest 原生获得 64 项目录 |
+| R3 | 注释引用 G3：`agent-queries.ts:9` | **不改**：历史教训注释，无行为面 | **不改**：注释为静态教训记录，不随存量库数据变化 | **不改**：注释为静态文本，与 builtin 预置启用态无关 |
+| R4 | renderer 目录桥 G6：`useToolCatalog.ts:1,2,49,61`、`ipc/types.d.ts:557,929,2407,2661` | **不改**：hook 与契约条目形状不变（64 项数据驱动流过）；types.d.ts:929（InstalledSkill 镜像）与 2661（getCatalogStatus）与本特性无关 | **不改**：hook 与契约形状不随存量行版本变化，存量经再同步后同一 hook 自动流过 64 项 | **不改**：契约镜像不读启用态，builtin 预置启用后数据同链流过 |
+| R8 | hub 降级态链 G5：`hub-install.ts:30,119,463`、`hub/ownership.ts:28,31,76,96,152,168`、`hub/momo-hub.ts:11,112,482,487`、`resource/ipc.handlers.ts:418,423`、`resource.store.ts:56,66,272` | **不改**：hub 域与 builtin skill / 新工具无交集；getCatalogStatus 降级态语义不变（resource.store 订阅新增见 R22，本行仅指降级态读取面） | **不改**：hub 判定链仅服务 hub 接入用户，存量 Momo 升级不触及；resource.store:272 的降级态读取语义不变 | **不改**：builtin skill / 新工具不经 hub 源，降级态聚合与之无交集 |
+| R9 | `resource/library.ts` listResources 多源聚合 G4（10 命中，含 :84,94 skill builtin 扫描分支） | **不改**（代码）：:84,94 的 builtin 目录扫描数据驱动，新 4 册落 `electron/resources/skills/` 后自动拾取（该目录现不存在，落盘即生效）；listResources 聚合逻辑零改动 | **不改**：扫描与聚合逻辑不读存量行版本，存量库中会话创建的新资源同样经既有拉取出现 | **不改**：新 4 册落盘即被 builtin 源扫描拾取（装机面），与预置启用态无关 |
+| R10 | `resource/ipc.handlers.ts:50,135,250,268,291` resource:list / registerMcp / uploadSkill handler | **不改**：listResources 聚合自动出现新资源；resource:registerMcp / uploadSkill 为 UI 链不动（会话创建走 resource-op 桥复用同链校验，不经这两条 handler）；`resource:changed` 为**新增**通道非改既有面（spec §2 不动 IPC 通道契约面） | **不改**：handler 语义与存量行无关，存量库中 resource:list 同链返回新资源 | **不改**：handler 不区分预置启用态，builtin 4 册经 listResources 自动返回 |
+| R11 | `resource/custom.ts:5,14,107` custom 源 | **不改**：custom 源过滤逻辑（source==='custom'）与新 builtin 4 册无交集（4 册走 builtin 源） | **不改**：custom 源判定只看 source==='custom'，与存量库数据、预置态均无关，新 builtin 4 册不入 custom 源 | **不改**：同左——判定逻辑与启用态无交互 |
+| R12 | `resource/plugin-dedup.ts:5,30,113` 插件源归并 | **不改**：插件源归并与 builtin skill 无交集；仅验收时确认新 slug 不与插件源撞名 | **不改**：插件源归并链路不因存量升级变化，归并范围与存量行无关 | **不改**：builtin skill 不经插件源，归并逻辑与之无交集 |
+| R13 | `resource/catalog-adapter.ts:8,12,13,19,31` marketplace installed 判断 | **不改**：installed 判断逻辑不变；catalog.json +4 条目为 builtin 内联新条目（见 R18），不改判定代码 | **不改**：installed 判断只读 marketplace 安装态，与存量 Momo 行无关 | **不改**：判定逻辑不读 builtin 预置态，catalog.json 新条目走内联路径不经此判定 |
 | R19 | `agent:runtimeChanged` 既有广播 → MainLayout 成员重拉（spec §6） | **不改**（消费端已存在）：成员增减类 op（createAgent-addToWorkspace / addMember / createTeam）由主进程侧复播既有通道，MainLayout 既有监听即重拉——验证该通道有生产者（本特性即新增生产者，消费端零改） | 同左 | 同左 |
-| R21 | SkillRegistry / RuntimeSkillRef defaultSkills 解析链（spec §7） | **不改**：4 册经 builtin 扫描注册，Momo manifest 的 defaultSkills 引用走既有 RuntimeSkillRef 链路（skill 底层机制不改，spec §2） | 不改 | 不改 |
+| R21 | SkillRegistry / RuntimeSkillRef defaultSkills 解析链（spec §7） | **不改**：4 册经 builtin 扫描注册，Momo manifest 的 defaultSkills 引用走既有 RuntimeSkillRef 链路（skill 底层机制不改，spec §2） | **不改**：解析链不随存量行版本变化，存量 Momo 经再同步获得 defaultSkills 后走同一 RuntimeSkillRef 链 | **不改**：未启用预置不含 defaultSkills 引用，启用时经 manifest 解析同链注册 |
 | R22 | `resource:changed` 新广播消费面（preload `resource.onChanged` 订阅、resource.store load() 重拉、agent.store 成员/团队重拉）——**本特性新增**（锚①零命中对应的新消费点，自建自销） | **改**：renderer 小改动三处 + 主进程广播一处（复用 pushToMainWindow / notifyPanelsChanged 模式）——spec §12 交付物；现行「死注释广播」被此通道替换 | **改**：存量库同一 renderer 代码生效（订阅逻辑与存量/builtin 无关，随包升级） | 同左 |
 
 ### 四类展示面 checklist（每类至少一行，不许漏类）
@@ -130,12 +130,12 @@ grep -rnE "getCatalog|useToolCatalog|listInstalled|listResources|unconditionalMo
 | # | 展示面 | 新建 | 存量 | builtin 只读 |
 |---|---|---|---|---|
 | R5 | ②选择器候选·**成员编辑工具页签**：`ToolPickerPanel.tsx:14,80`、`CapabilityTabs.tsx:15,24,73` | **改**（内容不改码）：候选目录 58→64 数据驱动原生出现；Momo builtin 只读经成员 deltas 增删 6 工具（既有模式，spec §10 同款裁定）；任何 custom agent 亦可勾选（通用可挂） | **不改**：再同步后 Momo 工具面原生更新，候选列表自动含新工具 | **不改**：启用时经 manifest 原生获得 |
-| R6 | ②选择器候选·**建向导三档预置**：`AgentCreateWizard.tsx:7,17,82` | **不改**：useToolCatalog 数据驱动，64 项自动流过，三档语义不变 | 不改 | 不改 |
-| R15 | ②选择器候选·**成员编辑 MCP/Skill 页签**（MemberEditDialog，G6 未命中但属同类候选面） | **不改**：新 MCP / skill 落库后经 resource:changed 重拉，候选列表数据驱动出现（既有 listResources 拉取），零码改 | 不改 | 不改 |
-| R16 | ②选择器候选·**工作空间配置页** | **不改**：本次不新增工作空间级配置项（资源创建为会话内工具行为） | 不改 | 不改 |
+| R6 | ②选择器候选·**建向导三档预置**：`AgentCreateWizard.tsx:7,17,82` | **不改**：useToolCatalog 数据驱动，64 项自动流过，三档语义不变 | **不改**：向导不读存量行版本，目录数据驱动、三档语义与行状态无关 | **不改**：builtin 预置启用后同一条数据链流过 64 项，向导无启用态分支 |
+| R15 | ②选择器候选·**成员编辑 MCP/Skill 页签**（MemberEditDialog，G6 未命中但属同类候选面） | **不改**：新 MCP / skill 落库后经 resource:changed 重拉，候选列表数据驱动出现（既有 listResources 拉取），零码改 | **不改**：候选拉取链与存量行版本无关，存量库中新建 MCP/skill 同样经刷新出现 | **不改**：候选列表不读预置态，builtin 注册的 4 册经同一 listResources 链进入候选 |
+| R16 | ②选择器候选·**工作空间配置页** | **不改**：本次不新增工作空间级配置项（资源创建为会话内工具行为） | **不改**：存量库不新增任何工作空间级配置项，页面语义不变 | **不改**：预置启用态不触及工作空间配置页（资源创建非 ws 级配置） |
 | R14 | ①资源目录页（资源库各类型页签）：`resource-library/`（ResourceLibraryView / TypeSidebar / ResourceCard / TypePageShell）——agent / MCP / skill 三页签 | **改**（内容不改码，三页签分述）：agent 页签 = Momo 预置卡版本 v2.1.0（YAML 更新）+ 会话建 custom agent 落库后经 R22 刷新原生出现；skill 页签 = 4 册 builtin 经 listInstalled 扫描原生出现；MCP 页签 = create_mcp 落库后经刷新出现；列表组件零码改 | **改**（存量列行为）：再同步后 Momo 行内字段更新；存量库中会话创建的新资源同样经刷新出现 | **不改**：builtin 预置启用链（EnablePresetDialog / AgentsView 预置卡）不变，首启用即 v2.1.0 |
 | R17 | ③命令引用入口（/ 命令、@ 引用） | **不适用**：固定注册表，设计如此（spec §10 同款裁定）——本特性不新增 / 命令与 @ 引用形态，6 工具经 LLM 工具调用触发非 slash 命令 | 不适用（同左） | 不适用（同左） |
-| R7 | ④编辑器·**定义编辑器**：`DefinitionEditor.tsx:26,52,55` | **不改**：Momo builtin 只读既有语义不变；工具候选数据驱动 64 项；会话建的 custom 定义可编辑（既有 custom 编辑链） | 不改 | 不改 |
+| R7 | ④编辑器·**定义编辑器**：`DefinitionEditor.tsx:26,52,55` | **不改**：Momo builtin 只读既有语义不变；工具候选数据驱动 64 项；会话建的 custom 定义可编辑（既有 custom 编辑链） | **不改**：只读性来自 builtin 身份而非行版本，存量 Momo 升级后编辑器仍只读；custom 定义编辑链不变 | **不改**：builtin 只读既有语义，编辑器不因新工具获得写权限，工具候选仅数据驱动 64 项 |
 | R20 | ④编辑器·**成员编辑器**（MemberEditDialog，工具/MCP/Skill 三页签汇总见 R5/R15）与**工作空间配置**（见 R16） | **改**（仅工具页签候选内容，见 R5；码改仅 R22 刷新订阅）：deltas 行模型既有模式，不扩字段 | 同 R5 | 同 R5 |
 
 ### spec §10 镜像补充行（非 W1 命中，登记面）
