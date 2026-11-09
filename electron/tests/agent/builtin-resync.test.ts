@@ -44,6 +44,8 @@ async function seedLegacyMomoRow(): Promise<void> {
     version: '2.0.0',
     defaultTools: [{ kind: 'builtin', ref: 'read_file' }],
     defaultSkills: [],
+    // 用户配置的黑名单（终审 M3）：升级不得清空——YAML 无 deniedTools，须取行现值
+    deniedTools: ['plugin:foo/*'],
     systemPrompt: '旧版 Momo 提示词（无资源创建段）',
     modelProviderId: 'user-provider',
     modelName: 'user-model',
@@ -89,6 +91,8 @@ describe('syncBuiltinPresetVersions', () => {
     // 携带路由项：技能面与提示词必须同批到达（077 单独只回填 tools）
     expect(def.defaultSkills.map((s) => s.ref)).toContain('build-team');
     expect(def.systemPrompt).toContain('资源创建');
+    // deniedTools 原样保留（M3 回归锁：YAML 无此字段，同步取 DB 行现值）
+    expect(def.deniedTools).toEqual(['plugin:foo/*']);
   });
 
   it('成员关系保留（无 DELETE 不触发 CASCADE）', async () => {

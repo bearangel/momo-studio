@@ -6,12 +6,20 @@
 // 与 resource-ops.test.ts 同款 mock。
 import { describe, it, expect, vi } from 'vitest';
 import { handleResourceOpMessage, notifyResourceOpSucceeded, MEMBER_AFFECTING_OPS } from '../../src/main/agent/resource-ops-bridge';
+import { broadcastRuntimeChanged } from '../../src/main/im/session-service';
+import { broadcastResourceChanged } from '../../src/main/resource/changed-emit';
 
 vi.mock('../../src/main/agent/runtime-status', () => ({
   isAgentRunning: vi.fn(() => false),
 }));
 vi.mock('../../src/main/agent/runtime-registry', () => ({
   stopAgentRuntime: vi.fn(),
+}));
+vi.mock('../../src/main/im/session-service', () => ({
+  broadcastRuntimeChanged: vi.fn(),
+}));
+vi.mock('../../src/main/resource/changed-emit', () => ({
+  broadcastResourceChanged: vi.fn(),
 }));
 
 describe('handleResourceOpMessage（主进程侧分支）', () => {
@@ -44,7 +52,43 @@ describe('handleResourceOpMessage（主进程侧分支）', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it('成功后按 op 通知刷新（member 类 op 额外广播 runtimeChanged）', () => {
+  it('list 成功不广播刷新（只读 op——技能「创建前先盘点」高频触发，不得引发 renderer 重拉）', async () => {
+    vi.mocked(broadcastResourceChanged).mockClear();
+    vi.mocked(broadcastRuntimeChanged).mockClear();
+    const send = vi.fn();
+    await handleResourceOpMessage(
+      { type: 'resource-op', id: 'r-list', op: 'list', args: {} },
+      'ws-1',
+      send,
+      async () => ({ agents: [] }),
+    );
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'resource-op', id: 'r-list' }));
+    expect(broadcastResourceChanged).not.toHaveBeenCalled();
+    expect(broadcastRuntimeChanged).not.toHaveBeenCalled();
+  });
+
+  it('写 op 成功广播 resource:changed（member 类额外广播 runtimeChanged）', async () => {
+    vi.mocked(broadcastResourceChanged).mockClear();
+    vi.mocked(broadcastRuntimeChanged).mockClear();
+    const send = vi.fn();
+    await handleResourceOpMessage(
+      { type: 'resource-op', id: 'r-cs', op: 'createSkill', args: {} },
+      'ws-1',
+      send,
+      async () => ({ slug: 's' }),
+    );
+    expect(broadcastResourceChanged).toHaveBeenCalledTimes(1);
+    expect(broadcastRuntimeChanged).not.toHaveBeenCalled();
+
+    await handleResourceOpMessage(
+      { type: 'resource-op', id: 'r-ct', op: 'createTeam', args: {} },
+      'ws-1',
+      send,
+      async () => ({ teamId: 't' }),
+    );
+    expect(broadcastResourceChanged).toHaveBeenCalledTimes(2);
+    expect(broadcastRuntimeChanged).toHaveBeenCalledTimes(1);
+
     // MEMBER_AFFECTING_OPS = createAgent | addMember | createTeam（语义固定）
     expect(MEMBER_AFFECTING_OPS).toContain('createTeam');
   });

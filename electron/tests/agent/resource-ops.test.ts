@@ -97,6 +97,25 @@ describe('resource-ops 分发', () => {
   });
 });
 
+describe('list（resource_list 聚合）', () => {
+  it('mcps 段含 transport 与启停态（spec §5.1——字段对齐 RegisteredMcp 真实形状）', async () => {
+    const db = getDb();
+    const seed = db.prepare(
+      `INSERT INTO mcp_definitions (id, name, version, transport, command, enabled)
+       VALUES (?, ?, '1.0.0', ?, 'echo', ?)`,
+    );
+    seed.run('mcp-on', 'stdio-server', 'stdio', 1);
+    seed.run('mcp-off', 'remote-server', 'streamable_http', 0);
+
+    const r = (await executeResourceOp('list', { type: 'mcps' }, wsId)) as {
+      mcps: Array<{ name: string; transport: string; enabled: boolean }>;
+    };
+    const byName = new Map(r.mcps.map((m) => [m.name, m]));
+    expect(byName.get('stdio-server')).toEqual({ name: 'stdio-server', transport: 'stdio', enabled: true });
+    expect(byName.get('remote-server')).toEqual({ name: 'remote-server', transport: 'streamable_http', enabled: false });
+  });
+});
+
 describe('createTeam', () => {
   it('成员不足拒绝并透传 team.ts 事务错误', async () => {
     await expect(

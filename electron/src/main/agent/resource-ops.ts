@@ -14,7 +14,7 @@ import { parseSkillMd } from '../skill/loader';
 import { listRegistered, registerMcpDefinition } from '../mcp/host-manager';
 import { McpClient } from '../mcp/client';
 import { HttpMcpClient } from '../mcp/http-client';
-import type { McpServerConfig, McpToolInfo } from '../mcp/types';
+import type { McpServerConfig, McpToolInfo, RegisteredMcp } from '../mcp/types';
 import { getDb } from '../storage/db';
 import { isValidSlug } from '../marketplace/types';
 import { createHash, randomUUID } from 'node:crypto';
@@ -37,7 +37,7 @@ export interface ResourceListResult {
   agents?: Array<{ id: string; slug: string; name: string; source: string; modelConfigured: boolean }>;
   members?: Array<{ instanceId: string; definitionId: string; name: string; running: boolean }>;
   skills?: Array<{ slug: string; name: string; source: string }>;
-  mcps?: Array<{ name: string }>;
+  mcps?: Array<{ name: string; transport: RegisteredMcp['transport']; enabled: boolean }>;
   teams?: Array<{ id: string; name: string; leaderInstanceId: string; memberInstanceIds: string[] }>;
 }
 
@@ -122,7 +122,12 @@ function opList(typeFilter: unknown, workspaceId: string): ResourceListResult {
     }));
   }
   if (need('mcps')) {
-    result.mcps = listRegistered().map((m) => ({ name: m.name }));
+    // spec §5.1：name + transport + 启停态（字段名对齐 RegisteredMcp 真实形状）
+    result.mcps = listRegistered().map((m) => ({
+      name: m.name,
+      transport: m.transport,
+      enabled: m.enabled,
+    }));
   }
   if (need('teams')) {
     result.teams = listTeams(workspaceId).map((tm) => ({
