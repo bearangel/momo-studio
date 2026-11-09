@@ -10,9 +10,13 @@ import { getProvider } from './provider-crud';
 import { parseAgentManifest } from './manifest-parser';
 import { createTeam, listTeams } from './team';
 import { getSkillsDir, listInstalled as listInstalledSkills } from '../skill/zip-uploader';
+import { parseSkillMd } from '../skill/loader';
 import { listRegistered } from '../mcp/host-manager';
 import { getDb } from '../storage/db';
 import { isValidSlug } from '../marketplace/types';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { logger } from '../logger';
 
 /** 白名单 op 枚举——桥面只放行这六个入口（spec §6：桥不是通用 RPC 面） */
@@ -47,6 +51,12 @@ export interface AddMemberResult {
   agentName: string;
 }
 
+/** create_skill 返回 */
+export interface CreateSkillResult {
+  slug: string;
+  name: string;
+}
+
 /** create_team 返回（team.ts 原事务，错误信息原样透出） */
 export interface CreateTeamResult {
   teamId: string;
@@ -68,7 +78,7 @@ export async function executeResourceOp(
     case 'list': return opList(a['type'], workspaceId);
     case 'createAgent': return opCreateAgent(a, workspaceId);
     case 'addMember': return opAddMember(a, workspaceId);
-    case 'createSkill': throw new Error('createSkill 未实现');
+    case 'createSkill': return opCreateSkill(a);
     case 'createMcp': throw new Error('createMcp 未实现');
     case 'createTeam': return opCreateTeam(a, workspaceId);
     default: throw new Error(`未知 resource op: ${op}`);
@@ -165,6 +175,61 @@ async function opAddMember(
   if (existing) return { instanceId: existing.instanceId, agentName: existing.agentName };
   const member = await addMember(workspaceId, def.id, generateAgentUserId(def.slug));
   return { instanceId: member.instanceId, agentName: member.agentName };
+}
+
+// ── createSkill（与 zip 上传 / resource:createSkill 表单链同布局：目录 + SKILL.md +
+//    .sha256 标记；skill_definitions 表是 marketplace 安装专用——写入会被 listInstalled
+//    误标 marketplace 源，故不落库）──
+interface SkillFileInput {
+  path: string;
+  content: string;
+}
+
+/** 解析后的路径必须仍在 skill 目录内（防 ../ 与绝对路径穿越——readSkillResource 同款纪律） */
+function safeJoin(dir: string, rel: string): string {
+  if (path.isAbsolute(rel)) throw new Error(`references 路径越界: ${rel}`);
+  const full = path.resolve(dir, rel);
+  if (full !== dir && !full.startsWith(dir + path.sep)) {
+    throw new Error(`references 路径越界: ${rel}`);
+  }
+  return full;
+}
+
+function opCreateSkill(a: Record<string, unknown>): CreateSkillResult {
+  const slug = str(a['slug'], 'slug'); // 显式必填——中文 name 无法可靠派生英文 slug（spec §5.4）
+  const skillMd = str(a['skillMd'], 'skillMd');
+  const rawRefs = Array.isArray(a['references']) ? a['references'] : [];
+  const refs: SkillFileInput[] = rawRefs.map((r): SkillFileInput => {
+    if (typeof r !== 'object' || r === null) {
+      throw new Error('references 条目须含 path 与 content 字符串');
+    }
+    const rec = r as Record<string, unknown>;
+    if (typeof rec['path'] !== 'string' || rec['path'].length === 0 || typeof rec['content'] !== 'string') {
+      throw new Error('references 条目须含 path 与 content 字符串');
+    }
+    return { path: rec['path'], content: rec['content'] };
+  });
+  if (!isValidSlug(slug)) throw new Error(`非法 slug: ${slug}`);
+  const dup = listInstalledSkills().find((s) => s.slug === slug);
+  if (dup) throw new Error(`skill 已存在: ${slug}（source=${dup.source}）——如需覆盖请先在资源库删除`);
+
+  const dir = path.join(getSkillsDir(), slug);
+  const def = parseSkillMd(skillMd, dir); // name/description 必填校验（缺则抛）
+  // 全部校验（含 references 越界）先于任何写盘——错误路径零落盘
+  const targets = refs.map((r) => safeJoin(dir, r.path));
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'SKILL.md'), skillMd, 'utf-8');
+  refs.forEach((r, i) => {
+    fs.mkdirSync(path.dirname(targets[i]!), { recursive: true });
+    fs.writeFileSync(targets[i]!, r.content, 'utf-8');
+  });
+  // .sha256 标记 = custom 源标识（zip-uploader / form-create 同款）：listInstalled 据此识别
+  fs.writeFileSync(
+    path.join(dir, '.sha256'),
+    createHash('sha256').update(skillMd, 'utf-8').digest('hex'),
+  );
+  logger.info('会话内安装 skill', { slug });
+  return { slug, name: def.name };
 }
 
 // ── createTeam（复用 team.ts 事务，错误原样透出）──

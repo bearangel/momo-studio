@@ -13,6 +13,7 @@ import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keych
 import { addMember } from '../../src/main/agent/crud';
 import { createProvider } from '../../src/main/agent/provider-crud';
 import { updateGlobalSettings } from '../../src/main/settings/crud';
+import { getSkillsDir, listInstalled } from '../../src/main/skill/zip-uploader';
 import { executeResourceOp } from '../../src/main/agent/resource-ops';
 
 // 与 crud-custom-def.test.ts 同款 mock：crud.ts 引入的 runtime 依赖在测试环境不可用
@@ -180,5 +181,64 @@ spec:
     )) as { definitionId: string; member?: { instanceId: string } };
     expect(r.definitionId).toBeTruthy();
     expect(r.member?.instanceId).toBeTruthy();
+  });
+});
+
+describe('createSkill', () => {
+  // getSkillsDir() = <AP_USER_DATA_DIR>/skills = <tmpRoot>/skills（upload-zip.test.ts 同款隔离）
+  const md = `---
+name: 报告撰写
+description: 写结构化报告时使用
+---
+## 工作流
+1. 先列大纲
+`;
+
+  it('frontmatter 缺 name 拒绝', async () => {
+    await expect(
+      executeResourceOp('createSkill', { slug: 'report-writer', skillMd: '---\ndescription: x\n---\nbody' }, wsId),
+    ).rejects.toThrow('name');
+  });
+
+  it('非法 slug 拒绝', async () => {
+    await expect(
+      executeResourceOp('createSkill', { slug: 'Bad/Slug', skillMd: md }, wsId),
+    ).rejects.toThrow('非法 slug');
+  });
+
+  it('与既有 skill 同名拒绝并带来源', async () => {
+    // 种子：先装 slug=report-writer；再建同名
+    await executeResourceOp('createSkill', { slug: 'report-writer', skillMd: md }, wsId);
+    await expect(
+      executeResourceOp('createSkill', { slug: 'report-writer', skillMd: md }, wsId),
+    ).rejects.toThrow(/skill 已存在.*custom/);
+  });
+
+  it('references 路径穿越拒绝且零落盘', async () => {
+    await expect(
+      executeResourceOp(
+        'createSkill',
+        { slug: 'safe-skill', skillMd: md, references: [{ path: '../escape.md', content: 'x' }] },
+        wsId,
+      ),
+    ).rejects.toThrow('越界');
+    expect(fs.existsSync(path.join(getSkillsDir(), 'escape.md'))).toBe(false);
+    // 全部校验先于任何写盘——skill 目录本身也不得残留
+    expect(fs.existsSync(path.join(getSkillsDir(), 'safe-skill'))).toBe(false);
+  });
+
+  it('成功：SKILL.md + references 落盘 + listInstalled 识别 custom 源', async () => {
+    const r = (await executeResourceOp(
+      'createSkill',
+      { slug: 'ref-skill', skillMd: md, references: [{ path: 'references/tpl.md', content: '模板' }] },
+      wsId,
+    )) as { slug: string; name: string };
+    expect(r.name).toBe('报告撰写');
+    expect(fs.existsSync(path.join(getSkillsDir(), 'ref-skill', 'references', 'tpl.md'))).toBe(true);
+    expect(fs.existsSync(path.join(getSkillsDir(), 'ref-skill', 'SKILL.md'))).toBe(true);
+    // 与 zip/表单创建同链：.sha256 标记 → listInstalled 报 source='custom'（资源库可见）
+    const installed = listInstalled().find((s) => s.slug === 'ref-skill');
+    expect(installed?.source).toBe('custom');
+    expect(installed?.name).toBe('报告撰写');
   });
 });
