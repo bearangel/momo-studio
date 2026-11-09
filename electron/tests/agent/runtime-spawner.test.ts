@@ -8,6 +8,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { spawnForAgent, stopRuntime } from '../../src/main/agent/runtime-spawner';
+import { __setSandboxStateForTest } from '../../src/main/sandbox/probe';
 
 // mock fork（避免真实 fork runtime-entry）。P0 boot 握手契约：真实子进程在
 // 注册完监听器后异步发一次性 {type:'runtime-ready'}——mock 以 setImmediate
@@ -28,6 +29,9 @@ vi.mock('node:child_process', () => ({
   })),
 }));
 
+// 沙箱探测快照：win32 spawn 时把主进程缓存结果塞进 AGENT_CONFIG（子进程零 spawn）。
+// 用真实 probe 的测试钩子注入，不 mock 模块——保持「快照 = 主进程探测产物」语义。
+
 describe('runtime-spawner', () => {
   it('spawnForAgent fork runtime-entry + 注册 handlers', async () => {
     const opts = {
@@ -44,6 +48,41 @@ describe('runtime-spawner', () => {
     expect(runtime.child.pid).toBe(12345);
     expect(runtime.assignmentId).toBe('inst1');
     expect(runtime.child.on).toHaveBeenCalled();
+  });
+
+  it('win32：沙箱探测快照随 AGENT_CONFIG 下传（子进程零 PowerShell spawn）', async () => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    __setSandboxStateForTest({
+      platform: 'win32',
+      sandboxTool: null,
+      toolVersion: null,
+      available: false,
+      unavailableReason: null,
+      windowsShell: 'pwsh.exe',
+      executionPolicy: 'RemoteSigned',
+      probedAt: Date.now(),
+    });
+    try {
+      const { fork } = await import('node:child_process');
+      vi.mocked(fork).mockClear();
+      await spawnForAgent({
+        assignmentId: 'inst-win',
+        runtimeConfig: { instanceId: 'inst-win', workspaceId: 'ws1', workspaceDir: 'C:/tmp' } as never,
+        onChunk: vi.fn(),
+        onExit: vi.fn(),
+      });
+      const call = vi.mocked(fork).mock.calls.at(-1)!;
+      const env = (call[2] as { env: NodeJS.ProcessEnv }).env;
+      const cfg = JSON.parse(env.AGENT_CONFIG ?? '{}') as { sandboxProbe?: unknown };
+      expect(cfg.sandboxProbe).toEqual({
+        windowsShell: 'pwsh.exe',
+        executionPolicy: 'RemoteSigned',
+      });
+    } finally {
+      Object.defineProperty(process, 'platform', original);
+      __setSandboxStateForTest(null);
+    }
   });
 
   it('stopRuntime 发 shutdown + 等 + force kill', async () => {

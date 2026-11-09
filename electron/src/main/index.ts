@@ -28,7 +28,7 @@ import { initTaskDrivenRuntime } from './agent/init-runtime';
 import { destroyRouterService } from './agent/router-bootstrap';
 import { loadBuiltinSuggestionsOnly } from './agent/builtin';
 import { tokenizeForIndex } from './storage/memories/tokenize';
-import { reprobeSandbox } from './sandbox/probe';
+import { ensureSandboxProbe } from './sandbox/probe';
 import { enforceQuota } from './journal/quota';
 import { listWorkspaces } from './workspace/crud';
 import { sweepStaleStreaming } from './task/resume';
@@ -229,7 +229,9 @@ if (!app.requestSingleInstanceLock()) {
       }
 
       // v2.4：OS 沙箱 boot 探测（fire-and-forget，不阻塞启动；失败只影响 bash 可用性）
-      void reprobeSandbox().catch((err) => {
+      // 2026-11-09：走 ensureSandboxProbe 单飞入口——与 spawn 快照下传共用同一份
+      // 结果，避免 boot 探测与首个 agent 启动各跑一次 PowerShell。
+      void ensureSandboxProbe().catch((err) => {
         logger.warn('沙箱探测失败（不影响应用启动）', {
           error: err instanceof Error ? err.message : String(err),
         });

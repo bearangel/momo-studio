@@ -38,6 +38,62 @@ let cached: SandboxProbeState | null = null;
 
 export function getSandboxState(): SandboxProbeState | null { return cached; }
 
+/**
+ * 沙箱探测快照（跨进程传递用）。
+ * 只有子进程真正消费的字段：win32 下 resolveShellSpawn / bash 工具描述读
+ * `windowsShell`（选 pwsh 还是 5.1），`executionPolicy` 随探测态一并展示。
+ */
+export interface SandboxProbeSnapshot {
+  windowsShell: string | null;
+  executionPolicy: string | null;
+}
+
+/** 主进程侧 in-flight 探测（boot 的 fire-and-forget 与 spawn 快照共用，避免各探一遍） */
+let probeInFlight: Promise<SandboxProbeState> | null = null;
+
+/**
+ * 单飞探测入口：已有结果直接返回；否则复用同一个 in-flight Promise。
+ * 与 runtime 子进程里的 ensureSandboxProbed 语义一致（探测一次，全生命周期复用）。
+ */
+export function ensureSandboxProbe(): Promise<SandboxProbeState> {
+  if (cached) return Promise.resolve(cached);
+  probeInFlight ??= reprobeSandbox().finally(() => {
+    probeInFlight = null;
+  });
+  return probeInFlight;
+}
+
+/**
+ * 是否有探测正在进行（尚未出结果）。
+ *
+ * 供「用户点启动」路径判断：在途时等它是划算的（一次性 ~5-10s，换每个 runtime
+ * 子进程省 ~11s），不在途且无缓存时则不阻塞（宁可子进程自己探）。
+ */
+export function sandboxProbeInFlight(): boolean {
+  return probeInFlight !== null;
+}
+
+/**
+ * 子进程侧：用主进程快照填充本地单例，跳过本进程的探测。
+ *
+ * 仅 win32 生效——posix 的 `available` / strict 判定依赖真实探测（seatbelt /
+ * bwrap 可用性），伪造快照会让沙箱门禁失据；win32 本就 `available=false`（无
+ * OS 沙箱，plain 路径），只影响 shell 选择与描述文案，与主进程保持一致即可。
+ */
+export function hydrateSandboxProbeFromParent(snapshot: SandboxProbeSnapshot): void {
+  if (process.platform !== 'win32') return;
+  cached = {
+    platform: process.platform,
+    sandboxTool: null,
+    toolVersion: null,
+    available: false,
+    unavailableReason: null,
+    windowsShell: snapshot.windowsShell,
+    executionPolicy: snapshot.executionPolicy,
+    probedAt: Date.now(),
+  };
+}
+
 /** 测试钩子：注入 fake 状态（对齐 memory provider 测试模式）；null 恢复 */
 export function __setSandboxStateForTest(s: SandboxProbeState | null): void { cached = s; }
 

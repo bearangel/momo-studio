@@ -19,6 +19,7 @@ import { logger } from '../logger';
 import type { StreamChunk } from './stream-chunk';
 import { handleChildMessage } from './internal-event-bridge';
 import { registerFromChildMsg } from '../sandbox/process-registry';
+import { getSandboxState } from '../sandbox/probe';
 import { writeBlockedFromChildMsg } from '../sandbox/write-blocked-emit';
 import { insertToolCall } from '../audit/insert';
 import { handlePluginBridgeMsg } from '../plugin/hook-bridge-main';
@@ -242,10 +243,23 @@ async function ensureMcpStarted(workspaceId: string, mcpName: string): Promise<v
 export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
   const { assignmentId, runtimeConfig, onExit } = opts;
 
+  // Windows 性能（2026-11-09）：沙箱探测快照下传，子进程不再自行 spawn PowerShell。
+  // 实测（Win11 + 安全软件）：从 Electron 进程冷启动 pwsh.exe 5.4s、同进程再启 3.7s，
+  // 而普通 node 进程仅 0.44s；每个 runtime 子进程 boot 都白等 ~9-11s，WarmPool K=2
+  // 让「加入工作空间 / 重启 agent」多等 20s+。主进程 boot 已探测过（index.ts），
+  // 这里直接复用其缓存结果（**不 await 探测**：spawn 路径不能被 PowerShell 阻塞；
+  // 探测尚未完成时不下发，子进程回退自行探测——旧行为，仍好于串行 warm）。
+  // posix 不下发（strict 判定依赖真探测）。
+  const sandboxState = process.platform === 'win32' ? getSandboxState() : null;
+  const sandboxProbe = sandboxState
+    ? { windowsShell: sandboxState.windowsShell, executionPolicy: sandboxState.executionPolicy }
+    : undefined;
+  const childConfig = sandboxProbe ? { ...runtimeConfig, sandboxProbe } : runtimeConfig;
+
   // AGENT_CONFIG 环境变量传递 runtime config
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    AGENT_CONFIG: JSON.stringify(runtimeConfig),
+    AGENT_CONFIG: JSON.stringify(childConfig),
     MOMO_RUNTIME_CHILD: '1',
   };
 

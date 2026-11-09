@@ -81,6 +81,48 @@ describe('WarmPool', () => {
 
   // === C4 回归锁：并发 warm / acquire 不产生孤儿 ===
 
+  // === 2026-11-09 Windows 性能回归锁：预热并发填充 ===
+  // 原实现 while + await 串行 spawn：每个 runtime 子进程 boot 的墙钟线性叠加
+  // （Windows 实测单次 ~11s ⇒ 池预热 22s+，用户侧表现为「加入/重启 agent 极慢」）。
+  it('warm 并发填充：poolSize 个 spawn 同时发起，不等上一个 ready', async () => {
+    let inFlight = 0;
+    let maxConcurrent = 0;
+    const gates: Array<() => void> = [];
+    const spawn = vi.fn(async () => {
+      inFlight += 1;
+      maxConcurrent = Math.max(maxConcurrent, inFlight);
+      await new Promise<void>((resolve) => gates.push(resolve));
+      inFlight -= 1;
+      return mkMockChild();
+    });
+    const pool = new WarmPool({ poolSize: 2, spawn });
+
+    const filling = pool.warm('agent-1');
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
+    // 两个 spawn 都已在 in-flight（串行实现此时只会发起 1 个）
+    expect(maxConcurrent).toBe(2);
+
+    for (const open of gates) open();
+    await filling;
+    expect(pool.size('agent-1')).toBe(2);
+  });
+
+  it('并发填充部分失败：已产出的子进程仍入池（不留孤儿），失败原因抛出', async () => {
+    let n = 0;
+    const spawn = vi.fn(async () => {
+      n += 1;
+      if (n === 2) throw new Error('fork 失败');
+      return mkMockChild();
+    });
+    const pool = new WarmPool({ poolSize: 2, spawn });
+
+    await expect(pool.warm('agent-1')).rejects.toThrow(/fork 失败/);
+    // 成功的那一个可被 destroyAll 回收（不是永不 kill 的孤儿）
+    expect(pool.size('agent-1')).toBe(1);
+    pool.destroyAll();
+    expect(pool.size('agent-1')).toBe(0);
+  });
+
   it('C4 回归锁：并发 warm() 共享同一次填充——只 spawn poolSize 个（旧实现两批互相覆盖泄漏）', async () => {
     let seq = 0;
     const spawned: ChildProcess[] = [];

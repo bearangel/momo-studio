@@ -196,8 +196,15 @@ describe('runtime-registry spawn 闭包（握手期 exit 的 TDZ 回归锁）', 
     const warmP = pool.warm('inst-tdz').catch(() => undefined);
     await tick();
 
+    // 2026-11-09 起池预热是并发 spawn（K 个同时发起）：握手期退出要对全部
+    // in-flight 子进程逐一触发，否则 allSettled 会等剩余子进程直到超时。
+    const exitAll = (): void => {
+      for (const c of fake.children) c.emit('exit', 1);
+    };
     // 修复前：onExit 闭包解引用 TDZ 的 runtime → ReferenceError 向 emit 冒泡（红）
-    expect(() => fake.last().emit('exit', 1)).not.toThrow();
+    expect(exitAll).not.toThrow();
+    await tick();
+    exitAll(); // 补漏：并发填充可能在本 tick 才 fork 出第二个
 
     await warmP;
     // 握手期退出的子进程绝不入池
@@ -209,7 +216,7 @@ describe('runtime-registry spawn 闭包（握手期 exit 的 TDZ 回归锁）', 
     const opts: AgentRuntimeOpts = { ...runtimeConfig, instanceId: 'inst-ok', agentAssignmentId: 'inst-ok' };
     const pool = createTaskDrivenRuntime(opts);
     const warmP = pool.warm('inst-ok');
-    // warm 串行 spawn K=2 个：逐个等 fork 发生后发 ready
+    // 池预热 K=2 个（并发 spawn）：逐个等 fork 发生后发 ready
     for (let i = 0; i < 2; i++) {
       for (let guard = 0; fake.children.length <= i && guard < 50; guard++) {
         await tick();

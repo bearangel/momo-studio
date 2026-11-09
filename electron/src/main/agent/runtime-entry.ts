@@ -101,7 +101,11 @@ import { getDb } from '../storage/db';
 //（钩子是软提醒，绝不因存储故障阻塞回合终止路径）
 import { getTask } from '../storage/tasks/repo';
 import { setJournalStore } from '../journal/recorder';
-import { reprobeSandbox } from '../sandbox/probe';
+import {
+  reprobeSandbox,
+  hydrateSandboxProbeFromParent,
+  type SandboxProbeSnapshot,
+} from '../sandbox/probe';
 import { createJournalStore } from '../journal/store';
 // 浏览器工具 IPC 桥（主机验收 P0 修复）：BrowserManager 持 WebContentsView 只能
 // 活在主进程——子进程以 IPC 代理端口注入 initBrowserTools，见 browser-ipc-bridge.ts
@@ -367,7 +371,7 @@ import { requestCompaction, handleCompactionResultIpc } from './compaction-ipc';
  * runTaskChatLoop 里那次调用因此退化为 no-op，保留无害。
  */
 export async function bootRuntimeContext(config: RuntimeConfig): Promise<RuntimeContext> {
-  await ensureSandboxProbed();
+  await ensureSandboxProbed(config.sandboxProbe);
   return buildRuntimeContext(config);
 }
 
@@ -1968,7 +1972,17 @@ function sendTaskEndAndExit(msg: Record<string, unknown>, exitCode: number): voi
  * （macOS 主机验收实测暴露；探测失败仅影响 bash 可用性，与主进程降级语义一致）。
  */
 let sandboxProbePromise: Promise<void> | null = null;
-function ensureSandboxProbed(): Promise<void> {
+/**
+ * @param snapshot 主进程下发的探测快照（win32）——有则直接填充本地单例，零 spawn。
+ *   见 runtime-spawner.spawnForAgent 注释：Windows 上子进程自探 PowerShell 每次
+ *   boot 白等 ~9-11s（Electron 进程冷启动 pwsh 尤其慢）。
+ */
+function ensureSandboxProbed(snapshot?: SandboxProbeSnapshot): Promise<void> {
+  if (snapshot) {
+    hydrateSandboxProbeFromParent(snapshot);
+    sandboxProbePromise ??= Promise.resolve();
+    return sandboxProbePromise;
+  }
   sandboxProbePromise ??= reprobeSandbox()
     .then(() => undefined)
     .catch((err: unknown) => {

@@ -36,6 +36,7 @@ import { AgentRunner, markShuttingDown, __resetShuttingDownForTest } from './age
 import { notifyRunnerIdle, notifyAgentStopped } from './router-service';
 import { dispatchRegistry } from './dispatch-registry';
 import { spawnForAgent, type SpawnedRuntime } from './runtime-spawner';
+import { ensureSandboxProbe, sandboxProbeInFlight } from '../sandbox/probe';
 import { ProviderTokenBucket } from './llm/token-bucket';
 
 // ─── 全局注册表 ───────────────────────────────────────────────────────────
@@ -104,6 +105,12 @@ async function ensureTaskDrivenRuntime(opts: AgentRuntimeOpts): Promise<void> {
   }
 
   const pool = agentWarmPools.get(instanceId)!;
+  // Windows（2026-11-09）：boot 探测仍在途时先等它——一次性 ~5-10s，换来每个
+  // runtime 子进程免于自行 spawn pwsh（单个 ~11s）。不在途/无缓存则不等（宁可
+  // 子进程自探，也不让启动路径被 PowerShell 卡住）。
+  if (process.platform === 'win32' && sandboxProbeInFlight()) {
+    await ensureSandboxProbe().catch(() => undefined);
+  }
   await pool.warm(instanceId).catch((err) => {
     logger.warn('WarmPool 预热失败', { instanceId, error: String(err) });
   });

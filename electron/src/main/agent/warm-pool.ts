@@ -83,13 +83,25 @@ export class WarmPool {
 
     const fill = (async (): Promise<void> => {
       const pool = this.pools.get(agentId) ?? [];
-      while (pool.length < this.poolSize) {
-        const child = await this.spawn(agentId);
-        pool.push({ child, spawnedAt: Date.now(), agentId });
+      const need = this.poolSize - pool.length;
+      if (need <= 0) return;
+      // 并发 spawn（2026-11-09 Windows 性能修复）：原实现 while + await 串行，
+      // 每个 runtime 子进程 boot 的墙钟线性叠加（实测单次 ~11s ⇒ 池预热 22s+）。
+      // 并发填充后墙钟 ≈ 最慢一个子进程。
+      // allSettled 而非 all：部分失败时已产出的子进程仍要入池（否则成为永不
+      // kill 的孤儿——C4 泄漏防护），失败原因在填充结束后原样抛出。
+      const results = await Promise.allSettled(
+        Array.from({ length: need }, () => this.spawn(agentId)),
+      );
+      for (const r of results) {
+        if (r.status !== 'fulfilled') continue;
+        pool.push({ child: r.value, spawnedAt: Date.now(), agentId });
         // 每产出一条立即写回 Map：spawn 中途抛错时已产出的子进程
         // 仍留在池中（destroyAll 可达），不产生孤儿
         this.pools.set(agentId, pool);
       }
+      const failed = results.find((r) => r.status === 'rejected');
+      if (failed) throw (failed as PromiseRejectedResult).reason;
     })();
 
     this.warming.set(agentId, fill);

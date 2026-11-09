@@ -239,6 +239,42 @@ describe('runtime 子进程沙箱探测接线锁（主机验收 P0 修复）', (
     expect(ctx2.tools.some((t) => t.name === 'bash')).toBe(true);
   });
 
+  // 2026-11-09 Windows 性能回归锁：主进程下发探测快照 → 子进程零 spawn。
+  //
+  // 症状：Win11 + 安全软件环境从 Electron 进程冷启动 pwsh.exe 实测 5.4s（第二次
+  // 3.7s），每个 runtime 子进程 boot 都在自己的 reprobeSandbox 里白等 ~9-11s；
+  // WarmPool K=2 ⇒ 加入工作空间 / 重启 agent 20s+。
+  // 锁法：传入 sandboxProbe 后 bootRuntimeContext 不得调用 reprobeSandbox，
+  // 且本地单例（bash 描述 / resolveShellSpawn 的消费源）必须是主进程结果。
+  it('sandboxProbe 快照：子进程零探测，探测态直接取主进程结果（win32）', async () => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      __resetSandboxProbeForTest();
+      __setSandboxStateForTest(null);
+      vi.mocked(reprobeSandbox).mockClear();
+      observed.probed.length = 0;
+
+      const ctx2 = await bootRuntimeContext(
+        makeConfig({
+          workspaceDir: tmpDir,
+          sandboxProbe: { windowsShell: 'pwsh.exe', executionPolicy: 'RemoteSigned' },
+        }),
+      );
+
+      expect(vi.mocked(reprobeSandbox)).not.toHaveBeenCalled();
+      expect(getSandboxState()?.windowsShell).toBe('pwsh.exe');
+      expect(getSandboxState()?.executionPolicy).toBe('RemoteSigned');
+      // 工具定义定型时读到的是快照（非 null）
+      expect(observed.probed.length).toBeGreaterThan(0);
+      expect(observed.probed.every(Boolean)).toBe(true);
+      expect(ctx2.tools.some((t) => t.name === 'bash')).toBe(true);
+    } finally {
+      Object.defineProperty(process, 'platform', original);
+      __setSandboxStateForTest(null);
+    }
+  });
+
   // 探测已就绪且实测 shell = pwsh.exe 时，getDefs 的 bash 描述必须带 pwsh 事实。
   // win32 门控：描述按 process.platform 分平台（不 mock process.platform），posix
   // 上 shellToolDescription 根本不看 detectedShell——这一支只能在 win32 上验。

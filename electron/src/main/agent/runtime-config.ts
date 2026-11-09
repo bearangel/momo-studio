@@ -26,6 +26,7 @@ export interface PluginToolRef {
 }
 import type { LLMMessage } from './llm-provider';
 import { isThinkingRequest, type ThinkingRequest } from '../llm/provider-presets';
+import type { SandboxProbeSnapshot } from '../sandbox/probe';
 
 /** 启动 agent 子进程所需的全部配置，会以 JSON 序列化后通过 AGENT_CONFIG 传递 */
 export interface AgentRuntimeOpts {
@@ -117,6 +118,17 @@ export interface AgentRuntimeOpts {
    * 缺省时消费方回退 os.tmpdir()（旧 AGENT_CONFIG / 测试兼容）。
    */
   userDataDir?: string;
+  /**
+   * Windows 沙箱探测快照（主进程下发；见 runtime-spawner.spawnForAgent）。
+   *
+   * 起因（2026-11-09 Windows 性能排查）：win32 runtime 子进程 boot 时自行
+   * `reprobeSandbox`，要 spawn `pwsh.exe` + `powershell.exe` 各一次；装有安全
+   * 软件的机器上「Electron 进程冷启动 PowerShell」实测 5.4s / 3.7s，单个子进程
+   * 白等 ~9-11s。WarmPool K=2 再翻倍 ⇒ 用户侧「加入工作空间 / 重启 agent」20s+。
+   * 主进程 boot 已探测过，随 AGENT_CONFIG 下传即可让子进程零 spawn 拿到结果。
+   * 缺省 undefined = 子进程自行探测（旧行为，posix 与测试路径不变）。
+   */
+  sandboxProbe?: SandboxProbeSnapshot;
 }
 
 /** runtime-spawner 通过 AGENT_CONFIG 传入的完整配置 */
@@ -212,6 +224,11 @@ export interface RuntimeConfig {
   vision?: boolean;
   /** 主进程 userData 绝对路径（AGENT_CONFIG 定型）；缺省=消费方回退 os.tmpdir() */
   userDataDir?: string;
+  /**
+   * Windows 沙箱探测快照（主进程下发；语义见 AgentRuntimeOpts.sandboxProbe）。
+   * 缺省 = 子进程自行探测（旧行为）。
+   */
+  sandboxProbe?: SandboxProbeSnapshot;
 }
 
 /** 主进程展开后下发给子进程的上下文项——skill（loadFull 正文） */
@@ -506,7 +523,17 @@ export function parseConfig(raw: unknown): RuntimeConfig {
       typeof r.userDataDir === 'string' && r.userDataDir.length > 0
         ? r.userDataDir
         : undefined,
+    // Windows 沙箱探测快照：形状守卫失败 → undefined（子进程回退自行探测，fail-safe）
+    sandboxProbe: isSandboxProbeSnapshot(r.sandboxProbe) ? r.sandboxProbe : undefined,
   };
+}
+
+/** 运行时类型守卫：沙箱探测快照两字段均为 string | null */
+function isSandboxProbeSnapshot(v: unknown): v is SandboxProbeSnapshot {
+  if (typeof v !== 'object' || v === null) return false;
+  const o = v as Record<string, unknown>;
+  const ok = (x: unknown): boolean => x === null || typeof x === 'string';
+  return ok(o.windowsShell) && ok(o.executionPolicy);
 }
 
 /** 运行时类型守卫：SubAgentRef 必须含 slug/assignmentId/description 三个字符串字段 */
