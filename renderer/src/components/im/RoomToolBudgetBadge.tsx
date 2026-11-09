@@ -20,13 +20,13 @@ type Choice = 'inherit' | 'disabled' | 'unlimited' | 'custom';
 
 export function RoomToolBudgetBadge({ sessionId }: Props) {
   const [roomValue, setRoomValue] = useState<number | null>(null);
-  // fallback 与主进程 DEFAULT_MAX_TOOL_CALLS 同源（2026-10-10 起 50）——
+  // fallback 与主进程 DEFAULT_MAX_TOOL_CALLS 同源（2026-11-09 起 -1 无限）——
   // getGlobal 必回填实际值，此 fallback 仅 IPC 失败窗口兜底
-  const [globalDefault, setGlobalDefault] = useState(50);
+  const [globalDefault, setGlobalDefault] = useState(-1);
   const [editing, setEditing] = useState(false);
   // popup 内的草稿状态，保存时才提交
   const [draftChoice, setDraftChoice] = useState<Choice>('inherit');
-  const [draftCustom, setDraftCustom] = useState('50');
+  const [draftCustom, setDraftCustom] = useState('');
   const [saving, setSaving] = useState(false);
 
   // 房间切换时重新加载
@@ -55,7 +55,9 @@ export function RoomToolBudgetBadge({ sessionId }: Props) {
   const openPopup = () => {
     const c = choiceFromValue(roomValue);
     setDraftChoice(c);
-    setDraftCustom(String(c === 'custom' ? roomValue : globalDefault));
+    // 预填仅取正整数（-1/0/未配置 → 留空，无限不靠键入 -1 表达）
+    const preFill = c === 'custom' ? roomValue : globalDefault;
+    setDraftCustom(typeof preFill === 'number' && preFill > 0 ? String(preFill) : '');
     setEditing(true);
   };
 
@@ -103,7 +105,7 @@ export function RoomToolBudgetBadge({ sessionId }: Props) {
               <label className="flex items-center gap-2 text-xs text-secondary cursor-pointer">
                 <input type="radio" checked={draftChoice === 'inherit'}
                   onChange={() => setDraftChoice('inherit')} />
-                继承全局 ({globalDefault}次)
+                继承全局 ({globalDefault === -1 ? '∞' : `${globalDefault}次`})
               </label>
               <label className="flex items-center gap-2 text-xs text-secondary cursor-pointer">
                 <input type="radio" checked={draftChoice === 'disabled'}
@@ -119,12 +121,18 @@ export function RoomToolBudgetBadge({ sessionId }: Props) {
                 <input type="radio" checked={draftChoice === 'custom'}
                   onChange={() => {
                     setDraftChoice('custom');
-                    if (draftCustom === '') setDraftCustom(String(globalDefault));
+                    if (draftCustom === '' && globalDefault > 0) setDraftCustom(String(globalDefault));
                   }} />
                 自定义：
-                <input type="number" value={draftCustom} min={0}
+                <input type="text" inputMode="numeric" value={draftCustom}
                   disabled={draftChoice !== 'custom'}
-                  onChange={(e) => setDraftCustom(e.target.value)}
+                  placeholder="次数"
+                  onChange={(e) => {
+                    const next = e.target.value.replace(/[^\d]/g, '');
+                    // sanitize 与受控态同值时 React 不重渲染，回写 DOM 即时剥掉负号
+                    if (e.target.value !== next) e.target.value = next;
+                    setDraftCustom(next);
+                  }}
                   style={{ width: 60 }}
                   className="rounded border border-subtle bg-surface-2 px-1.5 py-0.5 text-primary focus:border-focus focus:outline-none disabled:opacity-40" />
               </label>
@@ -132,7 +140,8 @@ export function RoomToolBudgetBadge({ sessionId }: Props) {
             <div className="flex justify-end gap-2 mt-3">
               <button type="button" onClick={() => setEditing(false)}
                 className="text-xs px-2 py-1 text-secondary hover:text-primary">取消</button>
-              <Button size="sm" onClick={handleSave} disabled={saving}>
+              <Button size="sm" onClick={handleSave}
+                disabled={saving || (draftChoice === 'custom' && draftCustom === '')}>
                 {saving ? '保存中...' : '保存'}
               </Button>
             </div>

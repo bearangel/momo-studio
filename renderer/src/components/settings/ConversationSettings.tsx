@@ -1,7 +1,9 @@
 // renderer/src/components/settings/ConversationSettings.tsx
 //
-// 会话设置面板：全局工具调用上限配置（-1=无限 / 0=禁用 / N=上限）
+// 会话设置面板：全局工具调用上限配置（留空=无限 -1 / 0=禁用 / N=上限）
 // + 变更账本保留配额（journalQuotaMb，v2.5）。
+// 工具上限输入仅接受非负整数——键入负号/小数点/非数字即时剥除（2026-11-09
+// 起默认无限，无限=留空，不再依赖键入 -1）。
 // 房间级配置可在房间头部徽标里单独覆盖。
 // 挂载时通过 ipc.settings.getGlobal 拉取，保存时 ipc.settings.updateGlobal。
 import { useState, useEffect, type FormEvent } from 'react';
@@ -10,8 +12,14 @@ import type { GlobalSettings } from '../../ipc/types';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 
+/** 仅保留数字字符（负号/小数点/其他全剥除） */
+function sanitizeDigits(raw: string): string {
+  return raw.replace(/[^\d]/g, '');
+}
+
 export function ConversationSettings() {
-  const [maxToolCalls, setMaxToolCalls] = useState(10);
+  // '' = 无限（存 -1）；草稿为字符串以支持逐字符 sanitize 与留空语义
+  const [maxToolCallsStr, setMaxToolCallsStr] = useState('');
   // v2.5 变更账本配额（MB）；undefined = 未配置（留空，走主进程默认 200）
   const [journalQuotaMb, setJournalQuotaMb] = useState<number | undefined>(undefined);
   const [loading, setLoading] = useState(true);
@@ -20,7 +28,7 @@ export function ConversationSettings() {
 
   useEffect(() => {
     void ipc.settings.getGlobal().then((s: GlobalSettings) => {
-      setMaxToolCalls(s.maxToolCalls);
+      setMaxToolCallsStr(s.maxToolCalls === -1 ? '' : String(s.maxToolCalls));
       setJournalQuotaMb(s.journalQuotaMb);
       setLoading(false);
     });
@@ -31,10 +39,10 @@ export function ConversationSettings() {
     setSaving(true);
     try {
       const updated = await ipc.settings.updateGlobal({
-        maxToolCalls,
+        maxToolCalls: maxToolCallsStr === '' ? -1 : Number(maxToolCallsStr),
         ...(journalQuotaMb !== undefined ? { journalQuotaMb } : {}),
       });
-      setMaxToolCalls(updated.maxToolCalls);
+      setMaxToolCallsStr(updated.maxToolCalls === -1 ? '' : String(updated.maxToolCalls));
       setJournalQuotaMb(updated.journalQuotaMb);
       setSavedAt(true);
       setTimeout(() => setSavedAt(false), 2000);
@@ -53,15 +61,21 @@ export function ConversationSettings() {
 
       <Input
         label="工具调用上限（全局默认）"
-        type="number"
-        value={maxToolCalls}
-        onChange={(e) => setMaxToolCalls(Number(e.target.value))}
-        min={-1}
+        type="text"
+        inputMode="numeric"
+        value={maxToolCallsStr}
+        onChange={(e) => {
+          const next = sanitizeDigits(e.target.value);
+          // sanitize 结果与受控态同值时 React 不重渲染，需即时回写 DOM 才能剥掉负号等非法字符
+          if (e.target.value !== next) e.target.value = next;
+          setMaxToolCallsStr(next);
+        }}
+        placeholder="无限"
         style={{ width: 128 }}
       />
       <p className="text-xs text-tertiary leading-relaxed">
+        留空 = 无限制（默认）<br />
         0 = 禁用工具调用（纯对话模式）<br />
-        -1 = 无限制<br />
         正整数 = 最多调用 N 次<br />
         每个房间可单独覆盖此值。
       </p>

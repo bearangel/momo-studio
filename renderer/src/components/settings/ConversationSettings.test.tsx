@@ -87,4 +87,50 @@ describe('ConversationSettings', () => {
       expect(updateGlobalMock).toHaveBeenCalledWith({ maxToolCalls: 5, journalQuotaMb: 500 });
     });
   });
+
+  // 2026-11-09 输入纠正 + 默认无限回归锁
+  it('键入负号被即时剥除：-1 → 1，-25 → 25（不允许输入 -1）', async () => {
+    getGlobalMock.mockResolvedValue({ maxToolCalls: 5 });
+    render(<ConversationSettings />);
+    await waitFor(() => expect(screen.getByDisplayValue('5')).toBeInTheDocument());
+
+    const input = screen.getByDisplayValue('5');
+    fireEvent.change(input, { target: { value: '-1' } });
+    expect((input as HTMLInputElement).value).toBe('1');
+
+    fireEvent.change(input, { target: { value: '-25' } });
+    expect((input as HTMLInputElement).value).toBe('25');
+  });
+
+  it('回显 -1（无限）→ 输入留空 + placeholder 无限', async () => {
+    getGlobalMock.mockResolvedValue({ maxToolCalls: -1 });
+    render(<ConversationSettings />);
+    await waitFor(() => {
+      const input = screen.getByPlaceholderText('无限') as HTMLInputElement;
+      expect(input.value).toBe('');
+    });
+  });
+
+  it('清空输入保存 → updateGlobal({ maxToolCalls: -1 })（留空=无限）', async () => {
+    getGlobalMock.mockResolvedValue({ maxToolCalls: 5 });
+    updateGlobalMock.mockResolvedValue({ maxToolCalls: -1 });
+    render(<ConversationSettings />);
+    await waitFor(() => expect(screen.getByDisplayValue('5')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByDisplayValue('5'), { target: { value: '' } });
+    fireEvent.click(screen.getByText('保存'));
+    await waitFor(() => {
+      expect(updateGlobalMock).toHaveBeenCalledWith({ maxToolCalls: -1 });
+    });
+  });
+
+  it('键入非数字字符全剥除：仅保留数字', async () => {
+    getGlobalMock.mockResolvedValue({ maxToolCalls: 5 });
+    render(<ConversationSettings />);
+    await waitFor(() => expect(screen.getByDisplayValue('5')).toBeInTheDocument());
+
+    const input = screen.getByDisplayValue('5');
+    fireEvent.change(input, { target: { value: '1e3' } });
+    expect((input as HTMLInputElement).value).toBe('13');
+  });
 });

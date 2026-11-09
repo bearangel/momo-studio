@@ -119,4 +119,68 @@ describe('RoomToolBudgetBadge', () => {
     expect(screen.queryByText('无限制 (∞)')).not.toBeInTheDocument();
     expect(updateSessionMock).not.toHaveBeenCalled();
   });
+
+  // 2026-11-09 输入纠正 + 默认无限回归锁
+  it('选择"无限制"并保存，调用 updateSession({ maxToolCalls: -1 })', async () => {
+    getSessionMock.mockResolvedValue({ maxToolCalls: null });
+    updateSessionMock.mockResolvedValue({ maxToolCalls: -1 });
+    render(<RoomToolBudgetBadge sessionId="sess-room" />);
+    await waitFor(() => expect(screen.getByText('10次')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /工具调用上限/ }));
+    fireEvent.click(screen.getByText('无限制 (∞)'));
+    fireEvent.click(screen.getByText('保存'));
+
+    await waitFor(() => {
+      expect(updateSessionMock).toHaveBeenCalledWith('sess-room', { maxToolCalls: -1 });
+    });
+  });
+
+  it('自定义输入键入 -8 → 剥除负号存 8（不允许输入 -1/负数）', async () => {
+    getSessionMock.mockResolvedValue({ maxToolCalls: null });
+    updateSessionMock.mockResolvedValue({ maxToolCalls: 8 });
+    render(<RoomToolBudgetBadge sessionId="sess-room" />);
+    await waitFor(() => expect(screen.getByText('10次')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /工具调用上限/ }));
+    fireEvent.click(screen.getByText('自定义：'));
+    const input = screen.getByPlaceholderText('次数') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '-8' } });
+    expect(input.value).toBe('8');
+
+    fireEvent.click(screen.getByText('保存'));
+    await waitFor(() => {
+      expect(updateSessionMock).toHaveBeenCalledWith('sess-room', { maxToolCalls: 8 });
+    });
+  });
+
+  it('自定义空草稿 → 保存禁用（不留存 Number(\'\')=0 塌陷）', async () => {
+    getSessionMock.mockResolvedValue({ maxToolCalls: null });
+    render(<RoomToolBudgetBadge sessionId="sess-room" />);
+    await waitFor(() => expect(screen.getByText('10次')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /工具调用上限/ }));
+    fireEvent.click(screen.getByText('自定义：'));
+    const input = screen.getByPlaceholderText('次数') as HTMLInputElement;
+    // openPopup 预填全局默认 10；清空后保存须禁用
+    fireEvent.change(input, { target: { value: '' } });
+    const saveBtn = screen.getByText('保存').closest('button') as HTMLButtonElement;
+    expect(saveBtn.disabled).toBe(true);
+
+    fireEvent.change(input, { target: { value: '5' } });
+    expect((screen.getByText('保存').closest('button') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('全局默认 -1 时：徽标显示 ∞ + popup「继承全局 (∞)」且自定义预填为空', async () => {
+    getGlobalMock.mockResolvedValue({ maxToolCalls: -1 });
+    getSessionMock.mockResolvedValue({ maxToolCalls: null });
+    render(<RoomToolBudgetBadge sessionId="sess-room" />);
+    await waitFor(() => {
+      expect(screen.getByText('∞')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /工具调用上限/ }));
+    expect(screen.getByText('继承全局 (∞)')).toBeInTheDocument();
+    expect((screen.getByPlaceholderText('次数') as HTMLInputElement).value).toBe('');
+  });
 });
