@@ -326,6 +326,12 @@ export class AgentRunner {
         void this.routeProcessOpToChild(child, msg);
         return;
       }
+      // task-op（任务工具 hub 侧桥请求，2026-11-09）：hub 连接只活在主进程——
+      // create_task routing / list_workgroups 在此代执行
+      if (m.type === 'task-op') {
+        void this.routeTaskOpToChild(child, msg);
+        return;
+      }
       // 只处理本 task 的 chunk（同一 runtime 未来可能复用跑多 task）
       if (m.streamSessionId !== task.streamSessionId) return;
       if (m.type === 'end') {
@@ -449,6 +455,43 @@ export class AgentRunner {
     } catch (err) {
       logger.warn('net-trust-op 应答回送失败（IPC 通道已关闭）', {
         requestId: typeof requestId === 'string' ? requestId : undefined,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * task-op 请求路由回程（routeProcessOpToChild 同型）：list_workgroups /
+   * create_routed 在主进程侧执行（hub 连接 + 派发管线只活在主进程）。
+   * task-tools 经动态 import 解析——静态链会经 dispatch-ports → task/
+   * ipc.handlers 回指 agent/tools 构成模块环（2026-11-09 实测）。失败统一
+   * 序列化 {ok:false, error}；child.send 失败只记日志（子进程侧 30s 超时兜底）。
+   */
+  private async routeTaskOpToChild(child: ChildProcess, msg: unknown): Promise<void> {
+    const m = msg as { requestId?: unknown; op?: unknown; input?: unknown };
+    const requestId = typeof m.requestId === 'string' ? m.requestId : '';
+    let outcome: { ok: boolean; payload?: unknown; error?: string };
+    try {
+      const taskTools = await import('./tools/task-tools');
+      if (m.op === 'list_workgroups') {
+        outcome = { ok: true, payload: await taskTools.listWorkgroups() };
+      } else if (m.op === 'create_routed') {
+        outcome = { ok: true, payload: await taskTools.createTask(m.input as never) };
+      } else {
+        outcome = { ok: false, error: `未知 task-op: ${String(m.op)}` };
+      }
+    } catch (err) {
+      outcome = { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+    const result =
+      outcome.ok
+        ? { type: 'task-op:result', requestId, ok: true, payload: outcome.payload }
+        : { type: 'task-op:result', requestId, ok: false, error: outcome.error };
+    try {
+      child.send(result);
+    } catch (err) {
+      logger.warn('task-op 应答回送失败（IPC 通道已关闭）', {
+        requestId: requestId || undefined,
         error: err instanceof Error ? err.message : String(err),
       });
     }

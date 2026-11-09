@@ -1,6 +1,6 @@
 // electron/tests/storage/052-tier1-backfill.test.ts
 // migration 052 契约（spec §4.5）：
-//   1. 只加不减：旧 7 工具 def → 旧集 ∪ Tier 1（17）；已有非 Tier 1 工具（bash）保留
+//   1. 只加不减：旧 7 工具 def → 旧集 ∪ Tier 1（052+073 后 18）；已有非 Tier 1 工具（bash）保留
 //   2. 幂等：对已回填行重复执行等价 SQL 无变化（UNION 去重）
 //   3. 空/异常输入：default_tools='[]' 的行 → 恰好 Tier 1
 //   4. default_mcps / default_skills 不动
@@ -10,6 +10,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { SAFE_MINIMUM_TOOLS } from '../../src/main/agent/tools/catalog';
+import { migration073 } from '../../src/main/storage/migrations/073_list_workgroups_backfill';
 import { migration052 } from '../../src/main/storage/migrations/052_agent_tools_tier1_backfill';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-mig052-test-${Date.now()}-${process.pid}`);
@@ -43,9 +44,11 @@ function readTools(id: string): Array<{ kind: string; ref: string }> {
 }
 
 function replay(): void {
-  // 测试行插在 runMigrations 之后——手动重放 052 SQL 等价验证「migration 时点已有行被回填」；
+  // 测试行插在 runMigrations 之后——手动重放 052+073 SQL 等价验证「migration 时点已有行被回填」
+  // （073 = 1.10.1 list_workgroups 并入——052 冻结名单不含它，live 派生 Tier 1 已 18 项）；
   // SQL 幂等（UNION 去重），重放同时验证幂等性。SQL 从 migration 导出对象取，测试与实现同源。
   getDb().exec(migration052.sql);
+  getDb().exec(migration073.sql);
 }
 
 describe('migration 052 Tier 1 回填', () => {
@@ -64,7 +67,7 @@ describe('migration 052 Tier 1 回填', () => {
     }
   });
 
-  it('default_tools=[] 的行 → 恰好 Tier 1（17 个），重复重放幂等', () => {
+  it('default_tools=[] 的行 → 恰好 Tier 1（052+073 后 18 个），重复重放幂等', () => {
     insertDef('d2', '[]');
     replay();
     replay(); // 幂等：第二次重放结果不变

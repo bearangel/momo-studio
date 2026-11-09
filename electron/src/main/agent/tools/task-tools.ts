@@ -58,6 +58,11 @@ import { buildCatalog, type ToolCatalogEntry, type ToolMeta } from './catalog-en
 import { parseStringArg } from './shared/arg-parse';
 import { hasPendingUserTodos } from './todo-tools';
 import { SIDEEFFECT_UNLINKED_WARNING } from './shared/mandate-warning';
+import {
+  requestCreateRouted,
+  requestListWorkgroups,
+  type TaskCreateRoutedInput,
+} from './task-ipc-bridge';
 
 /**
  * read_task 的返回结构（task 上下文摘要）。
@@ -184,6 +189,12 @@ export interface CreateTaskDeps {
 /** 默认端口装配经动态 import 解析——hub/dispatch-ports 静态链经 task/
  *  ipc.handlers → memory → spawn-helpers → agent/tools 回指本模块（构造期
  *  TaskTools undefined 的模块环）；运行期解析时全模块已就绪，环即断 */
+/** runtime 子进程判定：fork IPC 在场且非 vitest worker（forks 池 worker 也有
+ *  process.send——VITEST 环境变量甄别，单测直调仍走本进程路径） */
+function inRuntimeChild(): boolean {
+  return typeof process.send === 'function' && process.env.VITEST === undefined;
+}
+
 async function defaultPorts(): Promise<DispatchSubmitPorts> {
   const { buildDispatchSubmitPorts } = await import('../../hub/dispatch-ports');
   return buildDispatchSubmitPorts();
@@ -206,8 +217,12 @@ export async function createTask(
   deps: CreateTaskDeps = {},
 ): Promise<TaskRow & { dispatched?: boolean; nodeId?: string | null }> {
   // 1.10.1 跨节点路由分支：submitRoutedTask 单源管线（与 CreateTaskDialog /
-  // EditTaskDialog 同一条链——peer 草稿白名单、lf 编排、派发闸、RM-M21-5 兜底全复用）
+  // EditTaskDialog 同一条链——peer 草稿白名单、lf 编排、派发闸、RM-M21-5 兜底全复用）。
+  // hub 连接只活在主进程——runtime 子进程内经 task-op IPC 桥代理主进程侧执行
   if (input.routing !== undefined) {
+    if (inRuntimeChild()) {
+      return requestCreateRouted(input);
+    }
     return createTaskRouted(input, deps.ports ?? (await defaultPorts()));
   }
   // 分组校验（看板重构 Task 8）：组存在 + 同 ws + 未归档，任一不满足即拒绝落库
@@ -335,6 +350,7 @@ export async function listWorkgroups(
     }>;
   }>
 > {
+  if (inRuntimeChild()) return requestListWorkgroups();
   const ports = deps.ports ?? (await defaultPorts());
   const groups = await ports.listGroups().catch(() => {
     throw new Error('hub 未连接——无法获取工作组清单。连接恢复后重试');
@@ -559,7 +575,7 @@ const TASK_CATALOG_META: Record<string, ToolMeta> = {
   list_tasks: { displayName: '任务列表', category: '任务', categoryEmoji: '🗃️', defaultOn: true },
   // brief/spec Tier 表未及的既有工具（getDefs 一一对应契约强制补齐；只读、不入 Tier 1）：
   list_task_groups: { displayName: '任务分组', category: '任务', categoryEmoji: '🗃️', defaultOn: false },
-  list_workgroups: { displayName: '工作组清单', category: '任务', categoryEmoji: '🗃️', defaultOn: false },
+  list_workgroups: { displayName: '工作组清单', category: '任务', categoryEmoji: '🗃️', defaultOn: true },
   create_task: { displayName: '创建任务', category: '任务', categoryEmoji: '🗃️', defaultOn: false, riskNote: '任务板状态变更' },
   complete_task: { displayName: '完成任务', category: '任务', categoryEmoji: '🗃️', defaultOn: false, riskNote: '任务板状态变更' },
   fail_task: { displayName: '标记失败', category: '任务', categoryEmoji: '🗃️', defaultOn: false, riskNote: '任务板状态变更' },

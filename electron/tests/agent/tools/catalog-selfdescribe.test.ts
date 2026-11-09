@@ -3,7 +3,7 @@
 //   1. 每个模块 getCatalog() 与 getDefs() 名字一一对应
 //   2. 每个条目 category 非空、defaultOn 为 boolean、displayName（中文显示名）非空
 //   3. 缺 meta 的工具在 buildCatalog 处 fail-fast（防将来新模块漏写）
-//   4. Tier 1（defaultOn=true）全集 = 17 个，与 spec §3.2 逐名核对
+//   4. Tier 1（defaultOn=true）全集 = 18 个（1.10.1 +list_workgroups 只读发现面）
 import { describe, it, expect } from 'vitest';
 import { unconditionalModules } from '../../../src/main/agent/tools/index';
 import { buildCatalog, type ToolCatalogEntry } from '../../../src/main/agent/tools/catalog-entry';
@@ -14,6 +14,7 @@ const TIER1 = [
   'grep', 'glob',
   'todowrite',
   'read_task', 'read_task_history', 'read_task_progress', 'list_tasks',
+  'list_workgroups',
   'memory_search',
   'list_sessions', 'read_session',
 ];
@@ -33,7 +34,7 @@ describe('ToolModule.getCatalog 自描述', () => {
     }
   });
 
-  it('Tier 1 全集 = 17 个且逐名核对', () => {
+  it('Tier 1 全集 = 18 个且逐名核对', () => {
     const all: ToolCatalogEntry[] = [
       ...unconditionalModules().flatMap((m) => m.getCatalog()),
     ];

@@ -978,6 +978,42 @@ describe('AgentRunner child exit 清理链（C2）', () => {
   });
 });
 
+  it('task-op 桥路由（2026-11-09）：list_workgroups / 未知 op → 主进程执行 → 应答原路回送（hub 未连接人话透传）', async () => {
+    const child = mkMockChild();
+    const warmPool = new WarmPool({ spawn: vi.fn().mockResolvedValue(child) });
+    await warmPool.warm('inst1');
+    const runner = mkRunner(warmPool);
+    await runner.executeTask({
+      taskId: null,
+      executionSessionId: '!r:home',
+      body: 'x',
+      streamSessionId: 'ss-taskop',
+    });
+
+    // list_workgroups：测试环境无 hub 连接 → 主进程侧执行落到人话错误（ok:false 透传）
+    getMessageHandler(child)({ type: 'task-op', requestId: 'req-tw', op: 'list_workgroups' });
+    await vi.waitFor(() => {
+      const calls = (child.send as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+      const reply = calls.find(
+        (m) => (m as { type?: string }).type === 'task-op:result' && (m as { requestId?: string }).requestId === 'req-tw',
+      ) as { ok?: boolean; error?: string } | undefined;
+      expect(reply).toBeDefined();
+      expect(reply!.ok).toBe(false);
+      expect(reply!.error).toContain('hub 未连接');
+    });
+
+    // 未知 op：人话错误回送
+    getMessageHandler(child)({ type: 'task-op', requestId: 'req-x', op: 'nonsense' });
+    await vi.waitFor(() => {
+      const calls = (child.send as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+      const reply = calls.find(
+        (m) => (m as { type?: string }).type === 'task-op:result' && (m as { requestId?: string }).requestId === 'req-x',
+      ) as { ok?: boolean; error?: string } | undefined;
+      expect(reply!.ok).toBe(false);
+      expect(reply!.error).toContain('未知 task-op');
+    });
+  });
+
   it('process-op 桥路由（E-A）：list/kill 请求 → 主进程执行 → 应答原路回送', async () => {
     // 真实语义：登记一个真 sleeper 组，经消息桥 list 应答带出成员
     const sleeper = spawn('sleep', ['60'], { stdio: 'ignore', detached: true });

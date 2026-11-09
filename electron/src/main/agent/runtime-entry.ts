@@ -112,6 +112,7 @@ import { initBrowserTools } from './tools/browser-tools';
 // shell-tools 经此桥往返 effective / wait 两 op
 import { handleNetTrustOpResult } from './tools/net-trust-bridge';
 import { handleProcessOpResult } from './tools/process-bridge';
+import { handleTaskOpResult } from './tools/task-ipc-bridge';
 // 写授权硬门控拒绝广播（spec 2026-10-03 hard-gate §4.4）：主进程经
 // runtime-registry.broadcastWriteGrantDenied → child.send(write-grant-denied) →
 // runtime-entry 此分支路由至 write-grant-wait 的通知器。
@@ -415,6 +416,8 @@ async function main(): Promise<void> {
       notifyWriteGrantDenied(msg);
     } else if (m.type === 'process-op:result') {
       handleProcessOpResult(msg);
+    } else if (m.type === 'task-op:result') {
+      handleTaskOpResult(msg);
     } else if (m.type === 'compaction:result') {
       handleCompactionResultIpc(msg);
     } else if (m.type === 'shutdown') {

@@ -47,6 +47,7 @@ import * as migration069 from './069_m21_task_routing_mirror_registry';
 import * as migration070 from './070_m33_task_dependencies';
 import * as migration071 from './071_task_origin_column';
 import * as migration072 from './072_hub_group_bindings';
+import { migration073 } from './073_list_workgroups_backfill';
 
 export interface Migration {
   version: number;
@@ -1176,6 +1177,10 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // （group_id → workspace_id——草稿落点/镜像 applyTo:'binding' 解析键）。
     version: migration072.version,
     sql: migration072.up,
+  },
+  {
+    version: migration073.version,
+    sql: migration073.sql,
   },
 ];
 
