@@ -251,7 +251,7 @@ describe('错误路径（momo-test-rules #3：错误不吞）', () => {
     await vi.waitFor(() => expect(useHubViewStore.getState().overview).not.toBeNull());
     await enterReplay(10);
     expect(useHubViewStore.getState().replay).toBeNull();
-    expect(useHubViewStore.getState().error).toBe('对方节点关闭了本组查看——可在其「设置 → 节点互联」重新开启');
+    expect(useHubViewStore.getState().error).toBe('对方节点关闭了本组查看——可在其「设置 → momo-hub」重新开启');
     expect(api.hub.viewSubscribe).not.toHaveBeenCalled();
   });
 });
@@ -265,14 +265,14 @@ describe('humanizeViewError（M4.1 错误契约）', () => {
 
   it('forbidden 两义不入码表：consent 关闭文 → 开关人话；同组校验文 → 剥前缀原文（不错标）', () => {
     expect(humanizeViewError(new Error('[forbidden] 目标节点已关闭本组查看')))
-      .toBe('对方节点关闭了本组查看——可在其「设置 → 节点互联」重新开启');
+      .toBe('对方节点关闭了本组查看——可在其「设置 → momo-hub」重新开启');
     expect(humanizeViewError(new Error('[forbidden] 仅组长可远程查看目标节点（需与其同组）')))
       .toBe('仅组长可远程查看目标节点（需与其同组）');
   });
 
   it('子串回落（双保险不删）：无前缀旧形态 → 既有子串匹配文案不变', () => {
     expect(humanizeViewError(new Error('目标节点已关闭本组查看')))
-      .toBe('对方节点关闭了本组查看——可在其「设置 → 节点互联」重新开启');
+      .toBe('对方节点关闭了本组查看——可在其「设置 → momo-hub」重新开启');
     expect(humanizeViewError(new Error('目标节点不在线')))
       .toBe('目标节点不在线——连接恢复后可重试');
   });
@@ -375,7 +375,7 @@ describe('M3.2 openRemotePick 远端清单前置步', () => {
     await vi.waitFor(() => expect(useHubViewStore.getState().remoteLoading).toBe(false));
     expect(api.hub.viewWorkspaces).toHaveBeenCalledWith({ targetNodeId: 'node-b' });
     expect(useHubViewStore.getState().pickerWorkspaces).toEqual([]);
-    expect(useHubViewStore.getState().error).toBe('对方节点关闭了本组查看——可在其「设置 → 节点互联」重新开启');
+    expect(useHubViewStore.getState().error).toBe('对方节点关闭了本组查看——可在其「设置 → momo-hub」重新开启');
   });
 
   it('pickWorkspace 从远端行选中 → 清远端选择态 + loadAll', async () => {

@@ -1,6 +1,7 @@
 // renderer/src/stores/hub.store.ts
 //
-// 节点互联设置面板数据源（momo-hub M0 Task 11）：status 快照 + 两推送订阅 + 在线节点表维护。
+// momo-hub 设置面板数据源（原「节点互联」面板，2026-11-09 更名；momo-hub M0 Task 11）：
+// status 快照 + 两推送订阅 + 在线节点表维护。
 // - init() 先订阅后快照（controller ruling：订阅先于快照防丢事件）；快照在途期间到达的
 //   stateChanged 暂存 pending、快照落地后重放——事件可能新于快照，重放方向恒为事件覆盖
 //   快照，两序皆幂等安全

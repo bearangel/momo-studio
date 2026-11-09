@@ -288,7 +288,7 @@ export function ResourceCard({
             <button
               type="button"
               disabled={!hubEnrolled}
-              title={hubEnrolled ? undefined : '未接入 momo-hub——去「设置 → 节点互联」接入后可发布'}
+              title={hubEnrolled ? undefined : '未接入 momo-hub——去「设置 → momo-hub」接入后可发布'}
               className="text-xs px-2 py-0.5 rounded bg-surface-active text-accent-600 dark:text-accent-300 hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
               onClick={(e) => { e.stopPropagation(); if (hubEnrolled) onPublishToHub(item); }}
             >
@@ -319,7 +319,7 @@ export function ResourceCard({
                 type="button"
                 data-testid="unpublish-arm"
                 aria-label={unpublishTitle}
-                title={hubEnrolled ? unpublishTitle : '未接入 momo-hub——去「设置 → 节点互联」接入后可下架'}
+                title={hubEnrolled ? unpublishTitle : '未接入 momo-hub——去「设置 → momo-hub」接入后可下架'}
                 disabled={!hubEnrolled}
                 className="text-xs px-2 py-0.5 rounded bg-surface-active text-status-error hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={(e) => { e.stopPropagation(); if (hubEnrolled) unpublishConfirm.arm(); }}

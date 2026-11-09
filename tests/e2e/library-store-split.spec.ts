@@ -302,7 +302,7 @@ test.describe.serial('资源库「库/商店」分离（library-store-split）',
     }, CUSTOM_SKILL);
 
     await win.getByRole('button', { name: '设置', exact: true }).click();
-    await win.getByRole('button', { name: '节点互联' }).click();
+    await win.getByRole('button', { name: 'momo-hub' }).click();
     await win.getByLabel('hub 地址').fill(hub.baseUrl);
     await win.getByLabel('节点名').fill(NODE_NAME);
     await win.getByLabel('加入凭证').fill(ENROLL_TOKEN);

@@ -168,7 +168,7 @@ export function humanizeViewError(err: unknown): string {
     if (byCode !== undefined) return byCode;
   }
   const msg = coded !== null ? coded.message : err instanceof Error ? err.message : String(err);
-  if (msg.includes('已关闭本组查看')) return '对方节点关闭了本组查看——可在其「设置 → 节点互联」重新开启';
+  if (msg.includes('已关闭本组查看')) return '对方节点关闭了本组查看——可在其「设置 → momo-hub」重新开启';
   if (msg.includes('不在线') || msg.includes('离线')) return '目标节点不在线——连接恢复后可重试';
   return msg;
 }

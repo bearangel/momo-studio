@@ -213,7 +213,7 @@ async function uploadSnapshot(
     throw new Error('快照超过 200MB 上限，请精简工作空间后重试');
   }
   if (response.status === 401) {
-    throw new Error('连接已失效，请重新接入 hub（设置 → 节点互联）');
+    throw new Error('连接已失效，请重新接入 hub（设置 → momo-hub）');
   }
   throw new Error(`hub 响应异常: HTTP ${response.status}`);
 }

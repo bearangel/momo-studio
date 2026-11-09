@@ -712,7 +712,7 @@ export async function unpublishHubResource(slug: string, deps: UnpublishDeps = {
     throw new Error('资源不存在或已撤回');
   }
   if (res.status === 401) {
-    throw new Error('连接已失效，请重新接入 hub（设置 → 节点互联）');
+    throw new Error('连接已失效，请重新接入 hub（设置 → momo-hub）');
   }
   throw new Error(`hub 响应异常: HTTP ${res.status}`);
 }

@@ -122,7 +122,7 @@ describe('ViewPickerDialog S3b 选择器', () => {
 
   it('错误人话呈现（role=alert 防御路径——403 文案复用 humanizeViewError）', async () => {
     openPanelMulti();
-    useHubViewStore.setState({ error: '对方节点关闭了本组查看——可在其「设置 → 节点互联」重新开启' });
+    useHubViewStore.setState({ error: '对方节点关闭了本组查看——可在其「设置 → momo-hub」重新开启' });
     render(<ViewPickerDialog />);
     expect(await screen.findByRole('alert')).toHaveTextContent('对方节点关闭了本组查看');
   });

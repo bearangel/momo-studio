@@ -942,10 +942,10 @@ async function skipOnboardingAndCreateWorkspace(win: Page, name: string, dir: st
   await expect(win.getByLabel('智能体', { exact: true })).toBeVisible({ timeout: 20000 });
 }
 
-/** 设置 → 节点互联 → enroll 表单接入 → 等已连接（WS hello 成功） */
+/** 设置 → momo-hub → enroll 表单接入 → 等已连接（WS hello 成功） */
 async function enrollViaSettings(win: Page, nodeName: string): Promise<void> {
   await win.getByRole('button', { name: '设置', exact: true }).click();
-  await win.getByRole('button', { name: '节点互联' }).click();
+  await win.getByRole('button', { name: 'momo-hub' }).click();
   await win.getByLabel('hub 地址').fill(hub.baseUrl);
   await win.getByLabel('节点名').fill(nodeName);
   await win.getByLabel('加入凭证').fill(ENROLL_TOKEN);

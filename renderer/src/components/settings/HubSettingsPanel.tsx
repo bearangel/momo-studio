@@ -1,6 +1,6 @@
 // renderer/src/components/settings/HubSettingsPanel.tsx
 //
-// 设置「节点互联」面板（momo-hub M0 Task 11 三态底座 + M2.1 Task 5 瘦身，视觉合同
+// 设置「momo-hub」面板（原「节点互联」，2026-11-09 更名；momo-hub M0 Task 11 三态底座 + M2.1 Task 5 瘦身，视觉合同
 // .omo/previews/hub-ia-fullapp.html S5「瘦身为纯配置」）：
 // - 迁移说明卡（已接入态首块）：工作组日常操作（组/镜像/委派/查看）已移至主界面
 //   「工作组」，「前往 →」setActiveView('workgroups')——GroupPanel 及其挂载的
@@ -389,11 +389,11 @@ export function HubSettingsPanel() {
     if (loadError !== null) {
       // 快照失败态：错误行 + 重试（不留在「加载中」死滞；标题保留上下文）
       return (
-        <section className="flex max-w-[560px] flex-col gap-6" aria-label="节点互联设置">
+        <section className="flex max-w-[560px] flex-col gap-6" aria-label="momo-hub 设置">
           <div>
             <h2 className="mb-1 flex items-center gap-2 text-base font-medium text-primary">
               <Network size={16} strokeWidth={1.75} aria-hidden />
-              节点互联
+              momo-hub
             </h2>
             <p className="text-sm text-secondary">连接 momo-hub 中心服务，跨设备同步资源与任务。</p>
           </div>
@@ -426,11 +426,11 @@ function EnrollForm({ needsReenroll }: { needsReenroll: boolean }) {
   const form = useHubEnroll();
 
   return (
-    <section className="flex max-w-[560px] flex-col gap-6" aria-label="节点互联设置">
+    <section className="flex max-w-[560px] flex-col gap-6" aria-label="momo-hub 设置">
       <div>
         <h2 className="mb-1 flex items-center gap-2 text-base font-medium text-primary">
           <Network size={16} strokeWidth={1.75} aria-hidden />
-          节点互联
+          momo-hub
         </h2>
         <p className="text-sm text-secondary">连接 momo-hub 中心服务，跨设备同步资源与任务。</p>
       </div>
@@ -581,14 +581,14 @@ function EnrolledView({ status }: { status: HubStatus }) {
   };
 
   return (
-    <section className="flex max-w-[560px] flex-col gap-6" aria-label="节点互联设置">
+    <section className="flex max-w-[560px] flex-col gap-6" aria-label="momo-hub 设置">
       <MigrationCard />
 
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="mb-1 flex items-center gap-2 text-base font-medium text-primary">
             <Network size={16} strokeWidth={1.75} aria-hidden />
-            节点互联
+            momo-hub
           </h2>
           <p className="text-sm text-secondary">连接 momo-hub 中心服务，跨设备同步资源与任务。</p>
         </div>
