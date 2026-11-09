@@ -23,6 +23,7 @@ import { writeBlockedFromChildMsg } from '../sandbox/write-blocked-emit';
 import { insertToolCall } from '../audit/insert';
 import { handlePluginBridgeMsg } from '../plugin/hook-bridge-main';
 import { getPluginBus } from '../plugin/bus-instance';
+import { handleResourceOpMessage } from './resource-ops-bridge';
 import { enforceAuditQuota } from '../audit/quota';
 import { getOrStartMcp, getMcpConfig, listMcpTools, callMcpTool } from '../mcp/host-manager';
 import type { McpToolInfo } from '../mcp/types';
@@ -460,6 +461,20 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
         sendMcpResponse({ id: m.id, error: throwableText(err) });
       }
       return;
+    }
+    // resource-ops 桥（spec 2026-11-09-resource-creation-skills §6）：子进程
+    // requestResourceOp 的 resource-op 请求——workspaceId 取 spawn 闭包
+    // runtimeConfig（消息内携带的 workspaceId 一律忽略，子进程不可伪造归属）；
+    // 回写复用 sendMcpResponse 的通道关闭防御。同步 type 预判 + 异步执行：
+    // 非本分支消息零 await 让量（与插件桥同款纪律）。
+    if (m.type === 'resource-op') {
+      if (
+        await handleResourceOpMessage(msg, runtimeConfig.workspaceId, (mm) =>
+          sendMcpResponse(mm as McpBridgeResponse),
+        )
+      ) {
+        return;
+      }
     }
     // StreamChunk 类型的消息转发给 wrappedOnChunk（先触发下游 routeChunkToBuffer，
     // 再 flush 待发的 MCP 发现失败事件挂到该消息行——P1 注入点）
