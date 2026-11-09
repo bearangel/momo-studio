@@ -349,7 +349,7 @@ export interface TaskConfig {
    * 工具预算（sessions.settings_json.maxToolCalls → global_settings.maxToolCalls），
    * 每条消息派发时随 task-config 下发——修改会话/全局设置后下一条消息即生效，
    * 不受 warm runtime AGENT_CONFIG 定型影响。优先级低于 dispatchContext.tool_budget；
-   * 缺省时回退 AGENT_CONFIG 的 maxToolCalls（parseConfig 默认 10）。
+   * 缺省时回退 AGENT_CONFIG 的 maxToolCalls（parseConfig 默认 -1 无限）。
    */
   maxToolCalls?: number;
   /**
@@ -477,8 +477,8 @@ export function parseConfig(raw: unknown): RuntimeConfig {
     // v25：isLeader 缺省/类型不符时按「非 leader」处理（旧配置无旧兼容负担）
     isLeader: typeof isLeader === 'boolean' ? isLeader : false,
     devMode: typeof devMode === 'boolean' ? devMode : false,
-    // v1.4：默认 10；dispatch 任务由 dispatchContext.tool_budget 覆盖
-    maxToolCalls: typeof r.maxToolCalls === 'number' ? r.maxToolCalls : 10,
+    // 默认 -1（无限，2026-11-09 与 DEFAULT_MAX_TOOL_CALLS 对齐）；dispatch 任务由 dispatchContext.tool_budget 覆盖
+    maxToolCalls: typeof r.maxToolCalls === 'number' ? r.maxToolCalls : -1,
     botName: typeof r.botName === 'string' ? r.botName : undefined,
     botAvatar: typeof r.botAvatar === 'string' ? r.botAvatar : undefined,
     // v1.5：roomId/streamSessionId 缺省空字符串（spawn 时不带 per-message 状态）；

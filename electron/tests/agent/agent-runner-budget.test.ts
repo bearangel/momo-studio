@@ -3,7 +3,7 @@
 // v2.2 bug 修复回归锁：会话工具调用次数设置接入 task-driven 派发链。
 // 根因：resolveMaxToolCalls 此前零生产调用者——sessions.settings_json /
 // global_settings 的 maxToolCalls 从未注入 AGENT_CONFIG（buildSpawnOpts 不含
-// 该字段，parseConfig 缺省恒 10），修改会话工具上限后任何会话都不生效。
+// 该字段，parseConfig 缺省恒 10；2026-11-09 起缺省 -1 无限），修改会话工具上限后任何会话都不生效。
 //
 // 修复契约：AgentRunner.executeTask 每条消息派发时按 executionSessionId
 // 现解析（session 覆盖 → global 默认），经 task-config IPC 字段 maxToolCalls

@@ -48,7 +48,7 @@ describe('GlobalSettings 扩展', () => {
     updateGlobalSettings({ auditQuotaMb: 500 });
     const s = getGlobalSettings();
     expect(s.auditQuotaMb).toBe(500);
-    expect(s.maxToolCalls).toBe(50);
+    expect(s.maxToolCalls).toBe(-1);
   });
 
   it('四类默认模型读写往返', () => {

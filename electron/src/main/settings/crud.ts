@@ -71,11 +71,12 @@ export type { SessionSettings } from '../storage/sessions/repo';
 
 const GLOBAL_KEY = 'global_settings';
 /**
- * 工具调用上限默认值（2026-10-10 起 10 → 50）：两次真实走查实测多文件产出型
- * 任务需求 ≈ 探测2 + N文件 + 走查2-3，10 次必撞墙；50 覆盖绝大多数且防失控
- * 语义不变（耗尽时 UI 弹软续期卡）。存量库旧默认痕迹 10 由 migration 054 升级。
+ * 工具调用上限默认值（2026-11-09 起 50 → -1 无限）：产品决策——默认不应替用户
+ * 设防失控上限，需要限额的用户可显式配置（UI 输入仅接受非负整数，留空=无限，
+ * 不再依赖键入 -1）。存量库旧默认痕迹 50 由 migration 075 升级（自定义值不动）。
+ * 历史演变：10（初始）→ 50（2026-10-10 走查实测）→ -1（2026-11-09 决策翻转）。
  */
-const DEFAULT_MAX_TOOL_CALLS = 50;
+const DEFAULT_MAX_TOOL_CALLS = -1;
 const DEFAULT_AUDIT_QUOTA_MB = 100;
 /** 变更账本 blob 配额默认值（MB）——导出供 quota 层非法值回退共用（单一事实源） */
 export const DEFAULT_JOURNAL_QUOTA_MB = 200;
@@ -143,7 +144,7 @@ export function updateGlobalSettings(patch: Partial<GlobalSettings>): void {
 
 /**
  * 解析某会话的有效工具调用上限。
- * 优先级：sessions.settings_json 的 maxToolCalls → global_settings.maxToolCalls → 硬编码 10
+ * 优先级：sessions.settings_json 的 maxToolCalls（非 null）→ global_settings.maxToolCalls（默认 -1 无限）
  */
 export function resolveMaxToolCalls(sessionId: string): number {
   const session = getSessionSettings(sessionId);

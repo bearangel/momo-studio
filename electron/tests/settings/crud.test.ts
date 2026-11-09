@@ -47,7 +47,7 @@ describe('GlobalSettings 变更账本字段（v2.5 Task 6）', () => {
     expect(getGlobalSettings().journalQuotaMb).toBe(0.5);
     updateGlobalSettings({ journalQuotaMb: 1 / 1024 });
     expect(getGlobalSettings().journalQuotaMb).toBe(1 / 1024);
-    // 部分更新不殃及其他字段
-    expect(getGlobalSettings().maxToolCalls).toBe(50);
+    // 部分更新不殃及其他字段（maxToolCalls 为读改写烤入的默认 -1）
+    expect(getGlobalSettings().maxToolCalls).toBe(-1);
   });
 });

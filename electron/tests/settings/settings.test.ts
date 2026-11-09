@@ -41,9 +41,9 @@ afterEach(() => {
 
 describe('settings/crud', () => {
   describe('全局配置', () => {
-    it('默认 maxToolCalls = 50（2026-10-10 软续期起）', () => {
+    it('默认 maxToolCalls = -1 无限（2026-11-09 设置优化起）', () => {
       const s = getGlobalSettings();
-      expect(s.maxToolCalls).toBe(50);
+      expect(s.maxToolCalls).toBe(-1);
     });
 
     it('更新 maxToolCalls', () => {
@@ -114,9 +114,9 @@ describe('settings/crud', () => {
       expect(resolveMaxToolCalls(s.id)).toBe(30);
     });
 
-    it('全局和会话都未设 → 默认 50', () => {
+    it('全局和会话都未设 → 默认 -1 无限', () => {
       const s = insertSession({ workspaceId: 'ws1', title: '会话 1' });
-      expect(resolveMaxToolCalls(s.id)).toBe(50);
+      expect(resolveMaxToolCalls(s.id)).toBe(-1);
     });
   });
 });

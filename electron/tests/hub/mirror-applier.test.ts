@@ -408,7 +408,7 @@ describe('applyMirrorSnapshot confirm 分流', () => {
     expect(conflict.diffSummary).toEqual({ added: 1, removed: 1, changed: 1 }); // 成员±1 + prefs 变更 1
     // conflict 早退：配置未动
     expect(listMembers(wsId)).toHaveLength(1);
-    expect(getGlobalSettings().maxToolCalls).toBe(50);
+    expect(getGlobalSettings().maxToolCalls).toBe(-1);
 
     const confirmed = await applyMirrorSnapshot(applyPayload({ confirm: true }), deps);
     expect(confirmed.ok).toBe(true);
@@ -436,6 +436,8 @@ describe('computeDiffSummary 七子段计数（经 conflict 路径断言）', ()
     setPluginEnabled('kept-plugin', wsId, true);
     setPluginEnabled('dropped-plugin', wsId, true);
     await createProvider({ name: 'P1', baseUrl: 'https://a.example.com', apiKey: 'sk-a-000000000000', platform: 'openai' });
+    // 归档 prefs maxToolCalls=50 视为「同值」——本地默认已 -1（2026-11-09 起），显式对齐保持该前提
+    updateGlobalSettings({ maxToolCalls: 50 });
 
     const manifest = baseManifest({
       config: {
