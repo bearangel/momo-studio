@@ -36,6 +36,10 @@ export interface McpServerConfig {
   url?: string;
   /** remote 请求头（token 等；不落日志） */
   headers?: Record<string, string>;
+  /** 绑定的 OAuth 连接 id（空 = 不走 OAuth；仅 DB 行读取赋值） */
+  oauthConnectionId?: string;
+  /** stdio 形态下 OAuth token 注入的环境变量名（http 形态忽略） */
+  oauthEnvVar?: string;
   /** 配置表单元数据（安装时 Smithery configSchema 原样落库；'{}' 视为无） */
   configSchema?: McpConfigSchema;
   /** 来源标识。缺省按 'marketplace' 处理（modelscope 已于 P2.1 移除） */
@@ -86,6 +90,9 @@ export interface RegisteredMcp {
   cwd?: string;
   url?: string;
   headers?: Record<string, string>;
+  /** OAuth 绑定（DB 行 NULL → undefined） */
+  oauthConnectionId?: string;
+  oauthEnvVar?: string;
   /** 配置表单元数据（DB 行 config_schema='{}' → undefined；编辑功能表单回填源） */
   configSchema?: McpConfigSchema;
   source: 'marketplace' | 'custom' | 'smithery' | 'plugin';

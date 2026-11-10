@@ -42,6 +42,8 @@ interface McpDefinitionRow {
   plugin_id?: string | null;
   installed_at: string;
   enabled: number;
+  oauth_connection_id: string | null;
+  oauth_env_var: string | null;
 }
 
 /** transport 合法值集合——白名单外的行值（历史脏数据/未知形态）一律回退 'stdio' */
@@ -114,6 +116,8 @@ function rowToRegistered(row: McpDefinitionRow): RegisteredMcp {
     pluginId: row.plugin_id ?? undefined,
     installedAt: row.installed_at,
     enabled: row.enabled !== 0,
+    oauthConnectionId: row.oauth_connection_id ?? undefined,
+    oauthEnvVar: row.oauth_env_var ?? undefined,
   };
 }
 
@@ -170,6 +174,11 @@ export async function getOrStartMcp(
     if (config.source === 'plugin' && config.pluginId && mcpConfigHasPlaceholder(config)) {
       const expanded = await expandMcpTemplate(config, workspaceId);
       effective = { ...config, ...expanded };
+    }
+    // OAuth 注入（spec §9.2）：解析器由 oauth 域注入；未绑定连接时零开销
+    if (effective.oauthConnectionId && authResolver) {
+      const withAuth = await authResolver(effective);
+      if (withAuth) effective = withAuth;
     }
     const client =
       (effective.transport ?? 'stdio') === 'streamable_http'
@@ -323,7 +332,7 @@ export function getMcpConfig(mcpName: string): McpServerConfig | null {
   const db = getDb();
   const row = db
     .prepare(
-      'SELECT id, name, version, transport, command, args, env, url, headers_json, cwd, config_schema, source, plugin_id, installed_at, enabled FROM mcp_definitions WHERE name = ?',
+      'SELECT id, name, version, transport, command, args, env, url, headers_json, cwd, config_schema, source, plugin_id, installed_at, enabled, oauth_connection_id, oauth_env_var FROM mcp_definitions WHERE name = ?',
     )
     .get(mcpName) as McpDefinitionRow | undefined;
   if (!row) return null;
@@ -450,7 +459,7 @@ export function listRegistered(): RegisteredMcp[] {
   const db = getDb();
   const rows = db
     .prepare(
-      'SELECT id, name, version, transport, command, args, env, url, headers_json, cwd, config_schema, source, plugin_id, installed_at, enabled FROM mcp_definitions ORDER BY installed_at DESC',
+      'SELECT id, name, version, transport, command, args, env, url, headers_json, cwd, config_schema, source, plugin_id, installed_at, enabled, oauth_connection_id, oauth_env_var FROM mcp_definitions ORDER BY installed_at DESC',
     )
     .all() as McpDefinitionRow[];
   return rows.map(rowToRegistered);
@@ -488,4 +497,40 @@ export function deleteRegistered(name: string): void {
   }
   db.prepare('DELETE FROM mcp_definitions WHERE name = ?').run(name);
   logger.info('MCP 定义已删除', { name });
+}
+
+/**
+ * OAuth 认证解析器（setter 反接，spec §9.2）。
+ * host-manager 不 import oauth 业务模块——由 oauth/adapters/mcp.wireMcpOAuth()
+ * 在 boot 时注入，避免 mcp ↔ oauth 循环依赖。
+ */
+type McpAuthResolver = (config: McpServerConfig) => Promise<McpServerConfig | null>;
+
+let authResolver: McpAuthResolver | null = null;
+
+export function setMcpAuthResolver(resolver: McpAuthResolver | null): void {
+  authResolver = resolver;
+}
+
+/** 写 OAuth 绑定（仅 UPDATE 两列；连接状态校验由 OAuth 服务层负责） */
+export function setMcpOAuthBinding(
+  mcpName: string,
+  connectionId: string | null,
+  envVar: string | null,
+): void {
+  const info = getDb()
+    .prepare('UPDATE mcp_definitions SET oauth_connection_id = ?, oauth_env_var = ? WHERE name = ?')
+    .run(connectionId, envVar, mcpName);
+  if (info.changes === 0) throw new Error(`MCP ${mcpName} 未注册`);
+  logger.info('MCP OAuth 绑定已更新', { name: mcpName, bound: connectionId !== null });
+}
+
+/** 按连接扇出驱逐：同一连接可能被多个 MCP、多个 workspace 引用 */
+export async function evictMcpsByConnection(connectionId: string): Promise<string[]> {
+  const rows = getDb()
+    .prepare('SELECT name FROM mcp_definitions WHERE oauth_connection_id = ?')
+    .all(connectionId) as Array<{ name: string }>;
+  const names = rows.map((r) => r.name);
+  await Promise.all(names.map((name) => evictMcpByName(name)));
+  return names;
 }
