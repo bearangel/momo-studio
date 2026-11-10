@@ -59,7 +59,8 @@ function trimTrailingSlash(url: string): string {
 
 /** WWW-Authenticate 里取 resource_metadata="…"（容忍无引号） */
 export function parseResourceMetadataUrl(wwwAuthenticate: string): string | null {
-  const match = /resource_metadata\s*=\s*"?([^"\s,]+)"?/i.exec(wwwAuthenticate);
+  // 左边界防 `x_resource_metadata=` 之类前缀误匹配（RFC 7235 参数以空格/逗号分隔）
+  const match = /(?:^|[\s,])resource_metadata\s*=\s*"?([^"\s,]+)"?/i.exec(wwwAuthenticate);
   return match?.[1] ?? null;
 }
 
@@ -85,7 +86,9 @@ async function getJsonFollowingValidatedRedirects(
   fetchImpl: FetchLike,
 ): Promise<unknown | null> {
   let current = url;
-  for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+  let redirects = 0;
+  // 无限循环：所有分支都 return/throw，第 MAX_REDIRECTS+1 跳由上方分支抛错退出
+  for (;;) {
     let response: Response;
     try {
       response = await fetchImpl(current, {
@@ -104,7 +107,7 @@ async function getJsonFollowingValidatedRedirects(
       const location = response.headers.get('location');
       // 无 Location 的 3xx 无法继续，按不可用处理
       if (!location) return null;
-      if (hop === MAX_REDIRECTS) {
+      if (redirects === MAX_REDIRECTS) {
         throw new OAuthFailure(
           'discovery_failed',
           `发现请求重定向超过 ${MAX_REDIRECTS} 跳`,
@@ -112,6 +115,7 @@ async function getJsonFollowingValidatedRedirects(
           current,
         );
       }
+      redirects += 1;
       let next: string;
       try {
         // Location 允许相对形式，按当前 URL 解析
@@ -135,7 +139,6 @@ async function getJsonFollowingValidatedRedirects(
       return null;
     }
   }
-  return null;
 }
 
 export async function discoverAuthorizationServer(
@@ -143,6 +146,8 @@ export async function discoverAuthorizationServer(
   fetchImpl?: FetchLike,
 ): Promise<AuthServerMetadata> {
   const issuer = trimTrailingSlash(issuerUrl);
+  // R2：issuer 本身同样受准入约束——直接调用也不能向未批准目标发明文发现 GET
+  assertEndpointAllowed(issuer);
   const fetchFn = fetchImpl ?? resolveFetch(issuer.startsWith('http://'));
   const candidates = [
     `${issuer}/.well-known/oauth-authorization-server`,

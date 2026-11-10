@@ -73,6 +73,19 @@ describe('parseResourceMetadataUrl', () => {
       'https://a.example.com/meta',
     );
   });
+
+  it('前缀同名的其它参数不误匹配（左边界）', () => {
+    expect(parseResourceMetadataUrl('Bearer x_resource_metadata="https://evil.example.com/meta"')).toBeNull();
+    expect(parseResourceMetadataUrl('Bearer not_a_resource_metadata="https://evil.example.com/meta"')).toBeNull();
+  });
+
+  it('逗号分隔的多参数里仍能取到', () => {
+    expect(
+      parseResourceMetadataUrl(
+        'Bearer realm="x", resource_metadata="https://a.example.com/meta", error="invalid_token"',
+      ),
+    ).toBe('https://a.example.com/meta');
+  });
 });
 
 describe('discoverAuthorizationServer', () => {
@@ -136,6 +149,17 @@ describe('discoverAuthorizationServer', () => {
     await expect(discoverAuthorizationServer(base)).rejects.toMatchObject({
       code: 'discovery_failed',
     });
+  });
+
+  it('非回环 http issuer 直接拒绝且零请求（R2 issuer 准入）', async () => {
+    await expect(discoverAuthorizationServer('http://example.com')).rejects.toMatchObject({
+      code: 'insecure_endpoint',
+      detail: 'http://example.com',
+    });
+    await expect(discoverAuthorizationServer('http://example.com/')).rejects.toMatchObject({
+      code: 'insecure_endpoint',
+    });
+    expect(hits).toEqual([]);
   });
 
   it('元数据里的非回环 http 端点被拒（insecure_endpoint）', async () => {
