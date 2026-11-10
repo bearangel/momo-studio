@@ -7,7 +7,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { runMigrations, closeDb } from '../../src/main/storage/db';
-import { setKeychainImpl, __resetKeychainImplForTest } from '../../src/main/storage/keychain';
+import {
+  setKeychainImpl,
+  setSecret,
+  __resetKeychainImplForTest,
+} from '../../src/main/storage/keychain';
 import {
   insertConnection,
   getConnection,
@@ -184,11 +188,16 @@ describe('oauth store', () => {
     const c = insertConnection(base);
     await saveTokenSet(c.id, {
       accessToken: 'at',
-      refreshToken: null,
+      refreshToken: 'rt',
       expiresAt: null,
       tokenType: 'Bearer',
       scope: null,
     });
+    await setSecret(clientSecretKey(c.id), 'cs');
+    // 前置断言：三个键确实都在，避免「删前就没有」的空断言
+    expect(vault.get(accessTokenKey(c.id))).toBe('at');
+    expect(vault.get(refreshTokenKey(c.id))).toBe('rt');
+    expect(vault.get(clientSecretKey(c.id))).toBe('cs');
     deleteConnection(c.id);
     expect(getConnection(c.id)).toBeNull();
     // clearTokenSet 为 fire-and-forget，等一个微任务批次落定
@@ -200,5 +209,57 @@ describe('oauth store', () => {
 
   it('deleteConnection 不存在的 id 不抛错', () => {
     expect(() => deleteConnection('missing')).not.toThrow();
+  });
+
+  it('密钥键名格式固定（findSecretKeysByPrefix("oauth.") 依赖）', () => {
+    // 字面量断言而非经过同一工厂自证：改名必须打红
+    expect(accessTokenKey('abc')).toBe('oauth.abc.access_token');
+    expect(refreshTokenKey('abc')).toBe('oauth.abc.refresh_token');
+    expect(clientSecretKey('abc')).toBe('oauth.abc.client_secret');
+  });
+
+  it('全列往返：25 列均写的插入经 DB 读回逐字段一致', () => {
+    const c = insertConnection({
+      providerKey: 'https://issuer.example.com|signup|cid-full||repo read write',
+      displayName: '全列连接',
+      accountLabel: 'me@example.com',
+      issuer: 'https://issuer.example.com',
+      authorizationEndpoint: 'https://issuer.example.com/authorize',
+      tokenEndpoint: 'https://issuer.example.com/token',
+      registrationEndpoint: 'https://issuer.example.com/register',
+      revocationEndpoint: 'https://issuer.example.com/revoke',
+      userinfoEndpoint: 'https://issuer.example.com/userinfo',
+      clientId: 'cid-full',
+      clientAuthMethod: 'client_secret_post',
+      scopes: 'repo read write',
+      resource: 'https://api.example.com',
+      extraAuthorizeParams: { audience: 'api', prompt: 'consent' },
+      extraTokenParams: { source: 'cli', flag: '1' },
+      redirectHost: 'localhost',
+      redirectPort: 51234,
+      allowInsecureTls: true,
+      status: 'needs_reauth',
+      expiresAt: '2030-01-01T00:00:00.000Z',
+      source: 'mcp',
+    });
+    const got = getConnection(c.id);
+    // 整体相等即可捕获手写 25 参 .run() 的任何列错位
+    expect(got).toEqual(c);
+    expect(got?.issuer).toBe('https://issuer.example.com');
+    expect(got?.resource).toBe('https://api.example.com');
+    expect(got?.redirectHost).toBe('localhost');
+    expect(got?.redirectPort).toBe(51234);
+    expect(got?.allowInsecureTls).toBe(true);
+    expect(got?.clientAuthMethod).toBe('client_secret_post');
+    expect(got?.status).toBe('needs_reauth');
+    expect(got?.source).toBe('mcp');
+    expect(got?.extraAuthorizeParams).toEqual({ audience: 'api', prompt: 'consent' });
+    expect(got?.extraTokenParams).toEqual({ source: 'cli', flag: '1' });
+    expect(got?.createdAt).toBe(got?.updatedAt);
+
+    // last_refreshed_at 只能经 update 写入，单独验证其往返
+    const refreshed = new Date().toISOString();
+    updateConnection(c.id, { lastRefreshedAt: refreshed });
+    expect(getConnection(c.id)?.lastRefreshedAt).toBe(refreshed);
   });
 });

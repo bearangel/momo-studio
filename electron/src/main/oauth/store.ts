@@ -4,6 +4,7 @@
 // 时间戳统一 ISO 字符串；过期判定用 Date.parse（null expires_at = 不过期）。
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../storage/db';
+import { logger } from '../logger';
 import { clearTokenSet } from './keys';
 import type {
   OAuthConnection,
@@ -159,9 +160,11 @@ export function getConnection(id: string): OAuthConnection | null {
   return row ? rowToConnection(row) : null;
 }
 
+// 排序用 rowid 而非 id：created_at 同毫秒并列时 UUIDv4 的 id 序是随机的，
+// rowid 单调递增才给出真实插入序（本表是普通 rowid 表，id 为 TEXT 主键）。
 export function listConnections(): OAuthConnection[] {
   const rows = getDb()
-    .prepare(`SELECT ${COLUMNS} FROM oauth_connections ORDER BY created_at DESC, id DESC`)
+    .prepare(`SELECT ${COLUMNS} FROM oauth_connections ORDER BY created_at DESC, rowid DESC`)
     .all() as Row[];
   return rows.map(rowToConnection);
 }
@@ -172,7 +175,7 @@ export function findReusable(providerKey: string): OAuthConnection | null {
     .prepare(
       `SELECT ${COLUMNS} FROM oauth_connections
        WHERE provider_key = ? AND status = 'connected'
-       ORDER BY created_at DESC, id DESC LIMIT 1`
+       ORDER BY created_at DESC, rowid DESC LIMIT 1`
     )
     .get(providerKey) as Row | undefined;
   if (!row) return null;
@@ -228,6 +231,8 @@ export function updateConnection(id: string, patch: Patch): void {
 /** 物理删除（调用前必须已确认无引用——service.removeConnection 负责阻断） */
 export function deleteConnection(id: string): void {
   getDb().prepare('DELETE FROM oauth_connections WHERE id = ?').run(id);
-  // 跨存储无法原子：先删行再清密钥，失败只留孤儿密钥（无害）
-  void clearTokenSet(id).catch(() => undefined);
+  // 跨存储无法原子：先删行再清密钥，失败只留孤儿密钥（无害）——但不静默吞掉
+  void clearTokenSet(id).catch((err: unknown) => {
+    logger.warn('清理 OAuth 连接密钥失败，可能残留孤儿密钥', { connectionId: id, err });
+  });
 }
