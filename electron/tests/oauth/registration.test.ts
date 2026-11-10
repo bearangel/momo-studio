@@ -40,6 +40,8 @@ beforeEach(async () => {
   lastBody = {};
   lastMethod = '';
   lastContentType = '';
+  // 测试隔离：respond 是跨用例共享的模块级状态，必须每条用例前复位
+  respond = { status: 201, body: {} };
   server = http.createServer((req, res) => {
     let body = '';
     req.on('data', (c) => {
@@ -111,6 +113,20 @@ describe('registerClient', () => {
 
   it('缺 client_id 抛 registration_failed', async () => {
     respond = { status: 201, body: {} };
+    await expect(
+      registerClient({ ...baseReq, registrationEndpoint: `${base}/register` }),
+    ).rejects.toMatchObject({ code: 'registration_failed' });
+  });
+
+  it('400 错误响应抛 registration_failed', async () => {
+    respond = { status: 400, body: { error: 'invalid_redirect_uri' } };
+    await expect(
+      registerClient({ ...baseReq, registrationEndpoint: `${base}/register` }),
+    ).rejects.toMatchObject({ code: 'registration_failed' });
+  });
+
+  it('400 响应体即便含 client_id 仍抛 registration_failed（非 2xx 闸门回归锁）', async () => {
+    respond = { status: 400, body: { client_id: 'evil' } };
     await expect(
       registerClient({ ...baseReq, registrationEndpoint: `${base}/register` }),
     ).rejects.toMatchObject({ code: 'registration_failed' });

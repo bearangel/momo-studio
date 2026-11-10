@@ -63,6 +63,7 @@ export async function registerClient(req: RegisterClientRequest): Promise<Regist
 
   let body = '';
   let status = 0;
+  let ok = false;
   try {
     const response = await fetchFn(req.registrationEndpoint, {
       method: 'POST',
@@ -73,6 +74,7 @@ export async function registerClient(req: RegisterClientRequest): Promise<Regist
       redirect: 'error',
     });
     status = response.status;
+    ok = response.ok;
     body = await response.text();
   } catch (err) {
     // 网络层失败 / 超时 / 重定向被拒（redirect:'error' 的 TypeError）
@@ -82,6 +84,12 @@ export async function registerClient(req: RegisterClientRequest): Promise<Regist
       detail,
     });
     throw new OAuthFailure('registration_failed', '动态客户端注册请求失败', undefined, detail);
+  }
+
+  // 显式非 2xx 闸门：必须先于字段提取拒绝，否则病态非 2xx 响应体若恰好含
+  // client_id 会被误认为注册成功（错误码/成功判定不能只依赖响应体形状）。
+  if (!ok) {
+    throw new OAuthFailure('registration_failed', `动态客户端注册失败（HTTP ${status}）`);
   }
 
   let json: Record<string, unknown> = {};
