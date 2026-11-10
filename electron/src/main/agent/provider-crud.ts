@@ -17,6 +17,8 @@ import {
   type ThinkingConfig,
 } from '../llm/provider-presets';
 import { lookupModelLimits, lookupReasoningCapability } from '../llm/model-catalog';
+// 本机回环域名（允许 http，如本地 Ollama）。与 provider-ipc.ts testConnection 的校验互为镜像
+import { isLoopbackHost } from '../util/url-guard';
 export interface ModelProviderRow {
   id: string;
   name: string;
@@ -390,12 +392,6 @@ export function removeProviderModel(providerId: string, modelId: string): void {
 }
 
 // ─── 远端模型列表拉取（Task 6）───────────────────────────────────────────────
-
-/** 本机回环域名（允许 http，如本地 Ollama）。与 provider-ipc.ts testConnection 的校验互为镜像 */
-function isLoopbackHost(hostname: string): boolean {
-  const h = hostname.toLowerCase();
-  return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '0.0.0.0';
-}
 
 /**
  * 从供应商 API 拉取可用模型列表：GET {baseUrl}/models（OpenAI 兼容格式），

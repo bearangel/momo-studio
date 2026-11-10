@@ -909,12 +909,26 @@ describe('registerResourceHandlers', () => {
       expect(shellOpenExternal).toHaveBeenCalledTimes(1);
     });
 
-    it('misc:openExternal http:// 前缀 → 中文拒绝且 shell 不被调', async () => {
+    // 2026-11-10 OAuth Task 1：口径改为 https 任意 + http 仅回环。
+    // 非回环 http 明文传 token → 必须拒绝（此用例锁拒绝面）。
+    it('misc:openExternal 非回环 http → 中文拒绝且 shell 不被调', async () => {
       const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
       const openCall = calls.find((c: unknown[]) => c[0] === 'misc:openExternal');
       const handler = openCall![1] as (evt: unknown, url: string) => Promise<void>;
       await expect(handler({}, 'http://insecure.example.com/')).rejects.toThrow(/https/);
+      await expect(handler({}, 'http://192.168.1.5:8080/')).rejects.toThrow(/https/);
       expect(shellOpenExternal).not.toHaveBeenCalled();
+    });
+
+    it('misc:openExternal 本机回环 http（OAuth 回调授权页）→ 放行透传', async () => {
+      const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+      const openCall = calls.find((c: unknown[]) => c[0] === 'misc:openExternal');
+      const handler = openCall![1] as (evt: unknown, url: string) => Promise<void>;
+      await handler({}, 'http://127.0.0.1:51789/callback');
+      await handler({}, 'http://localhost:8080/authorize');
+      expect(shellOpenExternal).toHaveBeenCalledWith('http://127.0.0.1:51789/callback');
+      expect(shellOpenExternal).toHaveBeenCalledWith('http://localhost:8080/authorize');
+      expect(shellOpenExternal).toHaveBeenCalledTimes(2);
     });
 
     it('misc:openExternal 空串 → 中文拒绝且 shell 不被调', async () => {

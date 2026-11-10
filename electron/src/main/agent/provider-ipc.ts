@@ -13,6 +13,8 @@ import {
   setProviderModelThinking, setProviderModelVision, markProviderVerified,
 } from './provider-crud';
 import { listProviderPresets } from '../llm/provider-presets';
+// 本机回环域名（允许 http，如本地 Ollama）；非本机必须 https 防 MITM/凭据外泄
+import { isLoopbackHost } from '../util/url-guard';
 
 interface TestConnectionInput {
   baseUrl: string;
@@ -22,12 +24,6 @@ interface TestConnectionInput {
   providerId?: string;
 }
 interface TestConnectionResult { ok: boolean; error?: string; }
-
-/** 本机回环域名（允许 http，如本地 Ollama）；非本机必须 https 防 MITM/凭据外泄 */
-function isLoopbackHost(hostname: string): boolean {
-  const h = hostname.toLowerCase();
-  return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '0.0.0.0';
-}
 
 /** 发最小 chat completion 请求验证连通性（不落库） */
 export async function testProviderConnection(input: TestConnectionInput): Promise<TestConnectionResult> {
