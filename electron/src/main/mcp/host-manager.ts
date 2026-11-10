@@ -12,10 +12,11 @@
 //   - MCP server 定义持久化在 SQLite（mcp_definitions 表），通过 name 唯一索引读取。
 
 import { McpClient } from './client';
-import { HttpMcpClient } from './http-client';
+import { HttpMcpClient, McpHttpError } from './http-client';
 import { getDb } from '../storage/db';
 import { expandMcpTemplate, mcpConfigHasPlaceholder } from './template-expand';
 import { logger } from '../logger';
+import { OAuthFailure } from '../oauth/types';
 import type {
   McpServerConfig,
   McpToolInfo,
@@ -184,7 +185,30 @@ export async function getOrStartMcp(
       (effective.transport ?? 'stdio') === 'streamable_http'
         ? new HttpMcpClient(effective)
         : new McpClient(effective);
-    await client.connect();
+    // 401/403 → OAuth 语义错误（已绑定=连接失效；未绑定=提示可授权）
+    try {
+      await client.connect();
+    } catch (err) {
+      if (err instanceof McpHttpError && (err.status === 401 || err.status === 403)) {
+        pool.delete(key);
+        void client.disconnect().catch(() => undefined);
+        if (effective.oauthConnectionId) {
+          throw new OAuthFailure(
+            'needs_reauth',
+            `MCP ${config.name} 的授权已失效，请重新授权`,
+            effective.oauthConnectionId,
+            err.wwwAuthenticate ?? undefined,
+          );
+        }
+        throw new OAuthFailure(
+          'needs_reauth',
+          `MCP ${config.name} 需要授权（HTTP ${err.status}）`,
+          undefined,
+          err.wwwAuthenticate ?? undefined,
+        );
+      }
+      throw err;
+    }
     logger.info('MCP server 已启动', { workspaceId, name: config.name });
     return client;
   })();
