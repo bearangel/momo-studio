@@ -449,30 +449,64 @@ export function updateRemoteMcpDefinition(
  * registerMcpDefinition 的 INSERT OR REPLACE 整行覆盖语义不同）。字段组装/
  * url scheme 校验与注册同构（isAllowedRemoteUrl）；池驱逐由服务层（mcp-config.updateMcpEntry）负责。
  */
-export function updateMcpEntryDefinition(name: string, config: McpEntryUpdateInput): void {
+export function updateMcpEntryDefinition(
+  name: string,
+  config: McpEntryUpdateInput,
+): boolean {
   const db = getDb();
-  const row = db.prepare('SELECT id FROM mcp_definitions WHERE name = ?').get(name) as
-    | { id: string }
+  const row = db
+    .prepare(
+      'SELECT id, transport, command, args, env, url, headers_json, cwd FROM mcp_definitions WHERE name = ?',
+    )
+    .get(name) as
+    | {
+        id: string;
+        transport: string;
+        command: string;
+        args: string;
+        env: string;
+        url: string | null;
+        headers_json: string | null;
+        cwd: string | null;
+      }
     | undefined;
   if (!row) throw new Error(`MCP ${name} 未注册`);
   const transport = config.transport ?? 'stdio';
   if (transport === 'streamable_http' && !isAllowedRemoteUrl(config.url ?? '')) {
     throw new Error(`远程 MCP ${name} 更新失败：url 必须以 http:// 或 https:// 开头`);
   }
+  // 与 UPDATE 写入值同构的规范化元组（比对口径 = 写入口径，杜绝归一化漂移）
+  const command = transport === 'streamable_http' && !config.command ? '' : config.command;
+  const args = JSON.stringify(config.args ?? []);
+  const env = JSON.stringify(config.env ?? {});
+  const url = transport === 'streamable_http' ? (config.url ?? null) : null;
+  const headersJson = transport === 'streamable_http' ? JSON.stringify(config.headers ?? {}) : null;
+  const cwd = config.cwd ?? null;
+  // 连接相关字段未变 → 告知服务层跳过池驱逐（保存即秒回池内活实例，
+  // 不付 DNS+TLS+握手 1-2s 重连；version 不影响连接，不参与比对）
+  const connectionUnchanged =
+    row.transport === transport &&
+    row.command === command &&
+    row.args === args &&
+    row.env === env &&
+    row.url === url &&
+    row.headers_json === headersJson &&
+    row.cwd === cwd;
   db.prepare(
     `UPDATE mcp_definitions SET version = ?, transport = ?, command = ?, args = ?, env = ?, url = ?, headers_json = ?, cwd = ? WHERE name = ?`,
   ).run(
     config.version ?? '1.0.0',
     transport,
-    transport === 'streamable_http' && !config.command ? '' : config.command,
-    JSON.stringify(config.args ?? []),
-    JSON.stringify(config.env ?? {}),
-    transport === 'streamable_http' ? (config.url ?? null) : null,
-    transport === 'streamable_http' ? JSON.stringify(config.headers ?? {}) : null,
-    config.cwd ?? null,
+    command,
+    args,
+    env,
+    url,
+    headersJson,
+    cwd,
     name,
   );
-  logger.info('MCP 定义已编辑', { name, transport }); // 不打 url/headers（含 key）
+  logger.info('MCP 定义已编辑', { name, transport, connectionUnchanged }); // 不打 url/headers（含 key）
+  return !connectionUnchanged;
 }
 
 /**

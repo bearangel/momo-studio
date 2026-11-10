@@ -14,10 +14,17 @@ vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }));
 
 import { ipcMain } from 'electron';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
-import { getMcpConfig } from '../../src/main/mcp/host-manager';
+import { getMcpConfig, evictMcpByName } from '../../src/main/mcp/host-manager';
 import { registerResourceHandlers } from '../../src/main/resource/ipc.handlers';
 import type { McpEditView } from '../../src/main/resource/mcp-config';
 import type { RegisteredMcp } from '../../src/main/mcp/types';
+
+// evictMcpByName 包 vi.fn(真实实现)：驱逐行为全真，仅记录调用事实——
+// 供「连接字段未变的保存不得驱逐池连接」性能回归锁断言（保存慢根因：无条件重连）
+vi.mock('../../src/main/mcp/host-manager', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/mcp/host-manager')>();
+  return { ...actual, evictMcpByName: vi.fn(actual.evictMcpByName) };
+});
 
 const tmpRoot = path.join(os.tmpdir(), `ap-mcp-edit-${Date.now()}`);
 
@@ -26,6 +33,7 @@ beforeEach(() => {
   process.env.AP_USER_DATA_DIR = tmpRoot;
   runMigrations();
   registerResourceHandlers();
+  vi.mocked(evictMcpByName).mockClear();
 });
 
 afterEach(() => {
@@ -106,6 +114,41 @@ describe('MCP 全字段编辑（getMcpEditView / updateMcpEntry 真实 DB 契约
     await expect(
       getChannelHandler('resource:getMcpEditView')({}, 'ghost-mcp'),
     ).rejects.toThrow('未注册');
+  });
+
+  it('updateMcpEntry：连接字段未变（仅 version 改）→ 不驱逐池连接（保存慢性能锁：远程 MCP 无改动保存应秒回，不付 1-2s 重连）', async () => {
+    await seedEntry({
+      name: 'ctx7-noop',
+      command: '',
+      transport: 'streamable_http',
+      url: 'https://mcp.context7.com/mcp',
+      headers: { Authorization: 'Bearer tok-1' },
+    });
+    await getChannelHandler('resource:updateMcpEntry')({}, 'ctx7-noop', {
+      transport: 'streamable_http',
+      url: 'https://mcp.context7.com/mcp',
+      headers: { Authorization: 'Bearer tok-1' },
+      version: '2.0.0',
+    });
+    expect(getMcpConfig('ctx7-noop')?.version).toBe('2.0.0');
+    expect(evictMcpByName).not.toHaveBeenCalled();
+  });
+
+  it('updateMcpEntry：连接字段变化（url 改）→ 仍驱逐池连接（真改动必须真连验证）', async () => {
+    await seedEntry({
+      name: 'ctx7-changed',
+      command: '',
+      transport: 'streamable_http',
+      url: 'https://old.test/mcp',
+      headers: {},
+    });
+    await getChannelHandler('resource:updateMcpEntry')({}, 'ctx7-changed', {
+      transport: 'streamable_http',
+      url: 'https://new.test/mcp',
+      headers: {},
+    });
+    expect(getMcpConfig('ctx7-changed')?.url).toBe('https://new.test/mcp');
+    expect(evictMcpByName).toHaveBeenCalledWith('ctx7-changed');
   });
 
   it('updateMcpEntry：改 stdio command/args/env → 读回落新值，且 id/installed_at/source 不变', async () => {
