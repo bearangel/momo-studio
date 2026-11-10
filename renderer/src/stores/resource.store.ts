@@ -132,6 +132,13 @@ interface ResourceStore {
    */
   initHubUpdates: () => () => void;
   /**
+   * 资源创建六工具 Task 8：订阅 resource:changed 推送（主进程资源域任何写操作
+   * 成功即广播），事件驱动 load() 重拉列表——agent 会话内经工具创建资源时库页
+   * 自动刷新，无需用户手动刷新/重进。幂等：模块级 flag 防重复订阅，订阅生命
+   * 周期 = 应用进程（不随视图卸载退订，重进库页不叠加监听）。
+   */
+  initResourceChanged: () => void;
+  /**
    * M2.5 T1（A1）：用目录版本播种某类型的更新基线——只作用于该类型（其他
    * 类型 key 不动），入表条件 compareVersions(目录版本, 已装版本) > 0。
    * hub 源降级或未接入时整体早退（既不清空也不新增）。事件路径仍为增量。
@@ -171,6 +178,9 @@ interface ResourceStore {
 
 /** load 序号（过期响应丢弃——见 load 内注释） */
 let loadSeq = 0;
+
+/** resource:changed 是否已订阅（幂等防重复订阅——见 initResourceChanged） */
+let resourceChangedSubscribed = false;
 
 export const useResourceStore = create<ResourceStore>((set, get) => ({
   items: [],
@@ -367,6 +377,14 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
       offPublished();
       offUnpublished();
     };
+  },
+
+  initResourceChanged: () => {
+    if (resourceChangedSubscribed) return;
+    resourceChangedSubscribed = true;
+    ipc.resource.onResourceChanged(() => {
+      void get().load();
+    });
   },
 
   seedHubUpdates: (type, entries) => {

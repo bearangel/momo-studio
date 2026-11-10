@@ -49,6 +49,8 @@ const mockApi = {
     install: resourceInstall,
     delete: resourceDelete,
     danglingMcpRefs: resourceDanglingMcpRefs,
+    // 资源创建六工具 Task 8：ResourceLibraryView 挂载 initResourceChanged 订阅
+    onResourceChanged: vi.fn().mockReturnValue(() => {}),
   },
   agent: { list: agentList, getBuiltinSuggestions: agentBuiltinSuggestions },
   provider: { list: providerList },

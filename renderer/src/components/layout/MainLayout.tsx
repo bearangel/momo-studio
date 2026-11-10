@@ -51,6 +51,13 @@ export function MainLayout() {
     return cleanup;
   }, [loadMembers]);
 
+  // 资源创建六工具 Task 8：资源域写操作推送（resource:changed）→ 成员 + 团队
+  // 重拉（agent 经工具创建/安装后各消费面即时刷新；幂等订阅，MainLayout 常驻
+  // ——库页挂载点只在 ResourceLibraryView，成员/团队消费面是全局的）
+  useEffect(() => {
+    useAgentStore.getState().initResourceChanged();
+  }, []);
+
   // 全局 Ctrl/Cmd+B 折叠/展开当前视图侧边栏（preventDefault 阻止浏览器默认行为）。
   // v2.2 优化：收起状态按视图独立——仅当前为侧边栏视图时切换该视图，其余视图无侧边栏 no-op
   useEffect(() => {

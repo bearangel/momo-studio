@@ -526,7 +526,9 @@ describe('T10 e2e：resource:list 并入 hub 已装项 + 五源并列', () => {
     // hub 已装 MCP（真包安装）
     await installHubPackage('mcp', 'hub-e2e-mcp');
 
-    // builtin = 本地 catalog 直读的 Momo（agent，无 type 过滤的合并面可见）
+    // builtin 并列面 = catalog 直读（Momo agent 等）+ resources/skills/ 落盘扫描
+    // 并入（本分支 4 册创建技能）——bySource 同源取末项随枚举序漂移，改集合包含
+    // 锁在场，不冻结 builtin 枚举顺序
     const items = await listResources();
     const bySource = new Map(items.map((i) => [i.source, i]));
     expect([...bySource.keys()].sort()).toEqual([
@@ -535,7 +537,8 @@ describe('T10 e2e：resource:list 并入 hub 已装项 + 五源并列', () => {
       'hub',
       'smithery',
     ]);
-    expect(bySource.get('builtin')!.id).toBe('builtin-agent-general-assistant');
+    const builtinIds = items.filter((i) => i.source === 'builtin').map((i) => i.id);
+    expect(builtinIds).toContain('builtin-agent-general-assistant');
     expect(bySource.get('hub')!.id).toBe('hub-mcp-hub-e2e-mcp');
     expect(bySource.get('hub')!.installed).toBe(true);
     expect(bySource.get('smithery')!.id).toBe('smithery-mcp-e2e-smithery');

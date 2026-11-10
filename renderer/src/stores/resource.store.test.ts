@@ -37,6 +37,12 @@ const hubOnResourceUnpublished = vi.fn((cb: (e: { slug: string; by: string; at: 
   unpublishedCb = cb;
   return () => { unpublishedCb = undefined; };
 });
+// 资源创建六工具 Task 8：resource:changed 推送订阅（onResourceChanged 回调捕获——同上解订阅语义）
+let resourceChangedCb: (() => void) | undefined;
+const resourceOnResourceChanged = vi.fn((cb: () => void) => {
+  resourceChangedCb = cb;
+  return () => { resourceChangedCb = undefined; };
+});
 
 const mockApi = {
   resource: {
@@ -45,6 +51,7 @@ const mockApi = {
     setMcpEnabled: resourceSetMcpEnabled,
     getCatalogStatus: resourceGetCatalogStatus,
     hubCatalogOwnership: resourceHubCatalogOwnership,
+    onResourceChanged: resourceOnResourceChanged,
   },
   plugin: {
     setEnabled: pluginSetEnabled,
@@ -830,5 +837,26 @@ describe('load 过期响应丢弃', () => {
     const items = useResourceStore.getState().items;
     expect(items.map((i) => i.type)).toEqual(['skill']);
     expect(useResourceStore.getState().loading).toBe(false);
+  });
+});
+
+// ── resource:changed 推送订阅（资源创建六工具 Task 8）──
+describe('resource.store — resource:changed 推送订阅', () => {
+  it('initResourceChanged：订阅回调驱动 load()；重复调用幂等（只订阅一次）', async () => {
+    const before = resourceList.mock.calls.length;
+
+    useResourceStore.getState().initResourceChanged();
+    // 幂等：模块级 flag 防重复订阅——第二次调用不得再挂监听
+    useResourceStore.getState().initResourceChanged();
+    expect(resourceOnResourceChanged).toHaveBeenCalledTimes(1);
+    expect(resourceChangedCb).toBeDefined();
+
+    resourceChangedCb?.();
+    await vi.waitFor(() => {
+      expect(resourceList.mock.calls.length).toBe(before + 1);
+    });
+    await vi.waitFor(() => {
+      expect(useResourceStore.getState().loading).toBe(false);
+    });
   });
 });

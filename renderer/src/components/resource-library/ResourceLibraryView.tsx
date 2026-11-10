@@ -84,6 +84,9 @@ export function ResourceLibraryView() {
   // 设置面板 init，此处仅快照）+ 订阅发布事件（更新角标事件源，卸载解订阅）
   useEffect(() => {
     if (useHubStore.getState().status === null) useHubStore.getState().refresh();
+    // 资源创建六工具 Task 8：resource:changed 推送订阅（幂等——首挂载后进程
+    // 存续期内常驻，不随视图卸载退订）
+    useResourceStore.getState().initResourceChanged();
     return useResourceStore.getState().initHubUpdates();
   }, []);
 

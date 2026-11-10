@@ -242,10 +242,15 @@ describe('buildAndUploadWorkspaceSnapshot', () => {
     const result = await buildAndUploadWorkspaceSnapshot(wsId, deps);
 
     const installed = listInstalled();
-    // 2026-11-02 极简化：builtin 桶为空（内置 skill 整库下架）；
-    // 「目录桶只入总数不装包」口径改由 bare-market-skill 承担验证
-    const builtinCount = installed.filter((s) => s.source === 'builtin').length;
-    expect(builtinCount).toBe(0);
+    // 本分支恢复内置技能：resources/skills/ 落盘 4 册创建技能（create-agent /
+    // create-skill / create-mcp / build-team），被 builtin 源扫描拾取（消费面矩阵
+    // R9「落盘即被 builtin 源扫描拾取」）——锁集合包含而非冻结名单长度，
+    // 后续 builtin 扩容不再破测；「目录桶只入总数不装包」口径仍由
+    // bare-market-skill 承担验证
+    const builtinSlugs = installed.filter((s) => s.source === 'builtin').map((s) => s.slug);
+    expect(builtinSlugs).toEqual(
+      expect.arrayContaining(['create-agent', 'create-skill', 'create-mcp', 'build-team']),
+    );
     expect(installed.map((s) => s.slug)).toEqual(
       expect.arrayContaining(['hub-skill', 'embed-skill', 'bare-market-skill']),
     );

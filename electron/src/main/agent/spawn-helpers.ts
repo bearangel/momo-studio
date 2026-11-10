@@ -15,6 +15,7 @@
 //   概念退役删除（dispatch 目标会话一律用 executionSessionId）。
 
 import path from 'node:path';
+import fs from 'node:fs';
 import { loadElectronApis } from '../electron-access';
 import {
   dropUnknownToolRefs,
@@ -24,6 +25,7 @@ import {
 } from './capability-merger';
 import { collectKnownToolNames } from './known-tool-names';
 import { resolveSkillsDir } from '../paths';
+import { resolveBuiltinSkillsDir } from '../skill/zip-uploader';
 import {
   buildPluginToolRefs,
   buildPluginSkillRefs,
@@ -165,13 +167,27 @@ export async function resolveApiKey(
 }
 
 /**
- * 把 skill slug 列表解析成子进程可用的 RuntimeSkillRef。
- * cachePath 按 <userData>/skills/<slug> 约定解析；skill 包尚未安装时该路径可能不存在，
- * 子进程 SkillRegistry.register 会抛错并被 try/catch 跳过（不阻塞 agent 上线）。
+ * 把 skill slug 列表解析成子进程可用的 RuntimeSkillRef（双源回退）：
+ *   1. <userData>/skills/<slug>/SKILL.md 存在 → custom 上传的物化目录，优先用之
+ *   2. builtin 根（resolveBuiltinSkillsDir，与 context-expander 同一真相源）存在
+ *      → builtin 技能直读 repo/打包资源目录——builtin 技能从不物化进 userData，
+ *      无差别映射 userData 会让四册资源创建技能在子进程 register 抛「SKILL.md
+ *      不存在」被吞，Layer 1 索引不注入（C1）
+ *   3. 两处皆无 → 保留 userData 约定路径（悬空引用语义：register 抛错被吞，
+ *      不阻塞 agent 上线）
  */
 export function resolveSkillSlugs(slugs: string[]): RuntimeSkillRef[] {
   const skillsDir = resolveSkillsDir();
-  return slugs.map((slug) => ({ slug, cachePath: path.join(skillsDir, slug) }));
+  const builtinDir = resolveBuiltinSkillsDir();
+  return slugs.map((slug) => {
+    if (fs.existsSync(path.join(skillsDir, slug, 'SKILL.md'))) {
+      return { slug, cachePath: path.join(skillsDir, slug) };
+    }
+    if (fs.existsSync(path.join(builtinDir, slug, 'SKILL.md'))) {
+      return { slug, cachePath: path.join(builtinDir, slug) };
+    }
+    return { slug, cachePath: path.join(skillsDir, slug) };
+  });
 }
 
 /** buildSpawnOpts 的入参（v2 Task 10：本地身份形状，无 Matrix 凭据） */

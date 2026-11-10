@@ -3,7 +3,8 @@
 // （白名单强执行后 builtin 不丢公共默认能力）。
 // 2026-11-02 内置资源极简化：仅剩 general-assistant.yaml 一个内置预置。
 // 2026-11-09 全能化：general-assistant.yaml 的 defaultTools 必须严格等于
-// ALL_BUILTIN_TOOLS 全集（58 个，排序后比较）——防止目录扩展后 Momo 默默掉队。
+// ALL_BUILTIN_TOOLS 全集（58 项；同日资源创建扩容至 64 项，排序后比较）——
+// 防止目录扩展后 Momo 默默掉队。
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';

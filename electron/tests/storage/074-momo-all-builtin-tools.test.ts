@@ -13,6 +13,7 @@ import {
   migration074,
   MOMO_ALL_BUILTIN_TOOL_REFS,
 } from '../../src/main/storage/migrations/074_momo_all_builtin_tools';
+import { MOMO_V211_ALL_BUILTIN_TOOL_REFS } from '../../src/main/storage/migrations/078_momo_list_models_tool';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-mig074-test-${Date.now()}-${process.pid}`);
 
@@ -111,9 +112,12 @@ describe('migration 074 Momo 全量内置工具回填', () => {
   });
 
   it('用例 D：冻结名单与 ALL_BUILTIN_TOOLS 全集一致（排序后严格相等）', () => {
-    // 未来新增内置工具时：按 052 先例追加新迁移，并同步更新本断言与冻结名单
-    expect([...MOMO_ALL_BUILTIN_TOOL_REFS].sort()).toEqual([...ALL_BUILTIN_TOOLS].sort());
-    expect(MOMO_ALL_BUILTIN_TOOL_REFS).toHaveLength(58);
-    expect(new Set(MOMO_ALL_BUILTIN_TOOL_REFS).size).toBe(MOMO_ALL_BUILTIN_TOOL_REFS.length);
+    // 2026-11-09 资源创建六工具扩容按本用例原处方处置：追加迁移 077；2026-11-10
+    // list_models 扩容同式再追加迁移 078，本断言与冻结名单同步改指 078 的 65 项
+    // 全集（074 的 58 项名单与 SQL 保持冻结不改——用例 A-C 仍锁 074 自身行为）。
+    // 下次扩容同式再追加。
+    expect([...MOMO_V211_ALL_BUILTIN_TOOL_REFS].sort()).toEqual([...ALL_BUILTIN_TOOLS].sort());
+    expect(MOMO_V211_ALL_BUILTIN_TOOL_REFS).toHaveLength(65);
+    expect(new Set(MOMO_V211_ALL_BUILTIN_TOOL_REFS).size).toBe(MOMO_V211_ALL_BUILTIN_TOOL_REFS.length);
   });
 });

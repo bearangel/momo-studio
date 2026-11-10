@@ -19,8 +19,9 @@ describe('previewBuiltinPresetAgent（预置能力预览，只读不落库）', 
     expect(Array.isArray(preview.tools)).toBe(true);
     expect(preview.tools).toContain('webfetch');
     expect(Array.isArray(preview.mcps)).toBe(true);
-    // 2026-11-02 极简化：defaultSkills 已移除（原 3 个内置 skill 随整库下架）
-    expect(preview.skills).toEqual([]);
+    // 2026-11-09 资源创建：defaultSkills 恢复——挂 4 册资源创建技能
+    // （与 builtin.test.ts 引用一致性锁同名单；原 3 册写作技能不回潮）
+    expect([...preview.skills].sort()).toEqual(['build-team', 'create-agent', 'create-mcp', 'create-skill']);
     // systemPrompt 全量返回（截断由 renderer 展示层做——fork 需要全量）
     expect(preview.systemPrompt).toContain('万能小助手');
     // 内联写作纪律在位（原技能承载的行为不应随技能下架丢失）
