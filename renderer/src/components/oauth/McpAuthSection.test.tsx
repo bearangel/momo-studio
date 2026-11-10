@@ -70,13 +70,12 @@ describe('McpAuthSection（v2：授权管理点）', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: '授权' })).toBeEnabled());
   });
 
-  it('已绑定时显示连接信息 + 共享提示 + 解除绑定/撤销授权', async () => {
-    unbindMcp.mockResolvedValue(undefined);
+  it('已绑定时显示连接信息 + 共享提示；不提供「解除绑定」（R13：binding 即标记，撤销授权已含解绑）', async () => {
     render(<McpAuthSection mcpName="gh" transport="streamable_http" connectionId="c1" envVar={undefined} onChange={vi.fn()} />);
     expect(await screen.findByText(/GitHub/)).toBeTruthy();
     expect(screen.getByText(/此授权也被 1 个其他服务器使用/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: '解除绑定' }));
-    await waitFor(() => expect(unbindMcp).toHaveBeenCalledWith('gh'));
+    expect(screen.queryByRole('button', { name: '解除绑定' })).toBeNull();
+    expect(screen.getByRole('button', { name: /撤销授权/ })).toBeInTheDocument();
   });
 
   it('撤销授权两步确认：确认前只读影响面不吊销，确认后 disconnect + unbind 各一次', async () => {

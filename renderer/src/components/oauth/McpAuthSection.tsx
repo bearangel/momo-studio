@@ -1,8 +1,9 @@
 // renderer/src/components/oauth/McpAuthSection.tsx
 //
 // MCP 认证区块（spec §13.2，预览 v2 区块 D）：该 MCP 服务器的授权管理点。
-// 未绑定 → 授权（stdio 需环境变量名）；已绑定 → 连接信息 + 共享提示 + 解除绑定/撤销授权；
-// needs_reauth → 重新授权。授权成功由主进程回写绑定并驱逐池，父层用 mcp:start 重连。
+// 未绑定 → 授权（stdio 需环境变量名）；已绑定 → 连接信息 + 共享提示 + 撤销授权
+// （R13：唯一离场动作，吊销令牌 + 清绑定；「解除绑定」已移除）；needs_reauth →
+// 重新授权。授权成功由主进程回写绑定并驱逐池，父层用 mcp:start 重连。
 //
 // 绑定态自愈（review 修复）：boundId 以内部态持有（prop 播种），订阅
 // oauth:authorizationChanged 的 connected 推送即收即用——就地授权完成后无需
@@ -99,20 +100,6 @@ export function McpAuthSection({ mcpName, transport, connectionId, envVar, onCha
     }
   };
 
-  const unbind = async (): Promise<void> => {
-    setError(null);
-    try {
-      await ipc.oauth.unbindMcp(mcpName);
-      setBoundId(undefined);
-      onChange({ connectionId: '', envVar: envDraft });
-      onAuthorized?.();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  // 第一步只读影响面（listBoundMcps）——disconnect 会吊销令牌并驱逐全部共享该
-  // 连接的 MCP，必须等用户「确认撤销」后才执行
   const startRevoke = async (): Promise<void> => {
     if (!boundId) return;
     setError(null);
@@ -175,16 +162,16 @@ export function McpAuthSection({ mcpName, transport, connectionId, envVar, onCha
             {bound.status === 'needs_reauth' && (
               <Button size="sm" disabled={authorizeBusy} onClick={() => void authorize()}>重新授权</Button>
             )}
-            {/* 同形不同色（R10）：两操作同为描边按钮，颜色编码危险级——
-                解除绑定 = 中性描边（可逆），撤销授权 = 红描边（吊销令牌·破坏性） */}
+            {/* R13：唯一离场动作 = 撤销授权（吊销令牌 + 清绑定）。
+                「解除绑定」已移除——独立连接管理页取消后（R6），
+                「保留授权但不绑定」只产生 UI 不可见的孤儿连接，无消费面 */}
             <Button size="sm" variant="danger-outline" onClick={() => void startRevoke()}>
               <ShieldOff size={14} strokeWidth={1.75} aria-hidden />
               撤销授权…
             </Button>
-            <Button size="sm" variant="secondary" onClick={() => void unbind()}>解除绑定</Button>
           </div>
           <div className="text-xs text-tertiary">
-            解除绑定 = 保留授权，仅此服务器不再使用；撤销授权 = 吊销令牌（会影响共享它的服务器）。
+            撤销授权 = 吊销令牌并解除绑定（会影响共享此授权的服务器）。
           </div>
         </>
       ) : (
