@@ -50,6 +50,9 @@ export interface McpConfigView {
   url: string;
   /** 裸模式的现有 headers 键值（schema 模式为空对象） */
   headers: Record<string, string>;
+  /** OAuth 绑定（无绑定为 undefined；认证区块回显用，与 McpEditView 同源字段） */
+  oauthConnectionId?: string;
+  oauthEnvVar?: string;
 }
 
 /** resource:updateMcpConfig 入参形状（spec §4.2） */
@@ -119,9 +122,20 @@ export async function getMcpConfigView(name: string): Promise<McpConfigView> {
       url,
       // schema 模式下回显走 values，headers 保持空对象（spec §4.1）
       headers: {},
+      oauthConnectionId: def.oauthConnectionId,
+      oauthEnvVar: def.oauthEnvVar,
     };
   }
-  return { name, transport: def.transport, bare: true, values: {}, url, headers };
+  return {
+    name,
+    transport: def.transport,
+    bare: true,
+    values: {},
+    url,
+    headers,
+    oauthConnectionId: def.oauthConnectionId,
+    oauthEnvVar: def.oauthEnvVar,
+  };
 }
 
 /** 编辑已装远程 MCP 配置：校验 → 重组/直写 → 专用 UPDATE → 驱逐池连接 */

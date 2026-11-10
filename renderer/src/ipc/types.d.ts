@@ -1403,6 +1403,9 @@ export interface McpConfigView {
   url: string;
   /** 裸模式的现有 headers 键值（schema 模式为空对象） */
   headers: Record<string, string>;
+  /** OAuth 绑定（无绑定为 undefined；认证区块回显用，主进程经 mcp_definitions 带出） */
+  oauthConnectionId?: string;
+  oauthEnvVar?: string;
 }
 
 /**
@@ -2301,7 +2304,7 @@ export interface OAuthProviderPreset {
   input: OAuthProviderPresetInput;
 }
 
-/** OAuth 连接管理通道面（oauth/ipc.handlers.ts）——invoke 九通道 + 推送两通道 */
+/** OAuth 连接管理通道面（oauth/ipc.handlers.ts）——invoke 十一通道 + 推送两通道 */
 export interface OAuthApiSurface {
   listConnections(): Promise<OAuthConnectionView[]>;
   getConnection(id: string): Promise<OAuthConnectionView | null>;
@@ -2311,6 +2314,10 @@ export interface OAuthApiSurface {
   completeWithManualCallback(payload: { pendingId: string; input: string }): Promise<OAuthConnectionView>;
   cancelAuthorization(pendingId: string): Promise<void>;
   disconnect(id: string): Promise<{ affectedMcpNames: string[] }>;
+  /** Task 16：引用某连接的 MCP 名单（认证区块共享提示） */
+  listBoundMcps(id: string): Promise<string[]>;
+  /** Task 16：解除单服务器绑定（保留授权本体；授权本体走 disconnect 吊销） */
+  unbindMcp(mcpName: string): Promise<void>;
   removeConnection(id: string): Promise<{ affectedMcpNames: string[] }>;
   onAuthorizationChanged(callback: (payload: AuthorizationChangedPayload) => void): () => void;
   onConnectionsChanged(callback: (payload: { at: number }) => void): () => void;

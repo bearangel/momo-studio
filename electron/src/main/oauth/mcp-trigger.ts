@@ -19,6 +19,13 @@ export async function bindConnectionToMcp(
   logger.info('MCP 已绑定 OAuth 连接', { name: mcpName });
 }
 
+/** 解除绑定：清两列（连接 + 环境变量名）+ 驱逐池实例；授权本体保留（disconnect 才吊销令牌） */
+export async function unbindConnectionFromMcp(mcpName: string): Promise<void> {
+  setMcpOAuthBinding(mcpName, null, null);
+  await evictMcpByName(mcpName);
+  logger.info('MCP 已解除 OAuth 绑定', { name: mcpName });
+}
+
 /** 一键「授权 + 绑定」：begin 返回后由 renderer 打开浏览器，完成后走 complete 事件回写 */
 export async function beginAuthorizationForMcp(
   mcpName: string,

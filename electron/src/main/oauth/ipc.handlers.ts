@@ -9,9 +9,10 @@ import { evictMcpsByConnection } from '../mcp/host-manager';
 import {
   beginAuthorization, completeWithManualCallback, cancelAuthorization,
   listConnectionViews, getConnectionView, disconnect, removeConnection,
+  listMcpNamesByConnection,
   setOAuthChangeListener, setAuthorizationCompleteListener,
 } from './service';
-import { beginAuthorizationForMcp, bindConnectionToMcp } from './mcp-trigger';
+import { beginAuthorizationForMcp, bindConnectionToMcp, unbindConnectionFromMcp } from './mcp-trigger';
 import { listPresets } from './presets';
 import { OAuthFailure } from './types';
 
@@ -129,6 +130,16 @@ export function registerOAuthHandlers(): void {
   });
 
   ipcMain.handle('oauth:disconnect', (_evt, id: unknown) => disconnect(requireId(id, '连接 ID')));
+
+  // Task 16：共享提示数据源——某连接被哪些 MCP 绑定（认证区块 sharedOthers 计数）
+  ipcMain.handle('oauth:listBoundMcps', (_evt, id: unknown) =>
+    listMcpNamesByConnection(requireId(id, '连接 ID')),
+  );
+
+  // Task 16：解除绑定（清绑定两列 + 驱逐池实例；授权本体保留，disconnect 才吊销令牌）
+  ipcMain.handle('oauth:unbindMcp', (_evt, mcpName: unknown) =>
+    unbindConnectionFromMcp(requireId(mcpName, 'MCP 名称')),
+  );
 
   ipcMain.handle('oauth:removeConnection', (_evt, id: unknown) =>
     removeConnection(requireId(id, '连接 ID')),

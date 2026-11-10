@@ -24,6 +24,9 @@ const resourceList = vi.fn();
 const resourceGetMcpEditView = vi.fn();
 const resourceUpdateMcpEntry = vi.fn();
 const mcpStart = vi.fn();
+// Task 16：内联认证面（McpAuthSection mount 拉 listConnections；横幅流不直接触达
+// 其余方法，桩补齐以保 ipc.client 包装层完整）
+const oauthListConnections = vi.fn();
 
 const mockApi = {
   resource: {
@@ -33,6 +36,7 @@ const mockApi = {
     updateMcpEntry: resourceUpdateMcpEntry,
   },
   mcp: { start: mcpStart },
+  oauth: { listConnections: oauthListConnections },
 };
 
 const REGISTERED_ITEM: ResourceItem = {
@@ -69,6 +73,8 @@ beforeEach(() => {
   resourceList.mockResolvedValue([]); // 默认无同名
   resourceUpdateMcpEntry.mockResolvedValue(undefined);
   mcpStart.mockResolvedValue(undefined);
+  oauthListConnections.mockReset();
+  oauthListConnections.mockResolvedValue([]);
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
   useWorkspaceStore.setState({ workspaces: [WS], activeWorkspaceId: 'ws-active', loading: false, error: null });
 });
@@ -261,6 +267,33 @@ describe('RegisterMcpDialog — 既有语义回归', () => {
     fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
     await waitFor(() => expect(resourceRegisterMcp).toHaveBeenCalled());
     expect(resourceRegisterMcp.mock.calls[0]![0].version).toBeUndefined();
+  });
+});
+
+// ── Task 16：401 内联认证（spec §13，预览 v2 区块 G）─────────────────────
+describe('RegisterMcpDialog — 401 需要授权横幅（Task 16）', () => {
+  it('mcp.start 401 → 「需要授权」横幅 + 去授权按钮，错误红字保留', async () => {
+    mcpStart.mockRejectedValueOnce(new Error('MCP github-mcp 需要授权（HTTP 401）'));
+    const onClose = vi.fn();
+    render(<RegisterMcpDialog onClose={onClose} onSuccess={() => {}} />);
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'github-mcp' } });
+    fireEvent.change(screen.getByLabelText('命令'), { target: { value: 'npx' } });
+    fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
+    expect(await screen.findByText('该服务器需要 OAuth 授权（HTTP 401）')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '去授权' })).toBeInTheDocument();
+    expect(screen.getByText('MCP github-mcp 需要授权（HTTP 401）')).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('非 401 启动失败 → 不渲染横幅（错误路径专项）', async () => {
+    mcpStart.mockRejectedValueOnce(new Error('MCP runner 连接超时'));
+    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'runner' } });
+    fireEvent.change(screen.getByLabelText('命令'), { target: { value: 'cmd' } });
+    fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
+    expect(await screen.findByText('MCP runner 连接超时')).toBeInTheDocument();
+    expect(screen.queryByText('该服务器需要 OAuth 授权（HTTP 401）')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '去授权' })).not.toBeInTheDocument();
   });
 });
 

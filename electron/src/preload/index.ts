@@ -337,7 +337,7 @@ const api: ApiSurface = {
       invoke('mcp:callTool', workspaceId, mcpName, toolName, args),
     stop: (workspaceId, mcpName) => invoke('mcp:stop', workspaceId, mcpName),
   },
-  // OAuth 模块（spec 2026-11-10）：连接管理九通道 + 授权/列表两推送。
+  // OAuth 模块（spec 2026-11-10）：连接管理十一通道 + 授权/列表两推送。
   // 推送载荷最小化（authorizationChanged 带 pendingId/status，connectionsChanged
   // 仅 { at } 时间戳）——列表数据 renderer 收到后重拉，连接视图永不含令牌。
   oauth: {
@@ -350,6 +350,9 @@ const api: ApiSurface = {
     completeWithManualCallback: (payload) => invoke('oauth:completeWithManualCallback', payload),
     cancelAuthorization: (pendingId) => invoke('oauth:cancelAuthorization', pendingId),
     disconnect: (id) => invoke('oauth:disconnect', id),
+    // Task 16：某连接绑定的 MCP 名单（认证区块共享提示）/ 解除单服务器绑定
+    listBoundMcps: (id) => invoke('oauth:listBoundMcps', id),
+    unbindMcp: (mcpName) => invoke('oauth:unbindMcp', mcpName),
     removeConnection: (id) => invoke('oauth:removeConnection', id),
     onAuthorizationChanged: (callback) => {
       const handler = (_e: IpcRendererEvent, payload: AuthorizationChangedPayload): void =>
