@@ -27,6 +27,7 @@ const mcpStart = vi.fn();
 // Task 16：内联认证面（McpAuthSection mount 拉 listConnections + 订阅授权推送；
 // 订阅桩 impl 常驻——mockReset 会清掉返回退订函数的实现）
 const oauthListConnections = vi.fn();
+const oauthListBoundMcps = vi.fn();
 const oauthOnAuthorizationChanged = vi.fn(() => () => undefined);
 
 const mockApi = {
@@ -37,7 +38,11 @@ const mockApi = {
     updateMcpEntry: resourceUpdateMcpEntry,
   },
   mcp: { start: mcpStart },
-  oauth: { listConnections: oauthListConnections, onAuthorizationChanged: oauthOnAuthorizationChanged },
+  oauth: {
+    listConnections: oauthListConnections,
+    listBoundMcps: oauthListBoundMcps,
+    onAuthorizationChanged: oauthOnAuthorizationChanged,
+  },
 };
 
 const REGISTERED_ITEM: ResourceItem = {
@@ -76,6 +81,8 @@ beforeEach(() => {
   mcpStart.mockResolvedValue(undefined);
   oauthListConnections.mockReset();
   oauthListConnections.mockResolvedValue([]);
+  oauthListBoundMcps.mockReset();
+  oauthListBoundMcps.mockResolvedValue([]);
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
   useWorkspaceStore.setState({ workspaces: [WS], activeWorkspaceId: 'ws-active', loading: false, error: null });
 });
@@ -286,7 +293,26 @@ describe('RegisterMcpDialog — 新建态不渲染认证区块（R8）', () => {
     expect(screen.queryByText('认证')).toBeNull();
   });
 
-  it('编辑态（http）：渲染「认证」区块', async () => {
+  it('编辑态（http）：已绑定 OAuth → 直接渲染「认证」区块', async () => {
+    resourceGetMcpEditView.mockResolvedValue({
+      name: 'notion',
+      transport: 'streamable_http',
+      version: '1.0.0',
+      command: '',
+      args: [],
+      env: {},
+      url: 'https://mcp.notion.com/mcp',
+      headers: {},
+      enabled: true,
+      oauthConnectionId: 'conn-1',
+    });
+    render(<RegisterMcpDialog edit={{ name: 'notion' }} onClose={() => {}} onSuccess={() => {}} />);
+    expect(await screen.findByText('认证')).toBeInTheDocument();
+    // 已绑定 = 有状态要管理，直接可见；不出现「高级：OAuth 授权」折叠入口
+    expect(screen.queryByText('高级：OAuth 授权')).toBeNull();
+  });
+
+  it('编辑态（http）未绑定：认证收纳进「高级：OAuth 授权」折叠区且默认收起（R11）', async () => {
     resourceGetMcpEditView.mockResolvedValue({
       name: 'context7',
       transport: 'streamable_http',
@@ -299,7 +325,30 @@ describe('RegisterMcpDialog — 新建态不渲染认证区块（R8）', () => {
       enabled: true,
     });
     render(<RegisterMcpDialog edit={{ name: 'context7' }} onClose={() => {}} onSuccess={() => {}} />);
-    expect(await screen.findByText('认证')).toBeInTheDocument();
+    const summary = await screen.findByText('高级：OAuth 授权');
+    const details = summary.closest('details');
+    expect(details).not.toBeNull();
+    expect(details?.open).toBe(false);
+  });
+
+  it('编辑态传输类型锁定：点另一形态不切换（R11）', async () => {
+    resourceGetMcpEditView.mockResolvedValue({
+      name: 'my-mcp',
+      transport: 'stdio',
+      version: '1.0.0',
+      command: 'npx',
+      args: [],
+      env: {},
+      headers: {},
+      enabled: true,
+    });
+    render(<RegisterMcpDialog edit={{ name: 'my-mcp' }} onClose={() => {}} onSuccess={() => {}} />);
+    expect(await screen.findByLabelText('命令')).toBeInTheDocument();
+    const remote = screen.getByRole('radio', { name: '远程（HTTP）' });
+    expect(remote).toHaveProperty('disabled', true);
+    fireEvent.click(remote);
+    expect(screen.getByLabelText('命令')).toBeInTheDocument();
+    expect(screen.queryByLabelText('URL')).toBeNull();
   });
 });
 

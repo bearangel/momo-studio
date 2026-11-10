@@ -247,6 +247,7 @@ export function RegisterMcpDialog({
           value={transport}
           onChange={switchTransport}
           aria-label="传输类型"
+          disabled={Boolean(edit)}
         />
         {/* 名称是 agent 引用键（defaultMcps[].ref），编辑模式锁定不可改 */}
         <Input label="名称" value={name} onChange={(e) => { setOverwriteWarning(null); setName(e.target.value); }} placeholder="如：github" autoFocus disabled={Boolean(edit)} />
@@ -301,7 +302,10 @@ export function RegisterMcpDialog({
                 <KeyValueRows rows={headerRows} onChange={(rows) => { setOverwriteWarning(null); setHeaderRows(rows); }} keyPlaceholder="Header 名" valuePlaceholder="值" addLabel="添加请求头" ariaLabel="请求头" />
               </div>
             </details>
-            {edit && (
+            {/* R11：未绑定的编辑态不裸露 OAuth UI（无认证/手填 Authorization 的
+                MCP 会被误导）；已绑定 = 有状态要管理才直接展示。未绑定仍需
+                主动绑定时走折叠入口（或提交后 401 横幅路径） */}
+            {edit && oauthConnectionId && (
               <McpAuthSection
                 mcpName={edit.name}
                 transport="streamable_http"
@@ -312,6 +316,23 @@ export function RegisterMcpDialog({
                   setOauthEnvVar(next.envVar || undefined);
                 }}
               />
+            )}
+            {edit && !oauthConnectionId && (
+              <details className="border border-subtle rounded-md px-3 py-2">
+                <summary className="text-sm text-secondary cursor-pointer select-none">高级：OAuth 授权</summary>
+                <div className="pt-2">
+                  <McpAuthSection
+                    mcpName={edit.name}
+                    transport="streamable_http"
+                    connectionId={undefined}
+                    envVar={oauthEnvVar}
+                    onChange={(next) => {
+                      setOauthConnectionId(next.connectionId || undefined);
+                      setOauthEnvVar(next.envVar || undefined);
+                    }}
+                  />
+                </div>
+              </details>
             )}
           </>
         )}
