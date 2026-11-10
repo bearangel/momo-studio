@@ -171,19 +171,17 @@ export function McpAuthSection({ mcpName, transport, connectionId, envVar, onCha
             }`}>{STATUS_LABEL[bound.status]}</span>
             {sharedOthers > 0 && <span className="text-tertiary">此授权也被 {sharedOthers} 个其他服务器使用</span>}
           </div>
-          <div className="flex items-center justify-end gap-3">
+          <div className="flex items-center justify-end gap-2">
             {bound.status === 'needs_reauth' && (
               <Button size="sm" disabled={authorizeBusy} onClick={() => void authorize()}>重新授权</Button>
             )}
-            <button
-              type="button"
-              className="inline-flex items-center gap-1 text-xs text-accent-600 dark:text-accent-300 underline"
-              onClick={() => void startRevoke()}
-            >
-              <ShieldOff size={16} strokeWidth={1.75} aria-hidden />
+            {/* 同形不同色（R10）：两操作同为描边按钮，颜色编码危险级——
+                解除绑定 = 中性描边（可逆），撤销授权 = 红描边（吊销令牌·破坏性） */}
+            <Button size="sm" variant="danger-outline" onClick={() => void startRevoke()}>
+              <ShieldOff size={14} strokeWidth={1.75} aria-hidden />
               撤销授权…
-            </button>
-            <Button size="sm" variant="ghost" onClick={() => void unbind()}>解除绑定</Button>
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => void unbind()}>解除绑定</Button>
           </div>
           <div className="text-xs text-tertiary">
             解除绑定 = 保留授权，仅此服务器不再使用；撤销授权 = 吊销令牌（会影响共享它的服务器）。
