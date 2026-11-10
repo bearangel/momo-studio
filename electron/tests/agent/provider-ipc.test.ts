@@ -20,6 +20,19 @@ describe('provider-ipc testConnection', () => {
     expect(r.error).toContain('ETIMEDOUT');
   });
 
+  // 2026-11-10 OAuth Task 1：共享 isLoopbackHost 必须理解 WHATWG URL 的 IPv6 方括号。
+  it('http://[::1] 回环 IPv6 → 通过准入并继续发请求', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: false, status: 401, text: () => Promise.resolve('unauthorized'),
+    });
+    global.fetch = fetchSpy;
+    const r = await testProviderConnection({
+      baseUrl: 'http://[::1]:11434/v1', apiKey: 'k', model: 'm',
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(r.error).toBe('HTTP 401');
+  });
+
   // 2026-11-10 放宽：内网 oneapi/本地中转常见纯 http——放行探测，安全提醒不阻断（用户自担）
   it('非回环 http → 放行探测并附非加密 warning', async () => {
     const fetchSpy = vi.fn().mockResolvedValue({

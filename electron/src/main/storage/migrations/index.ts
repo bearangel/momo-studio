@@ -53,6 +53,7 @@ import { migration075 } from './075_global_tool_budget_default_unlimited';
 import { migration076 } from './076_browser_evaluate_default_on';
 import { migration077 } from './077_momo_resource_creation_tools';
 import { migration078 } from './078_momo_list_models_tool';
+import { migration079 } from './079_oauth_module';
 
 export interface Migration {
   version: number;
@@ -1218,6 +1219,13 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 查询（077 同式替换语义；新装库 no-op）。SQL 住在独立模块 078_momo_list_models_tool.ts。
     version: migration078.version,
     sql: migration078.sql,
+  },
+  {
+    // 公共 OAuth 模块（spec 2026-11-10）：oauth_connections 元数据表 +
+    // mcp_definitions 绑定两列（oauth_connection_id / oauth_env_var）。
+    // 密文不落库表（access/refresh/client_secret 走 keychain 门面）。
+    version: migration079.version,
+    sql: migration079.sql,
   },
 ];
 

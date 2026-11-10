@@ -47,6 +47,8 @@ import { emitPluginEvent } from '../plugin/event-sources';
 import { randomUUID } from 'node:crypto';
 import { ipcMain, shell, app } from 'electron';
 import { logger } from '../logger';
+// URL 准入口径（https 任意 + http 仅回环），2026-11-10 起与 OAuth / provider 共用
+import { isHttpsOrLoopbackHttp } from '../util/url-guard';
 import { listResources, resolveResourceById } from './library';
 import {
   parseResourceId,
@@ -478,16 +480,18 @@ export function registerResourceHandlers(): void {
     return previewBuiltinPresetAgent(slug);
   });
 
-  // misc:openExternal — 外链转系统浏览器（P2.3 spec §6）。显式 https 校验
+  // misc:openExternal — 外链转系统浏览器（P2.3 spec §6）。显式 URL 准入校验
   // （区别于 window.ts setWindowOpenHandler 的无条件转发——那是被动安全闸，
-  // 本通道是 renderer 主动调用的受控入口）；空串 / 非 https 一律中文拒绝，
+  // 本通道是 renderer 主动调用的受控入口）；空串 / 非准入 URL 一律中文拒绝，
   // 不触碰系统浏览器。
   ipcMain.handle('misc:openExternal', async (_evt, url: string) => {
     if (typeof url !== 'string' || url === '') {
       throw new Error('链接不能为空');
     }
-    if (!url.startsWith('https://')) {
-      throw new Error('仅支持打开 https:// 开头的链接');
+    // 2026-11-10 OAuth：本地研发需要打开 http://127.0.0.1 授权页——
+    // 口径统一为 https 任意 + http 仅回环（非回环 http 会明文传 token，拒绝）。
+    if (!isHttpsOrLoopbackHttp(url)) {
+      throw new Error('仅支持打开 https:// 或本机回环 http:// 链接');
     }
     await shell.openExternal(url);
   });
