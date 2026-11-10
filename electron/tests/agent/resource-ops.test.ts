@@ -22,6 +22,7 @@ import {
 import { updateGlobalSettings } from '../../src/main/settings/crud';
 import { getSkillsDir, listInstalled } from '../../src/main/skill/zip-uploader';
 import type { McpToolInfo } from '../../src/main/mcp/types';
+import { McpHttpError } from '../../src/main/mcp/http-client';
 import { executeResourceOp } from '../../src/main/agent/resource-ops';
 import type { ListModelsResult } from '../../src/main/agent/resource-ops';
 
@@ -344,6 +345,44 @@ describe('createMcp', () => {
     ).rejects.toThrow('connection refused');
     const row = getDb().prepare('SELECT 1 FROM mcp_definitions WHERE name = ?').get('dead-server');
     expect(row).toBeUndefined();
+  });
+
+  it('撞 OAuth 401：落库（未绑定）并返回 needsAuthorization 引导（R14，判定口径同 host-manager）', async () => {
+    const challengedClient = {
+      connect: async () => {
+        throw new McpHttpError('initialize', 401, 'Bearer resource_metadata="https://mcp.notion.com/.well-known/oauth-protected-resource"');
+      },
+      listTools: async () => [],
+      disconnect: async () => undefined,
+    };
+    const r = (await executeResourceOp(
+      'createMcp', { name: 'notion', transport: { kind: 'http', url: 'https://mcp.notion.com/mcp' } }, wsId,
+      { makeClient: () => challengedClient },
+    )) as { needsAuthorization?: boolean; notice?: string; toolCount: number };
+    expect(r.needsAuthorization).toBe(true);
+    expect(r.notice).toContain('资源库');
+    expect(r.toolCount).toBe(0);
+    // 落库且未绑定 OAuth（oauth_connection_id 空）——用户去资源库编辑弹窗走 401 横幅授权
+    const row = getDb()
+      .prepare('SELECT oauth_connection_id FROM mcp_definitions WHERE name = ?')
+      .get('notion') as { oauth_connection_id: string | null };
+    expect(row).toBeTruthy();
+    expect(row.oauth_connection_id).toBeNull();
+  });
+
+  it('非 OAuth 形状的 401（手填 key 失效等）仍零落库——原语义锁', async () => {
+    const plainFailClient = {
+      // 普通 Error 携带 401 字样：不经 McpHttpError 结构化通道，非 OAuth 挑战
+      connect: async () => { throw new Error('远程 MCP initialize 失败：HTTP 401'); },
+      listTools: async () => [],
+      disconnect: async () => undefined,
+    };
+    await expect(
+      executeResourceOp('createMcp', { name: 'bad-key', transport: { kind: 'http', url: 'https://x' } }, wsId, {
+        makeClient: () => plainFailClient,
+      }),
+    ).rejects.toThrow('HTTP 401');
+    expect(getDb().prepare('SELECT 1 FROM mcp_definitions WHERE name = ?').get('bad-key')).toBeUndefined();
   });
 
   it('连通成功后落库并返回工具名摘要（截断至 20）', async () => {
