@@ -6,7 +6,8 @@
 //   - 已绑定连接的 MCP 遇 401 → host-manager 翻译为 OAuthFailure('needs_reauth')，
 //     带 connectionId，且池不留死实例（下次调用可重走完整启动）
 //   - bindConnectionToMcp：写绑定 + env 变量名（stdio 传 envVar）并驱逐该 MCP 池实例
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+//   - unbindConnectionFromMcp（Task 16）：清绑定两列 + 驱逐池实例，不触碰令牌/授权层
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import fs from 'node:fs';
@@ -14,8 +15,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { getMcpConfig, getOrStartMcp, setMcpAuthResolver } from '../../src/main/mcp/host-manager';
+import * as hostManager from '../../src/main/mcp/host-manager';
 import { McpHttpError, HttpMcpClient } from '../../src/main/mcp/http-client';
-import { bindConnectionToMcp } from '../../src/main/oauth/mcp-trigger';
+import { bindConnectionToMcp, unbindConnectionFromMcp } from '../../src/main/oauth/mcp-trigger';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-mcp-401-${Date.now()}-${process.pid}`);
 
@@ -100,5 +102,42 @@ describe('bindConnectionToMcp', () => {
       .get('needs-auth') as { oauth_connection_id: string; oauth_env_var: string };
     expect(httpRow.oauth_connection_id).toBe('conn-1');
     expect(httpRow.oauth_env_var).toBeNull();
+  });
+});
+
+describe('unbindConnectionFromMcp', () => {
+  it('清绑定两列（连接 + 环境变量名）+ 驱逐该 MCP 池实例；不触碰令牌/授权层', async () => {
+    // 本 fixture 的 oauth_connections 表为空（conn-1 无连接行）——解绑能成功
+    // 即证明它不读连接/令牌层；驱逐以 call-through spy 断言（真实行为不替换）
+    getDb()
+      .prepare(
+        `INSERT INTO mcp_definitions (id, name, version, transport, command, args, oauth_connection_id, oauth_env_var)
+         VALUES ('m3', 'stdio-unbind', '1.0.0', 'stdio', 'npx', '["-y", "mcp"]', 'conn-3', 'GH_TOKEN')`,
+      )
+      .run();
+    const evictSpy = vi.spyOn(hostManager, 'evictMcpByName');
+
+    await unbindConnectionFromMcp('stdio-unbind');
+    await unbindConnectionFromMcp('needs-auth');
+
+    const rows = getDb()
+      .prepare('SELECT name, oauth_connection_id, oauth_env_var FROM mcp_definitions WHERE name IN (?, ?)')
+      .all('stdio-unbind', 'needs-auth') as Array<{
+        name: string;
+        oauth_connection_id: string | null;
+        oauth_env_var: string | null;
+      }>;
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.oauth_connection_id).toBeNull();
+      expect(row.oauth_env_var).toBeNull();
+    }
+    expect(evictSpy).toHaveBeenCalledWith('stdio-unbind');
+    expect(evictSpy).toHaveBeenCalledWith('needs-auth');
+    evictSpy.mockRestore();
+  });
+
+  it('未注册名 → 中文「未注册」拒绝（错误路径）', async () => {
+    await expect(unbindConnectionFromMcp('ghost')).rejects.toThrow(/未注册/);
   });
 });

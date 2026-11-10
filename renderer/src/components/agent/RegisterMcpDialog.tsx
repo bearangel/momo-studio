@@ -13,7 +13,7 @@
 // Task 16（spec §13，预览 v2 区块 G）：内联认证——远程态与 stdio 高级区渲染
 // McpAuthSection；启动 401（needs_reauth）→ McpNeedsAuthNotice 横幅 → 去授权
 // 就地完成 beginAuthorizationForMcp + AuthorizeDialog，成功后重试 mcp.start。
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ipc } from '../../ipc/client';
 import { isSupportedRemoteUrl } from '../../lib/mcp-json';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -197,8 +197,12 @@ export function RegisterMcpDialog({
     }
   };
 
-  /** 401 横幅「去授权」：就地发起授权（复用连接直接重试启动，否则开授权等待框） */
+  /** 401 横幅「去授权」：就地发起授权（复用连接直接重试启动，否则开授权等待框）。
+   *  ref 挡同 tick 双击重入（横幅按钮无禁用态，handler 侧自守） */
+  const authorizeRetryBusyRef = useRef(false);
   const authorizeAndRetry = async (): Promise<void> => {
+    if (authorizeRetryBusyRef.current) return;
+    authorizeRetryBusyRef.current = true;
     const targetName = edit ? edit.name : name.trim();
     if (!activeWorkspaceId) { setError('未激活的工作空间，无法启动 MCP'); return; }
     try {
@@ -218,6 +222,8 @@ export function RegisterMcpDialog({
       }
     } catch (err) {
       setError((err as Error).message);
+    } finally {
+      authorizeRetryBusyRef.current = false;
     }
   };
 

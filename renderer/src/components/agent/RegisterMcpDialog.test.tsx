@@ -24,9 +24,10 @@ const resourceList = vi.fn();
 const resourceGetMcpEditView = vi.fn();
 const resourceUpdateMcpEntry = vi.fn();
 const mcpStart = vi.fn();
-// Task 16：内联认证面（McpAuthSection mount 拉 listConnections；横幅流不直接触达
-// 其余方法，桩补齐以保 ipc.client 包装层完整）
+// Task 16：内联认证面（McpAuthSection mount 拉 listConnections + 订阅授权推送；
+// 订阅桩 impl 常驻——mockReset 会清掉返回退订函数的实现）
 const oauthListConnections = vi.fn();
+const oauthOnAuthorizationChanged = vi.fn(() => () => undefined);
 
 const mockApi = {
   resource: {
@@ -36,7 +37,7 @@ const mockApi = {
     updateMcpEntry: resourceUpdateMcpEntry,
   },
   mcp: { start: mcpStart },
-  oauth: { listConnections: oauthListConnections },
+  oauth: { listConnections: oauthListConnections, onAuthorizationChanged: oauthOnAuthorizationChanged },
 };
 
 const REGISTERED_ITEM: ResourceItem = {

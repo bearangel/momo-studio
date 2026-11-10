@@ -14,7 +14,8 @@
 //   - McpConfigView.schema 可选：bare=true 时键缺省（非 undefined 值）
 //   - headers 仅裸模式生效；config 值 trim 后空串剔除（同安装语义）
 //   - Task 16：headers 区下方渲染 McpAuthSection（认证管理点；oauth 绑定经
-//     view.oauthConnectionId/oauthEnvVar 回填，改动只入 renderer 态随提交闭环）
+//     view.oauthConnectionId/oauthEnvVar 回填。授权/绑定/解除在区块内即时经
+//     主进程落库并驱逐池，与表单「保存」提交相互独立）
 //
 // 交互照抄 McpConnectDialog / UploadSkillDialog 的锁定模式：提交期间禁用全部
 // 可交互元素（Esc / 遮罩关闭同样锁死）；失败红字留在弹窗可重试；成功后自关。
