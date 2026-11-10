@@ -194,3 +194,10 @@ W4 门禁预答：⑦生效层（spawn 工具装配 + skill 注册）与可见�
 - **技能内容质量**决定触发命中率：验收人工抽检 description 触发短语（沿 preset spec 既有要求）
 - catalog 计数测试 fixture 联动（§11）；office 契约锁不受影响（不动 office-assistant——本设计唯一 builtin agent 只动 Momo）
 - 接线锚（计划期已钉）：主进程子进程消息路由在 `runtime-spawner.ts`（per-child handler，`McpBridgeResponse` 同函数内）；启动再同步插 `index.ts` `runMigrations()` 之后（:95 一带，`reactivatePluginsOnBoot` 同风格）；MCP 落库复用 `registerMcpDefinition`（`mcp/host-manager.ts:351`，与 `resource:registerMcp` handler `resource/ipc.handlers.ts:251-275` 同输入形状）
+
+## 14. 验收迭代记录（2026-11-10 真机验收发现）
+
+- **model 块必填歧义修复**（commit 4f14cc54）：真机验收中 `create_agent` 两次因「spec.declarative.model.provider/model 不能为空」失败——parser 硬校验 ≠ 技能文案的「建议位」措辞，Momo 合理省略整个块。修复：`create-agent` 技能模板注释改「必填（校验要求）——值仅为建议位」+ NEVER 省略 model 块硬规则 + 工具 description 补必填契约；回归锁 ×2。
+- **新增 `list_models` 第 7 工具**（commits 7dc2d30e + 89bf098f）：补上「agent 看不到真实模型配置」的缺口。op `listModels`（只读，不广播）：`listProviders()` + `listProviderModels()` + `getGlobalSettings().defaultChatModel` 聚合，返回 `{ providers[{providerId,name,platform,isDefault,verified,defaultModel,models[modelId,enabled,contextWindow,vision]}], globalDefault }`——**显式丢弃 baseUrl/apiKey/api_key_ref**（最小暴露面 + 安全测试锁）。挂载链：Momo YAML v2.1.1（启动再同步 2.1.0→2.1.1 存量自动进位，用户模型配置保留）+ 迁移 078（65 项冻结名单，074→077 先例同构，077/074 断言改指 078）+ `create-agent` 技能工作流插入选模型指引（先查清单，未指定建议 globalDefault）。
+- **C1 修复真机验证通过**：验收会话中 `loadSkill('create-agent')` 返回完整正文 + `readResource(references/tool-catalog.md)` 读取成功——builtin 技能三层披露链路全通。
+
