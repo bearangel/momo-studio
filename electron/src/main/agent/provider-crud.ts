@@ -408,7 +408,8 @@ export async function fetchRemoteModels(providerId: string): Promise<string[]> {
   if (!provider) throw new Error(`供应商不存在: ${providerId}`);
   const apiKey = await getProviderApiKey(providerId);
 
-  // SSRF/传输安全校验：镜像 testConnection——http 仅允许本机回环，非本机必须 https
+  // 2026-11-10 放宽：非回环 http 不再强制 https（内网 oneapi/本地中转常见纯 http），
+  // 与 testConnection 同姿态——放行拉取，仅记日志提醒；协议白名单（http/https）外仍拒绝。
   let parsed: URL;
   try {
     parsed = new URL(provider.baseUrl);
@@ -419,7 +420,10 @@ export async function fetchRemoteModels(providerId: string): Promise<string[]> {
     throw new Error('仅支持 http/https 协议');
   }
   if (parsed.protocol === 'http:' && !isLoopbackHost(parsed.hostname)) {
-    throw new Error('非本机地址必须使用 https（防止凭据被截获）');
+    logger.warn('供应商 baseUrl 为非本机 http（明文传输），继续拉取模型列表（用户自担）', {
+      providerId,
+      host: parsed.hostname,
+    });
   }
 
   const base = provider.baseUrl.replace(/\/$/, '');

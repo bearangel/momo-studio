@@ -147,7 +147,7 @@ function ProviderConfigCard({ provider, onSaved, onDeleted, onSetDefault }: {
   const [baseUrl, setBaseUrl] = useState(provider.baseUrl);
   const [apiKey, setApiKey] = useState('');
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [testResult, setTestResult] = useState<{ ok: boolean; text: string; warning?: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
@@ -160,7 +160,7 @@ function ProviderConfigCard({ provider, onSaved, onDeleted, onSetDefault }: {
       const models = await ipc.provider.listModels(provider.id);
       const model = models.find((m) => m.enabled)?.modelId ?? '';
       const r = await ipc.provider.testConnection({ baseUrl, apiKey: key, model, providerId: provider.id });
-      setTestResult(r.ok ? { ok: true, text: '连接成功' } : { ok: false, text: r.error ?? '连接失败' });
+      setTestResult(r.ok ? { ok: true, text: '连接成功', warning: r.warning } : { ok: false, text: r.error ?? '连接失败', warning: r.warning });
       if (r.ok) {
         // D6：验证成功回写 last_verified_at 后刷新列表——「未验证」徽标即时消除
         // （loadProviders 未解构进本卡作用域——store 直取，语义同构）
@@ -232,8 +232,13 @@ function ProviderConfigCard({ provider, onSaved, onDeleted, onSetDefault }: {
             {testing ? '检查中…' : '检查连接'}
           </button>
           {testResult && (
-            <span className={cn('text-xs', testResult.ok ? 'text-status-success' : 'text-status-error')}>
-              {testResult.text}
+            <span className="flex flex-col">
+              <span className={cn('text-xs', testResult.ok ? 'text-status-success' : 'text-status-error')}>
+                {testResult.text}
+              </span>
+              {testResult.warning && (
+                <span className="text-xs text-status-warning">{testResult.warning}</span>
+              )}
             </span>
           )}
           <span className="flex-1" />

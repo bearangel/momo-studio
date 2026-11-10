@@ -1,7 +1,7 @@
 // fetchRemoteModels 行为测试（真实 DB + 内存 keychain + mock global.fetch）：
 //   - 成功：GET {baseUrl}/models + Bearer keychain key，解析 data[].id
 //   - 401 / 非 JSON / 坏形状（data 非数组 / 条目缺 id）→ 抛错
-//   - SSRF 防护：镜像 testConnection 的校验——非本机 http 拒绝，本机回环 http 放行
+//   - 协议白名单外拒绝；非本机 http 放行（2026-11-10 与 testConnection 同步放宽，安全提醒不阻断）
 //   - ghost provider → 供应商不存在
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import path from 'node:path';
@@ -109,10 +109,14 @@ describe('fetchRemoteModels 失败路径', () => {
 });
 
 describe('fetchRemoteModels SSRF 防护（镜像 testConnection 校验）', () => {
-  it('非本机 http 地址 → 抛「必须使用 https」且不发请求', async () => {
+  // 2026-11-10 放宽：内网 oneapi/本地中转常见纯 http——放行拉取（与 testConnection 同姿态）
+  it('非本机 http 地址 → 放行拉取（安全提醒不阻断）', async () => {
     const p = await createProvider({ name: 'A', baseUrl: 'http://192.168.1.5:8080/v1', apiKey: 'k' });
-    await expect(fetchRemoteModels(p.id)).rejects.toThrow(/https/);
-    expect(fetchMock).not.toHaveBeenCalled();
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [{ id: 'qwen-max' }] }),
+    });
+    await expect(fetchRemoteModels(p.id)).resolves.toEqual(['qwen-max']);
   });
 
   it('baseUrl 非 http(s) scheme → 抛错', async () => {

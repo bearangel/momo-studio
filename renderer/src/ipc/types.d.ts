@@ -2429,7 +2429,7 @@ export interface ApiSurface {
       model: string;
       /** D6：存量 provider 验证成功回写 last_verified_at（provider-ipc 现成机制——此前 renderer 从未传过） */
       providerId?: string;
-    }): Promise<{ ok: boolean; error?: string }>;
+    }): Promise<{ ok: boolean; error?: string; warning?: string }>;
     getApiKey(id: string): Promise<string | null>;
     /** Task 6：GET {baseUrl}/models 拉取远端模型 id 列表（失败抛 IPC error） */
     fetchModels(id: string): Promise<string[]>;

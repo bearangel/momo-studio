@@ -21,7 +21,7 @@ interface TestConnectionInput {
   /** 存量供应商验证（配置卡「检查连接」）：成功时回写 last_verified_at */
   providerId?: string;
 }
-interface TestConnectionResult { ok: boolean; error?: string; }
+interface TestConnectionResult { ok: boolean; error?: string; warning?: string; }
 
 /** 本机回环域名（允许 http，如本地 Ollama）；非本机必须 https 防 MITM/凭据外泄 */
 function isLoopbackHost(hostname: string): boolean {
@@ -37,7 +37,9 @@ export async function testProviderConnection(input: TestConnectionInput): Promis
   if (!input.model?.trim()) {
     return { ok: false, error: '请先填写模型名或在模型服务页拉取模型列表' };
   }
-  // scheme 校验：仅 http(s)；http 仅允许本机（本地 Ollama 等），非本机必须 https
+  // scheme 校验：仅 http(s)；协议白名单外（ftp/file 等）仍拒绝。
+  // 2026-11-10 放宽：非回环 http 不再强制 https（内网 oneapi/本地中转常见纯 http），
+  // 安全面改为返回非阻断 warning，由用户自行判断网络环境可信度。
   let parsed: URL;
   try {
     parsed = new URL(input.baseUrl);
@@ -47,9 +49,8 @@ export async function testProviderConnection(input: TestConnectionInput): Promis
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
     return { ok: false, error: '仅支持 http/https 协议' };
   }
-  if (parsed.protocol === 'http:' && !isLoopbackHost(parsed.hostname)) {
-    return { ok: false, error: '非本机地址必须使用 https（防止凭据被截获）' };
-  }
+  const insecureHttp = parsed.protocol === 'http:' && !isLoopbackHost(parsed.hostname);
+  const warning = insecureHttp ? '非加密 http 连接：API 密钥与数据将明文传输，请确认网络环境可信' : undefined;
   try {
     const base = input.baseUrl.replace(/\/$/, '');
     const resp = await fetch(`${base}/chat/completions`, {
@@ -59,7 +60,7 @@ export async function testProviderConnection(input: TestConnectionInput): Promis
     });
     // 不回传远端响应体（消除 SSRF 读出通道），仅回状态码
     if (!resp.ok) {
-      return { ok: false, error: `HTTP ${resp.status}` };
+      return { ok: false, error: `HTTP ${resp.status}`, warning };
     }
     // D7（走查 2026-10-12）：存量供应商验证成功 → 记录时刻（UI「未验证」徽标消除）
     if (input.providerId) {
@@ -72,9 +73,9 @@ export async function testProviderConnection(input: TestConnectionInput): Promis
         });
       }
     }
-    return { ok: true };
+    return { ok: true, warning };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, error: err instanceof Error ? err.message : String(err), warning };
   }
 }
 
