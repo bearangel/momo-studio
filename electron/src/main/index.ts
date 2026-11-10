@@ -46,6 +46,9 @@ import { initHub, stopHub } from './hub/index';
 // M3.0 T5：keychain 门面实例作用域（服务名分域）——hub token 之外的四族
 // 账户键（provider / agent / plugin）同受其隔离
 import { wireKeychainScope } from './storage/keychain';
+// OAuth 模块（spec 2026-11-10）：MCP 认证解析器接线 + 令牌生命周期扫描
+import { wireMcpOAuth } from './oauth/adapters/mcp';
+import { startOAuthLifecycle, stopOAuthLifecycle } from './oauth/lifecycle';
 
 // 单实例锁（v2.10 Windows 全平台化 Task 4）：同一用户数据目录只允许一个实例。
 // 无锁 = 已有实例在运行——app.quit() 后不进入任何 boot（whenReady 不注册、
@@ -212,6 +215,11 @@ if (!app.requestSingleInstanceLock()) {
         path.join(app.getPath('appData'), app.getName()),
       );
 
+      // OAuth 模块（spec 2026-11-10）：keychain 分域之后接线——解析器惰性取凭据，
+      // 生命周期扫描器启动即扫一遍临近过期连接（unref，不阻塞退出）
+      wireMcpOAuth();
+      startOAuthLifecycle();
+
       // M0 节点互联（spec 2026-10-23）：已配置 hub 且 keychain 有 device token 时
       // 自动连上（fire-and-forget——连接失败只写 lastError，不阻塞启动）。
       void initHub().catch((err) => {
@@ -305,5 +313,7 @@ if (!app.requestSingleInstanceLock()) {
     stopTaskRuntime();
     // M0 节点互联（spec 2026-10-23）：断开 hub 长连接（幂等——stop 内部先摘连接身份）
     stopHub();
+    // OAuth 令牌生命周期扫描器停扫（幂等；密钥环等资源由 OS 回收）
+    stopOAuthLifecycle();
   });
 }

@@ -22,6 +22,8 @@ import { registerAllocationHandlers } from '../workspace/ipc.handlers';
 import { registerGitPolicyHandlers } from '../workspace/git-policy';
 import { registerAuditHandlers } from '../audit/ipc.handlers';
 import { registerProviderHandlers } from '../agent/provider-ipc';
+// OAuth 模块（spec 2026-11-10）：连接管理九通道 + 授权/列表两推送
+import { registerOAuthHandlers } from '../oauth/ipc.handlers';
 import { registerSettingsIpc } from '../settings/ipc.handlers';
 import { registerSandboxIpc } from '../sandbox/ipc.handlers';
 import { registerMemoryIpc } from '../memory/ipc.handlers';
@@ -75,6 +77,7 @@ export function registerIpcHandlers(opts: WorkspaceIpcOpts = {}): void {
   registerGitPolicyHandlers();
   registerAuditHandlers();
   registerProviderHandlers();
+  registerOAuthHandlers();
   registerSettingsIpc();
   registerSandboxIpc();
   registerMemoryIpc();

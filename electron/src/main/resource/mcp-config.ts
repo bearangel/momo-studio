@@ -212,6 +212,9 @@ export interface McpEditView {
   cwd?: string;
   /** 组⑤：启停态（编辑保存后据此决定是否跳过 mcp.start 预热） */
   enabled: boolean;
+  /** OAuth 绑定（无绑定为 undefined；与 renderer types.d.ts 镜像同步） */
+  oauthConnectionId?: string;
+  oauthEnvVar?: string;
 }
 
 /** 读全字段编辑视图（未注册抛中文错） */
@@ -229,6 +232,8 @@ export function getMcpEditView(name: string): McpEditView {
     headers: def.transport === 'streamable_http' ? (def.headers ?? {}) : {},
     cwd: def.cwd,
     enabled: def.enabled,
+    oauthConnectionId: def.oauthConnectionId,
+    oauthEnvVar: def.oauthEnvVar,
   };
 }
 

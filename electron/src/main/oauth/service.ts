@@ -51,6 +51,17 @@ export function emitOAuthChange(
   }
 }
 
+export type OnAuthorizationComplete = (pendingId: string, view: ConnectionView) => void;
+
+let authorizationCompleteListener: OnAuthorizationComplete | null = null;
+
+/** loopback 异步完成时通知 IPC 层（回写 MCP 绑定 + 推送 renderer） */
+export function setAuthorizationCompleteListener(
+  listener: OnAuthorizationComplete | null,
+): void {
+  authorizationCompleteListener = listener;
+}
+
 export interface ManualAuthInput {
   displayName: string;
   authorizationEndpoint: string;
@@ -109,6 +120,7 @@ export function __resetOAuthServiceForTest(): void {
   for (const item of pending.values()) void item.server.close();
   pending.clear();
   changeListener = null;
+  authorizationCompleteListener = null;
 }
 
 export function toConnectionView(conn: OAuthConnection): ConnectionView {
@@ -411,7 +423,15 @@ async function finishAuthorization(pendingId: string, code: string): Promise<Con
     );
   }
 
-  return toConnectionView(stored);
+  const view = toConnectionView(stored);
+  try {
+    authorizationCompleteListener?.(pendingId, view);
+  } catch (err) {
+    // 与 emitOAuthChange 同语义：监听方异常不得影响主流程——此处连接已落库，
+    // 抛穿会让浏览器回调路径误记「授权未完成」、手动回调路径向 renderer 误报失败
+    logger.warn('OAuth 授权完成监听异常', { error: (err as Error).message });
+  }
+  return view;
 }
 
 /**
