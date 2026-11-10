@@ -6,7 +6,8 @@
 // workspaceId——子进程不可伪造归属。
 import { createCustomDef, addMember, generateAgentUserId } from './crud';
 import { listAgentDefinitions, getAgentDefinition, listMembers } from './agent-queries';
-import { getProvider } from './provider-crud';
+import { getProvider, listProviders, listProviderModels } from './provider-crud';
+import { getGlobalSettings } from '../settings/crud';
 import { parseAgentManifest } from './manifest-parser';
 import { createTeam, listTeams } from './team';
 import { getSkillsDir, listInstalled as listInstalledSkills } from '../skill/zip-uploader';
@@ -22,7 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { logger } from '../logger';
 
-/** 白名单 op 枚举——桥面只放行这六个入口（spec §6：桥不是通用 RPC 面） */
+/** 白名单 op 枚举——桥面只放行这七个入口（spec §6：桥不是通用 RPC 面） */
 export const RESOURCE_OP_NAMES = [
   'list',
   'createAgent',
@@ -30,6 +31,7 @@ export const RESOURCE_OP_NAMES = [
   'createSkill',
   'createMcp',
   'createTeam',
+  'listModels',
 ] as const;
 
 /** resource_list 聚合清单（缺省全量；type 过滤时仅填对应段） */
@@ -74,6 +76,16 @@ export interface CreateTeamResult {
   memberCount: number;
 }
 
+/** list_models 返回（最小暴露面：绝不携带 baseUrl / apiKey / api_key_ref） */
+export interface ListModelsResult {
+  providers: Array<{
+    providerId: string; name: string; platform: string; isDefault: boolean;
+    verified: boolean; defaultModel: string | null;
+    models: Array<{ modelId: string; enabled: boolean; contextWindow: number | null; vision: boolean }>;
+  }>;
+  globalDefault: { providerId: string; modelId: string } | null;
+}
+
 /** op 分发。args 一律视为不可信输入（形状先验，非法即抛中文错误）。 */
 export async function executeResourceOp(
   op: string,
@@ -92,6 +104,7 @@ export async function executeResourceOp(
     case 'createSkill': return opCreateSkill(a);
     case 'createMcp': return opCreateMcp(a, deps);
     case 'createTeam': return opCreateTeam(a, workspaceId);
+    case 'listModels': return opListModels();
     default: throw new Error(`未知 resource op: ${op}`);
   }
 }
@@ -347,6 +360,26 @@ function opCreateTeam(a: Record<string, unknown>, workspaceId: string): CreateTe
   const leaderInstanceId = str(a['leaderInstanceId'], 'leaderInstanceId');
   const team = createTeam(workspaceId, name, icon, memberInstanceIds, leaderInstanceId);
   return { teamId: team.id, name: team.name, memberCount: team.members.length };
+}
+
+// ── listModels（只读：agent 建号选模型的真清单——与 UI 供应商页同链。输出白名单
+//    字段——baseUrl/apiKey/api_key_ref 在此层显式丢弃，不进会话上下文）──
+function opListModels(): ListModelsResult {
+  const providers = listProviders().map((p) => ({
+    providerId: p.id,
+    name: p.name,
+    platform: p.platform,
+    isDefault: p.isDefault,
+    verified: p.lastVerifiedAt !== null,
+    defaultModel: p.defaultModel,
+    models: listProviderModels(p.id).map((m) => ({
+      modelId: m.modelId,
+      enabled: m.enabled,
+      contextWindow: m.contextWindow,
+      vision: m.vision,
+    })),
+  }));
+  return { providers, globalDefault: getGlobalSettings().defaultChatModel ?? null };
 }
 
 // ── 入参形状小工具（no any：unknown 先验后窄化）──

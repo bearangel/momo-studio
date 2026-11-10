@@ -40,9 +40,9 @@ export function requestResourceOp(op: string, args: Record<string, unknown>): Pr
 /** 影响成员/团队可见性的 op——成功后额外广播既有 agent:runtimeChanged（MainLayout 已监听） */
 export const MEMBER_AFFECTING_OPS = ['createAgent', 'addMember', 'createTeam'] as const;
 
-/** 只读 op——成功后不触发任何刷新广播（list 高频且无状态变更；技能还强制「创建前
- *  先盘点」，无差别广播会让 renderer 三 store 每次白重拉） */
-const READ_ONLY_OPS: ReadonlySet<string> = new Set(['list']);
+/** 只读 op——成功后不触发任何刷新广播（list / listModels 高频且无状态变更；技能还
+ *  强制「创建前先盘点」，无差别广播会让 renderer 三 store 每次白重拉） */
+const READ_ONLY_OPS: ReadonlySet<string> = new Set(['list', 'listModels']);
 
 type OpExecutor = (op: string, args: unknown, workspaceId: string) => Promise<unknown>;
 
@@ -76,7 +76,7 @@ export async function handleResourceOpMessage(
   return true;
 }
 
-/** op 成功后的刷新广播：只读 op（list）不广播；写 op 恒发 resource:changed，
+/** op 成功后的刷新广播：只读 op（list / listModels）不广播；写 op 恒发 resource:changed，
  *  member 类叠加 agent:runtimeChanged */
 export function notifyResourceOpSucceeded(op: string): void {
   if (READ_ONLY_OPS.has(op)) return;

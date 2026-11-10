@@ -10,11 +10,12 @@ description: 用户要求新建 agent / 新建智能体 / 定制一个助手 / �
 ## 工作流
 
 1. **问清定位**：一句话职能（做什么/不做什么）+ 典型任务示例；用户已说清则不追问
-2. **复述确认**（创建前必做）：向用户复述——名称、slug、一句话职能、工具面清单、是否立即加入当前工作空间
-3. **起草 manifest**（K8s 风格，模板见下），工具只授任务必需的（最小授权——速查表 readResource 读 create-agent/references/tool-catalog.md）
-4. 调 `create_agent`（manifestYaml 全文；要立即可用则 addToWorkspace: true）
-5. 校验失败会逐字段报错——修正 YAML 后重试，不换 slug 逃避
-6. 成功后报告 definitionId 与 slug，指引用户在资源库查看/编辑
+2. **选模型**：先调 `list_models` 查真实可用清单；用户指定了就填指定值，没指定就建议 globalDefault（并在复述时说明默认绑定来源）
+3. **复述确认**（创建前必做）：向用户复述——名称、slug、一句话职能、工具面清单、是否立即加入当前工作空间
+4. **起草 manifest**（K8s 风格，模板见下），工具只授任务必需的（最小授权——速查表 readResource 读 create-agent/references/tool-catalog.md）
+5. 调 `create_agent`（manifestYaml 全文；要立即可用则 addToWorkspace: true）
+6. 校验失败会逐字段报错——修正 YAML 后重试，不换 slug 逃避
+7. 成功后报告 definitionId 与 slug，指引用户在资源库查看/编辑
 
 ## manifest 模板
 

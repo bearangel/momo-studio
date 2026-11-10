@@ -7,19 +7,21 @@ const fakeOp = (result: unknown) => async (_op: string, _args: Record<string, un
 const mk = (r: unknown) => new ResourceTools(fakeOp(r));
 
 describe('ResourceTools', () => {
-  it('六工具名进目录全集（58→64）', () => {
+  it('七工具名进目录全集（64→65）', () => {
     const names = new ResourceTools(fakeOp(null)).getDefs().map((d) => d.name);
     expect(names).toEqual([
-      'resource_list', 'create_agent', 'add_agent_member', 'create_skill', 'create_mcp', 'create_team',
+      'resource_list', 'create_agent', 'add_agent_member', 'create_skill', 'create_mcp', 'create_team', 'list_models',
     ]);
     for (const n of names) expect(ALL_BUILTIN_TOOLS).toContain(n);
   });
 
-  it('handles 精确匹配六个名', () => {
+  it('handles 精确匹配七个名', () => {
     const t = mk(null);
     expect(t.handles('create_agent')).toBe(true);
     expect(t.handles('create_agent_v2')).toBe(false);
     expect(t.handles('resource_list')).toBe(true);
+    expect(t.handles('list_models')).toBe(true);
+    expect(t.handles('list_model')).toBe(false);
   });
 
   it('execute 映射 op 并 JSON 化结果', async () => {

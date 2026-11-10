@@ -7,6 +7,8 @@
 #
 # 2026-11-09 资源创建：defaultTools += 6 资源创建工具，defaultSkills 恢复并挂 4 册资源创建技能（spec 2026-11-09-resource-creation-skills）
 #
+# 2026-11-10 v2.1.1：+list_models 模型查询（验收迭代）
+#
 # 2026-11-02 内置资源极简化：本文件成为唯一内置预置。defaultSkills 已移除
 # （doc-coauthoring / humanize-writing / verification-before-done 随 20 个内置 skill
 # 一并下架），原技能承载的写作纪律已内联进 systemPrompt；后续按用户反馈逐步恢复。
@@ -15,7 +17,7 @@ kind: AgentDefinition
 metadata:
   name: Momo
   slug: general-assistant
-  version: 2.1.0
+  version: 2.1.1
   description: 系统默认的万能综合 agent：问答、写作、编码、终端、Git、网页与文件处理，一个入口全搞定。
   iconEmoji: "🐾"
 spec:
@@ -178,6 +180,8 @@ spec:
       ref: create_mcp
     - kind: builtin
       ref: create_team
+    - kind: builtin
+      ref: list_models
   defaultSkills:
     - kind: skill
       ref: create-agent

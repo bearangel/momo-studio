@@ -7,7 +7,7 @@ import path from 'node:path';
 
 const SKILLS_ROOT = path.join(__dirname, '../../resources/skills');
 const SLUGS = ['create-agent', 'create-skill', 'create-mcp', 'build-team'] as const;
-const TOOL_NAMES = ['resource_list', 'create_agent', 'add_agent_member', 'create_skill', 'create_mcp', 'create_team'];
+const TOOL_NAMES = ['resource_list', 'create_agent', 'add_agent_member', 'create_skill', 'create_mcp', 'create_team', 'list_models'];
 
 describe('builtin 资源创建技能', () => {
   it.each(SLUGS)('%s：SKILL.md 在位且 frontmatter 完整', (slug) => {
@@ -47,7 +47,7 @@ describe('builtin 资源创建技能', () => {
     expect(md).toContain('回显');
   });
 
-  it('全部工具名引用都在六工具集内（防拼错工具名）', () => {
+  it('全部工具名引用都在七工具集内（防拼错工具名）', () => {
     for (const slug of SLUGS) {
       const md = fs.readFileSync(path.join(SKILLS_ROOT, slug, 'SKILL.md'), 'utf-8');
       const mentioned = TOOL_NAMES.filter((t) => new RegExp(`\\b${t}\\b`).test(md));

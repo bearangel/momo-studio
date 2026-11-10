@@ -11,11 +11,19 @@ import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keychain';
 import { addMember } from '../../src/main/agent/crud';
-import { createProvider } from '../../src/main/agent/provider-crud';
+import {
+  createProvider,
+  setDefaultProvider,
+  markProviderVerified,
+  upsertProviderModel,
+  setProviderModelEnabled,
+  setProviderModelWindow,
+} from '../../src/main/agent/provider-crud';
 import { updateGlobalSettings } from '../../src/main/settings/crud';
 import { getSkillsDir, listInstalled } from '../../src/main/skill/zip-uploader';
 import type { McpToolInfo } from '../../src/main/mcp/types';
 import { executeResourceOp } from '../../src/main/agent/resource-ops';
+import type { ListModelsResult } from '../../src/main/agent/resource-ops';
 
 // 与 crud-custom-def.test.ts 同款 mock：crud.ts 引入的 runtime 依赖在测试环境不可用
 vi.mock('../../src/main/agent/runtime-status', () => ({
@@ -260,6 +268,46 @@ description: 写结构化报告时使用
     const installed = listInstalled().find((s) => s.slug === 'ref-skill');
     expect(installed?.source).toBe('custom');
     expect(installed?.name).toBe('报告撰写');
+  });
+});
+
+describe('listModels', () => {
+  it('返回供应商与模型清单逐字段（含 globalDefault），且不含 apiKey/baseUrl（最小暴露面）', async () => {
+    // 种：置默认 + 标记已验证 + 2 行模型（一 enabled 一 disabled）+ 全局默认聊天模型
+    setDefaultProvider(provId);
+    markProviderVerified(provId);
+    upsertProviderModel(provId, 'glm-5.3', true, true);
+    setProviderModelWindow(provId, 'glm-5.3', 131072);
+    upsertProviderModel(provId, 'glm-4.5-air', true, false);
+    setProviderModelEnabled(provId, 'glm-4.5-air', false);
+    updateGlobalSettings({ defaultChatModel: { providerId: provId, modelId: 'glm-5.3' } });
+
+    const r = (await executeResourceOp('listModels', {}, wsId)) as ListModelsResult;
+
+    expect(r.providers).toHaveLength(1);
+    const p = r.providers[0]!;
+    expect(p.providerId).toBe(provId);
+    expect(p.name).toBe('GLM');
+    expect(p.platform).toBe('openai');
+    expect(p.isDefault).toBe(true);
+    expect(p.verified).toBe(true);
+    expect(p.defaultModel).toBeNull();
+    const byModel = new Map(p.models.map((m) => [m.modelId, m]));
+    expect(byModel.get('glm-5.3')).toEqual({ modelId: 'glm-5.3', enabled: true, contextWindow: 131072, vision: true });
+    expect(byModel.get('glm-4.5-air')).toEqual({ modelId: 'glm-4.5-air', enabled: false, contextWindow: null, vision: false });
+    expect(r.globalDefault).toEqual({ providerId: provId, modelId: 'glm-5.3' });
+    // 安全锁：序列化结果不得泄漏凭证或端点字段
+    const json = JSON.stringify(r);
+    expect(json).not.toContain('apiKey');
+    expect(json).not.toContain('baseUrl');
+  });
+
+  it('globalDefault 清设置后返回 null', async () => {
+    updateGlobalSettings({ defaultChatModel: { providerId: provId, modelId: 'glm-5.3' } });
+    // undefined 键被 JSON.stringify 丢弃 = 清设置（读回 undefined → null）
+    updateGlobalSettings({ defaultChatModel: undefined });
+    const r = (await executeResourceOp('listModels', {}, wsId)) as ListModelsResult;
+    expect(r.globalDefault).toBeNull();
   });
 });
 

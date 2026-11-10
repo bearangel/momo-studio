@@ -1,6 +1,6 @@
 // electron/src/main/agent/tools/resource-tools.ts
 //
-// 资源创建工具模块（spec §5）：六个工具经 resource-ops 桥在主进程执行。
+// 资源创建工具模块（spec §5）：七个工具经 resource-ops 桥在主进程执行。
 // workspaceId 不经工具入参——主进程侧从 spawn 上下文注入（子进程不可伪造）。
 // callOp 构造注入：生产默认 requestResourceOp；测试注入 fake（momo-test-rules）。
 import type { LLMToolDef } from '../llm-provider';
@@ -25,6 +25,7 @@ const TOOL_TO_OP: Record<string, string> = {
   create_skill: 'createSkill',
   create_mcp: 'createMcp',
   create_team: 'createTeam',
+  list_models: 'listModels',
 };
 
 // 目录元数据：defaultOn=false = 非默认启用（资源创建属写操作，不进 Tier 1 公共默认集）
@@ -35,6 +36,7 @@ const CATALOG_META: Record<string, ToolMeta> = {
   create_skill: { displayName: '创建技能', category: '资源创建', categoryEmoji: '🧱', defaultOn: false },
   create_mcp: { displayName: '接入 MCP', category: '资源创建', categoryEmoji: '🧱', defaultOn: false },
   create_team: { displayName: '组建团队', category: '资源创建', categoryEmoji: '🧱', defaultOn: false },
+  list_models: { displayName: '查询模型清单', category: '资源创建', categoryEmoji: '🧱', defaultOn: false },
 };
 
 export class ResourceTools implements ToolModule {
@@ -130,6 +132,15 @@ export class ResourceTools implements ToolModule {
             leaderInstanceId: { type: 'string' },
           },
           required: ['name', 'memberInstanceIds', 'leaderInstanceId'],
+        },
+      },
+      {
+        name: 'list_models',
+        description:
+          '查询系统已配置的模型供应商与可用模型清单（含全局默认聊天模型 globalDefault）。创建 agent 需要选模型、用户问有哪些模型可用、或需要向用户复述模型选项时使用。返回不含 API 密钥。用户未指定时优先建议 globalDefault。',
+        inputSchema: {
+          type: 'object',
+          properties: {},
         },
       },
     ];
