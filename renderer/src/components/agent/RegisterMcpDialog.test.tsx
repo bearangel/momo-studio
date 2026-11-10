@@ -272,6 +272,37 @@ describe('RegisterMcpDialog — 既有语义回归', () => {
 });
 
 // ── Task 16：401 内联认证（spec §13，预览 v2 区块 G）─────────────────────
+// ── R8：新建态不渲染认证区块（认证只在编辑态与提交后 401 横幅出现；
+// 新建时 MCP 尚未注册，区块里的「授权」必然失败，展示即误导）──────────
+describe('RegisterMcpDialog — 新建态不渲染认证区块（R8）', () => {
+  it('新建（默认 stdio 态）：无「认证」区块', () => {
+    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
+    expect(screen.queryByText('认证')).toBeNull();
+  });
+
+  it('新建切远程（HTTP）态：仍无「认证」区块', () => {
+    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
+    fireEvent.click(screen.getByRole('radio', { name: '远程（HTTP）' }));
+    expect(screen.queryByText('认证')).toBeNull();
+  });
+
+  it('编辑态（http）：渲染「认证」区块', async () => {
+    resourceGetMcpEditView.mockResolvedValue({
+      name: 'context7',
+      transport: 'streamable_http',
+      version: '1.0.0',
+      command: '',
+      args: [],
+      env: {},
+      url: 'https://mcp.context7.com/mcp',
+      headers: {},
+      enabled: true,
+    });
+    render(<RegisterMcpDialog edit={{ name: 'context7' }} onClose={() => {}} onSuccess={() => {}} />);
+    expect(await screen.findByText('认证')).toBeInTheDocument();
+  });
+});
+
 describe('RegisterMcpDialog — 401 需要授权横幅（Task 16）', () => {
   it('mcp.start 401 → 「需要授权」横幅 + 去授权按钮，错误红字保留', async () => {
     mcpStart.mockRejectedValueOnce(new Error('MCP github-mcp 需要授权（HTTP 401）'));

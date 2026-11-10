@@ -267,16 +267,18 @@ export function RegisterMcpDialog({
               <div className="flex flex-col gap-2 pt-2">
                 <KeyValueRows rows={envRows} onChange={(rows) => { setOverwriteWarning(null); setEnvRows(rows); }} keyPlaceholder="变量名" valuePlaceholder="值" addLabel="添加环境变量" ariaLabel="环境变量" />
                 <Input label="工作目录" value={cwd} onChange={(e) => { setOverwriteWarning(null); setCwd(e.target.value); }} placeholder="如：/opt/project（可选，子进程 cwd）" />
-                <McpAuthSection
-                  mcpName={edit ? edit.name : name.trim()}
-                  transport="stdio"
-                  connectionId={oauthConnectionId}
-                  envVar={oauthEnvVar}
-                  onChange={(next) => {
-                    setOauthConnectionId(next.connectionId || undefined);
-                    setOauthEnvVar(next.envVar || undefined);
-                  }}
-                />
+                {edit && (
+                  <McpAuthSection
+                    mcpName={edit.name}
+                    transport="stdio"
+                    connectionId={oauthConnectionId}
+                    envVar={oauthEnvVar}
+                    onChange={(next) => {
+                      setOauthConnectionId(next.connectionId || undefined);
+                      setOauthEnvVar(next.envVar || undefined);
+                    }}
+                  />
+                )}
               </div>
             </details>
           </>
@@ -295,16 +297,18 @@ export function RegisterMcpDialog({
                 <KeyValueRows rows={headerRows} onChange={(rows) => { setOverwriteWarning(null); setHeaderRows(rows); }} keyPlaceholder="Header 名" valuePlaceholder="值" addLabel="添加请求头" ariaLabel="请求头" />
               </div>
             </details>
-            <McpAuthSection
-              mcpName={edit ? edit.name : name.trim()}
-              transport="streamable_http"
-              connectionId={oauthConnectionId}
-              envVar={oauthEnvVar}
-              onChange={(next) => {
-                setOauthConnectionId(next.connectionId || undefined);
-                setOauthEnvVar(next.envVar || undefined);
-              }}
-            />
+            {edit && (
+              <McpAuthSection
+                mcpName={edit.name}
+                transport="streamable_http"
+                connectionId={oauthConnectionId}
+                envVar={oauthEnvVar}
+                onChange={(next) => {
+                  setOauthConnectionId(next.connectionId || undefined);
+                  setOauthEnvVar(next.envVar || undefined);
+                }}
+              />
+            )}
           </>
         )}
 
