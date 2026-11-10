@@ -10,7 +10,7 @@ description: 用户要求新建 agent / 新建智能体 / 定制一个助手 / �
 ## 工作流
 
 1. **问清定位**：一句话职能（做什么/不做什么）+ 典型任务示例；用户已说清则不追问
-2. **选模型**：先调 `list_models` 查真实可用清单；用户指定了就填指定值，没指定就建议 globalDefault（并在复述时说明默认绑定来源）
+2. **选模型**：先调 `list_models` 查真实清单。三方契约——manifest `model.provider` 只填协议平台 `openai` 或 `anthropic`（= list_models 的 `platform` 字段，**不是**供应商名/providerId）；manifest `model.model` 填建议模型名。**真实绑定**：调 `create_agent` 时传 `modelProviderId`（= list_models 的 `providerId`）与 `modelName`（= 所选 `modelId`）；用户未指定且不传时走全局默认聊天模型兜底，复述时说明绑定来源
 3. **复述确认**（创建前必做）：向用户复述——名称、slug、一句话职能、工具面清单、是否立即加入当前工作空间
 4. **起草 manifest**（K8s 风格，模板见下），工具只授任务必需的（最小授权——速查表 readResource 读 create-agent/references/tool-catalog.md）
 5. 调 `create_agent`（manifestYaml 全文；要立即可用则 addToWorkspace: true）
@@ -38,7 +38,7 @@ spec:
       纪律：
       - NEVER: ...
       - ALWAYS: ...
-    model:            # 必填（校验要求：provider/model 不能为空）——但值仅为建议位：真实绑定 = 用户已配 > 全局默认聊天模型
+    model:            # 必填（校验要求）。provider 填平台枚举 openai/anthropic（list_models 的 platform 字段），非供应商名；值均为建议位，真实绑定走 create_agent 的 modelProviderId 入参
       provider: anthropic
       model: claude-sonnet-4-5
   defaultTools:       # 只授必需工具（kind: builtin + 精确工具名）

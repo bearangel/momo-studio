@@ -42,6 +42,12 @@ describe('builtin 资源创建技能', () => {
     expect(md).toContain('NEVER: 省略 spec.declarative.model');
   });
 
+  it('create-agent 模型三方契约在场（回归锁：agent 曾把 manifest model.provider 填成供应商名而非平台枚举）', () => {
+    const md = fs.readFileSync(path.join(SKILLS_ROOT, 'create-agent/SKILL.md'), 'utf-8');
+    expect(md).toContain('平台枚举');
+    expect(md).toContain('modelProviderId');
+  });
+
   it('create-mcp 凭证纪律在场', () => {
     const md = fs.readFileSync(path.join(SKILLS_ROOT, 'create-mcp/SKILL.md'), 'utf-8');
     expect(md).toContain('回显');

@@ -37,6 +37,12 @@ describe('ResourceTools', () => {
     expect(def?.description).toContain('必填');
   });
 
+  it('模型三方契约在工具 description（回归锁：agent 曾把 manifest model.provider 填成供应商名 glm-code 而非平台枚举）', () => {
+    const defs = new ResourceTools(fakeOp(null)).getDefs();
+    expect(defs.find((d) => d.name === 'create_agent')?.description).toContain('platform 字段');
+    expect(defs.find((d) => d.name === 'list_models')?.description).toContain('modelProviderId');
+  });
+
   it('无 IPC 通道时干净失败（默认 callOp 无 process.send → 中文 reject）', async () => {
     const t = new ResourceTools(); // 不注入——生产默认 requestResourceOp
     await expect(t.execute('resource_list', {}, ctx)).rejects.toThrow('未建立 IPC 通道');

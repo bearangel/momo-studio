@@ -56,12 +56,14 @@ export class ResourceTools implements ToolModule {
       {
         name: 'create_agent',
         description:
-          '创建 agent 定义（K8s 风格 YAML manifest 全文入参，格式见 create-agent 技能）。slug 全局唯一，冲突会拒绝；manifest 的 model 块必填（provider/model 填建议值；真实绑定走全局默认聊天模型兜底）。addToWorkspace=true 时同时加入当前工作空间。创建前必须向用户复述名称/slug/工具面。',
+          '创建 agent 定义（K8s 风格 YAML manifest 全文入参，格式见 create-agent 技能）。slug 全局唯一，冲突会拒绝；manifest 的 model 块必填（provider/model 填建议值；真实绑定走全局默认聊天模型兜底）。manifest 的 model 块：provider 只接受 openai/anthropic（协议平台，取 list_models 的 platform 字段）；真实供应商绑定用本工具的 modelProviderId/modelName 入参（取 list_models 的 providerId/modelId）。addToWorkspace=true 时同时加入当前工作空间。创建前必须向用户复述名称/slug/工具面。',
         inputSchema: {
           type: 'object',
           properties: {
             manifestYaml: { type: 'string', description: '完整 agent manifest YAML' },
             addToWorkspace: { type: 'boolean', description: '创建后加入当前工作空间（默认 false）' },
+            modelProviderId: { type: 'string', description: '真实供应商绑定 id（= list_models 返回的 providerId；可选，缺省走全局默认聊天模型）' },
+            modelName: { type: 'string', description: '所选模型 id（= list_models 的 modelId，与 modelProviderId 成对传）' },
           },
           required: ['manifestYaml'],
         },
@@ -137,7 +139,7 @@ export class ResourceTools implements ToolModule {
       {
         name: 'list_models',
         description:
-          '查询系统已配置的模型供应商与可用模型清单（含全局默认聊天模型 globalDefault）。创建 agent 需要选模型、用户问有哪些模型可用、或需要向用户复述模型选项时使用。返回不含 API 密钥。用户未指定时优先建议 globalDefault。',
+          '查询系统已配置的模型供应商与可用模型清单（含全局默认聊天模型 globalDefault）。创建 agent 需要选模型、用户问有哪些模型可用、或需要向用户复述模型选项时使用。返回不含 API 密钥。用户未指定时优先建议 globalDefault。providers[].providerId 供 create_agent 的 modelProviderId 入参使用；platform 供 manifest model 块的 provider 建议值使用。',
         inputSchema: {
           type: 'object',
           properties: {},
