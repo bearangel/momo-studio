@@ -558,3 +558,39 @@ describe('ResourceDetail 归属三态（M5.0）', () => {
     expect(screen.queryByTestId('hub-published-badge')).toBeNull();
   });
 });
+
+// ── R9：MCP 详情「配置/编辑」双入口去重。custom 源远程 MCP 的「编辑」
+// 已含全部配置内容 + 认证区块，「配置」不再显示；非 custom 源（smithery/hub）
+// 远程 MCP 无「编辑」入口，「配置」保留为其唯一配置途径（消费面矩阵）。
+describe('ResourceDetail — MCP 配置/编辑入口矩阵（R9）', () => {
+  const noop = (): void => {};
+  it('custom 源远程 MCP：仅「编辑」，无「配置」', () => {
+    const item = baseItem({
+      type: 'mcp', source: 'custom', slug: 'notion', name: 'notion',
+      removable: true,
+      custom: { installedAt: '', transport: 'streamable_http' },
+    });
+    render(
+      <ResourceDetail
+        item={item} onClose={noop} onEditMcpConfig={noop} onEditMcpEntry={noop}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /编辑/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /配置/ })).toBeNull();
+  });
+
+  it('非 custom 源（smithery）远程 MCP：仅「配置」，无「编辑」', () => {
+    const item = baseItem({
+      type: 'mcp', source: 'smithery', slug: 'remote-tools', name: 'remote-tools',
+      removable: true,
+      custom: { installedAt: '', transport: 'streamable_http' },
+    });
+    render(
+      <ResourceDetail
+        item={item} onClose={noop} onEditMcpConfig={noop} onEditMcpEntry={noop}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /配置/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /编辑/ })).toBeNull();
+  });
+});

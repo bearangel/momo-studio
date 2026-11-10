@@ -188,10 +188,14 @@ export function RegisterMcpDialog({
       onClose();
     } catch (err) {
       const message = (err as Error).message;
-      setError(message);
-      // 401 → needs_reauth：主进程文案「MCP … 需要授权（HTTP 401）」/已绑定失效
-      // 文案均含「需要授权」；error code 场景以 needs_reauth 兜底判定
-      if (message.includes('需要授权') || message.includes('needs_reauth')) setNeedsAuth(true);
+      // 401 → needs_reauth：横幅已完整表达「需要授权 + 去授权」，原始报错
+      // （「MCP … 需要授权（HTTP 401）」）与横幅同屏即重复（R9）——banner 替代红字。
+      // 非 401 失败仍走红字。判定口径沿用主进程文案「需要授权」/错误码 needs_reauth。
+      if (message.includes('需要授权') || message.includes('needs_reauth')) {
+        setNeedsAuth(true);
+      } else {
+        setError(message);
+      }
     } finally {
       setSubmitting(false);
     }

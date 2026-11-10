@@ -304,16 +304,16 @@ describe('RegisterMcpDialog — 新建态不渲染认证区块（R8）', () => {
 });
 
 describe('RegisterMcpDialog — 401 需要授权横幅（Task 16）', () => {
-  it('mcp.start 401 → 「需要授权」横幅 + 去授权按钮，错误红字保留', async () => {
+  it('mcp.start 401 → 「需要授权」横幅 + 去授权按钮，原始红字被横幅替代（R9）', async () => {
     mcpStart.mockRejectedValueOnce(new Error('MCP github-mcp 需要授权（HTTP 401）'));
     const onClose = vi.fn();
     render(<RegisterMcpDialog onClose={onClose} onSuccess={() => {}} />);
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'github-mcp' } });
     fireEvent.change(screen.getByLabelText('命令'), { target: { value: 'npx' } });
     fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
-    expect(await screen.findByText('该服务器需要 OAuth 授权（HTTP 401）')).toBeInTheDocument();
+    expect(await screen.findByText('该服务器需要 OAuth 授权')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '去授权' })).toBeInTheDocument();
-    expect(screen.getByText('MCP github-mcp 需要授权（HTTP 401）')).toBeInTheDocument();
+    expect(screen.queryByText('MCP github-mcp 需要授权（HTTP 401）')).not.toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -324,7 +324,7 @@ describe('RegisterMcpDialog — 401 需要授权横幅（Task 16）', () => {
     fireEvent.change(screen.getByLabelText('命令'), { target: { value: 'cmd' } });
     fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
     expect(await screen.findByText('MCP runner 连接超时')).toBeInTheDocument();
-    expect(screen.queryByText('该服务器需要 OAuth 授权（HTTP 401）')).not.toBeInTheDocument();
+    expect(screen.queryByText('该服务器需要 OAuth 授权')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '去授权' })).not.toBeInTheDocument();
   });
 });
