@@ -52,6 +52,7 @@ import { migration074 } from './074_momo_all_builtin_tools';
 import { migration075 } from './075_global_tool_budget_default_unlimited';
 import { migration076 } from './076_browser_evaluate_default_on';
 import { migration077 } from './077_momo_resource_creation_tools';
+import { migration078 } from './078_momo_list_models_tool';
 
 export interface Migration {
   version: number;
@@ -1211,6 +1212,12 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 内置定义落库执行）。SQL 住在独立模块 077_momo_resource_creation_tools.ts。
     version: migration077.version,
     sql: migration077.sql,
+  },
+  {
+    // Momo 默认工具全集 64 → 65（2026-11-10 验收迭代）：+list_models 模型清单
+    // 查询（077 同式替换语义；新装库 no-op）。SQL 住在独立模块 078_momo_list_models_tool.ts。
+    version: migration078.version,
+    sql: migration078.sql,
   },
 ];
 
