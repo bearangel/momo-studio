@@ -14,6 +14,8 @@ export interface FetchInit {
   headers?: Record<string, string>;
   body?: string;
   signal?: AbortSignal;
+  /** 与 fetch 的 redirect 语义一致；本地声明联合类型避免依赖 DOM lib */
+  redirect?: 'error' | 'follow' | 'manual';
   /** undici 扩展字段（Node 全局 fetch 透传读取），便于测试注入自定义 dispatcher */
   dispatcher?: unknown;
 }

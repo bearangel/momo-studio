@@ -6,6 +6,7 @@
 //   refresh invalid_grant    → needs_reauth（生命周期据此置位待重授权）
 //   refresh 其余失败（含 5xx）→ refresh_failed（可重试）
 // detail 一律携带服务端错误码字符串（无错误码时退化为 HTTP 状态码），便于排障与 UI 展示。
+import { logger } from '../../logger';
 import { OAuthFailure, type ClientAuthMethod, type OAuthTokenSet } from '../types';
 import { assertEndpointAllowed } from './endpoint-guard';
 import { resolveFetch, type FetchLike } from './http';
@@ -110,8 +111,12 @@ function parseTokenResponse(
   if (typeof raw.access_token !== 'string' || raw.access_token === '') {
     throw new OAuthFailure(failureCode, '令牌端点响应缺少 access_token');
   }
-  // expires_in 为秒；按本地时钟换算成 ISO（null = 不过期，调用方不主动刷新）
-  const expiresIn = typeof raw.expires_in === 'number' ? raw.expires_in : null;
+  // expires_in 为秒；按本地时钟换算成 ISO（null = 不过期，调用方不主动刷新）。
+  // Number.isFinite 拦 1e400 这类 JSON 解析出的 Infinity——否则 toISOString 抛 RangeError
+  // 逃出 OAuth 错误契约。
+  const expiresIn = typeof raw.expires_in === 'number' && Number.isFinite(raw.expires_in)
+    ? raw.expires_in
+    : null;
   return {
     accessToken: raw.access_token,
     refreshToken:
@@ -145,6 +150,11 @@ async function postForm(
     },
     body: body.toString(),
     signal: AbortSignal.timeout(TIMEOUT_MS),
+    // 禁止跟随重定向：307/308 会原样重发 POST body——授权码 + code_verifier、
+    // client_secret_post 的 secret、撤销 token 都会被打到未经 endpoint-guard 的
+    // 目标（约束：每个请求 URL 都必须通过 assertEndpointAllowed）。3xx 交给
+    // 状态码分支归一为 OAuthFailure。
+    redirect: 'error',
   });
   const text = await response.text();
   let json: TokenResponseShape = {};
@@ -213,7 +223,16 @@ export async function refreshTokens(req: RefreshRequest): Promise<OAuthTokenSet>
   return parseTokenResponse(status, json, 'refresh_failed');
 }
 
-/** 撤销：尽力而为，失败吞掉（spec §11——撤销不阻塞断开主流程） */
+/** 日志脱敏：只取端点 host，解析失败也不阻断撤销流程 */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return '<invalid-url>';
+  }
+}
+
+/** 撤销：尽力而为，失败吞掉（spec §11——撤销不阻塞断开主流程），但必须留痕 */
 export async function revokeToken(req: RevokeRequest): Promise<void> {
   try {
     assertEndpointAllowed(req.revocationEndpoint);
@@ -226,7 +245,11 @@ export async function revokeToken(req: RevokeRequest): Promise<void> {
       headers,
       req.fetchImpl ?? resolveFetch(req.allowInsecureTls),
     );
-  } catch {
-    // 撤销失败不阻塞断开主流程（含端点准入失败/网络失败/服务端错误）
+  } catch (err) {
+    // 只记错误消息与端点 host——绝不记 token 值（日志会落盘）
+    logger.warn('OAuth 撤销令牌失败（尽力而为，不阻塞断开）', {
+      host: hostOf(req.revocationEndpoint),
+      message: err instanceof Error ? err.message : String(err),
+    });
   }
 }

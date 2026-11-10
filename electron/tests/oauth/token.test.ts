@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { exchangeCode, refreshTokens, revokeToken } from '../../src/main/oauth/protocol/token';
+import { resolveFetch, type FetchInit } from '../../src/main/oauth/protocol/http';
 
 let server: http.Server;
 let base = '';
@@ -16,6 +17,20 @@ let lastAuth = '';
 let lastMethod = '';
 let lastPath = '';
 let respond: { status: number; body: unknown; raw?: string } = { status: 200, body: {} };
+
+/** 独立临时服务器（重定向类用例需要第二个端点观察是否被真实打到） */
+async function listen(
+  handler: http.RequestListener
+): Promise<{ server: http.Server; base: string }> {
+  const s = http.createServer(handler);
+  await new Promise<void>((resolve) => s.listen(0, '127.0.0.1', resolve));
+  return { server: s, base: `http://127.0.0.1:${(s.address() as AddressInfo).port}` };
+}
+
+async function closeServer(s: http.Server): Promise<void> {
+  s.closeAllConnections();
+  await new Promise<void>((resolve) => s.close(() => resolve()));
+}
 
 beforeEach(async () => {
   lastBody = '';
@@ -168,6 +183,36 @@ describe('exchangeCode', () => {
     ).rejects.toMatchObject({ code: 'token_exchange_failed' });
   });
 
+  it('307 重定向不跟随：目标服务器零请求，exchange 抛 token_exchange_failed', async () => {
+    let secondHits = 0;
+    const second = await listen((_req, res) => {
+      secondHits += 1;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ access_token: 'leaked' }));
+    });
+    const redirector = await listen((_req, res) => {
+      res.writeHead(307, { location: `${second.base}/token` });
+      res.end();
+    });
+
+    try {
+      await expect(
+        exchangeCode({ ...exchangeReq, tokenEndpoint: `${redirector.base}/token` })
+      ).rejects.toMatchObject({ code: 'token_exchange_failed' });
+      expect(secondHits).toBe(0);
+    } finally {
+      await closeServer(redirector.server);
+      await closeServer(second.server);
+    }
+  });
+
+  it('expires_in 为 1e400（JSON 解析成 Infinity）时 expiresAt=null，不抛 RangeError', async () => {
+    respond = { status: 200, body: {}, raw: '{"access_token":"at","expires_in":1e400}' };
+    const set = await exchangeCode({ ...exchangeReq, tokenEndpoint: `${base}/token` });
+    expect(set.accessToken).toBe('at');
+    expect(set.expiresAt).toBeNull();
+  });
+
   it('非 https 且非回环端点直接拒绝（不发请求）', async () => {
     await expect(
       exchangeCode({ ...exchangeReq, tokenEndpoint: 'http://example.com/token' })
@@ -271,5 +316,77 @@ describe('revokeToken', () => {
       allowInsecureTls: false,
     });
     expect(Buffer.from(lastAuth.slice(6), 'base64').toString()).toBe('cid:s%3Ac');
+  });
+
+  it('撤销端 307 重定向同样不跟随：目标零请求且不抛错', async () => {
+    let secondHits = 0;
+    const second = await listen((_req, res) => {
+      secondHits += 1;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    const redirector = await listen((_req, res) => {
+      res.writeHead(307, { location: `${second.base}/revoke` });
+      res.end();
+    });
+
+    try {
+      await expect(
+        revokeToken({
+          revocationEndpoint: `${redirector.base}/revoke`,
+          token: 'at',
+          tokenTypeHint: 'access_token',
+          clientId: 'cid',
+          clientAuthMethod: 'none',
+          allowInsecureTls: false,
+        })
+      ).resolves.toBeUndefined();
+      expect(secondHits).toBe(0);
+    } finally {
+      await closeServer(redirector.server);
+      await closeServer(second.server);
+    }
+  });
+});
+
+describe('resolveFetch（不安全 TLS 通道接线）', () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it('allowInsecureTls=false 不传 dispatcher；true 注入 undici Agent 且复用同一实例', async () => {
+    const seen: Array<{ url: string; dispatcher: unknown }> = [];
+    const fakeFetch = (async (url: string, init: FetchInit) => {
+      seen.push({ url, dispatcher: init.dispatcher });
+      return new Response(JSON.stringify({ access_token: 'at' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+    globalThis.fetch = fakeFetch;
+
+    await resolveFetch(false)('https://as.example.com/token', {
+      method: 'POST',
+      body: 'grant_type=x',
+    });
+    await resolveFetch(true)('https://as.example.com/token', {
+      method: 'POST',
+      body: 'grant_type=x',
+    });
+    await resolveFetch(true)('https://as.example.com/token', {
+      method: 'POST',
+      body: 'grant_type=x',
+    });
+
+    expect(seen.map((s) => s.url)).toEqual([
+      'https://as.example.com/token',
+      'https://as.example.com/token',
+      'https://as.example.com/token',
+    ]);
+    expect(seen[0]?.dispatcher).toBeUndefined();
+    expect(seen[1]?.dispatcher).toBeDefined();
+    expect(seen[1]?.dispatcher).toBe(seen[2]?.dispatcher);
   });
 });
