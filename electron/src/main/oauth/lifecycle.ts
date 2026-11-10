@@ -4,16 +4,18 @@
 //   - 过期前 5 分钟主动刷新；无 expires_at 视为不过期
 //   - 单飞：同一连接并发刷新只发一个请求
 //   - 轮换：响应带新 refresh_token 覆盖旧值；未带则保留旧值
+//   - 不复活：刷新期间连接被断开（disconnect 已置 revoked 并清密钥）则丢弃
+//     新取回的凭据，保持断开终态，绝不写回
 //   - 失败分类：invalid_grant → needs_reauth（保留行，用户可重授权）；
 //     网络/5xx → 退避重试（1m/5m/15m），3 次后同样落 needs_reauth
 //   - 60s 扫描器（startOAuthLifecycle）覆盖「长期不用也会过期」的场景
 import { logger } from '../logger';
 import { getSecret } from '../storage/keychain';
 import { getConnection, listConnections, updateConnection } from './store';
-import { clientSecretKey, loadTokenSet, saveTokenSet } from './keys';
+import { clientSecretKey, clearTokenSet, loadTokenSet, saveTokenSet } from './keys';
 import { refreshTokens } from './protocol/token';
 import { emitOAuthChange } from './service';
-import { OAuthFailure } from './types';
+import { OAuthFailure, type OAuthTokenSet } from './types';
 
 /** 过期前 5 分钟即主动刷新，避免请求途中过期 */
 const REFRESH_AHEAD_MS = 5 * 60 * 1000;
@@ -26,8 +28,6 @@ const MAX_ATTEMPTS = 3;
 
 /** 单飞表：connectionId → 进行中的刷新 Promise */
 const inflight = new Map<string, Promise<string>>();
-/** 当前连接已连续失败的次数（成功后清零；供退避与观测） */
-const retryCount = new Map<string, number>();
 let sweeper: NodeJS.Timeout | null = null;
 
 export interface OAuthLifecycleTestHooks {
@@ -47,10 +47,9 @@ export function setOAuthLifecycleTestHooks(next: OAuthLifecycleTestHooks): void 
   hooks = { ...defaultHooks, ...next };
 }
 
-/** 测试缝：清零单飞表、退避计数与注入的钩子，避免用例间状态泄漏 */
+/** 测试缝：清零单飞表与注入的钩子，避免用例间状态泄漏 */
 export function __resetOAuthLifecycleForTest(): void {
   inflight.clear();
-  retryCount.clear();
   hooks = defaultHooks;
 }
 
@@ -68,7 +67,6 @@ function failNeedsReauth(
   message: string,
   detail?: string,
 ): OAuthFailure {
-  retryCount.delete(connectionId);
   updateConnection(connectionId, { status: 'needs_reauth' });
   emitOAuthChange(connectionId, 'needs_reauth');
   return new OAuthFailure('needs_reauth', message, connectionId, detail);
@@ -94,8 +92,9 @@ async function doRefresh(connectionId: string): Promise<string> {
 
   let lastError: unknown = null;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    let next: OAuthTokenSet;
     try {
-      const next = await refreshTokens({
+      next = await refreshTokens({
         tokenEndpoint: conn.tokenEndpoint,
         clientId: conn.clientId,
         clientAuthMethod: conn.clientAuthMethod,
@@ -104,31 +103,38 @@ async function doRefresh(connectionId: string): Promise<string> {
         extraParams: conn.extraTokenParams,
         allowInsecureTls: conn.allowInsecureTls,
       });
-      // 轮换：响应未带 refresh_token 时保留旧值
-      const effectiveRefresh = next.refreshToken ?? tokenSet.refreshToken;
-      await saveTokenSet(connectionId, { ...next, refreshToken: effectiveRefresh });
-      updateConnection(connectionId, {
-        status: 'connected',
-        expiresAt: next.expiresAt,
-        lastRefreshedAt: new Date().toISOString(),
-      });
-      retryCount.delete(connectionId);
-      emitOAuthChange(connectionId, 'refreshed');
-      return next.accessToken;
     } catch (err) {
       lastError = err;
       // invalid_grant：授权已死，重试无意义——立即落 needs_reauth 并抛出
       if (err instanceof OAuthFailure && err.code === 'needs_reauth') {
         throw failNeedsReauth(connectionId, err.message, err.detail);
       }
-      // 网络 / 5xx 等可重试失败：记录计数，非末次则退避后再试
-      retryCount.set(connectionId, attempt + 1);
+      // 网络 / 5xx 等可重试失败：非末次则退避后再试
       if (attempt < MAX_ATTEMPTS - 1) await hooks.waitBeforeRetry(attempt);
+      continue;
     }
+    // 刷新成功——但若刷新期间连接被断开/失效（disconnect 已置 revoked 并清密钥），
+    // 写回新凭据会复活已断开的连接。不复活：清掉刚取回的凭据并抛出；
+    // 此路径不覆盖 status、不 emit——断开方已落终态并通知过。故意放在 try 外，
+    // 否则会落入上面的 catch 经 failNeedsReauth 把 revoked 改写成 needs_reauth。
+    const latest = getConnection(connectionId);
+    if (!latest || latest.status !== 'connected') {
+      await clearTokenSet(connectionId);
+      throw new OAuthFailure('needs_reauth', '连接在刷新期间被断开，请重新授权', connectionId);
+    }
+    // 轮换：响应未带 refresh_token 时保留旧值
+    const effectiveRefresh = next.refreshToken ?? tokenSet.refreshToken;
+    await saveTokenSet(connectionId, { ...next, refreshToken: effectiveRefresh });
+    updateConnection(connectionId, {
+      status: 'connected',
+      expiresAt: next.expiresAt,
+      lastRefreshedAt: new Date().toISOString(),
+    });
+    emitOAuthChange(connectionId, 'refreshed');
+    return next.accessToken;
   }
 
   logger.warn('OAuth 令牌刷新重试耗尽', { connectionId, attempts: MAX_ATTEMPTS });
-  retryCount.delete(connectionId);
   updateConnection(connectionId, { status: 'needs_reauth' });
   emitOAuthChange(connectionId, 'needs_reauth');
   throw lastError instanceof OAuthFailure

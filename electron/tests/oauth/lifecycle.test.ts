@@ -21,6 +21,7 @@ import {
   __resetOAuthLifecycleForTest,
 } from '../../src/main/oauth/lifecycle';
 import {
+  disconnect,
   setOAuthChangeListener,
   __resetOAuthServiceForTest,
 } from '../../src/main/oauth/service';
@@ -32,6 +33,8 @@ let server: http.Server;
 let base = '';
 let tokenCalls = 0;
 let tokenResponse: { status: number; body: unknown } = { status: 200, body: {} };
+/** 令牌端点响应延迟（ms）：>0 时延迟响应，用于制造「刷新进行中」窗口 */
+let tokenDelayMs = 0;
 /** 一次性响应队列：非空时优先于 tokenResponse（模拟「先失败后成功」） */
 const queuedResponses: Array<{ status: number; body: unknown }> = [];
 /** 变更事件采集（锁住 emitOAuthChange 契约） */
@@ -43,6 +46,7 @@ beforeEach(async () => {
   runMigrations();
   vault.clear();
   tokenCalls = 0;
+  tokenDelayMs = 0;
   queuedResponses.length = 0;
   changes.length = 0;
   setKeychainImpl({
@@ -54,8 +58,12 @@ beforeEach(async () => {
   server = http.createServer((req, res) => {
     tokenCalls += 1;
     const payload = queuedResponses.shift() ?? tokenResponse;
-    res.writeHead(payload.status, { 'content-type': 'application/json' });
-    res.end(JSON.stringify(payload.body));
+    const send = (): void => {
+      res.writeHead(payload.status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(payload.body));
+    };
+    if (tokenDelayMs > 0) setTimeout(send, tokenDelayMs);
+    else send();
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -207,6 +215,25 @@ describe('失败分类与退避', () => {
     expect(tokenCalls).toBe(2);
     expect(getConnection(id)?.status).toBe('connected');
     expect(changes).not.toContainEqual({ id, kind: 'needs_reauth' });
+  });
+});
+
+describe('刷新与断开竞态', () => {
+  it('刷新进行中 disconnect：不复活已断开连接（状态保持 revoked、凭据不写回）', async () => {
+    tokenDelayMs = 80; // 令牌响应延迟，保证 disconnect 插进刷新进行中的窗口
+    const id = seed(60_000);
+    tokenResponse = {
+      status: 200,
+      body: { access_token: 'new-at', refresh_token: 'new-rt', expires_in: 3600 },
+    };
+    const pending = ensureFreshAccessToken(id);
+    await disconnect(id); // 刷新仍在途：置 revoked + 清密钥 + emit('revoked')
+    await expect(pending).rejects.toMatchObject({ code: 'needs_reauth' });
+    expect(getConnection(id)?.status).toBe('revoked');
+    expect(vault.get(accessTokenKey(id))).toBeUndefined();
+    expect(vault.get(refreshTokenKey(id))).toBeUndefined();
+    expect(changes).not.toContainEqual({ id, kind: 'refreshed' });
+    expect(tokenCalls).toBe(1);
   });
 });
 
