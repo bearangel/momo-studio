@@ -4,7 +4,7 @@
 // 契约：挂载即开系统浏览器（misc:openExternal，https 任意 + 回环 http）；
 // 完成事件经 oauth:authorizationChanged 推送驱动 onSuccess；手动粘贴为
 // 容器/远程开发/防火墙场景的兜底，走同一条 complete 路径。
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Copy, KeyRound } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import type { AuthorizationChangedPayload } from '../../ipc/types';
@@ -27,22 +27,31 @@ export function AuthorizeDialog({ pendingId, authorizationUrl, redirectUri, onSu
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [opened, setOpened] = useState(false);
+  // StrictMode 双挂载（setup→cleanup→setup 同闭包）下 state 守卫读到的仍是
+  // 旧闭包值会二次开浏览器——ref 同步可变，双 setup 第二次必见 true
+  const openedRef = useRef(false);
+  // 取消后在途的手动提交 / 迟到的 connected 推送都不得再触发 onSuccess
+  const cancelledRef = useRef(false);
 
   useEffect(() => {
-    // 幂等开浏览器：opened 守卫防 StrictMode 双挂载/重渲染重复拉起
-    if (opened) return;
+    if (openedRef.current) return;
+    openedRef.current = true;
     setOpened(true);
     void ipc.misc.openExternal(authorizationUrl).catch((err: unknown) => {
-      setError(err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(`无法打开浏览器，请手动访问授权链接（${msg}）`);
     });
-  }, [authorizationUrl, opened]);
+  }, [authorizationUrl]);
 
   useEffect(
     () =>
       ipc.oauth.onAuthorizationChanged((payload: AuthorizationChangedPayload) => {
         if (payload.pendingId !== pendingId) return;
-        if (payload.status === 'connected') onSuccess();
-        else if (payload.status === 'failed') setError(payload.error?.message ?? '授权失败');
+        if (payload.status === 'connected') {
+          if (!cancelledRef.current) onSuccess();
+        } else if (payload.status === 'failed') {
+          setError(payload.error?.message ?? '授权失败');
+        }
       }),
     [pendingId, onSuccess],
   );
@@ -60,7 +69,7 @@ export function AuthorizeDialog({ pendingId, authorizationUrl, redirectUri, onSu
     setError(null);
     try {
       await ipc.oauth.completeWithManualCallback({ pendingId, input: manual });
-      onSuccess();
+      if (!cancelledRef.current) onSuccess();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -69,6 +78,7 @@ export function AuthorizeDialog({ pendingId, authorizationUrl, redirectUri, onSu
   };
 
   const handleClose = (): void => {
+    cancelledRef.current = true;
     void ipc.oauth.cancelAuthorization(pendingId).catch(() => undefined);
     onClose();
   };

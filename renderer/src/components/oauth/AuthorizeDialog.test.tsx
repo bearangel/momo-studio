@@ -1,13 +1,16 @@
 // renderer/src/components/oauth/AuthorizeDialog.test.tsx
 //
-// 授权等待对话框行为测试（预览 v2 区块 C 契约）：挂载即开系统浏览器（幂等）、
-// 回调地址展示 + 复制（失败兜底文案）、手动粘贴提交（成功 / 失败不关窗）、
-// authorizationChanged 推送（connected → onSuccess；failed → 错误文案）、
+// 授权等待对话框行为测试（预览 v2 区块 C 契约）：挂载即开系统浏览器（幂等，
+// 含 StrictMode 双挂载回归）、回调地址展示 + 复制（失败兜底文案）、手动粘贴
+// 提交（成功 / 失败不关窗 / 取消后迟到结果不触发 onSuccess）、
+// authorizationChanged 推送（connected → onSuccess；failed → 错误文案；
+// 取消后推送不触发 onSuccess）、打开浏览器失败中文兜底、
 // 取消 = cancelAuthorization + onClose。
+import { StrictMode } from 'react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { AuthorizeDialog } from './AuthorizeDialog';
-import type { AuthorizationChangedPayload } from '../../ipc/types';
+import type { AuthorizationChangedPayload, OAuthConnectionView } from '../../ipc/types';
 
 const openExternal = vi.fn().mockResolvedValue(undefined);
 const completeWithManualCallback = vi.fn();
@@ -138,5 +141,55 @@ describe('AuthorizeDialog', () => {
       // jsdom 无原生 clipboard——测试注入的 stub 用完即删，不污染其他用例
       Object.assign(navigator, { clipboard: undefined });
     }
+  });
+
+  it('StrictMode 双挂载（setup→cleanup→setup 同闭包）仅打开一次浏览器', async () => {
+    render(
+      <StrictMode>
+        <AuthorizeDialog {...PROPS} />
+      </StrictMode>,
+    );
+    await waitFor(() => expect(openExternal).toHaveBeenCalled());
+    // 再冲刷一拍微任务，确认没有迟到的第二次调用
+    await act(async () => {});
+    expect(openExternal).toHaveBeenCalledTimes(1);
+  });
+
+  it('打开浏览器失败展示中文兜底 + 原始错误', async () => {
+    openExternal.mockRejectedValue(new Error('cannot open'));
+    render(<AuthorizeDialog {...PROPS} />);
+    expect(await screen.findByText('无法打开浏览器，请手动访问授权链接（cannot open）')).toBeTruthy();
+  });
+
+  it('提交在途时取消 → 迟到的成功结果不触发 onSuccess', async () => {
+    let resolveSubmit: (view: OAuthConnectionView) => void = () => {};
+    completeWithManualCallback.mockImplementation(
+      () =>
+        new Promise<OAuthConnectionView>((resolve) => {
+          resolveSubmit = resolve;
+        }),
+    );
+    render(<AuthorizeDialog {...PROPS} />);
+    fireEvent.click(screen.getByText('无法自动回调？手动粘贴'));
+    fireEvent.change(screen.getByLabelText('粘贴浏览器地址栏的完整回调 URL（或仅 code）'), {
+      target: { value: `${PROPS.redirectUri}?code=abc&state=st` },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '提交' }));
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    await waitFor(() => expect(PROPS.onClose).toHaveBeenCalled());
+    resolveSubmit({
+      id: 'c1',
+      displayName: 'X',
+      accountLabel: '',
+      status: 'connected',
+      scopes: '',
+      expiresAt: null,
+      source: 'manual',
+    });
+    await act(async () => {});
+    expect(PROPS.onSuccess).not.toHaveBeenCalled();
+    changedHandler?.({ pendingId: 'p-1', status: 'connected', connectionId: 'c1' });
+    await act(async () => {});
+    expect(PROPS.onSuccess).not.toHaveBeenCalled();
   });
 });
