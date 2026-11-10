@@ -13,6 +13,7 @@ import {
   discoverAuthorizationServer,
   discoverForResource,
 } from '../../src/main/oauth/protocol/discovery';
+import type { FetchLike } from '../../src/main/oauth/protocol/http';
 
 interface RouteReply {
   status?: number;
@@ -158,6 +159,54 @@ describe('discoverAuthorizationServer', () => {
     expect(meta.tokenEndpoint).toBe(`${issuer}/token`);
   });
 
+  it('首个合法文档缺 registration_endpoint 时继续找带 DCR 的候选（tinyfish/Clerk 形态）', async () => {
+    // 8414 文档合法但无 DCR；OIDC 变体反而带 registration_endpoint → 必须取后者
+    routes['/.well-known/oauth-authorization-server'] = {
+      body: { issuer: base, authorization_endpoint: `${base}/authorize`, token_endpoint: `${base}/token` },
+    };
+    routes['/.well-known/openid-configuration'] = {
+      body: {
+        issuer: base,
+        authorization_endpoint: `${base}/authorize`,
+        token_endpoint: `${base}/token`,
+        registration_endpoint: `${base}/register`,
+      },
+    };
+    const meta = await discoverAuthorizationServer(base);
+    expect(meta.registrationEndpoint).toBe(`${base}/register`);
+  });
+
+  it('全部候选都缺 registration_endpoint → 返回首个合法文档（兜底不误杀）', async () => {
+    routes['/.well-known/oauth-authorization-server'] = {
+      body: { issuer: base, authorization_endpoint: `${base}/authorize`, token_endpoint: `${base}/token` },
+    };
+    routes['/.well-known/openid-configuration'] = {
+      body: { issuer: base, authorization_endpoint: `${base}/authorize`, token_endpoint: `${base}/token2` },
+    };
+    const meta = await discoverAuthorizationServer(base);
+    expect(meta.tokenEndpoint).toBe(`${base}/token`);
+    expect(meta.registrationEndpoint).toBeNull();
+  });
+
+  it('网络级瞬断对同一候选重试一次（不滑落 OIDC 变体）', async () => {
+    const calls: string[] = [];
+    const asDoc = {
+      issuer: base,
+      authorization_endpoint: `${base}/authorize`,
+      token_endpoint: `${base}/token`,
+      registration_endpoint: `${base}/register`,
+    };
+    const fetchImpl: FetchLike = async (url: string) => {
+      calls.push(url);
+      if (calls.length === 1) throw new TypeError('terminated');
+      return new Response(JSON.stringify(asDoc), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const meta = await discoverAuthorizationServer(base, fetchImpl);
+    expect(meta.registrationEndpoint).toBe(`${base}/register`);
+    expect(calls.length).toBe(2);
+    expect(calls[1]).toContain('oauth-authorization-server');
+  });
+
   it('RFC 8414 两条路径都 404 抛 discovery_failed', async () => {
     await expect(discoverAuthorizationServer(base)).rejects.toMatchObject({
       code: 'discovery_failed',
@@ -259,7 +308,13 @@ describe('discoverAuthorizationServer 重定向处理（R2）', () => {
     };
     const meta = await discoverAuthorizationServer(base);
     expect(meta.authorizationEndpoint).toBe(`${base}/authorize`);
-    expect(hits).toEqual(['/.well-known/oauth-authorization-server', '/as-metadata']);
+    expect(meta.registrationEndpoint).toBeNull();
+    // 文档缺 registration_endpoint → 继续探测剩余候选（OIDC 404 后以首个文档兜底）
+    expect(hits).toEqual([
+      '/.well-known/oauth-authorization-server',
+      '/as-metadata',
+      '/.well-known/openid-configuration',
+    ]);
   });
 
   it('相对 Location 按当前 URL 解析', async () => {

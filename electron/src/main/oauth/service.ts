@@ -223,7 +223,10 @@ async function ensureClientRegistration(
 ): Promise<AuthRequirement> {
   if (req.clientId) return req;
   if (!req.registrationEndpoint) {
-    throw new OAuthFailure('registration_failed', '该授权服务器不支持动态注册，请手工填写 client_id');
+    throw new OAuthFailure(
+      'registration_failed',
+      '该授权服务器不支持动态注册（若刚出现网络波动，请重试）',
+    );
   }
   const result = await registerClient({
     registrationEndpoint: req.registrationEndpoint,
