@@ -141,6 +141,29 @@ async function getJsonFollowingValidatedRedirects(
   }
 }
 
+/**
+ * well-known 候选构造：RFC 9728 §4.1 / RFC 8414 §3.1 的路径插入式优先。
+ * 规范把 well-known 插在 origin 与 path 之间；对带路径的 resource/issuer
+ * （https://mcp.notion.com/mcp、本地 Keycloak /realms/momo），追加式会打到
+ * 受保护端点（401）或 404（2026-11-10 Notion 实测回归）。
+ * 顺序：插入式 → 根形式 → 追加式（历史兼容），去重（无路径时三者合一）。
+ */
+function wellKnownCandidates(base: string, wellKnownPath: string): string[] {
+  let parsed: URL;
+  try {
+    parsed = new URL(base);
+  } catch {
+    return [`${trimTrailingSlash(base)}/.well-known/${wellKnownPath}`];
+  }
+  const path = parsed.pathname.replace(/\/+$/, '');
+  const trimmedBase = trimTrailingSlash(base);
+  return [
+    `${parsed.origin}/.well-known/${wellKnownPath}${path}`,
+    `${parsed.origin}/.well-known/${wellKnownPath}`,
+    `${trimmedBase}/.well-known/${wellKnownPath}`,
+  ].filter((value, index, all) => all.indexOf(value) === index);
+}
+
 export async function discoverAuthorizationServer(
   issuerUrl: string,
   fetchImpl?: FetchLike,
@@ -150,8 +173,8 @@ export async function discoverAuthorizationServer(
   assertEndpointAllowed(issuer);
   const fetchFn = fetchImpl ?? resolveFetch(issuer.startsWith('http://'));
   const candidates = [
-    `${issuer}/.well-known/oauth-authorization-server`,
-    `${issuer}/.well-known/openid-configuration`,
+    ...wellKnownCandidates(issuer, 'oauth-authorization-server'),
+    ...wellKnownCandidates(issuer, 'openid-configuration'),
   ];
   for (const candidate of candidates) {
     const raw = await getJsonFollowingValidatedRedirects(candidate, fetchFn);
@@ -199,7 +222,7 @@ export async function discoverForResource(
   const metadataUrl = wwwAuthenticate ? parseResourceMetadataUrl(wwwAuthenticate) : null;
   const candidates = metadataUrl
     ? [metadataUrl]
-    : [`${trimTrailingSlash(resourceUrl)}/.well-known/oauth-protected-resource`];
+    : wellKnownCandidates(resourceUrl, 'oauth-protected-resource');
   for (const candidate of candidates) {
     assertEndpointAllowed(candidate);
     const raw = await getJsonFollowingValidatedRedirects(candidate, fetchFn);

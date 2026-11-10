@@ -145,7 +145,20 @@ describe('discoverAuthorizationServer', () => {
     expect(meta.issuer).toBe(`${base}/`);
   });
 
-  it('两条路径都 404 抛 discovery_failed', async () => {
+  it('带路径 issuer 用 RFC 8414 路径插入式发现 AS（Keycloak /realms 形态）', async () => {
+    const issuer = `${base}/realms/momo`;
+    routes['/.well-known/oauth-authorization-server/realms/momo'] = {
+      body: {
+        issuer,
+        authorization_endpoint: `${issuer}/auth`,
+        token_endpoint: `${issuer}/token`,
+      },
+    };
+    const meta = await discoverAuthorizationServer(issuer);
+    expect(meta.tokenEndpoint).toBe(`${issuer}/token`);
+  });
+
+  it('RFC 8414 两条路径都 404 抛 discovery_failed', async () => {
     await expect(discoverAuthorizationServer(base)).rejects.toMatchObject({
       code: 'discovery_failed',
     });
@@ -373,6 +386,40 @@ describe('discoverForResource', () => {
 
   it('无 WWW-Authenticate 时回退资源根下的 protected-resource', async () => {
     routes['/mcp/.well-known/oauth-protected-resource'] = {
+      body: { authorization_servers: [base] },
+    };
+    routes['/.well-known/oauth-authorization-server'] = {
+      body: {
+        issuer: base,
+        authorization_endpoint: `${base}/authorize`,
+        token_endpoint: `${base}/token`,
+      },
+    };
+    const meta = await discoverForResource(`${base}/mcp`, null);
+    expect(meta.tokenEndpoint).toBe(`${base}/token`);
+  });
+
+  it('无头回退优先 RFC 9728 路径插入式（Notion 形态：追加式 401 不得判死）', async () => {
+    // 真实形态复刻：追加式打到受保护端点返回 401（非 404），插入式才是 200
+    routes['/mcp/.well-known/oauth-protected-resource'] = { status: 401 };
+    routes['/.well-known/oauth-protected-resource/mcp'] = {
+      body: { authorization_servers: [base] },
+    };
+    routes['/.well-known/oauth-authorization-server'] = {
+      body: {
+        issuer: base,
+        authorization_endpoint: `${base}/authorize`,
+        token_endpoint: `${base}/token`,
+      },
+    };
+    const meta = await discoverForResource(`${base}/mcp`, null);
+    expect(meta.authorizationEndpoint).toBe(`${base}/authorize`);
+  });
+
+  it('插入式/追加式均不可用时回退根形式 well-known', async () => {
+    routes['/mcp/.well-known/oauth-protected-resource'] = { status: 401 };
+    // /.well-known/oauth-protected-resource/mcp 未注册 → fixture 默认 404
+    routes['/.well-known/oauth-protected-resource'] = {
       body: { authorization_servers: [base] },
     };
     routes['/.well-known/oauth-authorization-server'] = {
