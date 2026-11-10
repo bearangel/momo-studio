@@ -3,9 +3,11 @@
 // Task 12：MCP OAuth 绑定字段 + 认证解析器注入点 + 扇出驱逐测试。
 //   - setMcpOAuthBinding 写绑定与 env 变量名 → getMcpConfig 读回（NULL → undefined）
 //   - 传 null 清空绑定（unbind 写 NULL/NULL，不动其他列）
+//   - setMcpOAuthBinding 未知 MCP 名 → 抛「未注册」中文错（错误路径专项）
 //   - 已绑定连接时 getOrStartMcp 调用 resolver，其返回的 headers 真实生效
 //     （真实 HTTP MCP fixture：JSON-RPC initialize + tools/list，真 socket，不 mock http/fetch）
 //   - 未绑定连接时 resolver 零调用
+//   - resolver 抛错 → 本次 getOrStartMcp reject，后续调用重试恢复（错误路径专项）
 //   - evictMcpsByConnection 跨全部 workspace pool key 驱逐该连接引用的实例
 //   - evictMcpsByConnection 对无引用连接返回空数组（错误/空输入专项，momo-test-rules 铁律 3）
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -83,6 +85,12 @@ describe('setMcpOAuthBinding', () => {
     expect(getMcpConfig('fixture')?.oauthConnectionId).toBeUndefined();
     expect(getMcpConfig('fixture')?.oauthEnvVar).toBeUndefined();
   });
+
+  it('未知 MCP 名 → 抛「未注册」中文错（错误路径专项）', () => {
+    expect(() => setMcpOAuthBinding('no-such-mcp', 'conn-1', null)).toThrow(
+      'MCP no-such-mcp 未注册',
+    );
+  });
 });
 
 describe('getOrStartMcp 注入与扇出驱逐', () => {
@@ -105,6 +113,21 @@ describe('getOrStartMcp 注入与扇出驱逐', () => {
     setMcpAuthResolver(async (config) => { calls.push(config.name); return config; });
     await getOrStartMcp('ws-1', getMcpConfig('fixture')!);
     expect(calls).toEqual([]);
+  });
+
+  it('resolver 抛错时本次启动失败，后续调用可重试恢复（失败 promise 不驻留）', async () => {
+    getDb().prepare('UPDATE mcp_definitions SET url = ? WHERE id = ?').run(`${base}/mcp`, 'm1');
+    setMcpOAuthBinding('fixture', 'conn-1', null);
+    setMcpAuthResolver(() => Promise.reject(new Error('resolver boom')));
+    // 第一次调用：resolver 拒绝沿 in-flight promise 透传 → getOrStartMcp 整体 reject
+    await expect(getOrStartMcp('ws-retry', getMcpConfig('fixture')!)).rejects.toThrow(
+      'resolver boom',
+    );
+    // 重试语义锁：失败后池不留死状态——换回正常 resolver，同一 workspace 再调即重新走完整启动
+    setMcpAuthResolver(async (config) => config);
+    const client = await getOrStartMcp('ws-retry', getMcpConfig('fixture')!);
+    expect(client.isConnected).toBe(true);
+    await client.disconnect(); // 回收，避免池实例泄漏到后续用例
   });
 
   it('evictMcpsByConnection 驱逐该连接引用的全部实例（含多 workspace）', async () => {
