@@ -4,7 +4,7 @@
 // 不 mock fetch（项目测试保真度规则：只 mock 进程/网络边界，且此处连边界都用真实 socket）。
 // 覆盖 brief 用例 + 补强：extraParams 透传、缺失 expires_in、非 JSON 响应、
 // 非回环端点拒绝、refresh 非 invalid_grant 错误、撤销失败吞错、basic 认证头编码。
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { exchangeCode, refreshTokens, revokeToken } from '../../src/main/oauth/protocol/token';
@@ -350,43 +350,49 @@ describe('revokeToken', () => {
 });
 
 describe('resolveFetch（不安全 TLS 通道接线）', () => {
-  const originalFetch = globalThis.fetch;
-
+  // 回归锁（host 约束，spec §10/§14）：allowInsecureTls 是连接级标志（由 MCP 资源 URL
+  // 是否为 http:// 回环派生），不得把「跳过证书校验」带给非回环主机——否则回环 MCP +
+  // 远端 https AS 的常见本地研发组合会把 access/refresh token 与 client_secret 发到
+  // 未验证 TLS 上。接线证明用 stub 捕获 dispatcher 注入情况（真实降级 socket 本地
+  // 无法提供 https，不在此覆盖）。
   afterEach(() => {
-    globalThis.fetch = originalFetch;
+    vi.unstubAllGlobals();
   });
 
-  it('allowInsecureTls=false 不传 dispatcher；true 注入 undici Agent 且复用同一实例', async () => {
+  /** 捕获型 fetch stub：记录每次调用的 url 与 dispatcher 注入情况 */
+  function captureFetch(): { seen: Array<{ url: string; dispatcher: unknown }> } {
     const seen: Array<{ url: string; dispatcher: unknown }> = [];
-    const fakeFetch = (async (url: string, init: FetchInit) => {
-      seen.push({ url, dispatcher: init.dispatcher });
-      return new Response(JSON.stringify({ access_token: 'at' }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    }) as unknown as typeof fetch;
-    globalThis.fetch = fakeFetch;
+    vi.stubGlobal(
+      'fetch',
+      async (url: string, init: FetchInit): Promise<Response> => {
+        seen.push({ url, dispatcher: init.dispatcher });
+        return new Response(JSON.stringify({ access_token: 'at' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+    );
+    return { seen };
+  }
 
-    await resolveFetch(false)('https://as.example.com/token', {
-      method: 'POST',
-      body: 'grant_type=x',
-    });
-    await resolveFetch(true)('https://as.example.com/token', {
-      method: 'POST',
-      body: 'grant_type=x',
-    });
-    await resolveFetch(true)('https://as.example.com/token', {
-      method: 'POST',
-      body: 'grant_type=x',
-    });
-
-    expect(seen.map((s) => s.url)).toEqual([
-      'https://as.example.com/token',
-      'https://as.example.com/token',
-      'https://as.example.com/token',
-    ]);
+  it('allowInsecureTls=false 不传 dispatcher（默认校验通道）', async () => {
+    const { seen } = captureFetch();
+    await resolveFetch(false)('https://as.example.com/token', { method: 'POST' });
     expect(seen[0]?.dispatcher).toBeUndefined();
-    expect(seen[1]?.dispatcher).toBeDefined();
-    expect(seen[1]?.dispatcher).toBe(seen[2]?.dispatcher);
+  });
+
+  it('allowInsecureTls=true 对非回环 URL 钳制为 verified fetch（dispatcher: undefined）', async () => {
+    const { seen } = captureFetch();
+    await resolveFetch(true)('https://auth.example.com/token', { method: 'POST' });
+    expect(seen[0]?.url).toBe('https://auth.example.com/token');
+    expect(seen[0]?.dispatcher).toBeUndefined();
+  });
+
+  it('allowInsecureTls=true 对回环 URL 仍注入 undici Agent 且复用同一实例', async () => {
+    const { seen } = captureFetch();
+    await resolveFetch(true)('http://127.0.0.1:18443/token', { method: 'POST' });
+    await resolveFetch(true)('http://127.0.0.1:18443/token', { method: 'POST' });
+    expect(seen[0]?.dispatcher).toBeDefined();
+    expect(seen[0]?.dispatcher).toBe(seen[1]?.dispatcher);
   });
 });
