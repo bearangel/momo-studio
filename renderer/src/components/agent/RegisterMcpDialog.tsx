@@ -242,13 +242,18 @@ export function RegisterMcpDialog({
           <div className="text-center text-tertiary text-sm py-8">加载中…</div>
         ) : (
         <>
-        <Segmented
-          options={TRANSPORT_OPTIONS}
-          value={transport}
-          onChange={switchTransport}
-          aria-label="传输类型"
-          disabled={Boolean(edit)}
-        />
+        {edit ? (
+          <div className="text-sm text-secondary">
+            传输类型：<span className="text-primary">{transport === 'http' ? '远程（HTTP）' : '本地（stdio）'}</span>
+          </div>
+        ) : (
+          <Segmented
+            options={TRANSPORT_OPTIONS}
+            value={transport}
+            onChange={switchTransport}
+            aria-label="传输类型"
+          />
+        )}
         {/* 名称是 agent 引用键（defaultMcps[].ref），编辑模式锁定不可改 */}
         <Input label="名称" value={name} onChange={(e) => { setOverwriteWarning(null); setName(e.target.value); }} placeholder="如：github" autoFocus disabled={Boolean(edit)} />
         <Input label="版本" value={version} onChange={(e) => { setOverwriteWarning(null); setVersion(e.target.value); }} placeholder="如：1.0.0（可选）" />
@@ -302,9 +307,9 @@ export function RegisterMcpDialog({
                 <KeyValueRows rows={headerRows} onChange={(rows) => { setOverwriteWarning(null); setHeaderRows(rows); }} keyPlaceholder="Header 名" valuePlaceholder="值" addLabel="添加请求头" ariaLabel="请求头" />
               </div>
             </details>
-            {/* R11：未绑定的编辑态不裸露 OAuth UI（无认证/手填 Authorization 的
-                MCP 会被误导）；已绑定 = 有状态要管理才直接展示。未绑定仍需
-                主动绑定时走折叠入口（或提交后 401 横幅路径） */}
+            {/* R12：binding 即标记——仅已绑定的编辑态展示 OAuth 管理点；
+                未绑定时零 OAuth 痕迹（无认证/手填 Authorization 的 MCP 不被误导），
+                绑定主路径 = 提交后 401 横幅。stdio 的高级区入口保留（无 401 触发器） */}
             {edit && oauthConnectionId && (
               <McpAuthSection
                 mcpName={edit.name}
@@ -316,23 +321,6 @@ export function RegisterMcpDialog({
                   setOauthEnvVar(next.envVar || undefined);
                 }}
               />
-            )}
-            {edit && !oauthConnectionId && (
-              <details className="border border-subtle rounded-md px-3 py-2">
-                <summary className="text-sm text-secondary cursor-pointer select-none">高级：OAuth 授权</summary>
-                <div className="pt-2">
-                  <McpAuthSection
-                    mcpName={edit.name}
-                    transport="streamable_http"
-                    connectionId={undefined}
-                    envVar={oauthEnvVar}
-                    onChange={(next) => {
-                      setOauthConnectionId(next.connectionId || undefined);
-                      setOauthEnvVar(next.envVar || undefined);
-                    }}
-                  />
-                </div>
-              </details>
             )}
           </>
         )}

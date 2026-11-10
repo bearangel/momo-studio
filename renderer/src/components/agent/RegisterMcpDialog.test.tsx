@@ -312,7 +312,7 @@ describe('RegisterMcpDialog — 新建态不渲染认证区块（R8）', () => {
     expect(screen.queryByText('高级：OAuth 授权')).toBeNull();
   });
 
-  it('编辑态（http）未绑定：认证收纳进「高级：OAuth 授权」折叠区且默认收起（R11）', async () => {
+  it('编辑态（http）未绑定：无任何 OAuth UI 痕迹（R12：binding 即标记）', async () => {
     resourceGetMcpEditView.mockResolvedValue({
       name: 'context7',
       transport: 'streamable_http',
@@ -321,17 +321,16 @@ describe('RegisterMcpDialog — 新建态不渲染认证区块（R8）', () => {
       args: [],
       env: {},
       url: 'https://mcp.context7.com/mcp',
-      headers: {},
+      headers: { Authorization: 'Bearer manual-token' },
       enabled: true,
     });
     render(<RegisterMcpDialog edit={{ name: 'context7' }} onClose={() => {}} onSuccess={() => {}} />);
-    const summary = await screen.findByText('高级：OAuth 授权');
-    const details = summary.closest('details');
-    expect(details).not.toBeNull();
-    expect(details?.open).toBe(false);
+    await screen.findByLabelText('URL');
+    expect(screen.queryByText('认证')).toBeNull();
+    expect(screen.queryByText('高级：OAuth 授权')).toBeNull();
   });
 
-  it('编辑态传输类型锁定：点另一形态不切换（R11）', async () => {
+  it('编辑态不渲染传输类型切换器，改只读说明（R12）', async () => {
     resourceGetMcpEditView.mockResolvedValue({
       name: 'my-mcp',
       transport: 'stdio',
@@ -343,12 +342,32 @@ describe('RegisterMcpDialog — 新建态不渲染认证区块（R8）', () => {
       enabled: true,
     });
     render(<RegisterMcpDialog edit={{ name: 'my-mcp' }} onClose={() => {}} onSuccess={() => {}} />);
-    expect(await screen.findByLabelText('命令')).toBeInTheDocument();
-    const remote = screen.getByRole('radio', { name: '远程（HTTP）' });
-    expect(remote).toHaveProperty('disabled', true);
-    fireEvent.click(remote);
-    expect(screen.getByLabelText('命令')).toBeInTheDocument();
-    expect(screen.queryByLabelText('URL')).toBeNull();
+    // 文本跨 span 拆分，用函数匹配器断言整行
+    expect(
+      await screen.findByText((_, el) => el?.tagName === 'DIV' && el.textContent === '传输类型：本地（stdio）'),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: '本地（stdio）' })).toBeNull();
+    expect(screen.queryByRole('radio', { name: '远程（HTTP）' })).toBeNull();
+  });
+
+  it('编辑态（stdio）：OAuth 区块仍在「高级：环境变量与工作目录」内且默认收起', async () => {
+    resourceGetMcpEditView.mockResolvedValue({
+      name: 'local-gh',
+      transport: 'stdio',
+      version: '1.0.0',
+      command: 'node',
+      args: ['server.js'],
+      env: {},
+      headers: {},
+      enabled: true,
+      oauthConnectionId: 'conn-1',
+      oauthEnvVar: 'GITHUB_TOKEN',
+    });
+    render(<RegisterMcpDialog edit={{ name: 'local-gh' }} onClose={() => {}} onSuccess={() => {}} />);
+    const summary = await screen.findByText('高级：环境变量与工作目录');
+    const details = summary.closest('details');
+    expect(details).not.toBeNull();
+    expect(details?.open).toBe(false);
   });
 });
 

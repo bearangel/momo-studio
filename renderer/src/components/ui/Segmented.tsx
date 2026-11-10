@@ -15,8 +15,6 @@ interface Props<T extends string> {
   onChange: (value: T) => void;
   'aria-label'?: string;
   className?: string;
-  /** 整组锁定（编辑不可切换形态等场景）：按钮 disabled + 方向键漫游停用 */
-  disabled?: boolean;
 }
 
 export function Segmented<T extends string>({
@@ -24,14 +22,12 @@ export function Segmented<T extends string>({
   value,
   onChange,
   className,
-  disabled = false,
   ...rest
 }: Props<T>) {
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
 
   /** 方向键漫游：焦点与选中同步移到相邻（循环）选项 */
   const moveFocus = (dir: 1 | -1): void => {
-    if (disabled) return;
     const idx = options.findIndex((o) => o.value === value);
     const next = (idx + dir + options.length) % options.length;
     const nextOpt = options[next];
@@ -70,12 +66,10 @@ export function Segmented<T extends string>({
             role="radio"
             aria-checked={active}
             tabIndex={active ? 0 : -1}
-            disabled={disabled}
             onClick={() => onChange(o.value)}
             className={cn(
               // 不可删：窄容器下逐字折行回归（M5.3 验收「只/读」竖排实锤）
               'h-7 shrink-0 whitespace-nowrap rounded px-3 text-[13px] font-medium transition-colors',
-              disabled && 'cursor-not-allowed opacity-50',
               active
                 ? 'bg-surface-active text-accent-600 dark:text-accent-300'
                 : 'text-secondary hover:text-primary',
