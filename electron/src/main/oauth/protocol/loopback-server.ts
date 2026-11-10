@@ -4,6 +4,7 @@
 //   - 只 bind 127.0.0.1 / localhost，绝不 bind 0.0.0.0
 //   - 路径固定 /callback；state 不匹配 400 并继续等待（防误杀用户二次尝试）
 //   - 命中后立即关连接；超时抛 authorization_timeout
+//   - 响应统一 `Connection: close`，避免 keep-alive 连接拖慢一次性服务器的 close()
 //   - 固定端口 EADDRINUSE 抛 redirect_port_in_use，不静默回落随机
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -11,6 +12,10 @@ import { OAuthFailure } from '../types';
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 const CALLBACK_PATH = '/callback';
+const HTML_HEADERS = {
+  'content-type': 'text/html; charset=utf-8',
+  connection: 'close',
+} as const;
 
 export interface LoopbackServerOptions {
   host: string;
@@ -55,41 +60,44 @@ export async function startLoopbackServer(opts: LoopbackServerOptions): Promise<
   let pendingResult: { code: string } | null = null;
   let pendingError: Error | null = null;
   let closePromise: Promise<void> | null = null;
+  // 只允许一个等待方：第二次调用直接拒绝，避免把第一个等待者变成孤儿
+  let waiterStarted = false;
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? '127.0.0.1'}`);
     if (url.pathname !== CALLBACK_PATH) {
-      res.writeHead(404, { 'content-type': 'text/html; charset=utf-8' });
+      res.writeHead(404, HTML_HEADERS);
       res.end(FAIL_HTML('未知回调路径'));
       return;
     }
     if (finished) {
-      res.writeHead(409, { 'content-type': 'text/html; charset=utf-8' });
+      res.writeHead(409, HTML_HEADERS);
       res.end(FAIL_HTML('该授权请求已完成，请勿重复刷新。'));
       return;
     }
     const state = url.searchParams.get('state');
     const code = url.searchParams.get('code');
     const error = url.searchParams.get('error');
+    if (state !== opts.expectedState) {
+      // state 不匹配不足以终止流程（可能是旧标签页/攻击尝试）——拒绝本次并继续等待。
+      // 必须先校验 state 再看 error：本地页面不得在不知道 state 的情况下取消流程。
+      res.writeHead(400, HTML_HEADERS);
+      res.end(FAIL_HTML('state 校验失败，请从 Momo Studio 重新发起授权。'));
+      return;
+    }
     if (error) {
       // 授权方明确拒绝：这是终止路径，按取消处理并关闭监听
       const failure = new OAuthFailure('authorization_cancelled', `授权被拒绝：${error}`);
       finished = true;
       pendingError = failure;
-      res.writeHead(400, { 'content-type': 'text/html; charset=utf-8' });
+      res.writeHead(400, HTML_HEADERS);
       res.end(FAIL_HTML(`授权被拒绝：${error}`));
       fail?.(failure);
       void close();
       return;
     }
-    if (state !== opts.expectedState) {
-      // state 不匹配不足以终止流程（可能是旧标签页/攻击尝试）——拒绝本次并继续等待
-      res.writeHead(400, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(FAIL_HTML('state 校验失败，请从 Momo Studio 重新发起授权。'));
-      return;
-    }
     if (!code) {
-      res.writeHead(400, { 'content-type': 'text/html; charset=utf-8' });
+      res.writeHead(400, HTML_HEADERS);
       res.end(FAIL_HTML('回调缺少 code 参数。'));
       return;
     }
@@ -97,7 +105,7 @@ export async function startLoopbackServer(opts: LoopbackServerOptions): Promise<
     const result = { code };
     finished = true;
     pendingResult = result;
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.writeHead(200, HTML_HEADERS);
     res.end(OK_HTML);
     settle?.(result);
   });
@@ -120,8 +128,17 @@ export async function startLoopbackServer(opts: LoopbackServerOptions): Promise<
   const address = server.address() as AddressInfo;
   const redirectUri = `http://${host}:${address.port}${CALLBACK_PATH}`;
 
-  // close() 幂等：重复调用复用同一个 Promise；未监听时直接完成
+  // close() 幂等：重复调用复用同一个 Promise；未监听时直接完成。
+  // 若流程尚未终结，显式关闭同时取消挂起的等待者（否则调用方会永远悬挂）。
   const close = (): Promise<void> => {
+    if (!finished) {
+      finished = true;
+      const cancelled = new OAuthFailure('authorization_cancelled', '授权已取消');
+      pendingError = cancelled;
+      if (timer) clearTimeout(timer);
+      timer = null;
+      fail?.(cancelled);
+    }
     if (closePromise) return closePromise;
     closePromise = (async () => {
       if (timer) clearTimeout(timer);
@@ -133,7 +150,13 @@ export async function startLoopbackServer(opts: LoopbackServerOptions): Promise<
   };
 
   const waitForCallback = (): Promise<{ code: string }> => {
-    // 回调已先到达：立即兑现暂存结果
+    if (waiterStarted) {
+      return Promise.reject(
+        new OAuthFailure('authorization_pending', '已有等待中的授权回调，请勿重复等待')
+      );
+    }
+    waiterStarted = true;
+    // 回调已先到达：立即兑现暂存结果，并在消费后关闭监听（与错误路径一致）
     if (pendingResult) {
       return Promise.resolve(pendingResult).finally(() => close());
     }
@@ -149,10 +172,13 @@ export async function startLoopbackServer(opts: LoopbackServerOptions): Promise<
         pendingError = new OAuthFailure('authorization_timeout', '等待授权回调超时（10 分钟）');
         reject(pendingError);
       }, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-    }).finally(() => {
+    }).finally(async () => {
+      settle = null;
+      fail = null;
       if (timer) clearTimeout(timer);
       timer = null;
-      void close();
+      // 等 socket 真正释放后再让返回的 Promise 落定，保证调用方不会拿到「已监听中」的假象
+      await close();
     });
   };
 

@@ -92,6 +92,92 @@ describe('startLoopbackServer', () => {
     ).rejects.toMatchObject({ code: 'redirect_port_in_use' });
     await first.close();
   });
+
+  it('?error= 回调返回 400 且以 authorization_cancelled 拒绝', async () => {
+    const server = await startLoopbackServer({
+      host: '127.0.0.1',
+      port: null,
+      expectedState: 'st-err',
+      timeoutMs: 5000,
+    });
+    const waiting = server.waitForCallback();
+    // 先挂上拒绝处理器，避免授权方拒绝早于断言导致 unhandled rejection
+    const rejection = expect(waiting).rejects.toMatchObject({ code: 'authorization_cancelled' });
+    const response = await fetch(`${server.redirectUri}?error=access_denied&state=st-err`);
+    expect(response.status).toBe(400);
+    await rejection;
+    await server.close();
+  });
+
+  it('state 不匹配的 ?error= 不终止流程（先校验 state）', async () => {
+    const server = await startLoopbackServer({
+      host: '127.0.0.1',
+      port: null,
+      expectedState: 'st-err2',
+      timeoutMs: 5000,
+    });
+    const waiting = server.waitForCallback();
+    const bad = await fetch(`${server.redirectUri}?error=access_denied&state=wrong`);
+    expect(bad.status).toBe(400);
+    await fetch(`${server.redirectUri}?code=ok&state=st-err2`);
+    await expect(waiting).resolves.toEqual({ code: 'ok' });
+    await server.close();
+  });
+
+  it('显式 close 会取消挂起的等待', async () => {
+    const server = await startLoopbackServer({
+      host: '127.0.0.1',
+      port: null,
+      expectedState: 'st-cancel',
+      timeoutMs: 5000,
+    });
+    const waiting = server.waitForCallback();
+    const rejection = expect(waiting).rejects.toMatchObject({ code: 'authorization_cancelled' });
+    await server.close();
+    await rejection;
+    // 关闭后再关闭仍是安全 no-op，且不产生二次结算
+    await server.close();
+  });
+
+  it('首个回调后不会二次结算，且监听已释放', async () => {
+    const server = await startLoopbackServer({
+      host: '127.0.0.1',
+      port: null,
+      expectedState: 'st-once',
+      timeoutMs: 5000,
+    });
+    const waiting = server.waitForCallback();
+    expect((await fetch(`${server.redirectUri}?code=first&state=st-once`)).status).toBe(200);
+    await expect(waiting).resolves.toEqual({ code: 'first' });
+
+    // 监听应在 finally 中释放：再次请求要么 409（关闭窗口内），要么 transport 层直接失败
+    let secondStatus: number | null = null;
+    try {
+      secondStatus = (await fetch(`${server.redirectUri}?code=second&state=st-once`)).status;
+    } catch {
+      secondStatus = null;
+    }
+    if (secondStatus !== null) expect(secondStatus).toBe(409);
+
+    // 第二次等待直接拒绝，不会拿到第二个结果
+    await expect(server.waitForCallback()).rejects.toMatchObject({ code: 'authorization_pending' });
+    await server.close();
+  });
+
+  it('回调先于 waitForCallback 到达也能兑现，消费后关闭监听', async () => {
+    const server = await startLoopbackServer({
+      host: '127.0.0.1',
+      port: null,
+      expectedState: 'st-early',
+      timeoutMs: 5000,
+    });
+    expect((await fetch(`${server.redirectUri}?code=early&state=st-early`)).status).toBe(200);
+    await expect(server.waitForCallback()).resolves.toEqual({ code: 'early' });
+    await expect(fetch(`${server.redirectUri}?code=late&state=st-early`)).rejects.toBeInstanceOf(
+      Error
+    );
+    await server.close();
+  });
 });
 
 describe('parseManualCallback', () => {
