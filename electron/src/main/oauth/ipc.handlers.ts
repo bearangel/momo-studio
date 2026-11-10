@@ -13,12 +13,12 @@ import {
 } from './service';
 import { beginAuthorizationForMcp, bindConnectionToMcp } from './mcp-trigger';
 import { listPresets } from './presets';
-import { OAuthFailure, type ConnectionView } from './types';
+import { OAuthFailure } from './types';
 
 const AUTHORIZATION_CHANGED = 'oauth:authorizationChanged';
 const CONNECTIONS_CHANGED = 'oauth:connectionsChanged';
 
-/** pendingId → 绑定的 MCP（loopback 完成后回写用） */
+/** pendingId → 绑定的 MCP（授权完成后由监听器统一回写） */
 const pendingMcpIntent = new Map<string, { mcpName: string; envVar: string | null }>();
 
 function broadcast(channel: string, payload: unknown): void {
@@ -46,7 +46,8 @@ export function registerOAuthHandlers(): void {
     broadcast(CONNECTIONS_CHANGED, { at: Date.now(), connectionId, kind });
   });
 
-  // loopback 异步完成 → 回写绑定 + 推送
+  // 授权完成（loopback 异步与手动回调两路共用——finishAuthorization 内触发）：
+  // intent 回写绑定 + 推送的唯一单点，handler 侧不得再重复广播
   setAuthorizationCompleteListener((pendingId, view) => {
     const intent = pendingMcpIntent.get(pendingId);
     pendingMcpIntent.delete(pendingId);
@@ -61,7 +62,10 @@ export function registerOAuthHandlers(): void {
       broadcast(AUTHORIZATION_CHANGED, {
         pendingId,
         status: 'failed',
-        error: { code: 'no_connection', message: (err as Error).message },
+        error: {
+          code: err instanceof OAuthFailure ? err.code : 'no_connection',
+          message: (err as Error).message,
+        },
       });
     });
   });
@@ -112,18 +116,9 @@ export function registerOAuthHandlers(): void {
     if (typeof input !== 'string' || input === '') {
       throw new OAuthFailure('no_connection', '回调内容无效');
     }
-    const view: ConnectionView = await completeWithManualCallback({
-      pendingId: pendingId as string,
-      input,
-    });
-    const intent = pendingMcpIntent.get(pendingId as string);
-    pendingMcpIntent.delete(pendingId as string);
-    if (intent) await bindConnectionToMcp(intent.mcpName, view.id, intent.envVar);
-    broadcast(AUTHORIZATION_CHANGED, {
-      pendingId: pendingId as string, status: 'connected', connectionId: view.id,
-    });
-    broadcast(CONNECTIONS_CHANGED, { at: Date.now(), connectionId: view.id, kind: 'connected' });
-    return view;
+    // 完成后的绑定回写与广播由 authorizationCompleteListener 在
+    // finishAuthorization 内统一执行——此处再广播即为重复推送（review 修复）
+    return completeWithManualCallback({ pendingId: pendingId as string, input });
   });
 
   ipcMain.handle('oauth:cancelAuthorization', async (_evt, pendingId: unknown) => {
