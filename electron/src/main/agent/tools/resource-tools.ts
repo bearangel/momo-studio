@@ -54,7 +54,7 @@ export class ResourceTools implements ToolModule {
       {
         name: 'create_agent',
         description:
-          '创建 agent 定义（K8s 风格 YAML manifest 全文入参，格式见 create-agent 技能）。slug 全局唯一，冲突会拒绝；模型缺省用全局默认聊天模型。addToWorkspace=true 时同时加入当前工作空间。创建前必须向用户复述名称/slug/工具面。',
+          '创建 agent 定义（K8s 风格 YAML manifest 全文入参，格式见 create-agent 技能）。slug 全局唯一，冲突会拒绝；manifest 的 model 块必填（provider/model 填建议值；真实绑定走全局默认聊天模型兜底）。addToWorkspace=true 时同时加入当前工作空间。创建前必须向用户复述名称/slug/工具面。',
         inputSchema: {
           type: 'object',
           properties: {

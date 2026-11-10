@@ -36,6 +36,12 @@ describe('builtin 资源创建技能', () => {
     expect(md).toContain('递归');
   });
 
+  it('create-agent model 块必填纪律在场（回归锁：模板注释曾标「建议位」致 agent 省略整块、create_agent 两次失败）', () => {
+    const md = fs.readFileSync(path.join(SKILLS_ROOT, 'create-agent/SKILL.md'), 'utf-8');
+    expect(md).toContain('必填');
+    expect(md).toContain('NEVER: 省略 spec.declarative.model');
+  });
+
   it('create-mcp 凭证纪律在场', () => {
     const md = fs.readFileSync(path.join(SKILLS_ROOT, 'create-mcp/SKILL.md'), 'utf-8');
     expect(md).toContain('回显');

@@ -37,7 +37,7 @@ spec:
       纪律：
       - NEVER: ...
       - ALWAYS: ...
-    model:            # 建议位：真实绑定 = 用户已配 > 全局默认聊天模型
+    model:            # 必填（校验要求：provider/model 不能为空）——但值仅为建议位：真实绑定 = 用户已配 > 全局默认聊天模型
       provider: anthropic
       model: claude-sonnet-4-5
   defaultTools:       # 只授必需工具（kind: builtin + 精确工具名）
@@ -52,4 +52,5 @@ prompt 四段式：角色锚定一句话 → 工作流编号步骤（引用真�
 ## 硬规则
 
 - NEVER: 引用不存在的工具名或 skill slug（工具全集见 references/tool-catalog.md）；未经复述直接创建；slug 冲突时静默换名重试
+- NEVER: 省略 spec.declarative.model 块（parser 校验必填；provider/model 填建议值即可，真实绑定走全局默认兜底）
 - ALWAYS: 创建前复述关键参数；工具面最小授权；建完报告 definitionId + slug
