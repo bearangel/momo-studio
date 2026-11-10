@@ -21,7 +21,7 @@ import { registerClient } from './protocol/registration';
 import { buildAuthorizationUrl } from './protocol/authorize';
 import { startLoopbackServer, parseManualCallback, type LoopbackServer } from './protocol/loopback-server';
 import { resolveFetch } from './protocol/http';
-import { loadPreset } from './presets';
+import { assertEndpointAllowed } from './protocol/endpoint-guard';
 import { getMcpConfig } from '../mcp/host-manager';
 import {
   OAuthFailure, type AuthRequirement, type ClientAuthMethod, type ConnectionView,
@@ -70,10 +70,9 @@ export interface ManualAuthInput {
   extraTokenParams?: Record<string, string>;
 }
 
-export type BeginInput =
-  | { manual: ManualAuthInput }
-  | { presetKey: string }
-  | { mcpName: string };
+// 预设仅用于 renderer 预填手动表单（listPresets/loadPreset）——内置预设 clientId 为空且
+// 无注册端点，独立授权入口必然 registration_failed，故不入 BeginInput（裁决 R5）。
+export type BeginInput = { manual: ManualAuthInput } | { mcpName: string };
 
 export interface BeginResult {
   pendingId: string | null;
@@ -103,6 +102,13 @@ function sweepPending(): void {
       void item.server.close();
     }
   }
+}
+
+/** 测试专用：清空内存中的待授权项并复位变更监听，避免用例间状态泄漏 */
+export function __resetOAuthServiceForTest(): void {
+  for (const item of pending.values()) void item.server.close();
+  pending.clear();
+  changeListener = null;
 }
 
 export function toConnectionView(conn: OAuthConnection): ConnectionView {
@@ -140,7 +146,7 @@ export function computeProviderKey(req: Pick<AuthRequirement,
   return [identity, req.clientId ?? '', req.resource ?? '', req.scopes].join('|');
 }
 
-/** manual / preset / mcp 三态 → AuthRequirement（mcp 分支做发现） */
+/** manual / mcp 两态 → AuthRequirement（mcp 分支做发现；预设已降级为 renderer 预填） */
 async function buildRequirement(input: BeginInput): Promise<AuthRequirement> {
   if ('manual' in input) {
     const m = input.manual;
@@ -167,14 +173,6 @@ async function buildRequirement(input: BeginInput): Promise<AuthRequirement> {
     };
     req.providerKey = computeProviderKey(req);
     return req;
-  }
-
-  if ('presetKey' in input) {
-    const preset = loadPreset(input.presetKey);
-    if (!preset) throw new OAuthFailure('no_connection', `未知的服务预设：${input.presetKey}`);
-    const req = await buildRequirement({ manual: preset });
-    // 预设来源单独标记——UI 需区分「手工端点」与「预设模板」
-    return { ...req, source: 'preset' };
   }
 
   const config = getMcpConfig(input.mcpName);
@@ -328,6 +326,8 @@ async function fetchAccountLabel(
 ): Promise<string> {
   if (!req.userinfoEndpoint) return '';
   try {
+    // 账号名是尽力而为的附加信息；端点必须先过准入，绝不明文携带 Bearer 发往非回环
+    assertEndpointAllowed(req.userinfoEndpoint);
     const fetchFn = resolveFetch(allowInsecureTls);
     const response = await fetchFn(req.userinfoEndpoint, {
       method: 'GET',
@@ -444,18 +444,26 @@ export function listMcpNamesByConnection(connectionId: string): string[] {
 
 async function revokeBestEffort(conn: OAuthConnection): Promise<void> {
   if (!conn.revocationEndpoint) return;
-  const tokenSet = await loadTokenSet(conn.id);
-  if (!tokenSet) return;
-  const clientSecret = await getSecret(clientSecretKey(conn.id));
-  await revokeToken({
-    revocationEndpoint: conn.revocationEndpoint,
-    token: tokenSet.accessToken,
-    tokenTypeHint: 'access_token',
-    clientId: conn.clientId,
-    clientAuthMethod: conn.clientAuthMethod,
-    clientSecret,
-    allowInsecureTls: conn.allowInsecureTls,
-  });
+  // 撤销是尽力而为：密钥环不可用等异常不得阻断断开主流程，也绝不记录 token 值
+  try {
+    const tokenSet = await loadTokenSet(conn.id);
+    if (!tokenSet) return;
+    const clientSecret = await getSecret(clientSecretKey(conn.id));
+    await revokeToken({
+      revocationEndpoint: conn.revocationEndpoint,
+      token: tokenSet.accessToken,
+      tokenTypeHint: 'access_token',
+      clientId: conn.clientId,
+      clientAuthMethod: conn.clientAuthMethod,
+      clientSecret,
+      allowInsecureTls: conn.allowInsecureTls,
+    });
+  } catch (err) {
+    logger.warn('OAuth 撤销授权失败或密钥环不可用，继续断开流程', {
+      connectionId: conn.id,
+      error: (err as Error).message,
+    });
+  }
 }
 
 /** 断开：撤销 + 清密钥 + 置 revoked；绑定保留（用户可一键重授权） */
@@ -464,9 +472,19 @@ export async function disconnect(id: string): Promise<{ affectedMcpNames: string
   if (!conn) throw new OAuthFailure('no_connection', '连接不存在');
   const affectedMcpNames = listMcpNamesByConnection(id);
   await revokeBestEffort(conn);
-  await clearTokenSet(id);
+  // 先落 revoked 状态并通知消费方，再清密钥——清密钥失败时状态仍是一致的
   updateConnection(id, { status: 'revoked', expiresAt: null, lastRefreshedAt: null });
   emitOAuthChange(id, 'revoked');
+  try {
+    await clearTokenSet(id);
+  } catch (err) {
+    throw new OAuthFailure(
+      'keychain_unavailable',
+      '系统密钥环不可用，无法清理授权凭据',
+      id,
+      (err as Error).message,
+    );
+  }
   return { affectedMcpNames };
 }
 
@@ -486,5 +504,6 @@ export async function removeConnection(id: string): Promise<{ affectedMcpNames: 
   // 显式等待清密钥（store.deleteConnection 的清理由是 fire-and-forget，不保证此处已完成）
   await clearTokenSet(id);
   deleteConnection(id);
+  emitOAuthChange(id, 'revoked');
   return { affectedMcpNames: [] };
 }

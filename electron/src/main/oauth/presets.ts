@@ -58,13 +58,23 @@ const PRESETS: ProviderPreset[] = [
   },
 ];
 
-/** 返回完整预设（含端点与默认 scope）——renderer 用它预先填满「自定义端点」表单 */
-export function listPresets(): ProviderPreset[] {
-  return PRESETS;
+type PresetInput = Omit<ManualAuthInput, 'displayName'> & { displayName: string };
+
+/** 逐层浅拷贝——调用方（renderer 表单/测试）改动返回值不得污染模块级常量 */
+function copyInput(input: PresetInput): PresetInput {
+  return {
+    ...input,
+    extraAuthorizeParams: { ...input.extraAuthorizeParams },
+    extraTokenParams: { ...input.extraTokenParams },
+  };
 }
 
-export function loadPreset(
-  key: string
-): (Omit<ManualAuthInput, 'displayName'> & { displayName: string }) | null {
-  return PRESETS.find((p) => p.key === key)?.input ?? null;
+/** 返回完整预设（含端点与默认 scope）——renderer 用它预先填满「自定义端点」表单 */
+export function listPresets(): ProviderPreset[] {
+  return PRESETS.map((preset) => ({ ...preset, input: copyInput(preset.input) }));
+}
+
+export function loadPreset(key: string): PresetInput | null {
+  const preset = PRESETS.find((p) => p.key === key);
+  return preset ? copyInput(preset.input) : null;
 }
