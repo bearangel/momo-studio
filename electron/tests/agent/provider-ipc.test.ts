@@ -33,15 +33,40 @@ describe('provider-ipc testConnection', () => {
     expect(r.error).toBe('HTTP 401');
   });
 
-  it('非回环 http → 中文拒绝且不发请求', async () => {
-    const fetchSpy = vi.fn();
+  // 2026-11-10 放宽：内网 oneapi/本地中转常见纯 http——放行探测，安全提醒不阻断（用户自担）
+  it('非回环 http → 放行探测并附非加密 warning', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 200, text: () => Promise.resolve('{}'),
+    });
     global.fetch = fetchSpy;
     const r = await testProviderConnection({
       baseUrl: 'http://192.168.1.5:8080/v1', apiKey: 'k', model: 'm',
     });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(r.ok).toBe(true);
+    expect(r.warning).toMatch(/非加密|明文/);
+  });
+
+  it('非回环 http 探测失败 → ok:false 且同样带 warning', async () => {
+    const fetchSpy = vi.fn().mockRejectedValue(new Error('ETIMEDOUT'));
+    global.fetch = fetchSpy;
+    const r = await testProviderConnection({
+      baseUrl: 'http://10.0.0.8:3000/v1', apiKey: 'k', model: 'm',
+    });
     expect(r.ok).toBe(false);
-    expect(r.error).toMatch(/非本机地址必须使用 https/);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(r.error).toContain('ETIMEDOUT');
+    expect(r.warning).toMatch(/非加密|明文/);
+  });
+
+  it('https 地址 → 不附 warning', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true, status: 200, text: () => Promise.resolve('{}'),
+    });
+    const r = await testProviderConnection({
+      baseUrl: 'https://x.example.com/v1', apiKey: 'k', model: 'm',
+    });
+    expect(r.ok).toBe(true);
+    expect(r.warning).toBeUndefined();
   });
 
   it('model 为空串 → 立即返回 ok:false + 提示文案（不发请求）', async () => {

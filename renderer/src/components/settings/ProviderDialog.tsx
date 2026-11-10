@@ -31,7 +31,7 @@ export function ProviderDialog({ open, onClose, onSaved }: Props) {
   const [apiKey, setApiKey] = useState('');
   const [isDefault, setIsDefault] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string; warning?: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
   const providers = useProviderStore((s) => s.providers);
@@ -60,7 +60,7 @@ export function ProviderDialog({ open, onClose, onSaved }: Props) {
     setTestResult(null);
     try {
       const r = await ipc.provider.testConnection({ baseUrl, apiKey, model: '' });
-      setTestResult(r.ok ? { ok: true, message: '连接成功' } : { ok: false, message: r.error ?? '连接失败' });
+      setTestResult(r.ok ? { ok: true, message: '连接成功', warning: r.warning } : { ok: false, message: r.error ?? '连接失败', warning: r.warning });
     } catch (e) {
       setTestResult({ ok: false, message: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -143,8 +143,13 @@ export function ProviderDialog({ open, onClose, onSaved }: Props) {
             {testing ? '测试中…' : '测试连接'}
           </Button>
           {testResult && (
-            <span className={testResult.ok ? 'text-xs text-secondary' : 'text-xs text-status-error'}>
-              {testResult.message}
+            <span className="flex flex-col">
+              <span className={testResult.ok ? 'text-xs text-secondary' : 'text-xs text-status-error'}>
+                {testResult.message}
+              </span>
+              {testResult.warning && (
+                <span className="text-xs text-status-warning">{testResult.warning}</span>
+              )}
             </span>
           )}
         </div>
