@@ -94,6 +94,20 @@ describe('FileIoSettingsPanel', () => {
     expect(updateGlobal).not.toHaveBeenCalled();
   });
 
+  // 错误路径红线：pickNodePath reject → 错误文案 + 面板不崩 + 不落任何变更
+  it('「浏览」对话框失败 → 错误文案，面板不崩，不调 updateGlobal', async () => {
+    pickNodePath.mockRejectedValueOnce(new Error('dialog failed'));
+    render(<FileIoSettingsPanel />);
+    await screen.findByText('直接读写（默认）');
+    updateGlobal.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: '浏览' }));
+    expect(await screen.findByText('加载文件访问设置失败，请重试')).toBeInTheDocument();
+    // 面板主体仍在（未被卸载成错误页/加载中）
+    expect(screen.getByText('直接读写（默认）')).toBeInTheDocument();
+    expect(screen.queryByText('加载中...')).not.toBeInTheDocument();
+    expect(updateGlobal).not.toHaveBeenCalled();
+  });
+
   // 错误路径红线：初始加载 reject 不得死滞「加载中」，须落错误态且可重试恢复
   it('初始加载失败 → 错误文案 + 重试按钮（无「加载中」），重试成功后恢复面板', async () => {
     getState.mockRejectedValueOnce(new Error('boom'));

@@ -58,10 +58,15 @@ export function FileIoSettingsPanel(): React.ReactElement {
   };
 
   const browseNodePath = async (): Promise<void> => {
-    const picked = await ipc.fileIo.pickNodePath();
-    if (!picked) return;
-    setNodePath(picked);
-    persistNodePath(picked);
+    try {
+      const picked = await ipc.fileIo.pickNodePath();
+      if (!picked) return;
+      setNodePath(picked);
+      persistNodePath(picked);
+    } catch {
+      // 对话框 IPC 异常：复用面板错误行提示，不落任何变更（错误路径红线）
+      setLoadError(true);
+    }
   };
 
   const reprobe = async (): Promise<void> => {
