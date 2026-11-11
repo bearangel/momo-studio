@@ -55,3 +55,176 @@ describe('handleFileIoRequestMsg（主进程侧）', () => {
     expect(await handleFileIoRequestMsg(null, () => {}, fakeSvc() as never)).toBe(false);
   });
 });
+
+describe('handleFileIoRequestMsg 工作空间囚禁（I1：opts.workspaceDir）', () => {
+  const WS = '/ws';
+  const INSIDE = '/ws/src/A.java';
+  const OUTSIDE = '/etc/passwd';
+
+  it('工作空间内 read / write 正常放行', async () => {
+    const reads: string[] = [];
+    const writes: string[] = [];
+    const svc = fakeSvc({
+      readFile: async (p) => {
+        reads.push(p);
+        return Buffer.from('ok');
+      },
+      writeFile: async (p) => {
+        writes.push(p);
+      },
+    });
+    const out: Array<Record<string, unknown>> = [];
+    const opts = { workspaceDir: WS };
+    await handleFileIoRequestMsg(
+      { type: 'file-io:req', requestId: 'i1', op: 'read', path: INSIDE },
+      (p) => out.push(p),
+      svc as never,
+      opts,
+    );
+    await handleFileIoRequestMsg(
+      { type: 'file-io:req', requestId: 'i2', op: 'write', path: INSIDE, dataBase64: 'eA==' },
+      (p) => out.push(p),
+      svc as never,
+      opts,
+    );
+    expect(reads).toEqual([INSIDE]);
+    expect(writes).toEqual([INSIDE]);
+    expect(out[0]).toMatchObject({ requestId: 'i1', ok: true });
+    expect(out[1]).toMatchObject({ requestId: 'i2', ok: true });
+  });
+
+  it('工作空间外 read → EBADREQ 且不触碰服务', async () => {
+    const reads: string[] = [];
+    const svc = fakeSvc({
+      readFile: async (p) => {
+        reads.push(p);
+        return Buffer.from('leak');
+      },
+    });
+    const out: Array<Record<string, unknown>> = [];
+    await handleFileIoRequestMsg(
+      { type: 'file-io:req', requestId: 'x1', op: 'read', path: OUTSIDE },
+      (p) => out.push(p),
+      svc as never,
+      { workspaceDir: WS },
+    );
+    expect(reads).toEqual([]);
+    expect(out[0]).toMatchObject({
+      requestId: 'x1',
+      ok: false,
+      error: { code: 'EBADREQ', message: '路径越界：文件读写请求超出工作空间' },
+    });
+  });
+
+  it('工作空间外 write → EBADREQ 且不触碰服务', async () => {
+    const writes: string[] = [];
+    const svc = fakeSvc({
+      writeFile: async (p) => {
+        writes.push(p);
+      },
+    });
+    const out: Array<Record<string, unknown>> = [];
+    await handleFileIoRequestMsg(
+      { type: 'file-io:req', requestId: 'x2', op: 'write', path: OUTSIDE, dataBase64: 'eA==' },
+      (p) => out.push(p),
+      svc as never,
+      { workspaceDir: WS },
+    );
+    expect(writes).toEqual([]);
+    expect(out[0]).toMatchObject({ ok: false, error: { code: 'EBADREQ' } });
+  });
+
+  it('readMany 混入单个越界路径 → 整批 EBADREQ 且不触碰服务', async () => {
+    const batches: string[][] = [];
+    const svc = fakeSvc({
+      readFiles: async (ps) => {
+        batches.push(ps);
+        return ps.map(() => Buffer.from('x'));
+      },
+    });
+    const out: Array<Record<string, unknown>> = [];
+    await handleFileIoRequestMsg(
+      { type: 'file-io:req', requestId: 'x3', op: 'readMany', paths: [INSIDE, OUTSIDE, '/ws/B.md'] },
+      (p) => out.push(p),
+      svc as never,
+      { workspaceDir: WS },
+    );
+    expect(batches).toEqual([]);
+    expect(out[0]).toMatchObject({ ok: false, error: { code: 'EBADREQ' } });
+  });
+
+  it('readMany 空数组（边界输入）放行且透传空批', async () => {
+    const batches: string[][] = [];
+    const svc = fakeSvc({
+      readFiles: async (ps) => {
+        batches.push(ps);
+        return [];
+      },
+    });
+    const out: Array<Record<string, unknown>> = [];
+    await handleFileIoRequestMsg(
+      { type: 'file-io:req', requestId: 'e1', op: 'readMany', paths: [] },
+      (p) => out.push(p),
+      svc as never,
+      { workspaceDir: WS },
+    );
+    expect(batches).toEqual([[]]);
+    expect(out[0]).toMatchObject({ requestId: 'e1', ok: true, items: [] });
+  });
+
+  it('兄弟前缀路径（/wsfoo.txt）不误伤为工作空间内', async () => {
+    const reads: string[] = [];
+    const svc = fakeSvc({
+      readFile: async (p) => {
+        reads.push(p);
+        return Buffer.from('x');
+      },
+    });
+    const out: Array<Record<string, unknown>> = [];
+    await handleFileIoRequestMsg(
+      { type: 'file-io:req', requestId: 'p1', op: 'read', path: '/wsfoo.txt' },
+      (p) => out.push(p),
+      svc as never,
+      { workspaceDir: WS },
+    );
+    expect(reads).toEqual([]);
+    expect(out[0]).toMatchObject({ ok: false, error: { code: 'EBADREQ' } });
+  });
+
+  it('相对路径（../ 逃逸形态）resolve 后越界 → EBADREQ', async () => {
+    const reads: string[] = [];
+    const svc = fakeSvc({
+      readFile: async (p) => {
+        reads.push(p);
+        return Buffer.from('x');
+      },
+    });
+    const out: Array<Record<string, unknown>> = [];
+    await handleFileIoRequestMsg(
+      { type: 'file-io:req', requestId: 'p2', op: 'read', path: '/ws/../secret.key' },
+      (p) => out.push(p),
+      svc as never,
+      { workspaceDir: WS },
+    );
+    expect(reads).toEqual([]);
+    expect(out[0]).toMatchObject({ ok: false, error: { code: 'EBADREQ' } });
+  });
+
+  it('不传 workspaceDir → 遗留行为：越界路径也放行（既有受信调用方兼容）', async () => {
+    const reads: string[] = [];
+    const svc = fakeSvc({
+      readFile: async (p) => {
+        reads.push(p);
+        return Buffer.from('legacy');
+      },
+    });
+    const out: Array<Record<string, unknown>> = [];
+    await handleFileIoRequestMsg(
+      { type: 'file-io:req', requestId: 'l1', op: 'read', path: OUTSIDE },
+      (p) => out.push(p),
+      svc as never,
+    );
+    expect(reads).toEqual([OUTSIDE]);
+    expect(out[0]).toMatchObject({ requestId: 'l1', ok: true });
+  });
+});

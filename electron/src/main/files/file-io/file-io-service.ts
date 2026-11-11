@@ -8,7 +8,8 @@
 //   - env 原样继承：亿赛通注入 DLL 经 PATH 加载（裁剪即 0xc0000135）
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from 'node:child_process';
+import { execFile, spawn, spawnSync, type ChildProcess, type SpawnOptions } from 'node:child_process';
+import { promisify } from 'node:util';
 import { looksEncrypted } from './cipher-detect';
 import {
   FileIoError,
@@ -21,34 +22,59 @@ import {
   resolveEffectiveMode,
   type ResolvedFileIoSettings,
 } from './file-io-settings';
+import { loadElectronApis } from '../../electron-access';
 import type { WorkerResponse } from './io-worker';
 
 export interface FileIoServiceOpts {
   settings: ResolvedFileIoSettings;
-  /** worker 脚本绝对路径（默认同目录编译产物 io-worker.js；测试注入 fixture） */
+  /** worker 脚本绝对路径（默认按打包态解析同目录编译产物 io-worker.js；测试注入 fixture） */
   workerPath?: string;
   /** 覆盖 node 解析（测试注入） */
   nodePathOverride?: string;
   timeoutMs?: number;
   batchSize?: number;
-  /** 客户端安装探测注入（测试；默认真实探测） */
+  /** 客户端安装探测注入（测试；等价 () => 固定值） */
   clientInstalled?: boolean;
+  /** 客户端安装探测函数注入（测试需要随时间翻转探测结果的场景） */
+  clientInstalledProbe?: () => boolean;
   logger?: { warn(msg: string, meta?: unknown): void; info(msg: string, meta?: unknown): void };
   /** spawn 注入（测试断言 env 继承；默认 child_process.spawn） */
   spawnImpl?: (cmd: string, args: string[], opts: SpawnOptions) => ChildProcess;
 }
 
-const DEFAULT_WORKER_PATH = path.join(__dirname, 'io-worker.js');
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_BATCH_SIZE = 50;
+/** node 可用性验证超时（同步 verifyNode 与异步 probeNodeAvailability 共用） */
+const NODE_PROBE_TIMEOUT_MS = 8_000;
 
-/** node 可用性验证（真跑一次——防「同名但不可执行」） */
+/**
+ * worker 脚本默认路径解析（纯函数，供单测锁定重写语义，C1）：
+ * 打包态 __dirname 位于 app.asar 内，而外部 node.exe 无法执行 asar 内的脚本——
+ * electron-builder 的 asarUnpack 把 dist/main/files/file-io/** 解包到
+ * app.asar.unpacked 同构相对路径，此处据此重写。兼容 win32 / posix 两种分隔符
+ * 形态（正则一次覆盖），路径不含 app.asar 时 no-op（dev / 测试零变化）。
+ */
+export function resolveWorkerPathForTesting(baseDir: string, isPackaged: boolean): string {
+  let dir = baseDir;
+  if (isPackaged) {
+    dir = dir.replace(/([/\\])app\.asar([/\\])/, '$1app.asar.unpacked$2');
+  }
+  return path.join(dir, 'io-worker.js');
+}
+
+/** 服务默认 worker 路径：app 不可用（vitest / 子进程）按非打包处理 */
+function defaultWorkerPath(): string {
+  const { app } = loadElectronApis();
+  return resolveWorkerPathForTesting(__dirname, app?.isPackaged === true);
+}
+
+/** node 可用性验证（真跑一次——防「同名但不可执行」）；服务自身 spawn 路径专用（同步可接受） */
 function verifyNode(p: string): boolean {
   try {
     if (!fs.existsSync(p)) return false;
     const r = spawnSync(p, ['-e', 'process.stdout.write("ok")'], {
       encoding: 'utf8',
-      timeout: 8000,
+      timeout: NODE_PROBE_TIMEOUT_MS,
       windowsHide: true,
     });
     return r.status === 0 && String(r.stdout).trim() === 'ok';
@@ -58,15 +84,10 @@ function verifyNode(p: string): boolean {
 }
 
 /**
- * 解析可用 node 可执行文件。优先级（上游 PoC §4.4）：
- * 显式 nodePath（无效即 ENONODE，不回退）→ 自身 execPath 若为 node → PATH → 常见安装位。
+ * 自动探测 node 候选清单（findNodePath 同步链与 probeNodeAvailability 异步链共用，
+ * 保证两条链路候选次序一致）：自身 execPath 若为 node → PATH 各目录 → win 常见安装位。
  */
-export function findNodePath(nodePath: string | null): string {
-  if (nodePath !== null) {
-    if (verifyNode(nodePath)) return nodePath;
-    throw new FileIoError('ENONODE', `配置的 Node.js 路径不可用: ${nodePath}`);
-  }
-
+export function nodeCandidatePaths(): string[] {
   const win = process.platform === 'win32';
   const exeName = win ? 'node.exe' : 'node';
   const candidates: string[] = [];
@@ -81,14 +102,84 @@ export function findNodePath(nodePath: string | null): string {
   if (win) {
     candidates.push('C:\\Program Files\\nodejs\\node.exe', 'D:\\Program Files\\nodejs\\node.exe');
   }
+  return candidates;
+}
 
-  for (const c of candidates) {
+/**
+ * 解析可用 node 可执行文件。优先级（上游 PoC §4.4）：
+ * 显式 nodePath（无效即 ENONODE，不回退）→ 自身 execPath 若为 node → PATH → 常见安装位。
+ */
+export function findNodePath(nodePath: string | null): string {
+  if (nodePath !== null) {
+    if (verifyNode(nodePath)) return nodePath;
+    throw new FileIoError('ENONODE', `配置的 Node.js 路径不可用: ${nodePath}`);
+  }
+
+  for (const c of nodeCandidatePaths()) {
     if (verifyNode(c)) return c;
   }
   throw new FileIoError(
     'ENONODE',
     '未找到可用的 Node.js。Node 代理模式需要系统中存在 node（安装 Node.js 或在 设置 → 文件访问 指定路径）。',
   );
+}
+
+// ── 异步 node 探测（I3：IPC 面板数据面专用——spawnSync 会阻塞主进程事件循环，
+//     安全软件机器冷启动实测 3.7~5.4s；服务自身 spawn 仍走同步 findNodePath）──
+
+const execFileAsync = promisify(execFile);
+
+/** 与 verifyNode 同语义的异步验证 */
+async function verifyNodeAsync(p: string): Promise<boolean> {
+  try {
+    if (!fs.existsSync(p)) return false;
+    const { stdout } = await execFileAsync(p, ['-e', 'process.stdout.write("ok")'], {
+      timeout: NODE_PROBE_TIMEOUT_MS,
+      windowsHide: true,
+    });
+    return String(stdout).trim() === 'ok';
+  } catch {
+    return false;
+  }
+}
+
+async function nodeVersionOf(p: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(p, ['-v'], {
+      timeout: NODE_PROBE_TIMEOUT_MS,
+      windowsHide: true,
+    });
+    const v = String(stdout).trim();
+    return v.length > 0 ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface NodeProbeResult {
+  nodePath: string | null;
+  nodeVersion: string | null;
+}
+
+/**
+ * 异步探测 node 可用性（设置面板状态卡数据源）。语义与 findNodePath 对齐：
+ * 显式 nodePath 无效 → null（面板显示「未找到」，不回退）；auto 按候选次序取
+ * 首个可用者，并附 `node -v` 版本串。
+ */
+export async function probeNodeAvailability(nodePath: string | null): Promise<NodeProbeResult> {
+  let resolved: string | null = null;
+  if (nodePath !== null) {
+    if (await verifyNodeAsync(nodePath)) resolved = nodePath;
+  } else {
+    for (const c of nodeCandidatePaths()) {
+      if (await verifyNodeAsync(c)) {
+        resolved = c;
+        break;
+      }
+    }
+  }
+  if (resolved === null) return { nodePath: null, nodeVersion: null };
+  return { nodePath: resolved, nodeVersion: await nodeVersionOf(resolved) };
 }
 
 interface PendingEntry {
@@ -103,7 +194,8 @@ export class FileIoService {
   private readonly nodePathOverride: string | null;
   private readonly timeoutMs: number;
   private readonly batchSize: number;
-  private readonly clientInstalled: boolean;
+  /** 探测函数而非冻结布尔（I2）：auto 模式的生效模式在设置代际刷新时重探，不固化构造期快照 */
+  private readonly clientInstalledProbe: () => boolean;
   private readonly logger: FileIoServiceOpts['logger'];
   private readonly spawnImpl: NonNullable<FileIoServiceOpts['spawnImpl']>;
 
@@ -116,11 +208,14 @@ export class FileIoService {
 
   constructor(opts: FileIoServiceOpts) {
     this.settings = opts.settings;
-    this.workerPath = opts.workerPath ?? DEFAULT_WORKER_PATH;
+    this.workerPath = opts.workerPath ?? defaultWorkerPath();
     this.nodePathOverride = opts.nodePathOverride ?? null;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.batchSize = opts.batchSize ?? DEFAULT_BATCH_SIZE;
-    this.clientInstalled = opts.clientInstalled ?? detectClientInstalled();
+    const frozenInstalled = opts.clientInstalled;
+    this.clientInstalledProbe =
+      opts.clientInstalledProbe ??
+      (frozenInstalled !== undefined ? () => frozenInstalled : detectClientInstalled);
     this.logger = opts.logger;
     this.spawnImpl = opts.spawnImpl ?? ((cmd, args, o) => spawn(cmd, args, o));
   }
@@ -132,9 +227,10 @@ export class FileIoService {
     if (this.effectiveMode() === 'direct') this.close();
   }
 
+  /** 代际内缓存（applySettings 清除）；计算时实时调探测函数（I2） */
   effectiveMode(): EffectiveFileIoMode {
     if (this.cachedEffective === null) {
-      this.cachedEffective = resolveEffectiveMode(this.settings, this.clientInstalled);
+      this.cachedEffective = resolveEffectiveMode(this.settings, this.clientInstalledProbe());
     }
     return this.cachedEffective;
   }

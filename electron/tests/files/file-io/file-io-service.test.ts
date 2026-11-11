@@ -178,3 +178,38 @@ describe('node 解析', () => {
     expect(fs.existsSync(findNodePath(null))).toBe(true);
   });
 });
+
+describe('effectiveMode 探测代际（I2：不固化构造期安装态快照）', () => {
+  const AUTO: ResolvedFileIoSettings = { mode: 'auto', nodePath: null, strictCipherCheck: true };
+
+  it('auto + 探测翻转：applySettings 后按新探测结果生效', () => {
+    let installed = false;
+    const svc = new FileIoService({ settings: AUTO, clientInstalledProbe: () => installed });
+    services.push(svc);
+    expect(svc.effectiveMode()).toBe('direct');
+    installed = true;
+    // 代际内缓存语义：未 applySettings 不重探（原值仍生效）
+    expect(svc.effectiveMode()).toBe('direct');
+    svc.applySettings(AUTO);
+    expect(svc.effectiveMode()).toBe('proxy');
+  });
+
+  it('clientInstalled 布尔注入仍支持（等价 () => 固定值）', () => {
+    const svc = new FileIoService({ settings: AUTO, clientInstalled: true });
+    services.push(svc);
+    expect(svc.effectiveMode()).toBe('proxy');
+    const direct = new FileIoService({ settings: AUTO, clientInstalled: false });
+    services.push(direct);
+    expect(direct.effectiveMode()).toBe('direct');
+  });
+
+  it('探测函数优先级高于 clientInstalled 布尔', () => {
+    const svc = new FileIoService({
+      settings: AUTO,
+      clientInstalled: true,
+      clientInstalledProbe: () => false,
+    });
+    services.push(svc);
+    expect(svc.effectiveMode()).toBe('direct');
+  });
+});

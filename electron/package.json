@@ -36,6 +36,9 @@
       "!**/*.map",
       "!**/*.ts"
     ],
+    "asarUnpack": [
+      "dist/main/files/file-io/**"
+    ],
     "extraResources": [
       {
         "from": "./resources/agents",

@@ -508,14 +508,20 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
     // 文件 IO 桥（spec 2026-11-11 §5.4）：子进程 proxy 模式读写经主进程 FileIoService。
     // 回写带通道关闭防御（与 sendMcpResponse 同款）——应答无法送达时子进程侧
     // 超时兜底，绝不让 async listener 抛 unhandledRejection。
+    // I1：子进程侧路径不可信（含插件工具直发），按 spawn 闭包的工作空间囚禁。
     if (m.type === 'file-io:req' && typeof m.requestId === 'string') {
-      await handleFileIoRequestMsg(msg, (payload) => {
-        try {
-          child.send(payload);
-        } catch {
-          // 通道已关闭，应答无法送达——子进程侧超时兜底
-        }
-      });
+      await handleFileIoRequestMsg(
+        msg,
+        (payload) => {
+          try {
+            child.send(payload);
+          } catch {
+            // 通道已关闭，应答无法送达——子进程侧超时兜底
+          }
+        },
+        undefined,
+        { workspaceDir: runtimeConfig.workspaceDir },
+      );
       return;
     }
     // StreamChunk 类型的消息转发给 wrappedOnChunk（先触发下游 routeChunkToBuffer，
