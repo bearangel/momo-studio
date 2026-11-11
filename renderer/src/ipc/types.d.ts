@@ -1403,6 +1403,9 @@ export interface McpConfigView {
   url: string;
   /** 裸模式的现有 headers 键值（schema 模式为空对象） */
   headers: Record<string, string>;
+  /** OAuth 绑定（无绑定为 undefined；认证区块回显用，主进程经 mcp_definitions 带出） */
+  oauthConnectionId?: string;
+  oauthEnvVar?: string;
 }
 
 /**
@@ -1440,6 +1443,9 @@ export interface McpEditView {
   cwd?: string;
   /** 组⑤：启停态（编辑保存后据此决定是否跳过 mcp.start 预热） */
   enabled: boolean;
+  /** OAuth 绑定（无绑定为 undefined；Task 12/13 绑定字段回显） */
+  oauthConnectionId?: string;
+  oauthEnvVar?: string;
 }
 
 /**
@@ -2202,6 +2208,121 @@ export interface MiscApiSurface {
   openExternal(url: string): Promise<void>;
 }
 
+/**
+ * OAuth 模块（spec 2026-11-10 §6/§15）：连接状态。与 electron 端
+ * oauth/types.ts 的 OAuthConnectionStatus 对齐（跨进程独立定义，仅结构对齐）。
+ */
+export type OAuthConnectionStatus = 'connected' | 'needs_reauth' | 'revoked';
+
+/**
+ * 连接视图（永不含令牌）——oauth:listConnections / oauth:getConnection /
+ * completeWithManualCallback 的返回形状，与 electron 端 ConnectionView 对齐。
+ */
+export interface OAuthConnectionView {
+  id: string;
+  displayName: string;
+  accountLabel: string;
+  status: OAuthConnectionStatus;
+  scopes: string;
+  expiresAt: string | null;
+  source: 'manual' | 'mcp' | 'preset';
+}
+
+/** 授权发起结果：复用既有连接时 pendingId 及 URL 均为 null，仅 existingConnectionId 有值 */
+export interface OAuthBeginResult {
+  pendingId: string | null;
+  authorizationUrl: string | null;
+  redirectUri: string | null;
+  existingConnectionId: string | null;
+}
+
+/** oauth:authorizationChanged 推送的失败载荷（与主进程 OAuthFailure 形状对齐） */
+export interface OAuthFailurePayload {
+  code: string;
+  message: string;
+  connectionId?: string;
+  detail?: string;
+}
+
+/** 授权流程状态推送（loopback 异步完成 / 手动回调完成 / 取消均会触发） */
+export interface AuthorizationChangedPayload {
+  pendingId: string;
+  status: 'connected' | 'failed' | 'cancelled';
+  connectionId?: string;
+  error?: OAuthFailurePayload;
+}
+
+/**
+ * 手动授权表单（与 electron 端 oauth/service.ts 的 ManualAuthInput 对齐；
+ * R5：预设已降级为 renderer 预填，故 begin 入参不含 presetKey 形态）。
+ */
+export interface OAuthManualAuthInput {
+  displayName: string;
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+  clientId: string;
+  clientSecret?: string | null;
+  clientAuthMethod?: 'none' | 'client_secret_post' | 'client_secret_basic';
+  scopes?: string;
+  resource?: string | null;
+  issuer?: string | null;
+  revocationEndpoint?: string | null;
+  userinfoEndpoint?: string | null;
+  redirectHost?: string;
+  redirectPort?: number | null;
+  allowInsecureTls?: boolean;
+  extraAuthorizeParams?: Record<string, string>;
+  extraTokenParams?: Record<string, string>;
+}
+
+/** 授权发起两态（R5）：manual 表单直授，或按已注册远程 MCP 名走发现 + DCR */
+export type OAuthBeginInput = { manual: OAuthManualAuthInput } | { mcpName: string };
+
+/** 预设携带完整端点与默认 scope——renderer 用它预填「自定义端点」表单 */
+export interface OAuthProviderPresetInput {
+  displayName: string;
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+  clientId: string;
+  clientAuthMethod?: 'none' | 'client_secret_post' | 'client_secret_basic';
+  scopes?: string;
+  resource?: string | null;
+  issuer?: string | null;
+  revocationEndpoint?: string | null;
+  userinfoEndpoint?: string | null;
+  redirectHost?: string;
+  redirectPort?: number | null;
+  allowInsecureTls?: boolean;
+  extraAuthorizeParams?: Record<string, string>;
+  extraTokenParams?: Record<string, string>;
+}
+
+/** 常用服务预设完整对象（oauth:listPresets 返回形状） */
+export interface OAuthProviderPreset {
+  key: string;
+  label: string;
+  input: OAuthProviderPresetInput;
+}
+
+/** OAuth 连接管理通道面（oauth/ipc.handlers.ts）——invoke 十一通道 + 推送两通道 */
+export interface OAuthApiSurface {
+  listConnections(): Promise<OAuthConnectionView[]>;
+  getConnection(id: string): Promise<OAuthConnectionView | null>;
+  listPresets(): Promise<OAuthProviderPreset[]>;
+  beginAuthorization(input: OAuthBeginInput): Promise<OAuthBeginResult>;
+  beginAuthorizationForMcp(mcpName: string, envVar: string | null): Promise<OAuthBeginResult>;
+  completeWithManualCallback(payload: { pendingId: string; input: string }): Promise<OAuthConnectionView>;
+  cancelAuthorization(pendingId: string): Promise<void>;
+  disconnect(id: string): Promise<{ affectedMcpNames: string[] }>;
+  /** Task 16：引用某连接的 MCP 名单（认证区块共享提示） */
+  listBoundMcps(id: string): Promise<string[]>;
+  /** Task 16：解除单服务器绑定（保留授权本体；授权本体走 disconnect 吊销） */
+  unbindMcp(mcpName: string): Promise<void>;
+  removeConnection(id: string): Promise<{ affectedMcpNames: string[] }>;
+  onAuthorizationChanged(callback: (payload: AuthorizationChangedPayload) => void): () => void;
+  onConnectionsChanged(callback: (payload: { at: number }) => void): () => void;
+}
+
 export interface ApiSurface {
   system: {
     getInfo(): Promise<SystemInfo>;
@@ -2490,6 +2611,8 @@ export interface ApiSurface {
     /** 停止某 workspace 内的指定 MCP 进程 */
     stop(workspaceId: string, mcpName: string): Promise<void>;
   };
+  /** OAuth 模块（spec 2026-11-10）：连接管理通道（oauth/ipc.handlers.ts） */
+  oauth: OAuthApiSurface;
   allocation: {
     /** 读取某 workspace 的全部能力分配（按 tool/mcp/skill 分桶） */
     get(workspaceId: string): Promise<WorkspaceAllocation>;

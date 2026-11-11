@@ -79,20 +79,17 @@ electron/src/preload/index.ts                      + oauth 命名空间
 **新增（renderer）**
 
 ```
-renderer/src/components/settings/ConnectionsSettings.tsx
-renderer/src/components/settings/ConnectionsSettings.test.tsx
-renderer/src/components/oauth/AddConnectionDialog.tsx
 renderer/src/components/oauth/AuthorizeDialog.tsx
 renderer/src/components/oauth/AuthorizeDialog.test.tsx
+renderer/src/components/oauth/McpAuthSection.tsx
+renderer/src/components/oauth/McpNeedsAuthNotice.tsx
+renderer/src/lib/url-guard.ts
 ```
 
 **修改（renderer）**
 
 ```
 renderer/src/ipc/types.d.ts                                    OAuthApiSurface + ApiSurface.oauth + MCP 字段
-renderer/src/stores/settings.store.ts                          + 'connections'
-renderer/src/components/settings/SettingsNav.tsx               新分类
-renderer/src/components/settings/SettingsView.tsx              渲染新页
 renderer/src/components/resource-library/McpConfigDialog.tsx   https 修正 + 认证区块
 renderer/src/components/agent/RegisterMcpDialog.tsx            认证区块
 renderer/src/components/resource-library/ResourceLibraryView.tsx  授权横幅接线
@@ -4403,278 +4400,136 @@ git commit -m "feat: OAuth IPC、preload 契约与 boot 接线"
 
 ---
 
-## Task 15: 设置页「连接」管理（UI，P1 预览门禁）
+## Task 15: 授权等待对话框（UI，P1 门禁 v2 已过）
 
-> **门禁**：本任务属 `momo-ui-preview-rules` 的 P1（新页面 + 新组件）。**Step 1 必须先产出静态预览并取得用户确认**，未确认不得进入 Step 2。
+> **门禁已过**：`.omo/previews/oauth-module-ui-v2.html` 区块 C 已获用户确认（2026-11-10，R6 融合式改版）。按预览定值实现，不得改变交互契约。
 
 **Files:**
-- Create: `renderer/src/components/settings/ConnectionsSettings.tsx`
-- Create: `renderer/src/components/settings/ConnectionsSettings.test.tsx`
-- Create: `renderer/src/components/oauth/AddConnectionDialog.tsx`
 - Create: `renderer/src/components/oauth/AuthorizeDialog.tsx`
-- Create: `renderer/src/components/oauth/AuthorizeDialog.test.tsx`
-- Modify: `renderer/src/stores/settings.store.ts`
-- Modify: `renderer/src/components/settings/SettingsNav.tsx`
-- Modify: `renderer/src/components/settings/SettingsView.tsx`
+- Test: `renderer/src/components/oauth/AuthorizeDialog.test.tsx`
 
 **Interfaces:**
-- Consumes: `ipc.oauth.*`（Task 14）、`ipc.misc.openExternal`
-- Produces: `<ConnectionsSettings />`、`<AddConnectionDialog onClose onCreated />`、`<AuthorizeDialog pendingId authorizationUrl redirectUri onSuccess onClose />`
+- Consumes: `ipc.oauth.completeWithManualCallback` / `cancelAuthorization` / `onAuthorizationChanged`、`ipc.misc.openExternal`
+- Produces: `<AuthorizeDialog pendingId authorizationUrl redirectUri onSuccess onClose />`
 
-- [ ] **Step 1: 静态预览（门禁）**
+- [ ] **Step 1: 定值清单抽取（合同条款）**
 
-按 `momo-ui-preview-rules` 生成三种状态的静态预览（列表有数据 / 空态 / 授权等待弹窗），交用户确认布局与文案后再实现。
+从已批准预览抽取：说明文案「已在浏览器中打开授权页，完成授权后会自动返回。」；回调地址行 = `.code` 等宽块 + 右侧复制 icon 按钮（aria-label「复制回调地址」）；「无法自动回调？手动粘贴」为文字链接（accent 色 + 下划线）；展开后 label「粘贴浏览器地址栏的完整回调 URL（或仅 code）」+ 提交主按钮；底部 footer 仅「取消」ghost 按钮（点击 = `cancelAuthorization` + `onClose`）；错误文案使用 `text-status-error`；复制失败兜底「复制失败，请手动选中复制」。
 
-- [ ] **Step 2: 分类键与导航**
-
-`settings.store.ts`：`SettingsCategory` 联合追加 `| 'connections'`。
-`SettingsNav.tsx`：import `Link2`，在 `model_provider` 之后插入：
+- [ ] **Step 2: 写失败测试**
 
 ```tsx
-  { key: 'connections', label: '连接', icon: Link2 },
-```
-
-`SettingsView.tsx`：import 组件并在内容区分支渲染 `<ConnectionsSettings />`。
-
-- [ ] **Step 3: 写失败测试（列表 / 空态 / 断开确认）**
-
-```tsx
-// renderer/src/components/settings/ConnectionsSettings.test.tsx
+// renderer/src/components/oauth/AuthorizeDialog.test.tsx
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { ConnectionsSettings } from './ConnectionsSettings';
+import { AuthorizeDialog } from './AuthorizeDialog';
+import type { AuthorizationChangedPayload } from '../../ipc/types';
 
-const listConnections = vi.fn();
-const disconnect = vi.fn();
-const removeConnection = vi.fn();
-const onConnectionsChanged = vi.fn(() => () => undefined);
+const openExternal = vi.fn().mockResolvedValue(undefined);
+const completeWithManualCallback = vi.fn();
+const cancelAuthorization = vi.fn().mockResolvedValue(undefined);
+type ChangedHandler = (payload: AuthorizationChangedPayload) => void;
+let changedHandler: ChangedHandler | null = null;
+const onAuthorizationChanged = vi.fn((cb: ChangedHandler) => {
+  changedHandler = cb;
+  return () => { changedHandler = null; };
+});
 
 const mockApi = {
-  oauth: { listConnections, disconnect, removeConnection, onConnectionsChanged },
+  misc: { openExternal },
+  oauth: { completeWithManualCallback, cancelAuthorization, onAuthorizationChanged },
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  openExternal.mockResolvedValue(undefined);
+  cancelAuthorization.mockResolvedValue(undefined);
+  changedHandler = null;
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
-  listConnections.mockResolvedValue([]);
 });
 
-describe('ConnectionsSettings', () => {
-  it('空态给出新增引导', async () => {
-    render(<ConnectionsSettings />);
-    expect(await screen.findByText('还没有任何授权连接')).toBeTruthy();
-  });
-
-  it('列出连接并显示状态徽标', async () => {
-    listConnections.mockResolvedValue([
-      { id: 'c1', displayName: 'GitHub', accountLabel: 'bearangel', status: 'connected', scopes: 'repo', expiresAt: null, source: 'manual' },
-      { id: 'c2', displayName: 'Notion', accountLabel: '', status: 'needs_reauth', scopes: '', expiresAt: null, source: 'mcp' },
-    ]);
-    render(<ConnectionsSettings />);
-    expect(await screen.findByText('GitHub')).toBeTruthy();
-    expect(screen.getByText('bearangel')).toBeTruthy();
-    expect(screen.getByText('需重新授权')).toBeTruthy();
-  });
-
-  it('断开需二次确认并调用 disconnect', async () => {
-    listConnections.mockResolvedValue([
-      { id: 'c1', displayName: 'GitHub', accountLabel: '', status: 'connected', scopes: '', expiresAt: null, source: 'manual' },
-    ]);
-    disconnect.mockResolvedValue({ affectedMcpNames: [] });
-    render(<ConnectionsSettings />);
-    fireEvent.click(await screen.findByRole('button', { name: '断开' }));
-    fireEvent.click(await screen.findByRole('button', { name: '确认断开' }));
-    await waitFor(() => expect(disconnect).toHaveBeenCalledWith('c1'));
-  });
-});
-```
-
-- [ ] **Step 4: 运行确认失败**
-
-Run: `cd renderer && npx pnpm@9.0.0 vitest run src/components/settings/ConnectionsSettings.test.tsx`
-Expected: FAIL
-
-- [ ] **Step 5: 实现 `ConnectionsSettings.tsx`**
-
-结构（用既有 `Button` / `Dialog` / 语义 token；图标 16px stroke 1.75）：
-
-```tsx
-// renderer/src/components/settings/ConnectionsSettings.tsx
-//
-// 设置 → 连接：OAuth 连接列表与生命周期操作（spec §13.1）。
-// 只消费 ConnectionView（无 token）；断开/移除均二次确认，移除被引用时展示影响面并失败。
-import { useEffect, useState } from 'react';
-import { Link2, Plus, RefreshCw, Trash2 } from 'lucide-react';
-import { ipc } from '../../ipc/client';
-import type { OAuthConnectionView } from '../../ipc/types';
-import { Button } from '../ui/Button';
-import { AddConnectionDialog } from '../oauth/AddConnectionDialog';
-
-const STATUS_LABEL: Record<OAuthConnectionView['status'], string> = {
-  connected: '已连接',
-  needs_reauth: '需重新授权',
-  revoked: '已断开',
+const PROPS = {
+  pendingId: 'p-1',
+  authorizationUrl: 'https://auth.example.com/authorize?x=1',
+  redirectUri: 'http://127.0.0.1:51789/callback',
+  onSuccess: vi.fn(),
+  onClose: vi.fn(),
 };
 
-export function ConnectionsSettings() {
-  const [items, setItems] = useState<OAuthConnectionView[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [adding, setAdding] = useState(false);
-  const [confirming, setConfirming] = useState<{ id: string; kind: 'disconnect' | 'remove' } | null>(null);
-  const [error, setError] = useState<string | null>(null);
+describe('AuthorizeDialog', () => {
+  it('挂载即用系统浏览器打开授权页（幂等，仅一次）', async () => {
+    render(<AuthorizeDialog {...PROPS} />);
+    await waitFor(() => expect(openExternal).toHaveBeenCalledTimes(1));
+    expect(openExternal).toHaveBeenCalledWith(PROPS.authorizationUrl);
+  });
 
-  const reload = async (): Promise<void> => {
-    setItems(await ipc.oauth.listConnections());
-    setLoading(false);
-  };
+  it('展示可复制的回调地址与手动粘贴入口', async () => {
+    render(<AuthorizeDialog {...PROPS} />);
+    expect(screen.getByText(PROPS.redirectUri)).toBeTruthy();
+    expect(screen.getByRole('button', { name: '复制回调地址' })).toBeTruthy();
+    fireEvent.click(screen.getByText('无法自动回调？手动粘贴'));
+    expect(screen.getByLabelText('粘贴浏览器地址栏的完整回调 URL（或仅 code）')).toBeTruthy();
+  });
 
-  useEffect(() => {
-    void reload();
-    return ipc.oauth.onConnectionsChanged(() => { void reload(); });
-  }, []);
+  it('手动粘贴提交走 completeWithManualCallback，成功回调 onSuccess', async () => {
+    completeWithManualCallback.mockResolvedValue({ id: 'c1', displayName: 'X', accountLabel: '', status: 'connected', scopes: '', expiresAt: null, source: 'manual' });
+    render(<AuthorizeDialog {...PROPS} />);
+    fireEvent.click(screen.getByText('无法自动回调？手动粘贴'));
+    fireEvent.change(screen.getByLabelText('粘贴浏览器地址栏的完整回调 URL（或仅 code）'), {
+      target: { value: `${PROPS.redirectUri}?code=abc&state=st` },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '提交' }));
+    await waitFor(() =>
+      expect(completeWithManualCallback).toHaveBeenCalledWith({
+        pendingId: 'p-1',
+        input: `${PROPS.redirectUri}?code=abc&state=st`,
+      }),
+    );
+    await waitFor(() => expect(PROPS.onSuccess).toHaveBeenCalled());
+  });
 
-  const runAction = async (
-    fn: () => Promise<{ affectedMcpNames: string[] }>,
-  ): Promise<void> => {
-    setError(null);
-    try {
-      await fn();
-      await reload();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setConfirming(null);
-    }
-  };
+  it('粘贴提交失败展示中文错误且弹窗不关', async () => {
+    completeWithManualCallback.mockRejectedValue(new Error('state 校验失败，请重新发起授权'));
+    render(<AuthorizeDialog {...PROPS} />);
+    fireEvent.click(screen.getByText('无法自动回调？手动粘贴'));
+    fireEvent.change(screen.getByLabelText('粘贴浏览器地址栏的完整回调 URL（或仅 code）'), {
+      target: { value: 'bad-input' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '提交' }));
+    expect(await screen.findByText('state 校验失败，请重新发起授权')).toBeTruthy();
+    expect(PROPS.onSuccess).not.toHaveBeenCalled();
+    expect(PROPS.onClose).not.toHaveBeenCalled();
+  });
 
-  return (
-    <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-sm font-medium text-primary">连接</h2>
-          <p className="text-xs text-tertiary mt-1">
-            OAuth 授权凭据统一在这里管理；MCP 与其他工具引用这些连接。
-          </p>
-        </div>
-        <Button size="sm" onClick={() => setAdding(true)}>
-          <Plus size={14} strokeWidth={1.75} aria-hidden />
-          新增连接
-        </Button>
-      </div>
+  it('收到本 pendingId 的 connected 推送 → onSuccess；failed → 显示错误', async () => {
+    render(<AuthorizeDialog {...PROPS} />);
+    changedHandler?.({ pendingId: 'p-1', status: 'connected', connectionId: 'c1' });
+    await waitFor(() => expect(PROPS.onSuccess).toHaveBeenCalled());
+  });
 
-      {error && <div className="text-status-error text-sm">{error}</div>}
-
-      {loading ? (
-        <div className="text-sm text-tertiary">加载中…</div>
-      ) : items.length === 0 ? (
-        <div className="flex-1 flex flex-col items-center justify-center gap-3 text-sm text-tertiary py-16">
-          <Link2 size={20} strokeWidth={1.75} aria-hidden />
-          还没有任何授权连接
-          <Button variant="secondary" size="sm" onClick={() => setAdding(true)}>
-            新增连接
-          </Button>
-        </div>
-      ) : (
-        <ul className="flex flex-col gap-2">
-          {items.map((item) => (
-            <li
-              key={item.id}
-              className="rounded-md border border-subtle bg-surface-1 px-3 py-2 flex items-center gap-3"
-            >
-              <div className="flex flex-col min-w-0">
-                <span className="text-sm text-primary truncate">{item.displayName}</span>
-                <span className="text-xs text-tertiary truncate">
-                  {item.accountLabel || '未命名账号'}
-                  {item.scopes ? ` · ${item.scopes}` : ''}
-                </span>
-              </div>
-              <span className="ml-auto text-xs px-2 py-0.5 rounded-full bg-surface-3 text-secondary">
-                {STATUS_LABEL[item.status]}
-              </span>
-              <span className="text-xs text-tertiary">
-                {item.expiresAt ? `到期 ${new Date(item.expiresAt).toLocaleString()}` : '长期有效'}
-              </span>
-              {confirming?.id === item.id ? (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-status-warning">
-                    {confirming.kind === 'remove' ? '确认移除该连接？' : '确认断开该连接？'}
-                  </span>
-                  <Button
-                    size="sm"
-                    variant={confirming.kind === 'remove' ? 'danger' : 'secondary'}
-                    onClick={() => {
-                      const kind = confirming.kind;
-                      void runAction(() =>
-                        kind === 'remove'
-                          ? ipc.oauth.removeConnection(item.id)
-                          : ipc.oauth.disconnect(item.id),
-                      );
-                    }}
-                  >
-                    {confirming.kind === 'remove' ? '确认移除' : '确认断开'}
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => setConfirming(null)}>
-                    取消
-                  </Button>
-                </div>
-              ) : (
-                <div className="flex items-center gap-1">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    aria-label="重新授权"
-                    title="重新授权"
-                    onClick={() => setAdding(true)}
-                  >
-                    <RefreshCw size={14} strokeWidth={1.75} aria-hidden />
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    aria-label="断开"
-                    onClick={() => setConfirming({ id: item.id, kind: 'disconnect' })}
-                  >
-                    断开
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    aria-label="移除"
-                    title="移除"
-                    onClick={() => setConfirming({ id: item.id, kind: 'remove' })}
-                  >
-                    <Trash2 size={14} strokeWidth={1.75} aria-hidden />
-                  </Button>
-                </div>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {adding && (
-        <AddConnectionDialog
-          onClose={() => setAdding(false)}
-          onCreated={() => {
-            setAdding(false);
-            void reload();
-          }}
-        />
-      )}
-    </div>
-  );
-}
+  it('取消 = cancelAuthorization + onClose', async () => {
+    render(<AuthorizeDialog {...PROPS} />);
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    await waitFor(() => expect(cancelAuthorization).toHaveBeenCalledWith('p-1'));
+    expect(PROPS.onClose).toHaveBeenCalled();
+  });
+});
 ```
 
-> 授权等待弹窗由 `AddConnectionDialog` 自己持有（拿到 `authorizationUrl` 后挂载 `AuthorizeDialog`），设置页只负责列表与生命周期操作。
+- [ ] **Step 3: 运行确认失败**
 
-- [ ] **Step 6: 实现 `AuthorizeDialog.tsx`**
+Run: `cd renderer && npx pnpm@9.0.0 vitest run src/components/oauth/AuthorizeDialog.test.tsx`
+Expected: FAIL（模块不存在）
+
+- [ ] **Step 4: 实现**
 
 ```tsx
 // renderer/src/components/oauth/AuthorizeDialog.tsx
 //
-// 授权等待弹窗（spec §13.3）：展示 redirect_uri（可复制）、用系统浏览器打开授权页、
-// 订阅 oauth:authorizationChanged；常驻「无法自动回调？」手动粘贴入口（容器/远程开发）。
+// 授权等待对话框（spec §13.3，预览 v2 区块 C）：所有授权入口共用。
+// 契约：挂载即开系统浏览器（misc:openExternal，https 任意 + 回环 http）；
+// 完成事件经 oauth:authorizationChanged 推送驱动 onSuccess；手动粘贴为
+// 容器/远程开发/防火墙场景的兜底，走同一条 complete 路径。
 import { useEffect, useState } from 'react';
 import { Copy, KeyRound } from 'lucide-react';
 import { ipc } from '../../ipc/client';
@@ -4698,7 +4553,6 @@ export function AuthorizeDialog({ pendingId, authorizationUrl, redirectUri, onSu
   const [submitting, setSubmitting] = useState(false);
   const [opened, setOpened] = useState(false);
 
-  // 打开系统浏览器（复用既有 misc:openExternal：https 任意 + 本机回环 http）
   useEffect(() => {
     if (opened) return;
     setOpened(true);
@@ -4707,13 +4561,23 @@ export function AuthorizeDialog({ pendingId, authorizationUrl, redirectUri, onSu
     });
   }, [authorizationUrl, opened]);
 
-  useEffect(() => {
-    return ipc.oauth.onAuthorizationChanged((payload: AuthorizationChangedPayload) => {
-      if (payload.pendingId !== pendingId) return;
-      if (payload.status === 'connected') onSuccess();
-      else if (payload.status === 'failed') setError(payload.error?.message ?? '授权失败');
-    });
-  }, [pendingId, onSuccess]);
+  useEffect(
+    () =>
+      ipc.oauth.onAuthorizationChanged((payload: AuthorizationChangedPayload) => {
+        if (payload.pendingId !== pendingId) return;
+        if (payload.status === 'connected') onSuccess();
+        else if (payload.status === 'failed') setError(payload.error?.message ?? '授权失败');
+      }),
+    [pendingId, onSuccess],
+  );
+
+  const copyRedirect = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(redirectUri);
+    } catch {
+      setError('复制失败，请手动选中复制');
+    }
+  };
 
   const submitManual = async (): Promise<void> => {
     setSubmitting(true);
@@ -4725,14 +4589,6 @@ export function AuthorizeDialog({ pendingId, authorizationUrl, redirectUri, onSu
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSubmitting(false);
-    }
-  };
-
-  const copyRedirect = async (): Promise<void> => {
-    try {
-      await navigator.clipboard.writeText(redirectUri);
-    } catch {
-      setError('复制失败，请手动选中复制');
     }
   };
 
@@ -4774,6 +4630,9 @@ export function AuthorizeDialog({ pendingId, authorizationUrl, redirectUri, onSu
               onChange={(e) => setManual(e.target.value)}
               placeholder="http://127.0.0.1:51789/callback?code=…&state=…"
             />
+            <div className="text-xs text-tertiary">
+              适用：容器 / 远程开发、防火墙拦截、授权服务限制回调地址。
+            </div>
             <Button
               size="sm"
               disabled={submitting || manual.trim() === ''}
@@ -4797,367 +4656,53 @@ export function AuthorizeDialog({ pendingId, authorizationUrl, redirectUri, onSu
 }
 ```
 
-同时把顶部 import 补全为：
+- [ ] **Step 5: 运行测试**
 
-```tsx
-import { useEffect, useState } from 'react';
-import { Copy, KeyRound } from 'lucide-react';
-```
-
-> 顶部 import 已在上方代码块内给出（`Copy` / `KeyRound`），实现时按预览确认的间距与文案微调，不得改变交互契约（复制、手动粘贴、取消）。
-
-- [ ] **Step 7: `AddConnectionDialog.tsx`（三模式）**
-
-```tsx
-// renderer/src/components/oauth/AddConnectionDialog.tsx
-//
-// 新增连接（spec §13.2）。三模式用普通 tab 按钮（aria-pressed）实现，避免依赖
-// Segmented 的既定 API；预设只做「预填」——最终统一走 manual 入参，避免为预设
-// 单开一条 BeginInput 分支（减少服务层可变面）。
-import { useEffect, useState } from 'react';
-import { ipc } from '../../ipc/client';
-import type { OAuthBeginResult, OAuthProviderPreset } from '../../ipc/types';
-import { Button } from '../ui/Button';
-import { Dialog } from '../ui/Dialog';
-import { Input } from '../ui/Input';
-import { AuthorizeDialog } from './AuthorizeDialog';
-
-type Mode = 'mcp' | 'preset' | 'manual';
-
-interface Props {
-  onClose: () => void;
-  onCreated: () => void;
-}
-
-interface ManualForm {
-  displayName: string;
-  authorizationEndpoint: string;
-  tokenEndpoint: string;
-  clientId: string;
-  clientSecret: string;
-  scopes: string;
-  userinfoEndpoint: string;
-  redirectHost: '127.0.0.1' | 'localhost';
-  redirectPort: string;
-  allowInsecureTls: boolean;
-}
-
-const EMPTY_FORM: ManualForm = {
-  displayName: '',
-  authorizationEndpoint: '',
-  tokenEndpoint: '',
-  clientId: '',
-  clientSecret: '',
-  scopes: '',
-  userinfoEndpoint: '',
-  redirectHost: '127.0.0.1',
-  redirectPort: '',
-  allowInsecureTls: false,
-};
-
-export function AddConnectionDialog({ onClose, onCreated }: Props) {
-  const [mode, setMode] = useState<Mode>('manual');
-  const [presets, setPresets] = useState<OAuthProviderPreset[]>([]);
-  const [mcpItems, setMcpItems] = useState<Array<{ slug: string; title: string }>>([]);
-  const [mcpName, setMcpName] = useState('');
-  const [presetKey, setPresetKey] = useState('');
-  const [form, setForm] = useState<ManualForm>(EMPTY_FORM);
-  const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [authorizing, setAuthorizing] = useState<{
-    pendingId: string; authorizationUrl: string; redirectUri: string;
-  } | null>(null);
-
-  useEffect(() => {
-    void ipc.oauth.listPresets().then(setPresets);
-    void ipc.resource
-      .list({ type: 'mcp' })
-      .then((items) => setMcpItems(items.map((i) => ({ slug: i.slug, title: i.title }))));
-  }, []);
-
-  const patch = (next: Partial<ManualForm>): void => setForm((prev) => ({ ...prev, ...next }));
-
-  const applyPreset = (key: string): void => {
-    setPresetKey(key);
-    const preset = presets.find((p) => p.key === key);
-    if (!preset) return;
-    setForm({
-      ...EMPTY_FORM,
-      displayName: preset.input.displayName,
-      authorizationEndpoint: preset.input.authorizationEndpoint,
-      tokenEndpoint: preset.input.tokenEndpoint,
-      clientId: preset.input.clientId,
-      scopes: preset.input.scopes ?? '',
-      userinfoEndpoint: preset.input.userinfoEndpoint ?? '',
-      redirectHost: preset.input.redirectHost === 'localhost' ? 'localhost' : '127.0.0.1',
-      redirectPort: preset.input.redirectPort ? String(preset.input.redirectPort) : '',
-      allowInsecureTls: preset.input.allowInsecureTls ?? false,
-    });
-  };
-
-  const handleResult = (result: OAuthBeginResult): void => {
-    if (result.existingConnectionId) {
-      onCreated();
-      return;
-    }
-    if (result.pendingId && result.authorizationUrl && result.redirectUri) {
-      setAuthorizing({
-        pendingId: result.pendingId,
-        authorizationUrl: result.authorizationUrl,
-        redirectUri: result.redirectUri,
-      });
-    }
-  };
-
-  const submit = async (): Promise<void> => {
-    setSubmitting(true);
-    setError(null);
-    try {
-      if (mode === 'mcp') {
-        if (!mcpName) throw new Error('请选择要授权的 MCP 服务器');
-        handleResult(await ipc.oauth.beginAuthorizationForMcp(mcpName, null));
-        return;
-      }
-      if (!form.authorizationEndpoint.trim() || !form.tokenEndpoint.trim() || !form.clientId.trim()) {
-        throw new Error('授权端点、令牌端点与 client_id 必填');
-      }
-      const port = form.redirectPort.trim() === '' ? null : Number(form.redirectPort);
-      if (port !== null && (!Number.isInteger(port) || port <= 0 || port > 65535)) {
-        throw new Error('回调端口必须是 1-65535 的整数');
-      }
-      handleResult(
-        await ipc.oauth.beginAuthorization({
-          manual: {
-            displayName: form.displayName.trim() || '未命名连接',
-            authorizationEndpoint: form.authorizationEndpoint.trim(),
-            tokenEndpoint: form.tokenEndpoint.trim(),
-            clientId: form.clientId.trim(),
-            clientSecret: form.clientSecret.trim() || null,
-            scopes: form.scopes.trim(),
-            userinfoEndpoint: form.userinfoEndpoint.trim() || null,
-            redirectHost: form.redirectHost,
-            redirectPort: port,
-            allowInsecureTls: form.allowInsecureTls,
-          },
-        }),
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const loopbackEndpoint =
-    form.authorizationEndpoint.trim().startsWith('http://127.0.0.1') ||
-    form.authorizationEndpoint.trim().startsWith('http://localhost');
-
-  return (
-    <Dialog
-      open
-      onClose={onClose}
-      title="新增 OAuth 连接"
-      width={560}
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>取消</Button>
-          <Button
-            disabled={submitting}
-            onClick={() => {
-              void submit();
-            }}
-          >
-            {submitting ? '正在发起…' : '开始授权'}
-          </Button>
-        </>
-      }
-    >
-      <div className="flex flex-col gap-3 text-sm">
-        <div className="flex gap-1" role="tablist" aria-label="连接来源">
-          {([
-            ['manual', '自定义端点'],
-            ['preset', '常用服务'],
-            ['mcp', '从 MCP 发现'],
-          ] as Array<[Mode, string]>).map(([key, label]) => (
-            <Button
-              key={key}
-              size="sm"
-              variant={mode === key ? 'secondary' : 'ghost'}
-              aria-pressed={mode === key}
-              onClick={() => setMode(key)}
-            >
-              {label}
-            </Button>
-          ))}
-        </div>
-
-        {error && <div className="text-status-error">{error}</div>}
-
-        {mode === 'mcp' ? (
-          <label className="flex flex-col gap-1">
-            <span className="text-sm text-secondary">MCP 服务器</span>
-            <select
-              className="rounded-md border border-subtle bg-surface-2 px-3 py-2 text-[13px] text-primary"
-              value={mcpName}
-              onChange={(e) => setMcpName(e.target.value)}
-            >
-              <option value="">请选择…</option>
-              {mcpItems.map((item) => (
-                <option key={item.slug} value={item.slug}>{item.title}</option>
-              ))}
-            </select>
-            <span className="text-xs text-tertiary">
-              将从服务器的 OAuth 资源元数据自动发现授权服务器（需要该服务器声明 OAuth）。
-            </span>
-          </label>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {mode === 'preset' && (
-              <label className="flex flex-col gap-1">
-                <span className="text-sm text-secondary">服务</span>
-                <select
-                  className="rounded-md border border-subtle bg-surface-2 px-3 py-2 text-[13px] text-primary"
-                  value={presetKey}
-                  onChange={(e) => applyPreset(e.target.value)}
-                >
-                  <option value="">请选择…</option>
-                  {presets.map((p) => (
-                    <option key={p.key} value={p.key}>{p.label}</option>
-                  ))}
-                </select>
-              </label>
-            )}
-            <Input label="名称" value={form.displayName} onChange={(e) => patch({ displayName: e.target.value })} />
-            <Input
-              label="授权端点"
-              value={form.authorizationEndpoint}
-              placeholder="https://…/authorize"
-              onChange={(e) => patch({ authorizationEndpoint: e.target.value })}
-            />
-            <Input
-              label="令牌端点"
-              value={form.tokenEndpoint}
-              placeholder="https://…/token"
-              onChange={(e) => patch({ tokenEndpoint: e.target.value })}
-            />
-            <Input label="Client ID" value={form.clientId} onChange={(e) => patch({ clientId: e.target.value })} />
-            <Input
-              label="Client Secret（可空；公共客户端留空）"
-              type="password"
-              value={form.clientSecret}
-              onChange={(e) => patch({ clientSecret: e.target.value })}
-            />
-            <Input label="Scope（空格分隔）" value={form.scopes} onChange={(e) => patch({ scopes: e.target.value })} />
-            <Input
-              label="用户信息端点（可空，用于回填账号名）"
-              value={form.userinfoEndpoint}
-              placeholder="https://…/userinfo"
-              onChange={(e) => patch({ userinfoEndpoint: e.target.value })}
-            />
-            <div className="flex items-end gap-2">
-              <label className="flex flex-col gap-1">
-                <span className="text-sm text-secondary">回调主机</span>
-                <select
-                  className="rounded-md border border-subtle bg-surface-2 px-3 py-2 text-[13px] text-primary"
-                  value={form.redirectHost}
-                  onChange={(e) => patch({ redirectHost: e.target.value === 'localhost' ? 'localhost' : '127.0.0.1' })}
-                >
-                  <option value="127.0.0.1">127.0.0.1</option>
-                  <option value="localhost">localhost</option>
-                </select>
-              </label>
-              <Input
-                label="回调端口（留空=随机）"
-                value={form.redirectPort}
-                onChange={(e) => patch({ redirectPort: e.target.value })}
-              />
-            </div>
-            {loopbackEndpoint && (
-              <label className="flex items-center gap-2 text-xs text-secondary">
-                <input
-                  type="checkbox"
-                  checked={form.allowInsecureTls}
-                  onChange={(e) => patch({ allowInsecureTls: e.target.checked })}
-                />
-                忽略自签证书（仅本地开发）
-              </label>
-            )}
-          </div>
-        )}
-      </div>
-
-      {authorizing && (
-        <AuthorizeDialog
-          pendingId={authorizing.pendingId}
-          authorizationUrl={authorizing.authorizationUrl}
-          redirectUri={authorizing.redirectUri}
-          onSuccess={onCreated}
-          onClose={() => setAuthorizing(null)}
-        />
-      )}
-    </Dialog>
-  );
-}
-```
-
-> 说明：`ipc.resource.list({ type: 'mcp' })` 返回项含 `slug` / `title`（既有资源库列表契约）；非远程条目在选择后由服务层给出明确中文错误，不在 UI 预先猜测 transport。
-
-- [ ] **Step 8: 运行 renderer 测试**
-
-Run: `cd renderer && npx pnpm@9.0.0 vitest run src/components/settings/ConnectionsSettings.test.tsx src/components/oauth`
+Run: `cd renderer && npx pnpm@9.0.0 vitest run src/components/oauth/AuthorizeDialog.test.tsx`
 Expected: PASS
 
-- [ ] **Step 9: 提交**
+- [ ] **Step 6: 提交**
 
 ```bash
-git add renderer/src/components/settings/ConnectionsSettings.tsx \
-  renderer/src/components/settings/ConnectionsSettings.test.tsx \
-  renderer/src/components/oauth/AddConnectionDialog.tsx \
-  renderer/src/components/oauth/AuthorizeDialog.tsx \
-  renderer/src/components/oauth/AuthorizeDialog.test.tsx \
-  renderer/src/stores/settings.store.ts \
-  renderer/src/components/settings/SettingsNav.tsx \
-  renderer/src/components/settings/SettingsView.tsx
-git commit -m "feat: 设置页 OAuth 连接管理与授权弹窗"
+git add renderer/src/components/oauth/AuthorizeDialog.tsx \
+  renderer/src/components/oauth/AuthorizeDialog.test.tsx
+git commit -m "feat: OAuth 授权等待对话框（复制回调/手动粘贴）"
 ```
 
----
+## Task 16: MCP 内联认证全流程（授权区块 + 添加流横幅 + 撤销授权 + https 修正）
 
-## Task 16: MCP 弹窗认证区块 + 授权横幅 + `McpConfigDialog` https 修正
-
-> **门禁**：新增 UI 区块属 P1，先出预览确认。
+> **门禁已过**：`.omo/previews/oauth-module-ui-v2.html` 区块 G/D/E 已确认（R6 融合式：认证全部发生在 MCP 使用点，无独立管理页）。
 
 **Files:**
 - Create: `renderer/src/lib/url-guard.ts`
+- Create: `renderer/src/lib/url-guard.test.ts`
 - Create: `renderer/src/components/oauth/McpAuthSection.tsx`
 - Create: `renderer/src/components/oauth/McpAuthSection.test.tsx`
+- Create: `renderer/src/components/oauth/McpNeedsAuthNotice.tsx`
 - Modify: `renderer/src/components/resource-library/McpConfigDialog.tsx`
 - Modify: `renderer/src/components/agent/RegisterMcpDialog.tsx`
-- Modify: `electron/src/main/resource/mcp-config.ts`（`McpEditView` 补两字段）
-- Modify: `electron/src/main/oauth/ipc.handlers.ts`（`oauth:unbindMcp`）
-- Modify: `electron/src/main/oauth/mcp-trigger.ts`（`unbindMcpOAuth`）
-- Modify: `electron/src/preload/index.ts` + `renderer/src/ipc/types.d.ts`（`oauth:unbindMcp`）
+- Modify: `electron/src/main/oauth/ipc.handlers.ts`（新通道 `oauth:listBoundMcps`）
+- Modify: `electron/src/main/oauth/service.ts`（导出 `listMcpNamesByConnection` 若未导出）
+- Modify: `electron/src/preload/index.ts` + `renderer/src/ipc/types.d.ts`（`oauth.listBoundMcps`）
 - Test: `renderer/src/components/resource-library/McpConfigDialog.test.tsx`（补 http 回环用例）
+- Test: `renderer/src/components/agent/RegisterMcpDialog.test.tsx`（补 401 横幅用例）
 
 **Interfaces:**
-- Consumes: `ipc.oauth.beginAuthorizationForMcp` / `unbindMcp` / `listConnections`
-- Produces: `<McpAuthSection mcpName transport connectionId envVar onChange />`；`isHttpsOrLoopbackHttp(url)`（renderer 镜像）
+- Consumes: `ipc.oauth.beginAuthorizationForMcp` / `unbindMcp` / `disconnect` / `listConnections` / `listBoundMcps`；Task 15 的 `AuthorizeDialog`
+- Produces: `<McpAuthSection mcpName transport connectionId envVar onChange onAuthorized />`、`<McpNeedsAuthNotice onAuthorize />`、`isHttpsOrLoopbackHttp(url)`
 
-- [ ] **Step 1: 静态预览（门禁）**
-
-出 MCP 配置弹窗「认证」区块的三种状态预览：未绑定 / 已绑定已连接 / 需重新授权。
-
-- [ ] **Step 2: renderer URL 守卫镜像 + `McpConfigDialog` 修正**
+- [ ] **Step 1: renderer URL 守卫镜像 + `McpConfigDialog` https 修正**
 
 ```ts
 // renderer/src/lib/url-guard.ts
 // 与 electron/src/main/util/url-guard.ts 同构（双端契约）：https 任意 + http 仅回环。
 export function isLoopbackHost(hostname: string): boolean {
-  const h = hostname.toLowerCase();
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, '');
   return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '0.0.0.0';
 }
 
-export function isHttpsOrLoopbackHttp(url: string): boolean {
+export function isHttpsOrLoopbackHttp(url: unknown): boolean {
+  if (typeof url !== 'string') return false;
   try {
     const parsed = new URL(url);
     if (parsed.protocol === 'https:') return true;
@@ -5168,22 +4713,24 @@ export function isHttpsOrLoopbackHttp(url: string): boolean {
 }
 ```
 
-`McpConfigDialog.tsx`：`canSubmit` 改
+`url-guard.test.ts` 覆盖：https 任意、`http://127.0.0.1:8080/x` 与 `http://[::1]:51789/callback` 通过、`http://example.com` / `http://192.168.1.5` / `ftp://` / 非法串拒绝。
+
+`McpConfigDialog.tsx`：`canSubmit` 改 `isHttpsOrLoopbackHttp(url.trim()) && !missingRequired && !lockAll`，并更新文件头注释（「非 https 且非回环 http 禁提交」）。
+
+- [ ] **Step 2: 主进程补 `oauth:listBoundMcps`**
+
+`service.ts` 若 `listMcpNamesByConnection` 非 export 则导出；`ipc.handlers.ts` 追加（preload / types.d.ts 同步 `listBoundMcps(id: string): Promise<string[]>`）：
 
 ```ts
-  const canSubmit = isHttpsOrLoopbackHttp(url.trim()) && !missingRequired && !lockAll;
-```
-
-并更新文件头注释（原文写「url 非 https 禁提交」，改为「非 https 且非回环 http 禁提交」）。测试补：
-
-```tsx
-  it('允许 http://127.0.0.1 端点提交，拒绝 http://example.com', async () => {
-    // getMcpConfig 返回 bare=true + url=http://127.0.0.1:8080/mcp
-    // 填写后提交按钮可用；改为 http://example.com 后禁用
+  ipcMain.handle('oauth:listBoundMcps', (_evt, id: string) => {
+    if (typeof id !== 'string' || id === '') {
+      throw new OAuthFailure('no_connection', '连接 id 无效');
+    }
+    return listMcpNamesByConnection(id);
   });
 ```
 
-- [ ] **Step 3: 写失败测试（认证区块）**
+- [ ] **Step 3: 写失败测试（认证区块 v2）**
 
 ```tsx
 // renderer/src/components/oauth/McpAuthSection.test.tsx
@@ -5192,67 +4739,102 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { McpAuthSection } from './McpAuthSection';
 
 const listConnections = vi.fn();
+const listBoundMcps = vi.fn();
 const beginAuthorizationForMcp = vi.fn();
 const unbindMcp = vi.fn();
-const openExternal = vi.fn();
-const mockApi = {
-  oauth: { listConnections, beginAuthorizationForMcp, unbindMcp },
-  misc: { openExternal },
-};
+const disconnect = vi.fn();
+const mockApi = { oauth: { listConnections, listBoundMcps, beginAuthorizationForMcp, unbindMcp, disconnect } };
 
 beforeEach(() => {
   vi.clearAllMocks();
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
   listConnections.mockResolvedValue([
-    { id: 'c1', displayName: 'GitHub', accountLabel: 'bearangel', status: 'connected', scopes: '', expiresAt: null, source: 'manual' },
+    { id: 'c1', displayName: 'GitHub', accountLabel: 'bearangel', status: 'connected', scopes: '', expiresAt: null, source: 'mcp' },
   ]);
+  listBoundMcps.mockResolvedValue(['gh', 'gh-mirror']);
 });
 
-describe('McpAuthSection', () => {
-  it('未绑定时展示「授权」按钮，点击发起 beginAuthorizationForMcp 并打开浏览器', async () => {
+describe('McpAuthSection（v2：授权管理点）', () => {
+  it('未绑定时展示「授权」，stdio 未填环境变量名则禁用并提示', () => {
+    render(<McpAuthSection mcpName="local" transport="stdio" connectionId={undefined} envVar={undefined} onChange={vi.fn()} />);
+    expect(screen.getByText('未绑定 OAuth 连接')).toBeTruthy();
+    expect(screen.getByText('请先填写注入的环境变量名')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '授权' })).toBeDisabled();
+  });
+
+  it('点击授权发起 beginAuthorizationForMcp 并挂载 AuthorizeDialog（打开浏览器）', async () => {
+    const openExternal = vi.fn().mockResolvedValue(undefined);
+    const onAuthorizationChanged = vi.fn(() => () => undefined);
+    (globalThis as unknown as { window: { api: unknown } }).window.api = {
+      ...mockApi, misc: { openExternal }, oauth: { ...mockApi.oauth, onAuthorizationChanged },
+    };
     beginAuthorizationForMcp.mockResolvedValue({
       pendingId: 'p1',
       authorizationUrl: 'https://auth.example.com/authorize?x=1',
       redirectUri: 'http://127.0.0.1:51789/callback',
       existingConnectionId: null,
     });
-    const onChange = vi.fn();
-    render(<McpAuthSection mcpName="gh" transport="streamable_http" connectionId={undefined} envVar={undefined} onChange={onChange} />);
+    render(<McpAuthSection mcpName="gh" transport="streamable_http" connectionId={undefined} envVar={undefined} onChange={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: '授权' }));
     await waitFor(() => expect(beginAuthorizationForMcp).toHaveBeenCalledWith('gh', null));
+    await waitFor(() => expect(openExternal).toHaveBeenCalled());
   });
 
-  it('已绑定时展示连接名与「解除绑定」', async () => {
+  it('已绑定时显示连接信息 + 共享提示 + 解除绑定/撤销授权', async () => {
     unbindMcp.mockResolvedValue(undefined);
-    const onChange = vi.fn();
-    render(<McpAuthSection mcpName="gh" transport="streamable_http" connectionId="c1" envVar={undefined} onChange={onChange} />);
+    render(<McpAuthSection mcpName="gh" transport="streamable_http" connectionId="c1" envVar={undefined} onChange={vi.fn()} />);
     expect(await screen.findByText(/GitHub/)).toBeTruthy();
+    expect(screen.getByText(/此授权也被 1 个其他服务器使用/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: '解除绑定' }));
     await waitFor(() => expect(unbindMcp).toHaveBeenCalledWith('gh'));
   });
 
-  it('stdio 且未填环境变量名时授权按钮禁用并提示', () => {
-    render(<McpAuthSection mcpName="local" transport="stdio" connectionId={undefined} envVar={undefined} onChange={vi.fn()} />);
-    expect(screen.getByText('请先填写注入的环境变量名')).toBeTruthy();
+  it('撤销授权先取影响面，确认后 disconnect + unbind', async () => {
+    disconnect.mockResolvedValue({ affectedMcpNames: ['gh', 'gh-mirror'] });
+    unbindMcp.mockResolvedValue(undefined);
+    const onAuthorized = vi.fn();
+    render(<McpAuthSection mcpName="gh" transport="streamable_http" connectionId="c1" envVar={undefined} onChange={vi.fn()} onAuthorized={onAuthorized} />);
+    fireEvent.click(await screen.findByText('撤销授权…'));
+    expect(await screen.findByText(/gh、gh-mirror/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '确认撤销' }));
+    await waitFor(() => expect(disconnect).toHaveBeenCalledWith('c1'));
+    await waitFor(() => expect(unbindMcp).toHaveBeenCalledWith('gh'));
   });
 });
 ```
 
 - [ ] **Step 4: 运行确认失败**
 
-Run: `cd renderer && npx pnpm@9.0.0 vitest run src/components/oauth/McpAuthSection.test.tsx`
+Run: `cd renderer && npx pnpm@9.0.0 vitest run src/components/oauth/McpAuthSection.test.tsx src/lib/url-guard.test.ts`
 Expected: FAIL
 
-- [ ] **Step 5: 实现 `McpAuthSection.tsx`**
+- [ ] **Step 5: 实现 `McpNeedsAuthNotice` 与 `McpAuthSection`**
+
+```tsx
+// renderer/src/components/oauth/McpNeedsAuthNotice.tsx
+// 「需要授权」横幅（spec §13.4 / 预览 v2 区块 E）：注册或启动返回 needs_reauth 时展示。
+import { AlertTriangle } from 'lucide-react';
+import { Button } from '../ui/Button';
+
+export function McpNeedsAuthNotice({ onAuthorize }: { onAuthorize: () => void }) {
+  return (
+    <div className="flex items-center gap-2 rounded-md bg-status-warning-tint px-3 py-2 text-sm text-status-warning">
+      <AlertTriangle size={16} strokeWidth={1.75} aria-hidden />
+      <span className="grow">该服务器需要 OAuth 授权（HTTP 401）</span>
+      <Button size="sm" variant="secondary" onClick={onAuthorize}>去授权</Button>
+    </div>
+  );
+}
+```
 
 ```tsx
 // renderer/src/components/oauth/McpAuthSection.tsx
 //
-// MCP 弹窗「认证」区块（spec §13.4）：OAuth 开关 + 连接选择 + 一键授权 + 状态徽标。
-// 授权成功后由主进程回写绑定并驱逐池；本组件通过 onChange 通知父弹窗刷新回显，
-// 父弹窗负责用既有 mcp:start 完成重连（当前 workspace 上下文在父层）。
+// MCP 认证区块（spec §13.2，预览 v2 区块 D）：该 MCP 服务器的授权管理点。
+// 未绑定 → 授权（stdio 需环境变量名）；已绑定 → 连接信息 + 共享提示 + 解除绑定/撤销授权；
+// needs_reauth → 重新授权。授权成功由主进程回写绑定并驱逐池，父层用 mcp:start 重连。
 import { useEffect, useState } from 'react';
-import { KeyRound } from 'lucide-react';
+import { KeyRound, ShieldOff } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import type { OAuthConnectionView } from '../../ipc/types';
 import { Button } from '../ui/Button';
@@ -5268,15 +4850,28 @@ interface Props {
   onAuthorized?: () => void;
 }
 
+const STATUS_LABEL: Record<OAuthConnectionView['status'], string> = {
+  connected: '已连接',
+  needs_reauth: '需重新授权',
+  revoked: '已断开',
+};
+
 export function McpAuthSection({ mcpName, transport, connectionId, envVar, onChange, onAuthorized }: Props) {
   const [connections, setConnections] = useState<OAuthConnectionView[]>([]);
+  const [sharedOthers, setSharedOthers] = useState(0);
   const [authorizing, setAuthorizing] = useState<{ pendingId: string; authorizationUrl: string; redirectUri: string } | null>(null);
   const [envDraft, setEnvDraft] = useState(envVar ?? '');
   const [error, setError] = useState<string | null>(null);
+  const [revoking, setRevoking] = useState<string[] | null>(null);
+  const [revokingBusy, setRevokingBusy] = useState(false);
 
+  useEffect(() => { void ipc.oauth.listConnections().then(setConnections); }, []);
   useEffect(() => {
-    void ipc.oauth.listConnections().then(setConnections);
-  }, []);
+    if (!connectionId) { setSharedOthers(0); return; }
+    void ipc.oauth.listBoundMcps(connectionId)
+      .then((names) => setSharedOthers(Math.max(0, names.filter((n) => n !== mcpName).length)))
+      .catch(() => setSharedOthers(0));
+  }, [connectionId, mcpName]);
 
   const missingEnvVar = transport === 'stdio' && envDraft.trim() === '';
   const bound = connectionId ? connections.find((c) => c.id === connectionId) : undefined;
@@ -5291,11 +4886,7 @@ export function McpAuthSection({ mcpName, transport, connectionId, envVar, onCha
         return;
       }
       if (result.pendingId && result.authorizationUrl && result.redirectUri) {
-        setAuthorizing({
-          pendingId: result.pendingId,
-          authorizationUrl: result.authorizationUrl,
-          redirectUri: result.redirectUri,
-        });
+        setAuthorizing({ pendingId: result.pendingId, authorizationUrl: result.authorizationUrl, redirectUri: result.redirectUri });
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -5313,13 +4904,29 @@ export function McpAuthSection({ mcpName, transport, connectionId, envVar, onCha
     }
   };
 
-  const statusLabel = bound
-    ? bound.status === 'connected'
-      ? '已连接'
-      : bound.status === 'needs_reauth'
-        ? '需重新授权'
-        : '已断开'
-    : '';
+  const startRevoke = async (): Promise<void> => {
+    setError(null);
+    try {
+      const { affectedMcpNames } = await ipc.oauth.disconnect(connectionId!);
+      setRevoking(affectedMcpNames);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const confirmRevoke = async (): Promise<void> => {
+    setRevokingBusy(true);
+    try {
+      await ipc.oauth.unbindMcp(mcpName);
+      setRevoking(null);
+      onChange({ connectionId: '', envVar: envDraft });
+      onAuthorized?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRevokingBusy(false);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-2 rounded-md border border-subtle bg-surface-1 px-3 py-2">
@@ -5328,36 +4935,50 @@ export function McpAuthSection({ mcpName, transport, connectionId, envVar, onCha
         认证
       </div>
 
-      {bound ? (
-        <div className="flex items-center gap-2 text-xs text-secondary">
-          <span className="truncate">
-            {bound.displayName}
-            {bound.accountLabel ? ` · ${bound.accountLabel}` : ''}
-          </span>
-          <span className="px-2 py-0.5 rounded-full bg-surface-3">{statusLabel}</span>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              void unbind();
-            }}
-          >
-            解除绑定
-          </Button>
+      {revoking ? (
+        <div className="flex flex-col gap-2 text-xs">
+          <span className="text-status-error">撤销将断开使用此授权的服务器：{revoking.join('、')}</span>
+          <div className="flex gap-2">
+            <Button size="sm" variant="danger" disabled={revokingBusy} onClick={() => void confirmRevoke()}>确认撤销</Button>
+            <Button size="sm" variant="ghost" onClick={() => setRevoking(null)}>取消</Button>
+          </div>
         </div>
+      ) : bound ? (
+        <>
+          <div className="flex items-center gap-2 text-xs text-secondary flex-wrap">
+            <span className="truncate">
+              {bound.displayName}
+              {bound.accountLabel ? ` · ${bound.accountLabel}` : ''}
+            </span>
+            <span className={`px-2 py-0.5 rounded-full ${
+              bound.status === 'connected' ? 'bg-status-success-tint text-status-success'
+                : bound.status === 'needs_reauth' ? 'bg-status-warning-tint text-status-warning'
+                : 'bg-surface-3 text-tertiary'
+            }`}>{STATUS_LABEL[bound.status]}</span>
+            {sharedOthers > 0 && <span className="text-tertiary">此授权也被 {sharedOthers} 个其他服务器使用</span>}
+          </div>
+          <div className="flex items-center justify-end gap-3">
+            {bound.status === 'needs_reauth' && (
+              <Button size="sm" onClick={() => void authorize()}>重新授权</Button>
+            )}
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 text-xs text-accent-600 dark:text-accent-300 underline"
+              onClick={() => void startRevoke()}
+            >
+              <ShieldOff size={13} strokeWidth={1.75} aria-hidden />
+              撤销授权…
+            </button>
+            <Button size="sm" variant="ghost" onClick={() => void unbind()}>解除绑定</Button>
+          </div>
+          <div className="text-xs text-tertiary">
+            解除绑定 = 保留授权，仅此服务器不再使用；撤销授权 = 吊销令牌（会影响共享它的服务器）。
+          </div>
+        </>
       ) : (
         <div className="flex items-center gap-2 text-xs text-tertiary flex-wrap">
-          未绑定 OAuth 连接
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={missingEnvVar}
-            onClick={() => {
-              void authorize();
-            }}
-          >
-            授权
-          </Button>
+          <span>未绑定 OAuth 连接</span>
+          <Button size="sm" variant="secondary" disabled={missingEnvVar} onClick={() => void authorize()}>授权</Button>
           {missingEnvVar && <span className="text-status-warning">请先填写注入的环境变量名</span>}
         </div>
       )}
@@ -5394,103 +5015,33 @@ export function McpAuthSection({ mcpName, transport, connectionId, envVar, onCha
 }
 ```
 
-- [ ] **Step 6: 主进程补 `unbindMcp` 与编辑视图字段**
+- [ ] **Step 6: 接入两个弹窗（内联认证流程，预览 v2 区块 G）**
 
-`oauth/mcp-trigger.ts` 追加：
-
-```ts
-/** 解除绑定（清两列 + 驱逐池）；不影响连接本身 */
-export async function unbindMcpOAuth(mcpName: string): Promise<void> {
-  const config = getMcpConfig(mcpName);
-  if (!config) throw new OAuthFailure('no_connection', `MCP ${mcpName} 未注册`);
-  setMcpOAuthBinding(mcpName, null, null);
-  await evictMcpByName(mcpName);
-}
-```
-
-`oauth/ipc.handlers.ts` 追加（并在 preload / types.d.ts 同步）：
-
-```ts
-  ipcMain.handle('oauth:unbindMcp', async (_evt, mcpName: string) => {
-    if (typeof mcpName !== 'string' || mcpName === '') {
-      throw new OAuthFailure('no_connection', 'MCP 名称不能为空');
-    }
-    await unbindMcpOAuth(mcpName);
-    broadcast('oauth:connectionsChanged', { at: Date.now() });
-  });
-```
-
-`resource/mcp-config.ts`：**两个视图都补字段**（`McpConfigView` 供 `McpConfigDialog`、`McpEditView` 供 `RegisterMcpDialog`）：
-
-```ts
-// 两个 interface 内各加：
-  /** OAuth 绑定（无绑定为 undefined） */
-  oauthConnectionId?: string;
-  oauthEnvVar?: string;
-```
-
-`getMcpConfigView` 与 `getMcpEditView` 的返回对象各加：
-
-```ts
-    oauthConnectionId: (def as RegisteredMcp).oauthConnectionId,
-    oauthEnvVar: (def as RegisteredMcp).oauthEnvVar,
-```
-
-`renderer/src/ipc/types.d.ts` 的 `McpConfigView` / `McpEditView` 镜像同步这两行。
-
-- [ ] **Step 7: 接入两个弹窗**
-
-`McpConfigDialog.tsx`：
+`McpConfigDialog.tsx`：`useState` 保存 `oauthConnectionId/oauthEnvVar`，`getMcpConfig` 回填；表单 headers 区下方渲染：
 
 ```tsx
-// 组件内新增状态
-const [oauthConnectionId, setOauthConnectionId] = useState<string | undefined>(undefined);
-const [oauthEnvVar, setOauthEnvVar] = useState<string | undefined>(undefined);
-
-// 挂载回填（既有 getMcpConfig .then 内）
-setOauthConnectionId(v.oauthConnectionId);
-setOauthEnvVar(v.oauthEnvVar);
-
-// 表单末尾（headers 区下方）
-{view && (
-  <McpAuthSection
-    mcpName={name}
-    transport={view.transport}
-    connectionId={oauthConnectionId}
-    envVar={oauthEnvVar}
-    onChange={(next) => {
-      setOauthConnectionId(next.connectionId || undefined);
-      setOauthEnvVar(next.envVar || undefined);
-    }}
-  />
-)}
+<McpAuthSection
+  mcpName={name}
+  transport={view.transport}
+  connectionId={oauthConnectionId}
+  envVar={oauthEnvVar}
+  onChange={(next) => {
+    setOauthConnectionId(next.connectionId || undefined);
+    setOauthEnvVar(next.envVar || undefined);
+  }}
+/>
 ```
 
 `RegisterMcpDialog.tsx`：
-- `edit` 态回填 `oauthConnectionId` / `oauthEnvVar`（来自 `resource.getMcpEditView`）
-- HTTP 态与 stdio 高级区各渲染 `McpAuthSection`（props 同上，`onAuthorized` 中重新 `mcp.start`）
-- 提交时 `mcp.start` 失败的错误要保留 `code`：`normalizeIpcError` 已剥前缀，但 code 在 `OAuthFailure` 的 message 之外——采用约定：主进程错误文案以 `[needs_reauth]` 前缀开头，renderer 侧解析前缀设置 `errorCode`。**更稳的做法**：`mcp:start` 在 host-manager 抛 `OAuthFailure` 时，错误 message 以 `MCP 需要授权` 开头，renderer 用该前缀判定。
-
-```tsx
-  // 错误区（既有 error 渲染处旁边）
-  {errorCode === 'needs_reauth' && (
-    <div className="text-status-warning text-sm flex items-center gap-2">
-      该服务器需要 OAuth 授权
-      <Button size="sm" variant="secondary" onClick={() => void authorizeAndRetry()}>去授权</Button>
-    </div>
-  )}
-```
-
-`authorizeAndRetry`：
+- 远程态与 stdio 高级区各渲染 `McpAuthSection`（`edit` 态用 `resource.getMcpEditView` 的 `oauthConnectionId/oauthEnvVar` 回填）；
+- 提交（注册并启动）catch 到 `needs_reauth`（错误 message 以「需要授权」/`MCP … 需要授权` 判定，主进程文案已定）时在错误区上方渲染 `<McpNeedsAuthNotice onAuthorize={() => void authorizeAndRetry()} />`；
+- `authorizeAndRetry`：
 
 ```tsx
   const authorizeAndRetry = async (): Promise<void> => {
-    const result = await ipc.oauth.beginAuthorizationForMcp(
-      edit ? edit.name : trimmedName,
-      oauthEnvVar ?? null,
-    );
+    const result = await ipc.oauth.beginAuthorizationForMcp(targetName, oauthEnvVar?.trim() || null);
     if (result.existingConnectionId) {
-      await ipc.mcp.start(activeWorkspaceId, edit ? edit.name : trimmedName);
+      await ipc.mcp.start(activeWorkspaceId, targetName);
       onSuccess();
       return;
     }
@@ -5504,29 +5055,35 @@ setOauthEnvVar(v.oauthEnvVar);
   };
 ```
 
-- [ ] **Step 8: 运行测试**
+（`authorizing` 态渲染 `AuthorizeDialog`；其 `onSuccess` 内重新 `mcp.start` 后走 `onSuccess()`。按对话框实际变量名对齐 `targetName`/`activeWorkspaceId`。）
 
-Run: `cd renderer && npx pnpm@9.0.0 vitest run src/components/oauth src/components/resource-library/McpConfigDialog.test.tsx src/components/agent/RegisterMcpDialog.test.tsx`
+- [ ] **Step 7: 补两个弹窗测试用例**
+
+`McpConfigDialog.test.tsx`：URL 填 `http://127.0.0.1:8080/mcp` 可提交、`http://example.com` 禁用。
+`RegisterMcpDialog.test.tsx`：`mcp.start` 拒绝 `new Error('MCP github-mcp 需要授权（HTTP 401）')` 时渲染横幅且含「去授权」按钮。
+
+- [ ] **Step 8: 运行测试 + 双 typecheck**
+
+Run: `cd renderer && npx pnpm@9.0.0 vitest run src/components/oauth src/lib/url-guard.test.ts src/components/resource-library/McpConfigDialog.test.tsx src/components/agent/RegisterMcpDialog.test.tsx`
 Expected: PASS
 
-Run: `npx pnpm@9.0.0 typecheck`
-Expected: 0 error
+Run: `cd electron && npx pnpm@9.0.0 vitest run tests/ipc`（契约锁三处同步）+ `npx pnpm@9.0.0 typecheck`
+Expected: PASS
 
 - [ ] **Step 9: 提交**
 
 ```bash
-git add renderer/src/lib/url-guard.ts renderer/src/components/oauth/McpAuthSection.tsx \
-  renderer/src/components/oauth/McpAuthSection.test.tsx \
+git add renderer/src/lib/url-guard.ts renderer/src/lib/url-guard.test.ts \
+  renderer/src/components/oauth/McpAuthSection.tsx renderer/src/components/oauth/McpAuthSection.test.tsx \
+  renderer/src/components/oauth/McpNeedsAuthNotice.tsx \
   renderer/src/components/resource-library/McpConfigDialog.tsx \
   renderer/src/components/resource-library/McpConfigDialog.test.tsx \
   renderer/src/components/agent/RegisterMcpDialog.tsx \
-  electron/src/main/resource/mcp-config.ts electron/src/main/oauth/ipc.handlers.ts \
-  electron/src/main/oauth/mcp-trigger.ts electron/src/preload/index.ts \
-  renderer/src/ipc/types.d.ts
-git commit -m "feat: MCP 弹窗 OAuth 认证区块与授权微触发"
+  renderer/src/components/agent/RegisterMcpDialog.test.tsx \
+  electron/src/main/oauth/ipc.handlers.ts electron/src/main/oauth/service.ts \
+  electron/src/preload/index.ts renderer/src/ipc/types.d.ts
+git commit -m "feat: MCP 内联 OAuth 认证（授权区块/401 横幅/撤销授权）"
 ```
-
----
 
 ## Task 17: 插件扩展点 `ctx.oauth`（只读）
 
@@ -5734,12 +5291,12 @@ Expected: exit 0。
 
 | # | 场景 | 期望 |
 |---|---|---|
-| A1 | 设置 → 连接 → 新增 → 自定义端点（指向本地 http AS） | 弹出授权等待对话框，`redirect_uri` 可复制，浏览器打开授权页 |
-| A2 | 完成授权（或手动粘贴回调 URL） | 连接列表出现该连接，状态「已连接」 |
-| A3 | MCP 配置弹窗绑定该连接 → 保存 → 启动 | 服务器连接成功，工具可列出 |
-| A4 | 撤销连接 | 连接状态「已断开」，引用它的 MCP 启动报「授权已失效」并提供「去授权」 |
-| A5 | 断开后重新授权同一 provider | 复用检查生效或新建连接（取决于 provider_key），MCP 可再次启动 |
-| A6 | 重启 App | 连接仍在，MCP 免登录可用 |
+| A1 | 添加 MCP（指向本地 http AS 的远程条目）→ 注册并启动 | 遇 401 就地出现「需要授权」横幅 + 认证区块，不离开弹窗 |
+| A2 | 点「去授权」→ 浏览器完成（或手动粘贴回调 URL） | 授权等待对话框闭环，自动回写绑定并重连，工具可列出 |
+| A3 | MCP 认证区块：解除绑定后再启动 | 服务器报「需要授权」；重新授权后恢复 |
+| A4 | 认证区块「撤销授权…」 | 展示受影响服务器清单，确认后令牌吊销、绑定清除 |
+| A5 | 同一 provider 的第二个 MCP 再授权 | 复用检查生效（共享提示出现），不重复弹浏览器 |
+| A6 | 重启 App | 绑定仍在，MCP 免登录可用 |
 | A7 | MCP 未绑定 + 服务器返回 401 | 提交时出现「该服务器需要 OAuth 授权 + 去授权」 |
 | A8 | 固定端口被占用 | 报「回调端口 N 已被占用」，不静默改用随机端口 |
 | A9 | 手动回调：粘贴错误 state | 拒绝并提示，pending 仍可重试 |

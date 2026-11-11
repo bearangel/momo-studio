@@ -102,7 +102,7 @@ export class ResourceTools implements ToolModule {
       {
         name: 'create_mcp',
         description:
-          '接入 MCP server（stdio 命令或 HTTP url 二选一）。落库前强制连通测试（initialize + tools/list），失败不落库并返回错误可修后重试。凭证只入配置不在回复回显。格式见 create-mcp 技能。',
+          '接入 MCP server（stdio 命令或 HTTP url 二选一）。落库前强制连通测试（initialize + tools/list），失败不落库并返回错误可修后重试。唯一例外：HTTP 401/403 判定为服务器要求 OAuth 授权——此时已落库并返回 needsAuthorization=true 与 notice，须把 notice 中的授权路径转告用户（授权须用户在应用内完成，agent 无法代劳），不得重试创建。凭证只入配置不在回复回显。格式见 create-mcp 技能。',
         inputSchema: {
           type: 'object',
           properties: {

@@ -12,6 +12,7 @@ import { readPluginConfigJson, sensitiveOverlaySync, normalizeConfigSchema, plug
 import { getSecret, setSecret, deleteSecret } from '../storage/keychain';
 import { resolvePluginsDir, resolvePluginDataDir } from '../paths';
 import { getPlugin, isPluginEnabled } from './registry';
+import { buildPluginOAuthApi, type PluginOAuthApi } from './oauth-ctx';
 import { getDb } from '../storage/db';
 import type { PluginRecord } from './types';
 
@@ -22,6 +23,8 @@ export interface PluginServiceCtx {
   getDataDir(): string;
   workspace?: { id: string; directoryPath: string };
   secrets: PluginSecretsApi;
+  /** OAuth 连接只读面（spec §12.3）：列表只有元数据；token 信任级别等价 secrets */
+  oauth: PluginOAuthApi;
   logger: {
     warn(msg: string, meta?: unknown): void;
     info(msg: string, meta?: unknown): void;
@@ -140,6 +143,7 @@ async function doStartPluginService(
         set: async (key, value) => setSecret(guard(key), value),
         delete: async (key) => deleteSecret(guard(key)),
       },
+      oauth: buildPluginOAuthApi(),
       logger: {
         warn: (msg, meta) => logger.warn(`[plugin:${rec.id}] ${msg}`, meta),
         info: (msg, meta) => logger.info(`[plugin:${rec.id}] ${msg}`, meta),

@@ -24,6 +24,22 @@ import type { McpServerConfig, McpToolInfo, McpToolResult } from './types';
 /** 单请求超时——对齐 stdio 客户端 REQUEST_TIMEOUT_MS */
 const REQUEST_TIMEOUT_MS = 30_000;
 
+/**
+ * 远程 MCP 结构化 HTTP 失败（spec §9.3）。
+ * 401/403 需要驱动 OAuth 重授权，字符串错误无法判别——status 与
+ * WWW-Authenticate 原样带出，由 host-manager 翻译成 OAuthFailure。
+ */
+export class McpHttpError extends Error {
+  constructor(
+    readonly method: string,
+    readonly status: number,
+    readonly wwwAuthenticate: string | null,
+  ) {
+    super(`远程 MCP ${method} 失败：HTTP ${status}`);
+    this.name = 'McpHttpError';
+  }
+}
+
 /** JSON-RPC 响应消息的最小消费面（result / error 二选一） */
 interface JsonRpcResponseShape {
   result?: unknown;
@@ -94,7 +110,7 @@ export class HttpMcpClient {
     const response = await this.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
     if (!response.ok) {
       this.connected = false;
-      throw new Error(`远程 MCP ${method} 失败：HTTP ${response.status}`);
+      throw new McpHttpError(method, response.status, response.headers.get('www-authenticate'));
     }
     const message = await this.readMessage(response, id, method);
     return { response, message };
@@ -109,7 +125,7 @@ export class HttpMcpClient {
     const response = await this.send(JSON.stringify({ jsonrpc: '2.0', method, params }));
     if (!response.ok) {
       this.connected = false;
-      throw new Error(`远程 MCP ${method} 通知失败：HTTP ${response.status}`);
+      throw new McpHttpError(method, response.status, response.headers.get('www-authenticate'));
     }
   }
 

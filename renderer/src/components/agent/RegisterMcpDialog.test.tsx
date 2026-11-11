@@ -24,6 +24,11 @@ const resourceList = vi.fn();
 const resourceGetMcpEditView = vi.fn();
 const resourceUpdateMcpEntry = vi.fn();
 const mcpStart = vi.fn();
+// Task 16：内联认证面（McpAuthSection mount 拉 listConnections + 订阅授权推送；
+// 订阅桩 impl 常驻——mockReset 会清掉返回退订函数的实现）
+const oauthListConnections = vi.fn();
+const oauthListBoundMcps = vi.fn();
+const oauthOnAuthorizationChanged = vi.fn(() => () => undefined);
 
 const mockApi = {
   resource: {
@@ -33,6 +38,11 @@ const mockApi = {
     updateMcpEntry: resourceUpdateMcpEntry,
   },
   mcp: { start: mcpStart },
+  oauth: {
+    listConnections: oauthListConnections,
+    listBoundMcps: oauthListBoundMcps,
+    onAuthorizationChanged: oauthOnAuthorizationChanged,
+  },
 };
 
 const REGISTERED_ITEM: ResourceItem = {
@@ -69,6 +79,10 @@ beforeEach(() => {
   resourceList.mockResolvedValue([]); // 默认无同名
   resourceUpdateMcpEntry.mockResolvedValue(undefined);
   mcpStart.mockResolvedValue(undefined);
+  oauthListConnections.mockReset();
+  oauthListConnections.mockResolvedValue([]);
+  oauthListBoundMcps.mockReset();
+  oauthListBoundMcps.mockResolvedValue([]);
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
   useWorkspaceStore.setState({ workspaces: [WS], activeWorkspaceId: 'ws-active', loading: false, error: null });
 });
@@ -261,6 +275,125 @@ describe('RegisterMcpDialog — 既有语义回归', () => {
     fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
     await waitFor(() => expect(resourceRegisterMcp).toHaveBeenCalled());
     expect(resourceRegisterMcp.mock.calls[0]![0].version).toBeUndefined();
+  });
+});
+
+// ── Task 16：401 内联认证（spec §13，预览 v2 区块 G）─────────────────────
+// ── R8：新建态不渲染认证区块（认证只在编辑态与提交后 401 横幅出现；
+// 新建时 MCP 尚未注册，区块里的「授权」必然失败，展示即误导）──────────
+describe('RegisterMcpDialog — 新建态不渲染认证区块（R8）', () => {
+  it('新建（默认 stdio 态）：无「认证」区块', () => {
+    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
+    expect(screen.queryByText('认证')).toBeNull();
+  });
+
+  it('新建切远程（HTTP）态：仍无「认证」区块', () => {
+    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
+    fireEvent.click(screen.getByRole('radio', { name: '远程（HTTP）' }));
+    expect(screen.queryByText('认证')).toBeNull();
+  });
+
+  it('编辑态（http）：已绑定 OAuth → 直接渲染「认证」区块', async () => {
+    resourceGetMcpEditView.mockResolvedValue({
+      name: 'notion',
+      transport: 'streamable_http',
+      version: '1.0.0',
+      command: '',
+      args: [],
+      env: {},
+      url: 'https://mcp.notion.com/mcp',
+      headers: {},
+      enabled: true,
+      oauthConnectionId: 'conn-1',
+    });
+    render(<RegisterMcpDialog edit={{ name: 'notion' }} onClose={() => {}} onSuccess={() => {}} />);
+    expect(await screen.findByText('认证')).toBeInTheDocument();
+    // 已绑定 = 有状态要管理，直接可见；不出现「高级：OAuth 授权」折叠入口
+    expect(screen.queryByText('高级：OAuth 授权')).toBeNull();
+  });
+
+  it('编辑态（http）未绑定：无任何 OAuth UI 痕迹（R12：binding 即标记）', async () => {
+    resourceGetMcpEditView.mockResolvedValue({
+      name: 'context7',
+      transport: 'streamable_http',
+      version: '1.0.0',
+      command: '',
+      args: [],
+      env: {},
+      url: 'https://mcp.context7.com/mcp',
+      headers: { Authorization: 'Bearer manual-token' },
+      enabled: true,
+    });
+    render(<RegisterMcpDialog edit={{ name: 'context7' }} onClose={() => {}} onSuccess={() => {}} />);
+    await screen.findByLabelText('URL');
+    expect(screen.queryByText('认证')).toBeNull();
+    expect(screen.queryByText('高级：OAuth 授权')).toBeNull();
+  });
+
+  it('编辑态不渲染传输类型切换器，改只读说明（R12）', async () => {
+    resourceGetMcpEditView.mockResolvedValue({
+      name: 'my-mcp',
+      transport: 'stdio',
+      version: '1.0.0',
+      command: 'npx',
+      args: [],
+      env: {},
+      headers: {},
+      enabled: true,
+    });
+    render(<RegisterMcpDialog edit={{ name: 'my-mcp' }} onClose={() => {}} onSuccess={() => {}} />);
+    // 文本跨 span 拆分，用函数匹配器断言整行
+    expect(
+      await screen.findByText((_, el) => el?.tagName === 'DIV' && el.textContent === '传输类型：本地（stdio）'),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: '本地（stdio）' })).toBeNull();
+    expect(screen.queryByRole('radio', { name: '远程（HTTP）' })).toBeNull();
+  });
+
+  it('编辑态（stdio）：OAuth 区块仍在「高级：环境变量与工作目录」内且默认收起', async () => {
+    resourceGetMcpEditView.mockResolvedValue({
+      name: 'local-gh',
+      transport: 'stdio',
+      version: '1.0.0',
+      command: 'node',
+      args: ['server.js'],
+      env: {},
+      headers: {},
+      enabled: true,
+      oauthConnectionId: 'conn-1',
+      oauthEnvVar: 'GITHUB_TOKEN',
+    });
+    render(<RegisterMcpDialog edit={{ name: 'local-gh' }} onClose={() => {}} onSuccess={() => {}} />);
+    const summary = await screen.findByText('高级：环境变量与工作目录');
+    const details = summary.closest('details');
+    expect(details).not.toBeNull();
+    expect(details?.open).toBe(false);
+  });
+});
+
+describe('RegisterMcpDialog — 401 需要授权横幅（Task 16）', () => {
+  it('mcp.start 401 → 「需要授权」横幅 + 去授权按钮，原始红字被横幅替代（R9）', async () => {
+    mcpStart.mockRejectedValueOnce(new Error('MCP github-mcp 需要授权（HTTP 401）'));
+    const onClose = vi.fn();
+    render(<RegisterMcpDialog onClose={onClose} onSuccess={() => {}} />);
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'github-mcp' } });
+    fireEvent.change(screen.getByLabelText('命令'), { target: { value: 'npx' } });
+    fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
+    expect(await screen.findByText('该服务器需要 OAuth 授权')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '去授权' })).toBeInTheDocument();
+    expect(screen.queryByText('MCP github-mcp 需要授权（HTTP 401）')).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('非 401 启动失败 → 不渲染横幅（错误路径专项）', async () => {
+    mcpStart.mockRejectedValueOnce(new Error('MCP runner 连接超时'));
+    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'runner' } });
+    fireEvent.change(screen.getByLabelText('命令'), { target: { value: 'cmd' } });
+    fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
+    expect(await screen.findByText('MCP runner 连接超时')).toBeInTheDocument();
+    expect(screen.queryByText('该服务器需要 OAuth 授权')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '去授权' })).not.toBeInTheDocument();
   });
 });
 

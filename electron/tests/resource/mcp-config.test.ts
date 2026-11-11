@@ -342,6 +342,25 @@ describe('updateRemoteMcpConfig', () => {
     expect(evictMcpByName).toHaveBeenCalledWith('upd-bare');
   });
 
+  it('裸模式：url/headers 原值重提交 → 不驱逐池连接（无改动保存不付重连）', async () => {
+    registerMcpDefinition(
+      remoteRow({
+        name: 'upd-noop',
+        url: 'https://n.test/mcp',
+        headers: { Authorization: 'Bearer same' },
+      }),
+    );
+
+    await updateRemoteMcpConfig('upd-noop', {
+      url: 'https://n.test/mcp',
+      config: {},
+      headers: { Authorization: 'Bearer same' },
+    });
+
+    expect(getMcpConfig('upd-noop')?.url).toBe('https://n.test/mcp');
+    expect(evictMcpByName).not.toHaveBeenCalled();
+  });
+
   it('input.schema 透传落库（编辑期间拉到的新 schema 顺手保存，裸模式下同样生效）', async () => {
     registerMcpDefinition(remoteRow({ name: 'upd-passthru', url: 'https://p.test/mcp' }));
     const fresh = {

@@ -45,4 +45,5 @@
 |---|---|---|---|
 | 命令不存在 | spawn ENOENT / command not found | 命令未安装或不在 PATH；包名拼错 | 先确认本机有该命令（如 `npx -v`）；核对包名与 scope 大小写；必要时换绝对路径 |
 | 握手超时 | initialize 超时 / no response | 首次运行在下载包；网络或代理不通；url 非端点 | 手动跑一遍命令预热缓存再重试；检查网络与代理设置；核对 url 是否 MCP 端点 |
+| 需要 OAuth 授权 | 返回 `needsAuthorization: true` + notice | 远程服务器要求 OAuth（HTTP 401/403 挑战） | 已自动落库；把 notice 原样转告用户（资源库 → MCP → 编辑 → 去授权），不重试创建 |
 | 凭证错（401/403） | HTTP 401/403 / unauthorized | token 缺失、过期或权限不足 | 向用户索要新凭证并说明用途；放入 env/headers 对应字段后重试；不回显明文 |

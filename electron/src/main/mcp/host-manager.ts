@@ -12,10 +12,11 @@
 //   - MCP server 定义持久化在 SQLite（mcp_definitions 表），通过 name 唯一索引读取。
 
 import { McpClient } from './client';
-import { HttpMcpClient } from './http-client';
+import { HttpMcpClient, McpHttpError } from './http-client';
 import { getDb } from '../storage/db';
 import { expandMcpTemplate, mcpConfigHasPlaceholder } from './template-expand';
 import { logger } from '../logger';
+import { OAuthFailure } from '../oauth/types';
 import type {
   McpServerConfig,
   McpToolInfo,
@@ -42,6 +43,8 @@ interface McpDefinitionRow {
   plugin_id?: string | null;
   installed_at: string;
   enabled: number;
+  oauth_connection_id: string | null;
+  oauth_env_var: string | null;
 }
 
 /** transport 合法值集合——白名单外的行值（历史脏数据/未知形态）一律回退 'stdio' */
@@ -114,6 +117,8 @@ function rowToRegistered(row: McpDefinitionRow): RegisteredMcp {
     pluginId: row.plugin_id ?? undefined,
     installedAt: row.installed_at,
     enabled: row.enabled !== 0,
+    oauthConnectionId: row.oauth_connection_id ?? undefined,
+    oauthEnvVar: row.oauth_env_var ?? undefined,
   };
 }
 
@@ -171,11 +176,39 @@ export async function getOrStartMcp(
       const expanded = await expandMcpTemplate(config, workspaceId);
       effective = { ...config, ...expanded };
     }
+    // OAuth 注入（spec §9.2）：解析器由 oauth 域注入；未绑定连接时零开销
+    if (effective.oauthConnectionId && authResolver) {
+      const withAuth = await authResolver(effective);
+      if (withAuth) effective = withAuth;
+    }
     const client =
       (effective.transport ?? 'stdio') === 'streamable_http'
         ? new HttpMcpClient(effective)
         : new McpClient(effective);
-    await client.connect();
+    // 401/403 → OAuth 语义错误（已绑定=连接失效；未绑定=提示可授权）
+    try {
+      await client.connect();
+    } catch (err) {
+      if (err instanceof McpHttpError && (err.status === 401 || err.status === 403)) {
+        pool.delete(key);
+        void client.disconnect().catch(() => undefined);
+        if (effective.oauthConnectionId) {
+          throw new OAuthFailure(
+            'needs_reauth',
+            `MCP ${config.name} 的授权已失效，请重新授权`,
+            effective.oauthConnectionId,
+            err.wwwAuthenticate ?? undefined,
+          );
+        }
+        throw new OAuthFailure(
+          'needs_reauth',
+          `MCP ${config.name} 需要授权（HTTP ${err.status}）`,
+          undefined,
+          err.wwwAuthenticate ?? undefined,
+        );
+      }
+      throw err;
+    }
     logger.info('MCP server 已启动', { workspaceId, name: config.name });
     return client;
   })();
@@ -323,7 +356,7 @@ export function getMcpConfig(mcpName: string): McpServerConfig | null {
   const db = getDb();
   const row = db
     .prepare(
-      'SELECT id, name, version, transport, command, args, env, url, headers_json, cwd, config_schema, source, plugin_id, installed_at, enabled FROM mcp_definitions WHERE name = ?',
+      'SELECT id, name, version, transport, command, args, env, url, headers_json, cwd, config_schema, source, plugin_id, installed_at, enabled, oauth_connection_id, oauth_env_var FROM mcp_definitions WHERE name = ?',
     )
     .get(mcpName) as McpDefinitionRow | undefined;
   if (!row) return null;
@@ -416,30 +449,64 @@ export function updateRemoteMcpDefinition(
  * registerMcpDefinition 的 INSERT OR REPLACE 整行覆盖语义不同）。字段组装/
  * url scheme 校验与注册同构（isAllowedRemoteUrl）；池驱逐由服务层（mcp-config.updateMcpEntry）负责。
  */
-export function updateMcpEntryDefinition(name: string, config: McpEntryUpdateInput): void {
+export function updateMcpEntryDefinition(
+  name: string,
+  config: McpEntryUpdateInput,
+): boolean {
   const db = getDb();
-  const row = db.prepare('SELECT id FROM mcp_definitions WHERE name = ?').get(name) as
-    | { id: string }
+  const row = db
+    .prepare(
+      'SELECT id, transport, command, args, env, url, headers_json, cwd FROM mcp_definitions WHERE name = ?',
+    )
+    .get(name) as
+    | {
+        id: string;
+        transport: string;
+        command: string;
+        args: string;
+        env: string;
+        url: string | null;
+        headers_json: string | null;
+        cwd: string | null;
+      }
     | undefined;
   if (!row) throw new Error(`MCP ${name} 未注册`);
   const transport = config.transport ?? 'stdio';
   if (transport === 'streamable_http' && !isAllowedRemoteUrl(config.url ?? '')) {
     throw new Error(`远程 MCP ${name} 更新失败：url 必须以 http:// 或 https:// 开头`);
   }
+  // 与 UPDATE 写入值同构的规范化元组（比对口径 = 写入口径，杜绝归一化漂移）
+  const command = transport === 'streamable_http' && !config.command ? '' : config.command;
+  const args = JSON.stringify(config.args ?? []);
+  const env = JSON.stringify(config.env ?? {});
+  const url = transport === 'streamable_http' ? (config.url ?? null) : null;
+  const headersJson = transport === 'streamable_http' ? JSON.stringify(config.headers ?? {}) : null;
+  const cwd = config.cwd ?? null;
+  // 连接相关字段未变 → 告知服务层跳过池驱逐（保存即秒回池内活实例，
+  // 不付 DNS+TLS+握手 1-2s 重连；version 不影响连接，不参与比对）
+  const connectionUnchanged =
+    row.transport === transport &&
+    row.command === command &&
+    row.args === args &&
+    row.env === env &&
+    row.url === url &&
+    row.headers_json === headersJson &&
+    row.cwd === cwd;
   db.prepare(
     `UPDATE mcp_definitions SET version = ?, transport = ?, command = ?, args = ?, env = ?, url = ?, headers_json = ?, cwd = ? WHERE name = ?`,
   ).run(
     config.version ?? '1.0.0',
     transport,
-    transport === 'streamable_http' && !config.command ? '' : config.command,
-    JSON.stringify(config.args ?? []),
-    JSON.stringify(config.env ?? {}),
-    transport === 'streamable_http' ? (config.url ?? null) : null,
-    transport === 'streamable_http' ? JSON.stringify(config.headers ?? {}) : null,
-    config.cwd ?? null,
+    command,
+    args,
+    env,
+    url,
+    headersJson,
+    cwd,
     name,
   );
-  logger.info('MCP 定义已编辑', { name, transport }); // 不打 url/headers（含 key）
+  logger.info('MCP 定义已编辑', { name, transport, connectionUnchanged }); // 不打 url/headers（含 key）
+  return !connectionUnchanged;
 }
 
 /**
@@ -450,7 +517,7 @@ export function listRegistered(): RegisteredMcp[] {
   const db = getDb();
   const rows = db
     .prepare(
-      'SELECT id, name, version, transport, command, args, env, url, headers_json, cwd, config_schema, source, plugin_id, installed_at, enabled FROM mcp_definitions ORDER BY installed_at DESC',
+      'SELECT id, name, version, transport, command, args, env, url, headers_json, cwd, config_schema, source, plugin_id, installed_at, enabled, oauth_connection_id, oauth_env_var FROM mcp_definitions ORDER BY installed_at DESC',
     )
     .all() as McpDefinitionRow[];
   return rows.map(rowToRegistered);
@@ -488,4 +555,40 @@ export function deleteRegistered(name: string): void {
   }
   db.prepare('DELETE FROM mcp_definitions WHERE name = ?').run(name);
   logger.info('MCP 定义已删除', { name });
+}
+
+/**
+ * OAuth 认证解析器（setter 反接，spec §9.2）。
+ * host-manager 不 import oauth 业务模块——由 oauth/adapters/mcp.wireMcpOAuth()
+ * 在 boot 时注入，避免 mcp ↔ oauth 循环依赖。
+ */
+type McpAuthResolver = (config: McpServerConfig) => Promise<McpServerConfig | null>;
+
+let authResolver: McpAuthResolver | null = null;
+
+export function setMcpAuthResolver(resolver: McpAuthResolver | null): void {
+  authResolver = resolver;
+}
+
+/** 写 OAuth 绑定（仅 UPDATE 两列；连接状态校验由 OAuth 服务层负责） */
+export function setMcpOAuthBinding(
+  mcpName: string,
+  connectionId: string | null,
+  envVar: string | null,
+): void {
+  const info = getDb()
+    .prepare('UPDATE mcp_definitions SET oauth_connection_id = ?, oauth_env_var = ? WHERE name = ?')
+    .run(connectionId, envVar, mcpName);
+  if (info.changes === 0) throw new Error(`MCP ${mcpName} 未注册`);
+  logger.info('MCP OAuth 绑定已更新', { name: mcpName, bound: connectionId !== null });
+}
+
+/** 按连接扇出驱逐：同一连接可能被多个 MCP、多个 workspace 引用 */
+export async function evictMcpsByConnection(connectionId: string): Promise<string[]> {
+  const rows = getDb()
+    .prepare('SELECT name FROM mcp_definitions WHERE oauth_connection_id = ?')
+    .all(connectionId) as Array<{ name: string }>;
+  const names = rows.map((r) => r.name);
+  await Promise.all(names.map((name) => evictMcpByName(name)));
+  return names;
 }

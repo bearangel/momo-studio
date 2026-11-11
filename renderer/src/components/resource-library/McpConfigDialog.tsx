@@ -10,9 +10,12 @@
 //   - D9（spec §9）：schema 模式 url 预填 view.url.split('?')[0]——url 里带着
 //     x-from=query 字段拼出的 query，原样预填会让 composeRemoteConfig 追加第二个
 //     同名参数，连接发双份
-//   - url 非 https 禁提交（spec §7 前端防线；主进程双防线兜底）
+//   - url 非 https 且非回环 http 禁提交（spec §7 前端防线；主进程双防线兜底）
 //   - McpConfigView.schema 可选：bare=true 时键缺省（非 undefined 值）
 //   - headers 仅裸模式生效；config 值 trim 后空串剔除（同安装语义）
+//   - Task 16：headers 区下方渲染 McpAuthSection（认证管理点；oauth 绑定经
+//     view.oauthConnectionId/oauthEnvVar 回填。授权/绑定/解除在区块内即时经
+//     主进程落库并驱逐池，与表单「保存」提交相互独立）
 //
 // 交互照抄 McpConnectDialog / UploadSkillDialog 的锁定模式：提交期间禁用全部
 // 可交互元素（Esc / 遮罩关闭同样锁死）；失败红字留在弹窗可重试；成功后自关。
@@ -22,7 +25,9 @@ import { Plus, X } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { Input } from '../ui/Input';
+import { McpAuthSection } from '../oauth/McpAuthSection';
 import { ipc } from '../../ipc/client';
+import { isHttpsOrLoopbackHttp } from '../../lib/url-guard';
 import type { McpConfigUpdateInput, McpConfigView } from '../../ipc/types';
 
 /** placeholder=description 截断上限（与 McpConnectDialog 同参） */
@@ -59,6 +64,9 @@ export function McpConfigDialog({ name, serverName, onSubmit, onClose }: Props) 
   const [headerRows, setHeaderRows] = useState<HeaderRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // OAuth 绑定态（认证区块）：view 回填，McpAuthSection.onChange 更新
+  const [oauthConnectionId, setOauthConnectionId] = useState<string | undefined>();
+  const [oauthEnvVar, setOauthEnvVar] = useState<string | undefined>();
 
   useEffect(() => {
     let cancelled = false;
@@ -71,6 +79,8 @@ export function McpConfigDialog({ name, serverName, onSubmit, onClose }: Props) 
         setUrl(v.bare ? v.url : (v.url.split('?')[0] ?? ''));
         setValues(v.values);
         setHeaderRows(Object.entries(v.headers).map(([key, value]) => ({ key, value })));
+        setOauthConnectionId(v.oauthConnectionId);
+        setOauthEnvVar(v.oauthEnvVar);
       })
       .catch((err) => {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err));
@@ -87,7 +97,7 @@ export function McpConfigDialog({ name, serverName, onSubmit, onClose }: Props) 
     ([fieldName]) => required.has(fieldName) && !(values[fieldName] ?? '').trim(),
   );
   const lockAll = submitting;
-  const canSubmit = url.trim().startsWith('https://') && !missingRequired && !lockAll;
+  const canSubmit = isHttpsOrLoopbackHttp(url.trim()) && !missingRequired && !lockAll;
 
   const handleSubmit = async (e: FormEvent): Promise<void> => {
     e.preventDefault();
@@ -209,6 +219,16 @@ export function McpConfigDialog({ name, serverName, onSubmit, onClose }: Props) 
               </Button>
             </div>
           )}
+          <McpAuthSection
+            mcpName={name}
+            transport={view.transport}
+            connectionId={oauthConnectionId}
+            envVar={oauthEnvVar}
+            onChange={(next) => {
+              setOauthConnectionId(next.connectionId || undefined);
+              setOauthEnvVar(next.envVar || undefined);
+            }}
+          />
           {error && <div className="text-status-error text-sm break-all">{error}</div>}
           <div className="flex gap-2 justify-end mt-2">
             <Button variant="ghost" type="button" onClick={onClose} disabled={lockAll}>

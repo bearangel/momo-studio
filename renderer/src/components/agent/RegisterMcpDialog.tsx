@@ -10,7 +10,10 @@
 // name 是 agent 引用键，编辑不可改；编辑语义即覆盖自身，跳过同名二段确认。
 // version '1.0.0' 是 electron 缺省值不回显（提交省略→主进程回落 1.0.0，
 // 与非缺省回显回传恰好闭环，避免全字段 UPDATE 静默降级）。
-import { useEffect, useState, type FormEvent } from 'react';
+// Task 16（spec §13，预览 v2 区块 G）：内联认证——远程态与 stdio 高级区渲染
+// McpAuthSection；启动 401（needs_reauth）→ McpNeedsAuthNotice 横幅 → 去授权
+// 就地完成 beginAuthorizationForMcp + AuthorizeDialog，成功后重试 mcp.start。
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ipc } from '../../ipc/client';
 import { isSupportedRemoteUrl } from '../../lib/mcp-json';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -19,6 +22,9 @@ import { Dialog } from '../ui/Dialog';
 import { Input } from '../ui/Input';
 import { Segmented } from '../ui/Segmented';
 import { KeyValueRows, type KVRow } from '../ui/KeyValueRows';
+import { AuthorizeDialog } from '../oauth/AuthorizeDialog';
+import { McpAuthSection } from '../oauth/McpAuthSection';
+import { McpNeedsAuthNotice } from '../oauth/McpNeedsAuthNotice';
 
 type Transport = 'stdio' | 'http';
 
@@ -73,6 +79,11 @@ export function RegisterMcpDialog({
   const [loadingEdit, setLoadingEdit] = useState<boolean>(Boolean(edit));
   // 组⑤：编辑对象当前启停态（视图就位时捕获；禁用态保存后跳过 mcp.start 预热）
   const [editEnabled, setEditEnabled] = useState<boolean>(true);
+  // Task 16：内联认证态——OAuth 绑定（编辑回显）、授权等待、401 横幅
+  const [oauthConnectionId, setOauthConnectionId] = useState<string | undefined>(undefined);
+  const [oauthEnvVar, setOauthEnvVar] = useState<string | undefined>(undefined);
+  const [authorizing, setAuthorizing] = useState<{ pendingId: string; authorizationUrl: string; redirectUri: string } | null>(null);
+  const [needsAuth, setNeedsAuth] = useState(false);
 
   // edit 模式 mount 预填：getMcpEditView 全字段回显（cancelled 防卸载后 setState）
   useEffect(() => {
@@ -93,6 +104,8 @@ export function RegisterMcpDialog({
         setEnvRows(recordToRows(view.env));
         setHeaderRows(recordToRows(view.headers));
         setEditEnabled(view.enabled);
+        setOauthConnectionId(view.oauthConnectionId);
+        setOauthEnvVar(view.oauthEnvVar);
       })
       .catch((err) => {
         if (!cancelled) setError(`读取 MCP 配置失败：${(err as Error).message}`);
@@ -141,6 +154,7 @@ export function RegisterMcpDialog({
     }
     setSubmitting(true);
     setError(null);
+    setNeedsAuth(false);
     try {
       const parsedArgs = argsText.split('\n').map((s) => s.trim()).filter(Boolean);
       const payload = transport === 'http'
@@ -173,9 +187,47 @@ export function RegisterMcpDialog({
       onSuccess();
       onClose();
     } catch (err) {
-      setError((err as Error).message);
+      const message = (err as Error).message;
+      // 401 → needs_reauth：横幅已完整表达「需要授权 + 去授权」，原始报错
+      // （「MCP … 需要授权（HTTP 401）」）与横幅同屏即重复（R9）——banner 替代红字。
+      // 非 401 失败仍走红字。判定口径沿用主进程文案「需要授权」/错误码 needs_reauth。
+      if (message.includes('需要授权') || message.includes('needs_reauth')) {
+        setNeedsAuth(true);
+      } else {
+        setError(message);
+      }
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  /** 401 横幅「去授权」：就地发起授权（复用连接直接重试启动，否则开授权等待框）。
+   *  ref 挡同 tick 双击重入（横幅按钮无禁用态，handler 侧自守） */
+  const authorizeRetryBusyRef = useRef(false);
+  const authorizeAndRetry = async (): Promise<void> => {
+    if (authorizeRetryBusyRef.current) return;
+    authorizeRetryBusyRef.current = true;
+    const targetName = edit ? edit.name : name.trim();
+    if (!activeWorkspaceId) { setError('未激活的工作空间，无法启动 MCP'); return; }
+    try {
+      const result = await ipc.oauth.beginAuthorizationForMcp(targetName, oauthEnvVar?.trim() || null);
+      if (result.existingConnectionId) {
+        await ipc.mcp.start(activeWorkspaceId, targetName);
+        setNeedsAuth(false);
+        onSuccess();
+        return;
+      }
+      if (result.pendingId && result.authorizationUrl && result.redirectUri) {
+        setAuthorizing({
+          pendingId: result.pendingId,
+          authorizationUrl: result.authorizationUrl,
+          redirectUri: result.redirectUri,
+        });
+      }
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      authorizeRetryBusyRef.current = false;
     }
   };
 
@@ -190,12 +242,18 @@ export function RegisterMcpDialog({
           <div className="text-center text-tertiary text-sm py-8">加载中…</div>
         ) : (
         <>
-        <Segmented
-          options={TRANSPORT_OPTIONS}
-          value={transport}
-          onChange={switchTransport}
-          aria-label="传输类型"
-        />
+        {edit ? (
+          <div className="text-sm text-secondary">
+            传输类型：<span className="text-primary">{transport === 'http' ? '远程（HTTP）' : '本地（stdio）'}</span>
+          </div>
+        ) : (
+          <Segmented
+            options={TRANSPORT_OPTIONS}
+            value={transport}
+            onChange={switchTransport}
+            aria-label="传输类型"
+          />
+        )}
         {/* 名称是 agent 引用键（defaultMcps[].ref），编辑模式锁定不可改 */}
         <Input label="名称" value={name} onChange={(e) => { setOverwriteWarning(null); setName(e.target.value); }} placeholder="如：github" autoFocus disabled={Boolean(edit)} />
         <Input label="版本" value={version} onChange={(e) => { setOverwriteWarning(null); setVersion(e.target.value); }} placeholder="如：1.0.0（可选）" />
@@ -219,6 +277,18 @@ export function RegisterMcpDialog({
               <div className="flex flex-col gap-2 pt-2">
                 <KeyValueRows rows={envRows} onChange={(rows) => { setOverwriteWarning(null); setEnvRows(rows); }} keyPlaceholder="变量名" valuePlaceholder="值" addLabel="添加环境变量" ariaLabel="环境变量" />
                 <Input label="工作目录" value={cwd} onChange={(e) => { setOverwriteWarning(null); setCwd(e.target.value); }} placeholder="如：/opt/project（可选，子进程 cwd）" />
+                {edit && (
+                  <McpAuthSection
+                    mcpName={edit.name}
+                    transport="stdio"
+                    connectionId={oauthConnectionId}
+                    envVar={oauthEnvVar}
+                    onChange={(next) => {
+                      setOauthConnectionId(next.connectionId || undefined);
+                      setOauthEnvVar(next.envVar || undefined);
+                    }}
+                  />
+                )}
               </div>
             </details>
           </>
@@ -237,18 +307,56 @@ export function RegisterMcpDialog({
                 <KeyValueRows rows={headerRows} onChange={(rows) => { setOverwriteWarning(null); setHeaderRows(rows); }} keyPlaceholder="Header 名" valuePlaceholder="值" addLabel="添加请求头" ariaLabel="请求头" />
               </div>
             </details>
+            {/* R12：binding 即标记——仅已绑定的编辑态展示 OAuth 管理点；
+                未绑定时零 OAuth 痕迹（无认证/手填 Authorization 的 MCP 不被误导），
+                绑定主路径 = 提交后 401 横幅。stdio 的高级区入口保留（无 401 触发器） */}
+            {edit && oauthConnectionId && (
+              <McpAuthSection
+                mcpName={edit.name}
+                transport="streamable_http"
+                connectionId={oauthConnectionId}
+                envVar={oauthEnvVar}
+                onChange={(next) => {
+                  setOauthConnectionId(next.connectionId || undefined);
+                  setOauthEnvVar(next.envVar || undefined);
+                }}
+              />
+            )}
           </>
         )}
 
         {overwriteWarning !== null && (
           <div className="text-status-warning text-sm">将覆盖同名服务器：{overwriteWarning}</div>
         )}
+        {needsAuth && <McpNeedsAuthNotice onAuthorize={() => void authorizeAndRetry()} />}
         {error && <div className="text-status-error text-sm">{error}</div>}
         <div className="flex gap-2 justify-end mt-2">
           <Button variant="ghost" type="button" onClick={onClose}>取消</Button>
           <Button type="submit" disabled={submitting || !valid}>{submitLabel}</Button>
         </div>
         </>
+        )}
+        {authorizing && (
+          <AuthorizeDialog
+            pendingId={authorizing.pendingId}
+            authorizationUrl={authorizing.authorizationUrl}
+            redirectUri={authorizing.redirectUri}
+            onSuccess={() => {
+              setAuthorizing(null);
+              // 授权完成即绑定 + 驱逐池（主进程回写）——重试启动后走 onSuccess 刷新
+              if (!activeWorkspaceId) return;
+              void (async () => {
+                try {
+                  await ipc.mcp.start(activeWorkspaceId, edit ? edit.name : name.trim());
+                  setNeedsAuth(false);
+                  onSuccess();
+                } catch (err) {
+                  setError((err as Error).message);
+                }
+              })();
+            }}
+            onClose={() => setAuthorizing(null)}
+          />
         )}
       </form>
     </Dialog>

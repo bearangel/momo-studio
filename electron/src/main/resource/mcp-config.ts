@@ -50,6 +50,9 @@ export interface McpConfigView {
   url: string;
   /** 裸模式的现有 headers 键值（schema 模式为空对象） */
   headers: Record<string, string>;
+  /** OAuth 绑定（无绑定为 undefined；认证区块回显用，与 McpEditView 同源字段） */
+  oauthConnectionId?: string;
+  oauthEnvVar?: string;
 }
 
 /** resource:updateMcpConfig 入参形状（spec §4.2） */
@@ -119,9 +122,20 @@ export async function getMcpConfigView(name: string): Promise<McpConfigView> {
       url,
       // schema 模式下回显走 values，headers 保持空对象（spec §4.1）
       headers: {},
+      oauthConnectionId: def.oauthConnectionId,
+      oauthEnvVar: def.oauthEnvVar,
     };
   }
-  return { name, transport: def.transport, bare: true, values: {}, url, headers };
+  return {
+    name,
+    transport: def.transport,
+    bare: true,
+    values: {},
+    url,
+    headers,
+    oauthConnectionId: def.oauthConnectionId,
+    oauthEnvVar: def.oauthEnvVar,
+  };
 }
 
 /** 编辑已装远程 MCP 配置：校验 → 重组/直写 → 专用 UPDATE → 驱逐池连接 */
@@ -158,7 +172,10 @@ export async function updateRemoteMcpConfig(
   }
   // input.schema 透传落库（编辑期间拉到的新 schema 顺手保存；缺省保留原列值）
   updateRemoteMcpDefinition(name, finalUrl, headers, input.schema);
-  await evictMcpByName(name);
+  // 连接参数（url + headers）原值重提交 → 不驱逐池连接（与 updateMcpEntry 同性能口径）
+  const connectionUnchanged =
+    def.url === finalUrl && JSON.stringify(def.headers ?? {}) === JSON.stringify(headers);
+  if (!connectionUnchanged) await evictMcpByName(name);
 }
 
 /** 悬空 MCP 引用条目（spec §4.3，renderer types.d.ts 镜像源） */
@@ -212,6 +229,9 @@ export interface McpEditView {
   cwd?: string;
   /** 组⑤：启停态（编辑保存后据此决定是否跳过 mcp.start 预热） */
   enabled: boolean;
+  /** OAuth 绑定（无绑定为 undefined；与 renderer types.d.ts 镜像同步） */
+  oauthConnectionId?: string;
+  oauthEnvVar?: string;
 }
 
 /** 读全字段编辑视图（未注册抛中文错） */
@@ -229,13 +249,17 @@ export function getMcpEditView(name: string): McpEditView {
     headers: def.transport === 'streamable_http' ? (def.headers ?? {}) : {},
     cwd: def.cwd,
     enabled: def.enabled,
+    oauthConnectionId: def.oauthConnectionId,
+    oauthEnvVar: def.oauthEnvVar,
   };
 }
 
-/** 全字段编辑：校验 → UPDATE（保 id/source/installed_at/config_schema）→ 驱逐池连接 → 广播目录 */
+/** 全字段编辑：校验 → UPDATE（保 id/source/installed_at/config_schema）→ 连接字段
+ *  变化时驱逐池连接 → 广播目录。无改动保存不付 DNS+TLS+握手重连（性能锁：
+ *  updateMcpEntryDefinition 返回连接字段是否变化）。 */
 export async function updateMcpEntry(name: string, input: McpEntryUpdateInput): Promise<void> {
-  updateMcpEntryDefinition(name, input);
-  await evictMcpByName(name);
+  const connectionChanged = updateMcpEntryDefinition(name, input);
+  if (connectionChanged) await evictMcpByName(name);
 }
 
 /**

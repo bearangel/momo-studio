@@ -14,7 +14,7 @@ import { getSkillsDir, listInstalled as listInstalledSkills } from '../skill/zip
 import { parseSkillMd } from '../skill/loader';
 import { listRegistered, registerMcpDefinition } from '../mcp/host-manager';
 import { McpClient } from '../mcp/client';
-import { HttpMcpClient } from '../mcp/http-client';
+import { HttpMcpClient, McpHttpError } from '../mcp/http-client';
 import type { McpServerConfig, McpToolInfo, RegisteredMcp } from '../mcp/types';
 import { getDb } from '../storage/db';
 import { isValidSlug } from '../marketplace/types';
@@ -62,11 +62,15 @@ export interface CreateSkillResult {
   name: string;
 }
 
-/** create_mcp 返回（toolNames 为首层工具名摘要，截断至前 20） */
+/** create_mcp 返回（toolNames 为首层工具名摘要，截断至前 20）。
+ *  needsAuthorization：服务器返回 OAuth 挑战（401/403）——已落库未绑定，
+ *  工具面为空，用户须在资源库完成授权后可用（R14）。 */
 export interface CreateMcpResult {
   name: string;
   toolCount: number;
   toolNames: string[];
+  needsAuthorization?: boolean;
+  notice?: string;
 }
 
 /** create_team 返回（team.ts 原事务，错误信息原样透出） */
@@ -332,6 +336,26 @@ function opCreateMcp(a: Record<string, unknown>, deps?: ResourceOpDeps): Promise
       await withTimeout(client.connect(), MCP_TEST_TIMEOUT_MS, `MCP ${name} 连接超时`);
       const tools = await withTimeout(client.listTools(), MCP_TEST_TIMEOUT_MS, `MCP ${name} 工具发现超时`);
       toolNames = tools.map((tool) => tool.name);
+    } catch (err) {
+      // R14：OAuth 挑战例外（判定口径与 host-manager getOrStartMcp 一致——401/403 的
+      // McpHttpError 即「服务器要求授权」，不依赖 wwwAuthenticate 存在性）。授权码+
+      // PKCE 须用户在浏览器完成，agent 无法代劳，故落库未绑定 + 返回引导而非报错，
+      // 避免用户被迫手工重建同一 server
+      if (err instanceof McpHttpError && (err.status === 401 || err.status === 403)) {
+        registerMcpDefinition(config);
+        logger.info('会话内注册 MCP（待 OAuth 授权）', { name });
+        return {
+          name,
+          toolCount: 0,
+          toolNames: [],
+          needsAuthorization: true,
+          notice:
+            `MCP ${name} 需要 OAuth 授权，已注册但暂未连接（工具面为空）。` +
+            '授权须由用户在应用内完成，agent 无法代为操作：请在 资源库 → MCP → ' +
+            `${name} → 编辑，提交后点「去授权」完成认证。完成后即可直接使用，无需重新创建。`,
+        };
+      }
+      throw err;
     } finally {
       await client.disconnect().catch(() => undefined);
     }

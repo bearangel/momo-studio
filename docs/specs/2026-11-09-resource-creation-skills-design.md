@@ -84,8 +84,8 @@
 ### 5.5 `create_mcp`
 
 - 入参：`{ name: string, transport: { kind: 'stdio', command, args?, env? } | { kind: 'http', url, headers? } }`
-- 行为：name 过 `isValidSlug` + 同名冲突拒绝 → **先测后落库**：瞬态客户端（stdio `McpClient` / http `HttpMcpClient`，不经进程池不落库）`connect()` + `listTools()` 握手（30s 超时对齐既有常量）→ 失败回传错误零落库（agent 可修参数重试）→ 成功后 `registerMcpDefinition`（p2.4 同款落库形状）→ 返回首层工具名摘要
-- 返回：`{ name, toolCount, toolNames: string[]（截断至前 20） }`
+- 行为：name 过 `isValidSlug` + 同名冲突拒绝 → **先测后落库**：瞬态客户端（stdio `McpClient` / http `HttpMcpClient`，不经进程池不落库）`connect()` + `listTools()` 握手（30s 超时对齐既有常量）→ 失败回传错误零落库（agent 可修参数重试）→ 成功后 `registerMcpDefinition`（p2.4 同款落库形状）→ 返回首层工具名摘要。**OAuth 例外（2026-11-10 R14）**：失败为 `McpHttpError` 401/403（判定口径与 host-manager `getOrStartMcp` 横幅一致）= 服务器要求 OAuth 授权——落库（未绑定）并返回 `needsAuthorization: true` + notice（引导用户去 资源库 → MCP → 编辑 → 去授权；授权码+PKCE 须用户在浏览器完成，agent 无法代劳），其余失败维持零落库
+- 返回：`{ name, toolCount, toolNames: string[]（截断至前 20）; needsAuthorization?: boolean; notice?: string }`
 
 ### 5.6 `create_team`
 

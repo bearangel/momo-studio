@@ -4,6 +4,7 @@ import type {
   ApiSurface,
   AssignmentDeltas,
   ApplyOnboardingPlanInput,
+  AuthorizationChangedPayload,
   BrowserNotice,
   BrowserState,
   BundlePreview,
@@ -335,6 +336,39 @@ const api: ApiSurface = {
     callTool: (workspaceId, mcpName, toolName, args) =>
       invoke('mcp:callTool', workspaceId, mcpName, toolName, args),
     stop: (workspaceId, mcpName) => invoke('mcp:stop', workspaceId, mcpName),
+  },
+  // OAuth 模块（spec 2026-11-10）：连接管理十一通道 + 授权/列表两推送。
+  // 推送载荷最小化（authorizationChanged 带 pendingId/status，connectionsChanged
+  // 仅 { at } 时间戳）——列表数据 renderer 收到后重拉，连接视图永不含令牌。
+  oauth: {
+    listConnections: () => invoke('oauth:listConnections'),
+    getConnection: (id) => invoke('oauth:getConnection', id),
+    listPresets: () => invoke('oauth:listPresets'),
+    beginAuthorization: (input) => invoke('oauth:beginAuthorization', input),
+    beginAuthorizationForMcp: (mcpName, envVar) =>
+      invoke('oauth:beginAuthorizationForMcp', mcpName, envVar),
+    completeWithManualCallback: (payload) => invoke('oauth:completeWithManualCallback', payload),
+    cancelAuthorization: (pendingId) => invoke('oauth:cancelAuthorization', pendingId),
+    disconnect: (id) => invoke('oauth:disconnect', id),
+    // Task 16：某连接绑定的 MCP 名单（认证区块共享提示）/ 解除单服务器绑定
+    listBoundMcps: (id) => invoke('oauth:listBoundMcps', id),
+    unbindMcp: (mcpName) => invoke('oauth:unbindMcp', mcpName),
+    removeConnection: (id) => invoke('oauth:removeConnection', id),
+    onAuthorizationChanged: (callback) => {
+      const handler = (_e: IpcRendererEvent, payload: AuthorizationChangedPayload): void =>
+        callback(payload);
+      ipcRenderer.on('oauth:authorizationChanged', handler);
+      return () => {
+        ipcRenderer.off('oauth:authorizationChanged', handler);
+      };
+    },
+    onConnectionsChanged: (callback) => {
+      const handler = (_e: IpcRendererEvent, payload: { at: number }): void => callback(payload);
+      ipcRenderer.on('oauth:connectionsChanged', handler);
+      return () => {
+        ipcRenderer.off('oauth:connectionsChanged', handler);
+      };
+    },
   },
   session: {
     // v2.0 P1 Task 8：会话内核命名空间（纯 SQLite，无 Matrix）。

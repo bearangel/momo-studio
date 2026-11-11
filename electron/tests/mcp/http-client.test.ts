@@ -159,7 +159,12 @@ describe('HttpMcpClient（streamable_http 传输）', () => {
   });
 
   it('HTTP 非 2xx 抛错且 isConnected=false', async () => {
-    fetchSpy.mockResolvedValue({ ok: false, status: 502 } as unknown as Response);
+    // 真实 Response 恒有 headers（结构化错误要读 www-authenticate）——mock 补齐形状
+    fetchSpy.mockResolvedValue({
+      ok: false,
+      status: 502,
+      headers: new Headers(),
+    } as unknown as Response);
     const client = new HttpMcpClient(cfg);
     await expect(client.connect()).rejects.toThrow(/502|远程 MCP/);
     expect(client.isConnected).toBe(false);

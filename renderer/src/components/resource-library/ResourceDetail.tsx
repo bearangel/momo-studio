@@ -553,8 +553,10 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
             配置
           </Button>
         )}
-        {/* 配置按钮：已装远程 MCP（spec §6.1 / Task 7）——与卸载按钮同排；stdio 不编辑（D1） */}
-        {item.type === 'mcp' && item.installed && item.custom?.transport === 'streamable_http' && onEditMcpConfig && (
+        {/* 配置按钮：非 custom 源的已装远程 MCP（smithery/hub；spec §6.1 / Task 7）。
+            custom 源远程 MCP 不再显示——「编辑」已含全部配置内容 + 认证区块，
+            双入口即功能重复（R9）；stdio 非 custom 无编辑入口维持现状 */}
+        {item.type === 'mcp' && item.installed && item.custom?.transport === 'streamable_http' && item.source !== 'custom' && onEditMcpConfig && (
           <Button
             size="sm"
             onClick={() => onEditMcpConfig(item)}

@@ -21,12 +21,22 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { McpConfigDialog } from './McpConfigDialog';
 import type { McpConfigView } from '../../ipc/types';
 
-// ---- mock IPC 桩（弹窗只触达 resource.getMcpConfig——updateMcpConfig 由 View 层接线）----
+// ---- mock IPC 桩（弹窗触达 resource.getMcpConfig + Task 16 认证区块的 oauth 面；
+// updateMcpConfig 由 View 层接线）----
 const getMcpConfigMock = vi.fn();
+const listConnectionsMock = vi.fn();
+const listBoundMcpsMock = vi.fn();
+// McpAuthSection mount 订阅；无断言需求，impl 常驻（mockReset 会清掉返回退订函数的实现）
+const onAuthorizationChangedMock = vi.fn(() => () => undefined);
 
 const mockApi = {
   resource: {
     getMcpConfig: getMcpConfigMock,
+  },
+  oauth: {
+    listConnections: listConnectionsMock,
+    listBoundMcps: listBoundMcpsMock,
+    onAuthorizationChanged: onAuthorizationChangedMock,
   },
 };
 
@@ -76,6 +86,10 @@ const BARE_VIEW: McpConfigView = {
 beforeEach(() => {
   getMcpConfigMock.mockReset();
   getMcpConfigMock.mockResolvedValue(SCHEMA_VIEW);
+  listConnectionsMock.mockReset();
+  listConnectionsMock.mockResolvedValue([]);
+  listBoundMcpsMock.mockReset();
+  listBoundMcpsMock.mockResolvedValue([]);
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 });
 
@@ -145,13 +159,37 @@ describe('McpConfigDialog — schema 模式回显（D9）', () => {
     expect(screen.getByRole('button', { name: '保存' })).toBeEnabled();
   });
 
-  it('url 非 https → 禁提交（前端防线，spec §7）', async () => {
+  it('url 非 https 且非回环 http → 禁提交（前端防线，spec §7）', async () => {
     render(<McpConfigDialog name="s" serverName="s" onSubmit={vi.fn()} onClose={vi.fn()} />);
     await screen.findByLabelText('服务地址');
     fireEvent.change(screen.getByLabelText('服务地址'), { target: { value: 'http://mcp.example.com/mcp' } });
     expect(screen.getByRole('button', { name: '保存' })).toBeDisabled();
     fireEvent.change(screen.getByLabelText('服务地址'), { target: { value: 'https://mcp.example.com/mcp' } });
     expect(screen.getByRole('button', { name: '保存' })).toBeEnabled();
+  });
+
+  it('回环 http 放行、非回环 http 拒绝（Task 16 https 修正回归锁）', async () => {
+    render(<McpConfigDialog name="s" serverName="s" onSubmit={vi.fn()} onClose={vi.fn()} />);
+    await screen.findByLabelText('服务地址');
+    // 本地自建服务（127.0.0.1 回环）→ 可提交
+    fireEvent.change(screen.getByLabelText('服务地址'), { target: { value: 'http://127.0.0.1:8080/mcp' } });
+    expect(screen.getByRole('button', { name: '保存' })).toBeEnabled();
+    // 非回环明文 http（域名）→ 禁提交
+    fireEvent.change(screen.getByLabelText('服务地址'), { target: { value: 'http://example.com' } });
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled();
+  });
+
+  it('认证区块：view 携带 oauth 绑定时回显已绑定连接（Task 16）', async () => {
+    getMcpConfigMock.mockResolvedValueOnce({
+      ...SCHEMA_VIEW,
+      oauthConnectionId: 'c1',
+    });
+    listConnectionsMock.mockResolvedValue([
+      { id: 'c1', displayName: 'GitHub', accountLabel: 'bearangel', status: 'connected', scopes: '', expiresAt: null, source: 'mcp' },
+    ]);
+    render(<McpConfigDialog name="s" serverName="s" onSubmit={vi.fn()} onClose={vi.fn()} />);
+    expect(await screen.findByText(/GitHub · bearangel/)).toBeTruthy();
+    expect(screen.getByText('已连接')).toBeTruthy();
   });
 });
 
