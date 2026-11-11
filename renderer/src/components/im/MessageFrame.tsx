@@ -7,8 +7,8 @@ import type { ReactNode } from 'react';
 import { cn } from '../../lib/cn';
 import { avatarEmoji, shortName } from './avatars';
 
-/** epoch ms → HH:mm（本地时区） */
-function formatHHmm(ts: number): string {
+/** epoch ms → HH:mm（本地时区）。2026-11-11 起导出共享：lib/progress-segment 进度折叠卡单源复用 */
+export function formatHHmm(ts: number): string {
   const d = new Date(ts);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
