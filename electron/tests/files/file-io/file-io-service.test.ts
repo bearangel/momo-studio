@@ -138,6 +138,28 @@ describe('proxy 模式（真实子进程 + fake worker）', () => {
     expect((await svc.readFile(normal)).toString('utf8')).toBe('ok');
   });
 
+  it('spawn 同步失败 → ESPAWN，失败不缓存（下一请求自愈重试）', async () => {
+    const normal = path.join(dir, 'ok.txt');
+    fs.writeFileSync(normal, 'ok');
+    let spawnCalls = 0;
+    const svc = new FileIoService({
+      settings: PROXY,
+      workerPath: FIXTURE,
+      nodePathOverride: process.execPath,
+      spawnImpl: (cmd, args, opts) => {
+        spawnCalls += 1;
+        if (spawnCalls === 1) throw new Error('boom');
+        return spawn(cmd, args, opts);
+      },
+    });
+    services.push(svc);
+    await expect(svc.readFile(normal)).rejects.toMatchObject({ code: 'ESPAWN' });
+    // 回归锁：ensureWorker 不得把 rejected promise 缓存在 starting——
+    // 否则失败被永久固化，applySettings 后也无法自愈
+    expect((await svc.readFile(normal)).toString('utf8')).toBe('ok');
+    expect(spawnCalls).toBe(2);
+  });
+
   it('超时', async () => {
     const svc = mkProxySvc({ timeoutMs: 150 });
     const hang = path.join(dir, 'hang-now.txt');

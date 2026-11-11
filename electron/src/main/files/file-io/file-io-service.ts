@@ -258,6 +258,8 @@ export class FileIoService {
       this.buf = '';
       child.stdout?.setEncoding('utf8');
       child.stdout?.on('data', (chunk: string) => {
+        // 已被新 worker 取代：旧 worker 迟到的 stdout 分片不得混入新 worker 的行分帧
+        if (this.child !== child) return;
         this.buf += chunk;
         let idx: number;
         while ((idx = this.buf.indexOf('\n')) >= 0) {
@@ -283,18 +285,18 @@ export class FileIoService {
         this.logger?.warn('代理进程 stderr', { text: String(d).trim() });
       });
       child.on('error', (e) => {
-        this.failAllPending(`代理进程错误: ${e.message}`);
-        // 同一时刻可能已 spawn 出新 worker——只清理自己创建的状态
+        // 已被新 worker 取代：迟到终态事件不误伤新代在途请求（旧代请求已由首个终态事件失败）
         if (this.child !== child) return;
         this.child = null;
         this.starting = null;
+        this.failAllPending(`代理进程错误: ${e.message}`);
       });
       child.on('exit', (code, signal) => {
-        // 无论是否已被新 worker 取代，本进程在途请求的应答永远不会来——必须失败
-        this.failAllPending(`代理进程退出（code=${code ?? 'null'} signal=${signal ?? 'null'}）`);
+        // 迟到事件发生时 pending 中只可能是新 worker 的请求，故身份守卫必须先于 failAllPending
         if (this.child !== child) return;
         this.child = null;
         this.starting = null;
+        this.failAllPending(`代理进程退出（code=${code ?? 'null'} signal=${signal ?? 'null'}）`);
       });
 
       resolve();
