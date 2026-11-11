@@ -6,6 +6,7 @@
 
 import { getDb } from '../storage/db';
 import { getSessionSettings } from '../storage/sessions/repo';
+import type { FileIoMode } from '../files/file-io/types';
 
 /** 默认模型引用：指向某供应商模型列表中的一个模型 */
 export interface DefaultModelRef {
@@ -62,6 +63,16 @@ export interface GlobalSettings {
   sandboxWritePolicy?: 'confined' | 'full-disk';
   /** v2.5：变更账本 workspace 级 blob 配额（MB，按 1024² 换算）；默认 200。 */
   journalQuotaMb?: number;
+  /**
+   * 文件访问配置（spec 2026-11-11）。读侧只在 kv 有行时透传（缺省 undefined，
+   * 缺省语义在 file-io-settings 解析）——此处给默认值会被 updateGlobalSettings
+   * 的读改写合并烤进 JSON 污染判定（sandboxNetworkPolicy 先例）。
+   */
+  fileIo?: {
+    mode?: FileIoMode;
+    nodePath?: string;
+    strictCipherCheck?: boolean;
+  };
 }
 
 // 会话级配置（SessionSettings）与 CRUD 直接转调 sessions repo——单一数据源，
@@ -122,6 +133,7 @@ export function getGlobalSettings(): GlobalSettings {
     sandboxToolchainDirs: parsed.sandboxToolchainDirs,
     sandboxWritePolicy: parsed.sandboxWritePolicy,
     journalQuotaMb: parsed.journalQuotaMb ?? DEFAULT_JOURNAL_QUOTA_MB,
+    fileIo: parsed.fileIo,
   };
 }
 
