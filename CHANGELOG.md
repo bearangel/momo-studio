@@ -6,6 +6,20 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 亿赛通加密环境文件代理读写（File IO Proxy）
+
+`2.1.0-alpha.60`。依据 spec `docs/specs/2026-11-11-esafenet-fileio-proxy-design.md` + 实施计划
+`docs/plans/2026-11-11-esafenet-fileio-proxy.md`（9 任务全量落地，逐任务独立评审 + 整分支终审）。
+
+- **问题**：研发内网亿赛通透明加密环境下，momo-studio 进程不在放行名单——读 `.java` 得密文、写落明文（合规违规）；自研工具无法加入放行名单，只能借用已获授权的 node.exe 通道
+- **内核**：`FileIoService`（主进程单例，懒启动 1 个常驻 node.exe worker；JSON-lines read/readMany/write/stat；batch=50；超时与 ECHILD 自愈；spawn env 原样继承——PATH 注入 DLL 硬约束）+ `WorkspaceFS` 内容通道收口（direct/proxy 经 `ContentIo` 路由，83 处调用零改动）+ 密文魔数硬失败 `EENCRYPTED`（用户文案中性化，技术细节只落日志）
+- **子进程覆盖**：fork 出的 runtime 子进程（momo-studio.exe 镜像）经 `file-io-bridge`（id 配对，同构 process-bridge）转发主进程；`AGENT_CONFIG.fileIoMode` spawn 快照下发，缺省 direct 向后兼容
+- **设置面**：设置 → 文件访问（三档模式 direct/proxy/auto + Node.js 路径（含系统文件选择器）+ 状态卡 + 重新检测）；默认 direct，未加密环境零行为变化
+- **打包与安全**：`asarUnpack` + `app.asar.unpacked` 路径重写（外部 node.exe 无法读 asar）；桥主进程侧工作空间路径校验（插件不可借道越界读取）；异步探测 + 缓存（设置页不再阻塞主进程事件循环）
+- **冒烟**：`scripts/esafenet-probe.mjs`（`--self-test` / `--file` 明文密文判定 / `--write-probe-dir` 三段写入探针）
+- **测试**：electron `tests/files` 196（含 PATH 引用恒等回归锁、die→ECHILD→自愈、120 文件批量保序、桥协议配对与越界拒绝）+ renderer 面板 8；双 workspace typecheck 绿；全量套件与 main 基线 A/B 一致（agent-threads 预存失败无新增）
+- **门禁**：发布前需 P0 书面合规确认 + P3 研发机实测（读明文 / 写入探针 / 批量 / 退出回收 / 安装包 asar 路径）+ 设置面板真实 App 截图验收
+
 ## [未发布] — office-pro 插件：office 生成能力代码工坊化 + 核心生成类下线
 
 `2.1.0-alpha.57`。依据 spec `docs/specs/2026-11-03-office-pro-plugin-design.md`（已批准）+ 实施计划
