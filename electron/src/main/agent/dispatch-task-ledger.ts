@@ -12,7 +12,7 @@
 //   - **id 单点**：行 id = 链 taskId 原样沿用（禁造第二 id——boundary 规则 1）
 import { getDb } from '../storage/db';
 import { getTask, insertTask, transitionTaskStatus, updateTask } from '../storage/tasks/repo';
-import type { TaskStatus } from '../storage/tasks/state-machine';
+import { canTransition, type TaskStatus } from '../storage/tasks/state-machine';
 import {
   handleQuotaFailureSettle,
   isQuotaLimitError,
@@ -120,6 +120,18 @@ export function ledgerSettleDispatch(
     const row = getTask(taskId);
     if (!row || row.origin !== 'dispatch') return;
     if (row.status === SETTLE_STATUS[outcome]) return; // 幂等（迟到重复钩子）
+    if (!canTransition(row.status, SETTLE_STATUS[outcome])) {
+      // 2026-11-11 会话停止竞速：cancel 投影先行落 cancelled，子进程退出前的
+      // failed settle 迟到——非法转换此前以「投影失败」warn 噪声落场。迟到
+      // 钩子不覆盖先落的权威状态（含终态互斥与 paused→completed 等），记
+      // info 跳过；真正的投影异常仍走下方 catch 兜底。
+      logger.info('dispatch 账本 settle：行状态无法承接本钩子，跳过', {
+        taskId,
+        rowStatus: row.status,
+        outcome,
+      });
+      return;
+    }
     if (outcome === 'failed' && (row.status === 'assigned' || row.status === 'session_queued')) {
       // 另一 settle 入口（task-end）已排配额自动续跑——迟到失败钩子不覆盖排队行
       logger.info('dispatch 账本 settle：行已排队配额自动续跑，忽略失败投影', {
@@ -167,6 +179,14 @@ export function ledgerCancelDispatch(taskId: string): void {
     const row = getTask(taskId);
     if (!row || row.origin !== 'dispatch') return;
     if (row.status === 'cancelled') return;
+    if (!canTransition(row.status, 'cancelled')) {
+      // 同 settle 预检语义（2026-11-11）：迟到取消不覆盖先落的权威终态
+      logger.info('dispatch 账本 cancel：行状态无法承接本钩子，跳过', {
+        taskId,
+        rowStatus: row.status,
+      });
+      return;
+    }
     resetQuotaRetryCount(taskId);
     transitionTaskStatus(taskId, 'cancelled', { completedAt: Date.now() });
   } catch (err) {
@@ -203,6 +223,14 @@ export function ledgerFailDispatch(taskId: string, reason: string): void {
     const row = getTask(taskId);
     if (!row || row.origin !== 'dispatch') return;
     if (row.status === 'failed') return;
+    if (!canTransition(row.status, 'failed')) {
+      // 同 settle 预检语义（2026-11-11）：判死投影不覆盖先落的权威终态
+      logger.info('dispatch 账本判死：行状态无法承接本钩子，跳过', {
+        taskId,
+        rowStatus: row.status,
+      });
+      return;
+    }
     resetQuotaRetryCount(taskId);
     transitionTaskStatus(taskId, 'failed', {
       errorMessage: reason.slice(0, 200),
