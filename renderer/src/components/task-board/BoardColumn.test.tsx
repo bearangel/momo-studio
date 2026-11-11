@@ -156,6 +156,53 @@ describe('BoardColumn 列内排序（sortColumn 内部生效）', () => {
   });
 });
 
+// ── 流式布局回归锁（2026-11-11 泳道自适应宽度 + 列内卡片流式换行）────────────
+// 预览定值合同（.omo/previews/board-fluid-lane-layout.html，用户已批准）：
+// 列 flex-1 + min-w-[184px]、列体 grid auto-fill minmax(168px,1fr) + content-start、
+// 分隔线/空态 col-span-full、hint truncate。jsdom 不计算 grid 模板列，断言
+// Tailwind 静态类名契约（布局产出的唯一真相层）。
+describe('BoardColumn 列宽自适应与卡片流式布局（预览定值合同锁）', () => {
+  it('列容器：flex-1 均分 + min-w-[184px] 下限（旧 w-[232px] shrink-0 退役）', () => {
+    render(<BoardColumn column={backlog} tasks={[]} />);
+    const section = screen.getByRole('region', { name: '待办' });
+    expect(section.className).toContain('flex-1');
+    expect(section.className).toContain('min-w-[184px]');
+    expect(section.className).not.toContain('w-[232px]');
+    expect(section.className).not.toContain('shrink-0');
+  });
+
+  it('列体：grid auto-fill minmax(168px,1fr) 流式换行 + content-start 顶对齐', () => {
+    render(<BoardColumn column={backlog} tasks={[]} />);
+    // 列体 = 空态「暂无」的父元素（section 下唯一的体容器）
+    const body = screen.getByText('暂无').parentElement!;
+    expect(body.className).toContain('grid');
+    expect(body.className).toContain('grid-cols-[repeat(auto-fill,minmax(168px,1fr))]');
+    expect(body.className).toContain('content-start');
+    expect(body.className).toContain('p-2');
+  });
+
+  it('空态「暂无」与「顶置以上」分隔线均 col-span-full 占满整行', () => {
+    const { unmount } = render(<BoardColumn column={backlog} tasks={[]} />);
+    expect(screen.getByText('暂无').className).toContain('col-span-full');
+    unmount();
+    render(
+      <BoardColumn
+        column={backlog}
+        tasks={[mkTask({ id: 'T-p', title: '置顶卡', pinnedAt: 1000 }), mkTask({ id: 'T-n', title: '普通卡' })]}
+      />,
+    );
+    expect(screen.getByTestId('pinned-divider').className).toContain('col-span-full');
+  });
+
+  it('列头 hint：flex-1 + min-w-0 + truncate（窄列省略号截断，防长副标挤爆列头）', () => {
+    render(<BoardColumn column={BOARD_COLUMNS[1]!} tasks={[]} />);
+    const hint = screen.getByText('等并发/等计划时间/等车道');
+    expect(hint.className).toContain('flex-1');
+    expect(hint.className).toContain('min-w-0');
+    expect(hint.className).toContain('truncate');
+  });
+});
+
 // ── 拖拽视觉反馈(看板重构 Task 13:禁投变暗 / 合法虚线 / 目标列高亮)──────────
 describe('BoardColumn 拖拽视觉反馈', () => {
   const assigned: BoardColumnDef = BOARD_COLUMNS[1]!;

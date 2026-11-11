@@ -1,11 +1,15 @@
 // renderer/src/components/task-board/BoardColumn.tsx
 //
-// 看板列（看板重构 Task 11 建立，Task 12 拖拽升级）：
-//   - 独立圆角卡容器：bg-surface-1 + border-subtle，固定列宽 ~232px（mockup 基线）
-//   - 列头：列名 + 卡片计数 + hint 灰字（BOARD_COLUMNS 契约的 statuses 标注）
+// 看板列（看板重构 Task 11 建立，Task 12 拖拽升级；2026-11-11 流式布局改造）：
+//   - 独立圆角卡容器：bg-surface-1 + border-subtle；列宽自适应——flex-1 五列
+//     均分可用宽度 + min-w-[184px] 下限（预览定值合同 .omo/previews/
+//     board-fluid-lane-layout.html：内容区窄于五列最小总宽 968px 时由泳道
+//     容器 overflow-x-auto 回退横向滚动）
+//   - 列头：列名 + 卡片计数 + hint 灰字（BOARD_COLUMNS 契约的 statuses 标注）；
+//     hint 窄列下省略号截断（min-w-0 + truncate，防长副标挤爆列头）
 //   - 列体：sortColumn 内部排序（顶置组 pin 时间倒序 → 未顶置创建时间倒序，
-//     2026-09-30 排序收敛）→ 卡片列表；两组之间渲染「顶置以上」分隔线；
-//     空列显示「暂无」空态
+//     2026-09-30 排序收敛）→ 卡片流式网格（auto-fill minmax(168px,1fr)，列宽
+//     时多卡/行换行铺满）；「顶置以上」分隔线与空态「暂无」col-span-full 占满整行
 //   - Task 12 拖拽接线：
 //     * droppableId 传入 → useDroppable 列容器（跨列/跨泳道落点）；缺省静态渲染
 //       仍安全（dnd-kit 默认 context dispatch=noop，不炸独立渲染）
@@ -47,7 +51,7 @@ interface BoardColumnProps {
 /** 顶置分区线（图钉 + 「顶置以上」+ 细线）——pinned 组与未 pin 组的分界 */
 function PinnedDivider(): ReactNode {
   return (
-    <div data-testid="pinned-divider" className="flex items-center gap-1 text-[10px] text-tertiary">
+    <div data-testid="pinned-divider" className="col-span-full flex items-center gap-1 text-[10px] text-tertiary">
       <Pin size={10} strokeWidth={1.75} aria-hidden className="shrink-0" />
       顶置以上
       <span aria-hidden className="h-px flex-1 bg-border-subtle" />
@@ -97,7 +101,7 @@ export function BoardColumn({
       ref={setNodeRef}
       aria-label={column.label}
       data-drop-state={dropState}
-      className={`flex w-[232px] shrink-0 flex-col rounded-lg border bg-surface-1 ${dropStateClass}`}
+      className={`flex min-w-[184px] flex-1 flex-col rounded-lg border bg-surface-1 ${dropStateClass}`}
     >
       <header className="flex items-center gap-1.5 border-b border-subtle px-2.5 pb-1.5 pt-2 text-xs font-semibold text-secondary">
         <span>{column.label}</span>
@@ -109,12 +113,12 @@ export function BoardColumn({
           </span>
         )}
         {column.hint !== '' && (
-          <span className="ml-auto text-[11px] font-normal text-tertiary">{column.hint}</span>
+          <span className="ml-auto min-w-0 flex-1 truncate text-right text-[11px] font-normal text-tertiary">{column.hint}</span>
         )}
       </header>
-      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
+      <div className="grid min-h-0 flex-1 grid-cols-[repeat(auto-fill,minmax(168px,1fr))] content-start gap-2 overflow-y-auto p-2">
         {sorted.length === 0 ? (
-          <div className="py-6 text-center text-xs text-tertiary">暂无</div>
+          <div className="col-span-full py-6 text-center text-xs text-tertiary">暂无</div>
         ) : renderCard ? (
           <SortableContext items={sorted.map((t) => t.id)} strategy={verticalListSortingStrategy}>
             {sorted.map((task, idx) => (
