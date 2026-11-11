@@ -15,7 +15,6 @@
 //       若 node 也读密文，说明策略/签名校验已变更，Node 代理模式将失效。
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 
 const MAGIC = Buffer.from('E-SafeNet', 'latin1');
@@ -61,24 +60,45 @@ function readRawViaUnlistedProcess(p) {
 }
 
 function writeProbe(dir) {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const probePath = path.join(dir, `.momo-esafenet-probe-${process.pid}.java`);
   const payload = `public class MomoProbe { /* ${new Date().toISOString()} */ }\n`;
-  fs.writeFileSync(probePath, payload);
 
-  const backViaNode = fs.readFileSync(probePath, 'utf8');
-  const nodeRoundtripOk = backViaNode === payload;
-
-  let rawCipher;
+  // 判定结果在 try 外声明：任何一段抛错都不泄漏探针文件（清理在 finally 无条件执行）
+  let nodeRoundtripOk = null;
+  let rawCipher = null;
+  let setupError = null;
   try {
-    rawCipher = looksEncrypted(readRawViaUnlistedProcess(probePath));
+    try {
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(probePath, payload);
+
+      const backViaNode = fs.readFileSync(probePath, 'utf8');
+      nodeRoundtripOk = backViaNode === payload;
+
+      try {
+        rawCipher = looksEncrypted(readRawViaUnlistedProcess(probePath));
+      } catch (e) {
+        console.warn(`[warn] 非放行进程视角读取失败（${e.message}）——跳过该段检查`);
+        rawCipher = null;
+      }
+    } finally {
+      // 清理自身的异常不得掩盖原始错误
+      try {
+        fs.rmSync(probePath, { force: true });
+        console.log('  已清理探针文件');
+      } catch (e) {
+        console.warn(`[warn] 探针文件清理失败（${e.message}）: ${probePath}`);
+      }
+    }
   } catch (e) {
-    console.warn(`[warn] 非放行进程视角读取失败（${e.message}）——跳过该段检查`);
-    rawCipher = null;
+    setupError = e.message;
   }
 
   console.log(`[write-probe] 探针文件: ${probePath}`);
   console.log(`  node 侧写→读一致: ${nodeRoundtripOk ? 'PASS' : 'FAIL'}`);
+  if (setupError) {
+    console.log(`  探针准备阶段失败: ${setupError}`);
+  }
   if (rawCipher === null) {
     console.log('  非放行进程视角: SKIP（无法读取——请人工用 IDE 打开探针文件确认）');
   } else {
@@ -87,10 +107,11 @@ function writeProbe(dir) {
       console.log('  ⚠ 落盘为明文——当前环境可能未启用代理写入要求，或写入走了非放行进程。');
     }
   }
+  if (process.platform !== 'win32') {
+    console.log('  [note] 非 Windows 平台：磁盘字节段为同进程直读，仅在 Windows + 加密客户端主机上具有鉴别力');
+  }
 
-  fs.rmSync(probePath, { force: true });
-  console.log('  已清理探针文件');
-  return nodeRoundtripOk && rawCipher !== false;
+  return nodeRoundtripOk === true && rawCipher !== false;
 }
 
 function main() {
