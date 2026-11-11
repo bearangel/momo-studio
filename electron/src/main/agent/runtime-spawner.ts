@@ -26,6 +26,9 @@ import { insertToolCall } from '../audit/insert';
 import { handlePluginBridgeMsg } from '../plugin/hook-bridge-main';
 import { getPluginBus } from '../plugin/bus-instance';
 import { handleResourceOpMessage } from './resource-ops-bridge';
+import { handleFileIoRequestMsg } from '../files/file-io/main-bridge';
+import { detectClientInstalled, resolveEffectiveMode, resolveFileIoSettings } from '../files/file-io/file-io-settings';
+import { getGlobalSettings } from '../settings/crud';
 import { enforceAuditQuota } from '../audit/quota';
 import { getOrStartMcp, getMcpConfig, listMcpTools, callMcpTool } from '../mcp/host-manager';
 import type { McpToolInfo } from '../mcp/types';
@@ -256,7 +259,18 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
   const sandboxProbe = sandboxState
     ? { windowsShell: sandboxState.windowsShell, executionPolicy: sandboxState.executionPolicy }
     : undefined;
-  const childConfig = sandboxProbe ? { ...runtimeConfig, sandboxProbe } : runtimeConfig;
+  // 文件访问生效模式（spec 2026-11-11 §5.6）：spawn 时定型下传，运行中不随设置
+  // 变更（子进程 boot 据此装配内容通道）。auto 在此解析成 direct/proxy 终值。
+  const fileIoMode = resolveEffectiveMode(
+    resolveFileIoSettings(getGlobalSettings().fileIo),
+    detectClientInstalled(),
+  );
+  // sandboxProbe 保持「仅在場时携带」语义（见上）；fileIoMode 恒下发
+  const childConfig = {
+    ...runtimeConfig,
+    fileIoMode,
+    ...(sandboxProbe ? { sandboxProbe } : {}),
+  };
 
   // AGENT_CONFIG 环境变量传递 runtime config
   const env: NodeJS.ProcessEnv = {
@@ -372,7 +386,7 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
     // B2（安全 review）：附 owner 身份——桥据此校验 envelope sender，拦截跨身份伪造
     if (handleChildMessage(msg, runtimeConfig.agentUserId)) return;
     if (typeof msg !== 'object' || msg === null) return;
-    const m = msg as AuditToolCallChildMsg & McpChildRequestMsg;
+    const m = msg as AuditToolCallChildMsg & McpChildRequestMsg & { requestId?: unknown };
     // 插件桥三分支（P3 spec §5.2-5.3）：preToolUse/callService id 配对回包，
     // postToolUse fire-and-forget——已消费则不进 chunk 通道。前缀同步门卫：
     // 非插件消息零 await 让步（audit:toolCall 的同步落库线契约依赖此顺序）
@@ -490,6 +504,19 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
       ) {
         return;
       }
+    }
+    // 文件 IO 桥（spec 2026-11-11 §5.4）：子进程 proxy 模式读写经主进程 FileIoService。
+    // 回写带通道关闭防御（与 sendMcpResponse 同款）——应答无法送达时子进程侧
+    // 超时兜底，绝不让 async listener 抛 unhandledRejection。
+    if (m.type === 'file-io:req' && typeof m.requestId === 'string') {
+      await handleFileIoRequestMsg(msg, (payload) => {
+        try {
+          child.send(payload);
+        } catch {
+          // 通道已关闭，应答无法送达——子进程侧超时兜底
+        }
+      });
+      return;
     }
     // StreamChunk 类型的消息转发给 wrappedOnChunk（先触发下游 routeChunkToBuffer，
     // 再 flush 待发的 MCP 发现失败事件挂到该消息行——P1 注入点）

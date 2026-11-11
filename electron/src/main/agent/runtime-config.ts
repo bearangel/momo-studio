@@ -129,6 +129,12 @@ export interface AgentRuntimeOpts {
    * 缺省 undefined = 子进程自行探测（旧行为，posix 与测试路径不变）。
    */
   sandboxProbe?: SandboxProbeSnapshot;
+  /**
+   * 文件访问生效模式（spec 2026-11-11 §5.6）：spawn 时定型（resolveEffectiveMode
+   * 产出 direct/proxy），运行中不随设置变更。缺省 = 子进程按 direct 装配
+   * （旧 spawn 载荷兼容）。
+   */
+  fileIoMode?: 'direct' | 'proxy';
 }
 
 /** runtime-spawner 通过 AGENT_CONFIG 传入的完整配置 */
@@ -229,6 +235,14 @@ export interface RuntimeConfig {
    * 缺省 = 子进程自行探测（旧行为）。
    */
   sandboxProbe?: SandboxProbeSnapshot;
+  /**
+   * 文件访问生效模式（AGENT_CONFIG 定型快照，spec 2026-11-11 §5.4/§5.6）：
+   * runtime-entry boot 时据此装配子进程内容通道（proxy=BridgeContentIo，
+   * direct=DirectContentIo）。类型可选以兼容存量测试构造；parseConfig 产物
+   * 恒携带解析值（缺省/非法 → direct，旧 AGENT_CONFIG 兼容），消费方一律
+   * `=== 'proxy'` 判定（vision 字段同款纪律）。
+   */
+  fileIoMode?: 'direct' | 'proxy';
 }
 
 /** 主进程展开后下发给子进程的上下文项——skill（loadFull 正文） */
@@ -525,6 +539,8 @@ export function parseConfig(raw: unknown): RuntimeConfig {
         : undefined,
     // Windows 沙箱探测快照：形状守卫失败 → undefined（子进程回退自行探测，fail-safe）
     sandboxProbe: isSandboxProbeSnapshot(r.sandboxProbe) ? r.sandboxProbe : undefined,
+    // 文件访问生效模式：仅 'proxy' 透传，缺省/其它一律 direct（旧 AGENT_CONFIG 兼容）
+    fileIoMode: r.fileIoMode === 'proxy' ? 'proxy' : 'direct',
   };
 }
 

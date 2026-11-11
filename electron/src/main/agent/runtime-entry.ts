@@ -15,7 +15,9 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { WorkspaceFS } from '../files/workspace-fs';
+import { WorkspaceFS, setDefaultContentIo } from '../files/workspace-fs';
+import { BridgeContentIo, handleFileIoResp } from '../files/file-io/file-io-bridge';
+import { DirectContentIo } from '../files/file-io/content-io';
 import { createLLMProvider, type LLMMessage, type LLMToolCall, type LLMToolDef } from './llm-provider';
 import type { ThinkingRequest } from '../llm/provider-presets';
 import { parseConfig, type RuntimeConfig, type TaskConfig, type ExpandedContext, type ExpandedImageItem } from './runtime-config';
@@ -380,6 +382,13 @@ async function main(): Promise<void> {
   traceEnabled = config.devMode;
   setDispatchTraceEnabled(config.devMode);
 
+  // 子进程内容通道装配（spec 2026-11-11 §5.4）：proxy 模式经 file-io 桥走主进程
+  // FileIoService（E-SafeNet 密文代理读取），direct 模式本地 fs + 密文硬失败
+  // （strict）。先于 bootRuntimeContext——WorkspaceFS 首次内容读写前必须就位。
+  setDefaultContentIo(
+    config.fileIoMode === 'proxy' ? new BridgeContentIo() : new DirectContentIo(true),
+  );
+
   // v2.5 变更账本：子进程内直接开 SQLite WAL 连接记账（MemoryTools getDb()
   // 同款生产形态——audit 桥注释的「无法访问主进程连接」指内存单例不可跨进程，
   // 文件级 WAL 多进程访问是 memory 工具既有先例）。注入失败仅降级跳过记账
@@ -420,6 +429,8 @@ async function main(): Promise<void> {
       notifyWriteGrantDenied(msg);
     } else if (m.type === 'process-op:result') {
       handleProcessOpResult(msg);
+    } else if (m.type === 'file-io:resp') {
+      handleFileIoResp(msg);
     } else if (m.type === 'task-op:result') {
       handleTaskOpResult(msg);
     } else if (m.type === 'compaction:result') {
