@@ -30,8 +30,8 @@ export interface IpcMainLike {
   handle<A extends unknown[]>(channel: string, listener: (event: unknown, ...args: A) => unknown): void;
 }
 
-/** app 的结构性子集（消费方只用 getPath；真实 App 满足） */
-export type AppLike = Pick<App, 'getPath'>;
+/** app 的结构性子集（消费方用 getPath 与生命周期 on()；真实 App 满足） */
+export type AppLike = Pick<App, 'getPath' | 'on'>;
 
 /** electron 主进程 API 子集（结构性类型——生产真件与测试假件共用同一契约） */
 export interface ElectronApis {

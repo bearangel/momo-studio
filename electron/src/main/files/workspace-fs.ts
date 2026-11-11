@@ -31,6 +31,11 @@ export function setDefaultContentIo(io: ContentIo | null): void {
   defaultContentIo = io;
 }
 
+/** 仅供测试：读取当前模块默认内容通道 */
+export function getDefaultContentIoForTest(): ContentIo | null {
+  return defaultContentIo;
+}
+
 /**
  * 应用层文件系统沙箱。强制所有路径在 workspace 目录内。
  * 这是 OS 级沙箱（namespace / sandbox-exec）之外的应用层防线（M3 会加 OS 级）。
