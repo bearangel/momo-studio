@@ -2,6 +2,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isInsideDir, PATH_SEMANTICS_WIN32 } from '../platform/paths';
+import { DirectContentIo } from './file-io/content-io';
+import type { ContentIo } from './file-io/types';
 
 export interface DirEntry {
   name: string;
@@ -21,6 +23,14 @@ const SEARCH_LIMIT_DEFAULT = 200;
 /** searchNames 遍历条目总数上限（防病态深目录拖死主进程，spec §5.1） */
 const SEARCH_TRAVERSAL_CAP_DEFAULT = 10_000;
 
+// 模块级默认内容通道（主进程/子进程 boot 时设定；未设定 = direct 行为）：
+let defaultContentIo: ContentIo | null = null;
+
+/** 设置模块级默认内容通道（spec §5.3：主进程与 runtime 子进程各设一次） */
+export function setDefaultContentIo(io: ContentIo | null): void {
+  defaultContentIo = io;
+}
+
 /**
  * 应用层文件系统沙箱。强制所有路径在 workspace 目录内。
  * 这是 OS 级沙箱（namespace / sandbox-exec）之外的应用层防线（M3 会加 OS 级）。
@@ -28,9 +38,17 @@ const SEARCH_TRAVERSAL_CAP_DEFAULT = 10_000;
 export class WorkspaceFS {
   /** 写授权扩展根（spec 2026-10-03 hard-gate §6）：realpath 归一去重；默认空 = 既有行为 */
   private extraRootDirs: string[] = [];
+  private readonly rootDir: string;
+  private readonly injectedContentIo: ContentIo | null;
 
-  constructor(private rootDir: string) {
+  constructor(rootDir: string, opts?: { contentIo?: ContentIo }) {
     this.rootDir = path.resolve(rootDir);
+    this.injectedContentIo = opts?.contentIo ?? null;
+  }
+
+  /** 内容读写通道解析：注入 > 模块默认 > direct(strict) */
+  private contentIo(): ContentIo {
+    return this.injectedContentIo ?? defaultContentIo ?? new DirectContentIo(true);
   }
 
   /** 设置写授权扩展根（子进程工具侧 covered 后注入三层合成目录） */
@@ -121,7 +139,7 @@ export class WorkspaceFS {
 
   async readFile(relativePath: string): Promise<Buffer> {
     const abs = this.assertInWorkspace(relativePath);
-    return fs.promises.readFile(abs);
+    return this.contentIo().readFile(abs);
   }
 
   async writeFile(relativePath: string, content: string | Buffer): Promise<void> {
@@ -131,7 +149,10 @@ export class WorkspaceFS {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    await fs.promises.writeFile(abs, content);
+    await this.contentIo().writeFile(
+      abs,
+      Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf-8'),
+    );
   }
 
   async listDir(relativePath: string): Promise<DirEntry[]> {
@@ -205,7 +226,7 @@ export class WorkspaceFS {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    await fs.promises.writeFile(abs, '');
+    await this.contentIo().writeFile(abs, Buffer.alloc(0));
   }
 
   /** 递归创建目录（mkdir -p）。 */
