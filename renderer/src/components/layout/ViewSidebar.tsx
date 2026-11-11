@@ -45,22 +45,27 @@ export function ViewSidebar() {
   );
   const workspace = useWorkspaceStore((s) => s.getActive());
   const openFile = useEditorStore((s) => s.openFile);
-  const showBinaryNotice = useEditorStore((s) => s.showBinaryNotice);
+  const showFileNotice = useEditorStore((s) => s.showFileNotice);
 
   // 与 MiddlePanel 原 files 分支逻辑一致：IPC 读文件 → 打开编辑器 tab。
   // 2026-10-23 ④：二进制文件改走 VS Code 式占位卡（编辑区显式按钮触发外部
-  // 打开），不再点击即静默拉起系统应用。
+  // 打开），不再点击即静默拉起系统应用。2026-11-11：超过预览上限的文件同走
+  // 占位卡（主进程只 stat 不读内容，避免超大文件阻塞）。
   const handleSelectFile = useCallback(
     async (filePath: string) => {
       if (!workspace) return;
       const result = await ipc.file.readForEditor(workspace.id, filePath);
       if (result.kind === 'binary') {
-        showBinaryNotice(filePath);
+        showFileNotice({ kind: 'binary', filePath });
+        return;
+      }
+      if (result.kind === 'tooLarge') {
+        showFileNotice({ kind: 'tooLarge', filePath, size: result.size });
         return;
       }
       openFile(filePath, result.content);
     },
-    [workspace, openFile, showBinaryNotice],
+    [workspace, openFile, showFileNotice],
   );
 
   // 面板模式（P4）：activeKey 非空 → 侧栏槽整体让给 PanelHost（主区不动）

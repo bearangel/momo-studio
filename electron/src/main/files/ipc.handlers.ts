@@ -11,8 +11,16 @@ import { getWorkspace } from '../workspace/crud';
 /**
  * file:readForEditor 返回形状（与 renderer types.d.ts 的 EditorFileContent
  * 跨进程独立定义、仅结构对齐——本仓既有约定，如 JournalEntryView / GroupRow）。
+ * tooLarge：超过预览上限的文件不读内容，UI 转占位卡 + 外部应用打开。
  */
-export type EditorFileContent = { kind: 'text'; content: string } | { kind: 'binary' };
+export type EditorFileContent =
+  | { kind: 'text'; content: string }
+  | { kind: 'binary' }
+  | { kind: 'tooLarge'; size: number };
+
+/** 编辑器预览大小上限：超过即不读内容。整读 + utf-8 round-trip 是主进程同步
+ *  全量运算，超大 PDF/压缩包会让事件循环阻塞数秒（真机实测点开即卡死）。 */
+export const EDITOR_PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
 
 /** 缓存每个 workspace 的 WorkspaceFS 实例。 */
 export const fsCache = new Map<string, WorkspaceFS>();
@@ -132,11 +140,19 @@ export function registerFileHandlers(): void {
   // 编辑器读取通道：文本返回内容；二进制返回 kind='binary'（UI 转外部应用打开）。
   // 检测与 journal ipc.handlers 的 readTextCapped 同法：utf-8 解码再编码与
   // 原字节不一致即二进制。不改 file:read 契约（MessageBubble 等既有消费者零影响）。
+  // 大小闸门在读取之前：stat 一次即可挡住超大文件（阻塞源是读取后的全量
+  // decode/re-encode，不是读盘本身）。
   ipcMain.handle(
     'file:readForEditor',
     async (_evt, workspaceId: string, filePath: string): Promise<EditorFileContent> => {
       const wsFs = getWorkspaceFs(workspaceId);
+      const size = await wsFs.statSize(filePath);
+      if (size > EDITOR_PREVIEW_MAX_BYTES) return { kind: 'tooLarge', size };
+
       const buf = await wsFs.readFile(filePath);
+      // stat 与 read 之间文件可能增长：以实际读到的长度复核，避免把超限内容塞给编辑器
+      if (buf.length > EDITOR_PREVIEW_MAX_BYTES) return { kind: 'tooLarge', size: buf.length };
+
       const text = buf.toString('utf-8');
       if (!Buffer.from(text, 'utf-8').equals(buf)) {
         return { kind: 'binary' };

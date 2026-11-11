@@ -39,6 +39,12 @@ describe('files/workspace-fs', () => {
     expect(content.toString()).toBe('hello world');
   });
 
+  it('statSize 返回字节数且不读内容（沙箱同 readFile）', async () => {
+    fs.writeFileSync(path.join(tmpRoot, 'workspace', 'big.bin'), Buffer.alloc(4096, 7));
+    await expect(wsFs.statSize('big.bin')).resolves.toBe(4096);
+    await expect(wsFs.statSize('../outside.bin')).rejects.toThrow(/越界/);
+  });
+
   it('writeFile 拒绝写到 .git/', async () => {
     await expect(wsFs.writeFile('.git/config', 'evil')).rejects.toThrow();
   });

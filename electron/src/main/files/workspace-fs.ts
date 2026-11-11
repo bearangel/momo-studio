@@ -147,6 +147,13 @@ export class WorkspaceFS {
     return this.contentIo().readFile(abs);
   }
 
+  /** 文件字节数（预览阈值判定用）：沙箱校验后只 stat，不读内容 */
+  async statSize(relativePath: string): Promise<number> {
+    const abs = this.assertInWorkspace(relativePath);
+    const stat = await fs.promises.stat(abs);
+    return stat.size;
+  }
+
   async writeFile(relativePath: string, content: string | Buffer): Promise<void> {
     const abs = this.assertInWorkspace(relativePath);
     // 确保父目录存在

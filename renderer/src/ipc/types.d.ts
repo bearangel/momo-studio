@@ -2893,9 +2893,13 @@ export interface SearchHit {
 /**
  * file:readForEditor 返回（文件区功能优化）。
  * 与 electron 端 files/ipc.handlers.ts 的 EditorFileContent 对齐（跨进程独立定义，
- * 仅结构对齐）：text=可编辑文本；binary=非 utf-8（图片/PDF 等），UI 转外部应用打开。
+ * 仅结构对齐）：text=可编辑文本；binary=非 utf-8（图片/PDF 等）；
+ * tooLarge=超过预览上限（不读内容），两者 UI 均转占位卡 + 外部应用打开。
  */
-export type EditorFileContent = { kind: 'text'; content: string } | { kind: 'binary' };
+export type EditorFileContent =
+  | { kind: 'text'; content: string }
+  | { kind: 'binary' }
+  | { kind: 'tooLarge'; size: number };
 
 // ─── Onboarding（新装引导，spec 2026-10-10 §5）────────────────────────────
 

@@ -12,6 +12,7 @@ import os from 'node:os';
 const {
   ipcHandlers,
   mockReadFile,
+  mockStatSize,
   mockWriteFile,
   mockListDir,
   mockSearchNames,
@@ -24,6 +25,7 @@ const {
   return {
     ipcHandlers,
     mockReadFile: vi.fn(),
+    mockStatSize: vi.fn(),
     mockWriteFile: vi.fn(),
     mockListDir: vi.fn(),
     mockSearchNames: vi.fn(),
@@ -54,6 +56,7 @@ vi.mock('../../src/main/logger', () => ({
 vi.mock('../../src/main/files/workspace-fs', () => ({
   WorkspaceFS: vi.fn().mockImplementation(() => ({
     readFile: mockReadFile,
+    statSize: mockStatSize,
     writeFile: mockWriteFile,
     listDir: mockListDir,
     searchNames: mockSearchNames,
@@ -65,7 +68,11 @@ vi.mock('../../src/main/workspace/crud', () => ({
   getWorkspace: getWorkspaceMock,
 }));
 
-import { registerFileHandlers, __resetFsCacheForTest } from '../../src/main/files/ipc.handlers';
+import {
+  registerFileHandlers,
+  __resetFsCacheForTest,
+  EDITOR_PREVIEW_MAX_BYTES,
+} from '../../src/main/files/ipc.handlers';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-file-ipc-test-${Date.now()}`);
 
@@ -73,6 +80,8 @@ beforeEach(() => {
   fs.mkdirSync(tmpRoot, { recursive: true });
   ipcHandlers.clear();
   mockReadFile.mockReset();
+  mockStatSize.mockReset();
+  mockStatSize.mockResolvedValue(0);
   mockWriteFile.mockReset();
   mockListDir.mockReset();
   mockSearchNames.mockReset();
@@ -286,6 +295,46 @@ describe('files/ipc.handlers 文件区功能优化通道（absolutePath / reveal
     const result = await handler({}, 'ws-1', 'logo.png');
 
     expect(result).toEqual({ kind: 'binary' });
+  });
+
+  it('file:readForEditor 超过预览上限 → {kind:"tooLarge", size} 且不读内容', async () => {
+    const ws = fakeWorkspace('ws-1', path.join(tmpRoot, 'ws-1'));
+    getWorkspaceMock.mockReturnValue(ws);
+    const bigSize = 28 * 1024 * 1024;
+    mockStatSize.mockResolvedValue(bigSize);
+
+    const handler = ipcHandlers.get('file:readForEditor')!;
+    const result = await handler({}, 'ws-1', '深圳二院最终稿 250-160.pdf');
+
+    expect(result).toEqual({ kind: 'tooLarge', size: bigSize });
+    // 核心性能契约：超大文件绝不进入整读 + utf-8 round-trip
+    expect(mockReadFile).not.toHaveBeenCalled();
+  });
+
+  it('file:readForEditor 恰好等于上限 → 仍按文本返回（阈值「超过」才拦）', async () => {
+    const ws = fakeWorkspace('ws-1', path.join(tmpRoot, 'ws-1'));
+    getWorkspaceMock.mockReturnValue(ws);
+    mockStatSize.mockResolvedValue(EDITOR_PREVIEW_MAX_BYTES);
+    mockReadFile.mockResolvedValue(Buffer.from('tiny', 'utf-8'));
+
+    const handler = ipcHandlers.get('file:readForEditor')!;
+    const result = await handler({}, 'ws-1', 'edge.txt');
+
+    expect(mockReadFile).toHaveBeenCalledWith('edge.txt');
+    expect(result).toEqual({ kind: 'text', content: 'tiny' });
+  });
+
+  it('file:readForEditor stat 后被撑大（stat/read 竞态）→ 以实读长度复核为 tooLarge', async () => {
+    const ws = fakeWorkspace('ws-1', path.join(tmpRoot, 'ws-1'));
+    getWorkspaceMock.mockReturnValue(ws);
+    mockStatSize.mockResolvedValue(1024);
+    const grown = Buffer.alloc(EDITOR_PREVIEW_MAX_BYTES + 1, 0x61);
+    mockReadFile.mockResolvedValue(grown);
+
+    const handler = ipcHandlers.get('file:readForEditor')!;
+    const result = await handler({}, 'ws-1', 'growing.log');
+
+    expect(result).toEqual({ kind: 'tooLarge', size: grown.length });
   });
 
   it('file:readForEditor 空文件 → {kind:"text", content:""}（空文件可正常编辑）', async () => {

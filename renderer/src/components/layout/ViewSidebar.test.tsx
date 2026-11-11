@@ -154,7 +154,7 @@ describe('ViewSidebar handleSelectFile（readForEditor 分流，功能优化 202
     useEditorStore.setState({
       tabs: [],
       activeTab: null,
-      pendingBinary: null,
+      pendingFileNotice: null,
       byWorkspace: {},
       currentWorkspaceId: 'ws-1',
     });
@@ -173,15 +173,34 @@ describe('ViewSidebar handleSelectFile（readForEditor 分流，功能优化 202
     expect(fileApi.openWithDefaultApp).not.toHaveBeenCalled();
   });
 
-  it('二进制文件 → 写 pendingBinary 占位，不建 tab 也不自动拉起外部应用（④ 回归锁）', async () => {
+  it('二进制文件 → 写 binary 占位，不建 tab 也不自动拉起外部应用（④ 回归锁）', async () => {
     fileApi.readForEditor.mockResolvedValue({ kind: 'binary' });
     render(<ViewSidebar />);
     fireEvent.click(screen.getByTestId('file-tree-stub'));
     await waitFor(() => {
-      expect(useEditorStore.getState().pendingBinary).toBe('a.ts');
+      expect(useEditorStore.getState().pendingFileNotice).toEqual({
+        kind: 'binary',
+        filePath: 'a.ts',
+      });
     });
     expect(useEditorStore.getState().tabs).toEqual([]);
-    // 点击本身绝不触发外部程序——显式按钮才开（BinaryFileNotice.test 覆盖）
+    // 点击本身绝不触发外部程序——显式按钮才开（FilePreviewNotice.test 覆盖）
+    expect(fileApi.openWithDefaultApp).not.toHaveBeenCalled();
+  });
+
+  it('超大文件（tooLarge）→ 写 tooLarge 占位（带 size），不建 tab 不读内容', async () => {
+    fileApi.readForEditor.mockResolvedValue({ kind: 'tooLarge', size: 28 * 1024 * 1024 });
+    render(<ViewSidebar />);
+    fireEvent.click(screen.getByTestId('file-tree-stub'));
+    await waitFor(() => {
+      expect(useEditorStore.getState().pendingFileNotice).toEqual({
+        kind: 'tooLarge',
+        filePath: 'a.ts',
+        size: 28 * 1024 * 1024,
+      });
+    });
+    expect(useEditorStore.getState().tabs).toEqual([]);
+    expect(useEditorStore.getState().activeTab).toBeNull();
     expect(fileApi.openWithDefaultApp).not.toHaveBeenCalled();
   });
 });

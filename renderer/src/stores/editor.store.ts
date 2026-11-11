@@ -12,30 +12,35 @@ export interface EditorTab {
   dirty: boolean;
 }
 
+/** 编辑器占位（VS Code 式）：无法在 Monaco 中预览的文件。
+ *  binary=非 utf-8；tooLarge=超过主进程预览上限（未读取内容） */
+export type PendingFileNotice =
+  | { kind: 'binary'; filePath: string }
+  | { kind: 'tooLarge'; filePath: string; size: number };
+
 /** 单个 workspace 的编辑器状态分片 */
 interface WorkspaceSlice {
   tabs: EditorTab[];
   activeTab: string | null;
-  /** 二进制占位（VS Code 式）：当前被点击的二进制文件相对路径；瞬态——
-   *  打开任一文本文件 / 激活任一 tab / 切换工作空间即清空 */
-  pendingBinary: string | null;
+  /** 不可预览占位；瞬态——打开任一文本文件 / 激活任一 tab / 切换工作空间即清空 */
+  pendingFileNotice: PendingFileNotice | null;
 }
 
-const EMPTY_SLICE: WorkspaceSlice = { tabs: [], activeTab: null, pendingBinary: null };
+const EMPTY_SLICE: WorkspaceSlice = { tabs: [], activeTab: null, pendingFileNotice: null };
 
 interface EditorState {
   /** 当前分片镜像（消费者直接读，勿单独写） */
   tabs: EditorTab[];
   activeTab: string | null;
-  /** 当前分片镜像：二进制占位路径（null = 无占位） */
-  pendingBinary: string | null;
+  /** 当前分片镜像：不可预览占位（null = 无占位） */
+  pendingFileNotice: PendingFileNotice | null;
   byWorkspace: Record<string, WorkspaceSlice>;
   currentWorkspaceId: string | null;
 
   /** 切换当前分片（App 顶层 effect 随 activeWorkspaceId 调用；null = 无工作空间） */
   setWorkspace: (workspaceId: string | null) => void;
-  /** 二进制文件被点击：当前分片写入占位路径（编辑区渲染占位卡，不建 tab） */
-  showBinaryNotice: (filePath: string) => void;
+  /** 不可预览文件被点击：当前分片写入占位（编辑区渲染占位卡，不建 tab） */
+  showFileNotice: (notice: PendingFileNotice) => void;
   // 打开文件（已存在则仅激活，否则新建 tab 并激活）；workspaceId 缺省 = 当前
   // 空间，显式传入用于跨空间打开（消息 chip 的 workspaceId 取自消息本身）
   openFile: (filePath: string, content: string, workspaceId?: string) => void;
@@ -66,7 +71,7 @@ function writeSlice(
       ? {
           tabs: slice.tabs,
           activeTab: slice.activeTab,
-          pendingBinary: slice.pendingBinary,
+          pendingFileNotice: slice.pendingFileNotice,
         }
       : {}),
   };
@@ -75,7 +80,7 @@ function writeSlice(
 export const useEditorStore = create<EditorState>((set, get) => ({
   tabs: [],
   activeTab: null,
-  pendingBinary: null,
+  pendingFileNotice: null,
   byWorkspace: {},
   currentWorkspaceId: null,
 
@@ -88,17 +93,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       currentWorkspaceId: workspaceId,
       tabs: slice.tabs,
       activeTab: slice.activeTab,
-      pendingBinary: slice.pendingBinary,
+      pendingFileNotice: slice.pendingFileNotice,
     });
   },
 
-  showBinaryNotice: (filePath) => {
+  showFileNotice: (notice) => {
     const state = get();
     const wsId = state.currentWorkspaceId;
     if (wsId === null) return;
     const slice = state.byWorkspace[wsId] ?? EMPTY_SLICE;
-    if (slice.pendingBinary === filePath) return;
-    set(writeSlice(state, wsId, { ...slice, pendingBinary: filePath }));
+    const prev = slice.pendingFileNotice;
+    if (prev !== null && prev.kind === notice.kind && prev.filePath === notice.filePath) return;
+    set(writeSlice(state, wsId, { ...slice, pendingFileNotice: notice }));
   },
 
   openFile: (filePath, content, workspaceId) => {
@@ -106,8 +112,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const target = workspaceId ?? state.currentWorkspaceId;
     if (target === null) return;
     const slice = state.byWorkspace[target] ?? EMPTY_SLICE;
-    // 打开文本文件即清二进制占位（占位是「未打开任何替代内容」时的编辑区主体）
-    const cleared = slice.pendingBinary === null ? slice : { ...slice, pendingBinary: null };
+    // 打开文本文件即清占位（占位是「未打开任何替代内容」时的编辑区主体）
+    const cleared =
+      slice.pendingFileNotice === null ? slice : { ...slice, pendingFileNotice: null };
     if (cleared.tabs.some((t) => t.filePath === filePath)) {
       set(writeSlice(state, target, { ...cleared, activeTab: filePath }));
       return;
@@ -163,9 +170,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const wsId = state.currentWorkspaceId;
     if (wsId === null) return;
     const slice = state.byWorkspace[wsId] ?? EMPTY_SLICE;
-    if (slice.activeTab === filePath && slice.pendingBinary === null) return;
-    // 激活任一 tab 即清二进制占位（预览定值：点 tab 返回编辑器）
-    set(writeSlice(state, wsId, { ...slice, activeTab: filePath, pendingBinary: null }));
+    if (slice.activeTab === filePath && slice.pendingFileNotice === null) return;
+    // 激活任一 tab 即清占位（预览定值：点 tab 返回编辑器）
+    set(writeSlice(state, wsId, { ...slice, activeTab: filePath, pendingFileNotice: null }));
   },
 
   closeTabIfPath: (filePath) => {

@@ -8,7 +8,7 @@ beforeEach(() => {
   useEditorStore.setState({
     tabs: [],
     activeTab: null,
-    pendingBinary: null,
+    pendingFileNotice: null,
     byWorkspace: {},
     currentWorkspaceId: 'ws-test',
   });
@@ -169,45 +169,65 @@ describe('editor.store', () => {
     });
   });
 
-  describe('pendingBinary 二进制占位（④ VS Code 式）', () => {
-    it('showBinaryNotice 写入镜像，不建 tab', () => {
-      const { showBinaryNotice } = useEditorStore.getState();
-      showBinaryNotice('assets/hero.png');
-      const state = useEditorStore.getState();
-      expect(state.pendingBinary).toBe('assets/hero.png');
+  describe('pendingFileNotice 不可预览占位（④ VS Code 式；2026-11-11 扩 tooLarge）', () => {
+    const binaryNotice = { kind: 'binary', filePath: 'assets/hero.png' } as const;
+    const tooLargeNotice = {
+      kind: 'tooLarge',
+      filePath: 'docs/深圳二院最终稿.pdf',
+      size: 28 * 1024 * 1024,
+    } as const;
+
+    it('showFileNotice 写入镜像，不建 tab（binary / tooLarge 两态）', () => {
+      const { showFileNotice } = useEditorStore.getState();
+      showFileNotice(binaryNotice);
+      let state = useEditorStore.getState();
+      expect(state.pendingFileNotice).toEqual(binaryNotice);
+      expect(state.tabs).toEqual([]);
+
+      showFileNotice(tooLargeNotice);
+      state = useEditorStore.getState();
+      expect(state.pendingFileNotice).toEqual(tooLargeNotice);
       expect(state.tabs).toEqual([]);
     });
 
+    it('重复写同一文件同一态不产生新对象（幂等）', () => {
+      const { showFileNotice } = useEditorStore.getState();
+      showFileNotice(binaryNotice);
+      const first = useEditorStore.getState().byWorkspace['ws-test'];
+      showFileNotice({ ...binaryNotice });
+      expect(useEditorStore.getState().byWorkspace['ws-test']).toBe(first);
+    });
+
     it('打开任一文本文件即清占位', () => {
-      const { showBinaryNotice, openFile } = useEditorStore.getState();
-      showBinaryNotice('assets/hero.png');
+      const { showFileNotice, openFile } = useEditorStore.getState();
+      showFileNotice(tooLargeNotice);
       openFile('a.ts', '');
-      expect(useEditorStore.getState().pendingBinary).toBeNull();
+      expect(useEditorStore.getState().pendingFileNotice).toBeNull();
     });
 
     it('激活任一 tab 即清占位（点 tab 返回编辑器）', () => {
-      const { openFile, setActive, showBinaryNotice } = useEditorStore.getState();
+      const { openFile, setActive, showFileNotice } = useEditorStore.getState();
       openFile('a.ts', '');
-      showBinaryNotice('assets/hero.png');
+      showFileNotice(binaryNotice);
       setActive('a.ts');
-      expect(useEditorStore.getState().pendingBinary).toBeNull();
+      expect(useEditorStore.getState().pendingFileNotice).toBeNull();
     });
 
     it('占位按工作空间隔离：切走不泄漏，切回恢复', () => {
-      const { showBinaryNotice, openFile, setWorkspace } = useEditorStore.getState();
+      const { showFileNotice, openFile, setWorkspace } = useEditorStore.getState();
       setWorkspace('ws-a');
-      showBinaryNotice('a.png');
+      showFileNotice(tooLargeNotice);
       setWorkspace('ws-b');
-      expect(useEditorStore.getState().pendingBinary).toBeNull();
+      expect(useEditorStore.getState().pendingFileNotice).toBeNull();
       openFile('b.ts', '');
       setWorkspace('ws-a');
-      expect(useEditorStore.getState().pendingBinary).toBe('a.png');
+      expect(useEditorStore.getState().pendingFileNotice).toEqual(tooLargeNotice);
     });
 
-    it('未绑定工作空间时 showBinaryNotice 无副作用（防御锁）', () => {
-      useEditorStore.setState({ currentWorkspaceId: null, pendingBinary: null });
-      useEditorStore.getState().showBinaryNotice('a.png');
-      expect(useEditorStore.getState().pendingBinary).toBeNull();
+    it('未绑定工作空间时 showFileNotice 无副作用（防御锁）', () => {
+      useEditorStore.setState({ currentWorkspaceId: null, pendingFileNotice: null });
+      useEditorStore.getState().showFileNotice(binaryNotice);
+      expect(useEditorStore.getState().pendingFileNotice).toBeNull();
     });
   });
 });
