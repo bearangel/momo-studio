@@ -44,10 +44,18 @@ function toErr(e: unknown): { code: string; message: string } {
  * 单批 50 个小文件实测 < 1ms（上游 PoC §7.3），无需异步化。
  */
 export function handleWorkerRequest(req: WorkerRequest): WorkerResponse {
+  // 协议边界防御：stdin 每行是任意合法 JSON 值（可为字面 null / 数字 / 字符串），
+  // 不能假设 req 是带数值 id 的合法对象。响应必须始终带数值 id（主进程按 id 配对，
+  // undefined 会被 JSON.stringify 丢弃），任何输入都不允许抛出（worker 不能崩）。
+  const id =
+    req !== null && typeof req === 'object' && typeof req.id === 'number' ? req.id : -1;
+  if (req === null || typeof req !== 'object') {
+    return { id, ok: false, error: { code: 'EBADREQ', message: `非法请求: ${String(req)}` } };
+  }
   try {
     if (req.op === 'read' && typeof req.path === 'string') {
       const buf = fs.readFileSync(req.path);
-      return { id: req.id, ok: true, dataBase64: buf.toString('base64'), size: buf.length };
+      return { id, ok: true, dataBase64: buf.toString('base64'), size: buf.length };
     }
     if (req.op === 'readMany' && Array.isArray(req.paths)) {
       const items: WorkerItem[] = req.paths.map((p) => {
@@ -58,21 +66,21 @@ export function handleWorkerRequest(req: WorkerRequest): WorkerResponse {
           return { ok: false, error: toErr(e) };
         }
       });
-      return { id: req.id, ok: true, items };
+      return { id, ok: true, items };
     }
     if (req.op === 'write' && typeof req.path === 'string' && typeof req.dataBase64 === 'string') {
       fs.mkdirSync(path.dirname(req.path), { recursive: true });
       const buf = Buffer.from(req.dataBase64, 'base64');
       fs.writeFileSync(req.path, buf);
-      return { id: req.id, ok: true, size: buf.length };
+      return { id, ok: true, size: buf.length };
     }
     if (req.op === 'stat' && typeof req.path === 'string') {
       const st = fs.statSync(req.path);
-      return { id: req.id, ok: true, size: st.size };
+      return { id, ok: true, size: st.size };
     }
-    return { id: req.id, ok: false, error: { code: 'EBADREQ', message: `非法请求: ${String(req.op)}` } };
+    return { id, ok: false, error: { code: 'EBADREQ', message: `非法请求: ${String(req.op)}` } };
   } catch (e) {
-    return { id: req.id, ok: false, error: toErr(e) };
+    return { id, ok: false, error: toErr(e) };
   }
 }
 

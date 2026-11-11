@@ -67,4 +67,18 @@ describe('handleWorkerRequest', () => {
     const r = handleWorkerRequest({ id: 5, op: 'explode' } as unknown as WorkerRequest);
     expect(r).toMatchObject({ ok: false, error: { code: 'EBADREQ' } });
   });
+
+  it('stdin 行为字面 null → ok:false + 数值 id（不崩）', () => {
+    // 合法 JSON 的 null 行：历史上 req.op 处抛 TypeError、catch 里 req.id 再抛 → 逸出崩溃
+    const r = handleWorkerRequest(null as unknown as WorkerRequest);
+    expect(r).toMatchObject({ id: -1, ok: false, error: { code: 'EBADREQ' } });
+    expect(typeof r.id).toBe('number');
+  });
+
+  it('stdin 行为非对象 JSON（42）→ ok:false + 数值 id（不崩）', () => {
+    // 数字 / 字符串等原语行：响应必须始终带数值 id，否则 JSON.stringify 丢 id、主进程配对失配
+    const r = handleWorkerRequest(42 as unknown as WorkerRequest);
+    expect(r).toMatchObject({ id: -1, ok: false, error: { code: 'EBADREQ' } });
+    expect(typeof r.id).toBe('number');
+  });
 });
