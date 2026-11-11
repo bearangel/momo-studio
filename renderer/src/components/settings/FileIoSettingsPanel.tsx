@@ -124,26 +124,26 @@ export function FileIoSettingsPanel(): React.ReactElement {
         ))}
       </fieldset>
 
-      <div className="flex flex-col gap-1">
-        <div className="flex items-end gap-2">
+      <div className="flex items-end gap-2">
+        <div className="min-w-0 flex-1">
           <Input
             label="Node.js 路径（可选）"
-            className="w-full font-mono text-[12.5px]"
+            className="h-9 w-full font-mono text-[12.5px]"
             value={nodePath}
             onChange={(e) => setNodePath(e.target.value)}
             onBlur={() => persistNodePath(nodePath)}
             placeholder="留空 = 自动查找系统 Node.js"
           />
-          <Button
-            variant="secondary"
-            size="sm"
-            className="shrink-0"
-            onClick={() => void browseNodePath()}
-          >
-            <FolderOpen size={16} strokeWidth={1.75} aria-hidden />
-            浏览
-          </Button>
         </div>
+        <Button
+          size="md"
+          variant="secondary"
+          className="h-9 shrink-0"
+          onClick={() => void browseNodePath()}
+        >
+          <FolderOpen size={16} strokeWidth={1.75} aria-hidden />
+          浏览
+        </Button>
       </div>
 
       {loadError && (
