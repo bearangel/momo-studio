@@ -967,7 +967,17 @@ export class AgentRunner {
    */
   private safeSend(child: ChildProcess, msg: Record<string, unknown>, label: string): void {
     try {
-      child.send(msg as never);
+      // 2026-11-11：EPIPE 异步路径补口——写失败可不同步抛而经 send callback
+      // 异步投递（无 callback 时打 'error' 事件，由 spawn 站点的吞并网兜底）。
+      // callback 承接异步失败进 warn；同步抛仍由下方 catch 兜。
+      child.send(msg as never, (err) => {
+        if (err === null) return;
+        logger.warn('父→子发信失败（目标 runtime 已退出，消息丢弃）', {
+          label,
+          pid: child.pid,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
     } catch (err) {
       logger.warn('父→子发信失败（目标 runtime 已退出，消息丢弃）', {
         label,

@@ -26,6 +26,7 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { AgentRunner } from '../../src/main/agent/agent-runner';
 import { markShuttingDown, __resetShuttingDownForTest } from '../../src/main/agent/agent-runner';
+import { logger } from '../../src/main/logger';
 import { WarmPool } from '../../src/main/agent/warm-pool';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import {
@@ -182,6 +183,7 @@ describe('AgentRunner', () => {
     runner.abortStream('ss-1');
     expect(child.send).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'abort', streamSessionId: 'ss-1' }),
+      expect.any(Function),
     );
   });
 
@@ -339,6 +341,7 @@ describe('AgentRunner', () => {
         type: 'task-reply',
         reply: expect.objectContaining({ taskId: 'task-dispatch-9', status: 'completed', body: 'ok' }),
       }),
+      expect.any(Function),
     );
   });
 });
@@ -953,6 +956,7 @@ describe('AgentRunner child exit 清理链（C2）', () => {
     expect(runner.abortTasksBySession('sess-exec-1')).toBe(true);
     expect(child.send).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'abort', streamSessionId: 'ss-eph-1' }),
+      expect.any(Function),
     );
     // 活跃表不清理——abort 后由 end/task-end 正常收尾（与 abortStream 同语义）
     expect(runner.activeTaskCount()).toBe(1);
@@ -1094,7 +1098,7 @@ describe('AgentRunner 父→子发信护栏（EPIPE 死通道）', () => {
     await expect(
       runner.notifyTaskReply({ taskId: 't1', status: 'completed', body: '结果' } as never),
     ).resolves.toBeUndefined();
-    expect(child.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'task-reply' }));
+    expect(child.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'task-reply' }), expect.any(Function));
     runner.destroy();
   });
 
@@ -1114,5 +1118,77 @@ describe('AgentRunner 父→子发信护栏（EPIPE 死通道）', () => {
     const { runner } = await startWithDeadChannel();
     expect(runner.abortTasksBySession('!room:home')).toBe(true);
     runner.destroy();
+  });
+});
+
+// === 2026-11-11 EPIPE 异步路径回归锁（会话停止竞速实录）===
+// 时序：abortTurn 杀死 runtime → 子进程退出前最后一条 task_reply 在途 →
+// notifyTaskReply → child.send 写向已断管道。Node 的 EPIPE 可不同步抛，
+// 而是异步投递——有 callback 进 callback，无 callback 打 'error' 事件
+// （后者由 runtime-spawner 的吞并网兜底，另有专项测试）。2026-10-14 的
+// 修复只堵了同步抛；本组锁「safeSend 必须传 callback 且异步错误进 warn」。
+describe('AgentRunner 父→子发信护栏（EPIPE 异步投递）', () => {
+  /** 异步死通道 mock：task-config 握手正常；其余消息 send 同步成功（已入队），
+   * 写失败经 callback 异步投递（真实 Node 形态——同步 true + nextTick 回调 EPIPE） */
+  function mkAsyncEpipeChild(): ReturnType<typeof mkDeadChannelChild> {
+    const base = mkMockChild();
+    const origSend = base.send as unknown as ReturnType<typeof vi.fn>;
+    base.send = vi.fn((msg: unknown, cb?: (err: Error | null) => void) => {
+      const type = (msg as { type?: string } | null)?.type;
+      if (type === 'task-config') return origSend(msg);
+      if (typeof cb === 'function') {
+        const e = new Error('write EPIPE');
+        (e as NodeJS.ErrnoException).code = 'EPIPE';
+        process.nextTick(() => cb(e));
+        return true;
+      }
+      return origSend(msg);
+    }) as unknown as typeof base.send;
+    return base;
+  }
+
+  async function startWithAsyncEpipeChannel(): Promise<{
+    runner: AgentRunner;
+    child: ReturnType<typeof mkDeadChannelChild>;
+  }> {
+    const child = mkAsyncEpipeChild();
+    const warmPool = new WarmPool({ spawn: vi.fn().mockResolvedValue(child) });
+    await warmPool.warm('inst1');
+    const runner = mkRunner(warmPool);
+    await runner.executeTask({
+      taskId: null,
+      executionSessionId: '!room:home',
+      body: 'hi',
+      streamSessionId: 'ss-epipe-async',
+    });
+    expect(runner.activeTaskCount()).toBe(1);
+    return { runner, child };
+  }
+
+  it('notifyTaskReply 异步 EPIPE → safeSend 传 callback 承接 + warn 记痕 + 不抛穿', async () => {
+    const { runner, child } = await startWithAsyncEpipeChannel();
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      await expect(
+        runner.notifyTaskReply({ taskId: 't1', status: 'completed', body: '结果' } as never),
+      ).resolves.toBeUndefined();
+      // 契约：task-reply 消息必须带 callback 投递（异步写失败的唯一承接点）
+      const sendCalls = (child.send as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c) => (c[0] as { type?: string } | null)?.type === 'task-reply',
+      );
+      expect(sendCalls.length).toBeGreaterThan(0);
+      for (const c of sendCalls) {
+        expect(typeof c[1]).toBe('function');
+      }
+      // 等 nextTick 的异步 EPIPE 回调落地 → 进 warn（而非 uncaught）
+      await new Promise((r) => setImmediate(r));
+      expect(warnSpy).toHaveBeenCalledWith(
+        '父→子发信失败（目标 runtime 已退出，消息丢弃）',
+        expect.objectContaining({ label: 'task-reply' }),
+      );
+    } finally {
+      warnSpy.mockRestore();
+      runner.destroy();
+    }
   });
 });
