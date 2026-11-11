@@ -255,7 +255,7 @@ function resetState(): void {
   // 仅设置 api，不替换整个 window（保留 jsdom Window 的其它属性与方法，避免破坏 react-dom）
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
   mockApi.file.searchNames.mockClear();
-  mockApi.file.searchNames.mockResolvedValue([]);
+  mockApi.file.searchNames.mockResolvedValue({ hits: [], truncated: false });
   mockApi.file.list.mockClear();
   mockApi.file.list.mockResolvedValue([]);
   mockApi.session.listCommands.mockClear();
@@ -542,7 +542,10 @@ describe('MentionInput 发送（serializeSegments 三参契约）', () => {
       makeMember({ instanceId: 'inst-pm', agentName: 'PM-agent', lastRunning: true }),
     ];
     taskState.tasks = [makeTask({ id: 'T-001', title: '修复登录' })];
-    mockApi.file.searchNames.mockResolvedValue([{ path: 'package.json', isDirectory: false }]);
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [{ path: 'package.json', isDirectory: false }],
+      truncated: false,
+    });
     render(<MentionInput />);
     const el = editor();
     typeInEditor(el, '/com');
@@ -571,7 +574,10 @@ describe('MentionInput 发送（serializeSegments 三参契约）', () => {
       makeMember({ instanceId: 'inst-pm', agentName: 'PM-agent', lastRunning: true }),
     ];
     taskState.tasks = [makeTask({ id: 'T-001', title: '修复登录' })];
-    mockApi.file.searchNames.mockResolvedValue([{ path: 'package.json', isDirectory: false }]);
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [{ path: 'package.json', isDirectory: false }],
+      truncated: false,
+    });
     render(<MentionInput />);
     const el = editor();
     typeInEditor(el, '/code');
@@ -669,19 +675,26 @@ describe('MentionInput 会话草稿（segments JSON 往返，pill 不丢）', ()
 describe('MentionInput @ 统一菜单（v2.11.1 F2）', () => {
   it('输入 @ → agent 组与文件组同浮层渲染（双源同 query）', async () => {
     sessionState.members = [makeMember({ instanceId: 'i-1', agentName: 'coder' })];
-    mockApi.file.searchNames.mockResolvedValue([
-      { path: 'coder-notes.md', isDirectory: false },
-      { path: 'src/', isDirectory: true },
-    ]);
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [
+        { path: 'coder-notes.md', isDirectory: false },
+        { path: 'src/', isDirectory: true },
+      ],
+      truncated: false,
+    });
     render(<MentionInput />);
     typeInEditor(editor(), '@coder');
     await waitFor(() => expect(screen.getByText('选择要 @ 的 agent')).toBeTruthy());
     await waitFor(() => expect(screen.getByText('coder-notes.md')).toBeTruthy());
-    expect(screen.queryByText('src/')).toBeNull(); // 目录命中被过滤
+    // 目录命中保留（2026-11-11 B 方案：可钻入；旧实现整类过滤导致输入目录名空列表）
+    expect(screen.getByText('src/')).toBeInTheDocument();
   });
 
   it('选择文件 → 编辑器内 file pill（data-id=路径）；不再有「移除文件」chip', async () => {
-    mockApi.file.searchNames.mockResolvedValue([{ path: 'package.json', isDirectory: false }]);
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [{ path: 'package.json', isDirectory: false }],
+      truncated: false,
+    });
     render(<MentionInput />);
     const el = editor();
     typeInEditor(el, '@pack');
@@ -706,7 +719,10 @@ describe('MentionInput @ 统一菜单（v2.11.1 F2）', () => {
   it('工具条 file 触发 → 直开文件限定菜单：全量递归列表 + 固定导入条目，编辑器零侵入', async () => {
     sessionState.mentionTrigger = { kind: 'file', tick: 1 };
     sessionState.mentionScope = 'file';
-    mockApi.file.searchNames.mockResolvedValue([{ path: 'README.md', isDirectory: false }]);
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [{ path: 'README.md', isDirectory: false }],
+      truncated: false,
+    });
     render(<MentionInput />);
     await waitFor(() => expect(mockApi.file.searchNames).toHaveBeenCalledWith('ws-1', ''));
     await waitFor(() => expect(screen.getByText('README.md')).toBeTruthy());
@@ -755,7 +771,10 @@ describe('MentionInput @ 统一菜单（v2.11.1 F2）', () => {
 
   it('发送失败恢复文件 pill 原位（@路径 pill 形态）', async () => {
     sessionState.sendMessage.mockRejectedValue(new Error('net'));
-    mockApi.file.searchNames.mockResolvedValue([{ path: 'a.ts', isDirectory: false }]);
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [{ path: 'a.ts', isDirectory: false }],
+      truncated: false,
+    });
     render(<MentionInput />);
     const el = editor();
     typeInEditor(el, '@a');
@@ -968,9 +987,10 @@ describe('MentionInput / 菜单（命令 + 技能两组）', () => {
 
   it('技能 pill + 文件 pill 组装完整 context 发送', async () => {
     vi.useFakeTimers();
-    mockApi.file.searchNames.mockResolvedValue([
-      { path: 'src/a.ts', isDirectory: false },
-    ]);
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [{ path: 'src/a.ts', isDirectory: false }],
+      truncated: false,
+    });
     render(<MentionInput />);
     const el = editor();
     typeInEditor(el, '/code');
@@ -1069,10 +1089,13 @@ describe('MentionInput / 菜单（命令 + 技能两组）', () => {
 
 describe('MentionInput 工具条触发（mentionTrigger，2026-11-05 零文本侵入）', () => {
   it('mentionTrigger 变更 → 聚焦 + 直开菜单；输入框零文本侵入（残留/跳行回归锁）', async () => {
-    mockApi.file.searchNames.mockResolvedValue([
-      { path: 'README.md', isDirectory: false },
-      { path: 'src/a.ts', isDirectory: false },
-    ]);
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [
+        { path: 'README.md', isDirectory: false },
+        { path: 'src/a.ts', isDirectory: false },
+      ],
+      truncated: false,
+    });
     const { rerender } = render(<MentionInput />);
     const el = editor();
     expect(document.activeElement).not.toBe(el);
@@ -1137,7 +1160,10 @@ describe('MentionInput 工具条触发（mentionTrigger，2026-11-05 零文本�
   });
 
   it('面板切换重挂载不回放旧菜单（实测 bug 3 回归锁）：信号一次性 + 卸载清 scope', async () => {
-    mockApi.file.searchNames.mockResolvedValue([{ path: 'README.md', isDirectory: false }]);
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [{ path: 'README.md', isDirectory: false }],
+      truncated: false,
+    });
     sessionState.mentionTrigger = { kind: 'file', tick: 1 };
     sessionState.mentionScope = 'file';
     const { unmount } = render(<MentionInput />);
@@ -1250,9 +1276,10 @@ describe('MentionInput 按钮限定菜单数据完整性', () => {
   }
 
   it('file 限定空 query → searchNames("") 全量递归（非根目录默认列表），>8 条全显', async () => {
-    mockApi.file.searchNames.mockResolvedValue(
-      Array.from({ length: 12 }, (_, i) => ({ path: `src/deep/f${i}.ts`, isDirectory: false })),
-    );
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: Array.from({ length: 12 }, (_, i) => ({ path: `src/deep/f${i}.ts`, isDirectory: false })),
+      truncated: false,
+    });
     await openScoped('file');
     await waitFor(() => expect(mockApi.file.searchNames).toHaveBeenCalledWith('ws-1', ''));
     expect(mockApi.file.list).not.toHaveBeenCalled();
@@ -1377,7 +1404,10 @@ describe('MentionInput 限定菜单内搜索框', () => {
   });
 
   it('文件限定：搜索框输入走 debounce searchNames（会话框 query 不参与）', async () => {
-    mockApi.file.searchNames.mockResolvedValue([{ path: 'src/a.ts', isDirectory: false }]);
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [{ path: 'src/a.ts', isDirectory: false }],
+      truncated: false,
+    });
     sessionState.mentionTrigger = { kind: 'file', tick: 1 };
     sessionState.mentionScope = 'file';
     const { rerender } = render(<MentionInput />);
@@ -1391,6 +1421,47 @@ describe('MentionInput 限定菜单内搜索框', () => {
     });
     expect(mockApi.file.searchNames).toHaveBeenLastCalledWith('ws-1', 'a.t');
     expect(screen.getByText('src/a.ts')).toBeInTheDocument();
+  });
+
+  it('文件限定：truncated=true → 结果列表底部示警「扫描已达上限」（方案 C）', async () => {
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [{ path: 'src/a.ts', isDirectory: false }],
+      truncated: true,
+    });
+    sessionState.mentionTrigger = { kind: 'file', tick: 1 };
+    sessionState.mentionScope = 'file';
+    const { rerender } = render(<MentionInput />);
+    rerender(<MentionInput />);
+    await waitFor(() => expect(screen.getByText('src/a.ts')).toBeInTheDocument());
+    expect(screen.getByText(/扫描已达上限/)).toBeInTheDocument();
+  });
+
+  it('文件限定：truncated=false → 不显示扫描上限示警', async () => {
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [{ path: 'src/a.ts', isDirectory: false }],
+      truncated: false,
+    });
+    sessionState.mentionTrigger = { kind: 'file', tick: 1 };
+    sessionState.mentionScope = 'file';
+    const { rerender } = render(<MentionInput />);
+    rerender(<MentionInput />);
+    await waitFor(() => expect(screen.getByText('src/a.ts')).toBeInTheDocument());
+    expect(screen.queryByText(/扫描已达上限/)).toBeNull();
+  });
+
+  it('文件限定：零命中 + truncated=true → 空态改口「未在已扫描范围内找到」（不宣称没有）', async () => {
+    mockApi.file.searchNames.mockResolvedValue({ hits: [], truncated: true });
+    sessionState.mentionTrigger = { kind: 'file', tick: 1 };
+    sessionState.mentionScope = 'file';
+    const { rerender } = render(<MentionInput />);
+    rerender(<MentionInput />);
+    const input = (await screen.findByTestId('scope-search')) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'zzz' } });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 300));
+    });
+    expect(screen.getByText('未在已扫描范围内找到「zzz」')).toBeInTheDocument();
+    expect(screen.queryByText('无匹配「zzz」')).toBeNull();
   });
 
   it('手动路径无搜索框（@ 统一菜单保持原形态）', async () => {
@@ -1509,7 +1580,10 @@ describe('MentionInput 句中 / 触发（v3.1：与 @/# 对称）', () => {
 // === Kimi 式单一容器（v2.11.1 F3→v3 pill 形态）：pills-in-editor + 📎 框内 ===
 describe('MentionInput Kimi 式容器（pill 时代形态）', () => {
   it('选文件后 pill 渲染在编辑器内（pills-in-editor）；📎 仍在 .rounded-lg 容器框内', async () => {
-    mockApi.file.searchNames.mockResolvedValue([{ path: 'a.ts', isDirectory: false }]);
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [{ path: 'a.ts', isDirectory: false }],
+      truncated: false,
+    });
     render(<MentionInput />);
     typeInEditor(editor(), '@a');
     fireEvent.click(await screen.findByText('a.ts'));
@@ -1775,7 +1849,7 @@ describe('MentionInput 菜单键盘导航（2026-09-26 可用性 P0：↑↓/Ent
 
   it('@ 零命中（菜单无条目）时 Enter 照常发送——不再静默吞 Enter', async () => {
     sessionState.members = [];
-    mockApi.file.searchNames.mockResolvedValue([]);
+    mockApi.file.searchNames.mockResolvedValue({ hits: [], truncated: false });
     render(<MentionInput />);
     const el = editor();
     typeInEditor(el, '@zzz');
@@ -1937,10 +2011,13 @@ describe('MentionInput 粘贴/拖入图片管线', () => {
 
 describe('MentionInput @ 菜单图片分流（spec §5）', () => {
   it('图片扩展名条目 lucide-image 图标差异；选中插 image pill（2048 哨兵尺寸）+ images 通道', async () => {
-    mockApi.file.searchNames.mockResolvedValue([
-      { path: 'docs/diagram.png', isDirectory: false },
-      { path: 'docs/readme.md', isDirectory: false },
-    ]);
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [
+        { path: 'docs/diagram.png', isDirectory: false },
+        { path: 'docs/readme.md', isDirectory: false },
+      ],
+      truncated: false,
+    });
     render(<MentionInput />);
     const el = editor();
     typeInEditor(el, '@diagram');
@@ -1965,7 +2042,10 @@ describe('MentionInput @ 菜单图片分流（spec §5）', () => {
   });
 
   it('非图片扩展名条目照旧进 file 通道（回归锁——分流不误伤普通文件）', async () => {
-    mockApi.file.searchNames.mockResolvedValue([{ path: 'docs/readme.md', isDirectory: false }]);
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [{ path: 'docs/readme.md', isDirectory: false }],
+      truncated: false,
+    });
     render(<MentionInput />);
     const el = editor();
     typeInEditor(el, '@readme');
@@ -1980,7 +2060,10 @@ describe('MentionInput @ 菜单图片分流（spec §5）', () => {
   });
 
   it('@ 图片选择同样受上限 6 拦截（第 7 个图片条目点击 → 无 pill + 提示）', async () => {
-    mockApi.file.searchNames.mockResolvedValue([{ path: 'docs/d7.png', isDirectory: false }]);
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [{ path: 'docs/d7.png', isDirectory: false }],
+      truncated: false,
+    });
     render(<MentionInput />);
     const el = editor();
     // 先经粘贴灌满 6 张
@@ -2168,5 +2251,69 @@ describe('MentionInput / 菜单技能组 — 停用插件行过滤（矩阵 C4�
     expect(mockApi.resource.list).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'skill', workspaceId: 'ws-1' }),
     );
+  });
+});
+
+// === 文件目录钻入（2026-11-11 B 方案）：目录行可见 + 选中即展开其内容 ===
+// 背景：主进程改路径匹配后目录本可命中，但旧 renderer 把目录条目过滤掉，
+// 用户输入目录名（如 shell）看到空列表。钻入 = 把查询改写为 `dir/` 就地
+// 展开，菜单保持打开，继续输入收窄到文件。
+describe('MentionInput 文件目录钻入', () => {
+  /** 首屏只给目录命中，查询含前缀后给子项——仿真主进程路径匹配的两级结果 */
+  function mockDirThenChild(): void {
+    mockApi.file.searchNames.mockImplementation((_ws: string, q: string) =>
+      Promise.resolve(
+        q === 'src/'
+          ? { hits: [{ path: 'src/a.ts', isDirectory: false }], truncated: false }
+          : {
+              hits: [
+                { path: 'src', isDirectory: true },
+                { path: 'src/a.ts', isDirectory: false },
+              ],
+              truncated: false,
+            },
+      ),
+    );
+  }
+
+  it('手动 @：点击目录行 → 编辑器文本改写为 @dir/、按前缀重搜、菜单保持打开', async () => {
+    mockDirThenChild();
+    render(<MentionInput />);
+    const el = editor();
+    typeInEditor(el, '@src');
+    fireEvent.click(await screen.findByText('src'));
+
+    await waitFor(() => expect(visibleText(el)).toBe('@src/'));
+    await waitFor(() => expect(mockApi.file.searchNames).toHaveBeenCalledWith('ws-1', 'src/'));
+    await waitFor(() => expect(screen.getByText('src/a.ts')).toBeInTheDocument());
+
+    // 继续点文件 → 正常插 file pill（钻入不改选择语义）
+    fireEvent.click(screen.getByText('src/a.ts'));
+    expect(hasPill(el, 'file', 'src/a.ts')).toBe(true);
+  });
+
+  it('按钮文件弹层：点击目录行 → 菜单内搜索词变 dir/、子项可见、不插 pill', async () => {
+    mockDirThenChild();
+    sessionState.mentionTrigger = { kind: 'file', tick: 1 };
+    sessionState.mentionScope = 'file';
+    const { rerender } = render(<MentionInput />);
+    rerender(<MentionInput />);
+
+    const input = (await screen.findByTestId('scope-search')) as HTMLInputElement;
+    await waitFor(() => expect(screen.getByText('src')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('src'));
+
+    expect(input.value).toBe('src/');
+    await waitFor(() => expect(mockApi.file.searchNames).toHaveBeenCalledWith('ws-1', 'src/'));
+    await waitFor(() => expect(screen.getByText('src/a.ts')).toBeInTheDocument());
+    expect(hasPill(editor(), 'file', 'src/a.ts')).toBe(false);
+  });
+
+  it('目录条目带 Folder 图标（与文件/图片图标分流）', async () => {
+    mockDirThenChild();
+    render(<MentionInput />);
+    typeInEditor(editor(), '@src');
+    const dirBtn = (await screen.findByText('src')).closest('button') as HTMLElement;
+    expect(dirBtn.querySelector('svg.lucide-folder')).not.toBeNull();
   });
 });

@@ -175,14 +175,21 @@ describe('files/ipc.handlers file:searchNames', () => {
     expect(ipcHandlers.has('file:searchNames')).toBe(true);
   });
 
-  it('透传 workspaceId 定位 workspace，query 原样交给 searchNames，结果直返', async () => {
+  it('透传 workspaceId 定位 workspace，query 原样交给 searchNames，{hits,truncated} 直返', async () => {
     const ws = fakeWorkspace('ws-1', path.join(tmpRoot, 'ws-1'));
     getWorkspaceMock.mockReturnValue(ws);
-    mockSearchNames.mockResolvedValue([{ path: 'src/foo.ts', isDirectory: false }]);
+    mockSearchNames.mockResolvedValue({
+      hits: [{ path: 'src/foo.ts', isDirectory: false }],
+      truncated: true,
+    });
     const handler = ipcHandlers.get('file:searchNames')!;
     const result = (await handler(undefined, 'ws-1', 'foo')) as unknown;
     expect(mockSearchNames).toHaveBeenCalledWith('foo');
-    expect(result).toEqual([{ path: 'src/foo.ts', isDirectory: false }]);
+    // 契约形状（2026-11-11 方案 C）：截断标记必须原样到达 renderer
+    expect(result).toEqual({
+      hits: [{ path: 'src/foo.ts', isDirectory: false }],
+      truncated: true,
+    });
   });
 
   it('searchNames 抛错时错误沿 IPC 传播（reject）', async () => {

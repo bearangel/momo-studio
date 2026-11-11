@@ -46,7 +46,7 @@
 //     图片扩展名走 image pill（降采样 + saveImage），其余 asset:importFile
 //     复制进 imports/ 后插 file pill（id=相对路径进序列化、label=文件名显示）
 import { Fragment, useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
-import { Bot, EyeOff, FileText, Image as ImageIcon, Loader2, Lock, MessagesSquare, Paperclip, Pin, Terminal, Upload, Zap } from 'lucide-react';
+import { Bot, EyeOff, FileText, Folder, Image as ImageIcon, Loader2, Lock, MessagesSquare, Paperclip, Pin, Terminal, Upload, Zap } from 'lucide-react';
 import { useSessionStore, type MentionTriggerKind } from '../../stores/session.store';
 import { useTaskStore } from '../../stores/task.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -83,6 +83,8 @@ interface MenuEntry {
   iconEmoji?: string;
   /** 图片扩展名文件条目（spec §5：lucide-image 图标 + 选中进 images 通道） */
   image?: boolean;
+  /** 目录条目（2026-11-11 B 方案）：lucide-folder 图标 + 选中 = 钻入而非插 pill */
+  isDirectory?: boolean;
   select: () => void;
 }
 
@@ -206,9 +208,13 @@ export function MentionInput() {
   // 菜单键盘导航高亮索引（跨组扁平序列；query/菜单类型变化回顶，条目缩水渲染期 clamp）
   const [activeIndex, setActiveIndex] = useState(0);
   const menuListRef = useRef<HTMLDivElement>(null);
+  const scopeSearchRef = useRef<HTMLInputElement>(null);
   // 文件组命中（@ 菜单双源之一；空 query 显示 ipc.file.list('.') 根目录默认列表，
   // 非空 query debounce 200ms 调 searchNames；统一过滤目录 + 截 FILE_MENU_LIMIT）
   const [fileHits, setFileHits] = useState<SearchHit[]>([]);
+  // 主进程遍历预算提前结束（2026-11-11 方案 C）：结果可能不完整，菜单底部示警。
+  // 与「结果数达上限」区分——后者是正常截断，不提示。
+  const [fileTruncated, setFileTruncated] = useState(false);
   // 文件搜索竞态守卫：响应返回时序号不匹配则丢弃（与 FileTree 一致）
   const fileSearchSeqRef = useRef(0);
   // / 菜单两组数据缓存：命令注册表 + 已安装技能（挂载时拉取一次，均为全局
@@ -278,6 +284,7 @@ export function MentionInput() {
     // 会跳过分支不清 fileHits；切会话时显式清空，下一次 @ 触发前菜单条件
     // (filteredMembers.length > 0 || fileHits.length > 0) 不会拿旧 ws 数据渲染
     setFileHits([]);
+    setFileTruncated(false);
     syncImageHint();
     prevSessionRef.current = activeSessionId;
   }, [activeSessionId]);
@@ -285,11 +292,13 @@ export function MentionInput() {
   // @ 统一菜单文件组。手动路径：空 query → file.list('.') 根目录默认列表，
   // 非空 → debounce searchNames。按钮限定（scope='file'）：菜单内搜索框
   // scopeQuery 驱动——空 → searchNames('') match-all 全量递归，非空 →
-  // debounce searchNames。seqRef 竞态守卫覆盖全部路径。
+  // debounce searchNames。seqRef 竞态守卫覆盖全部路径；truncated（主进程
+  // 遍历预算耗尽）原样透传给菜单示警（2026-11-11 方案 C）。
   const workspaceId = workspace?.id;
   useEffect(() => {
     if (menuType !== 'agent') {
       fileSearchSeqRef.current++;
+      setFileTruncated(false);
       return;
     }
     if (!workspaceId) return;
@@ -301,16 +310,20 @@ export function MentionInput() {
       if (mentionScope === 'file') {
         void ipc.file
           .searchNames(workspaceId, '')
-          .then((hits) => {
+          .then((res) => {
             if (fileSearchSeqRef.current !== seq) return;
-            setFileHits(hits.filter((h) => !h.isDirectory).slice(0, fileLimit));
+            setFileHits(res.hits.slice(0, fileLimit));
+            setFileTruncated(res.truncated);
           })
           .catch(() => {
             if (fileSearchSeqRef.current !== seq) return;
             setFileHits((prev) => (prev.length > 0 ? [] : prev));
+            setFileTruncated(false);
           });
         return;
       }
+      // 根目录默认列表是一次 readdir，不存在遍历预算截断
+      setFileTruncated(false);
       void ipc.file
         .list(workspaceId, '.')
         .then((entries) => {
@@ -332,13 +345,15 @@ export function MentionInput() {
       const seq = ++fileSearchSeqRef.current;
       ipc.file
         .searchNames(workspaceId, trimmed)
-        .then((hits) => {
+        .then((res) => {
           if (fileSearchSeqRef.current !== seq) return;
-          setFileHits(hits.filter((h) => !h.isDirectory).slice(0, fileLimit));
+          setFileHits(res.hits.slice(0, fileLimit));
+          setFileTruncated(res.truncated);
         })
         .catch(() => {
           if (fileSearchSeqRef.current !== seq) return;
           setFileHits((prev) => (prev.length > 0 ? [] : prev));
+          setFileTruncated(false);
         });
     }, FILE_SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
@@ -702,6 +717,23 @@ export function MentionInput() {
     selectWithPill({ kind: 'file', id: f.path, label: f.path });
   };
 
+  /**
+   * 目录钻入（2026-11-11 B 方案）：目录不进正文（context 只认文件）——把查询
+   * 改写为 `dir/` 就地展开其内容，主进程路径匹配随即只列该目录子项，用户继续
+   * 输入即可收窄到文件。按钮限定菜单改菜单内搜索词；手动 @ 走编辑器触发局部
+   * 文本替换（`@shell` → `@shell/`），菜单保持打开。
+   */
+  const drillIntoDir = (path: string): void => {
+    const next = `${path}/`;
+    if (mentionScope === 'file') {
+      setScopeQuery(next);
+      scopeSearchRef.current?.focus();
+      return;
+    }
+    composerRef.current?.replaceBeforeCaret(1 + query.length, `@${next}`);
+    composerRef.current?.focus();
+  };
+
   /** 按菜单类型聚合的原始条目（scope 过滤前；三分支就地填充） */
   const rawEntries: MenuEntry[] = [];
   if (menuType === 'agent') {
@@ -719,8 +751,9 @@ export function MentionInput() {
         key: `file:${f.path}`,
         group: 'file',
         primary: f.path,
-        image: IMAGE_EXT_RE.test(f.path),
-        select: () => selectFile(f),
+        image: !f.isDirectory && IMAGE_EXT_RE.test(f.path),
+        isDirectory: f.isDirectory,
+        select: () => (f.isDirectory ? drillIntoDir(f.path) : selectFile(f)),
       });
     }
     // 会话组追加在 file 之后（spec agent → file → session 顺序）——
@@ -772,6 +805,13 @@ export function MentionInput() {
     const q = scopeQuery.trim();
     if (mentionScope === 'file') {
       if (fileHits.length > 0) return null;
+      // 遍历预算耗尽时「无匹配」是未扫描完的结论，必须换措辞（2026-11-11 方案 C）
+      if (fileTruncated) {
+        return {
+          p1: q === '' ? '文件过多，本次仅扫描了部分目录' : `未在已扫描范围内找到「${q}」`,
+          p2: '扫描已达上限，请输入更具体的关键词',
+        };
+      }
       return q === '' ? SCOPE_EMPTY.file : noMatchHint(q);
     }
     if (menuEntries.length > 0) return null;
@@ -878,6 +918,7 @@ export function MentionInput() {
           {mentionScope !== null && (
             <div className="px-2.5 py-1.5 border-b border-subtle sticky top-0 bg-surface-1">
               <input
+                ref={scopeSearchRef}
                 autoFocus
                 data-testid="scope-search"
                 type="text"
@@ -912,7 +953,9 @@ export function MentionInput() {
                 }`}
               >
                 <span className="shrink-0">
-                  {entry.image ? (
+                  {entry.isDirectory ? (
+                    <Folder size={12} strokeWidth={1.75} aria-hidden />
+                  ) : entry.image ? (
                     <ImageIcon size={12} strokeWidth={1.75} aria-hidden />
                   ) : (
                     <GroupIcon group={entry.group} emoji={entry.iconEmoji} />
@@ -925,6 +968,12 @@ export function MentionInput() {
               </button>
             </Fragment>
           ))}
+          {/* 遍历预算耗尽（方案 C）：结果不完整必须可见，否则又是「搜不到 = 没有」误解 */}
+          {fileTruncated && menuEntries.length > 0 && (
+            <div className="px-3 py-1 text-xs text-status-warning border-t border-subtle">
+              扫描已达上限，结果可能不完整——输入更具体的关键词
+            </div>
+          )}
           {pinnedImportVisible && (
             <div className="border-t border-subtle mt-1">
               <button

@@ -132,6 +132,7 @@ export interface RichComposerHandle {
   moveCaretToEnd(): void;
   insertPill(pill: PillSeg, replaceLen: number): void;
   insertTextAtEnd(text: string): void;
+  replaceBeforeCaret(replaceLen: number, text: string): void;
   getSegments(): ComposerSegment[];
   setSegments(segs: ComposerSegment[]): void;
   clear(): void;
@@ -402,6 +403,39 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
       emitInput();
     };
 
+    /**
+     * 用纯文本替换光标前 replaceLen 个字符（2026-11-11 目录钻入）：把触发局部
+     * `@shell` 就地重写为 `@shell/`，光标落新文本末尾并补发 onInputText——
+     * 上层触发检测据此把菜单过滤词换成目录前缀（菜单保持打开）。
+     * 采用整节点 data 重写而非 insertData（jsdom 对 deleteData 后的 insertData
+     * 抛 IndexSizeError，真机语义等价且更少 DOM 操作）；选区丢失或光标不在
+     * 文本节点时回退 insertTextAtEnd。
+     */
+    const replaceBeforeCaret = (replaceLen: number, text: string): void => {
+      const root = rootRef.current;
+      if (!root || text === '') return;
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) {
+        insertTextAtEnd(text);
+        return;
+      }
+      const range = sel.getRangeAt(0);
+      if (!root.contains(range.startContainer) || range.startContainer.nodeType !== Node.TEXT_NODE) {
+        insertTextAtEnd(text);
+        return;
+      }
+      const node = range.startContainer as Text;
+      const caretAt = Math.min(range.startOffset, node.data.length);
+      const start = Math.max(0, caretAt - replaceLen);
+      node.data = `${node.data.slice(0, start)}${text}${node.data.slice(caretAt)}`;
+      const caret = document.createRange();
+      caret.setStart(node, start + text.length);
+      caret.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(caret);
+      emitInput();
+    };
+
     const selectPill = (pill: HTMLSpanElement): void => {
       pill.dataset.selected = '1';
       pill.classList.add(...PILL_SELECTED_CLASS.split(' '));
@@ -582,6 +616,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
       moveCaretToEnd,
       insertPill,
       insertTextAtEnd,
+      replaceBeforeCaret,
       getSegments,
       setSegments,
       clear,

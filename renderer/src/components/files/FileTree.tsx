@@ -39,9 +39,12 @@ export function FileTree({ onSelectFile }: Props) {
   // 搜索态（瞬态本地态，不进 store；spec §5.3）
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchHit[]>([]);
+  // 主进程遍历预算提前结束（2026-11-11 方案 C）：结果可能不完整
+  const [truncated, setTruncated] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   // 竞态守卫：响应返回时序号不匹配则丢弃（旧响应不覆盖新结果）
   const seqRef = useRef(0);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // spec §6：切 workspace 时清空搜索（组件常驻不卸载，需显式复位）
   useEffect(() => {
@@ -54,6 +57,7 @@ export function FileTree({ onSelectFile }: Props) {
     if (!workspace || trimmed === '') {
       seqRef.current++;
       setResults([]);
+      setTruncated(false);
       setSearchError(null);
       return;
     }
@@ -61,14 +65,16 @@ export function FileTree({ onSelectFile }: Props) {
       const seq = ++seqRef.current;
       ipc.file
         .searchNames(workspace.id, trimmed)
-        .then((hits) => {
+        .then((res) => {
           if (seqRef.current !== seq) return;
-          setResults(hits);
+          setResults(res.hits);
+          setTruncated(res.truncated);
           setSearchError(null);
         })
         .catch((err: unknown) => {
           if (seqRef.current !== seq) return;
           setResults([]);
+          setTruncated(false);
           setSearchError(`搜索失败：${err instanceof Error ? err.message : String(err)}`);
         });
     }, SEARCH_DEBOUNCE_MS);
@@ -171,6 +177,7 @@ export function FileTree({ onSelectFile }: Props) {
       <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-subtle shrink-0">
         <Search size={14} strokeWidth={1.75} className="text-tertiary shrink-0" aria-hidden />
         <input
+          ref={searchInputRef}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="搜索文件"
@@ -196,7 +203,7 @@ export function FileTree({ onSelectFile }: Props) {
         <div className="flex-1 overflow-auto px-2 py-1">
           {results.length === 0 && !searchError ? (
             <div className="flex items-center justify-center h-full text-tertiary text-sm">
-              无匹配文件
+              {truncated ? '未在已扫描范围内找到匹配文件' : '无匹配文件'}
             </div>
           ) : (
             <>
@@ -206,17 +213,22 @@ export function FileTree({ onSelectFile }: Props) {
                   ? hit.path.slice(0, hit.path.lastIndexOf('/'))
                   : '';
                 return hit.isDirectory ? (
-                  <div
+                  <button
                     key={hit.path}
-                    title={hit.path}
-                    className="flex items-center gap-1.5 px-1 py-1 text-sm text-secondary"
+                    type="button"
+                    title={`${hit.path}（点击展开目录内容）`}
+                    onClick={() => {
+                      setQuery(`${hit.path}/`);
+                      searchInputRef.current?.focus();
+                    }}
+                    className="w-full flex items-center gap-1.5 px-1 py-1 text-sm text-secondary hover:bg-surface-3 text-left"
                   >
                     <FolderTypeIcon name={name} />
                     <span className="truncate">{name}</span>
                     {parentDir !== '' && (
                       <span className="text-tertiary text-xs truncate">{parentDir}</span>
                     )}
-                  </div>
+                  </button>
                 ) : (
                   <button
                     key={hit.path}
@@ -233,10 +245,16 @@ export function FileTree({ onSelectFile }: Props) {
                   </button>
                 );
               })}
-              {results.length >= SEARCH_RESULT_LIMIT && (
-                <div className="px-1 py-1 text-xs text-tertiary">
-                  已显示前 {SEARCH_RESULT_LIMIT} 条匹配
+              {truncated ? (
+                <div className="px-1 py-1 text-xs text-status-warning">
+                  扫描已达上限，结果可能不完整——请用更具体的关键词
                 </div>
+              ) : (
+                results.length >= SEARCH_RESULT_LIMIT && (
+                  <div className="px-1 py-1 text-xs text-tertiary">
+                    已显示前 {SEARCH_RESULT_LIMIT} 条匹配
+                  </div>
+                )
               )}
             </>
           )}

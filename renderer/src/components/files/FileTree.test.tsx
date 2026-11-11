@@ -7,7 +7,7 @@ import { FileTree } from './FileTree';
 import { useFileStore } from '../../stores/file.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useUiStore } from '../../stores/ui.store';
-import type { DirEntry, Workspace } from '../../ipc/types';
+import type { DirEntry, SearchResponse, Workspace } from '../../ipc/types';
 
 const ROOT_ENTRIES: DirEntry[] = [
   { name: 'a.ts', isDirectory: false, size: 0 },
@@ -21,7 +21,7 @@ const mockApi = {
     list: vi.fn().mockResolvedValue(ROOT_ENTRIES),
     read: vi.fn(),
     write: vi.fn(),
-    searchNames: vi.fn().mockResolvedValue([]),
+    searchNames: vi.fn().mockResolvedValue({ hits: [], truncated: false }),
     absolutePath: vi.fn().mockResolvedValue('/tmp/ws/abs'),
     revealInFolder: vi.fn().mockResolvedValue({ ok: true }),
     openWithDefaultApp: vi.fn().mockResolvedValue({ ok: true }),
@@ -67,7 +67,7 @@ beforeEach(() => {
   mockApi.file.list.mockClear();
   mockApi.file.list.mockResolvedValue(ROOT_ENTRIES);
   mockApi.file.searchNames.mockClear();
-  mockApi.file.searchNames.mockResolvedValue([]);
+  mockApi.file.searchNames.mockResolvedValue({ hits: [], truncated: false });
   mockApi.file.absolutePath.mockClear();
   mockApi.file.absolutePath.mockResolvedValue('/tmp/ws/abs');
 });
@@ -143,7 +143,10 @@ describe('FileTree 文件名搜索', () => {
 
   it('输入关键词 → 防抖 200ms 后调 file.searchNames 并渲染结果（含父目录小字）', async () => {
     vi.useFakeTimers();
-    mockApi.file.searchNames.mockResolvedValue([{ path: 'src/found.ts', isDirectory: false }]);
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [{ path: 'src/found.ts', isDirectory: false }],
+      truncated: false,
+    });
     render(<FileTree onSelectFile={() => {}} />);
     expect(mockApi.file.searchNames).not.toHaveBeenCalled();
     fireEvent.change(screen.getByLabelText('搜索文件'), { target: { value: 'found' } });
@@ -162,7 +165,7 @@ describe('FileTree 文件名搜索', () => {
 
   it('无结果 → 「无匹配文件」空态', async () => {
     vi.useFakeTimers();
-    mockApi.file.searchNames.mockResolvedValue([]);
+    mockApi.file.searchNames.mockResolvedValue({ hits: [], truncated: false });
     render(<FileTree onSelectFile={() => {}} />);
     fireEvent.change(screen.getByLabelText('搜索文件'), { target: { value: 'zzz' } });
     await act(async () => {
@@ -171,26 +174,42 @@ describe('FileTree 文件名搜索', () => {
     expect(screen.getByText('无匹配文件')).toBeInTheDocument();
   });
 
-  it('点击文件行 → onSelectFile(相对路径)；目录行不可点击', async () => {
+  it('点击文件行 → onSelectFile(相对路径)；目录行 → 钻入（查询改写为 dir/）', async () => {
     vi.useFakeTimers();
-    mockApi.file.searchNames.mockResolvedValue([
-      { path: 'docs', isDirectory: true },
-      { path: 'src/found.ts', isDirectory: false },
-    ]);
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [
+        { path: 'docs', isDirectory: true },
+        { path: 'src/found.ts', isDirectory: false },
+      ],
+      truncated: false,
+    });
     const onSelect = vi.fn();
     render(<FileTree onSelectFile={onSelect} />);
-    fireEvent.change(screen.getByLabelText('搜索文件'), { target: { value: 'found' } });
+    const search = screen.getByLabelText('搜索文件');
+    fireEvent.change(search, { target: { value: 'found' } });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
     });
     fireEvent.click(screen.getByText('found.ts'));
     expect(onSelect).toHaveBeenCalledWith('src/found.ts');
     expect(onSelect).not.toHaveBeenCalledWith('docs');
+
+    // 目录行：不选文件，把搜索词改成 dir/ 就地展开（2026-11-11 B 方案）
+    fireEvent.click(screen.getByText('docs'));
+    expect((search as HTMLInputElement).value).toBe('docs/');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(mockApi.file.searchNames).toHaveBeenLastCalledWith('ws-1', 'docs/');
+    expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
   it('清除搜索 → 恢复树视图（搜索结果消失、不再发 IPC）', async () => {
     vi.useFakeTimers();
-    mockApi.file.searchNames.mockResolvedValue([{ path: 'search-hit.ts', isDirectory: false }]);
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [{ path: 'search-hit.ts', isDirectory: false }],
+      truncated: false,
+    });
     render(<FileTree onSelectFile={() => {}} />);
     fireEvent.change(screen.getByLabelText('搜索文件'), { target: { value: 'hit' } });
     await act(async () => {
@@ -218,13 +237,18 @@ describe('FileTree 文件名搜索', () => {
 
   it('旧响应不覆盖新结果（竞态守卫）', async () => {
     vi.useFakeTimers();
-    let resolveStale!: (v: { path: string; isDirectory: boolean }[]) => void;
-    const stalePromise = new Promise<{ path: string; isDirectory: boolean }[]>((res) => {
+    let resolveStale!: (v: SearchResponse) => void;
+    const stalePromise = new Promise<SearchResponse>((res) => {
       resolveStale = res;
     });
     mockApi.file.searchNames
       .mockImplementationOnce(() => stalePromise)
-      .mockImplementationOnce(() => Promise.resolve([{ path: 'fresh.ts', isDirectory: false }]));
+      .mockImplementationOnce(() =>
+        Promise.resolve({
+          hits: [{ path: 'fresh.ts', isDirectory: false }],
+          truncated: false,
+        }),
+      );
     render(<FileTree onSelectFile={() => {}} />);
     fireEvent.change(screen.getByLabelText('搜索文件'), { target: { value: 'q1' } });
     await act(async () => {
@@ -235,7 +259,7 @@ describe('FileTree 文件名搜索', () => {
       await vi.advanceTimersByTimeAsync(200);
     });
     // 旧响应后到：不得覆盖 q2 的结果
-    resolveStale([{ path: 'stale.ts', isDirectory: false }]);
+    resolveStale({ hits: [{ path: 'stale.ts', isDirectory: false }], truncated: false });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
@@ -249,7 +273,7 @@ describe('FileTree 文件名搜索', () => {
       path: `hit${i}.ts`,
       isDirectory: false,
     }));
-    mockApi.file.searchNames.mockResolvedValue(many);
+    mockApi.file.searchNames.mockResolvedValue({ hits: many, truncated: false });
     render(<FileTree onSelectFile={() => {}} />);
     fireEvent.change(screen.getByLabelText('搜索文件'), { target: { value: 'hit' } });
     await act(async () => {
@@ -258,9 +282,39 @@ describe('FileTree 文件名搜索', () => {
     expect(screen.getByText('已显示前 200 条匹配')).toBeInTheDocument();
   });
 
+  it('遍历预算截断（truncated=true）→ 显示「扫描已达上限」示警，不冒充结果上限提示', async () => {
+    vi.useFakeTimers();
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [{ path: 'src/hit.ts', isDirectory: false }],
+      truncated: true,
+    });
+    render(<FileTree onSelectFile={() => {}} />);
+    fireEvent.change(screen.getByLabelText('搜索文件'), { target: { value: 'hit' } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(screen.getByText(/扫描已达上限，结果可能不完整/)).toBeInTheDocument();
+    expect(screen.queryByText(/已显示前/)).toBeNull();
+  });
+
+  it('零命中 + truncated=true → 空态改口「未在已扫描范围内找到」', async () => {
+    vi.useFakeTimers();
+    mockApi.file.searchNames.mockResolvedValue({ hits: [], truncated: true });
+    render(<FileTree onSelectFile={() => {}} />);
+    fireEvent.change(screen.getByLabelText('搜索文件'), { target: { value: 'zzz' } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(screen.getByText('未在已扫描范围内找到匹配文件')).toBeInTheDocument();
+    expect(screen.queryByText('无匹配文件')).toBeNull();
+  });
+
   it('切换 workspace 时清空搜索（spec §6）', async () => {
     vi.useFakeTimers();
-    mockApi.file.searchNames.mockResolvedValue([{ path: 'search-hit.ts', isDirectory: false }]);
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [{ path: 'search-hit.ts', isDirectory: false }],
+      truncated: false,
+    });
     render(<FileTree onSelectFile={() => {}} />);
     fireEvent.change(screen.getByLabelText('搜索文件'), { target: { value: 'hit' } });
     await act(async () => {
@@ -305,10 +359,13 @@ describe('FileTree 排序（功能优化 2026-10-11：目录优先 + 自然排�
   it('搜索结果渲染：目录命中排在文件命中之前', async () => {
     vi.useFakeTimers();
     // 主进程返回乱序（文件在前）——渲染层排序兜底
-    mockApi.file.searchNames.mockResolvedValue([
-      { path: 'src/found.ts', isDirectory: false },
-      { path: 'docs', isDirectory: true },
-    ]);
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [
+        { path: 'src/found.ts', isDirectory: false },
+        { path: 'docs', isDirectory: true },
+      ],
+      truncated: false,
+    });
     render(<FileTree onSelectFile={() => {}} />);
     fireEvent.change(screen.getByLabelText('搜索文件'), { target: { value: 'o' } });
     await act(async () => {
@@ -347,10 +404,13 @@ describe('FileTree 类型图标（2026-10-23 方案 A：Material 内联 SVG）',
 
   it('搜索结果：命中行与文件树同套类型图标', async () => {
     vi.useFakeTimers();
-    mockApi.file.searchNames.mockResolvedValue([
-      { path: 'docs', isDirectory: true },
-      { path: 'src/app.tsx', isDirectory: false },
-    ]);
+    mockApi.file.searchNames.mockResolvedValue({
+      hits: [
+        { path: 'docs', isDirectory: true },
+        { path: 'src/app.tsx', isDirectory: false },
+      ],
+      truncated: false,
+    });
     render(<FileTree onSelectFile={() => {}} />);
     fireEvent.change(screen.getByLabelText('搜索文件'), { target: { value: 'app' } });
     await act(async () => {
@@ -360,7 +420,7 @@ describe('FileTree 类型图标（2026-10-23 方案 A：Material 内联 SVG）',
     // 文件行带内联彩色 SVG；目录行（docs）带 folder 变体 SVG
     const fileRow = screen.getByText('app.tsx').closest('button');
     expect(fileRow?.querySelector('svg path')?.getAttribute('fill')).toBe('#0288d1');
-    const dirRow = screen.getByText('docs').closest('div');
+    const dirRow = screen.getByText('docs').closest('button');
     expect(dirRow?.querySelector('svg path')).not.toBeNull();
   });
 });

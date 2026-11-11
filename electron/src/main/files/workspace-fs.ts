@@ -18,10 +18,29 @@ export interface SearchHit {
   isDirectory: boolean;
 }
 
+/**
+ * 文件名搜索结果（file:searchNames 返回形状，2026-11-11 方案 C）。
+ * truncated 只表达「遍历预算提前结束、结果可能不完整」；结果数达到 limit
+ * 属正常截断（truncated=false），UI 侧用各自的结果上限提示表达。
+ */
+export interface SearchResponse {
+  hits: SearchHit[];
+  truncated: boolean;
+}
+
 /** searchNames 默认结果上限（spec §5.1） */
 const SEARCH_LIMIT_DEFAULT = 200;
-/** searchNames 遍历条目总数上限（防病态深目录拖死主进程，spec §5.1） */
-const SEARCH_TRAVERSAL_CAP_DEFAULT = 10_000;
+/**
+ * searchNames 遍历时间预算（毫秒，2026-11-11 方案 C）。取代旧「条目数 10000」
+ * 预算：DFS 顺序下单个大目录就能吃光条目预算（生产实证 ws2 `.momo-scratch`
+ * 有 11,604 条 → 后续目录永不访问，搜索静默 0 命中）。时间预算直接对齐
+ * 「防病态目录拖死主进程」的原始目标，且不随目录密度失真。
+ */
+const SEARCH_TIME_BUDGET_MS = 1500;
+/** 条目数绝对兜底：防毫秒级 readdir 的超巨型目录绕过时间预算语义。
+ *  取 100 万——本仓库实测 269,639 条遍历约 0.9s（< 时间预算），
+ *  兜底不得先于时间预算把正常大仓库截断。 */
+const SEARCH_TRAVERSAL_CAP_DEFAULT = 1_000_000;
 
 // 模块级默认内容通道（主进程/子进程 boot 时设定；未设定 = direct 行为）：
 let defaultContentIo: ContentIo | null = null;
@@ -184,33 +203,51 @@ export class WorkspaceFS {
   }
 
   /**
-   * 递归文件名搜索（spec §5.1）：从 workspace 根遍历，条目名（basename）
-   * 大小写不敏感子串匹配；.git* 前缀与 node_modules 条目排除（与 listDir
-   * 一致）；符号链接目录不进入（Dirent.isDirectory 对 symlink 为 false，
-   * 天然防环）。双上限：结果 limit + 遍历总数 traversalCap。
+   * 递归文件名搜索（spec §5.1）：从 workspace 根遍历，**相对路径**（含目录
+   * 前缀）大小写不敏感子串匹配——输入目录名即可命中其下文件、输入 `dir/`
+   * 即展开该目录内容（2026-11-11 B 方案；旧实现只匹配 basename，输入目录名
+   * 只命中目录本身，renderer 过滤目录后列表为空）。
+   * .git* 前缀与 node_modules 条目排除（与 listDir 一致）；符号链接目录不进入
+   * （Dirent.isDirectory 对 symlink 为 false，天然防环）。
+   * 预算：时间 timeBudgetMs（默认 1500ms）+ 条目数 traversalCap 绝对兜底；任一
+   * 触发即停止遍历并置 truncated=true。
    * 空 query = match-all 全量列举（2026-11-05：会话工具条「文件」按钮限定
-   * 菜单的全量浏览数据源；既有消费方 FileTree/MentionInput 手动路径均有
-   * 空串守卫，不发空 query，语义变更零波及）。
+   * 菜单的全量浏览数据源）。
    */
   async searchNames(
     query: string,
     limit: number = SEARCH_LIMIT_DEFAULT,
+    timeBudgetMs: number = SEARCH_TIME_BUDGET_MS,
     traversalCap: number = SEARCH_TRAVERSAL_CAP_DEFAULT,
-  ): Promise<SearchHit[]> {
+  ): Promise<SearchResponse> {
     const q = query.trim().toLowerCase();
     const hits: SearchHit[] = [];
+    const startedAt = Date.now();
     let visited = 0;
+    let budgetExhausted = false;
+
+    /** 预算判定（条目兜底 + 时间预算）；命中即标记 truncated 的权威来源 */
+    const budgetHit = (): boolean => {
+      if (visited >= traversalCap || Date.now() - startedAt > timeBudgetMs) {
+        budgetExhausted = true;
+        return true;
+      }
+      return false;
+    };
+
     const walk = async (relDir: string): Promise<void> => {
       const abs = relDir === '.' ? this.rootDir : this.assertInWorkspace(relDir);
       const entries = await fs.promises.readdir(abs, { withFileTypes: true });
       for (const e of entries) {
-        if (hits.length >= limit || visited >= traversalCap) return;
+        // 结果已满 / 预算已耗尽：逐层退出（父层 next iteration 由 budgetExhausted 拦截）
+        if (hits.length >= limit || budgetExhausted) return;
+        if (budgetHit()) return;
         const lower = e.name.toLowerCase();
         if (lower.startsWith('.git') || lower === 'node_modules') continue;
         // 相对路径统一 '/' 分隔（与 file.store 路径拼接约定一致，跨平台稳定）
         const rel = relDir === '.' ? e.name : `${relDir}/${e.name}`;
         visited++;
-        if (lower.includes(q)) {
+        if (rel.toLowerCase().includes(q)) {
           hits.push({ path: rel, isDirectory: e.isDirectory() });
         }
         if (e.isDirectory()) {
@@ -219,7 +256,18 @@ export class WorkspaceFS {
       }
     };
     await walk('.');
-    return hits;
+    // 排序（2026-11-11 B 方案）：basename 命中优先 → 目录优先 → 路径自然序。
+    // basename 优先保证「输入目录名」时目录与同名文件先出，不让远处纯路径命中
+    // 占据列表头部；目录优先让钻入路径（展开子项）符合浏览直觉。
+    const basenameOf = (p: string): string => p.slice(p.lastIndexOf('/') + 1).toLowerCase();
+    hits.sort((a, b) => {
+      const aBase = basenameOf(a.path).includes(q) ? 0 : 1;
+      const bBase = basenameOf(b.path).includes(q) ? 0 : 1;
+      if (aBase !== bBase) return aBase - bBase;
+      if (a.isDirectory !== b.isDirectory) return Number(b.isDirectory) - Number(a.isDirectory);
+      return a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' });
+    });
+    return { hits, truncated: budgetExhausted };
   }
 
   async exists(relativePath: string): Promise<boolean> {

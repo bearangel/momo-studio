@@ -95,8 +95,9 @@ export function registerFileHandlers(): void {
     },
   );
 
-  // 文件名搜索（侧边栏搜索，spec §5.1）：query 由 renderer 保证 trim 非空才调用；
-  // 主进程仍对空串返回 [] 短路（纵深防御）
+  // 文件名搜索（侧边栏搜索 / 会话「文件」按钮弹层，spec §5.1）：query 空串 =
+  // match-all 全量列举（已由 renderer 的空串守卫分流，主进程不做空串短路）；
+  // 返回 { hits, truncated }（truncated = 遍历预算提前结束，2026-11-11 方案 C）
   ipcMain.handle(
     'file:searchNames',
     async (_evt, workspaceId: string, query: string) => {

@@ -2392,8 +2392,8 @@ export interface ApiSurface {
     create(workspaceId: string, filePath: string, type: 'file' | 'dir'): Promise<void>;
     delete(workspaceId: string, filePath: string): Promise<void>;
     rename(workspaceId: string, srcPath: string, dstPath: string): Promise<void>;
-    /** 文件名搜索（侧边栏搜索，spec §5.1）：主进程递归扫描，返回相对路径命中项 */
-    searchNames(workspaceId: string, query: string): Promise<SearchHit[]>;
+    /** 文件名搜索（侧边栏搜索，spec §5.1）：主进程递归扫描，返回相对路径命中项 + 截断标记 */
+    searchNames(workspaceId: string, query: string): Promise<SearchResponse>;
     /** 文件区功能优化：相对路径 → OS 绝对路径（沙箱校验后返回；「复制路径」用） */
     absolutePath(workspaceId: string, filePath: string): Promise<string>;
     /** 文件区功能优化：在系统文件管理器中显示该文件/目录（所在目录内选中） */
@@ -2888,6 +2888,16 @@ export interface SearchHit {
   /** 相对 workspace 根的全路径（含目录前缀，'/' 分隔） */
   path: string;
   isDirectory: boolean;
+}
+
+/**
+ * file:searchNames 返回（2026-11-11 方案 C）。
+ * 与 electron 端 workspace-fs.ts 的 SearchResponse 对齐（跨进程独立定义，仅结构对齐）。
+ * truncated=true 表示遍历预算提前结束（结果可能不完整）；结果数达到上限不算截断。
+ */
+export interface SearchResponse {
+  hits: SearchHit[];
+  truncated: boolean;
 }
 
 /**
