@@ -3,6 +3,7 @@
 // 文件访问设置（spec §5.6）。形态同构 SandboxSettingsPanel（三档 radio +
 // 状态卡 + 重新检测）。文案中性化：不出现具体加密产品/白名单/合规字样。
 import { useEffect, useState } from 'react';
+import { FolderOpen } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { ipc } from '../../ipc/client';
@@ -45,6 +46,22 @@ export function FileIoSettingsPanel(): React.ReactElement {
       .updateGlobal({ fileIo: { mode, nodePath: nodePath.trim() || undefined } })
       .catch(() => {});
     void ipc.fileIo.probe().then(setStatus).catch(() => {});
+  };
+
+  // nodePath 落库并重探测（onBlur 与「浏览」选择共用；fire-and-forget，同 save 弱一致）
+  const persistNodePath = (path: string): void => {
+    if (!status) return;
+    void ipc.settings
+      .updateGlobal({ fileIo: { mode: status.mode, nodePath: path.trim() || undefined } })
+      .catch(() => {});
+    void ipc.fileIo.probe().then(setStatus).catch(() => {});
+  };
+
+  const browseNodePath = async (): Promise<void> => {
+    const picked = await ipc.fileIo.pickNodePath();
+    if (!picked) return;
+    setNodePath(picked);
+    persistNodePath(picked);
   };
 
   const reprobe = async (): Promise<void> => {
@@ -103,20 +120,25 @@ export function FileIoSettingsPanel(): React.ReactElement {
       </fieldset>
 
       <div className="flex flex-col gap-1">
-        <Input
-          label="Node.js 路径（可选）"
-          className="w-full font-mono text-[12.5px]"
-          value={nodePath}
-          onChange={(e) => setNodePath(e.target.value)}
-          onBlur={() => {
-            if (!status) return;
-            void ipc.settings
-              .updateGlobal({ fileIo: { mode: status.mode, nodePath: nodePath.trim() || undefined } })
-              .catch(() => {});
-            void ipc.fileIo.probe().then(setStatus).catch(() => {});
-          }}
-          placeholder="留空 = 自动查找系统 Node.js"
-        />
+        <div className="flex items-end gap-2">
+          <Input
+            label="Node.js 路径（可选）"
+            className="w-full font-mono text-[12.5px]"
+            value={nodePath}
+            onChange={(e) => setNodePath(e.target.value)}
+            onBlur={() => persistNodePath(nodePath)}
+            placeholder="留空 = 自动查找系统 Node.js"
+          />
+          <Button
+            variant="secondary"
+            size="sm"
+            className="shrink-0"
+            onClick={() => void browseNodePath()}
+          >
+            <FolderOpen size={16} strokeWidth={1.75} aria-hidden />
+            浏览
+          </Button>
+        </div>
       </div>
 
       {loadError && (

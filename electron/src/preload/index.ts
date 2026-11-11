@@ -267,6 +267,7 @@ const api: ApiSurface = {
   fileIo: {
     getState: () => invoke('fileIo:getState'),
     probe: () => invoke('fileIo:probe'),
+    pickNodePath: () => invoke('fileIo:pickNodePath'),
   },
   // v2.5：变更账本通道（journal/ipc.handlers.ts）——列表/撤销/组合回滚/干跑预检
   journal: {

@@ -1960,6 +1960,8 @@ export interface FileIoApiSurface {
   getState(): Promise<FileIoStatus>;
   /** 重新探测（先同步 kv 设置进单例再聚合，返回最新状态） */
   probe(): Promise<FileIoStatus>;
+  /** 打开系统文件选择器选取 Node.js 可执行文件；取消返回 null */
+  pickNodePath(): Promise<string | null>;
 }
 
 /**

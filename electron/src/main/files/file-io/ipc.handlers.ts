@@ -6,7 +6,7 @@
 // 3.7~5.4s（安全软件机器），面板每次 getState 都同步探测会把主进程事件循环
 // 钉死。getState 命中缓存直接返回；probe 强制重探并更新缓存。服务自身 spawn
 // 路径仍用同步 findNodePath（spawn 时点可接受）。
-import { ipcMain } from 'electron';
+import { BrowserWindow, dialog, ipcMain, type OpenDialogOptions } from 'electron';
 import { logger } from '../../logger';
 import { getGlobalSettings } from '../../settings/crud';
 import {
@@ -84,6 +84,25 @@ export function registerFileIoHandlers(): void {
   ipcMain.handle('fileIo:probe', async () => {
     syncFileIoDefaults();
     return buildFileIoStatus(undefined, { refresh: true });
+  });
+  // 系统文件选择器选取 Node.js 可执行文件；取消返回 null（面板据此不落任何变更）
+  ipcMain.handle('fileIo:pickNodePath', async () => {
+    const configured = resolveFileIoSettings(getGlobalSettings().fileIo).nodePath;
+    // Electron 44 类型：window 形参不可空，无聚焦窗走无参重载（同 dialog.handlers.ts）
+    const options: OpenDialogOptions = {
+      title: '选择 Node.js 可执行文件',
+      properties: ['openFile'],
+      defaultPath: configured ?? undefined,
+      filters:
+        process.platform === 'win32'
+          ? [{ name: 'Node.js', extensions: ['exe'] }]
+          : undefined,
+    };
+    const focused = BrowserWindow.getFocusedWindow();
+    const res = focused
+      ? await dialog.showOpenDialog(focused, options)
+      : await dialog.showOpenDialog(options);
+    return res.canceled ? null : (res.filePaths[0] ?? null);
   });
   logger.info('File IO IPC handlers 已注册');
 }

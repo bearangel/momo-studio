@@ -5,10 +5,11 @@ import { FileIoSettingsPanel } from './FileIoSettingsPanel';
 
 const getState = vi.fn();
 const probe = vi.fn();
+const pickNodePath = vi.fn();
 const updateGlobal = vi.fn();
 
 const api = {
-  fileIo: { getState, probe },
+  fileIo: { getState, probe, pickNodePath },
   settings: { updateGlobal },
 };
 
@@ -30,6 +31,8 @@ beforeEach(() => {
     nodeVersion: 'v14.21.3',
   });
   updateGlobal.mockResolvedValue(undefined);
+  // 默认「取消选择」；选中路径的用例各自 mockResolvedValueOnce
+  pickNodePath.mockResolvedValue(null);
   // 只替换 window.api、保留 jsdom 真实 window（整体覆盖 window 会让 React
   // commit 阶段读不到 document/Element 直接崩溃——对齐 HubSettingsPanel.test 锚点）
   (globalThis as unknown as { window: { api: typeof api } }).window.api = api;
@@ -62,6 +65,33 @@ describe('FileIoSettingsPanel', () => {
     await screen.findByText('重新检测');
     fireEvent.click(screen.getByText('重新检测'));
     await waitFor(() => expect(probe).toHaveBeenCalled());
+  });
+
+  it('点击「浏览」选中路径 → 落库 + 回填输入框 + 重探测', async () => {
+    pickNodePath.mockResolvedValueOnce('/usr/local/bin/node');
+    render(<FileIoSettingsPanel />);
+    await screen.findByText('直接读写（默认）');
+    fireEvent.click(screen.getByRole('button', { name: '浏览' }));
+    await waitFor(() =>
+      expect(updateGlobal).toHaveBeenCalledWith(
+        expect.objectContaining({ fileIo: expect.objectContaining({ nodePath: '/usr/local/bin/node' }) }),
+      ),
+    );
+    expect((screen.getByLabelText('Node.js 路径（可选）') as HTMLInputElement).value).toBe(
+      '/usr/local/bin/node',
+    );
+    await waitFor(() => expect(probe).toHaveBeenCalled());
+  });
+
+  // 空输入红线：选择器取消（null）不落任何变更。
+  // mock 调用史跨用例累积（beforeEach 只重设返回值），断言前先清零
+  it('「浏览」取消 → 不调 updateGlobal', async () => {
+    render(<FileIoSettingsPanel />);
+    await screen.findByText('直接读写（默认）');
+    updateGlobal.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: '浏览' }));
+    await waitFor(() => expect(pickNodePath).toHaveBeenCalled());
+    expect(updateGlobal).not.toHaveBeenCalled();
   });
 
   // 错误路径红线：初始加载 reject 不得死滞「加载中」，须落错误态且可重试恢复
