@@ -1,7 +1,7 @@
 // renderer/src/components/files/FileContextMenu.test.tsx
 // FileContextMenu 右键菜单：目录级新建项 + 重命名/移动/删除。
 // 纯展示组件，回调由调用方通过 props 注入。
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { FileContextMenu } from './FileContextMenu';
 
@@ -192,5 +192,65 @@ describe('FileContextMenu shell 组（功能优化 2026-10-11）', () => {
     expect(danger?.className).toContain('text-status-error');
     expect(danger?.className).toContain('hover:text-status-error');
     expect(danger?.className).not.toContain('hover:text-primary');
+  });
+});
+
+// 2026-11-11 溢出修复回归锁：文件树撑满屏幕时右击最底部文件，菜单原先直接按
+// clientX/clientY 定位、溢出视口下缘/右缘。要求像 SessionContextMenu.MenuShell
+// 一样按实际菜单尺寸回移（jsdom 默认视口 1024×768）。
+describe('FileContextMenu 视口钳制（溢出屏幕修复）', () => {
+  /** 菜单实际尺寸（模拟真实浏览器测量值；jsdom 中 offsetWidth/Height 恒为 0） */
+  const MENU_WIDTH = 200;
+  const MENU_HEIGHT = 240;
+
+  function mockMenuSize(width: number, height: number): void {
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(width);
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(height);
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('坐标在视口内时不做位移', () => {
+    mockMenuSize(MENU_WIDTH, MENU_HEIGHT);
+    render(<FileContextMenu {...baseProps} x={10} y={20} isDirectory={false} />);
+    const menu = screen.getByText('重命名').closest('ul');
+    expect(parseFloat(menu!.style.left)).toBe(10);
+    expect(parseFloat(menu!.style.top)).toBe(20);
+  });
+
+  it('底部溢出：y 超出下缘 → 上移到视口内（不溢出屏幕）', () => {
+    mockMenuSize(MENU_WIDTH, MENU_HEIGHT);
+    render(<FileContextMenu {...baseProps} x={100} y={760} isDirectory={false} />);
+    const menu = screen.getByText('重命名').closest('ul');
+    const top = parseFloat(menu!.style.top);
+    expect(top).toBe(window.innerHeight - MENU_HEIGHT - 8);
+    expect(top + MENU_HEIGHT).toBeLessThanOrEqual(window.innerHeight);
+  });
+
+  it('右缘溢出：x 超出右缘 → 左移到视口内', () => {
+    mockMenuSize(MENU_WIDTH, MENU_HEIGHT);
+    render(<FileContextMenu {...baseProps} x={1000} y={100} isDirectory={false} />);
+    const menu = screen.getByText('重命名').closest('ul');
+    const left = parseFloat(menu!.style.left);
+    expect(left).toBe(window.innerWidth - MENU_WIDTH - 8);
+    expect(left + MENU_WIDTH).toBeLessThanOrEqual(window.innerWidth);
+  });
+
+  it('右下角双溢出同时钳制', () => {
+    mockMenuSize(MENU_WIDTH, MENU_HEIGHT);
+    render(<FileContextMenu {...baseProps} x={2000} y={2000} isDirectory={false} />);
+    const menu = screen.getByText('重命名').closest('ul');
+    expect(parseFloat(menu!.style.left)).toBe(window.innerWidth - MENU_WIDTH - 8);
+    expect(parseFloat(menu!.style.top)).toBe(window.innerHeight - MENU_HEIGHT - 8);
+  });
+
+  it('菜单尺寸大于视口时钳制到 0，不出现负坐标', () => {
+    mockMenuSize(2000, 2000);
+    render(<FileContextMenu {...baseProps} x={100} y={100} isDirectory={false} />);
+    const menu = screen.getByText('重命名').closest('ul');
+    expect(parseFloat(menu!.style.left)).toBe(0);
+    expect(parseFloat(menu!.style.top)).toBe(0);
   });
 });

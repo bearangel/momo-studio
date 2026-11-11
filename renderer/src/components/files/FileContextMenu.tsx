@@ -4,6 +4,7 @@
 // 打开所在目录 / 复制路径，2026-10-11 功能优化）→ 重命名/移动/删除。
 // 根级空白区菜单只传 onNewFile/onNewDir，不传文件操作项。
 import { cn } from '../../lib/cn';
+import { useClampedMenuPosition } from '../../lib/use-clamped-menu-position';
 
 interface Props {
   x: number;
@@ -82,6 +83,8 @@ export function FileContextMenu({
   const hasEditItems = onRename || onMove;
   const hasShellItems = onOpenExternal || onReveal || onCopyPath;
 
+  const { ref: menuRef, left, top } = useClampedMenuPosition<HTMLUListElement>(x, y);
+
   return (
     <>
       {/* 全屏遮罩：点击或右键关闭菜单 */}
@@ -94,8 +97,9 @@ export function FileContextMenu({
         }}
       />
       <ul
+        ref={menuRef}
         className="fixed z-50 border border-subtle bg-surface-1 rounded shadow-lg py-1 text-sm text-secondary min-w-[120px]"
-        style={{ left: x, top: y }}
+        style={{ left, top }}
       >
         {hasNewItems && (
           <>

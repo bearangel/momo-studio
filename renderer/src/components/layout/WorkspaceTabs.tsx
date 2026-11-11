@@ -9,7 +9,7 @@
 // store.closedIds（会话级，重启后恢复全部标签），绝不触发删除；毁灭性删除
 // 收敛到右键菜单「删除工作空间…」的 PromptDialog 输名确认（流程不变）。
 // 全部标签关闭时内容由同文件导出的 ClosedWorkspacesPanel 承接重开。
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { X, Plus, Folder, Pencil, FolderOpen, Trash2 } from 'lucide-react';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { ipc } from '../../ipc/client';
@@ -17,6 +17,7 @@ import { CreateWorkspaceDialog } from '../workspace/CreateWorkspaceDialog';
 import { ClosedTabsDropdown } from './ClosedTabsDropdown';
 import { cn } from '../../lib/cn';
 import { noDragStyle } from '../../lib/platform';
+import { useClampedMenuPosition } from '../../lib/use-clamped-menu-position';
 import { PromptDialog } from '../common/PromptDialog';
 import { Button } from '../ui/Button';
 
@@ -41,7 +42,10 @@ export function WorkspaceTabs({ hideCreateButton = false }: { hideCreateButton?:
 
   const [showCreate, setShowCreate] = useState(false);
   const [menu, setMenu] = useState<TabMenu | null>(null);
-  const menuRef = useRef<HTMLDivElement | null>(null);
+  const { ref: menuRef, left: menuLeft, top: menuTop } = useClampedMenuPosition<HTMLDivElement>(
+    menu?.x ?? 0,
+    menu?.y ?? 0,
+  );
   // 正在重命名的 workspace id（tab 内 inline input 替换名称显示）
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -62,7 +66,7 @@ export function WorkspaceTabs({ hideCreateButton = false }: { hideCreateButton?:
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('mousedown', onMouseDown);
     };
-  }, [menu]);
+  }, [menu, menuRef]);
 
   /**
    * 删除 workspace（仅右键菜单「删除工作空间…」入口）：弹 PromptDialog
@@ -211,7 +215,7 @@ export function WorkspaceTabs({ hideCreateButton = false }: { hideCreateButton?:
         <div
           ref={menuRef}
           className="fixed z-50 py-1 rounded-lg border border-subtle bg-surface-1 shadow-xl"
-          style={{ ...noDragStyle, left: menu.x, top: menu.y, minWidth: 160 }}
+          style={{ ...noDragStyle, left: menuLeft, top: menuTop, minWidth: 160 }}
         >
           <button
             type="button"

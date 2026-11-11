@@ -1145,3 +1145,33 @@ describe('DelegatedTaskCard — 平行草稿新态（1.10.0）', () => {
     expect(screen.getByText('草稿已接收，等待节点拥有者安排')).toBeInTheDocument();
   });
 });
+
+// 2026-11-11 溢出修复回归锁：外派看板右击菜单不得溢出视口（与 BoardCard 同钩子）。
+describe('DelegatedTaskCard — 右键菜单视口钳制（溢出屏幕修复）', () => {
+  const MENU_WIDTH = 140;
+  const MENU_HEIGHT = 160;
+
+  // 只还原本组 spy：restoreAllMocks 会连带清掉共享 ipc mock 的实现
+  const sizeSpies: Array<{ mockRestore: () => void }> = [];
+
+  function mockMenuSize(width: number, height: number): void {
+    sizeSpies.push(vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(width));
+    sizeSpies.push(vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(height));
+  }
+
+  afterEach(() => {
+    for (const spy of sizeSpies.splice(0)) spy.mockRestore();
+  });
+
+  it('右下角双溢出 → 菜单回移到视口内', () => {
+    mockMenuSize(MENU_WIDTH, MENU_HEIGHT);
+    renderCard(mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'in_progress' }));
+    fireEvent.contextMenu(screen.getByRole('button', { name: /批量重命名/ }), {
+      clientX: 2000,
+      clientY: 2000,
+    });
+    const menu = screen.getByLabelText('任务菜单 批量重命名 legacy API 端点');
+    expect(parseFloat(menu.style.left)).toBe(window.innerWidth - MENU_WIDTH - 8);
+    expect(parseFloat(menu.style.top)).toBe(window.innerHeight - MENU_HEIGHT - 8);
+  });
+});

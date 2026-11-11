@@ -351,3 +351,47 @@ describe('WorkspaceTabs', () => {
     expect(screen.queryByText('重命名')).not.toBeInTheDocument();
   });
 });
+
+// 2026-11-11 溢出修复回归锁：工作空间标签右击菜单不得溢出视口（靠右缘/底部时回移）。
+describe('WorkspaceTabs 右键菜单视口钳制（溢出屏幕修复）', () => {
+  const MENU_WIDTH = 160;
+  const MENU_HEIGHT = 190;
+
+  beforeEach(() => {
+    (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
+    useWorkspaceStore.setState({
+      workspaces: [WS_A, WS_B],
+      activeWorkspaceId: WS_A.id,
+      closedIds: [],
+      loading: false,
+      error: null,
+    });
+  });
+
+  // 只还原本组 spy：restoreAllMocks 会连带清掉共享 mockApi 的实现
+  const sizeSpies: Array<{ mockRestore: () => void }> = [];
+
+  afterEach(() => {
+    for (const spy of sizeSpies.splice(0)) spy.mockRestore();
+  });
+
+  function openTabMenu(x: number, y: number): HTMLElement {
+    sizeSpies.push(vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(MENU_WIDTH));
+    sizeSpies.push(vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(MENU_HEIGHT));
+    render(<WorkspaceTabs />);
+    fireEvent.contextMenu(screen.getByRole('tab', { name: /产品重构/ }), { clientX: x, clientY: y });
+    return screen.getByRole('button', { name: /^关闭标签$/ }).parentElement as HTMLElement;
+  }
+
+  it('视口内坐标不位移', () => {
+    const menu = openTabMenu(10, 20);
+    expect(parseFloat(menu.style.left)).toBe(10);
+    expect(parseFloat(menu.style.top)).toBe(20);
+  });
+
+  it('右下角双溢出 → 菜单回移到视口内', () => {
+    const menu = openTabMenu(2000, 2000);
+    expect(parseFloat(menu.style.left)).toBe(window.innerWidth - MENU_WIDTH - 8);
+    expect(parseFloat(menu.style.top)).toBe(window.innerHeight - MENU_HEIGHT - 8);
+  });
+});

@@ -22,6 +22,7 @@ import type { TaskRow } from '../../ipc/types';
 import { BLOCKED_STYLE, PENDING_WRAP_UP_STYLE, taskStatusStyle } from '../../lib/task-status';
 import { isEditableStatus, isTerminalStatus } from '../../lib/board';
 import { humanizeRecurrence } from '../../lib/recurrence';
+import { useClampedMenuPosition } from '../../lib/use-clamped-menu-position';
 import { useTaskStore } from '../../stores/task.store';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { showToast } from '../ui/Toast';
@@ -66,6 +67,10 @@ export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps
   const names = useTaskEntityNames(task.workspaceId);
   // 右键菜单定位（null=关）；全状态可开——可编辑态出「编辑」/ 终态出「归档」（UX 波 2 #1）
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const { ref: menuRef, left: menuLeft, top: menuTop } = useClampedMenuPosition<HTMLUListElement>(
+    menu?.x ?? 0,
+    menu?.y ?? 0,
+  );
   // 可编辑态卡的内嵌编辑对话框开关（打开瞬间的 task 快照喂给 EditTaskDialog）
   const [editOpen, setEditOpen] = useState(false);
   // 1.10.0 平行草稿拒收确认弹窗开关
@@ -249,9 +254,10 @@ export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps
             }}
           />
           <ul
+            ref={menuRef}
             aria-label={`任务菜单 ${task.title}`}
             className="fixed z-50 min-w-[120px] rounded border border-subtle bg-surface-1 py-1 text-sm text-secondary shadow-lg"
-            style={{ left: menu.x, top: menu.y }}
+            style={{ left: menuLeft, top: menuTop }}
           >
             {/* 顶置开关（迁移 050）：全状态可用；重复 pin 刷新时间戳=重新压顶 */}
             <li>

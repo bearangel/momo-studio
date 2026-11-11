@@ -12,7 +12,7 @@
 //     单源）出「编辑」打开内嵌 EditTaskDialog；执行管线中间态无编辑无归档；
 //     全状态首位「顶置/取消顶置」（迁移 050，调 task.store.pin 乐观更新）
 // mock 边界对齐 TaskCard.test：仅 mock IPC（window.api），store 用真实实现。
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { BoardCard } from './BoardCard';
 import type { ImMessage, TaskRow } from '../../ipc/types';
@@ -589,5 +589,41 @@ describe('BoardCard — 平行草稿行（1.10.0）', () => {
     render(<BoardCard task={{ ...draft, status: 'in_progress' }} selected={false} onClick={() => {}} />);
     fireEvent.contextMenu(screen.getByRole('button', { name: /外来草稿/ }));
     expect(screen.queryByRole('button', { name: '拒收' })).not.toBeInTheDocument();
+  });
+});
+
+// 2026-11-11 溢出修复回归锁：看板右击（如屏幕最底部卡片）菜单不得溢出视口。
+describe('BoardCard 右键菜单视口钳制（溢出屏幕修复）', () => {
+  const MENU_WIDTH = 140;
+  const MENU_HEIGHT = 160;
+
+  // 只还原本组 spy：restoreAllMocks 会连带清掉共享 mockApi 的 mockRejectedValue 实现
+  const sizeSpies: Array<{ mockRestore: () => void }> = [];
+
+  function mockMenuSize(width: number, height: number): void {
+    sizeSpies.push(vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(width));
+    sizeSpies.push(vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(height));
+  }
+
+  afterEach(() => {
+    for (const spy of sizeSpies.splice(0)) spy.mockRestore();
+  });
+
+  it('视口内坐标不位移', () => {
+    mockMenuSize(MENU_WIDTH, MENU_HEIGHT);
+    render(<BoardCard task={base} selected={false} onClick={() => {}} />);
+    fireEvent.contextMenu(screen.getByRole('button', { name: /任务A/ }), { clientX: 10, clientY: 20 });
+    const menu = screen.getByLabelText('任务菜单 任务A');
+    expect(parseFloat(menu.style.left)).toBe(10);
+    expect(parseFloat(menu.style.top)).toBe(20);
+  });
+
+  it('右下角双溢出 → 菜单回移到视口内', () => {
+    mockMenuSize(MENU_WIDTH, MENU_HEIGHT);
+    render(<BoardCard task={base} selected={false} onClick={() => {}} />);
+    fireEvent.contextMenu(screen.getByRole('button', { name: /任务A/ }), { clientX: 2000, clientY: 2000 });
+    const menu = screen.getByLabelText('任务菜单 任务A');
+    expect(parseFloat(menu.style.left)).toBe(window.innerWidth - MENU_WIDTH - 8);
+    expect(parseFloat(menu.style.top)).toBe(window.innerHeight - MENU_HEIGHT - 8);
   });
 });

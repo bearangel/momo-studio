@@ -31,6 +31,7 @@ import { useHubStore } from '../../stores/hub.store';
 import { cacheDelegationGroupNames, useHubDelegationStore } from '../../stores/hub-delegation.store';
 import { hubSupportsMinor } from '../../lib/hub-capability';
 import { parseRpcErrorCode, rpcErrorMessage } from '../../lib/rpc-error';
+import { useClampedMenuPosition } from '../../lib/use-clamped-menu-position';
 import type {
   DelegationBoardResult,
   HubDelegationProgressEntry,
@@ -331,6 +332,10 @@ interface DelegatedTaskCardProps {
 export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSummary = null }: DelegatedTaskCardProps): ReactNode {
   const board = useContext(DelegationBoardContext);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const { ref: menuRef, left: menuLeft, top: menuTop } = useClampedMenuPosition<HTMLUListElement>(
+    menu?.x ?? 0,
+    menu?.y ?? 0,
+  );
   // D6 取消两步确认（P2-10 公共臂态 hook）：armed 态菜单项变「再次点击确认取消 · Ns」，
   // 3s 无操作回落 + 剩余秒倒计时明示；菜单关闭即复位
   const cancelConfirm = useArmedConfirm();
@@ -638,9 +643,10 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
             }}
           />
           <ul
+            ref={menuRef}
             aria-label={`任务菜单 ${task.title}`}
             className="fixed z-50 min-w-[120px] rounded border border-subtle bg-surface-1 py-1 text-sm text-secondary shadow-lg"
-            style={{ left: menu.x, top: menu.y }}
+            style={{ left: menuLeft, top: menuTop }}
           >
             {canCancel && (
               <li>
