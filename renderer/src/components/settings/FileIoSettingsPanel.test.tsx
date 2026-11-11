@@ -63,4 +63,27 @@ describe('FileIoSettingsPanel', () => {
     fireEvent.click(screen.getByText('重新检测'));
     await waitFor(() => expect(probe).toHaveBeenCalled());
   });
+
+  // 错误路径红线：初始加载 reject 不得死滞「加载中」，须落错误态且可重试恢复
+  it('初始加载失败 → 错误文案 + 重试按钮（无「加载中」），重试成功后恢复面板', async () => {
+    getState.mockRejectedValueOnce(new Error('boom'));
+    render(<FileIoSettingsPanel />);
+    expect(await screen.findByText('加载文件访问设置失败，请重试')).toBeInTheDocument();
+    expect(screen.queryByText('加载中...')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('重试'));
+    expect(await screen.findByText('直接读写（默认）')).toBeInTheDocument();
+    expect(screen.queryByText('加载文件访问设置失败，请重试')).not.toBeInTheDocument();
+  });
+
+  // 错误路径红线：重新检测 reject 保留上次状态卡，不冒 unhandled rejection
+  it('重新检测失败 → 保留状态卡并展示错误文案', async () => {
+    render(<FileIoSettingsPanel />);
+    await screen.findByText('直接读写（默认）');
+    probe.mockRejectedValueOnce(new Error('boom'));
+    fireEvent.click(screen.getByText('重新检测'));
+    expect(await screen.findByText('加载文件访问设置失败，请重试')).toBeInTheDocument();
+    // 上次快照仍在（三档 radio + 状态卡未被卸载成「加载中」）
+    expect(screen.getByText('直接读写（默认）')).toBeInTheDocument();
+    expect(screen.queryByText('加载中...')).not.toBeInTheDocument();
+  });
 });

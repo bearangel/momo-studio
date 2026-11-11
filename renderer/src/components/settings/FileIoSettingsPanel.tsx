@@ -18,12 +18,23 @@ export function FileIoSettingsPanel(): React.ReactElement {
   const [status, setStatus] = useState<FileIoStatus | null>(null);
   const [nodePath, setNodePath] = useState('');
   const [busy, setBusy] = useState(false);
+  // 初始加载 / 重探测失败标记（错误路径红线：IPC rejection 不得死滞在「加载中」）
+  const [loadError, setLoadError] = useState(false);
+
+  const load = (): Promise<void> =>
+    ipc.fileIo
+      .getState()
+      .then((s) => {
+        setStatus(s);
+        setNodePath(s.nodePath ?? '');
+        setLoadError(false);
+      })
+      .catch(() => {
+        setLoadError(true);
+      });
 
   useEffect(() => {
-    void ipc.fileIo.getState().then((s) => {
-      setStatus(s);
-      setNodePath(s.nodePath ?? '');
-    });
+    void load();
   }, []);
 
   const save = (mode: FileIoMode): void => {
@@ -40,12 +51,28 @@ export function FileIoSettingsPanel(): React.ReactElement {
     setBusy(true);
     try {
       setStatus(await ipc.fileIo.probe());
+      setLoadError(false);
+    } catch {
+      // 探测失败保留上次状态卡快照；错误提示行复用，重新检测按钮即重试入口
+      setLoadError(true);
     } finally {
       setBusy(false);
     }
   };
 
-  if (!status) return <div className="p-4 text-sm text-secondary">加载中...</div>;
+  if (!status) {
+    if (loadError) {
+      return (
+        <div className="flex flex-col items-start gap-3 p-4" aria-label="文件访问设置">
+          <p className="text-sm text-status-error">加载文件访问设置失败，请重试</p>
+          <Button size="sm" onClick={() => void load()}>
+            重试
+          </Button>
+        </div>
+      );
+    }
+    return <div className="p-4 text-sm text-secondary">加载中...</div>;
+  }
 
   return (
     <section className="flex flex-col gap-6" aria-label="文件访问设置">
@@ -91,6 +118,10 @@ export function FileIoSettingsPanel(): React.ReactElement {
           placeholder="留空 = 自动查找系统 Node.js"
         />
       </div>
+
+      {loadError && (
+        <p className="text-sm text-status-error">加载文件访问设置失败，请重试</p>
+      )}
 
       <div className="rounded-lg border border-subtle bg-surface-2 p-3 flex flex-col gap-2">
         <div className="text-sm">
