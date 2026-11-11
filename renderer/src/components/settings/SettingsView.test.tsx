@@ -124,11 +124,11 @@ describe('SettingsView', () => {
     vi.clearAllMocks();
   });
 
-  it('渲染 11 个分类菜单项且顺序符合规范（lucide 图标无 emoji；hub 分类名 momo-hub；Git 策略已下线）', () => {
+  it('渲染 12 个分类菜单项且顺序符合规范（lucide 图标无 emoji；hub 分类名 momo-hub；Git 策略已下线）', () => {
     render(<SettingsView />);
     const nav = screen.getByRole('navigation', { name: '设置分类' });
     const navButtons = Array.from(nav.querySelectorAll('button'));
-    expect(navButtons.length).toBe(11);
+    expect(navButtons.length).toBe(12);
     const labels = navButtons.map((b) => b.textContent ?? '');
     expect(labels).toEqual([
       '模型服务',
@@ -138,6 +138,7 @@ describe('SettingsView', () => {
       '记忆',
       '外观',
       '安全沙箱',
+      '文件访问',
       '浏览器',
       'momo-hub',
       '审计日志',
@@ -146,7 +147,7 @@ describe('SettingsView', () => {
     // Git 策略 2026-11-09 下线：导航不再渲染该入口
     expect(screen.queryByText('Git 策略')).not.toBeInTheDocument();
     // 分类图标均为 SVG（lucide），断言 nav 内不存在 emoji 文本
-    expect(nav.querySelectorAll('svg').length).toBe(11);
+    expect(nav.querySelectorAll('svg').length).toBe(12);
   });
 
   it('点击「momo-hub」分类切换 activeCategory 并渲染面板（订阅推送 + 拉快照）', async () => {

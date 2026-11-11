@@ -4,7 +4,7 @@
 // momo-hub M0（2026-10-23）：「节点互联」以 hub 语境回归（browser 后第 12 项）。
 // 2026-11-09 设置优化：「节点互联」更名「momo-hub」；「Git 策略」下线（入口隐藏，面板与 IPC 保留待后续讨论）。
 import type { LucideIcon } from 'lucide-react';
-import { Building2, Target, MessageSquare, Puzzle, Brain, SunMoon, ShieldCheck, AppWindow, Network, ScrollText, Info } from 'lucide-react';
+import { Building2, Target, MessageSquare, Puzzle, Brain, SunMoon, ShieldCheck, AppWindow, Network, ScrollText, Info, HardDrive } from 'lucide-react';
 import { useSettingsStore, type SettingsCategory } from '../../stores/settings.store';
 import { cn } from '../../lib/cn';
 
@@ -18,6 +18,7 @@ const CATEGORIES: { key: SettingsCategory; label: string; icon: LucideIcon }[] =
   { key: 'memory', label: '记忆', icon: Brain },
   { key: 'appearance', label: '外观', icon: SunMoon },
   { key: 'sandbox', label: '安全沙箱', icon: ShieldCheck },
+  { key: 'file_io', label: '文件访问', icon: HardDrive },
   { key: 'browser', label: '浏览器', icon: AppWindow },
   { key: 'hub', label: 'momo-hub', icon: Network },
   { key: 'audit_log', label: '审计日志', icon: ScrollText },

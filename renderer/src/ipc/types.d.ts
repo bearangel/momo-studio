@@ -914,6 +914,11 @@ export interface GlobalSettings {
   sandboxToolchainDirs?: string[];
   /** v2.5：变更账本 workspace 级 blob 配额（MB，按 1024² 换算；超限滚动清理最旧任务组）。默认 200。 */
   journalQuotaMb?: number;
+  /**
+   * 文件访问配置（spec 2026-11-11 §5.6）。缺省语义在 electron 端 file-io-settings
+   * 解析——此处不设默认值（updateGlobal 读改写合并会烤进 JSON 污染缺省判定）。
+   */
+  fileIo?: { mode?: FileIoMode; nodePath?: string; strictCipherCheck?: boolean };
 }
 
 /** 会话级配置（v1.4 + B9；v23 起存 sessions.settings_json），与 electron 端 SessionSettings 对齐 */
@@ -1933,6 +1938,30 @@ export type NetworkPolicy = 'deny' | 'allow';
 /** 沙箱写域，与 electron 端 sandbox/types.ts 的 SandboxWritePolicy 对齐（2026-11-05 全盘可写） */
 export type SandboxWritePolicy = 'confined' | 'full-disk';
 
+/** 文件访问模式（与 electron 端 file-io/types.ts 对齐，spec 2026-11-11 §5） */
+export type FileIoMode = 'direct' | 'proxy' | 'auto';
+
+/**
+ * fileIo:getState / fileIo:probe 返回（与 electron 端 file-io/ipc.handlers.ts 的
+ * FileIoStatus 对齐，spec 2026-11-11 §5.6 状态卡数据源）。
+ */
+export interface FileIoStatus {
+  mode: FileIoMode;
+  effectiveMode: 'direct' | 'proxy';
+  clientInstalled: boolean;
+  nodeAvailable: boolean;
+  nodePath: string | null;
+  nodeVersion: string | null;
+}
+
+/** 文件访问通道（fileIo:* 命名空间）；设置读写走 settings:updateGlobal 的 fileIo 补丁 */
+export interface FileIoApiSurface {
+  /** 聚合状态（设置 + 代理环境探测 + node 可用性） */
+  getState(): Promise<FileIoStatus>;
+  /** 重新探测（先同步 kv 设置进单例再聚合，返回最新状态） */
+  probe(): Promise<FileIoStatus>;
+}
+
 /**
  * v2.4 沙箱聚合信息（sandbox:getState / sandbox:reprobe 返回）。
  * 与 electron 端 sandbox/ipc.handlers.ts 的 SandboxInfo 对齐。
@@ -2657,6 +2686,8 @@ export interface ApiSurface {
   memory: MemoryApiSurface;
   /** v2.4：OS 沙箱通道（sandbox/ipc.handlers.ts） */
   sandbox: SandboxApiSurface;
+  /** 文件访问通道（file-io/ipc.handlers.ts，spec 2026-11-11 §5.6） */
+  fileIo: FileIoApiSurface;
   /** v2.5：变更账本通道（journal/ipc.handlers.ts） */
   journal: JournalApiSurface;
   /** v2.7：浏览器通道（browser/ipc.ts——16 invoke + state/notice 两推送） */

@@ -10,6 +10,7 @@ export type SettingsCategory =
   | 'memory'
   | 'appearance'
   | 'sandbox'
+  | 'file_io'
   | 'browser'
   | 'hub'
   | 'audit_log'

@@ -262,6 +262,12 @@ const api: ApiSurface = {
       };
     },
   },
+  // 文件访问通道（spec 2026-11-11 §5.6 设置面板数据面）——设置读写走
+  // settings:updateGlobal 的 fileIo 补丁，此处仅状态聚合与重探测
+  fileIo: {
+    getState: () => invoke('fileIo:getState'),
+    probe: () => invoke('fileIo:probe'),
+  },
   // v2.5：变更账本通道（journal/ipc.handlers.ts）——列表/撤销/组合回滚/干跑预检
   journal: {
     list: (scope) => invoke('journal:list', scope),
