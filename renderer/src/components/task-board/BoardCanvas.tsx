@@ -201,9 +201,11 @@ function SortableBoardCard({ task, selected, onSelect, groupChip }: SortableBoar
 // ── 画板组件 ─────────────────────────────────────────────────────────────────
 
 /**
- * M3.3 DAG 层列：复用 BoardColumn 容器样式（列宽 232px/圆角/列头/空态），
- * 但非状态列——层 = task-graph 拓扑深度。刻意不接 useDroppable（DAG 视图
- * 只读，无落点语义）；列内排序沿 sortColumn 单源（顶置/创建时间）。
+ * M3.3 DAG 层列：沿用旧版 BoardColumn 容器样式（固定列宽 232px/圆角/列头/
+ * 空态——BoardColumn 2026-11-11 改自适应流式后，DAG 分层视图保持独立定宽，
+ * 不随泳道自适应），但非状态列——层 = task-graph 拓扑深度。刻意不接
+ * useDroppable（DAG 视图只读，无落点语义）；列内排序沿 sortColumn 单源
+ * （顶置/创建时间）。
  */
 function DagLayerColumn({
   index,
