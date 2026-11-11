@@ -18,6 +18,7 @@ import path from 'node:path';
 import { logger } from '../logger';
 import type { StreamChunk } from './stream-chunk';
 import { handleChildMessage } from './internal-event-bridge';
+import { attachRuntimeChildErrorNet } from './child-error-net';
 import { registerFromChildMsg } from '../sandbox/process-registry';
 import { getSandboxState } from '../sandbox/probe';
 import { writeBlockedFromChildMsg } from '../sandbox/write-blocked-emit';
@@ -509,6 +510,10 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
     onExit(code);
   };
   child.on('exit', exitHandler);
+
+  // 2026-11-11：子进程 'error' 事件吞并网——IPC 通道写失败（EPIPE）可异步以
+  // 'error' 事件投递，无监听即 uncaughtException 弹窗（会话停止竞速实录）。
+  attachRuntimeChildErrorNet(child, assignmentId);
 
   logger.info('runtime 已 spawn（等待 boot 握手）', { assignmentId, pid: child.pid });
 
