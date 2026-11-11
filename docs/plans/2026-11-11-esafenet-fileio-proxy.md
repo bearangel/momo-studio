@@ -21,7 +21,7 @@
 - **`electron/src/main/files/file-io/` 下除 `ipc.handlers.ts` 外禁止 `import 'electron'`**——bridge / content-io / service 会被 runtime 子进程加载（`git-policy.ts` 先例）。需要 electron API 时用 `loadElectronApis()` 惰性取用。
 - **worker 脚本 Node ≥ 14 兼容**：不得使用 `??=`、`Array.prototype.at`、`fs.rmSync`、top-level await、`AbortController`；不得 require 任何 npm 包。
 - **spawn worker 时 `env` 必须完整继承 `process.env`（PATH 原样透传）**——亿赛通向白名单进程注入 `DynamicDll64.dll` 且按 PATH 加载，裁剪 PATH = `0xc0000135` 崩溃（vcpkg 实证）。专项回归测试锁死（Task 4）。
-- **UI 文案中性化**：用户可见文案不得出现「亿赛通 / 加密 / 白名单 / 安全部门 / 合规」等字样；技术细节只落 `logger`。错误文案使用 `types.ts` 中常量。
+- **UI 文案中性化**：用户可见文案不得出现「亿赛通 / E-SafeNet / 安全部门 / 合规批准」等厂商与审批口径字样，「白名单」改用「放行」表述；「加密」作为纯技术事实词允许；技术细节只落 `logger`。错误文案使用 `types.ts` 中常量。
 - **不做静默降级**：proxy 失败必须 `EENCRYPTED` / 错误码显式抛出，绝不回退 direct 继续读。
 - **默认 `direct`**；未加密环境零行为变化。
 - **测试位置**：主进程 `electron/tests/`（镜像 src 结构，`tests/files/file-io/`）；renderer 贴源 colocated。根 `tests/` 只放 Playwright。
