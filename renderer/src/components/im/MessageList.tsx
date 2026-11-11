@@ -17,6 +17,8 @@ import { EmptyState } from '../ui/EmptyState';
 import { MessageFlashStyle } from '../common/MessageFlash';
 import { isTopLevelMessage } from '../../lib/locate-message';
 import { isTurnAnchor } from '../../lib/sender';
+import { groupProgressSegments, isProgressSegmentMessage } from '../../lib/progress-segment';
+import { ProgressTimelineCard } from './ProgressTimelineCard';
 
 export function MessageList() {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
@@ -81,8 +83,15 @@ export function MessageList() {
     // spec §5.3：贴底锚点口径放宽为 isTurnAnchor——owner 或 system 行
     // （回执唤醒回合）出现即贴底，统一消费 A1 的锚点判定。
     const lastMsg = messages?.[messages.length - 1];
+    // 2026-11-11 展示优化：【进度分段】行是纯可见性行、不唤醒回合（spec §5.3
+    // 锚点语义是回执唤醒回合），每 ~2 分钟一条持续把视口拽回底部会打断上翻
+    // 阅读——豁免贴底；dispatch 回执等其他 system 行保留贴底。isTurnAnchor
+    // 本身不动（另有 turn 撤回分组等消费方）。
     const isNewOwnMessage =
-      lastMsg !== undefined && isTurnAnchor(lastMsg.sender) && lastMsg.id !== prevLastMsgIdRef.current;
+      lastMsg !== undefined &&
+      isTurnAnchor(lastMsg.sender) &&
+      !isProgressSegmentMessage(lastMsg) &&
+      lastMsg.id !== prevLastMsgIdRef.current;
     prevLastMsgIdRef.current = lastMsg?.id ?? null;
 
     if (isFirstRender.current || isRoomChange || isNewOwnMessage || isNearBottomRef.current) {
@@ -158,15 +167,25 @@ export function MessageList() {
       {/* 消息锚点归一（G2 spec §4.2）：全部顶层可见行由包装 div 提供 `msg-<id>` 锚点
           （owner 静态气泡此前无锚点）；闪烁 keyframes 常驻挂载，供定位视觉共用 */}
       <MessageFlashStyle />
-      {visibleMessages.map((msg) => (
-        <div key={msg.id} id={`msg-${msg.id}`}>
-          <MessageBubble
-            message={msg}
-            isSelf={msg.sender === currentUserId}
-            senderName={botNameByUserId.get(msg.sender)}
-          />
-        </div>
-      ))}
+      {/* 2026-11-11 展示优化：连续【进度分段】行先折叠分组再渲染（单卡承载，
+          防长任务 30+ 条进度行刷屏）；其余顶层消息走原 MessageBubble 路径 */}
+      {groupProgressSegments(visibleMessages).map((item) =>
+        item.kind === 'progress' ? (
+          // 组锚点取首行 id（revealMessage 对进度行的定位 best-effort 落到组）；
+          // progress 组由 groupProgressSegments 产出、必含 ≥1 行，首行断言非空
+          <div key={`grp-${item.messages[0]!.id}`} id={`msg-${item.messages[0]!.id}`}>
+            <ProgressTimelineCard messages={item.messages} />
+          </div>
+        ) : (
+          <div key={item.message.id} id={`msg-${item.message.id}`}>
+            <MessageBubble
+              message={item.message}
+              isSelf={item.message.sender === currentUserId}
+              senderName={botNameByUserId.get(item.message.sender)}
+            />
+          </div>
+        ),
+      )}
     </div>
   );
 }

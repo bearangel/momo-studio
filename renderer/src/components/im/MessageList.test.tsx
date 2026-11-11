@@ -317,3 +317,63 @@ describe('MessageList v2.0 分段行渲染契约（富信息不丢）', () => {
   });
 });
 
+// ────────────────────────────────────────────────────────────────────────────
+// 2026-11-11 展示优化：连续【进度分段】系统行折叠为单张进度时间线卡。
+// 本 describe 不 mock progress-segment lib 与 ProgressTimelineCard（用真实实现）；
+// body 用与主进程 router-service.maybeEmitProgressSegment 逐字一致的生产模板。
+describe('MessageList 进度分段折叠分组', () => {
+  /** 生产模板拼 body（契约对齐主进程） */
+  function progressBody(label: string, toolCalls: number, changes: number): string {
+    return `【进度分段】子任务 ${label} 进行中 · 工具调用累计 ${toolCalls} 次 · 文件变更累计 ${changes} 处`;
+  }
+
+  it('[普通, p, p, p, 普通2] → 2 个气泡 + 恰 1 张 count=3 的折叠卡', () => {
+    renderWith([
+      makeMsg({ id: 'n1', body: '首条普通' }),
+      makeMsg({ id: 'p1', sender: 'system', body: progressBody('阶段一', 1, 0) }),
+      makeMsg({ id: 'p2', sender: 'system', body: progressBody('阶段二', 4, 2) }),
+      makeMsg({ id: 'p3', sender: 'system', body: progressBody('阶段三', 9, 5) }),
+      makeMsg({ id: 'n2', body: '尾条普通' }),
+    ]);
+    expect(screen.getAllByTestId('bubble')).toHaveLength(2);
+    const cards = screen.getAllByTestId('progress-timeline-card');
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toHaveAttribute('data-count', '3');
+    expect(screen.getByText('进度 · 3 条')).toBeInTheDocument();
+  });
+
+  it('[p, p, 普通, p] → 两张卡（count=2 / count=1），普通消息间隔打断折叠', () => {
+    renderWith([
+      makeMsg({ id: 'p1', sender: 'system', body: progressBody('阶段一', 1, 0) }),
+      makeMsg({ id: 'p2', sender: 'system', body: progressBody('阶段二', 2, 1) }),
+      makeMsg({ id: 'n1', body: '普通消息' }),
+      makeMsg({ id: 'p3', sender: 'system', body: progressBody('阶段三', 3, 3) }),
+    ]);
+    const cards = screen.getAllByTestId('progress-timeline-card');
+    expect(cards).toHaveLength(2);
+    expect(cards[0]).toHaveAttribute('data-count', '2');
+    expect(cards[1]).toHaveAttribute('data-count', '1');
+    // 仅普通消息走气泡路径
+    expect(screen.getAllByTestId('bubble')).toHaveLength(1);
+  });
+
+  it('进度行不渲染为气泡（不进 MessageBubble 路径）', () => {
+    renderWith([
+      makeMsg({ id: 'p1', sender: 'system', body: progressBody('阶段一', 1, 0) }),
+    ]);
+    // 折叠卡承载，气泡数 0
+    expect(screen.queryAllByTestId('bubble')).toHaveLength(0);
+    expect(screen.getAllByTestId('progress-timeline-card')).toHaveLength(1);
+  });
+
+  it('折叠组外层包装 div 携带首行 msg-<id> 锚点（revealMessage best-effort 落组）', () => {
+    renderWith([
+      makeMsg({ id: 'p1', sender: 'system', body: progressBody('阶段一', 1, 0) }),
+      makeMsg({ id: 'p2', sender: 'system', body: progressBody('阶段二', 2, 1) }),
+    ]);
+    expect(document.getElementById('msg-p1')).not.toBeNull();
+    // 组锚点取首行 id：非首行无独立锚点（折叠语义下属预期）
+    expect(document.getElementById('msg-p2')).toBeNull();
+  });
+});
+

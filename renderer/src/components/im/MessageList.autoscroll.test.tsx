@@ -152,3 +152,66 @@ describe('MessageList 流式生成自动贴底（v2.2 修复）', () => {
     });
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// 2026-11-11 展示优化：【进度分段】行贴底豁免。
+// 契约：进度行是纯可见性行、不唤醒回合（spec §5.3 锚点语义是回执唤醒回合），
+// 用户滚离底部时到达不拽回；dispatch 回执与 owner 行保留贴底。body 用与主进程
+// router-service.maybeEmitProgressSegment 逐字一致的生产模板。
+describe('MessageList 进度分段贴底豁免（2026-11-11 展示优化）', () => {
+  /** 生产模板拼 body（契约对齐主进程） */
+  function progressBody(label: string, toolCalls: number, changes: number): string {
+    return `【进度分段】子任务 ${label} 进行中 · 工具调用累计 ${toolCalls} 次 · 文件变更累计 ${changes} 处`;
+  }
+
+  /** 公共前置：渲染 [m1] 后滚离底部（scrollTop=0 → 距底 600 > 120），清空初始贴底记录 */
+  function setupScrolledAway(): HTMLElement {
+    seedSession([makeMsg({ id: 'm1', streamSessionId: 'ss-1' })]);
+    const el = renderAndStubLayout();
+    scrollToCalls.length = 0;
+    el.scrollTop = 0;
+    fireEvent.scroll(el);
+    return el;
+  }
+
+  /** 向 store 追加一行（模拟主进程新消息到达） */
+  function appendRow(msg: ImMessage): void {
+    act(() => {
+      const cur = useSessionStore.getState().messagesBySession.get('sess-room') ?? [];
+      useSessionStore.setState({
+        messagesBySession: new Map([['sess-room', [...cur, msg]]]),
+      });
+    });
+  }
+
+  it('滚离底部时进度行到达 → 不贴底（不打断上翻阅读）', async () => {
+    setupScrolledAway();
+    appendRow(makeMsg({ id: 'p1', sender: 'system', body: progressBody('重构登录模块', 3, 1) }));
+    await new Promise((r) => setTimeout(r, 120));
+    expect(scrollToCalls).toHaveLength(0);
+  });
+
+  it('滚离底部时 dispatch 回执行到达 → 仍贴底（回执唤醒回合语义保留）', async () => {
+    setupScrolledAway();
+    scrollHeightValue = 1600;
+    appendRow(
+      makeMsg({
+        id: 'r1',
+        sender: 'system',
+        body: '【dispatch 回执自动送达】任务链 ch-1（第 1 轮）已完成（工具调用 5 次）。',
+      }),
+    );
+    await waitFor(() => {
+      expect(scrollToCalls.some((c) => c.top === 1600)).toBe(true);
+    });
+  });
+
+  it('滚离底部时 owner 行到达 → 仍贴底（自己消息无条件贴底不回归）', async () => {
+    setupScrolledAway();
+    scrollHeightValue = 1600;
+    appendRow(makeMsg({ id: 'o1', sender: 'owner', body: '我刚发送的' }));
+    await waitFor(() => {
+      expect(scrollToCalls.some((c) => c.top === 1600)).toBe(true);
+    });
+  });
+});
