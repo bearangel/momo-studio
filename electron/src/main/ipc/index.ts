@@ -33,6 +33,8 @@ import { registerSandboxIpc } from '../sandbox/ipc.handlers';
 import { registerMemoryIpc } from '../memory/ipc.handlers';
 import { registerJournalIpc } from '../journal/ipc.handlers';
 import { registerResourceHandlers } from '../resource/ipc.handlers';
+// 会话内能力管理——扩权确认通道（spec §7）：agent-op-confirm:reply 裁决回传
+import { registerAgentOpConfirmHandlers } from '../agent/agent-op-confirm';
 import { registerPluginHandlers } from '../plugin/ipc.handlers';
 import { registerTaskHandlers } from '../task/ipc.handlers';
 import { registerTaskGroupHandlers } from '../task/groups.ipc.handlers';
@@ -90,6 +92,8 @@ export function registerIpcHandlers(opts: WorkspaceIpcOpts = {}): void {
   // v2.5：变更账本通道（journal/ipc.handlers.ts）——list / revert / scan / 组合回滚
   registerJournalIpc();
   registerResourceHandlers();
+  // 扩权确认通道（spec §7）：reply 裁决回传单一通道
+  registerAgentOpConfirmHandlers();
   // 插件系统 P1（spec 2026-10-15）：installZip / installDevDir / setEnabled / uninstall
   registerPluginHandlers();
   registerTaskHandlers();
