@@ -10,7 +10,7 @@
 // 卡宽 440 / 圆角 8 卡 · 6 diff框按钮 / 内边距 16 卡 · 10 12 diff框 /
 // 字号 14 标题 · 13 正文按钮 · 12 辅助 · 11 大写标签 / 徽标 surface-active 底 +
 // accent-600（暗色 accent-300）/ riskNote warning-tint 底 + warning 字 + 35% 边框。
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Check, Monitor, ShieldCheck, TriangleAlert, User } from 'lucide-react';
 import { useAgentOpConfirmStore } from '../stores/agent-op-confirm.store';
 import type { AgentOpConfirmPayload } from '../ipc/types';
@@ -73,6 +73,7 @@ function DiffRow({ sign, field, refName }: { sign: '+' | '−'; field: string; r
 export function AgentOpConfirmCard() {
   const pending = useAgentOpConfirmStore((s) => s.pending);
   const reply = useAgentOpConfirmStore((s) => s.reply);
+  const cardRef = useRef<HTMLDivElement>(null);
 
   // TTL 清扫（write-grant F3 同款）：pending 存续期间每秒对表 expiresAt
   const visible = pending !== null;
@@ -80,6 +81,12 @@ export function AgentOpConfirmCard() {
     if (!visible) return;
     const t = setInterval(() => useAgentOpConfirmStore.getState().dismissExpired(), 1000);
     return () => clearInterval(t);
+  }, [visible]);
+
+  // a11y（F3 T12④）：卡挂载即把焦点移入卡内（容器 tabIndex=-1 可编程聚焦，
+  // Dialog 同款范式）；不做完整 focus trap，关闭后焦点还原由调用侧自然处理
+  useEffect(() => {
+    if (visible) cardRef.current?.focus();
   }, [visible]);
 
   if (!pending) return null;
@@ -96,10 +103,13 @@ export function AgentOpConfirmCard() {
       {/* 遮罩：与 ui/Dialog 同款（OVERLAY_CLASS 单一真相源）；点击不消散——裁决必须显式 */}
       <div data-testid="agent-op-confirm-overlay" className={OVERLAY_CLASS} aria-hidden />
       <div
+        ref={cardRef}
         role="alertdialog"
+        aria-modal="true"
         aria-label={cardTitle(pending)}
+        tabIndex={-1}
         data-testid="agent-op-confirm-card"
-        className="pointer-events-auto absolute left-0 top-0 z-50 w-[440px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-subtle bg-canvas p-4 shadow-2xl"
+        className="pointer-events-auto absolute left-0 top-0 z-50 w-[440px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-subtle bg-canvas p-4 shadow-2xl outline-none"
       >
         <div className="mb-0.5 flex items-center gap-2">
           <User

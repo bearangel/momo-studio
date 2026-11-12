@@ -616,6 +616,11 @@ async function opUpdateCapabilities(
     // 回合结束后 respawn-on-idle 换芯；其它运行实例停机语义不变
     const stopped = await stopRunningInstancesByDefinition(def.id, { excludeInstanceId: ctx?.callerInstanceId });
     const effectiveFrom = await callerRespawnOnIdle(def.id, ctx);
+    // 审计（F3 T5③）：对齐 member 分支审计面，definition 分支补记 op/defId/stoppedInstances
+    logger.info('会话内更新定义能力', {
+      op: 'updateCapabilities', defId: def.id, stoppedInstances: stopped.length,
+      ...(effectiveFrom !== undefined && { effectiveFrom }),
+    });
     const defDenied = def.deniedTools ?? [];
     const result: UpdateCapabilitiesResult = {
       appliedTo: 'definition',
@@ -754,7 +759,10 @@ async function opUpdateProfile(a: Record<string, unknown>, workspaceId: string, 
   // 发起者自身若是该定义的运行成员：豁免停机（spec §8），回合后 respawn-on-idle 换芯
   const stopped = await stopRunningInstancesByDefinition(def.id, { excludeInstanceId: ctx?.callerInstanceId });
   const effectiveFrom = await callerRespawnOnIdle(def.id, ctx);
-  logger.info('会话内更新 agent 档案', { defId: def.id, stopped: stopped.length });
+  logger.info('会话内更新 agent 档案', {
+    op: 'updateProfile', defId: def.id, stoppedInstances: stopped.length,
+    ...(effectiveFrom !== undefined && { effectiveFrom }),
+  });
   return { definition: updated, stoppedInstances: stopped.length, ...(effectiveFrom !== undefined && { effectiveFrom }) };
 }
 

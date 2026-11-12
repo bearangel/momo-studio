@@ -216,7 +216,7 @@ export class ResourceTools implements ToolModule {
       {
         name: 'update_agent_profile',
         description:
-          '编辑 agent 定义档案（名称 / 描述 / systemPrompt / 图标 / 模型绑定 / deniedTools）。model 用 list_models 的 providerId/modelId；deniedTools 是整列覆盖不是增量。恒确认：任何字段都会弹用户确认卡（systemPrompt / model / deniedTools 都改变 agent 行为面，统一一档防轻字段绕档），被拒后不得重试，先与用户对齐意图。builtin 定义只读会被拒绝，改道向用户说明。改动会停止该定义的其它运行实例（发起者自身回合结束后自动生效），需重启生效。',
+          '编辑 agent 定义档案（名称 / 描述 / systemPrompt / 图标 / 模型绑定 / deniedTools）。model 用 list_models 的 providerId/modelId；deniedTools 是整列覆盖不是增量。恒确认：任何字段都会弹用户确认卡（systemPrompt / model / deniedTools 都改变 agent 行为面，统一一档防轻字段绕档），被拒后不得重试，先与用户对齐意图。builtin 定义只读会被拒绝，改道向用户说明。停机生效：若目标是发起者自身（或其定义）则回合结束后自动生效，其它运行实例立即停止（需重启拉起新配置）。',
         inputSchema: {
           type: 'object',
           properties: {

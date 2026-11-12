@@ -66,6 +66,12 @@ describe('资源管理工具面（spec 2026-11-12 §5）', () => {
     expect(def.description).toContain('definition');
   });
 
+  it('update_agent_profile 停机生效表述条件化（F3：不得回退成无条件「发起者自身回合结束后自动生效」）', () => {
+    const def = new ResourceTools(vi.fn(async () => ({}))).getDefs().find((d) => d.name === 'update_agent_profile')!;
+    expect(def.description).toContain('若目标是发起者自身（或其定义）则回合结束后自动生效');
+    expect(def.description).toContain('其它运行实例立即停止');
+  });
+
   it('catalog：分类「资源管理」、defaultOn 全 false、riskNote 就位（buildCatalog fail-fast 兜底）', () => {
     const cat = new ResourceTools(vi.fn(async () => ({}))).getCatalog();
     const upd = cat.find((c) => c.name === 'update_agent_capabilities')!;

@@ -6,6 +6,7 @@
 //   - 变体 C：updateProfile → 档案标题 + fieldChanges before 删除线 → after；
 //     after-only（主进程构建侧恒省略 before）无箭头无删除线
 //   - Tier A：遮罩消费 ui/Dialog 的 OVERLAY_CLASS（关系锁）；点遮罩 / Esc 均不消散
+//   - a11y：aria-modal + 挂载后焦点移入卡内（不做 focus trap）
 //   - 双按钮 → store.reply → replyAgentOpConfirm；TTL 到点 interval 清扫
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
@@ -218,6 +219,14 @@ describe('AgentOpConfirmCard Tier A 阻断形态（spec 2026-09-15 §4.2）', ()
     // 关系锁底线：常量仍是全屏遮罩形态（fixed inset-0 + 遮罩底色），防空串/错串静默通过
     expect(OVERLAY_CLASS).toContain('fixed');
     expect(OVERLAY_CLASS).toContain('inset-0');
+  });
+
+  it('a11y：aria-modal + 挂载后焦点移入卡内（T12④——不做 focus trap，BrowserTrustNotice 范式对齐）', () => {
+    render(<AgentOpConfirmCard />);
+    push(payload());
+    const card = screen.getByTestId('agent-op-confirm-card');
+    expect(card).toHaveAttribute('aria-modal', 'true');
+    expect(card).toHaveFocus();
   });
 
   it('点击遮罩不消散——裁决必须显式', () => {

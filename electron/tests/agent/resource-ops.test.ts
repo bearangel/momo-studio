@@ -607,6 +607,27 @@ describe('updateCapabilities', () => {
     vi.mocked(isAgentRunning).mockReturnValue(false);
   });
 
+  it('definition 分支正值停机：目标成员运行中且非发起者 → stoppedInstances ≥ 1（T6①）', async () => {
+    seedSkill('weather');
+    getDb().prepare(`INSERT INTO agent_definitions (id, name, slug, version, system_prompt, model_name, source)
+                     VALUES ('def-stop-cap', '停机', 'agent-stop-cap', '1', 'p', 'm', 'custom')`).run();
+    const sm = (await addMember(wsId, 'def-stop-cap', '@stopcap:1')).instanceId;
+    const { isAgentRunning } = await import('../../src/main/agent/runtime-status');
+    const { stopAgentRuntime } = await import('../../src/main/agent/runtime-registry');
+    vi.mocked(isAgentRunning).mockReturnValue(true);
+    vi.mocked(stopAgentRuntime).mockClear();
+    try {
+      const r = (await executeResourceOp('updateCapabilities',
+        { agent: sm, scope: 'definition', add: { skills: ['weather'] } }, wsId, undefined,
+        { background: false, callerInstanceId: 'unrelated-caller' })) as UpdateCapabilitiesResult;
+      expect(r.appliedTo).toBe('definition');
+      expect(r.stoppedInstances).toBeGreaterThanOrEqual(1);
+      expect(vi.mocked(stopAgentRuntime)).toHaveBeenCalledWith(sm);
+    } finally {
+      vi.mocked(isAgentRunning).mockReturnValue(false);
+    }
+  });
+
   it('otherWorkspaceMembers：另一 ws 同 def 成员计数', async () => {
     seedSkill('weather');
     getDb().prepare(`INSERT INTO workspaces (id, name, description, directory_path, git_initialized, owner_id, icon_emoji)
@@ -717,6 +738,24 @@ describe('updateProfile', () => {
     expect(vi.mocked(requestRespawnAfterIdle)).toHaveBeenCalledWith(sm);
     expect(vi.mocked(stopAgentRuntime)).not.toHaveBeenCalled();
     vi.mocked(isAgentRunning).mockReturnValue(false);
+  });
+
+  it('成功路径正值停机：目标定义有运行成员且 caller 缺席 → stoppedInstances ≥ 1（T6①）', async () => {
+    getDb().prepare(`INSERT INTO agent_definitions (id, name, slug, version, system_prompt, model_name, source)
+                     VALUES ('def-stop-p', '停机', 'agent-stop-p', '1', 'p', 'm', 'custom')`).run();
+    const sm = (await addMember(wsId, 'def-stop-p', '@stopp:1')).instanceId;
+    const { isAgentRunning } = await import('../../src/main/agent/runtime-status');
+    const { stopAgentRuntime } = await import('../../src/main/agent/runtime-registry');
+    vi.mocked(isAgentRunning).mockReturnValue(true);
+    vi.mocked(stopAgentRuntime).mockClear();
+    try {
+      const r = (await executeResourceOp('updateProfile',
+        { agent: sm, name: '新名' }, wsId, undefined, { background: false })) as UpdateProfileResult;
+      expect(r.stoppedInstances).toBeGreaterThanOrEqual(1);
+      expect(vi.mocked(stopAgentRuntime)).toHaveBeenCalledWith(sm);
+    } finally {
+      vi.mocked(isAgentRunning).mockReturnValue(false);
+    }
   });
 
   it('改他人 def（caller 非该 def 成员）：停机语义不变——其它运行成员照常停止', async () => {
