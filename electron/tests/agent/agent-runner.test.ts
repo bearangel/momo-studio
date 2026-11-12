@@ -995,6 +995,7 @@ describe('AgentRunner child exit 清理链（C2）', () => {
     });
 
     // list_workgroups：测试环境无 hub 连接 → 主进程侧执行落到人话错误（ok:false 透传）
+    // waitFor 放宽 10s：首次触发 task-tools 动态 import，冷启实测可近 1s（默认预算贴线）
     getMessageHandler(child)({ type: 'task-op', requestId: 'req-tw', op: 'list_workgroups' });
     await vi.waitFor(() => {
       const calls = (child.send as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
@@ -1004,7 +1005,7 @@ describe('AgentRunner child exit 清理链（C2）', () => {
       expect(reply).toBeDefined();
       expect(reply!.ok).toBe(false);
       expect(reply!.error).toContain('hub 未连接');
-    });
+    }, 10_000);
 
     // 未知 op：人话错误回送
     getMessageHandler(child)({ type: 'task-op', requestId: 'req-x', op: 'nonsense' });
