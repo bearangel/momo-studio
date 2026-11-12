@@ -49,10 +49,19 @@ function makeFakeChild(): {
   send(): boolean;
   connected: boolean;
   once(): void;
+  listeners(event: string): Array<(msg: unknown) => void>;
 } {
+  // 真实 ChildProcess 继承 EventEmitter——监听器按事件存表，listeners() 如实
+  // 返回。2026-11-11 起 spawnForAgent 挂 attachRuntimeChildErrorNet（读
+  // child.listeners('error') 判幂等 + child.on('error') 注册），裸对象无此面
+  // 即 TypeError（mock 面腐化）。
+  const byEvent = new Map<string, Array<(msg: unknown) => void>>();
   return {
     pid: 7777,
     on(event: string, cb: (msg: unknown) => void) {
+      const arr = byEvent.get(event) ?? [];
+      arr.push(cb);
+      byEvent.set(event, arr);
       if (event === 'message') captured.handler = cb;
     },
     off() {},
@@ -62,6 +71,9 @@ function makeFakeChild(): {
     },
     connected: true,
     once() {},
+    listeners(event: string) {
+      return [...(byEvent.get(event) ?? [])];
+    },
   };
 }
 
