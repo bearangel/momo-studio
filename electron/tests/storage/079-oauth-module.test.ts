@@ -114,11 +114,11 @@ describe('migration 079 OAuth 模块', () => {
     expect(indexes.map((i) => i.name)).toContain('idx_oauth_connections_provider');
   });
 
-  it('079 注册为最新迁移（追加在数组末尾）', () => {
+  it('079 注册在迁移数组（080 追加后不再是最末——最新位哨兵移交 080 测试）', () => {
     const versions = loadMigrations().map((m) => m.version);
     expect(versions).toContain(79);
-    expect(versions[versions.length - 1]).toBe(79);
-    // 版本唯一性（重复注册会让 runner 静默跳过第二条，属契约破坏）
+    // 升序注册 + 版本唯一性（重复注册会让 runner 静默跳过第二条，属契约破坏）
+    expect([...versions].sort((a, b) => a - b)).toEqual(versions);
     expect(new Set(versions).size).toBe(versions.length);
   });
 });

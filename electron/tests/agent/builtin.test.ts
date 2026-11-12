@@ -28,7 +28,7 @@ const tmpRoot = path.join(os.tmpdir(), `ap-builtin-test-${Date.now()}`);
 const AGENTS_DIR = path.resolve(__dirname, '../../resources/agents');
 const SKILLS_ROOT = path.resolve(__dirname, '../../resources/skills');
 
-/** 读取仓库内真实 general-assistant.yaml（Momo v2.1.1 挂载锁的数据源） */
+/** 读取仓库内真实 general-assistant.yaml（Momo v2.2.0 挂载锁的数据源） */
 function readGeneralAssistantYaml(): string {
   return fs.readFileSync(path.join(AGENTS_DIR, 'general-assistant.yaml'), 'utf-8');
 }
@@ -249,20 +249,20 @@ spec:
   });
 });
 
-describe('general-assistant v2.1.1 资源创建挂载', () => {
-  it('版本 2.1.1 且七工具在目录全集内', () => {
+describe('general-assistant v2.2.0 资源创建 + 能力管理挂载', () => {
+  it('版本 2.2.0 且十二工具在目录全集内', () => {
     const { def } = parseAgentManifestWithSuggestion(readGeneralAssistantYaml());
-    expect(def.version).toBe('2.1.1');
+    expect(def.version).toBe('2.2.0');
     const refs = def.defaultTools.map((t) => t.ref);
-    for (const t of ['resource_list', 'create_agent', 'add_agent_member', 'create_skill', 'create_mcp', 'create_team', 'list_models']) {
+    for (const t of ['resource_list', 'create_agent', 'add_agent_member', 'create_skill', 'create_mcp', 'create_team', 'list_models', 'describe_agent', 'update_agent_capabilities', 'update_agent_profile', 'update_skill', 'update_mcp']) {
       expect(refs, `缺工具 ${t}`).toContain(t);
     }
   });
 
-  it('四个 defaultSkills 引用在 skills 目录存在（引用一致性锁，防契约漂移）', () => {
+  it('五个 defaultSkills 引用在 skills 目录存在（引用一致性锁，防契约漂移）', () => {
     const { def } = parseAgentManifestWithSuggestion(readGeneralAssistantYaml());
     const refs = def.defaultSkills.map((s) => s.ref);
-    expect(refs.sort()).toEqual(['build-team', 'create-agent', 'create-mcp', 'create-skill']);
+    expect(refs.sort()).toEqual(['build-team', 'create-agent', 'create-mcp', 'create-skill', 'manage-agent']);
     for (const s of refs) {
       expect(fs.existsSync(path.join(SKILLS_ROOT, s, 'SKILL.md')), `skill ${s} 目录缺失`).toBe(true);
     }

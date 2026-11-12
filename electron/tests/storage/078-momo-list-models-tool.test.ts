@@ -15,6 +15,7 @@ import {
   migration078,
   MOMO_V211_ALL_BUILTIN_TOOL_REFS,
 } from '../../src/main/storage/migrations/078_momo_list_models_tool';
+import { MOMO_V22_ALL_BUILTIN_TOOL_REFS } from '../../src/main/storage/migrations/080_momo_capability_management_tools';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-mig078-test-${Date.now()}-${process.pid}`);
 
@@ -110,10 +111,13 @@ describe('migration 078 Momo list_models 工具回填（64 → 65）', () => {
   });
 
   it('用例 E：冻结名单与 ALL_BUILTIN_TOOLS 全集一致（排序后严格相等，且顺序一致）', () => {
-    expect([...MOMO_V211_ALL_BUILTIN_TOOL_REFS].sort()).toEqual([...ALL_BUILTIN_TOOLS].sort());
+    // 2026-11-12 能力管理五工具扩容已按 074→077→078 先例处置：追加迁移 080，
+    // 本断言与冻结名单同步改指 080 的 70 项全集（078 的 65 项名单与 SQL 保持
+    // 冻结不改——用例 A-D 仍锁 078 自身行为）。下次扩容同式再追加。
+    expect([...MOMO_V22_ALL_BUILTIN_TOOL_REFS].sort()).toEqual([...ALL_BUILTIN_TOOLS].sort());
     // 冻结名单文档声称「顺序即落库顺序」——与 catalog 注册顺序（模块注册序）锁死
-    expect([...MOMO_V211_ALL_BUILTIN_TOOL_REFS]).toEqual([...ALL_BUILTIN_TOOLS]);
-    expect(MOMO_V211_ALL_BUILTIN_TOOL_REFS).toHaveLength(65);
-    expect(new Set(MOMO_V211_ALL_BUILTIN_TOOL_REFS).size).toBe(MOMO_V211_ALL_BUILTIN_TOOL_REFS.length);
+    expect([...MOMO_V22_ALL_BUILTIN_TOOL_REFS]).toEqual([...ALL_BUILTIN_TOOLS]);
+    expect(MOMO_V22_ALL_BUILTIN_TOOL_REFS).toHaveLength(70);
+    expect(new Set(MOMO_V22_ALL_BUILTIN_TOOL_REFS).size).toBe(MOMO_V22_ALL_BUILTIN_TOOL_REFS.length);
   });
 });
