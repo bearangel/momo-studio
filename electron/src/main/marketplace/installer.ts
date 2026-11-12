@@ -404,6 +404,10 @@ export async function downloadFile(
     });
   } catch (err) {
     writeStream.destroy();
+    // 清理须等流真正 close：open 在 threadpool 上完成，若中断先于 open 回落，
+    // destroy() 只是推迟关 fd——文件会在 rmSync 之后才被创建（半成品"复活"，
+    // 破坏"中止即删除"契约，S1 回归锁在负载下偶红即此竞态）。
+    if (!writeStream.closed) await once(writeStream, 'close');
     fs.rmSync(dest, { force: true });
     throw err;
   }
