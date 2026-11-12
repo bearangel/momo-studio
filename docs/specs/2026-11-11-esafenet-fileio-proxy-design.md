@@ -329,3 +329,48 @@ UI 变更受 momo-ui-preview-rules 预览门禁约束（新面板属 P1 变更�
 | node 冷启动 | 142ms（必须常驻 worker） |
 | 批量策略 | batch=50 → 1.39x（收益饱和点） |
 | 逐请求 spawn | ~790x 退化（禁用） |
+
+---
+
+## 11. 补遗：工具层全量收口（B 方案，2026-11-12 落地；正文保留写作时点原文，以本节为准）
+
+§2.3 消费面矩阵写作时点只覆盖了「走 WorkspaceFS 的既有消费面」。实测暴露缺口：**grep（search-tools.ts）等内容读取点绕过 WorkspaceFS 裸读 `node:fs`**——加密文件密文 → utf-8 乱码 → 正则不命中 → 静默返回「(无匹配)」假阴性。本节记录 B 方案全量收口的落地实况。
+
+### 11.1 通道层批量面
+
+`ContentIo` 接口新增 `readFiles(absPaths: string[]): Promise<Buffer[]>`（语义 = 逐文件 readFile 有序集合，任一失败整批抛错）：
+
+- `DirectContentIo`：顺序复用单文件逻辑（含 strict 密文硬失败）；
+- `ProxyContentIo`：委托 `FileIoService.readFiles`（主进程侧，内部 batch=50 分片——§5.4 预留的 readMany 线协议落地）；
+- `BridgeContentIo`：`requestFileIoReadMany`（`file-io:req {op:'readMany'}` 线协议，主进程 main-bridge 已接线）；
+- `WorkspaceFS.readFiles`：逐路径 `assertInWorkspace` 后整批委托，**不做分块**——分块预算归调用方。
+
+### 11.2 调用点收口矩阵（sweep 全集）
+
+| # | 调用点 | 旧实现 | 落地 | 密文语义 |
+|---|---|---|---|---|
+| 1 | grep 单文件（search-tools :208） | `fs.promises.readFile` 裸读 | `wsFs.readFile` + 自检 `looksEncrypted` | **抛错**「文件已加密（E-SafeNet 容器），当前 IO 通道读到密文：\<path\>」（strict 下通道 EENCRYPTED 先行，同为明确报错） |
+| 2 | grep 目录（:241 循环逐读） | 逐文件裸读 | 候选 stat 预过滤后按 **16 一批** `wsFs.readFiles`；strict 整批 EENCRYPTED 时退化逐文件定位 | **跳过 + 收集**，结果末尾追加「⚠ 已跳过 N 个加密文件: a, b, …」（名单截 10 个）；命中上限 early-exit 保持 |
+| 3 | loadGitignore（:29） | `fs.readFileSync` | `wsFs.readFile`（读失败含 EENCRYPTED / 密文魔数 → null，既有容忍语义） | 降级 null |
+| 4 | edit_file 读原文件（file-tools :236） | 裸读 utf-8 | `wsFs.readFile` + 自检 | **拒绝编辑**（宁报错不毁文件） |
+| 5 | edit_file 写回（:258） | **`fs.promises.writeFile` 裸写旁路** | `wsFs.writeFile`（proxy 模式下裸写 = 明文落盘 DLP 违规——§3.1 推论) | — |
+| 6 | write_file journal before（:200） | 裸读 utf-8 | `readJournalSnapshot(wsFs)` | **null 快照，写入照常** |
+| 7 | mv journal 快照（:311/:313） | 裸读 utf-8 | `readJournalSnapshot`（rename 本体照常——元数据操作天然安全） | null 快照，rename 照常 |
+| 8 | apply_patch 守门循环（update/delete 目标） | `assertRead` 磁盘回读 hash | 循环内 `wsFs.readFile` + 自检 + 字节缓存（applyOp 复用，消除同文件二次读） | **拒绝整个 patch** |
+| 9 | apply_patch delete before 读（:183）+ `fs.promises.unlink` | 裸读 / 裸 unlink | 缓存字节（或通道读）+ `wsFs.deletePath` | 拒绝 patch |
+| 10 | office_read / office_read_cells | reader 内 `fs.readFileSync(abs)`（pdf/excel）或 `path` 直读（docx/pptx） | office-tools 统一 `wsFs.readFile` + 自检后**按字节**传入 reader（四个 reader 入参 path → Buffer，模块不再裸触 fs） | **明确报错**（非垃圾解析错误） |
+| 11 | office_copy（:167/:172 + 裸 writeFileSync） | 裸读写 | 源 `wsFs.readFile` + 自检；目标 before 走 `readJournalSnapshot`；写走 `wsFs.writeFile` | 密文源**拒绝复制**；密文目标 null 快照照常复制 |
+| 12 | change-journal recordRenameTreeSafe（:124） | `fs.readFileSync` walk | 注入通道读取函数（`readJournalSnapshot` 包装），walker async 化 | null 内容，rename 条目照记（撤销时该条目会明确失败——无法快照即无法恢复，好过阻塞移动） |
+| 13 | read-tracker `hashFile`（:26，每次 add/assertRead 二次裸读） | 磁盘回读 sha1 | `add(…, content?)` / `assertRead(…, current?)` 接受调用方已持有的内容直传 hash；省略时保持磁盘回读 fallback | — |
+
+**自检是叠加层**：`strictCipherCheck` 语义未动（通道行为不变）；grep/edit/apply_patch/office 的 `looksEncrypted` 自检独立于 strict 设置——这些路径的失败模式是静默假阴性或毁文件，非 strict 配置下也必须拒绝/跳过。
+
+### 11.3 read-tracker 指纹口径变更（重要）
+
+hash 权威来源从「磁盘字节」改为「**agent 视角内容**（通道读到的字节 / 工具写入的产物）」。理由：proxy 加密环境下磁盘是密文形态、通道是明文——add 直传内容而 assertRead 仍读磁盘会产生永久指纹错配（编辑全被误判漂移）。落地：全部 add 调用点传内容、全部 assertRead 调用点传通道读到的当前内容（write_file / edit_file / apply_patch / office_copy 四处守门改为「先通道读后校验」，读到的字节复用给 journal 与守门）。未传内容时保持磁盘回读 fallback（向后兼容）。存量 DB 指纹（磁盘口径）在 proxy 加密环境升级后首次 assert 会误判漂移一次，agent 重读即自愈。
+
+### 11.4 范围外明示
+
+- apply_patch 备份/回滚（snapshotFile / restoreFromBackup 的 `copyFileSync`）仍为裸 fs——备份目录在 workspace 外（userDataDir/tmpdir），`WorkspaceFS` 沙箱不可达；属内部安全网非内容消费面。
+- `journal/recorder.ts` 的 `recordDeleteTree` walk 读（rm 工具记账）属 journal 基础层（主进程），不在工具层 sweep 范围。
+- bash 内 `cat`/`grep`、插件/MCP 自行 fs 读写维持 §9 已知限制不变。
