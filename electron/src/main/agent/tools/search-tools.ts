@@ -12,26 +12,33 @@ import type { ToolContext, ToolModule } from './types';
 import { buildCatalog, type ToolCatalogEntry, type ToolMeta } from './catalog-entry';
 import { OUTPUT_LIMITS, truncateArray } from './shared/output-truncate';
 import { parseStringArg } from './shared/arg-parse';
+import { assertNotCipher } from './shared/cipher-gate';
+import { FileIoError } from '../../files/file-io/types';
+import { looksEncrypted } from '../../files/file-io/cipher-detect';
+import type { WorkspaceFS } from '../../files/workspace-fs';
 
 /** workspaceDir → { mtime, matcher } 的缓存。mtime 用作失效信号。
  *  Map key 是 workspaceDir（绝对路径），不同 workspace 之间不串数据。*/
 const gitignoreCache = new Map<string, { mtime: number; matcher: Ignore }>();
 
 /** 读取 workspace 根的 .gitignore；不存在或读取失败返回 null 而不抛错。
- *  用 mtime 判断缓存有效性——文件未变直接复用 matcher。*/
-function loadGitignore(workspaceDir: string): Ignore | null {
+ *  用 mtime 判断缓存有效性——文件未变直接复用 matcher。
+ *  内容经 wsFs 内容通道读取（B 方案收口）；密文（strict 抛错或魔数自检）
+ *  同样按读取失败降级 null——密文规则表比没有规则表更糟。*/
+async function loadGitignore(workspaceDir: string, wsFs: WorkspaceFS): Promise<Ignore | null> {
   const gitignorePath = path.join(workspaceDir, '.gitignore');
   if (!fs.existsSync(gitignorePath)) return null;
   const stat = fs.statSync(gitignorePath);
   const cached = gitignoreCache.get(workspaceDir);
   if (cached && cached.mtime === stat.mtimeMs) return cached.matcher;
   try {
-    const content = fs.readFileSync(gitignorePath, 'utf-8');
-    const matcher = ignore().add(content);
+    const buf = await wsFs.readFile(gitignorePath);
+    if (looksEncrypted(buf)) return null;
+    const matcher = ignore().add(buf.toString('utf-8'));
     gitignoreCache.set(workspaceDir, { mtime: stat.mtimeMs, matcher });
     return matcher;
   } catch {
-    // 读取失败（权限 / IO 错误）静默降级——不该让 .gitignore 解析失败阻塞搜索。
+    // 读取失败（权限 / IO 错误 / EENCRYPTED）静默降级——不该让 .gitignore 解析失败阻塞搜索。
     return null;
   }
 }
@@ -111,6 +118,50 @@ export class SearchTools implements ToolModule {
 
 /** grep 单文件大小上限（1MB）：超限不读，避免大文件挤爆内存。 */
 const MAX_GREP_FILE_SIZE = 1024 * 1024;
+
+/** 目录模式批量读批大小（B 方案收口）：有界内存 + 摊薄通道往返 */
+const GREP_READ_BATCH = 16;
+
+/** 跳过加密文件提示的文件名上限（防密文仓库把提示行本身撑爆上下文） */
+const ENCRYPTED_SKIP_NAME_CAP = 10;
+
+/** 目录模式密文跳过提示行：「⚠ 已跳过 N 个加密文件: a, b, …」（超 10 个截断） */
+function encryptedSkipNote(names: string[]): string {
+  const shown = names.slice(0, ENCRYPTED_SKIP_NAME_CAP).join(', ');
+  const more = names.length > ENCRYPTED_SKIP_NAME_CAP ? ' …' : '';
+  return `⚠ 已跳过 ${names.length} 个加密文件: ${shown}${more}`;
+}
+
+/**
+ * 目录模式批量读 + 逐文件密文容错（B 方案收口）：
+ * - 常态：整批 readFiles，批内每个 buffer 自检 looksEncrypted（独立于通道
+ *   strict 设置——grep 的失败模式是静默假阴性）→ 密文项置 null 归入跳过；
+ * - strict 通道下整批被 EENCRYPTED 硬失败时退化为逐文件读，定位到具体
+ *   加密文件归入跳过；其余读错误原样抛（不吞——与旧版单文件读失败即抛一致）。
+ * 返回与 absFiles 同序的数组，null = 加密跳过。
+ */
+async function readBatchWithCipherSkip(
+  wsFs: WorkspaceFS,
+  absFiles: string[],
+): Promise<Array<Buffer | null>> {
+  try {
+    const bufs = await wsFs.readFiles(absFiles);
+    return bufs.map((b) => (looksEncrypted(b) ? null : b));
+  } catch (err) {
+    if (!(err instanceof FileIoError && err.code === 'EENCRYPTED')) throw err;
+    const out: Array<Buffer | null> = [];
+    for (const f of absFiles) {
+      try {
+        const b = await wsFs.readFile(f);
+        out.push(looksEncrypted(b) ? null : b);
+      } catch (e) {
+        if (e instanceof FileIoError && e.code === 'EENCRYPTED') out.push(null);
+        else throw e;
+      }
+    }
+    return out;
+  }
+}
 
 /** 一条 grep 命中。file 为相对「搜索起点」的路径（单文件模式即文件名本身）。 */
 interface GrepMatch {
@@ -204,11 +255,13 @@ async function executeGrep(args: Record<string, unknown>, ctx: ToolContext): Pro
     if (targetStat.size > MAX_GREP_FILE_SIZE) {
       return `文件超过 1MB 未搜索：${startDir}（可用 read_file 分页读后再定位，如先读前 200KB 找到关键词所在行）`;
     }
-    // file 字段口径与目录模式一致：相对 absStart（此处即文件名本身）的路径。
-    const content = await fs.promises.readFile(absStart, 'utf-8');
+    // B 方案收口：内容经通道读取 + 密文自检（独立于 strict——静默「(无匹配)」
+    // 是骗人；strict 通道自身也会以 EENCRYPTED 硬失败，两条路都是明确报错）
+    const contentBuf = await ctx.wsFs.readFile(absStart);
+    assertNotCipher(contentBuf, startDir);
     const matches: GrepMatch[] = [];
     const state = { limitReached: false };
-    collectFileMatches(content, path.basename(absStart), regex, matches, state);
+    collectFileMatches(contentBuf.toString('utf-8'), path.basename(absStart), regex, matches, state);
     return formatGrepResult(matches, state.limitReached);
   }
 
@@ -219,30 +272,52 @@ async function executeGrep(args: Record<string, unknown>, ctx: ToolContext): Pro
   });
 
   // .gitignore 在 DEFAULT_IGNORE 之上再叠加一层。loadGitignore 失败返回 null。
-  const ig = loadGitignore(ctx.workspaceDir);
+  const ig = await loadGitignore(ctx.workspaceDir, ctx.wsFs);
   const filtered = ig ? candidates.filter((p) => !ig.ignores(p)) : candidates;
+
+  // 预过滤：逐文件沙箱校验 + 大小上限，得到可读候选集（B 方案收口：内容读
+  // 改为批量经通道，stat/沙箱仍逐文件前置——大文件不进批，省通道流量）
+  const readableRels: string[] = [];
+  for (const relPath of filtered) {
+    const absFile = path.join(absStart, relPath);
+    // 每个候选文件再过一遍沙箱：fastGlob 不做 symlink follow 检查，WorkspaceFS 把关。
+    ctx.wsFs.assertInWorkspace(absFile);
+    const stat = await fs.promises.stat(absFile);
+    if (stat.size > MAX_GREP_FILE_SIZE) continue;
+    readableRels.push(relPath);
+  }
 
   const matches: GrepMatch[] = [];
   // 命中上限时记录，让结果末尾追加「已达上限」提示（LLM 可据此缩小范围）。
   const state = { limitReached: false };
+  // 密文文件按相对路径收集（与 file 字段同口径），结果末尾聚合提示。
+  const skippedEncrypted: string[] = [];
 
-  for (const relPath of filtered) {
+  for (let i = 0; i < readableRels.length; i += GREP_READ_BATCH) {
     if (matches.length >= OUTPUT_LIMITS.grep_matches) {
       state.limitReached = true;
       break;
     }
-    const absFile = path.join(absStart, relPath);
-    // 每个候选文件再过一遍沙箱：fastGlob 不做 symlink follow 检查，WorkspaceFS 把关。
-    ctx.wsFs.assertInWorkspace(absFile);
-
-    const stat = await fs.promises.stat(absFile);
-    if (stat.size > MAX_GREP_FILE_SIZE) continue;
-
-    const content = await fs.promises.readFile(absFile, 'utf-8');
-    collectFileMatches(content, relPath, regex, matches, state);
+    const batchRels = readableRels.slice(i, i + GREP_READ_BATCH);
+    const buffers = await readBatchWithCipherSkip(
+      ctx.wsFs,
+      batchRels.map((r) => path.join(absStart, r)),
+    );
+    for (let j = 0; j < batchRels.length; j++) {
+      const relPath = batchRels[j]!;
+      const buf = buffers[j];
+      if (buf === null || buf === undefined) {
+        skippedEncrypted.push(relPath);
+        continue;
+      }
+      collectFileMatches(buf.toString('utf-8'), relPath, regex, matches, state);
+      if (state.limitReached) break;
+    }
   }
 
-  return formatGrepResult(matches, state.limitReached);
+  const body = formatGrepResult(matches, state.limitReached);
+  if (skippedEncrypted.length === 0) return body;
+  return `${body}\n\n${encryptedSkipNote(skippedEncrypted)}`;
 }
 
 async function executeGlob(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
@@ -261,7 +336,7 @@ async function executeGlob(args: Record<string, unknown>, ctx: ToolContext): Pro
     cwd: absStart, absolute: false, ignore: DEFAULT_IGNORE, onlyFiles: true,
   });
 
-  const ig = loadGitignore(ctx.workspaceDir);
+  const ig = await loadGitignore(ctx.workspaceDir, ctx.wsFs);
   const filtered = ig ? files.filter((p) => !ig.ignores(p)) : files;
 
   if (filtered.length === 0) return '(无匹配文件)';

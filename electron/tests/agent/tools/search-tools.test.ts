@@ -13,8 +13,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { WorkspaceFS } from '../../../src/main/files/workspace-fs';
+import { DirectContentIo } from '../../../src/main/files/file-io/content-io';
 import { SearchTools } from '../../../src/main/agent/tools/search-tools';
 import type { ToolContext } from '../../../src/main/agent/tools/types';
+import type { ContentIo } from '../../../src/main/files/file-io/types';
+
+// 实测 E-SafeNet 容器头（cipher-detect.test.ts 同款；魔数在前 64 字节内）
+const CIPHER_HEAD = Buffer.from(
+  '62142365DA00260100000001452D536166654E65740000004C4F434B',
+  'hex',
+);
 
 // 每个 beforeEach 用唯一 tmpDir，避免 SearchTools 内部的 gitignoreCache（模块级 Map）
 // 在用例间串数据；不复用 file-tools.test.ts 的模块级 tmpDir 模式。
@@ -226,5 +234,142 @@ describe('SearchTools .gitignore 集成', () => {
     await fs.promises.writeFile(path.join(tmpDir, 'a.ts'), 'TODO\n');
     const tools = new SearchTools();
     expect(await tools.execute('grep', { pattern: 'TODO' }, ctx)).toContain('a.ts');
+  });
+
+  it('.gitignore 本身是密文时按读取失败降级（不当规则表解析，搜索不中断）', async () => {
+    // 注：默认通道 strict 读密文本应抛 EENCRYPTED——loadGitignore 捕获后降级 null；
+    // 非 strict 时魔数自检同样降级。此处用非 strict 通道锁自检路径。
+    fs.writeFileSync(path.join(tmpDir, '.gitignore'), CIPHER_HEAD);
+    await fs.promises.writeFile(path.join(tmpDir, 'a.ts'), 'TODO\n');
+    ctx.wsFs = new WorkspaceFS(tmpDir, { contentIo: new DirectContentIo(false) });
+    const tools = new SearchTools();
+    expect(await tools.execute('grep', { pattern: 'TODO' }, ctx)).toContain('a.ts:1:TODO');
+  });
+});
+
+// ── B 方案收口：密文安全闸 + 批量通道读（spec 2026-11-11 补遗）──
+
+describe('SearchTools grep 密文安全闸（B 方案收口）', () => {
+  it('单文件密文 → 明确报错（strict 通道 EENCRYPTED 或自检拒绝，绝非「(无匹配)」）', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'Enc.java'), CIPHER_HEAD);
+    const tools = new SearchTools();
+    let err: Error | null = null;
+    try {
+      await tools.execute('grep', { pattern: 'class', path: 'Enc.java' }, ctx);
+    } catch (e) {
+      err = e as Error;
+    }
+    expect(err).not.toBeNull();
+    expect(err?.message).toMatch(/加密/);
+    expect(err?.message).toContain('Enc.java');
+  });
+
+  it('单文件密文 + strict=false 通道 → 自检仍拒绝（自检独立于 strict 设置）', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'Enc.java'), CIPHER_HEAD);
+    ctx.wsFs = new WorkspaceFS(tmpDir, { contentIo: new DirectContentIo(false) });
+    const tools = new SearchTools();
+    await expect(
+      tools.execute('grep', { pattern: 'class', path: 'Enc.java' }, ctx),
+    ).rejects.toThrow(/已加密（E-SafeNet 容器）/);
+  });
+
+  it('目录混合（明文 + 密文）→ 命中明文 + 末尾「已跳过 N 个加密文件」', async () => {
+    await fs.promises.writeFile(path.join(tmpDir, 'ok1.ts'), 'NEEDLE in ok1\n');
+    fs.writeFileSync(path.join(tmpDir, 'Enc1.java'), CIPHER_HEAD);
+    fs.writeFileSync(path.join(tmpDir, 'Enc2.java'), CIPHER_HEAD);
+    await fs.promises.writeFile(path.join(tmpDir, 'ok2.ts'), 'NEEDLE in ok2\n');
+    const tools = new SearchTools();
+    const result = await tools.execute('grep', { pattern: 'NEEDLE' }, ctx);
+    expect(result).toContain('ok1.ts:1:NEEDLE in ok1');
+    expect(result).toContain('ok2.ts:1:NEEDLE in ok2');
+    expect(result).toContain('⚠ 已跳过 2 个加密文件: Enc1.java, Enc2.java');
+  });
+
+  it('目录全密文无命中 → 不再是裸「(无匹配)」，跳过提示可见', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'Enc.java'), CIPHER_HEAD);
+    const tools = new SearchTools();
+    const result = await tools.execute('grep', { pattern: 'NEEDLE' }, ctx);
+    expect(result).toContain('(无匹配)');
+    expect(result).toContain('⚠ 已跳过 1 个加密文件: Enc.java');
+  });
+
+  it('跳过名单超 10 个截断展示（计数仍为全量）', async () => {
+    for (let i = 1; i <= 12; i++) {
+      fs.writeFileSync(path.join(tmpDir, `Enc${i}.java`), CIPHER_HEAD);
+    }
+    const tools = new SearchTools();
+    const result = await tools.execute('grep', { pattern: 'NEEDLE' }, ctx);
+    // fast-glob 字典序：Enc1, Enc10, Enc11, Enc12, Enc2..Enc7 为前 10，Enc8/Enc9 截掉
+    expect(result).toContain('⚠ 已跳过 12 个加密文件: ');
+    expect(result).toContain('Enc7.java …');
+    expect(result).not.toContain('Enc8.java');
+    expect(result).not.toContain('Enc9.java');
+  });
+
+  it('strict 通道整批硬失败时退化逐文件定位密文（跳过而非整次失败）', async () => {
+    // 默认 WorkspaceFS 即 DirectContentIo(strict=true)：批读抛 EENCRYPTED，
+    // readBatchWithCipherSkip 应退化为逐文件并把密文归入跳过。
+    await fs.promises.writeFile(path.join(tmpDir, 'ok.ts'), 'NEEDLE\n');
+    fs.writeFileSync(path.join(tmpDir, 'Enc.java'), CIPHER_HEAD);
+    const tools = new SearchTools();
+    const result = await tools.execute('grep', { pattern: 'NEEDLE' }, ctx);
+    expect(result).toContain('ok.ts:1:NEEDLE');
+    expect(result).toContain('⚠ 已跳过 1 个加密文件: Enc.java');
+  });
+
+  it('命中上限 early-exit 保持：单文件 100 命中 → 「已达上限」仍出现', async () => {
+    let content = '';
+    for (let i = 0; i < 100; i++) content += 'match\n';
+    await fs.promises.writeFile(path.join(tmpDir, 'big.txt'), content);
+    const tools = new SearchTools();
+    const result = await tools.execute('grep', { pattern: 'match' }, ctx);
+    expect(result).toContain('已达上限');
+  });
+});
+
+describe('SearchTools grep 批量通道读（B 方案收口）', () => {
+  /** 真实 fs 后端的记录型通道：readFile/readFiles 读盘并记录每批大小 */
+  function recordingIo(): ContentIo & { batches: number[] } {
+    const io = {
+      batches: [] as number[],
+      async readFile(p: string) {
+        return fs.promises.readFile(p);
+      },
+      async readFiles(ps: string[]) {
+        io.batches.push(ps.length);
+        const out: Buffer[] = [];
+        for (const p of ps) out.push(await fs.promises.readFile(p));
+        return out;
+      },
+      async writeFile(p: string, d: Buffer) {
+        return fs.promises.writeFile(p, d);
+      },
+    };
+    return io;
+  }
+
+  it('目录模式经 wsFs.readFiles 批量读，每批 ≤16', async () => {
+    for (let i = 1; i <= 35; i++) {
+      await fs.promises.writeFile(path.join(tmpDir, `f${i}.ts`), `NEEDLE ${i}\n`);
+    }
+    const io = recordingIo();
+    ctx.wsFs = new WorkspaceFS(tmpDir, { contentIo: io });
+    const tools = new SearchTools();
+    const result = await tools.execute('grep', { pattern: 'NEEDLE' }, ctx);
+    expect(result).toContain('f35.ts:1:NEEDLE 35');
+    expect(io.batches.length).toBeGreaterThan(0);
+    // 35 个文件（.gitignore 不存在不进批）→ 3 批：16 + 16 + 3
+    expect(io.batches.every((n) => n <= 16)).toBe(true);
+    expect(io.batches.reduce((a, b) => a + b, 0)).toBe(35);
+  });
+
+  it('单文件模式走 readFile 单发（不进批量面）', async () => {
+    await fs.promises.writeFile(path.join(tmpDir, 'one.ts'), 'NEEDLE\n');
+    const io = recordingIo();
+    ctx.wsFs = new WorkspaceFS(tmpDir, { contentIo: io });
+    const tools = new SearchTools();
+    const result = await tools.execute('grep', { pattern: 'NEEDLE', path: 'one.ts' }, ctx);
+    expect(result).toContain('one.ts:1:NEEDLE');
+    expect(io.batches).toHaveLength(0);
   });
 });
