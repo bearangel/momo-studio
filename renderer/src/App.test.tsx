@@ -98,6 +98,10 @@ const mockApi = {
     dismissPrompt: vi.fn(),
     onWriteBlocked: vi.fn(() => () => {}),
   },
+  // 扩权确认（spec 2026-11-12 §7）：App 顶层订阅 agent-op-confirm:request（推送面 no-op 桩）
+  agent: {
+    onAgentOpConfirmRequest: vi.fn(() => () => {}),
+  },
   // v2.6.0 Task 6：ResumeNotice 挂载拉取中断任务——默认空列表使恢复卡不渲染，
   // 既有分支断言不受影响
   task: {

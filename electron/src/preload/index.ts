@@ -2,6 +2,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type {
   ApiSurface,
+  AgentOpConfirmPayload,
   AssignmentDeltas,
   ApplyOnboardingPlanInput,
   AuthorizationChangedPayload,
@@ -204,6 +205,17 @@ const api: ApiSurface = {
     abortStream: (streamSessionId: string) => invoke('agent:abortStream', streamSessionId),
     // 三级中断·回合级（spec 2026-10-13 §7.3）：载荷 { sessionId }——级联含本回合派生子链
     abortTurn: (sessionId: string) => invoke('agent:abortTurn', { sessionId }),
+    // 扩权确认（spec 2026-11-12 §7）：请求推送订阅 + 回执 invoke——通道名与主进程
+    // agent/agent-op-confirm.ts 逐字对齐；回执先到先得，skipped=true 静默忽略
+    onAgentOpConfirmRequest: (callback) => {
+      const handler = (_e: IpcRendererEvent, payload: AgentOpConfirmPayload): void => callback(payload);
+      ipcRenderer.on('agent-op-confirm:request', handler);
+      return () => {
+        ipcRenderer.off('agent-op-confirm:request', handler);
+      };
+    },
+    replyAgentOpConfirm: (requestId, allowed) =>
+      invoke('agent-op-confirm:reply', { requestId, allowed }),
   },
   // v25 Task 6：团队通道面（spec §4.2）
   team: {
