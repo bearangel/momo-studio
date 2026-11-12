@@ -5,7 +5,9 @@
 // 真相源）。workspaceId 由桥的主进程侧从 spawn 上下文注入，本层入参不含
 // workspaceId——子进程不可伪造归属。
 import { createCustomDef, addMember, generateAgentUserId } from './crud';
-import { listAgentDefinitions, getAgentDefinition, listMembers } from './agent-queries';
+import { listAgentDefinitions, getAgentDefinition, listMembers, getMemberByInstanceId } from './agent-queries';
+import { mergeCapabilities, readAllocationLayer, readAssignmentDeltas } from './capability-merger';
+import type { AgentDefinition, WorkspaceAgentMember } from './types';
 import { getProvider, listProviders, listProviderModels } from './provider-crud';
 import { getGlobalSettings } from '../settings/crud';
 import { parseAgentManifest } from './manifest-parser';
@@ -23,7 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { logger } from '../logger';
 
-/** 白名单 op 枚举——桥面只放行这七个入口（spec §6：桥不是通用 RPC 面） */
+/** 白名单 op 枚举——桥面只放行这八个入口（spec §6：桥不是通用 RPC 面） */
 export const RESOURCE_OP_NAMES = [
   'list',
   'createAgent',
@@ -32,6 +34,7 @@ export const RESOURCE_OP_NAMES = [
   'createMcp',
   'createTeam',
   'listModels',
+  'describeAgent',
 ] as const;
 
 /** resource_list 聚合清单（缺省全量；type 过滤时仅填对应段） */
@@ -109,6 +112,7 @@ export async function executeResourceOp(
     case 'createMcp': return opCreateMcp(a, deps);
     case 'createTeam': return opCreateTeam(a, workspaceId);
     case 'listModels': return opListModels();
+    case 'describeAgent': return opDescribeAgent(a, workspaceId);
     default: throw new Error(`未知 resource op: ${op}`);
   }
 }
@@ -153,6 +157,74 @@ function opList(typeFilter: unknown, workspaceId: string): ResourceListResult {
     }));
   }
   return result;
+}
+
+// ── describeAgent（读面，spec §5.1）──
+export interface DescribeAgentResult {
+  definition: { id: string; slug: string; name: string; source: string; modelProviderId: string | null; modelName: string;
+    defaultTools: Array<{ kind: string; ref: string }>; defaultMcps: unknown[]; defaultSkills: unknown[];
+    deniedTools: string[] };
+  member: { instanceId: string; running: boolean };
+  effective: { tools: string[]; mcps: string[]; skills: string[] };
+  attribution: { fromDefinition: string[]; fromWorkspace: string[]; memberAdded: string[]; memberRemoved: string[] };
+  otherWorkspaceMembers: number;
+}
+
+/** agent 入参解析（describe/updateCapabilities/updateProfile 共用）：instanceId → 成员表 definitionId 匹配 → slug 反查 */
+export function resolveAgentTarget(agent: string, workspaceId: string): { member: WorkspaceAgentMember; def: AgentDefinition } | null {
+  const byInstance = getMemberByInstanceId(agent);
+  if (byInstance) {
+    const def = getAgentDefinition(byInstance.agentDefinitionId);
+    if (def) return { member: byInstance, def };
+    return null;
+  }
+  const byDefId = listMembers(workspaceId).find((m) => m.agentDefinitionId === agent);
+  if (byDefId) {
+    const def = getAgentDefinition(byDefId.agentDefinitionId);
+    if (def) return { member: byDefId, def };
+  }
+  const bySlugDef = listAgentDefinitions().find((d) => d.slug === agent);
+  if (bySlugDef) {
+    const m = listMembers(workspaceId).find((x) => x.agentDefinitionId === bySlugDef.id);
+    if (m) return { member: m, def: bySlugDef };
+  }
+  return null;
+}
+
+function opDescribeAgent(a: Record<string, unknown>, workspaceId: string): DescribeAgentResult {
+  const key = str(a['agent'], 'agent');
+  const target = resolveAgentTarget(key, workspaceId);
+  if (!target) throw new Error(`未找到 agent 成员: ${key}（可先 resource_list 查询真实 instanceId/slug）`);
+  const { member, def } = target;
+  const alloc = readAllocationLayer(member.workspaceId);
+  const deltas = readAssignmentDeltas(member.instanceId);
+  const merged = mergeCapabilities(def, alloc, deltas);
+  const defRefs = [
+    ...def.defaultTools.map((t) => t.ref),
+    ...def.defaultMcps.map((m) => m.ref),
+    ...def.defaultSkills.map((s) => s.ref),
+  ];
+  const wsRefs = [...alloc.tools, ...alloc.mcps, ...alloc.skills];
+  const otherWs = getDb()
+    .prepare('SELECT COUNT(DISTINCT workspace_id) AS n FROM workspace_agent_members WHERE agent_definition_id = ? AND workspace_id != ?')
+    .get(def.id, member.workspaceId) as { n: number };
+  return {
+    definition: {
+      id: def.id, slug: def.slug, name: def.name, source: def.source,
+      modelProviderId: def.modelProviderId, modelName: def.modelName,
+      defaultTools: def.defaultTools, defaultMcps: def.defaultMcps, defaultSkills: def.defaultSkills,
+      deniedTools: def.deniedTools ?? [],
+    },
+    member: { instanceId: member.instanceId, running: member.lastRunning },
+    effective: { tools: merged.tools, mcps: merged.mcps, skills: merged.skills },
+    attribution: {
+      fromDefinition: defRefs,
+      fromWorkspace: wsRefs.filter((r) => !defRefs.includes(r)),
+      memberAdded: [...deltas.addedTools, ...deltas.addedMcps, ...deltas.addedSkills, ...deltas.addedPluginTools],
+      memberRemoved: [...deltas.removedTools, ...deltas.removedMcps, ...deltas.removedSkills, ...deltas.removedPluginTools],
+    },
+    otherWorkspaceMembers: otherWs.n,
+  };
 }
 
 // ── createAgent（与 UI 导入链 agent.createFromYaml 同语义：parse → 冲突拒绝 →

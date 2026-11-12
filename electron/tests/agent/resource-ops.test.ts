@@ -24,7 +24,7 @@ import { getSkillsDir, listInstalled } from '../../src/main/skill/zip-uploader';
 import type { McpToolInfo } from '../../src/main/mcp/types';
 import { McpHttpError } from '../../src/main/mcp/http-client';
 import { executeResourceOp } from '../../src/main/agent/resource-ops';
-import type { ListModelsResult } from '../../src/main/agent/resource-ops';
+import type { ListModelsResult, DescribeAgentResult } from '../../src/main/agent/resource-ops';
 
 // 与 crud-custom-def.test.ts 同款 mock：crud.ts 引入的 runtime 依赖在测试环境不可用
 vi.mock('../../src/main/agent/runtime-status', () => ({
@@ -399,5 +399,40 @@ describe('createMcp', () => {
     expect(r.toolCount).toBe(25);
     expect(r.toolNames).toHaveLength(20);
     expect(getDb().prepare('SELECT 1 FROM mcp_definitions WHERE name = ?').get('live-server')).toBeTruthy();
+  });
+});
+
+describe('describeAgent（读面）', () => {
+  it('instanceId 直查：定义 + 生效集 + 三层归因 + 跨 ws 计数', async () => {
+    // 共享夹具的 def 行未写 source 列（列默认 'custom'，migration v3）——本用例
+    // 显式置 builtin 以匹配断言（不改动共享 INSERT，避免影响既有用例）
+    getDb().prepare(`UPDATE agent_definitions SET source = 'builtin' WHERE id = 'def-a'`).run();
+    const r = (await executeResourceOp('describeAgent', { agent: m1 }, wsId)) as DescribeAgentResult;
+    expect(r).toMatchObject({
+      definition: { id: 'def-a', slug: 'agent-a', name: '甲', source: 'builtin' },
+      member: { instanceId: m1 },
+    });
+    // def-a 无 defaultTools/Mcps/Skills 夹具值 → attribution 三段可断言空集形状
+    expect(r.attribution).toHaveProperty('fromDefinition');
+    expect(r.attribution).toHaveProperty('memberAdded');
+    expect(typeof r.otherWorkspaceMembers).toBe('number');
+  });
+
+  it('slug 反查：当前 ws 内按 slug 定位唯一成员', async () => {
+    const r = (await executeResourceOp('describeAgent', { agent: 'agent-a' }, wsId)) as DescribeAgentResult;
+    expect(r.member.instanceId).toBe(m1);
+  });
+
+  it('查无目标报可行动错误', async () => {
+    await expect(executeResourceOp('describeAgent', { agent: 'no-such' }, wsId)).rejects.toThrow('resource_list');
+  });
+
+  it('member delta 反映进 attribution.memberAdded', async () => {
+    getDb().prepare(
+      `INSERT INTO agent_assignment_capabilities (assignment_id, capability_type, mode, ref) VALUES (?, 'skill', 'add', 'weather')`,
+    ).run(m1);
+    const r = (await executeResourceOp('describeAgent', { agent: m1 }, wsId)) as DescribeAgentResult;
+    expect(r.attribution.memberAdded).toContain('weather');
+    expect(r.effective.skills).toContain('weather');
   });
 });
