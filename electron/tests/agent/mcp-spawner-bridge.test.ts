@@ -19,7 +19,11 @@
 // fork 被 mock，message handler 被捕获后直接调用；host-manager / audit 模块被
 // mock（本测试只验证桥的转发逻辑，不碰真 MCP 进程池与真库）。
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { runMigrations, closeDb } from '../../src/main/storage/db';
 import type { McpToolInfo, McpServerConfig } from '../../src/main/mcp/types';
 
 // vi.mock 工厂被提升到 import 之前，用 vi.hoisted 共享 handler 捕获槽与 send spy
@@ -28,7 +32,13 @@ const captured = vi.hoisted(() => ({
   send: vi.fn(),
 }));
 
-vi.mock('node:child_process', () => ({
+// resource-ops 静态图（Task 8 起）引入 marketplace/installer——其顶层
+// promisify(execFile)；blanket mock 会抹掉 execFile 使整个套件在模块装载期
+// 即炸。importOriginal 部分化：仅 fork 拦截，spawn/execFile 等其余导出保持
+// 真实。fake child 另需 listeners()（2026-11-11 起 spawnForAgent 挂
+// attachRuntimeChildErrorNet——child.listeners('error') 判幂等）。
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   fork: vi.fn(() => ({
     pid: 4343,
     on: (event: string, cb: (msg: unknown) => void) => {
@@ -43,6 +53,7 @@ vi.mock('node:child_process', () => ({
     kill: vi.fn(),
     connected: true,
     once: vi.fn(),
+    listeners: vi.fn(() => []),
   })),
 }));
 
@@ -82,6 +93,20 @@ const MCP_CONFIG: McpServerConfig = {
   command: 'npx',
   args: ['-y', '@modelcontextprotocol/server-github'],
 };
+
+// 2026-11-11 文件 IO 设置起 spawnForAgent 读 global_settings（kv_store）——
+// 沿 resource-ops.test.ts 夹具：临时目录 + 全量迁移
+const tmpRoot = path.join(os.tmpdir(), `ap-mcp-bridge-${Date.now()}`);
+beforeEach(() => {
+  fs.mkdirSync(tmpRoot, { recursive: true });
+  process.env.AP_USER_DATA_DIR = tmpRoot;
+  runMigrations();
+});
+afterEach(() => {
+  closeDb();
+  delete process.env.AP_USER_DATA_DIR;
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
+});
 
 /** spawn 一个 runtime 并返回捕获到的 message handler */
 async function spawnAndGetHandler(): Promise<(msg: unknown) => void | Promise<void>> {
