@@ -80,6 +80,10 @@ const mockApi = {
     dismissPrompt: vi.fn(),
     onWriteBlocked: vi.fn(() => () => {}),
   },
+  // 扩权确认（spec 2026-11-12 §7）：App 顶层订阅 agent-op-confirm:request（推送面 no-op 桩）
+  agent: {
+    onAgentOpConfirmRequest: vi.fn(() => () => {}),
+  },
   task: { listInterrupted: vi.fn().mockResolvedValue([]) },
   browser: {
     getState: vi.fn(),

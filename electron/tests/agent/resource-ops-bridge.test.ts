@@ -1,19 +1,38 @@
 // electron/tests/agent/resource-ops-bridge.test.ts
 //
-// resource-ops 桥主进程侧分支单测（spec 2026-11-09-resource-creation-skills §6）。
+// resource-ops 桥主进程侧分支单测（spec 2026-11-09-resource-creation-skills §6；
+// 确认门扩面 spec 2026-11-12 §5.6/§7/§10）。
 // executor 注入 fake——纯函数化锁线协议（type/id 配对、error string 化、非本分支不消费）。
 // 桥模块 import resource-ops → crud.ts 引入的 runtime 依赖在测试环境不可用，
-// 与 resource-ops.test.ts 同款 mock。
-import { describe, it, expect, vi } from 'vitest';
-import { handleResourceOpMessage, notifyResourceOpSucceeded, MEMBER_AFFECTING_OPS } from '../../src/main/agent/resource-ops-bridge';
+// 与 resource-ops.test.ts 同款 mock。确认通道整体 mock（进程边界——BrowserWindow
+// 广播不进单测）；allow/deny 以 fake 注入，桥内门控逻辑全真。
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { closeDb } from '../../src/main/storage/db';
+import { handleResourceOpMessage, notifyResourceOpSucceeded, MEMBER_AFFECTING_OPS, confirmWaitBudgetMs, memberAffecting } from '../../src/main/agent/resource-ops-bridge';
+import { confirmTierForOp, buildConfirmPayload } from '../../src/main/agent/resource-ops';
 import { broadcastRuntimeChanged } from '../../src/main/im/session-service';
 import { broadcastResourceChanged } from '../../src/main/resource/changed-emit';
+
+// 确认通道 mock（momo-test-rules：只 mock 进程边界，桥逻辑全真）。hoisted 可变
+// fake——每用例经 mockResolvedValueOnce 注入 allow/deny，免 doMock 动态重导入。
+const confirmMock = vi.hoisted(() => ({ requestAgentOpConfirm: vi.fn() }));
+vi.mock('../../src/main/agent/agent-op-confirm', () => ({
+  requestAgentOpConfirm: confirmMock.requestAgentOpConfirm,
+  resolvePendingByChildExit: vi.fn(),
+}));
 
 vi.mock('../../src/main/agent/runtime-status', () => ({
   isAgentRunning: vi.fn(() => false),
 }));
 vi.mock('../../src/main/agent/runtime-registry', () => ({
   stopAgentRuntime: vi.fn(),
+  // resource-ops 引入 resource/mcp-config（updateMcp，Task 8）后模块图经
+  // hub-install → delegation-runner 在顶层调用 broadcastWriteGrantDenied——
+  // 本文件不测委派，桩掉即可
+  broadcastWriteGrantDenied: vi.fn(),
 }));
 vi.mock('../../src/main/im/session-service', () => ({
   broadcastRuntimeChanged: vi.fn(),
@@ -21,6 +40,21 @@ vi.mock('../../src/main/im/session-service', () => ({
 vi.mock('../../src/main/resource/changed-emit', () => ({
   broadcastResourceChanged: vi.fn(),
 }));
+
+// 确认门用例会触发 buildConfirmPayload 的容忍式 DB 查询（workspace 名 / agent
+// 目标解析）——无 AP_USER_DATA_DIR 时 getDb 会落到 ~/.momo-studio 建库（副作用
+// 出测试沙箱）。钉到临时目录；容忍路径在「无表」上降级，无需跑迁移。
+const tmpRoot = path.join(os.tmpdir(), `ap-bridge-confirm-${Date.now()}`);
+beforeEach(() => {
+  fs.mkdirSync(tmpRoot, { recursive: true });
+  process.env.AP_USER_DATA_DIR = tmpRoot;
+  confirmMock.requestAgentOpConfirm.mockReset();
+});
+afterEach(() => {
+  closeDb();
+  delete process.env.AP_USER_DATA_DIR;
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
+});
 
 describe('handleResourceOpMessage（主进程侧分支）', () => {
   it('type=resource-op 且 id 配对：成功回 result', async () => {
@@ -89,7 +123,107 @@ describe('handleResourceOpMessage（主进程侧分支）', () => {
     expect(broadcastResourceChanged).toHaveBeenCalledTimes(2);
     expect(broadcastRuntimeChanged).toHaveBeenCalledTimes(1);
 
-    // MEMBER_AFFECTING_OPS = createAgent | addMember | createTeam（语义固定）
+    // MEMBER_AFFECTING_OPS = createAgent | addMember | createTeam | updateCapabilities | updateProfile（语义固定）
     expect(MEMBER_AFFECTING_OPS).toContain('createTeam');
+  });
+});
+
+describe('resource-ops-bridge 确认门（spec §7/§10）', () => {
+  const executor = vi.fn(async (op: string) => ({ ok: op }));
+  const send = vi.fn();
+
+  beforeEach(() => {
+    // 共享 fake 跨用例清账（momo-test-rules：断言「未调用」前必须清历史）
+    executor.mockClear();
+    send.mockClear();
+  });
+
+  it('确认档位矩阵：describeAgent=none / updateProfile·updateSkill·updateMcp=required / updateCapabilities 按 add 与 scope 判', () => {
+    expect(confirmTierForOp('describeAgent', {})).toBe('none');
+    expect(confirmTierForOp('updateProfile', {})).toBe('required');
+    expect(confirmTierForOp('updateSkill', {})).toBe('required');
+    expect(confirmTierForOp('updateMcp', {})).toBe('required');
+    expect(confirmTierForOp('updateCapabilities', { add: { skills: ['x'] } })).toBe('required');
+    expect(confirmTierForOp('updateCapabilities', { scope: 'definition', remove: { tools: ['bash'] } })).toBe('required');
+    expect(confirmTierForOp('updateCapabilities', { remove: { tools: ['bash'] } })).toBe('none'); // 纯减权免确认
+    expect(confirmTierForOp('createAgent', {})).toBe('none'); // 既有 create 零变化
+  });
+
+  it('需确认 op：用户允许 → executor 执行且 ctx 透传（5 参）', async () => {
+    confirmMock.requestAgentOpConfirm.mockResolvedValueOnce({ allowed: true, reason: '' });
+    const m = { type: 'resource-op', id: 'r1', op: 'updateProfile', args: { agent: 'x' } };
+    await handleResourceOpMessage(m, 'ws-1', send, executor, { background: false, callerInstanceId: 'me' });
+    expect(confirmMock.requestAgentOpConfirm).toHaveBeenCalledTimes(1);
+    expect(executor).toHaveBeenCalledWith('updateProfile', expect.anything(), 'ws-1', undefined, { background: false, callerInstanceId: 'me' });
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'resource-op', id: 'r1', result: { ok: 'updateProfile' } }));
+  });
+
+  it('用户拒绝 → executor 不执行，错误文案回子进程', async () => {
+    confirmMock.requestAgentOpConfirm.mockResolvedValueOnce({ allowed: false, reason: '用户在确认卡上拒绝了本次变更' });
+    await handleResourceOpMessage({ type: 'resource-op', id: 'r2', op: 'updateMcp', args: {} }, 'ws-1', send, executor, { background: false });
+    expect(executor).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'resource-op', id: 'r2', error: expect.stringContaining('拒绝') }));
+  });
+
+  it('后台链 fail-closed：background=true 的需确认 op 立即拒绝、不弹卡（spec §7.3）', async () => {
+    await handleResourceOpMessage({ type: 'resource-op', id: 'r3', op: 'updateProfile', args: {} }, 'ws-1', send, executor, { background: true });
+    expect(confirmMock.requestAgentOpConfirm).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining('后台') }));
+  });
+
+  it('background 取自 ctx 闭包而非消息体（Review Focus ⑤）', async () => {
+    await handleResourceOpMessage(
+      { type: 'resource-op', id: 'r4', op: 'updateProfile', args: {}, background: false }, // 消息体伪造 false
+      'ws-1', send, executor, { background: true });
+    expect(confirmMock.requestAgentOpConfirm).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining('后台') }));
+  });
+
+  it('免确认 op 直通：describeAgent 不触碰确认通道', async () => {
+    await handleResourceOpMessage({ type: 'resource-op', id: 'r5', op: 'describeAgent', args: {} }, 'ws-1', send, executor, { background: false });
+    expect(confirmMock.requestAgentOpConfirm).not.toHaveBeenCalled();
+    expect(executor).toHaveBeenCalled();
+  });
+
+  it('per-op 超时：需确认 op 子进程等待 10min30s，普通 op 维持 30s', () => {
+    expect(confirmWaitBudgetMs('updateProfile')).toBe(10 * 60_000 + 30_000);
+    expect(confirmWaitBudgetMs('updateCapabilities', { add: { skills: ['x'] } })).toBe(10 * 60_000 + 30_000);
+    expect(confirmWaitBudgetMs('updateCapabilities', { remove: { tools: ['bash'] } })).toBe(30_000);
+    expect(confirmWaitBudgetMs('describeAgent')).toBe(30_000);
+    expect(confirmWaitBudgetMs('createAgent')).toBe(30_000);
+  });
+
+  it('广播矩阵：updateCapabilities → resource:changed + runtimeChanged；updateSkill → 仅 resource:changed；describeAgent → 零广播', () => {
+    expect(memberAffecting('updateCapabilities')).toBe(true);
+    expect(memberAffecting('updateProfile')).toBe(true);
+    expect(memberAffecting('updateSkill')).toBe(false);
+    expect(memberAffecting('describeAgent')).toBe(false);
+
+    // describeAgent 只读：成功后不触发任何刷新广播（spec §6.2 矩阵）
+    vi.mocked(broadcastResourceChanged).mockClear();
+    vi.mocked(broadcastRuntimeChanged).mockClear();
+    notifyResourceOpSucceeded('describeAgent');
+    expect(broadcastResourceChanged).not.toHaveBeenCalled();
+    expect(broadcastRuntimeChanged).not.toHaveBeenCalled();
+  });
+
+  it('buildConfirmPayload：updateCapabilities 结构化 diff（riskNote 拼接扩权与定义提示）', () => {
+    const p = buildConfirmPayload('updateCapabilities', {
+      agent: 'ghost-agent', scope: 'definition',
+      add: { tools: ['bash'] }, remove: { skills: ['old'] },
+    }, 'ws-1');
+    expect(p).not.toBeNull();
+    expect(p!.requester.op).toBe('updateCapabilities');
+    expect(p!.requester.toolName).toBe('update_agent_capabilities');
+    expect(p!.diff.target.kind).toBe('definition');
+    expect(p!.diff.adds).toEqual([{ field: 'tools', ref: 'bash' }]);
+    expect(p!.diff.removes).toEqual([{ field: 'skills', ref: 'old' }]);
+    expect(p!.riskNote).toContain('扩权');
+    expect(p!.riskNote).toContain('全局生效');
+  });
+
+  it('buildConfirmPayload：免确认 op 返回 null', () => {
+    expect(buildConfirmPayload('describeAgent', {}, 'ws-1')).toBeNull();
+    expect(buildConfirmPayload('createAgent', {}, 'ws-1')).toBeNull();
   });
 });

@@ -17,6 +17,8 @@ import { useWorkspaceStore, subscribeWorkspaceListChanged } from './stores/works
 import { useEditorStore } from './stores/editor.store';
 import { subscribeSessionChannels, useSessionStore } from './stores/session.store';
 import { useWriteGrantStore } from './stores/write-grant.store';
+import { useAgentOpConfirmStore } from './stores/agent-op-confirm.store';
+import { AgentOpConfirmCard } from './components/AgentOpConfirmCard';
 import { MainShell } from './routes/MainShell';
 import { OnboardingWizard } from './routes/OnboardingWizard';
 import { TitleBar } from './components/layout/TitleBar';
@@ -68,6 +70,16 @@ export function App() {
     () =>
       ipc.sandbox.onWriteBlocked((e) =>
         useWriteGrantStore.getState().receiveWriteBlocked(e),
+      ),
+    [],
+  );
+
+  // 扩权确认请求（spec 2026-11-12 §7）：主进程 required 档 op 广播 → store
+  // 单卡；卡本体挂 CenterPromptLayer（Tier A 阻断形态），回执先到先得
+  useEffect(
+    () =>
+      ipc.agent.onAgentOpConfirmRequest((payload) =>
+        useAgentOpConfirmStore.getState().receive(payload),
       ),
     [],
   );
@@ -169,11 +181,12 @@ export function App() {
           <UpgradeNotice exportDir={upgradeExportDir} onDismiss={dismissUpgrade} />
         )}
       </NoticeStack>
-      {/* 提示分级（spec 2026-09-15）：Tier A 阻断确认居中层（信任/释放/关闭确认自管显隐） */}
+      {/* 提示分级（spec 2026-09-15）：Tier A 阻断确认居中层（信任/释放/关闭确认/扩权确认自管显隐） */}
       <CenterPromptLayer>
         <BrowserTrustNotice />
         <BrowserWaitReleasePrompt />
         <BrowserCloseConfirmCard />
+        <AgentOpConfirmCard />
       </CenterPromptLayer>
       {/* Toast 全局唯一挂载点（M3.4 D1）：showToast 写模块级单例 store，多处挂载
           会重复渲染同一条——故在 App 壳挂载一次，各视图（资源库/看板/会话…）只调

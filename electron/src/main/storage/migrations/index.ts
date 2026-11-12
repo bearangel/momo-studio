@@ -54,6 +54,7 @@ import { migration076 } from './076_browser_evaluate_default_on';
 import { migration077 } from './077_momo_resource_creation_tools';
 import { migration078 } from './078_momo_list_models_tool';
 import { migration079 } from './079_oauth_module';
+import { migration080 } from './080_momo_capability_management_tools';
 
 export interface Migration {
   version: number;
@@ -1226,6 +1227,13 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 密文不落库表（access/refresh/client_secret 走 keychain 门面）。
     version: migration079.version,
     sql: migration079.sql,
+  },
+  {
+    // Momo 默认工具全集 65 → 70（spec 2026-11-12 能力管理）：资源管理五工具
+    // 整列替换进存量 Momo 行（074/077/078 同式替换语义；新装库 no-op——
+    // 迁移先于内置定义落库执行）。SQL 住在独立模块 080_momo_capability_management_tools.ts。
+    version: migration080.version,
+    sql: migration080.sql,
   },
 ];
 

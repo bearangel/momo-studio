@@ -36,6 +36,8 @@ import { AgentRunner, markShuttingDown, __resetShuttingDownForTest } from './age
 import { notifyRunnerIdle, notifyAgentStopped } from './router-service';
 import { dispatchRegistry } from './dispatch-registry';
 import { spawnForAgent, type SpawnedRuntime } from './runtime-spawner';
+import { childKeyFor } from './resource-ops-bridge';
+import { resolvePendingByChildExit } from './agent-op-confirm';
 import { ensureSandboxProbe, sandboxProbeInFlight } from '../sandbox/probe';
 import { ProviderTokenBucket } from './llm/token-bucket';
 
@@ -142,6 +144,9 @@ function registerTaskDrivenRuntime(opts: AgentRuntimeOpts): WarmPool {
           // C2 清理链：池剔除 + runner 活跃收尾。经全局 Map 实时查询保证幂等
           // （此闭包可能比 pool/runner 自身存活更久）。
           if (!spawned) return;
+          // 确认通道 child 退出出口（spec §7.2）：该 child 在途确认按拒绝收敛。
+          // 键与 runtime-spawner 请求侧同源（childKeyFor 单点派生）
+          resolvePendingByChildExit(childKeyFor(agentId, spawned.child));
           const poolNow = agentWarmPools.get(instanceId);
           if (poolNow) poolNow.evict(agentId, spawned.child);
           const runnerNow = agentRunners.get(instanceId);
@@ -164,7 +169,12 @@ function registerTaskDrivenRuntime(opts: AgentRuntimeOpts): WarmPool {
     warmPool: pool,
     // v2.9 事件驱动 dispatch：回合归零边沿 → RouterService PM 空闲快照 +
     // 自动送达结果投递（模块级 handler 注入，避免构造期循环依赖）
-    onIdle: notifyRunnerIdle,
+    onIdle: (assignmentId, forcedExit, roundStartedAt) => {
+      notifyRunnerIdle(assignmentId, forcedExit, roundStartedAt);
+      // respawn-on-idle：先走既有空闲通知，再驱动待定的 stop+拉起（fire-and-forget，
+      // 失败只记日志——不拖垮 idle 收尾链路）
+      void drainRespawnQueue(assignmentId);
+    },
   });
   agentRunners.set(instanceId, runner);
 
@@ -254,6 +264,39 @@ export function destroyTaskDrivenRuntime(instanceId: string): void {
   }
 }
 
+// ── respawn-on-idle（spec §8）：自改场景的回合后换芯 ──────────────────────
+// 能力管理 op 改动成员定义后登记；该成员回合归零（idle 边沿）时自动 stop+拉起。
+// 无超时：长任务合法延迟 respawn，标记不设 TTL。
+
+const pendingRespawn = new Set<string>();
+
+/** 标记成员回合归零后自动 stop+拉起（spec §8 自改场景）。幂等。 */
+export function requestRespawnAfterIdle(instanceId: string): void {
+  pendingRespawn.add(instanceId);
+  logger.info('登记回合后 respawn', { instanceId });
+}
+
+/** idle 边沿处理（runner onIdle 末尾调用；测试后门 __drainRespawnQueueForTest 同体） */
+export async function drainRespawnQueue(instanceId: string): Promise<void> {
+  if (!pendingRespawn.has(instanceId)) return;
+  pendingRespawn.delete(instanceId);
+  try {
+    await stopAgentRuntime(instanceId);
+    // 动态 import 打破 start-chain ↔ runtime-registry 回环（resource-ops-bridge 同款纪律）
+    const { ensureMemberRuntime } = await import('./start-chain');
+    await ensureMemberRuntime(instanceId);
+    logger.info('respawn 完成（idle 边沿）', { instanceId });
+  } catch (err) {
+    logger.warn('respawn 失败（保留停止态，下次派发自然拉起）', { instanceId, error: String(err) });
+  }
+}
+
+/** 测试后门：不经真实 runner 直接驱动 idle 处理 */
+export async function __drainRespawnQueueForTest(instanceId?: string): Promise<void> {
+  if (instanceId) return drainRespawnQueue(instanceId);
+  for (const id of [...pendingRespawn]) await drainRespawnQueue(id);
+}
+
 /**
  * 统一的 agent 停止入口。
  * 销毁 task-driven runtime（runner + WarmPool）+ 写 DB last_running=0。
@@ -266,6 +309,9 @@ export function destroyTaskDrivenRuntime(instanceId: string): void {
  * @param instanceId agent_assignment 主键
  */
 export async function stopAgentRuntime(instanceId: string): Promise<void> {
+  // 首行清 respawn 标记（spec §8）：防 stop→idle→重复 respawn——用户手动停止
+  // 即撤销待定的自动换芯，成员保持停止态
+  pendingRespawn.delete(instanceId);
   pauseRunningTasksForAgent(instanceId);
   destroyTaskDrivenRuntime(instanceId);
   getDb()

@@ -9,6 +9,11 @@
 #
 # 2026-11-10 v2.1.1：+list_models 模型查询（验收迭代）
 #
+# 2026-11-12 v2.2.0：能力管理五工具（describe_agent / update_agent_capabilities /
+# update_agent_profile / update_skill / update_mcp，spec
+# 2026-11-12-agent-capability-management-tools）+ manage-agent 技能册——
+# defaultTools 65 → 70，defaultSkills 4 → 5。
+#
 # 2026-11-02 内置资源极简化：本文件成为唯一内置预置。defaultSkills 已移除
 # （doc-coauthoring / humanize-writing / verification-before-done 随 20 个内置 skill
 # 一并下架），原技能承载的写作纪律已内联进 systemPrompt；后续按用户反馈逐步恢复。
@@ -17,7 +22,7 @@ kind: AgentDefinition
 metadata:
   name: Momo
   slug: general-assistant
-  version: 2.1.1
+  version: 2.2.0
   description: 系统默认的万能综合 agent：问答、写作、编码、终端、Git、网页与文件处理，一个入口全搞定。
   iconEmoji: "🐾"
 spec:
@@ -182,6 +187,16 @@ spec:
       ref: create_team
     - kind: builtin
       ref: list_models
+    - kind: builtin
+      ref: describe_agent
+    - kind: builtin
+      ref: update_agent_capabilities
+    - kind: builtin
+      ref: update_agent_profile
+    - kind: builtin
+      ref: update_skill
+    - kind: builtin
+      ref: update_mcp
   defaultSkills:
     - kind: skill
       ref: create-agent
@@ -191,3 +206,5 @@ spec:
       ref: create-mcp
     - kind: skill
       ref: build-team
+    - kind: skill
+      ref: manage-agent

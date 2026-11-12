@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "updatedAt": "2026-11-09T00:00:00Z",
+  "updatedAt": "2026-11-12T00:00:00Z",
   "items": [
     {
       "id": "agent-general-assistant",
@@ -86,6 +86,24 @@
       "tags": ["team", "资源创建"],
       "category": "general",
       "iconEmoji": "👥",
+      "verificationStatus": "official",
+      "downloadUrl": "",
+      "checksum": "",
+      "sizeBytes": 0,
+      "installCount": 0
+    },
+    {
+      "id": "skill-manage-agent",
+      "type": "skill",
+      "slug": "manage-agent",
+      "name": "管理智能体",
+      "version": "1.0.0",
+      "author": "Momo Studio",
+      "description": "会话内管理既有 agent（盘点→describe→复述→update 工具族 + 删除类请求拒答引导）",
+      "readme": "会话内查看与修改既有 agent 能力的方法论技能。",
+      "tags": ["agent", "资源管理"],
+      "category": "general",
+      "iconEmoji": "🛠️",
       "verificationStatus": "official",
       "downloadUrl": "",
       "checksum": "",

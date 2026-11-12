@@ -10,14 +10,21 @@
 // fork 被 mock，message handler 被捕获后直接调用；insert/quota 模块被 mock
 // （本测试只验证桥的转发逻辑，不落真库）。
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { runMigrations, closeDb } from '../../src/main/storage/db';
 
 // vi.mock 工厂被提升到 import 之前，用 vi.hoisted 共享 handler 捕获槽
 const captured = vi.hoisted(() => ({
   handler: null as ((msg: unknown) => void) | null,
 }));
 
-vi.mock('node:child_process', () => ({
+// Task 8 起 resource-ops 静态图引入 marketplace/installer（顶层 promisify(execFile)），
+// mock 须保 execFile 等真实导出可达——importOriginal 部分化，仅 fork 拦截
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   fork: vi.fn(() => ({
     pid: 4242,
     on: (event: string, cb: (msg: unknown) => void) => {
@@ -30,6 +37,7 @@ vi.mock('node:child_process', () => ({
     off: vi.fn(),
     send: vi.fn(),
     kill: vi.fn(),
+    listeners: vi.fn(() => []),
     connected: true,
     once: vi.fn(),
   })),
@@ -77,9 +85,20 @@ const AUDIT_MSG = {
 };
 
 describe('runtime-spawner audit:toolCall 桥', () => {
+  const tmpRoot = path.join(os.tmpdir(), `ap-spawner-audit-${Date.now()}`);
   beforeEach(() => {
     vi.clearAllMocks();
     __resetAuditCounterForTest();
+    // 2026-11-11 文件 IO 设置起 spawnForAgent 读 global_settings（kv_store）——
+    // 临时目录 + 全量迁移（resource-ops.test.ts 同款夹具）
+    fs.mkdirSync(tmpRoot, { recursive: true });
+    process.env.AP_USER_DATA_DIR = tmpRoot;
+    runMigrations();
+  });
+  afterEach(() => {
+    closeDb();
+    delete process.env.AP_USER_DATA_DIR;
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
   });
 
   it('audit:toolCall → insertToolCall 以闭包 runtimeConfig 补全身份', async () => {

@@ -2354,6 +2354,28 @@ export interface OAuthApiSurface {
   onConnectionsChanged(callback: (payload: { at: number }) => void): () => void;
 }
 
+/**
+ * agent-op-confirm:request 推送载荷（扩权确认，spec 2026-11-12 §7）——
+ * 主进程 agent/agent-op-confirm.ts 的 AgentOpConfirmPayload 镜像（跨进程
+ * 独立定义，仅结构对齐；契约由主进程 resource-ops 构建侧测试锁）。
+ * renderer 只渲染不解析——diff 结构是展示面真相源。
+ */
+export interface AgentOpConfirmPayload {
+  requestId: string;
+  workspaceId: string;
+  requester: { agentName: string; op: string; toolName: string };
+  diff: {
+    target: { kind: 'member' | 'definition' | 'skill' | 'mcp'; name: string; workspaceName?: string };
+    scope?: 'member' | 'definition';
+    adds: Array<{ field: 'skills' | 'mcps' | 'tools' | 'pluginTools'; ref: string }>;
+    removes: Array<{ field: 'skills' | 'mcps' | 'tools' | 'pluginTools'; ref: string }>;
+    fieldChanges?: Array<{ field: string; before?: string; after?: string }>;
+  };
+  riskNote?: string;
+  /** 处置截止（epoch ms）——到期未裁决主进程侧超时拒绝，卡面同步清扫 */
+  expiresAt: number;
+}
+
 export interface ApiSurface {
   system: {
     getInfo(): Promise<SystemInfo>;
@@ -2525,6 +2547,16 @@ export interface ApiSurface {
      * 车道空闲（无在途回合）→ { stoppedStream: false } 幂等 no-op。
      */
     abortTurn(sessionId: string): Promise<{ stoppedStream: boolean }>;
+    /**
+     * 扩权确认请求推送（spec 2026-11-12 §7）：主进程对 required 档 op 广播
+     * 确认卡载荷（全部窗口）。返回退订函数。
+     */
+    onAgentOpConfirmRequest(callback: (payload: AgentOpConfirmPayload) => void): () => void;
+    /**
+     * 扩权确认回执（先到先得）：{ skipped: true } = 该 requestId 已被其他
+     * 窗口/超时裁决，调用方静默忽略即可。
+     */
+    replyAgentOpConfirm(requestId: string, allowed: boolean): Promise<{ skipped: boolean }>;
   };
   /**
    * v25 Task 6：团队通道面（spec §4.2）。全部委托 team.ts 服务层。

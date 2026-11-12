@@ -10,7 +10,7 @@
 //   4. 幂等：版本一致时零写入（total_changes 不增 + 行相等双锁）
 //   5. 未启用的预置（无 DB 行）不受影响——按需启用语义不被启动钩子破坏
 //
-// 升级目标直读仓库真实 general-assistant.yaml（v2.1.1，65 工具 + 4 技能），
+// 升级目标直读仓库真实 general-assistant.yaml（v2.2.0，70 工具 + 5 技能），
 // 不在 tmp 沙盒伪造目标数据——与 builtin.test.ts 引用一致性锁同一数据源。
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -81,7 +81,7 @@ describe('syncBuiltinPresetVersions', () => {
     syncBuiltinPresetVersions();
 
     const def = getAgentDefinition('builtin-general-assistant')!;
-    expect(def.version).toBe('2.1.1');
+    expect(def.version).toBe('2.2.0');
     // 用户配置不被 YAML 覆盖（YAML 解析出的 provider/model 均为缺省值）
     expect(def.modelProviderId).toBe('user-provider');
     expect(def.modelName).toBe('user-model');
@@ -109,7 +109,7 @@ describe('syncBuiltinPresetVersions', () => {
 
   it('幂等：版本一致时零写入', async () => {
     await seedLegacyMomoRow();
-    syncBuiltinPresetVersions(); // 已升到 2.1.1
+    syncBuiltinPresetVersions(); // 已升到 2.2.0
 
     const before = getDb()
       .prepare("SELECT * FROM agent_definitions WHERE id = 'builtin-general-assistant'")
