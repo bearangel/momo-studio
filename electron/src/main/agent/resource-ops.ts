@@ -4,10 +4,14 @@
 // 会话内资源创建的白名单 op。全部复用主进程既有服务（与 UI 创建同链——单一
 // 真相源）。workspaceId 由桥的主进程侧从 spawn 上下文注入，本层入参不含
 // workspaceId——子进程不可伪造归属。
-import { createCustomDef, addMember, generateAgentUserId } from './crud';
+import { createCustomDef, addMember, generateAgentUserId, updateAgentDefinition, stopRunningInstancesByDefinition } from './crud';
 import { listAgentDefinitions, getAgentDefinition, listMembers, getMemberByInstanceId } from './agent-queries';
-import { mergeCapabilities, readAllocationLayer, readAssignmentDeltas } from './capability-merger';
-import type { AgentDefinition, WorkspaceAgentMember } from './types';
+import { mergeCapabilities, readAllocationLayer, readAssignmentDeltas, union, subtract } from './capability-merger';
+import { setAssignmentDeltas } from './assignment-capabilities';
+import { applyCapabilityDelta, type CapabilityDeltaInput } from './resource-ops-delta';
+import { isAgentRunning } from './runtime-status';
+import { toolRefMatches } from '../plugin/assembly';
+import type { AgentDefinition, WorkspaceAgentMember, McpRef, SkillRef } from './types';
 import { getProvider, listProviders, listProviderModels } from './provider-crud';
 import { getGlobalSettings } from '../settings/crud';
 import { parseAgentManifest } from './manifest-parser';
@@ -25,7 +29,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { logger } from '../logger';
 
-/** 白名单 op 枚举——桥面只放行这八个入口（spec §6：桥不是通用 RPC 面） */
+/** 白名单 op 枚举——桥面只放行这九个入口（spec §6：桥不是通用 RPC 面） */
 export const RESOURCE_OP_NAMES = [
   'list',
   'createAgent',
@@ -35,7 +39,16 @@ export const RESOURCE_OP_NAMES = [
   'createTeam',
   'listModels',
   'describeAgent',
+  'updateCapabilities',
 ] as const;
+
+/** op 执行上下文（spec 2026-11-12 §6）：background=后台派发；callerInstanceId=
+ *  触发本次 op 的成员自身（restart=auto 时的「绝不 mid-call 杀自己」判定依据）。
+ *  桥接线（Task 10）从 spawn 上下文填充；缺省视为前台且无自身调用 */
+export interface OpContext {
+  background: boolean;
+  callerInstanceId?: string;
+}
 
 /** resource_list 聚合清单（缺省全量；type 过滤时仅填对应段） */
 export interface ResourceListResult {
@@ -93,12 +106,15 @@ export interface ListModelsResult {
   globalDefault: { providerId: string; modelId: string } | null;
 }
 
-/** op 分发。args 一律视为不可信输入（形状先验，非法即抛中文错误）。 */
+/** op 分发。args 一律视为不可信输入（形状先验，非法即抛中文错误）。
+ *  ctx（Task 5 起）：background / callerInstanceId——桥接线在 Task 10 填充，
+ *  既有 4 参调用缺省 undefined，行为不变 */
 export async function executeResourceOp(
   op: string,
   args: unknown,
   workspaceId: string,
   deps?: ResourceOpDeps,
+  ctx?: OpContext,
 ): Promise<unknown> {
   if (!(RESOURCE_OP_NAMES as readonly string[]).includes(op)) {
     throw new Error(`未知 resource op: ${op}`);
@@ -113,6 +129,7 @@ export async function executeResourceOp(
     case 'createTeam': return opCreateTeam(a, workspaceId);
     case 'listModels': return opListModels();
     case 'describeAgent': return opDescribeAgent(a, workspaceId);
+    case 'updateCapabilities': return opUpdateCapabilities(a, workspaceId, ctx);
     default: throw new Error(`未知 resource op: ${op}`);
   }
 }
@@ -162,7 +179,7 @@ function opList(typeFilter: unknown, workspaceId: string): ResourceListResult {
 // ── describeAgent（读面，spec §5.1）──
 export interface DescribeAgentResult {
   definition: { id: string; slug: string; name: string; source: string; modelProviderId: string | null; modelName: string;
-    defaultTools: Array<{ kind: string; ref: string }>; defaultMcps: unknown[]; defaultSkills: unknown[];
+    defaultTools: Array<{ kind: string; ref: string }>; defaultMcps: McpRef[]; defaultSkills: SkillRef[];
     deniedTools: string[] };
   member: { instanceId: string; running: boolean };
   effective: { tools: string[]; mcps: string[]; skills: string[] };
@@ -223,6 +240,216 @@ function opDescribeAgent(a: Record<string, unknown>, workspaceId: string): Descr
       memberAdded: [...deltas.addedTools, ...deltas.addedMcps, ...deltas.addedSkills, ...deltas.addedPluginTools],
       memberRemoved: [...deltas.removedTools, ...deltas.removedMcps, ...deltas.removedSkills, ...deltas.removedPluginTools],
     },
+    otherWorkspaceMembers: otherWs.n,
+  };
+}
+
+// ── updateCapabilities（写面，spec 2026-11-12 §5.2/§6/§8——member delta 落
+//    Layer 3 / definition 落 def.default*，restart 三行接线）──
+
+/** update_capabilities 返回。restart 相关键互斥出现（spec §8 三行表）：
+ *  deferred → needsRestart:true；auto+自身 → effectiveFrom:'next-turn'；
+ *  auto+他人在跑 → restarted:true；auto+未在跑 → needsRestart:false */
+export interface UpdateCapabilitiesResult {
+  appliedTo: 'member' | 'definition';
+  changed: { adds: string[]; removes: string[] };
+  effective: { tools: string[]; mcps: string[]; skills: string[]; deniedTools: string[]; grantedPlugin: string[] };
+  restarted?: boolean;
+  needsRestart?: boolean;
+  effectiveFrom?: 'next-turn';
+  notice?: string;
+  stoppedInstances?: number;
+  otherWorkspaceMembers: number;
+}
+
+/** add/remove 归一：四字段缺省空数组，出现即须为字符串数组（返回全字段必填形状） */
+function normDelta(v: unknown, field: string): Required<CapabilityDeltaInput> {
+  if (v === undefined) return { skills: [], mcps: [], tools: [], pluginTools: [] };
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw new Error(`${field} 必须为 { skills?, mcps?, tools?, pluginTools? } 对象`);
+  }
+  const r = v as Record<string, unknown>;
+  const refs = (x: unknown, k: string): string[] => (x === undefined ? [] : strArray(x, `${field}.${k}`));
+  return {
+    skills: refs(r['skills'], 'skills'),
+    mcps: refs(r['mcps'], 'mcps'),
+    tools: refs(r['tools'], 'tools'),
+    pluginTools: refs(r['pluginTools'], 'pluginTools'),
+  };
+}
+
+/** 成员级插件授权基线（spec §6 公式）：授权通道（ws allocation ∪ def.defaultTools）
+ *  中的 plugin: refs，剔除被 def.deniedTools 模式串命中者（toolRefMatches 同款语义） */
+function pluginGrantBaseline(def: AgentDefinition, allocTools: string[]): string[] {
+  const denied = def.deniedTools ?? [];
+  return [...new Set([...allocTools, ...def.defaultTools.map((t) => t.ref)])]
+    .filter((r) => r.startsWith('plugin:') && !toolRefMatches(r, denied));
+}
+
+/** 授权并集减撤销并集（撤销侧按模式串命中判定）——applyCapabilityDelta 的
+ *  EffectiveState.grantedPlugin 输入口径 */
+function pluginGrantedFrom(base: string[], added: string[], removed: string[], defDenied: string[]): string[] {
+  const deny = [...removed, ...defDenied];
+  return [...new Set([...base, ...added])].filter((p) => !toolRefMatches(p, deny));
+}
+
+async function opUpdateCapabilities(
+  a: Record<string, unknown>,
+  workspaceId: string,
+  ctx?: OpContext,
+): Promise<UpdateCapabilitiesResult> {
+  const key = str(a['agent'], 'agent');
+  // 形状先验：scope / restart 枚举值非法即抛（缺省 member / auto）
+  const scope = a['scope'] === undefined ? 'member' : a['scope'];
+  if (scope !== 'member' && scope !== 'definition') throw new Error(`scope 必须为 'member' 或 'definition'`);
+  const restart = a['restart'] === undefined ? 'auto' : a['restart'];
+  if (restart !== 'auto' && restart !== 'deferred') throw new Error(`restart 必须为 'auto' 或 'deferred'`);
+  const add = normDelta(a['add'], 'add');
+  const remove = normDelta(a['remove'], 'remove');
+  const totalRefs =
+    add.tools.length + add.mcps.length + add.skills.length + add.pluginTools.length +
+    remove.tools.length + remove.mcps.length + remove.skills.length + remove.pluginTools.length;
+  if (totalRefs === 0) throw new Error('add 与 remove 至少其一须含非空引用（skills/mcps/tools/pluginTools）');
+
+  const target = resolveAgentTarget(key, workspaceId);
+  if (!target) throw new Error(`未找到 agent 成员: ${key}（可先 resource_list 查询真实 instanceId/slug）`);
+  const { member, def } = target;
+
+  // ref 校验 fail-fast（零写库）：全部非法项聚合成一条中文错误
+  const invalid: string[] = [];
+  const toolLike = [...add.tools, ...remove.tools, ...add.pluginTools, ...remove.pluginTools];
+  if (toolLike.length > 0) {
+    // 动态 import：known-tool-names 静态链牵 plugin 装配目录，沿本文件 runtime 边界动态纪律
+    const { collectKnownToolNames } = await import('./known-tool-names');
+    const known = collectKnownToolNames(workspaceId);
+    for (const t of [...add.tools, ...remove.tools]) if (!known.has(t)) invalid.push(`tool=${t}`);
+    for (const p of [...add.pluginTools, ...remove.pluginTools]) if (!known.has(p)) invalid.push(`pluginTool=${p}`);
+  }
+  if (add.skills.length + remove.skills.length > 0) {
+    const slugs = new Set(listInstalledSkills().map((s) => s.slug));
+    for (const s of [...add.skills, ...remove.skills]) if (!slugs.has(s)) invalid.push(`skill=${s}`);
+  }
+  if (add.mcps.length + remove.mcps.length > 0) {
+    const names = new Set(listRegistered().map((m) => m.name));
+    for (const m of [...add.mcps, ...remove.mcps]) if (!names.has(m)) invalid.push(`mcp=${m}`);
+  }
+  if (invalid.length > 0) {
+    throw new Error(`非法引用: ${invalid.join(', ')}（可先 resource_list 查询可用清单）`);
+  }
+
+  const otherWs = getDb()
+    .prepare('SELECT COUNT(DISTINCT workspace_id) AS n FROM workspace_agent_members WHERE agent_definition_id = ? AND workspace_id != ?')
+    .get(def.id, member.workspaceId) as { n: number };
+  const changed = {
+    adds: [...add.tools, ...add.mcps, ...add.skills, ...add.pluginTools],
+    removes: [...remove.tools, ...remove.mcps, ...remove.skills, ...remove.pluginTools],
+  };
+
+  if (scope === 'definition') {
+    if (def.source === 'builtin') {
+      throw new Error('builtin 预设定义只读。给成员调整能力用默认 member scope 即可；改定义请在资源库 UI（自定义 agent）');
+    }
+    if (add.pluginTools.length + remove.pluginTools.length > 0) {
+      throw new Error('definition scope 不支持 pluginTools（插件工具授权是成员级语义，请用默认 member scope）');
+    }
+    // 终态 = (def 现有 refs ∪ add) − remove；映射回 {kind,ref} 时既有条目保原形状
+    const toolByRef = new Map(def.defaultTools.map((t) => [t.ref, t]));
+    const mcpByRef = new Map(def.defaultMcps.map((m) => [m.ref, m]));
+    const skillByRef = new Map(def.defaultSkills.map((s) => [s.ref, s]));
+    const nextTools = subtract(union(def.defaultTools.map((t) => t.ref), add.tools), remove.tools);
+    const nextMcps = subtract(union(def.defaultMcps.map((m) => m.ref), add.mcps), remove.mcps);
+    const nextSkills = subtract(union(def.defaultSkills.map((s) => s.ref), add.skills), remove.skills);
+    updateAgentDefinition({
+      id: def.id,
+      defaultTools: nextTools.map((r) => toolByRef.get(r) ?? { kind: 'builtin', ref: r }),
+      defaultMcps: nextMcps.map((r) => mcpByRef.get(r) ?? { kind: 'mcp', ref: r }),
+      defaultSkills: nextSkills.map((r) => skillByRef.get(r) ?? { kind: 'skill', ref: r }),
+    });
+    const stopped = await stopRunningInstancesByDefinition(def.id);
+    const defDenied = def.deniedTools ?? [];
+    const result: UpdateCapabilitiesResult = {
+      appliedTo: 'definition',
+      changed,
+      effective: {
+        tools: nextTools,
+        mcps: nextMcps,
+        skills: nextSkills,
+        deniedTools: defDenied,
+        grantedPlugin: nextTools.filter((r) => r.startsWith('plugin:') && !toolRefMatches(r, defDenied)),
+      },
+      stoppedInstances: stopped.length,
+      otherWorkspaceMembers: otherWs.n,
+    };
+    if (a['restart'] !== undefined) {
+      result.notice = 'definition 分支恒 stop-only：restart 参数已忽略（实例保持停止态，下次派发自然拉起新配置）';
+    }
+    return result;
+  }
+
+  // member 分支：基线 = def ∪ ws allocation；现状 = 三层合并后的生效面（读面同链）
+  const alloc = readAllocationLayer(member.workspaceId);
+  const oldDeltas = readAssignmentDeltas(member.instanceId);
+  const merged = mergeCapabilities(def, alloc, oldDeltas);
+  const defDenied = def.deniedTools ?? [];
+  const baseGrantedPlugin = pluginGrantBaseline(def, alloc.tools);
+  const grantedPlugin = pluginGrantedFrom(
+    baseGrantedPlugin, oldDeltas.addedPluginTools, oldDeltas.removedPluginTools, defDenied,
+  );
+  const newDeltas = applyCapabilityDelta(
+    {
+      tools: union(def.defaultTools.map((t) => t.ref), alloc.tools),
+      mcps: union(def.defaultMcps.map((m) => m.ref), alloc.mcps),
+      skills: union(def.defaultSkills.map((s) => s.ref), alloc.skills),
+      baseGrantedPlugin,
+    },
+    { tools: merged.tools, mcps: merged.mcps, skills: merged.skills, grantedPlugin },
+    { add, remove },
+  );
+  setAssignmentDeltas(member.instanceId, newDeltas);
+
+  // 写后重算生效面（Layer 3 已换新 deltas——与 describeAgent 读面同口径）
+  const mergedAfter = mergeCapabilities(def, alloc, newDeltas);
+  const grantedAfter = pluginGrantedFrom(
+    baseGrantedPlugin, newDeltas.addedPluginTools, newDeltas.removedPluginTools, defDenied,
+  );
+
+  // restart 三行接线（spec §8，仅 member 分支）
+  let restarted: boolean | undefined;
+  let needsRestart: boolean | undefined;
+  let effectiveFrom: 'next-turn' | undefined;
+  if (restart === 'deferred') {
+    needsRestart = true;
+  } else if (ctx?.callerInstanceId === member.instanceId) {
+    // 自改：绝不 mid-call 杀自己——登记回合后 respawn-on-idle
+    const { requestRespawnAfterIdle } = await import('./runtime-registry');
+    requestRespawnAfterIdle(member.instanceId);
+    effectiveFrom = 'next-turn';
+  } else if (isAgentRunning(member.instanceId)) {
+    // 他人在跑：stop + 立即拉起（新配置下次回合生效）。动态 import 打破
+    // runtime-registry → runtime-spawner → resource-ops-bridge → 本模块 回环
+    const { stopAgentRuntime } = await import('./runtime-registry');
+    await stopAgentRuntime(member.instanceId);
+    const { ensureMemberRuntime } = await import('./start-chain');
+    await ensureMemberRuntime(member.instanceId);
+    restarted = true;
+  } else {
+    needsRestart = false;
+  }
+
+  logger.info('会话内更新成员能力', { instanceId: member.instanceId, defId: def.id, appliedTo: 'member' });
+  return {
+    appliedTo: 'member',
+    changed,
+    effective: {
+      tools: mergedAfter.tools,
+      mcps: mergedAfter.mcps,
+      skills: mergedAfter.skills,
+      deniedTools: mergedAfter.deniedTools,
+      grantedPlugin: grantedAfter,
+    },
+    ...(restarted !== undefined && { restarted }),
+    ...(needsRestart !== undefined && { needsRestart }),
+    ...(effectiveFrom !== undefined && { effectiveFrom }),
     otherWorkspaceMembers: otherWs.n,
   };
 }

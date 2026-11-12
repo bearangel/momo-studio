@@ -24,14 +24,20 @@ import { getSkillsDir, listInstalled } from '../../src/main/skill/zip-uploader';
 import type { McpToolInfo } from '../../src/main/mcp/types';
 import { McpHttpError } from '../../src/main/mcp/http-client';
 import { executeResourceOp } from '../../src/main/agent/resource-ops';
-import type { ListModelsResult, DescribeAgentResult } from '../../src/main/agent/resource-ops';
+import type { ListModelsResult, DescribeAgentResult, UpdateCapabilitiesResult } from '../../src/main/agent/resource-ops';
 
-// 与 crud-custom-def.test.ts 同款 mock：crud.ts 引入的 runtime 依赖在测试环境不可用
+// 与 crud-custom-def.test.ts 同款 mock：crud.ts 引入的 runtime 依赖在测试环境不可用。
+// updateCapabilities 的 restart 接线（spec §8）也经这两个边界——mock 面随 Task 5 扩：
+// runtime-registry 加 requestRespawnAfterIdle；start-chain（拉起通道）整体 mock。
 vi.mock('../../src/main/agent/runtime-status', () => ({
   isAgentRunning: vi.fn(() => false),
 }));
 vi.mock('../../src/main/agent/runtime-registry', () => ({
   stopAgentRuntime: vi.fn(),
+  requestRespawnAfterIdle: vi.fn(),
+}));
+vi.mock('../../src/main/agent/start-chain', () => ({
+  ensureMemberRuntime: vi.fn(),
 }));
 
 const tmpRoot = path.join(os.tmpdir(), `ap-resource-ops-${Date.now()}`);
@@ -434,5 +440,105 @@ describe('describeAgent（读面）', () => {
     const r = (await executeResourceOp('describeAgent', { agent: m1 }, wsId)) as DescribeAgentResult;
     expect(r.attribution.memberAdded).toContain('weather');
     expect(r.effective.skills).toContain('weather');
+  });
+});
+
+describe('updateCapabilities', () => {
+  // .sha256 标记 = listInstalled 识别 custom skill 的前提（zip-uploader §3 扫描规则）——
+  // 只写 SKILL.md 的目录对 ref 校验不可见
+  const seedSkill = (slug: string): void => {
+    const dir = path.join(getSkillsDir(), slug);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: ${slug}\ndescription: d\n---\nbody`);
+    fs.writeFileSync(path.join(dir, '.sha256'), 'seed');
+  };
+
+  it('member 加 skill：delta 落库 + restart=deferred 返回 needsRestart', async () => {
+    seedSkill('weather');
+    const r = (await executeResourceOp('updateCapabilities',
+      { agent: m1, add: { skills: ['weather'] }, restart: 'deferred' }, wsId, undefined, { background: false })) as UpdateCapabilitiesResult;
+    expect(r.appliedTo).toBe('member');
+    expect(r.needsRestart).toBe(true);
+    const deltas = getDb().prepare('SELECT * FROM agent_assignment_capabilities WHERE assignment_id = ?').all(m1) as Array<{ ref: string; mode: string }>;
+    expect(deltas.some((d) => d.ref === 'weather' && d.mode === 'add')).toBe(true);
+  });
+
+  it('ref 校验 fail-fast：全部非法项一次报出，零落库', async () => {
+    seedSkill('weather');
+    await expect(executeResourceOp('updateCapabilities',
+      { agent: m1, add: { skills: ['weather', 'ghost-skill'], tools: ['no_such_tool'] } }, wsId))
+      .rejects.toThrow(/ghost-skill.*no_such_tool|no_such_tool.*ghost-skill/s);
+    const n = getDb().prepare('SELECT COUNT(*) c FROM agent_assignment_capabilities').get() as { c: number };
+    expect(n.c).toBe(0);
+  });
+
+  it('scope=definition 且 builtin 定义 → 拒绝并指路 member/UI', async () => {
+    // 共享夹具 source 缺省 'custom'——builtin 用例须显式置源（describeAgent 同款手法）；
+    // 请求带合法非空 add，确保挡在 builtin 守卫而非空请求校验
+    seedSkill('weather');
+    getDb().prepare(`UPDATE agent_definitions SET source = 'builtin' WHERE id = 'def-a'`).run();
+    await expect(executeResourceOp('updateCapabilities',
+      { agent: m1, scope: 'definition', add: { skills: ['weather'] } }, wsId))
+      .rejects.toThrow('builtin');
+  });
+
+  it('definition 分支（custom def）：增量落 def.defaultSkills + 停机返回 stoppedInstances', async () => {
+    seedSkill('weather');
+    getDb().prepare(`INSERT INTO agent_definitions (id, name, slug, version, system_prompt, model_name, source)
+                     VALUES ('def-custom', '自', 'agent-custom', '1', 'p', 'm', 'custom')`).run();
+    const cm = (await addMember(wsId, 'def-custom', '@c:1')).instanceId;
+    const r = (await executeResourceOp('updateCapabilities',
+      { agent: cm, scope: 'definition', add: { skills: ['weather'] } }, wsId)) as UpdateCapabilitiesResult;
+    expect(r.appliedTo).toBe('definition');
+    expect(typeof r.stoppedInstances).toBe('number');
+    const def = getDb().prepare('SELECT default_skills FROM agent_definitions WHERE id = ?').get('def-custom') as { default_skills: string };
+    expect(JSON.parse(def.default_skills)).toEqual([{ kind: 'skill', ref: 'weather' }]);
+  });
+
+  it('otherWorkspaceMembers：另一 ws 同 def 成员计数', async () => {
+    seedSkill('weather');
+    getDb().prepare(`INSERT INTO workspaces (id, name, description, directory_path, git_initialized, owner_id, icon_emoji)
+                     VALUES ('ws-2', '二', '', '/tmp', 0, '@o:s', '📁')`).run();
+    await addMember('ws-2', 'def-a', '@a:2');
+    const r = (await executeResourceOp('updateCapabilities',
+      { agent: m1, add: { skills: ['weather'] }, restart: 'deferred' }, wsId, undefined, { background: false })) as UpdateCapabilitiesResult;
+    expect(r.otherWorkspaceMembers).toBe(1);
+  });
+
+  it('restart=auto 且目标≠自身且在跑 → stop + 拉起（restarted: true）', async () => {
+    seedSkill('weather');
+    const { isAgentRunning } = await import('../../src/main/agent/runtime-status');
+    const { stopAgentRuntime } = await import('../../src/main/agent/runtime-registry');
+    const { ensureMemberRuntime } = await import('../../src/main/agent/start-chain');
+    vi.mocked(isAgentRunning).mockReturnValue(true);
+    const r = (await executeResourceOp('updateCapabilities',
+      { agent: m1, add: { skills: ['weather'] } }, wsId, undefined, { background: false, callerInstanceId: 'someone-else' })) as UpdateCapabilitiesResult;
+    expect(r.restarted).toBe(true);
+    expect(vi.mocked(stopAgentRuntime)).toHaveBeenCalledWith(m1);
+    expect(vi.mocked(ensureMemberRuntime)).toHaveBeenCalledWith(m1);
+    vi.mocked(isAgentRunning).mockReturnValue(false);
+  });
+
+  it('restart=auto 且目标==自身 → 挂 respawn-on-idle（effectiveFrom: next-turn，绝不 mid-call 杀自己）', async () => {
+    seedSkill('weather');
+    const { requestRespawnAfterIdle } = await import('../../src/main/agent/runtime-registry');
+    const r = (await executeResourceOp('updateCapabilities',
+      { agent: m1, add: { skills: ['weather'] } }, wsId, undefined, { background: false, callerInstanceId: m1 })) as UpdateCapabilitiesResult;
+    expect(r.effectiveFrom).toBe('next-turn');
+    expect(r.restarted).toBeUndefined();
+    expect(vi.mocked(requestRespawnAfterIdle)).toHaveBeenCalledWith(m1);
+  });
+
+  it('目标未在跑 → needsRestart: false（下次派发现算快照）', async () => {
+    seedSkill('weather');
+    const { isAgentRunning } = await import('../../src/main/agent/runtime-status');
+    vi.mocked(isAgentRunning).mockReturnValue(false);
+    const r = (await executeResourceOp('updateCapabilities',
+      { agent: m1, add: { skills: ['weather'] } }, wsId, undefined, { background: false, callerInstanceId: 'x' })) as UpdateCapabilitiesResult;
+    expect(r.needsRestart).toBe(false);
+  });
+
+  it('空请求（无 add 无 remove）报错', async () => {
+    await expect(executeResourceOp('updateCapabilities', { agent: m1 }, wsId)).rejects.toThrow('至少');
   });
 });
