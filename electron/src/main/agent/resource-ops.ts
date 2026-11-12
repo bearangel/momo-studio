@@ -833,11 +833,15 @@ function opCreateSkill(a: Record<string, unknown>): CreateSkillResult {
   return { slug, name: def.name };
 }
 
-// ── updateSkill（写面，spec 2026-11-12 §5.4——仅 custom 源可全量替换；全部校验
+// ── updateSkill（写面，spec 2026-11-12 §5.4——仅 custom 源可更新；全部校验
 //    （含 references 越界）先于任何写盘，错误路径零部分写、旧内容原样保留。
-//    引用面计数跨 workspace 全量：def.default_skills ∪ 成员 delta add 行）──
+//    references 省略 = 只换 SKILL.md，附属文件原样保留（undefined=不改，对齐
+//    工具描述承诺与 updateProfile 先例）；显式提供（含 []）= 全量替换，[] 即
+//    有意清空。引用面计数跨 workspace 全量：def.default_skills ∪ 成员 delta add 行）──
 
-/** update_skill 返回（agentsUsingIt=引用该 skill 的成员数，任意 workspace；needsRestart 据此推导） */
+/** update_skill 返回（agentsUsingIt=引用该 skill 的成员数，任意 workspace；
+ *  refCount=references 提供时为其长度、省略时为实际保留的附属文件数；
+ *  needsRestart 据 agentsUsingIt 推导） */
 export interface UpdateSkillResult {
   slug: string;
   name: string;
@@ -881,10 +885,26 @@ function countSkillMembers(slug: string): number {
   return ids.size;
 }
 
+/** 递归统计 skill 目录附属文件数（排除 SKILL.md 与 .sha256 标记）——references
+ *  省略分支 refCount 的诚实口径（反映实际保留现状） */
+function countAttachmentFiles(dir: string): number {
+  let n = 0;
+  const walk = (p: string): void => {
+    for (const e of fs.readdirSync(p, { withFileTypes: true })) {
+      if (e.isDirectory()) walk(path.join(p, e.name));
+      else if (e.name !== 'SKILL.md' && e.name !== '.sha256') n += 1;
+    }
+  };
+  walk(dir);
+  return n;
+}
+
 function opUpdateSkill(a: Record<string, unknown>): UpdateSkillResult {
   const slug = str(a['slug'], 'slug');
   const skillMd = str(a['skillMd'], 'skillMd');
   if (!isValidSlug(slug)) throw new Error(`非法 slug: ${slug}`);
+  // 省略 = 保留附属文件（undefined=不改）；显式提供（含 []）= 全量替换
+  const refsProvided = a['references'] !== undefined;
   const rawRefs = Array.isArray(a['references']) ? a['references'] : [];
   const refs: SkillFileInput[] = rawRefs.map((r): SkillFileInput => {
     if (typeof r !== 'object' || r === null) {
@@ -909,6 +929,22 @@ function opUpdateSkill(a: Record<string, unknown>): UpdateSkillResult {
   // 全部校验先于任何写盘——越界等错误路径零落盘（rm 在此之后，旧内容原样保留）
   const targets = refs.map((r) => safeJoin(dir, r.path));
 
+  if (!refsProvided) {
+    // 省略分支：只覆写 SKILL.md + 重算 .sha256，附属文件原样保留（目录不 rm）
+    fs.writeFileSync(path.join(dir, 'SKILL.md'), skillMd, 'utf-8');
+    fs.writeFileSync(
+      path.join(dir, '.sha256'),
+      createHash('sha256').update(skillMd, 'utf-8').digest('hex'),
+    );
+    const agentsUsingIt = countSkillMembers(slug);
+    logger.info('会话内更新 skill（保留附属文件）', { slug, agentsUsingIt });
+    return {
+      slug, name: def.name, refCount: countAttachmentFiles(dir),
+      agentsUsingIt, needsRestart: agentsUsingIt > 0,
+    };
+  }
+
+  // 全量替换分支：显式 references（含 [] = 有意清空）
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'SKILL.md'), skillMd, 'utf-8');

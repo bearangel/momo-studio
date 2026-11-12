@@ -774,6 +774,32 @@ describe('updateSkill', () => {
     expect(q.needsRestart).toBe(false);
   });
 
+  it('references 省略 → 附属文件原样保留，SKILL.md 换新（undefined=不改，对齐工具描述）', async () => {
+    seedCustom('keep-skill');
+    fs.mkdirSync(path.join(getSkillsDir(), 'keep-skill', 'refs'), { recursive: true });
+    fs.writeFileSync(path.join(getSkillsDir(), 'keep-skill', 'refs', 'a.md'), '旧模板');
+    const r = (await executeResourceOp('updateSkill',
+      { slug: 'keep-skill', skillMd: '---\nname: 换名\ndescription: 换\n---\n新正文' }, wsId)) as { refCount: number; name: string };
+    // 附属文件原样保留（危险默认回归锁：修错别字不得毁 references）
+    expect(fs.readFileSync(path.join(getSkillsDir(), 'keep-skill', 'refs', 'a.md'), 'utf-8')).toBe('旧模板');
+    // SKILL.md 换新 + .sha256 重算
+    expect(fs.readFileSync(path.join(getSkillsDir(), 'keep-skill', 'SKILL.md'), 'utf-8')).toContain('新正文');
+    expect(fs.readFileSync(path.join(getSkillsDir(), 'keep-skill', '.sha256'), 'utf-8')).not.toBe('deadbeef');
+    // refCount = 实际保留的附属文件数（诚实反映现状）
+    expect(r.refCount).toBe(1);
+    expect(r.name).toBe('换名');
+  });
+
+  it('references 显式 [] → 有意清空附属文件', async () => {
+    seedCustom('clear-skill');
+    fs.mkdirSync(path.join(getSkillsDir(), 'clear-skill', 'refs'), { recursive: true });
+    fs.writeFileSync(path.join(getSkillsDir(), 'clear-skill', 'refs', 'a.md'), '旧模板');
+    const r = (await executeResourceOp('updateSkill',
+      { slug: 'clear-skill', skillMd: '---\nname: n\ndescription: d\n---\nb', references: [] }, wsId)) as { refCount: number };
+    expect(fs.existsSync(path.join(getSkillsDir(), 'clear-skill', 'refs'))).toBe(false);
+    expect(r.refCount).toBe(0);
+  });
+
   it('agentsUsingIt 子串防误报：LIKE 初筛命中 "kind":"skill" 字面量 / "my-skill" 子串时精确解析须排除（T7 回归锁）', async () => {
     // def 引用 my-skill（JSON 含 `"kind":"skill"` 字面量与 `"my-skill"` 子串）；
     // 更新一个恰好名为 skill 的不同技能——LIKE `%"skill"%` 初筛必命中该行，
