@@ -36,6 +36,8 @@ import { AgentRunner, markShuttingDown, __resetShuttingDownForTest } from './age
 import { notifyRunnerIdle, notifyAgentStopped } from './router-service';
 import { dispatchRegistry } from './dispatch-registry';
 import { spawnForAgent, type SpawnedRuntime } from './runtime-spawner';
+import { childKeyFor } from './resource-ops-bridge';
+import { resolvePendingByChildExit } from './agent-op-confirm';
 import { ensureSandboxProbe, sandboxProbeInFlight } from '../sandbox/probe';
 import { ProviderTokenBucket } from './llm/token-bucket';
 
@@ -142,6 +144,9 @@ function registerTaskDrivenRuntime(opts: AgentRuntimeOpts): WarmPool {
           // C2 清理链：池剔除 + runner 活跃收尾。经全局 Map 实时查询保证幂等
           // （此闭包可能比 pool/runner 自身存活更久）。
           if (!spawned) return;
+          // 确认通道 child 退出出口（spec §7.2）：该 child 在途确认按拒绝收敛。
+          // 键与 runtime-spawner 请求侧同源（childKeyFor 单点派生）
+          resolvePendingByChildExit(childKeyFor(agentId, spawned.child));
           const poolNow = agentWarmPools.get(instanceId);
           if (poolNow) poolNow.evict(agentId, spawned.child);
           const runnerNow = agentRunners.get(instanceId);

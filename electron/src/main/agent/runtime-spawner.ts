@@ -25,7 +25,7 @@ import { writeBlockedFromChildMsg } from '../sandbox/write-blocked-emit';
 import { insertToolCall } from '../audit/insert';
 import { handlePluginBridgeMsg } from '../plugin/hook-bridge-main';
 import { getPluginBus } from '../plugin/bus-instance';
-import { handleResourceOpMessage } from './resource-ops-bridge';
+import { handleResourceOpMessage, childKeyFor } from './resource-ops-bridge';
 import { handleFileIoRequestMsg } from '../files/file-io/main-bridge';
 import { detectClientInstalled, resolveEffectiveMode, resolveFileIoSettings } from '../files/file-io/file-io-settings';
 import { getGlobalSettings } from '../settings/crud';
@@ -379,6 +379,14 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
     opts.onChunk(chunk);
   };
 
+  // 后台链追踪（spec 2026-11-12 §7.3）：子进程 start chunk 的 parentStreamSessionId
+  // 是 dispatch 子链标识（spec §4 引用的 runtime-config 定型字段，子进程侧从
+  // dispatchContext 织入）。同一 warm child 先后台链后前台链（或反之）都合法，
+  // 故按流收集：start 带 parentStreamSessionId 记流、end 清流；child 退出即
+  // 闭包消亡无泄漏。确认门消费「当前是否有在途后台流」——background 取主进程
+  // 闭包态，不取子进程消息体（伪造 background 无法绕档，最多换来一张用户可见卡）。
+  const backgroundStreamIds = new Set<string>();
+
   // 注册 message handler（chunk 转发）。handler 为 async：仅 mcp 分支含 await，
   // handleChildMessage / audit 分支仍同步执行，优先语义与 T8 行为不变。
   const messageHandler = async (msg: unknown): Promise<void> => {
@@ -491,15 +499,25 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
       }
       return;
     }
-    // resource-ops 桥（spec 2026-11-09-resource-creation-skills §6）：子进程
-    // requestResourceOp 的 resource-op 请求——workspaceId 取 spawn 闭包
-    // runtimeConfig（消息内携带的 workspaceId 一律忽略，子进程不可伪造归属）；
-    // 回写复用 sendMcpResponse 的通道关闭防御。同步 type 预判 + 异步执行：
-    // 非本分支消息零 await 让量（与插件桥同款纪律）。
+    // resource-ops 桥（spec 2026-11-09-resource-creation-skills §6 + 2026-11-12 §7
+    // 确认门）：子进程 requestResourceOp 的 resource-op 请求——workspaceId 取
+    // spawn 闭包 runtimeConfig（消息内携带的 workspaceId 一律忽略，子进程不可
+    // 伪造归属）；ctx 三件套同样取闭包态（background 后台链追踪 /
+    // callerInstanceId 自改检测 / childKey 确认通道退出清理）；回写复用
+    // sendMcpResponse 的通道关闭防御。同步 type 预判 + 异步执行：非本分支消息
+    // 零 await 让量（与插件桥同款纪律）。
     if (m.type === 'resource-op') {
       if (
-        await handleResourceOpMessage(msg, runtimeConfig.workspaceId, (mm) =>
-          sendMcpResponse(mm as McpBridgeResponse),
+        await handleResourceOpMessage(
+          msg,
+          runtimeConfig.workspaceId,
+          (mm) => sendMcpResponse(mm as McpBridgeResponse),
+          undefined,
+          {
+            background: backgroundStreamIds.size > 0,
+            callerInstanceId: runtimeConfig.agentAssignmentId,
+            childKey: childKeyFor(assignmentId, child),
+          },
         )
       ) {
         return;
@@ -523,6 +541,17 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
         { workspaceDir: runtimeConfig.workspaceDir },
       );
       return;
+    }
+    // 后台链追踪喂入（见 backgroundStreamIds 声明处）：start 携带
+    // parentStreamSessionId 记流，end 清流——观察不消费，chunk 照常转发
+    if (m.type === 'start' || m.type === 'end') {
+      const c = m as { streamSessionId?: unknown; parentStreamSessionId?: unknown };
+      const sid = typeof c.streamSessionId === 'string' ? c.streamSessionId : '';
+      if (m.type === 'start' && typeof c.parentStreamSessionId === 'string' && sid) {
+        backgroundStreamIds.add(sid);
+      } else if (m.type === 'end' && sid) {
+        backgroundStreamIds.delete(sid);
+      }
     }
     // StreamChunk 类型的消息转发给 wrappedOnChunk（先触发下游 routeChunkToBuffer，
     // 再 flush 待发的 MCP 发现失败事件挂到该消息行——P1 注入点）

@@ -773,4 +773,18 @@ describe('updateSkill', () => {
     expect(q.agentsUsingIt).toBe(0);
     expect(q.needsRestart).toBe(false);
   });
+
+  it('agentsUsingIt 子串防误报：LIKE 初筛命中 "kind":"skill" 字面量 / "my-skill" 子串时精确解析须排除（T7 回归锁）', async () => {
+    // def 引用 my-skill（JSON 含 `"kind":"skill"` 字面量与 `"my-skill"` 子串）；
+    // 更新一个恰好名为 skill 的不同技能——LIKE `%"skill"%` 初筛必命中该行，
+    // JS 精确解析复核必须排除（ref !== 'skill'），agentsUsingIt === 0
+    seedCustom('skill');
+    getDb().prepare(`INSERT INTO agent_definitions (id, name, slug, version, system_prompt, model_name, source, default_skills)
+                     VALUES ('def-sub', 's', 'agent-sub', '1', 'p', 'm', 'custom', ?)`).run(JSON.stringify([{ kind: 'skill', ref: 'my-skill' }]));
+    await addMember(wsId, 'def-sub', '@sub:1');
+    const r = (await executeResourceOp('updateSkill',
+      { slug: 'skill', skillMd: '---\nname: n\ndescription: d\n---\nb' }, wsId)) as { agentsUsingIt: number; needsRestart: boolean };
+    expect(r.agentsUsingIt).toBe(0);
+    expect(r.needsRestart).toBe(false);
+  });
 });

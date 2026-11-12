@@ -23,12 +23,14 @@ import { McpClient } from '../mcp/client';
 import { HttpMcpClient, McpHttpError } from '../mcp/http-client';
 import type { McpServerConfig, McpToolInfo, RegisteredMcp, McpEntryUpdateInput } from '../mcp/types';
 import { updateMcpEntry } from '../resource/mcp-config';
+import { getWorkspace } from '../workspace/crud';
 import { getDb } from '../storage/db';
 import { isValidSlug } from '../marketplace/types';
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { logger } from '../logger';
+import type { AgentOpConfirmPayload } from './agent-op-confirm';
 
 /** 白名单 op 枚举——桥面只放行这十二个入口（spec §6：桥不是通用 RPC 面） */
 export const RESOURCE_OP_NAMES = [
@@ -52,6 +54,205 @@ export const RESOURCE_OP_NAMES = [
 export interface OpContext {
   background: boolean;
   callerInstanceId?: string;
+}
+
+// ── 确认档位与确认载荷（spec 2026-11-12 §5.6/§7.1——桥面确认门的单一真相源）──
+
+/** 确认档位矩阵（spec §5.6）：updateProfile / updateSkill / updateMcp 恒确认；
+ *  updateCapabilities 含任一非空 add（含加 skill）或 scope='definition' 需确认，
+ *  纯 member 纯 remove（纯减权，方向安全可逆）免确认；其余 op（含全部既有
+ *  create 族与只读族）一律 none。args 宽容读取（桥面在形状先验之前判档） */
+export function confirmTierForOp(op: string, args: Record<string, unknown>): 'required' | 'none' {
+  if (op === 'updateProfile' || op === 'updateSkill' || op === 'updateMcp') return 'required';
+  if (op === 'updateCapabilities') {
+    if (args['scope'] === 'definition') return 'required';
+    const add = args['add'];
+    if (typeof add === 'object' && add !== null && !Array.isArray(add)) {
+      const r = add as Record<string, unknown>;
+      for (const k of ['skills', 'mcps', 'tools', 'pluginTools'] as const) {
+        if (Array.isArray(r[k]) && (r[k] as unknown[]).length > 0) return 'required';
+      }
+    }
+    return 'none';
+  }
+  return 'none';
+}
+
+/** op → 确认卡展示的工具名（requester.toolName） */
+const OP_TOOL_NAMES: Readonly<Record<string, string>> = {
+  describeAgent: 'describe_agent',
+  updateCapabilities: 'update_agent_capabilities',
+  updateProfile: 'update_agent_profile',
+  updateSkill: 'update_skill',
+  updateMcp: 'update_mcp',
+};
+
+/** 确认载荷构建的宽容小工具（diff 是展示面不是校验面——非法形状降级展示，
+ *  严格形状先验仍由 executeResourceOp 在裁决通过后执行） */
+function optStr(v: unknown): string | undefined {
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+function deltaEntries(v: unknown): Array<{ field: 'skills' | 'mcps' | 'tools' | 'pluginTools'; ref: string }> {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return [];
+  const r = v as Record<string, unknown>;
+  const out: Array<{ field: 'skills' | 'mcps' | 'tools' | 'pluginTools'; ref: string }> = [];
+  for (const k of ['skills', 'mcps', 'tools', 'pluginTools'] as const) {
+    const arr = r[k];
+    if (Array.isArray(arr)) {
+      for (const ref of arr) if (typeof ref === 'string') out.push({ field: k, ref });
+    }
+  }
+  return out;
+}
+/** 确认卡长文本预览截断（systemPrompt / skillMd 不入卡全文） */
+function preview(v: string, max = 120): string {
+  return v.length <= max ? v : v.slice(0, max - 1) + '…';
+}
+/** agent 目标名解析（容忍失败：查无 / DB 异常 → undefined，卡面降级展示） */
+function agentTargetNames(agent: unknown, workspaceId: string): { memberName?: string; defName?: string } {
+  const key = optStr(agent);
+  if (!key) return {};
+  try {
+    const t = resolveAgentTarget(key, workspaceId);
+    return t ? { memberName: t.member.agentName, defName: t.def.name } : {};
+  } catch {
+    return {};
+  }
+}
+/** workspace 名（可选展示字段；容忍 DB 异常 → 缺席） */
+function workspaceNameOf(workspaceId: string): string | undefined {
+  try {
+    return getWorkspace(workspaceId)?.name ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 确认卡结构化 diff（spec §7.1）——主进程真相源，renderer 只渲染。
+ * 只对 tier=required 的 4 个 op 产出非 null；其余返回 null（桥面判档在前，
+ * 不会对 none 档调用）。before 值一律省略（只展示 after，避免回显 prompt
+ * 全文翻倍）；systemPrompt / skillMd 经 preview 截断。
+ */
+export function buildConfirmPayload(
+  op: string,
+  args: Record<string, unknown>,
+  workspaceId: string,
+): Omit<AgentOpConfirmPayload, 'requestId' | 'expiresAt'> | null {
+  const toolName = OP_TOOL_NAMES[op] ?? op;
+  const wsName = workspaceNameOf(workspaceId);
+  const targetWith = (kind: 'member' | 'definition' | 'skill' | 'mcp', name: string) => ({
+    kind, name, ...(wsName !== undefined && { workspaceName: wsName }),
+  });
+
+  if (op === 'updateCapabilities') {
+    const names = agentTargetNames(args['agent'], workspaceId);
+    const scope = args['scope'] === 'definition' ? 'definition' : 'member';
+    const adds = deltaEntries(args['add']);
+    const removes = deltaEntries(args['remove']);
+    const risks: string[] = [];
+    if (adds.some((e) => e.field === 'tools' || e.field === 'pluginTools')) risks.push('将授予新工具（扩权）');
+    if (scope === 'definition') risks.push('将修改 agent 定义（全局生效）');
+    return {
+      workspaceId,
+      requester: {
+        agentName: names.memberName ?? names.defName ?? '(unknown)',
+        op, toolName,
+      },
+      diff: {
+        target: targetWith(scope === 'definition' ? 'definition' : 'member',
+          names.memberName ?? names.defName ?? optStr(args['agent']) ?? '(unknown)'),
+        scope,
+        adds, removes,
+      },
+      ...(risks.length > 0 && { riskNote: risks.join('；') }),
+    };
+  }
+
+  if (op === 'updateProfile') {
+    const names = agentTargetNames(args['agent'], workspaceId);
+    const fieldChanges: Array<{ field: string; after?: string }> = [];
+    const name = optStr(args['name']);
+    if (name !== undefined) fieldChanges.push({ field: 'name', after: name });
+    const description = optStr(args['description']);
+    if (description !== undefined) fieldChanges.push({ field: 'description', after: preview(description) });
+    const systemPrompt = optStr(args['systemPrompt']);
+    if (systemPrompt !== undefined) fieldChanges.push({ field: 'systemPrompt', after: preview(systemPrompt) });
+    const iconEmoji = optStr(args['iconEmoji']);
+    if (iconEmoji !== undefined) fieldChanges.push({ field: 'iconEmoji', after: iconEmoji });
+    const deniedTools = args['deniedTools'];
+    if (Array.isArray(deniedTools) && deniedTools.every((x) => typeof x === 'string')) {
+      fieldChanges.push({ field: 'deniedTools', after: JSON.stringify(deniedTools) });
+    }
+    if (typeof args['model'] === 'object' && args['model'] !== null) {
+      const m = args['model'] as Record<string, unknown>;
+      const providerId = optStr(m['providerId']);
+      const modelName = optStr(m['modelName']);
+      if (providerId !== undefined && modelName !== undefined) {
+        fieldChanges.push({ field: 'model', after: `${providerId} / ${modelName}` });
+      }
+    }
+    return {
+      workspaceId,
+      requester: {
+        agentName: names.memberName ?? names.defName ?? '(unknown)',
+        op, toolName,
+      },
+      diff: {
+        target: targetWith('definition', names.defName ?? names.memberName ?? optStr(args['agent']) ?? '(unknown)'),
+        adds: [], removes: [],
+        ...(fieldChanges.length > 0 && { fieldChanges }),
+      },
+    };
+  }
+
+  if (op === 'updateSkill') {
+    const slug = optStr(args['slug']) ?? '(unknown)';
+    const skillMd = optStr(args['skillMd']);
+    return {
+      workspaceId,
+      requester: { agentName: slug, op, toolName },
+      diff: {
+        target: targetWith('skill', slug),
+        adds: [], removes: [],
+        ...(skillMd !== undefined && { fieldChanges: [{ field: 'skillMd', after: preview(skillMd) }] }),
+      },
+    };
+  }
+
+  if (op === 'updateMcp') {
+    const name = optStr(args['name']) ?? '(unknown)';
+    const fieldChanges: Array<{ field: string; after?: string }> = [];
+    const t = args['transport'];
+    if (typeof t === 'object' && t !== null && !Array.isArray(t)) {
+      const r = t as Record<string, unknown>;
+      if (r['kind'] === 'http') {
+        const url = optStr(r['url']);
+        if (url !== undefined) fieldChanges.push({ field: 'transport', after: `http ${url}` });
+      } else if (r['kind'] === 'stdio') {
+        const command = optStr(r['command']);
+        if (command !== undefined) {
+          // 凭证不回显：headers / env 只入配置不进卡（spec §5.5/§11）
+          const extra = Array.isArray(r['args']) && r['args'].every((x) => typeof x === 'string')
+            ? ` ${(r['args'] as string[]).join(' ')}`
+            : '';
+          fieldChanges.push({ field: 'transport', after: `stdio ${command}${extra}` });
+        }
+      }
+    }
+    return {
+      workspaceId,
+      requester: { agentName: name, op, toolName },
+      diff: {
+        target: targetWith('mcp', name),
+        adds: [], removes: [],
+        ...(fieldChanges.length > 0 && { fieldChanges }),
+      },
+      riskNote: '连接与凭证变更',
+    };
+  }
+
+  return null;
 }
 
 /** resource_list 聚合清单（缺省全量；type 过滤时仅填对应段） */
