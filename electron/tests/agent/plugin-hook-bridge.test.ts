@@ -157,3 +157,52 @@ describe('requestPluginCallService workspaceId 透传', () => {
     }
   });
 });
+
+// ── 桥超时按调用提示（2026-11-11 email 大邮件立项）：默认 10s 不变，提示钳制 [1s,60s] ──
+describe('callService 桥超时提示', () => {
+  it('clampCallServiceTimeoutMs：缺省/非法 → 10s；下限 1s；上限 60s；正常值透传', async () => {
+    const { clampCallServiceTimeoutMs } = await import('../../src/main/agent/plugin-hook-bridge');
+    expect(clampCallServiceTimeoutMs(undefined)).toBe(10_000);
+    expect(clampCallServiceTimeoutMs(Number.NaN)).toBe(10_000);
+    expect(clampCallServiceTimeoutMs(500)).toBe(1_000);
+    expect(clampCallServiceTimeoutMs(30_000)).toBe(30_000);
+    expect(clampCallServiceTimeoutMs(120_000)).toBe(60_000);
+  });
+
+  it('不传 opts → 行为与旧版一致（默认 10s 预算内正常回包）', async () => {
+    const orig = process.send;
+    (process as { send?: unknown }).send = function (this: unknown, msg: unknown) {
+      if (this !== process) throw new Error('this 丢失');
+      const m = msg as { id?: string };
+      setTimeout(() => emitChildIpcMessage({ id: m.id, result: 'legacy-ok' }), 0);
+      return true;
+    } as never;
+    try {
+      const { requestPluginCallService } = await import('../../src/main/agent/plugin-hook-bridge');
+      await expect(requestPluginCallService('email', 'mails.get', {}, 'ws-1')).resolves.toBe('legacy-ok');
+    } finally {
+      if (orig === undefined) delete (process as { send?: unknown }).send;
+      else (process as { send?: unknown }).send = orig;
+    }
+  });
+
+  it('opts.timeoutMs=1000 且无回包 → 约 1s 超时 reject（提示生效，非默认 10s）', async () => {
+    const orig = process.send;
+    (process as { send?: unknown }).send = function (this: unknown) {
+      if (this !== process) throw new Error('this 丢失');
+      return true; // 只发不回——模拟主进程长忙
+    } as never;
+    try {
+      const { requestPluginCallService } = await import('../../src/main/agent/plugin-hook-bridge');
+      const t0 = Date.now();
+      await expect(requestPluginCallService('email', 'mails.get', {}, 'ws-1', { timeoutMs: 1_000 }))
+        .rejects.toThrow('callService 超时');
+      const elapsed = Date.now() - t0;
+      expect(elapsed).toBeGreaterThanOrEqual(950);
+      expect(elapsed).toBeLessThan(5_000); // 若提示被忽略（走默认 10s）此处会炸
+    } finally {
+      if (orig === undefined) delete (process as { send?: unknown }).send;
+      else (process as { send?: unknown }).send = orig;
+    }
+  }, 10_000);
+});
