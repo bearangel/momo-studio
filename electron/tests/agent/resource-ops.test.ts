@@ -24,7 +24,7 @@ import { getSkillsDir, listInstalled } from '../../src/main/skill/zip-uploader';
 import type { McpToolInfo } from '../../src/main/mcp/types';
 import { McpHttpError } from '../../src/main/mcp/http-client';
 import { executeResourceOp } from '../../src/main/agent/resource-ops';
-import type { ListModelsResult, DescribeAgentResult, UpdateCapabilitiesResult } from '../../src/main/agent/resource-ops';
+import type { ListModelsResult, DescribeAgentResult, UpdateCapabilitiesResult, UpdateProfileResult } from '../../src/main/agent/resource-ops';
 
 // 与 crud-custom-def.test.ts 同款 mock：crud.ts 引入的 runtime 依赖在测试环境不可用。
 // updateCapabilities 的 restart 接线（spec §8）也经这两个边界——mock 面随 Task 5 扩：
@@ -562,5 +562,50 @@ describe('updateCapabilities', () => {
 
   it('空请求（无 add 无 remove）报错', async () => {
     await expect(executeResourceOp('updateCapabilities', { agent: m1 }, wsId)).rejects.toThrow('至少');
+  });
+});
+
+describe('updateProfile', () => {
+  it('custom def 改 name/systemPrompt/model：落库 + 停机计数', async () => {
+    getDb().prepare(`INSERT INTO agent_definitions (id, name, slug, version, system_prompt, model_name, source)
+                     VALUES ('def-p', '改前', 'agent-p', '1', 'p0', 'm0', 'custom')`).run();
+    const pm = (await addMember(wsId, 'def-p', '@p:1')).instanceId;
+    const r = (await executeResourceOp('updateProfile',
+      { agent: pm, name: '改后', systemPrompt: 'p1', model: { providerId: provId, modelName: 'glm-5' } }, wsId)) as UpdateProfileResult;
+    expect(r.definition.name).toBe('改后');
+    const row = getDb().prepare('SELECT name, system_prompt, model_provider_id FROM agent_definitions WHERE id = ?').get('def-p') as { name: string; system_prompt: string; model_provider_id: string };
+    expect(row).toMatchObject({ name: '改后', system_prompt: 'p1', model_provider_id: provId });
+    expect(typeof r.stoppedInstances).toBe('number');
+  });
+
+  it('builtin 定义拒绝（含指路文案）', async () => {
+    // 共享夹具 def-a source 缺省 'custom'——builtin 用例须显式置源（describeAgent 同款手法）
+    getDb().prepare(`UPDATE agent_definitions SET source = 'builtin' WHERE id = 'def-a'`).run();
+    await expect(executeResourceOp('updateProfile', { agent: m1, name: 'x' }, wsId))
+      .rejects.toThrow('builtin 预设定义只读');
+  });
+
+  it('model.providerId 不存在 → 友好报错（沿 opCreateAgent 口径）', async () => {
+    getDb().prepare(`INSERT INTO agent_definitions (id, name, slug, version, system_prompt, model_name, source)
+                     VALUES ('def-q', 'q', 'agent-q', '1', 'p', 'm', 'custom')`).run();
+    const qm = (await addMember(wsId, 'def-q', '@q:1')).instanceId;
+    await expect(executeResourceOp('updateProfile',
+      { agent: qm, model: { providerId: 'nope', modelName: 'm' } }, wsId)).rejects.toThrow('供应商不存在');
+  });
+
+  it('deniedTools 整列覆盖；全字段缺省 → no-op 更新（值不变）', async () => {
+    getDb().prepare(`INSERT INTO agent_definitions (id, name, slug, version, system_prompt, model_name, source)
+                     VALUES ('def-r', 'r', 'agent-r', '1', 'p', 'm', 'custom')`).run();
+    const rm = (await addMember(wsId, 'def-r', '@r:1')).instanceId;
+    const r = (await executeResourceOp('updateProfile', { agent: rm, deniedTools: ['bash'] }, wsId)) as UpdateProfileResult;
+    const row = getDb().prepare('SELECT denied_tools FROM agent_definitions WHERE id = ?').get('def-r') as { denied_tools: string };
+    expect(JSON.parse(row.denied_tools)).toEqual(['bash']);
+    expect(r.definition.deniedTools).toEqual(['bash']);
+    // 全字段缺省：仅 agent 入参 → no-op（undefined=不改，原值保留）
+    const noop = (await executeResourceOp('updateProfile', { agent: rm }, wsId)) as UpdateProfileResult;
+    expect(noop.definition.name).toBe('r');
+    expect(noop.definition.deniedTools).toEqual(['bash']);
+    const after = getDb().prepare('SELECT name, denied_tools FROM agent_definitions WHERE id = ?').get('def-r') as { name: string; denied_tools: string };
+    expect(after).toMatchObject({ name: 'r', denied_tools: JSON.stringify(['bash']) });
   });
 });

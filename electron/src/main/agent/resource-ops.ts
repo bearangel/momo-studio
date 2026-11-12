@@ -29,7 +29,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { logger } from '../logger';
 
-/** 白名单 op 枚举——桥面只放行这九个入口（spec §6：桥不是通用 RPC 面） */
+/** 白名单 op 枚举——桥面只放行这十个入口（spec §6：桥不是通用 RPC 面） */
 export const RESOURCE_OP_NAMES = [
   'list',
   'createAgent',
@@ -40,6 +40,7 @@ export const RESOURCE_OP_NAMES = [
   'listModels',
   'describeAgent',
   'updateCapabilities',
+  'updateProfile',
 ] as const;
 
 /** op 执行上下文（spec 2026-11-12 §6）：background=后台派发；callerInstanceId=
@@ -130,6 +131,7 @@ export async function executeResourceOp(
     case 'listModels': return opListModels();
     case 'describeAgent': return opDescribeAgent(a, workspaceId);
     case 'updateCapabilities': return opUpdateCapabilities(a, workspaceId, ctx);
+    case 'updateProfile': return opUpdateProfile(a, workspaceId);
     default: throw new Error(`未知 resource op: ${op}`);
   }
 }
@@ -450,6 +452,59 @@ async function opUpdateCapabilities(
     ...(effectiveFrom !== undefined && { effectiveFrom }),
     otherWorkspaceMembers: otherWs.n,
   };
+}
+
+// ── updateProfile（写面，spec §5.3——定义档案/模型绑定/禁用串整列覆盖；
+//    builtin 只读保护；写后恒 stop-only，无 restart 接线故不需要 ctx）──
+
+/** update_profile 返回（definition=写后读回行；stoppedInstances=停机实例数） */
+export interface UpdateProfileResult {
+  definition: AgentDefinition;
+  stoppedInstances: number;
+}
+
+async function opUpdateProfile(a: Record<string, unknown>, workspaceId: string): Promise<UpdateProfileResult> {
+  const key = str(a['agent'], 'agent');
+  const target = resolveAgentTarget(key, workspaceId);
+  if (!target) throw new Error(`未找到 agent 成员: ${key}（可先 resource_list 查询真实 instanceId/slug）`);
+  const { def } = target;
+  if (def.source === 'builtin') {
+    throw new Error('builtin 预设定义只读。给成员调整能力请用 update_agent_capabilities（默认 member scope）；改定义请在资源库 UI（自定义 agent）');
+  }
+
+  // 形状先验：可选字段出现即须为字符串（undefined=不改，透传 updateAgentDefinition 同语义）
+  const name = a['name'] === undefined ? undefined : str(a['name'], 'name');
+  const description = a['description'] === undefined ? undefined : str(a['description'], 'description');
+  const systemPrompt = a['systemPrompt'] === undefined ? undefined : str(a['systemPrompt'], 'systemPrompt');
+  const iconEmoji = a['iconEmoji'] === undefined ? undefined : str(a['iconEmoji'], 'iconEmoji');
+  const deniedTools = a['deniedTools'] === undefined ? undefined : strArray(a['deniedTools'], 'deniedTools');
+
+  // model 块：出现即整体生效——providerId 必非空且须存在（友好报错优于 FK 中止，opCreateAgent 同口径）
+  let modelProviderId: string | undefined;
+  let modelName: string | undefined;
+  if (a['model'] !== undefined) {
+    if (typeof a['model'] !== 'object' || a['model'] === null || Array.isArray(a['model'])) {
+      throw new Error('model 必须为 { providerId, modelName } 对象');
+    }
+    const m = a['model'] as Record<string, unknown>;
+    modelProviderId = str(m['providerId'], 'model.providerId');
+    modelName = str(m['modelName'], 'model.modelName');
+    if (!getProvider(modelProviderId)) throw new Error(`供应商不存在: ${modelProviderId}`);
+  }
+
+  const updated = updateAgentDefinition({
+    id: def.id,
+    ...(name !== undefined && { name }),
+    ...(description !== undefined && { description }),
+    ...(systemPrompt !== undefined && { systemPrompt }),
+    ...(iconEmoji !== undefined && { iconEmoji }),
+    ...(modelProviderId !== undefined && { modelProviderId }),
+    ...(modelName !== undefined && { modelName }),
+    ...(deniedTools !== undefined && { deniedTools }),
+  });
+  const stopped = await stopRunningInstancesByDefinition(def.id);
+  logger.info('会话内更新 agent 档案', { defId: def.id, stopped: stopped.length });
+  return { definition: updated, stoppedInstances: stopped.length };
 }
 
 // ── createAgent（与 UI 导入链 agent.createFromYaml 同语义：parse → 冲突拒绝 →
