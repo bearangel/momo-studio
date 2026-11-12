@@ -50,11 +50,35 @@ describe('requestAgentOpConfirm', () => {
 
   it('timeout 出口：CONFIRM_WAIT_MS 后按拒绝收敛（文案含「确认超时」）', async () => {
     vi.useFakeTimers();
-    windows.push({ isDestroyed: () => false, webContents: { send: vi.fn() } });
+    try {
+      windows.push({ isDestroyed: () => false, webContents: { send: vi.fn() } });
+      const p = requestAgentOpConfirm(base, 'child-1');
+      vi.advanceTimersByTime(CONFIRM_WAIT_MS + 1);
+      await expect(p).resolves.toMatchObject({ allowed: false, reason: expect.stringContaining('确认超时') });
+    } finally {
+      // 断言失败也不许泄漏 fake timers（F3 T9①：会污染后续用例的定时器语义）
+      vi.useRealTimers();
+    }
+  });
+
+  it('已毁窗口跳过广播（析构竞态守卫——send 打在已毁窗口会抛 Object has been destroyed）', async () => {
+    const dead = { isDestroyed: () => true, webContents: { send: vi.fn() } };
+    const alive = { isDestroyed: () => false, webContents: { send: vi.fn() } };
+    windows.push(dead, alive);
     const p = requestAgentOpConfirm(base, 'child-1');
-    vi.advanceTimersByTime(CONFIRM_WAIT_MS + 1);
-    await expect(p).resolves.toMatchObject({ allowed: false, reason: expect.stringContaining('确认超时') });
-    vi.useRealTimers();
+    expect(dead.webContents.send).not.toHaveBeenCalled();
+    expect(alive.webContents.send).toHaveBeenCalledTimes(1);
+    const payload = alive.webContents.send.mock.calls[0]![1];
+    await __resolveForTest(payload.requestId, false);
+    await expect(p).resolves.toMatchObject({ allowed: false });
+  });
+
+  it('全部窗口已毁 → 视同无人在场立即拒绝（live 计数不含已毁窗口）', async () => {
+    windows.push({ isDestroyed: () => true, webContents: { send: vi.fn() } });
+    await expect(requestAgentOpConfirm(base, 'child-1')).resolves.toMatchObject({
+      allowed: false,
+      reason: expect.stringContaining('无可用窗口'),
+    });
   });
 
   it('child 退出出口：resolvePendingByChildExit 按拒绝收敛（Review Focus ①）', async () => {

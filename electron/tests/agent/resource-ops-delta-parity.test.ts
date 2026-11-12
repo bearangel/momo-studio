@@ -79,17 +79,22 @@ describe('parity：与 renderer computeDeltas 同输入同输出（spec §6.4 �
     expect(ours.addedSkills).toEqual(['weather']);
   });
 
-  it('parity-2 既有 added 被撤销 → added 剔除而非记 removed', () => {
-    // 现状：weather 是旧 delta 加进来的（不在基线）；remove weather 后应回到全空
+  it('parity-2 真实撤销换新场景：基线含 skill X，终态 = 基线 − X + Y → added=[Y] removed=[X]（双侧对拍）', () => {
+    // F3 T2③：旧 theirs 侧是自比自恒空（base 与 value 同输入）——零对拍强度。
+    // 改喂真实撤销输入：X=weekly-report 被撤、Y=weather 新增，双侧都必须得出
+    // addedSkills=[weather] 且 removedSkills=[weekly-report]
+    const baseline = mkCaps(base.tools, [], ['create-agent', 'weekly-report']);
+    const value = mkCaps(base.tools, [], ['create-agent', 'weather']);
     const ours = applyCapabilityDelta(
-      { ...base, skills: ['create-agent'], baseGrantedPlugin: [] },
-      { tools: base.tools, mcps: [], skills: ['create-agent', 'weather'], grantedPlugin: [] },
-      { remove: { skills: ['weather'] } },
+      { ...base, skills: baseline.skills, baseGrantedPlugin: [] },
+      { tools: base.tools, mcps: [], skills: baseline.skills, grantedPlugin: [] },
+      { add: { skills: ['weather'] }, remove: { skills: ['weekly-report'] } },
     );
-    const theirs = computeDeltas(mkCaps(base.tools, [], ['create-agent']), mkCaps(base.tools, [], ['create-agent']));
-    expect(ours.addedSkills).toEqual([]);
-    expect(ours.removedSkills).toEqual([]);
-    expect(theirs.addedSkills).toEqual([]);
+    const theirs = computeDeltas(value, baseline);
+    expect(ours.addedSkills).toEqual(['weather']);
+    expect(ours.removedSkills).toEqual(['weekly-report']);
+    expect(theirs.addedSkills).toEqual(['weather']);
+    expect(theirs.removedSkills).toEqual(['weekly-report']);
   });
 
   it('parity-3 基线自带 ref 被 remove → removed 记录（双侧一致）', () => {

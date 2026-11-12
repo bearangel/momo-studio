@@ -6,6 +6,11 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '../../lib/cn';
 
+/** 全屏遮罩 class（单一真相源，F3 关系化）：ui/Dialog 与 Tier A 阻断卡
+ *  （AgentOpConfirmCard 等自绘遮罩卡）共同消费——改遮罩视觉一处定义两处
+ *  生效，测试锁「引用同源」而非比对硬编码字面量 */
+export const OVERLAY_CLASS = 'fixed inset-0 z-50 bg-backdrop';
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -46,7 +51,7 @@ export function Dialog({ open, onClose, title, children, footer, width = 480, ar
 
   return createPortal(
     <>
-      <div className="fixed inset-0 z-50 bg-backdrop" onClick={onClose} aria-hidden />
+      <div className={OVERLAY_CLASS} onClick={onClose} aria-hidden />
       <div
         ref={dialogRef}
         role="dialog"

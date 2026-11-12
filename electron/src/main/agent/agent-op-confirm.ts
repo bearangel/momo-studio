@@ -37,9 +37,15 @@ const pending = new Map<string, PendingEntry>();
 function broadcast(channel: string, payload: unknown): number {
   const { BrowserWindow } = loadElectronApis();
   if (!BrowserWindow) return 0;
-  const wins = BrowserWindow.getAllWindows();
-  for (const w of wins) w.webContents.send(channel, payload);
-  return wins.length;
+  let live = 0;
+  for (const w of BrowserWindow.getAllWindows()) {
+    // 析构竞态守卫（F3）：send 打在已毁窗口上会抛「Object has been destroyed」；
+    // 计数只含实际送达的窗口——全部已毁视同无人在场，立即拒绝
+    if (w.isDestroyed()) continue;
+    w.webContents.send(channel, payload);
+    live++;
+  }
+  return live;
 }
 
 /** 先到先得结算（四出口共用）：已结算/不存在的 requestId 静默 no-op。 */

@@ -136,11 +136,20 @@ export async function handleResourceOpMessage(
       childSend({ type: 'resource-op', id: m.id, error: `确认载荷构建失败: ${op}` });
       return true;
     }
-    const outcome = await requestAgentOpConfirm(payload, ctx?.childKey ?? 'no-child-key');
-    if (!outcome.allowed) {
+    try {
+      const outcome = await requestAgentOpConfirm(payload, ctx?.childKey ?? 'no-child-key');
+      if (!outcome.allowed) {
+        childSend({
+          type: 'resource-op', id: m.id,
+          error: `用户拒绝了本次变更${outcome.reason ? `：${outcome.reason}` : ''}`,
+        });
+        return true;
+      }
+    } catch (err) {
+      // 确认通道异常（理论路径）：按拒绝收敛回子进程，杜绝 unhandledRejection
       childSend({
         type: 'resource-op', id: m.id,
-        error: `用户拒绝了本次变更${outcome.reason ? `：${outcome.reason}` : ''}`,
+        error: `确认通道异常，已拒绝：${err instanceof Error ? err.message : String(err)}`,
       });
       return true;
     }

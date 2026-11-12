@@ -252,6 +252,19 @@ describe('resource-ops-bridge 确认门（spec §7/§10）', () => {
     }));
   });
 
+  it('确认通道异常（requestAgentOpConfirm reject）→ 按拒绝收敛回子进程，文案含「确认通道异常」（F3 T10②）', async () => {
+    confirmMock.requestAgentOpConfirm.mockRejectedValueOnce(new Error('ipc 崩了'));
+    await handleResourceOpMessage(
+      { type: 'resource-op', id: 'r-crash', op: 'updateProfile', args: {} },
+      'ws-1', send, executor, { background: false },
+    );
+    expect(executor).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'resource-op', id: 'r-crash',
+      error: expect.stringContaining('确认通道异常'),
+    }));
+  });
+
   it('buildConfirmPayload：updateCapabilities 结构化 diff（riskNote 拼接扩权与定义提示）', () => {
     const p = buildConfirmPayload('updateCapabilities', {
       agent: 'ghost-agent', scope: 'definition',

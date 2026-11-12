@@ -5,11 +5,12 @@
 //   - 变体 A：adds only（+ 行 status-success）；变体 B：+ / − 行 + riskNote 高亮
 //   - 变体 C：updateProfile → 档案标题 + fieldChanges before 删除线 → after；
 //     after-only（主进程构建侧恒省略 before）无箭头无删除线
-//   - Tier A：遮罩 class 与 ui/Dialog 逐字一致；点遮罩 / Esc 均不消散
+//   - Tier A：遮罩消费 ui/Dialog 的 OVERLAY_CLASS（关系锁）；点遮罩 / Esc 均不消散
 //   - 双按钮 → store.reply → replyAgentOpConfirm；TTL 到点 interval 清扫
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { AgentOpConfirmCard } from './AgentOpConfirmCard';
+import { OVERLAY_CLASS } from './ui/Dialog';
 import { useAgentOpConfirmStore } from '../stores/agent-op-confirm.store';
 import { ipc } from '../ipc/client';
 import type { AgentOpConfirmPayload } from '../ipc/types';
@@ -210,10 +211,13 @@ describe('AgentOpConfirmCard diff 渲染（预览合同定值）', () => {
 });
 
 describe('AgentOpConfirmCard Tier A 阻断形态（spec 2026-09-15 §4.2）', () => {
-  it('遮罩 class 与 ui/Dialog 逐字一致（字节级契约锁）', () => {
+  it('遮罩 class 消费 ui/Dialog 的 OVERLAY_CLASS（关系锁——Dialog 遮罩变更时本卡同源跟随）', () => {
     render(<AgentOpConfirmCard />);
     push(payload());
-    expect(screen.getByTestId('agent-op-confirm-overlay').className).toBe('fixed inset-0 z-50 bg-backdrop');
+    expect(screen.getByTestId('agent-op-confirm-overlay').className).toBe(OVERLAY_CLASS);
+    // 关系锁底线：常量仍是全屏遮罩形态（fixed inset-0 + 遮罩底色），防空串/错串静默通过
+    expect(OVERLAY_CLASS).toContain('fixed');
+    expect(OVERLAY_CLASS).toContain('inset-0');
   });
 
   it('点击遮罩不消散——裁决必须显式', () => {

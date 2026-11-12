@@ -4,8 +4,8 @@
 // resource op 广播 agent-op-confirm:request → store 单卡 → 本卡居中渲染。
 // 挂载点 App 层 CenterPromptLayer（锚点 0×0 无 transform 定位点，本卡自带
 // -translate-x/y-1/2 居中——见 CenterPromptLayer.tsx 头注）。
-// 遮罩 class 逐字复制 ui/Dialog.tsx（字节级契约锁见测试）；点击遮罩/Esc
-// 均不消散——裁决必须显式（拒绝/允许/10 分钟超时主进程侧拒绝）。
+// 遮罩消费 ui/Dialog 导出的 OVERLAY_CLASS（单一真相源——关系锁见测试）；点击
+// 遮罩/Esc 均不消散——裁决必须显式（拒绝/允许/10 分钟超时主进程侧拒绝）。
 // 定值清单（P1 预览合同，.omo/previews/agent-op-confirm-card.html）：
 // 卡宽 440 / 圆角 8 卡 · 6 diff框按钮 / 内边距 16 卡 · 10 12 diff框 /
 // 字号 14 标题 · 13 正文按钮 · 12 辅助 · 11 大写标签 / 徽标 surface-active 底 +
@@ -15,6 +15,7 @@ import { Check, Monitor, ShieldCheck, TriangleAlert, User } from 'lucide-react';
 import { useAgentOpConfirmStore } from '../stores/agent-op-confirm.store';
 import type { AgentOpConfirmPayload } from '../ipc/types';
 import { Button } from './ui/Button';
+import { OVERLAY_CLASS } from './ui/Dialog';
 
 const FIELD_LABELS: Record<AgentOpConfirmPayload['diff']['adds'][number]['field'], string> = {
   skills: '技能',
@@ -92,8 +93,8 @@ export function AgentOpConfirmCard() {
 
   return (
     <>
-      {/* 遮罩：与 ui/Dialog 同款（class 逐字复制）；点击不消散——裁决必须显式 */}
-      <div data-testid="agent-op-confirm-overlay" className="fixed inset-0 z-50 bg-backdrop" aria-hidden />
+      {/* 遮罩：与 ui/Dialog 同款（OVERLAY_CLASS 单一真相源）；点击不消散——裁决必须显式 */}
+      <div data-testid="agent-op-confirm-overlay" className={OVERLAY_CLASS} aria-hidden />
       <div
         role="alertdialog"
         aria-label={cardTitle(pending)}
