@@ -6,7 +6,7 @@
 // workspaceId——子进程不可伪造归属。
 import { createCustomDef, addMember, generateAgentUserId, updateAgentDefinition, stopRunningInstancesByDefinition } from './crud';
 import { listAgentDefinitions, getAgentDefinition, listMembers, getMemberByInstanceId } from './agent-queries';
-import { mergeCapabilities, readAllocationLayer, readAssignmentDeltas, union, subtract } from './capability-merger';
+import { mergeCapabilities, readAllocationLayer, readAssignmentDeltas, union, subtract, type MergedCapabilities } from './capability-merger';
 import { setAssignmentDeltas } from './assignment-capabilities';
 import { applyCapabilityDelta, type CapabilityDeltaInput } from './resource-ops-delta';
 import { isAgentRunning } from './runtime-status';
@@ -286,11 +286,14 @@ function pluginGrantBaseline(def: AgentDefinition, allocTools: string[]): string
     .filter((r) => r.startsWith('plugin:') && !toolRefMatches(r, denied));
 }
 
-/** 授权并集减撤销并集（撤销侧按模式串命中判定）——applyCapabilityDelta 的
- *  EffectiveState.grantedPlugin 输入口径 */
-function pluginGrantedFrom(base: string[], added: string[], removed: string[], defDenied: string[]): string[] {
-  const deny = [...removed, ...defDenied];
-  return [...new Set([...base, ...added])].filter((p) => !toolRefMatches(p, deny));
+/** 成员级插件授权现状——与 spawn 真值同源（spawn-helpers grant-set 口径）：
+ *  候选 = merged.tools 的 plugin: refs ∪ addedPluginTools（re-enable 行），
+ *  deny 侧 = merged.deniedTools = (def禁 ∪ removed) − added（added 可抵消
+ *  def 禁——另拼 removed ∪ defDenied 会擦除 re-enable 行）。
+ *  applyCapabilityDelta 的 EffectiveState.grantedPlugin 入参 */
+function pluginGrantedFrom(merged: MergedCapabilities, addedPluginTools: string[]): string[] {
+  const candidates = [...new Set([...merged.tools.filter((r) => r.startsWith('plugin:')), ...addedPluginTools])];
+  return candidates.filter((p) => !toolRefMatches(p, merged.deniedTools));
 }
 
 async function opUpdateCapabilities(
@@ -390,11 +393,8 @@ async function opUpdateCapabilities(
   const alloc = readAllocationLayer(member.workspaceId);
   const oldDeltas = readAssignmentDeltas(member.instanceId);
   const merged = mergeCapabilities(def, alloc, oldDeltas);
-  const defDenied = def.deniedTools ?? [];
   const baseGrantedPlugin = pluginGrantBaseline(def, alloc.tools);
-  const grantedPlugin = pluginGrantedFrom(
-    baseGrantedPlugin, oldDeltas.addedPluginTools, oldDeltas.removedPluginTools, defDenied,
-  );
+  const grantedPlugin = pluginGrantedFrom(merged, oldDeltas.addedPluginTools);
   const newDeltas = applyCapabilityDelta(
     {
       tools: union(def.defaultTools.map((t) => t.ref), alloc.tools),
@@ -409,9 +409,7 @@ async function opUpdateCapabilities(
 
   // 写后重算生效面（Layer 3 已换新 deltas——与 describeAgent 读面同口径）
   const mergedAfter = mergeCapabilities(def, alloc, newDeltas);
-  const grantedAfter = pluginGrantedFrom(
-    baseGrantedPlugin, newDeltas.addedPluginTools, newDeltas.removedPluginTools, defDenied,
-  );
+  const grantedAfter = pluginGrantedFrom(mergedAfter, newDeltas.addedPluginTools);
 
   // restart 三行接线（spec §8，仅 member 分支）
   let restarted: boolean | undefined;

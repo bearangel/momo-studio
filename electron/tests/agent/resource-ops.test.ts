@@ -463,6 +463,26 @@ describe('updateCapabilities', () => {
     expect(deltas.some((d) => d.ref === 'weather' && d.mode === 'add')).toBe(true);
   });
 
+  it('re-enable 行保全：def 禁 + added 重启用 → 无关 member 更新不擦除', async () => {
+    // 回归锁（spawn 同源契约）：插件工具黑名单 = (def禁 ∪ removed) − added——
+    // addedPluginTools 行可重启用 def 禁用的工具；不含 pluginTools 的 member
+    // 更新不得让 setAssignmentDeltas 全量替换擦掉该行
+    getDb().prepare(`UPDATE agent_definitions SET denied_tools = ? WHERE id = 'def-a'`)
+      .run(JSON.stringify(['plugin:foo/bar']));
+    getDb().prepare(
+      `INSERT INTO agent_assignment_capabilities (assignment_id, capability_type, mode, ref)
+       VALUES (?, 'plugin_tool', 'add', 'plugin:foo/bar')`,
+    ).run(m1);
+    seedSkill('weather');
+    const r = (await executeResourceOp('updateCapabilities',
+      { agent: m1, add: { skills: ['weather'] }, restart: 'deferred' }, wsId, undefined, { background: false })) as UpdateCapabilitiesResult;
+    const rows = getDb().prepare(
+      `SELECT ref, mode FROM agent_assignment_capabilities WHERE assignment_id = ? AND capability_type = 'plugin_tool'`,
+    ).all(m1) as Array<{ ref: string; mode: string }>;
+    expect(rows.some((x) => x.ref === 'plugin:foo/bar' && x.mode === 'add')).toBe(true);
+    expect(r.effective.grantedPlugin).toContain('plugin:foo/bar');
+  });
+
   it('ref 校验 fail-fast：全部非法项一次报出，零落库', async () => {
     seedSkill('weather');
     await expect(executeResourceOp('updateCapabilities',
@@ -521,12 +541,14 @@ describe('updateCapabilities', () => {
 
   it('restart=auto 且目标==自身 → 挂 respawn-on-idle（effectiveFrom: next-turn，绝不 mid-call 杀自己）', async () => {
     seedSkill('weather');
-    const { requestRespawnAfterIdle } = await import('../../src/main/agent/runtime-registry');
+    const { requestRespawnAfterIdle, stopAgentRuntime } = await import('../../src/main/agent/runtime-registry');
+    vi.mocked(stopAgentRuntime).mockClear();
     const r = (await executeResourceOp('updateCapabilities',
       { agent: m1, add: { skills: ['weather'] } }, wsId, undefined, { background: false, callerInstanceId: m1 })) as UpdateCapabilitiesResult;
     expect(r.effectiveFrom).toBe('next-turn');
     expect(r.restarted).toBeUndefined();
     expect(vi.mocked(requestRespawnAfterIdle)).toHaveBeenCalledWith(m1);
+    expect(vi.mocked(stopAgentRuntime)).not.toHaveBeenCalled();
   });
 
   it('目标未在跑 → needsRestart: false（下次派发现算快照）', async () => {
