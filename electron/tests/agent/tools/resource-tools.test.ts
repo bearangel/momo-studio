@@ -1,5 +1,5 @@
 // electron/tests/agent/tools/resource-tools.test.ts
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ResourceTools } from '../../../src/main/agent/tools/resource-tools';
 import { ALL_BUILTIN_TOOLS } from '../../../src/main/agent/tools/catalog';
 
@@ -7,10 +7,11 @@ const fakeOp = (result: unknown) => async (_op: string, _args: Record<string, un
 const mk = (r: unknown) => new ResourceTools(fakeOp(r));
 
 describe('ResourceTools', () => {
-  it('七工具名进目录全集（64→65）', () => {
+  it('十二工具名进目录全集（65→70）', () => {
     const names = new ResourceTools(fakeOp(null)).getDefs().map((d) => d.name);
     expect(names).toEqual([
       'resource_list', 'create_agent', 'add_agent_member', 'create_skill', 'create_mcp', 'create_team', 'list_models',
+      'describe_agent', 'update_agent_capabilities', 'update_agent_profile', 'update_skill', 'update_mcp',
     ]);
     for (const n of names) expect(ALL_BUILTIN_TOOLS).toContain(n);
   });
@@ -46,6 +47,44 @@ describe('ResourceTools', () => {
   it('无 IPC 通道时干净失败（默认 callOp 无 process.send → 中文 reject）', async () => {
     const t = new ResourceTools(); // 不注入——生产默认 requestResourceOp
     await expect(t.execute('resource_list', {}, ctx)).rejects.toThrow('未建立 IPC 通道');
+  });
+});
+
+describe('资源管理工具面（spec 2026-11-12 §5）', () => {
+  it('五工具齐备且 handles/op 映射正确', () => {
+    const tools = new ResourceTools(vi.fn(async () => ({})));
+    const names = tools.getDefs().map((d) => d.name);
+    for (const n of ['describe_agent', 'update_agent_capabilities', 'update_agent_profile', 'update_skill', 'update_mcp']) {
+      expect(names).toContain(n);
+      expect(tools.handles(n)).toBe(true);
+    }
+  });
+
+  it('update_agent_capabilities 的 scope 缺省语义写进 description', () => {
+    const def = new ResourceTools(vi.fn(async () => ({}))).getDefs().find((d) => d.name === 'update_agent_capabilities')!;
+    expect(def.description).toContain('member');
+    expect(def.description).toContain('definition');
+  });
+
+  it('catalog：分类「资源管理」、defaultOn 全 false、riskNote 就位（buildCatalog fail-fast 兜底）', () => {
+    const cat = new ResourceTools(vi.fn(async () => ({}))).getCatalog();
+    const upd = cat.find((c) => c.name === 'update_agent_capabilities')!;
+    expect(upd.category).toBe('资源管理');
+    expect(upd.categoryEmoji).toBe('🧱');
+    expect(upd.defaultOn).toBe(false);
+    expect(upd.riskNote).toBeTruthy();
+    expect(cat.find((c) => c.name === 'update_mcp')!.riskNote).toBeTruthy();
+    // 五条 meta 全量就位（buildCatalog 缺 meta 即抛——到达即证明无漏项）
+    for (const n of ['describe_agent', 'update_agent_profile', 'update_skill']) {
+      expect(cat.find((c) => c.name === n)!.category).toBe('资源管理');
+      expect(cat.find((c) => c.name === n)!.defaultOn).toBe(false);
+    }
+  });
+
+  it('execute 经 callOp 透传 op 与 args', async () => {
+    const callOp = vi.fn(async () => ({ ok: 1 }));
+    await new ResourceTools(callOp).execute('describe_agent', { agent: 'x' }, ctx);
+    expect(callOp).toHaveBeenCalledWith('describeAgent', { agent: 'x' });
   });
 });
 
