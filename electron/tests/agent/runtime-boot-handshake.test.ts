@@ -44,6 +44,7 @@ const fake = vi.hoisted(() => {
     send(msg: unknown): boolean;
     kill(): boolean;
     emit(event: string, arg?: unknown): void;
+    listeners(event: string): Cb[];
   }
   const children: FakeChild[] = [];
   const make = (): FakeChild => {
@@ -77,6 +78,11 @@ const fake = vi.hoisted(() => {
       emit(event, arg) {
         for (const cb of [...(listeners.get(event) ?? [])]) cb(arg);
       },
+      // 2026-11-11 起 spawnForAgent 挂 attachRuntimeChildErrorNet——
+      // child.listeners('error') 判幂等；如实返回已注册监听器（EventEmitter 语义）
+      listeners(event) {
+        return [...(listeners.get(event) ?? [])];
+      },
     };
     return child;
   };
@@ -96,7 +102,11 @@ const fake = vi.hoisted(() => {
   };
 });
 
-vi.mock('node:child_process', () => ({
+// resource-ops 静态图（Task 8 起）引入 marketplace/installer——其顶层
+// promisify(execFile)；blanket mock 会抹掉 execFile 使套件在模块装载期即炸。
+// importOriginal 部分化：仅 fork 拦截，其余导出保持真实。
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   fork: vi.fn(() => fake.newChild()),
 }));
 
@@ -138,6 +148,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   fake.reset();
   fs.mkdirSync(tmpRoot, { recursive: true });
+  // 2026-11-11 文件 IO 设置起 spawnForAgent 读 global_settings（kv_store）——
+  // 握手用例同样经真实 spawnForAgent，沿用临时目录 + 全量迁移夹具
+  process.env.AP_USER_DATA_DIR = tmpRoot;
+  runMigrations();
 });
 
 describe('runtime-ready 握手（fake child 层）', () => {
@@ -184,8 +198,6 @@ describe('runtime-ready 握手（fake child 层）', () => {
 
 describe('runtime-registry spawn 闭包（握手期 exit 的 TDZ 回归锁）', () => {
   beforeEach(() => {
-    process.env.AP_USER_DATA_DIR = tmpRoot;
-    runMigrations();
     __clearRuntimeRegistryForTest();
   });
 
