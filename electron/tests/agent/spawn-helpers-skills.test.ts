@@ -21,7 +21,9 @@ import { resolveSkillsDir } from '../../src/main/paths';
 const tmpRoot = path.join(os.tmpdir(), `ap-spawn-skills-test-${Date.now()}-${process.pid}`);
 const AGENTS_DIR = path.resolve(__dirname, '../../resources/agents');
 
-const MOMO_SKILL_SLUGS = ['build-team', 'create-agent', 'create-mcp', 'create-skill'];
+// 2026-11-12 会话内能力管理：defaultSkills 4 → 5（+manage-agent，与
+// builtin.test.ts 引用一致性锁同名单步进）。
+const MOMO_SKILL_SLUGS = ['build-team', 'create-agent', 'create-mcp', 'create-skill', 'manage-agent'];
 
 beforeEach(() => {
   fs.mkdirSync(tmpRoot, { recursive: true });
@@ -72,7 +74,7 @@ describe('resolveSkillSlugs（双源回退，C1 回归锁）', () => {
 });
 
 describe('buildSpawnOpts × Momo def（挂载链端到端）', () => {
-  it('general-assistant.yaml 的四个 defaultSkills 全部解析到存在 SKILL.md 的 cachePath', async () => {
+  it('general-assistant.yaml 的五个 defaultSkills 全部解析到存在 SKILL.md 的 cachePath', async () => {
     const db = getDb();
     db.prepare(
       `INSERT INTO model_providers (id, name, base_url, api_key_ref, default_model, is_default)
