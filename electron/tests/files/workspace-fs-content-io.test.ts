@@ -22,13 +22,22 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-function fakeIo(): ContentIo & { reads: string[]; writes: Array<{ p: string; size: number }> } {
+function fakeIo(): ContentIo & {
+  reads: string[];
+  readManyBatches: string[][];
+  writes: Array<{ p: string; size: number }>;
+} {
   const io = {
     reads: [] as string[],
+    readManyBatches: [] as string[][],
     writes: [] as Array<{ p: string; size: number }>,
     async readFile(p: string) {
       io.reads.push(p);
       return Buffer.from('via-io');
+    },
+    async readFiles(ps: string[]) {
+      io.readManyBatches.push(ps);
+      return ps.map(() => Buffer.from('via-io'));
     },
     async writeFile(p: string, d: Buffer) {
       io.writes.push({ p, size: d.length });
@@ -85,6 +94,30 @@ describe('WorkspaceFS 注入通道', () => {
     const io = fakeIo();
     const ws = new WorkspaceFS(dir, { contentIo: io });
     await expect(ws.readFile('.git/config')).rejects.toThrow('.git');
+  });
+
+  it('readFiles：逐路径沙箱校验后整批委托 io（绝对路径、顺序保持）', async () => {
+    const io = fakeIo();
+    const ws = new WorkspaceFS(dir, { contentIo: io });
+    const bufs = await ws.readFiles(['sub/a.txt', 'b.txt']);
+    expect(bufs).toHaveLength(2);
+    expect(io.readManyBatches).toEqual([[path.join(dir, 'sub', 'a.txt'), path.join(dir, 'b.txt')]]);
+    expect(io.reads).toHaveLength(0);
+  });
+
+  it('readFiles：批内任一路径越界 → 整批在校验期抛错，不触达 io', async () => {
+    const io = fakeIo();
+    const ws = new WorkspaceFS(dir, { contentIo: io });
+    await expect(ws.readFiles(['ok.txt', '../../etc/passwd'])).rejects.toThrow('路径越界');
+    expect(io.readManyBatches).toHaveLength(0);
+    expect(io.reads).toHaveLength(0);
+  });
+
+  it('readFiles：空数组直接空返回（不触达 io）', async () => {
+    const io = fakeIo();
+    const ws = new WorkspaceFS(dir, { contentIo: io });
+    expect(await ws.readFiles([])).toEqual([]);
+    expect(io.readManyBatches).toHaveLength(0);
   });
 
   it('listDir / rename / deletePath 不经内容通道（元数据操作）', async () => {

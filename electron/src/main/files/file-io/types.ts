@@ -29,6 +29,12 @@ export class FileIoError extends Error {
  */
 export interface ContentIo {
   readFile(absPath: string): Promise<Buffer>;
+  /**
+   * 批量读（B 方案工具层收口，2026-11-12）：语义 = 逐文件 readFile 的有序
+   * 集合——任一文件失败（含 strict 下的 EENCRYPTED）整批抛错。分块策略归
+   * 调用方（grep 按 16 一批）；实现层不叠加分块。
+   */
+  readFiles(absPaths: string[]): Promise<Buffer[]>;
   writeFile(absPath: string, data: Buffer): Promise<void>;
 }
 

@@ -166,6 +166,15 @@ export class WorkspaceFS {
     return this.contentIo().readFile(abs);
   }
 
+  /** 批量读（B 方案工具层收口）：逐路径沙箱校验后整批委托内容通道。
+   *  不做分块——内存预算归调用方（grep 按 16 一批切块调用）；空入参直接
+   *  空返回（Bridge 场景省一次无意义 IPC 跳）。 */
+  async readFiles(relativePaths: string[]): Promise<Buffer[]> {
+    if (relativePaths.length === 0) return [];
+    const absPaths = relativePaths.map((p) => this.assertInWorkspace(p));
+    return this.contentIo().readFiles(absPaths);
+  }
+
   /** 文件字节数（预览阈值判定用）：沙箱校验后只 stat，不读内容 */
   async statSize(relativePath: string): Promise<number> {
     const abs = this.assertInWorkspace(relativePath);

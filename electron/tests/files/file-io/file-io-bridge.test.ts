@@ -47,6 +47,53 @@ describe('file-io-bridge（子进程侧）', () => {
     await expect(writing).rejects.toMatchObject({ code: 'EENCRYPTED' });
   });
 
+  it('readFiles 走 readMany 线协议：请求带 paths，应答 items 按序解 base64', async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    (process as { send?: unknown }).send = (msg: Record<string, unknown>) => {
+      sent.push(msg);
+    };
+    const reading = new BridgeContentIo().readFiles(['/abs/a.java', '/abs/b.java']);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      type: 'file-io:req',
+      op: 'readMany',
+      paths: ['/abs/a.java', '/abs/b.java'],
+    });
+    handleFileIoResp({
+      type: 'file-io:resp',
+      requestId: String(sent[0]!.requestId),
+      ok: true,
+      items: [
+        { ok: true, dataBase64: Buffer.from('A').toString('base64') },
+        { ok: true, dataBase64: Buffer.from('B').toString('base64') },
+      ],
+    });
+    const bufs = await reading;
+    expect(bufs.map((b) => b.toString('utf8'))).toEqual(['A', 'B']);
+  });
+
+  it('readFiles：items 数量不符 / 单项失败 → reject 且 code 保留', async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    (process as { send?: unknown }).send = (msg: Record<string, unknown>) => sent.push(msg);
+    const mismatch = new BridgeContentIo().readFiles(['/a', '/b']);
+    handleFileIoResp({
+      type: 'file-io:resp',
+      requestId: String(sent[0]!.requestId),
+      ok: true,
+      items: [{ ok: true, dataBase64: Buffer.from('A').toString('base64') }],
+    });
+    await expect(mismatch).rejects.toBeInstanceOf(Error);
+
+    const failed = new BridgeContentIo().readFiles(['/enc.java']);
+    handleFileIoResp({
+      type: 'file-io:resp',
+      requestId: String(sent[1]!.requestId),
+      ok: true,
+      items: [{ ok: false, error: { code: 'EENCRYPTED', message: '密文' } }],
+    });
+    await expect(failed).rejects.toMatchObject({ code: 'EENCRYPTED' });
+  });
+
   it('未知 requestId / 非本协议消息静默忽略', () => {
     expect(() => handleFileIoResp({ type: 'file-io:resp', requestId: 'nope', ok: true })).not.toThrow();
     expect(() => handleFileIoResp({ type: 'other' })).not.toThrow();

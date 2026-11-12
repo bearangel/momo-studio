@@ -23,6 +23,15 @@ export class DirectContentIo implements ContentIo {
     return buf;
   }
 
+  /** 批量读：顺序复用单文件逻辑（含 strict 密文硬失败语义），任一失败整批抛错 */
+  async readFiles(absPaths: string[]): Promise<Buffer[]> {
+    const out: Buffer[] = [];
+    for (const p of absPaths) {
+      out.push(await this.readFile(p));
+    }
+    return out;
+  }
+
   async writeFile(absPath: string, data: Buffer): Promise<void> {
     try {
       fs.mkdirSync(path.dirname(absPath), { recursive: true });
@@ -38,12 +47,17 @@ export class ProxyContentIo implements ContentIo {
   constructor(
     private readonly io: {
       readFile(p: string): Promise<Buffer>;
+      readFiles(p: string[]): Promise<Buffer[]>;
       writeFile(p: string, data: Buffer): Promise<void>;
     },
   ) {}
 
   readFile(p: string): Promise<Buffer> {
     return this.io.readFile(p);
+  }
+
+  readFiles(p: string[]): Promise<Buffer[]> {
+    return this.io.readFiles(p);
   }
 
   writeFile(p: string, data: Buffer): Promise<void> {

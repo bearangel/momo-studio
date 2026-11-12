@@ -102,6 +102,9 @@ export class BridgeContentIo implements ContentIo {
   readFile(p: string): Promise<Buffer> {
     return requestFileIoRead(p);
   }
+  readFiles(p: string[]): Promise<Buffer[]> {
+    return requestFileIoReadMany(p);
+  }
   writeFile(p: string, data: Buffer): Promise<void> {
     return requestFileIoWrite(p, data);
   }
