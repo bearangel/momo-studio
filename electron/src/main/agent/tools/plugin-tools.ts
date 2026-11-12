@@ -14,8 +14,9 @@ export interface PluginToolCtx {
   getConfig(): Record<string, unknown>;
   getDataDir(): string;
   logger: { warn(msg: string, meta?: unknown): void; info(msg: string, meta?: unknown): void };
-  /** P3（spec §5.3）：service RPC——走 plugin:callService 子进程桥 */
-  callService(method: string, params: unknown): Promise<unknown>;
+  /** P3（spec §5.3）：service RPC——走 plugin:callService 子进程桥。
+   * opts.timeoutMs 按调用提示放宽桥超时（默认 10s，钳制 [1s,60s]——长操作如大邮件读取显式声明） */
+  callService(method: string, params: unknown, opts?: { timeoutMs?: number }): Promise<unknown>;
   /** 工作空间维度 v1.1（spec §4.4）：装配定型的工作区上下文（默认跟随依据） */
   workspace?: { id: string; directoryPath: string };
 }
@@ -60,7 +61,7 @@ export function loadPluginToolModules(
             warn: (msg, meta) => log(`[plugin:${ref.pluginId}] ${msg}`, meta),
             info: (msg, meta) => log(`[plugin:${ref.pluginId}] ${msg}`, meta),
           },
-          callService: (method, params) => requestPluginCallService(ref.pluginId, method, params, ref.workspace?.id),
+          callService: (method, params, opts) => requestPluginCallService(ref.pluginId, method, params, ref.workspace?.id, opts),
           workspace: ref.workspace,
         };
         const created = mod.createTools(pluginCtx);

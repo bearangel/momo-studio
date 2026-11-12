@@ -81,23 +81,35 @@ export function notifyPostToolUse(notice: PostToolUseNotice): void {
 }
 
 /** callService 子进程桥：无 IPC 明确 reject（区别于 preToolUse 的直通语义——
- * 工具需要拿到错误结果而不是静默跳过）；id 配对 + 10s 超时 */
+ * 工具需要拿到错误结果而不是静默跳过）；id 配对 + 超时（默认 10s，可按调用提示放宽） */
+export const DEFAULT_CALL_SERVICE_TIMEOUT_MS = 10_000;
+export const MIN_CALL_SERVICE_TIMEOUT_MS = 1_000;
+export const MAX_CALL_SERVICE_TIMEOUT_MS = 60_000;
+
+/** 提示值钳制 [1s, 60s]：默认 10s 不变——email 大邮件慢链路等长操作经工具侧显式提示放宽 */
+export function clampCallServiceTimeoutMs(hint: number | undefined): number {
+  if (hint === undefined || !Number.isFinite(hint)) return DEFAULT_CALL_SERVICE_TIMEOUT_MS;
+  return Math.min(Math.max(Math.trunc(hint), MIN_CALL_SERVICE_TIMEOUT_MS), MAX_CALL_SERVICE_TIMEOUT_MS);
+}
+
 export function requestPluginCallService(
   pluginId: string,
   method: string,
   params: unknown,
   workspaceId?: string,
+  opts?: { timeoutMs?: number },
 ): Promise<unknown> {
   const send = (process as { send?: (m: unknown) => void }).send?.bind(process);
   if (typeof send !== 'function') {
     return Promise.reject(new Error(`插件 ${pluginId} 的 callService 桥不可用（无 IPC 通道）`));
   }
+  const timeoutMs = clampCallServiceTimeoutMs(opts?.timeoutMs);
   return new Promise((resolve, reject) => {
     const id = randomUUID();
     const timer = setTimeout(() => {
       process.off('message', handler);
       reject(new Error(`插件 ${pluginId} callService 超时`));
-    }, 10_000);
+    }, timeoutMs);
     timer.unref?.();
     const handler = (msg: unknown): void => {
       const m = msg as { id?: unknown; result?: unknown; error?: unknown };
