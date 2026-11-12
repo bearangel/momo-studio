@@ -21,7 +21,8 @@ import { parseSkillMd } from '../skill/loader';
 import { listRegistered, registerMcpDefinition } from '../mcp/host-manager';
 import { McpClient } from '../mcp/client';
 import { HttpMcpClient, McpHttpError } from '../mcp/http-client';
-import type { McpServerConfig, McpToolInfo, RegisteredMcp } from '../mcp/types';
+import type { McpServerConfig, McpToolInfo, RegisteredMcp, McpEntryUpdateInput } from '../mcp/types';
+import { updateMcpEntry } from '../resource/mcp-config';
 import { getDb } from '../storage/db';
 import { isValidSlug } from '../marketplace/types';
 import { createHash, randomUUID } from 'node:crypto';
@@ -29,7 +30,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { logger } from '../logger';
 
-/** 白名单 op 枚举——桥面只放行这十一个入口（spec §6：桥不是通用 RPC 面） */
+/** 白名单 op 枚举——桥面只放行这十二个入口（spec §6：桥不是通用 RPC 面） */
 export const RESOURCE_OP_NAMES = [
   'list',
   'createAgent',
@@ -37,6 +38,7 @@ export const RESOURCE_OP_NAMES = [
   'createSkill',
   'updateSkill',
   'createMcp',
+  'updateMcp',
   'createTeam',
   'listModels',
   'describeAgent',
@@ -91,6 +93,16 @@ export interface CreateMcpResult {
   notice?: string;
 }
 
+/** update_mcp 返回（与 CreateMcpResult 同形，spec §5.5。needsAuthorization =
+ *  R14 OAuth 例外——新配置已落库但连接被 401/403 挑战，工具面为空待用户授权） */
+export interface UpdateMcpResult {
+  name: string;
+  toolCount: number;
+  toolNames: string[];
+  needsAuthorization?: boolean;
+  notice?: string;
+}
+
 /** create_team 返回（team.ts 原事务，错误信息原样透出） */
 export interface CreateTeamResult {
   teamId: string;
@@ -129,6 +141,7 @@ export async function executeResourceOp(
     case 'createSkill': return opCreateSkill(a);
     case 'updateSkill': return opUpdateSkill(a);
     case 'createMcp': return opCreateMcp(a, deps);
+    case 'updateMcp': return opUpdateMcp(a, deps);
     case 'createTeam': return opCreateTeam(a, workspaceId);
     case 'listModels': return opListModels();
     case 'describeAgent': return opDescribeAgent(a, workspaceId);
@@ -821,6 +834,101 @@ function withTimeout<T>(p: Promise<T>, ms: number, msg: string): Promise<T> {
       timer.unref?.();
     }),
   ]);
+}
+
+// ── updateMcp（先测后落库，spec §5.5：复用 createMcp 的瞬态客户端连通验证，
+//    失败零落库；落库走 updateMcpEntry——保 id/source/installed_at/config_schema，
+//    连接参数变化时其内部驱逐池连接，下回合 getOrStartMcp 按新定义重建）──
+
+async function opUpdateMcp(a: Record<string, unknown>, deps?: ResourceOpDeps): Promise<UpdateMcpResult> {
+  const name = str(a['name'], 'name');
+  // 存在性校验（listRegistered 同步读）。查无即指路 create_mcp，不静默新建；
+  // 顺带取 id/version——瞬态客户端要 McpServerConfig 全形状，落库要保 version
+  //（updateMcpEntryDefinition 对缺省 version 会重置为 '1.0.0'，不透传即降级）
+  const existing = listRegistered().find((m) => m.name === name);
+  if (!existing) throw new Error(`MCP 不存在: ${name}（新建请用 create_mcp）`);
+  const raw = a['transport'];
+  if (typeof raw !== 'object' || raw === null) {
+    throw new Error('transport 必须为 { kind: "stdio", command, args?, env?, cwd? } 或 { kind: "http", url, headers? }');
+  }
+  const t = raw as Record<string, unknown>;
+  const kind = t['kind'];
+  if (kind !== 'stdio' && kind !== 'http') {
+    throw new Error('transport 必须为 { kind: "stdio", command, args?, env?, cwd? } 或 { kind: "http", url, headers? }');
+  }
+
+  // 配置形状：逐字段对齐 opCreateMcp 同款先验（id/version 取现存行——客户端不
+  // 消费，仅为满足 McpServerConfig 形状；http 形态 command 空串占位，DB 列 NOT NULL）
+  let config: McpServerConfig;
+  if (kind === 'stdio') {
+    config = {
+      id: existing.id,
+      name,
+      version: existing.version,
+      transport: 'stdio',
+      command: str(t['command'], 'transport.command'),
+      args: t['args'] === undefined ? [] : strArray(t['args'], 'transport.args'),
+      env: optStrMap(t['env'], 'transport.env') ?? {},
+      cwd: t['cwd'] === undefined ? undefined : str(t['cwd'], 'transport.cwd'),
+    };
+  } else {
+    config = {
+      id: existing.id,
+      name,
+      version: existing.version,
+      transport: 'streamable_http',
+      command: '',
+      args: [],
+      url: str(t['url'], 'transport.url'),
+      headers: optStrMap(t['headers'], 'transport.headers') ?? {},
+    };
+  }
+  const input: McpEntryUpdateInput = {
+    transport: config.transport,
+    version: config.version,
+    command: config.command,
+    args: config.args,
+    env: config.env,
+    cwd: config.cwd,
+    url: config.url,
+    headers: config.headers,
+  };
+
+  const makeClient =
+    deps?.makeClient ??
+    ((cfg: McpServerConfig): TransientMcpClient =>
+      cfg.transport === 'streamable_http' ? new HttpMcpClient(cfg) : new McpClient(cfg));
+  const client = makeClient(config);
+  let toolNames: string[];
+  try {
+    await withTimeout(client.connect(), MCP_TEST_TIMEOUT_MS, `MCP ${name} 连接超时`);
+    const tools = await withTimeout(client.listTools(), MCP_TEST_TIMEOUT_MS, `MCP ${name} 工具发现超时`);
+    toolNames = tools.map((tool) => tool.name);
+  } catch (err) {
+    // R14：OAuth 挑战例外（判定口径与 opCreateMcp / host-manager getOrStartMcp
+    // 一致——401/403 的 McpHttpError 即「服务器要求授权」）。与 create 场景的
+    // 差异：新配置本就是要写入库的值，照常落库（已更新但未连接），返回引导而非报错
+    if (err instanceof McpHttpError && (err.status === 401 || err.status === 403)) {
+      await updateMcpEntry(name, input);
+      logger.info('会话内更新 MCP（已更新配置但未连接，待 OAuth 授权）', { name });
+      return {
+        name,
+        toolCount: 0,
+        toolNames: [],
+        needsAuthorization: true,
+        notice:
+          `MCP ${name} 的新配置已保存，但连接时服务器要求 OAuth 授权，暂未连通（工具面为空）。` +
+          '授权须由用户在应用内完成，agent 无法代为操作：请在 资源库 → MCP → ' +
+          `${name} → 编辑，提交后点「去授权」完成认证。完成后即可直接使用，无需再次更新。`,
+      };
+    }
+    throw err;
+  } finally {
+    await client.disconnect().catch(() => undefined);
+  }
+  await updateMcpEntry(name, input);
+  logger.info('会话内更新 MCP', { name, toolCount: toolNames.length });
+  return { name, toolCount: toolNames.length, toolNames: toolNames.slice(0, 20) };
 }
 
 // ── createTeam（复用 team.ts 事务，错误原样透出）──

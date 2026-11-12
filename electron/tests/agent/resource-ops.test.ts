@@ -24,7 +24,7 @@ import { getSkillsDir, listInstalled } from '../../src/main/skill/zip-uploader';
 import type { McpToolInfo } from '../../src/main/mcp/types';
 import { McpHttpError } from '../../src/main/mcp/http-client';
 import { executeResourceOp } from '../../src/main/agent/resource-ops';
-import type { ListModelsResult, DescribeAgentResult, UpdateCapabilitiesResult, UpdateProfileResult } from '../../src/main/agent/resource-ops';
+import type { ListModelsResult, DescribeAgentResult, UpdateCapabilitiesResult, UpdateProfileResult, ResourceOpDeps } from '../../src/main/agent/resource-ops';
 
 // 与 crud-custom-def.test.ts 同款 mock：crud.ts 引入的 runtime 依赖在测试环境不可用。
 // updateCapabilities 的 restart 接线（spec §8）也经这两个边界——mock 面随 Task 5 扩：
@@ -35,6 +35,10 @@ vi.mock('../../src/main/agent/runtime-status', () => ({
 vi.mock('../../src/main/agent/runtime-registry', () => ({
   stopAgentRuntime: vi.fn(),
   requestRespawnAfterIdle: vi.fn(),
+  // Task 8 起 resource-ops 引入 resource/mcp-config（updateMcpEntry），其模块图
+  // 经 hub-install → delegation-runner 在顶层调用 broadcastWriteGrantDenied——
+  // 本文件不测委派，桩掉即可
+  broadcastWriteGrantDenied: vi.fn(),
 }));
 vi.mock('../../src/main/agent/start-chain', () => ({
   ensureMemberRuntime: vi.fn(),
@@ -405,6 +409,73 @@ describe('createMcp', () => {
     expect(r.toolCount).toBe(25);
     expect(r.toolNames).toHaveLength(20);
     expect(getDb().prepare('SELECT 1 FROM mcp_definitions WHERE name = ?').get('live-server')).toBeTruthy();
+  });
+});
+
+describe('updateMcp', () => {
+  // 种子：预插一条 stdio 条目（source='custom'——updateMcpEntry 保 id/source/installed_at 的前提行）
+  const seedMcp = (name: string): void => {
+    getDb().prepare(`INSERT INTO mcp_definitions (id, name, version, transport, command, args, source)
+                     VALUES (?, ?, '1.0.0', 'stdio', 'old-cmd', '[]', 'custom')`).run(`mid-${name}`, name);
+  };
+  // fake client 注入（沿 createMcp 块手法）：fail='oauth' 时 connect 抛 McpHttpError 401
+  const mkDeps = (fail?: 'oauth'): { deps: ResourceOpDeps } => ({
+    deps: {
+      makeClient: () => ({
+        connect: async () => { if (fail === 'oauth') throw new McpHttpError('initialize', 401, null); },
+        listTools: async () => [{ name: 't1', description: '', inputSchema: {} }, { name: 't2', description: '', inputSchema: {} }] as McpToolInfo[],
+        disconnect: async () => undefined,
+      }),
+    },
+  });
+
+  it('先测后落库：连通通过 → updateMcpEntry 收到新 command', async () => {
+    seedMcp('fs');
+    const r = (await executeResourceOp('updateMcp',
+      { name: 'fs', transport: { kind: 'stdio', command: 'new-cmd' } }, wsId, mkDeps().deps)) as { toolCount: number };
+    expect(r.toolCount).toBe(2);
+    const row = getDb().prepare('SELECT command FROM mcp_definitions WHERE name = ?').get('fs') as { command: string };
+    expect(row.command).toBe('new-cmd');
+  });
+
+  it('连通失败零落库（命令未变）', async () => {
+    seedMcp('fs');
+    const deps = { makeClient: () => ({ connect: async () => { throw new Error('ECONNREFUSED'); }, listTools: async () => [] as McpToolInfo[], disconnect: async () => undefined }) };
+    await expect(executeResourceOp('updateMcp',
+      { name: 'fs', transport: { kind: 'stdio', command: 'new-cmd' } }, wsId, deps))
+      .rejects.toThrow('ECONNREFUSED');
+    const row = getDb().prepare('SELECT command FROM mcp_definitions WHERE name = ?').get('fs') as { command: string };
+    expect(row.command).toBe('old-cmd');
+  });
+
+  it('OAuth 401 → needsAuthorization 例外（落库 + 引导文案）', async () => {
+    seedMcp('oauth-mcp');
+    const r = (await executeResourceOp('updateMcp',
+      { name: 'oauth-mcp', transport: { kind: 'http', url: 'https://x/v1' } }, wsId, mkDeps('oauth').deps)) as
+      { needsAuthorization?: boolean; notice?: string };
+    expect(r.needsAuthorization).toBe(true);
+    expect(r.notice).toContain('授权');
+    // 落库验证：stdio → http 的 transport 迁移确实写入
+    const row = getDb().prepare('SELECT transport FROM mcp_definitions WHERE name = ?').get('oauth-mcp') as { transport: string };
+    expect(row.transport).toBe('streamable_http');
+  });
+
+  it('name 未注册 → 指路 create_mcp', async () => {
+    await expect(executeResourceOp('updateMcp',
+      { name: 'ghost', transport: { kind: 'stdio', command: 'c' } }, wsId, mkDeps().deps))
+      .rejects.toThrow('create_mcp');
+  });
+
+  it('凭证不回显：返回与 throw 信息不含 headers 值', async () => {
+    seedMcp('sec');
+    const r = (await executeResourceOp('updateMcp',
+      { name: 'sec', transport: { kind: 'http', url: 'https://x/v1', headers: { Authorization: 'Bearer sekret' } } },
+      wsId, mkDeps().deps)) as Record<string, unknown>;
+    expect(JSON.stringify(r)).not.toContain('sekret');
+    // throw 侧同样不回显（非法 url 触发形状错误——错误文本只含字段名）
+    await expect(executeResourceOp('updateMcp',
+      { name: 'sec', transport: { kind: 'http', url: '' } }, wsId, mkDeps().deps))
+      .rejects.toThrow(/transport\.url/);
   });
 });
 

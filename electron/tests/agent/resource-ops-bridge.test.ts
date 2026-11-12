@@ -14,6 +14,10 @@ vi.mock('../../src/main/agent/runtime-status', () => ({
 }));
 vi.mock('../../src/main/agent/runtime-registry', () => ({
   stopAgentRuntime: vi.fn(),
+  // resource-ops 引入 resource/mcp-config（updateMcp，Task 8）后模块图经
+  // hub-install → delegation-runner 在顶层调用 broadcastWriteGrantDenied——
+  // 本文件不测委派，桩掉即可
+  broadcastWriteGrantDenied: vi.fn(),
 }));
 vi.mock('../../src/main/im/session-service', () => ({
   broadcastRuntimeChanged: vi.fn(),
