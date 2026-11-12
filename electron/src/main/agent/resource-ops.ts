@@ -29,12 +29,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { logger } from '../logger';
 
-/** 白名单 op 枚举——桥面只放行这十个入口（spec §6：桥不是通用 RPC 面） */
+/** 白名单 op 枚举——桥面只放行这十一个入口（spec §6：桥不是通用 RPC 面） */
 export const RESOURCE_OP_NAMES = [
   'list',
   'createAgent',
   'addMember',
   'createSkill',
+  'updateSkill',
   'createMcp',
   'createTeam',
   'listModels',
@@ -126,6 +127,7 @@ export async function executeResourceOp(
     case 'createAgent': return opCreateAgent(a, workspaceId);
     case 'addMember': return opAddMember(a, workspaceId);
     case 'createSkill': return opCreateSkill(a);
+    case 'updateSkill': return opUpdateSkill(a);
     case 'createMcp': return opCreateMcp(a, deps);
     case 'createTeam': return opCreateTeam(a, workspaceId);
     case 'listModels': return opListModels();
@@ -615,6 +617,99 @@ function opCreateSkill(a: Record<string, unknown>): CreateSkillResult {
   );
   logger.info('会话内安装 skill', { slug });
   return { slug, name: def.name };
+}
+
+// ── updateSkill（写面，spec 2026-11-12 §5.4——仅 custom 源可全量替换；全部校验
+//    （含 references 越界）先于任何写盘，错误路径零部分写、旧内容原样保留。
+//    引用面计数跨 workspace 全量：def.default_skills ∪ 成员 delta add 行）──
+
+/** update_skill 返回（agentsUsingIt=引用该 skill 的成员数，任意 workspace；needsRestart 据此推导） */
+export interface UpdateSkillResult {
+  slug: string;
+  name: string;
+  refCount: number;
+  agentsUsingIt: number;
+  needsRestart: boolean;
+}
+
+/** 引用面成员计数：def.default_skills JSON 含该 slug 的成员 ∪ delta add 行
+ *  （capability_type='skill' AND mode='add'）的成员。LIKE 初筛 + JS 精确解析复核
+ *  ——防 substring 误报（slug="skill" 不得命中 "my-skill"）；delta 侧 ref 精确等值。 */
+function countSkillMembers(slug: string): number {
+  const likeRows = getDb()
+    .prepare(
+      `SELECT m.instance_id AS instance_id, d.default_skills AS default_skills
+       FROM workspace_agent_members m
+       JOIN agent_definitions d ON d.id = m.agent_definition_id
+       WHERE d.default_skills LIKE ?`,
+    )
+    .all(`%"${slug}"%`) as Array<{ instance_id: string; default_skills: string }>;
+  const ids = new Set<string>();
+  for (const row of likeRows) {
+    try {
+      const skills: unknown = JSON.parse(row.default_skills ?? '[]');
+      if (Array.isArray(skills) && skills.some((s) => (s as { ref?: unknown })?.ref === slug)) {
+        ids.add(row.instance_id);
+      }
+    } catch {
+      // 非法 JSON 行不计入（与能力合并层解析失败容忍同口径）
+    }
+  }
+  const deltaRows = getDb()
+    .prepare(
+      `SELECT m.instance_id AS instance_id
+       FROM agent_assignment_capabilities c
+       JOIN workspace_agent_members m ON m.instance_id = c.assignment_id
+       WHERE c.capability_type = 'skill' AND c.mode = 'add' AND c.ref = ?`,
+    )
+    .all(slug) as Array<{ instance_id: string }>;
+  for (const row of deltaRows) ids.add(row.instance_id);
+  return ids.size;
+}
+
+function opUpdateSkill(a: Record<string, unknown>): UpdateSkillResult {
+  const slug = str(a['slug'], 'slug');
+  const skillMd = str(a['skillMd'], 'skillMd');
+  if (!isValidSlug(slug)) throw new Error(`非法 slug: ${slug}`);
+  const rawRefs = Array.isArray(a['references']) ? a['references'] : [];
+  const refs: SkillFileInput[] = rawRefs.map((r): SkillFileInput => {
+    if (typeof r !== 'object' || r === null) {
+      throw new Error('references 条目须含 path 与 content 字符串');
+    }
+    const rec = r as Record<string, unknown>;
+    if (typeof rec['path'] !== 'string' || rec['path'].length === 0 || typeof rec['content'] !== 'string') {
+      throw new Error('references 条目须含 path 与 content 字符串');
+    }
+    return { path: rec['path'], content: rec['content'] };
+  });
+
+  const dir = path.join(getSkillsDir(), slug);
+  if (!fs.existsSync(path.join(dir, 'SKILL.md'))) {
+    throw new Error(`skill 不存在: ${slug}（新建请用 create_skill）`);
+  }
+  // .sha256 标记缺失 = builtin/marketplace 源——只读，引导用户去资源库 UI
+  if (!fs.existsSync(path.join(dir, '.sha256'))) {
+    throw new Error(`仅 custom 源技能可更新（请在 资源库 → 技能 管理: ${slug}）`);
+  }
+  const def = parseSkillMd(skillMd, dir); // name/description 必填校验（缺则抛）
+  // 全部校验先于任何写盘——越界等错误路径零落盘（rm 在此之后，旧内容原样保留）
+  const targets = refs.map((r) => safeJoin(dir, r.path));
+
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'SKILL.md'), skillMd, 'utf-8');
+  refs.forEach((r, i) => {
+    fs.mkdirSync(path.dirname(targets[i]!), { recursive: true });
+    fs.writeFileSync(targets[i]!, r.content, 'utf-8');
+  });
+  fs.writeFileSync(
+    path.join(dir, '.sha256'),
+    createHash('sha256').update(skillMd, 'utf-8').digest('hex'),
+  );
+
+  const agentsUsingIt = countSkillMembers(slug);
+  logger.info('会话内更新 skill', { slug, agentsUsingIt });
+  return { slug, name: def.name, refCount: refs.length, agentsUsingIt, needsRestart: agentsUsingIt > 0 };
 }
 
 // ── createMcp（先测后落库，spec §5.5：瞬态客户端不经进程池、失败零落库）──

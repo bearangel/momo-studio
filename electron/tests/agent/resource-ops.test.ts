@@ -609,3 +609,97 @@ describe('updateProfile', () => {
     expect(after).toMatchObject({ name: 'r', denied_tools: JSON.stringify(['bash']) });
   });
 });
+
+describe('updateSkill', () => {
+  const seedCustom = (slug: string): void => {
+    const dir = path.join(getSkillsDir(), slug);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'SKILL.md'), '---\nname: 旧名\ndescription: 旧\n---\n旧正文');
+    fs.writeFileSync(path.join(dir, '.sha256'), 'deadbeef'); // custom 源标记
+  };
+
+  it('custom 源全量替换：SKILL.md/references/.sha256 全部换新', async () => {
+    seedCustom('my-skill');
+    const r = (await executeResourceOp('updateSkill', {
+      slug: 'my-skill',
+      skillMd: '---\nname: 新名\ndescription: 新\n---\n新正文',
+      references: [{ path: 'refs/a.md', content: 'A' }],
+    }, wsId)) as { name: string; refCount: number };
+    expect(r.name).toBe('新名');
+    expect(r.refCount).toBe(1);
+    expect(fs.readFileSync(path.join(getSkillsDir(), 'my-skill', 'refs', 'a.md'), 'utf-8')).toBe('A');
+    const hash = fs.readFileSync(path.join(getSkillsDir(), 'my-skill', '.sha256'), 'utf-8');
+    expect(hash).not.toBe('deadbeef');
+    // SKILL.md 换新（全量替换不是追加）
+    expect(fs.readFileSync(path.join(getSkillsDir(), 'my-skill', 'SKILL.md'), 'utf-8')).toContain('新正文');
+    // listInstalled 仍识别 custom 源（.sha256 重算后不丢标记）
+    const installed = listInstalled().find((s) => s.slug === 'my-skill');
+    expect(installed?.source).toBe('custom');
+    expect(installed?.name).toBe('新名');
+  });
+
+  it('references 越界拒绝且零落盘（Review Focus ④）', async () => {
+    seedCustom('my-skill');
+    await expect(executeResourceOp('updateSkill', {
+      slug: 'my-skill', skillMd: '---\nname: n\ndescription: d\n---\nb',
+      references: [{ path: '../escape.md', content: 'x' }],
+    }, wsId)).rejects.toThrow('越界');
+    expect(fs.existsSync(path.join(getSkillsDir(), 'escape.md'))).toBe(false);
+    // 旧内容原样保留（不是先删后炸）
+    expect(fs.readFileSync(path.join(getSkillsDir(), 'my-skill', 'SKILL.md'), 'utf-8')).toContain('旧正文');
+    // 旧 .sha256 标记原样保留
+    expect(fs.readFileSync(path.join(getSkillsDir(), 'my-skill', '.sha256'), 'utf-8')).toBe('deadbeef');
+  });
+
+  it('slug 不存在 → 指路 create_skill', async () => {
+    await expect(executeResourceOp('updateSkill',
+      { slug: 'ghost', skillMd: '---\nname: n\ndescription: d\n---\nb' }, wsId))
+      .rejects.toThrow('create_skill');
+  });
+
+  it('非 custom 源（无 .sha256 标记）拒绝并引导 UI', async () => {
+    const dir = path.join(getSkillsDir(), 'builtin-like');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'SKILL.md'), '---\nname: b\ndescription: d\n---\nb');
+    await expect(executeResourceOp('updateSkill',
+      { slug: 'builtin-like', skillMd: '---\nname: n\ndescription: d\n---\nb' }, wsId))
+      .rejects.toThrow('资源库');
+  });
+
+  it('frontmatter 缺 description 拒绝（与 createSkill 同链校验）', async () => {
+    seedCustom('my-skill');
+    await expect(executeResourceOp('updateSkill',
+      { slug: 'my-skill', skillMd: '---\nname: 只有名\n---\nb' }, wsId))
+      .rejects.toThrow('description');
+    // 校验失败零落盘——旧内容原样
+    expect(fs.readFileSync(path.join(getSkillsDir(), 'my-skill', 'SKILL.md'), 'utf-8')).toContain('旧正文');
+  });
+
+  it('agentsUsingIt：引用该 skill 的成员行计数', async () => {
+    seedCustom('shared-skill');
+    getDb().prepare(`INSERT INTO agent_definitions (id, name, slug, version, system_prompt, model_name, source, default_skills)
+                     VALUES ('def-s', 's', 'agent-s', '1', 'p', 'm', 'custom', ?)`).run(JSON.stringify([{ kind: 'skill', ref: 'shared-skill' }]));
+    await addMember(wsId, 'def-s', '@s:1');
+    const r = (await executeResourceOp('updateSkill',
+      { slug: 'shared-skill', skillMd: '---\nname: n\ndescription: d\n---\nb' }, wsId)) as { agentsUsingIt: number; needsRestart: boolean };
+    expect(r.agentsUsingIt).toBeGreaterThanOrEqual(1);
+    expect(r.needsRestart).toBe(true);
+  });
+
+  it('agentsUsingIt：成员 delta add 行也计数；无引用时 needsRestart=false', async () => {
+    seedCustom('lone-skill');
+    getDb().prepare(
+      `INSERT INTO agent_assignment_capabilities (assignment_id, capability_type, mode, ref) VALUES (?, 'skill', 'add', 'lone-skill')`,
+    ).run(m1);
+    const r = (await executeResourceOp('updateSkill',
+      { slug: 'lone-skill', skillMd: '---\nname: n\ndescription: d\n---\nb' }, wsId)) as { agentsUsingIt: number; needsRestart: boolean };
+    expect(r.agentsUsingIt).toBeGreaterThanOrEqual(1);
+    expect(r.needsRestart).toBe(true);
+    // 无任何引用：needsRestart=false
+    seedCustom('quiet-skill');
+    const q = (await executeResourceOp('updateSkill',
+      { slug: 'quiet-skill', skillMd: '---\nname: n\ndescription: d\n---\nb' }, wsId)) as { agentsUsingIt: number; needsRestart: boolean };
+    expect(q.agentsUsingIt).toBe(0);
+    expect(q.needsRestart).toBe(false);
+  });
+});
