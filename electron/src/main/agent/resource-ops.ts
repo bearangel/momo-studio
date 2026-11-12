@@ -347,7 +347,7 @@ export async function executeResourceOp(
     case 'listModels': return opListModels();
     case 'describeAgent': return opDescribeAgent(a, workspaceId);
     case 'updateCapabilities': return opUpdateCapabilities(a, workspaceId, ctx);
-    case 'updateProfile': return opUpdateProfile(a, workspaceId);
+    case 'updateProfile': return opUpdateProfile(a, workspaceId, ctx);
     default: throw new Error(`未知 resource op: ${op}`);
   }
 }
@@ -514,6 +514,20 @@ function pluginGrantedFrom(merged: MergedCapabilities, addedPluginTools: string[
   return candidates.filter((p) => !toolRefMatches(p, merged.deniedTools));
 }
 
+/** 发起者豁免停机时的换芯登记（spec §8「绝不 mid-call 杀自己」definition 面）：
+ *  caller 是该定义的运行成员 → 动态 import 登记 respawn-on-idle 并返回
+ *  'next-turn'；否则返回 undefined。member 分支自改同款模式（动态 import 打破
+ *  runtime-registry → runtime-spawner → resource-ops-bridge → 本模块 回环） */
+async function callerRespawnOnIdle(defId: string, ctx: OpContext | undefined): Promise<'next-turn' | undefined> {
+  const caller = ctx?.callerInstanceId;
+  if (caller === undefined) return undefined;
+  if (getMemberByInstanceId(caller)?.agentDefinitionId !== defId) return undefined;
+  if (!isAgentRunning(caller)) return undefined;
+  const { requestRespawnAfterIdle } = await import('./runtime-registry');
+  requestRespawnAfterIdle(caller);
+  return 'next-turn';
+}
+
 async function opUpdateCapabilities(
   a: Record<string, unknown>,
   workspaceId: string,
@@ -586,7 +600,10 @@ async function opUpdateCapabilities(
       defaultMcps: nextMcps.map((r) => mcpByRef.get(r) ?? { kind: 'mcp', ref: r }),
       defaultSkills: nextSkills.map((r) => skillByRef.get(r) ?? { kind: 'skill', ref: r }),
     });
-    const stopped = await stopRunningInstancesByDefinition(def.id);
+    // 发起者自身若是该定义的运行成员：豁免停机（spec §8 绝不 mid-call 杀自己），
+    // 回合结束后 respawn-on-idle 换芯；其它运行实例停机语义不变
+    const stopped = await stopRunningInstancesByDefinition(def.id, { excludeInstanceId: ctx?.callerInstanceId });
+    const effectiveFrom = await callerRespawnOnIdle(def.id, ctx);
     const defDenied = def.deniedTools ?? [];
     const result: UpdateCapabilitiesResult = {
       appliedTo: 'definition',
@@ -600,9 +617,11 @@ async function opUpdateCapabilities(
       },
       stoppedInstances: stopped.length,
       otherWorkspaceMembers: otherWs.n,
+      ...(effectiveFrom !== undefined && { effectiveFrom }),
     };
     if (a['restart'] !== undefined) {
-      result.notice = 'definition 分支恒 stop-only：restart 参数已忽略（实例保持停止态，下次派发自然拉起新配置）';
+      result.notice = 'definition 分支 stop-only：restart 参数已忽略（其它运行实例保持停止态，下次派发自然拉起新配置）'
+        + (effectiveFrom !== undefined ? '；发起者自身豁免停机，回合结束后自动换芯' : '');
     }
     return result;
   }
@@ -677,9 +696,11 @@ async function opUpdateCapabilities(
 export interface UpdateProfileResult {
   definition: AgentDefinition;
   stoppedInstances: number;
+  /** 发起者自身是该定义的运行成员时出现：豁免停机，回合结束后 respawn-on-idle 换芯 */
+  effectiveFrom?: 'next-turn';
 }
 
-async function opUpdateProfile(a: Record<string, unknown>, workspaceId: string): Promise<UpdateProfileResult> {
+async function opUpdateProfile(a: Record<string, unknown>, workspaceId: string, ctx?: OpContext): Promise<UpdateProfileResult> {
   const key = str(a['agent'], 'agent');
   const target = resolveAgentTarget(key, workspaceId);
   if (!target) throw new Error(`未找到 agent 成员: ${key}（可先 resource_list 查询真实 instanceId/slug）`);
@@ -718,9 +739,11 @@ async function opUpdateProfile(a: Record<string, unknown>, workspaceId: string):
     ...(modelName !== undefined && { modelName }),
     ...(deniedTools !== undefined && { deniedTools }),
   });
-  const stopped = await stopRunningInstancesByDefinition(def.id);
+  // 发起者自身若是该定义的运行成员：豁免停机（spec §8），回合后 respawn-on-idle 换芯
+  const stopped = await stopRunningInstancesByDefinition(def.id, { excludeInstanceId: ctx?.callerInstanceId });
+  const effectiveFrom = await callerRespawnOnIdle(def.id, ctx);
   logger.info('会话内更新 agent 档案', { defId: def.id, stopped: stopped.length });
-  return { definition: updated, stoppedInstances: stopped.length };
+  return { definition: updated, stoppedInstances: stopped.length, ...(effectiveFrom !== undefined && { effectiveFrom }) };
 }
 
 // ── createAgent（与 UI 导入链 agent.createFromYaml 同语义：parse → 冲突拒绝 →
@@ -903,7 +926,11 @@ function opUpdateSkill(a: Record<string, unknown>): UpdateSkillResult {
   const slug = str(a['slug'], 'slug');
   const skillMd = str(a['skillMd'], 'skillMd');
   if (!isValidSlug(slug)) throw new Error(`非法 slug: ${slug}`);
-  // 省略 = 保留附属文件（undefined=不改）；显式提供（含 []）= 全量替换
+  // 省略 = 保留附属文件（undefined=不改）；显式提供（含 []）= 全量替换。
+  // 形状先验：非数组值若放行会走全量替换分支 rmSync 清空全部附属文件（静默数据销毁）
+  if (a['references'] !== undefined && !Array.isArray(a['references'])) {
+    throw new Error('references 必须为数组（每项 {path, content}），省略则保留既有附属文件');
+  }
   const refsProvided = a['references'] !== undefined;
   const rawRefs = Array.isArray(a['references']) ? a['references'] : [];
   const refs: SkillFileInput[] = rawRefs.map((r): SkillFileInput => {

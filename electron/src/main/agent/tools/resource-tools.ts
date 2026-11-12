@@ -182,7 +182,7 @@ export class ResourceTools implements ToolModule {
       {
         name: 'update_agent_capabilities',
         description:
-          '调整 agent 能力（增量：终态 = 现状 ∪ add − remove，同 ref 同现 add+remove 时 remove 胜）。scope 缺省 member（只改当前工作空间成员的增量层，不动定义）；仅当用户明确要求「改定义本身 / 全局生效 / 影响所有工作空间」时才传 definition（builtin 定义会被拒绝）。add 与 remove 至少传其一，ref 必须是已知资源名（工具/技能/MCP/插件工具），非法 ref 会逐条报出且零落库。确认纪律：含任一 add 或 scope=definition 属扩权类操作，会弹用户确认卡——被拒后不得重试原请求，改向用户确认意图或改道纯 remove；纯 member 纯 remove 复述即可。restart 仅 member 分支生效（definition 分支恒停止运行实例）。改前先 describe_agent 盘点，改后把生效能力集回报用户。',
+          '调整 agent 能力（增量：终态 = 现状 ∪ add − remove，同 ref 同现 add+remove 时 remove 胜）。scope 缺省 member（只改当前工作空间成员的增量层，不动定义）；仅当用户明确要求「改定义本身 / 全局生效 / 影响所有工作空间」时才传 definition（builtin 定义会被拒绝）。add 与 remove 至少传其一，ref 必须是已知资源名（工具/技能/MCP/插件工具），非法 ref 会逐条报出且零落库。确认纪律：含任一 add 或 scope=definition 属扩权类操作，会弹用户确认卡——被拒后不得重试原请求，改向用户确认意图或改道纯 remove；纯 member 纯 remove 复述即可。restart 仅 member 分支生效（definition 分支停止其它运行实例；发起者自身回合结束后自动生效）。改前先 describe_agent 盘点，改后把生效能力集回报用户。',
         inputSchema: {
           type: 'object',
           properties: {
@@ -216,7 +216,7 @@ export class ResourceTools implements ToolModule {
       {
         name: 'update_agent_profile',
         description:
-          '编辑 agent 定义档案（名称 / 描述 / systemPrompt / 图标 / 模型绑定 / deniedTools）。model 用 list_models 的 providerId/modelId；deniedTools 是整列覆盖不是增量。恒确认：任何字段都会弹用户确认卡（systemPrompt / model / deniedTools 都改变 agent 行为面，统一一档防轻字段绕档），被拒后不得重试，先与用户对齐意图。builtin 定义只读会被拒绝，改道向用户说明。改动会停止该定义的全部运行实例，需重启生效。',
+          '编辑 agent 定义档案（名称 / 描述 / systemPrompt / 图标 / 模型绑定 / deniedTools）。model 用 list_models 的 providerId/modelId；deniedTools 是整列覆盖不是增量。恒确认：任何字段都会弹用户确认卡（systemPrompt / model / deniedTools 都改变 agent 行为面，统一一档防轻字段绕档），被拒后不得重试，先与用户对齐意图。builtin 定义只读会被拒绝，改道向用户说明。改动会停止该定义的其它运行实例（发起者自身回合结束后自动生效），需重启生效。',
         inputSchema: {
           type: 'object',
           properties: {

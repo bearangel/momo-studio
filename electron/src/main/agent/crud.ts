@@ -604,10 +604,17 @@ export async function updateAgentApiKey(instanceId: string, newKey: string): Pro
   await setSecret(llmApiKeyRef(instanceId), newKey);
 }
 
-/** 停止某定义的全部运行中实例（编辑 def 后调用，让用户手动重启应用新配置） */
-export async function stopRunningInstancesByDefinition(definitionId: string): Promise<string[]> {
+/** 停止某定义的全部运行中实例（编辑 def 后调用，让用户手动重启应用新配置）。
+ *  opts.excludeInstanceId：豁免该实例不停——会话内自改场景发起者正等 op 回包，
+ *  mid-call 杀自己会让工具调用永无回包（spec §8 不变量；由调用方登记
+ *  respawn-on-idle 在回合结束后换芯） */
+export async function stopRunningInstancesByDefinition(
+  definitionId: string,
+  opts?: { excludeInstanceId?: string },
+): Promise<string[]> {
   const stopped: string[] = [];
   for (const instanceId of listRunningInstanceIdsByDefinition(definitionId)) {
+    if (opts?.excludeInstanceId !== undefined && instanceId === opts.excludeInstanceId) continue;
     if (isAgentRunning(instanceId)) {
       await stopAgentRuntime(instanceId);
       stopped.push(instanceId);

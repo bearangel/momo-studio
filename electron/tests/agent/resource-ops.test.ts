@@ -586,6 +586,27 @@ describe('updateCapabilities', () => {
     expect(JSON.parse(def.default_skills)).toEqual([{ kind: 'skill', ref: 'weather' }]);
   });
 
+  it('definition 分支自改（caller 是该 def 的运行成员）：豁免停机 + respawn-on-idle（绝不 mid-call 杀自己）', async () => {
+    seedSkill('weather');
+    getDb().prepare(`INSERT INTO agent_definitions (id, name, slug, version, system_prompt, model_name, source)
+                     VALUES ('def-self-cap', '自改', 'agent-self-cap', '1', 'p', 'm', 'custom')`).run();
+    const cm = (await addMember(wsId, 'def-self-cap', '@cap:1')).instanceId;
+    const { isAgentRunning } = await import('../../src/main/agent/runtime-status');
+    const { stopAgentRuntime, requestRespawnAfterIdle } = await import('../../src/main/agent/runtime-registry');
+    vi.mocked(isAgentRunning).mockReturnValue(true);
+    vi.mocked(stopAgentRuntime).mockClear();
+    vi.mocked(requestRespawnAfterIdle).mockClear();
+    const r = (await executeResourceOp('updateCapabilities',
+      { agent: cm, scope: 'definition', add: { skills: ['weather'] } }, wsId, undefined,
+      { background: false, callerInstanceId: cm })) as UpdateCapabilitiesResult;
+    expect(r.appliedTo).toBe('definition');
+    expect(r.stoppedInstances).toBe(0);
+    expect(r.effectiveFrom).toBe('next-turn');
+    expect(vi.mocked(requestRespawnAfterIdle)).toHaveBeenCalledWith(cm);
+    expect(vi.mocked(stopAgentRuntime)).not.toHaveBeenCalled();
+    vi.mocked(isAgentRunning).mockReturnValue(false);
+  });
+
   it('otherWorkspaceMembers：另一 ws 同 def 成员计数', async () => {
     seedSkill('weather');
     getDb().prepare(`INSERT INTO workspaces (id, name, description, directory_path, git_initialized, owner_id, icon_emoji)
@@ -678,6 +699,43 @@ describe('updateProfile', () => {
     expect(noop.definition.deniedTools).toEqual(['bash']);
     const after = getDb().prepare('SELECT name, denied_tools FROM agent_definitions WHERE id = ?').get('def-r') as { name: string; denied_tools: string };
     expect(after).toMatchObject({ name: 'r', denied_tools: JSON.stringify(['bash']) });
+  });
+
+  it('自改（caller 是该 def 的运行成员）：豁免停机 + respawn-on-idle（绝不 mid-call 杀自己）', async () => {
+    getDb().prepare(`INSERT INTO agent_definitions (id, name, slug, version, system_prompt, model_name, source)
+                     VALUES ('def-self', '自改', 'agent-self', '1', 'p', 'm', 'custom')`).run();
+    const sm = (await addMember(wsId, 'def-self', '@self:1')).instanceId;
+    const { isAgentRunning } = await import('../../src/main/agent/runtime-status');
+    const { stopAgentRuntime, requestRespawnAfterIdle } = await import('../../src/main/agent/runtime-registry');
+    vi.mocked(isAgentRunning).mockReturnValue(true);
+    vi.mocked(stopAgentRuntime).mockClear();
+    vi.mocked(requestRespawnAfterIdle).mockClear();
+    const r = (await executeResourceOp('updateProfile',
+      { agent: sm, name: '换名' }, wsId, undefined, { background: false, callerInstanceId: sm })) as UpdateProfileResult;
+    expect(r.stoppedInstances).toBe(0);
+    expect(r.effectiveFrom).toBe('next-turn');
+    expect(vi.mocked(requestRespawnAfterIdle)).toHaveBeenCalledWith(sm);
+    expect(vi.mocked(stopAgentRuntime)).not.toHaveBeenCalled();
+    vi.mocked(isAgentRunning).mockReturnValue(false);
+  });
+
+  it('改他人 def（caller 非该 def 成员）：停机语义不变——其它运行成员照常停止', async () => {
+    getDb().prepare(`INSERT INTO agent_definitions (id, name, slug, version, system_prompt, model_name, source)
+                     VALUES ('def-other', '他人', 'agent-other', '1', 'p', 'm', 'custom')`).run();
+    const om = (await addMember(wsId, 'def-other', '@other:1')).instanceId;
+    const { isAgentRunning } = await import('../../src/main/agent/runtime-status');
+    const { stopAgentRuntime, requestRespawnAfterIdle } = await import('../../src/main/agent/runtime-registry');
+    vi.mocked(isAgentRunning).mockReturnValue(true);
+    vi.mocked(stopAgentRuntime).mockClear();
+    vi.mocked(requestRespawnAfterIdle).mockClear();
+    // caller = m1（def-a 成员，与 def-other 无关）→ om 不豁免
+    const r = (await executeResourceOp('updateProfile',
+      { agent: om, name: 'x' }, wsId, undefined, { background: false, callerInstanceId: m1 })) as UpdateProfileResult;
+    expect(r.stoppedInstances).toBe(1);
+    expect(r.effectiveFrom).toBeUndefined();
+    expect(vi.mocked(stopAgentRuntime)).toHaveBeenCalledWith(om);
+    expect(vi.mocked(requestRespawnAfterIdle)).not.toHaveBeenCalled();
+    vi.mocked(isAgentRunning).mockReturnValue(false);
   });
 });
 
@@ -798,6 +856,21 @@ describe('updateSkill', () => {
       { slug: 'clear-skill', skillMd: '---\nname: n\ndescription: d\n---\nb', references: [] }, wsId)) as { refCount: number };
     expect(fs.existsSync(path.join(getSkillsDir(), 'clear-skill', 'refs'))).toBe(false);
     expect(r.refCount).toBe(0);
+  });
+
+  it('references 非数组（字符串等形状歪输入）→ 形状错误 + 零落盘（绝不静默清空附属文件）', async () => {
+    seedCustom('shape-skill');
+    fs.mkdirSync(path.join(getSkillsDir(), 'shape-skill', 'refs'), { recursive: true });
+    fs.writeFileSync(path.join(getSkillsDir(), 'shape-skill', 'refs', 'a.md'), '旧模板');
+    await expect(executeResourceOp('updateSkill', {
+      slug: 'shape-skill',
+      skillMd: '---\nname: n\ndescription: d\n---\nb',
+      references: '见附文件',
+    }, wsId)).rejects.toThrow('references 必须为数组');
+    // 既有附属文件与 SKILL.md / .sha256 原样（零落盘）
+    expect(fs.readFileSync(path.join(getSkillsDir(), 'shape-skill', 'refs', 'a.md'), 'utf-8')).toBe('旧模板');
+    expect(fs.readFileSync(path.join(getSkillsDir(), 'shape-skill', 'SKILL.md'), 'utf-8')).toContain('旧正文');
+    expect(fs.readFileSync(path.join(getSkillsDir(), 'shape-skill', '.sha256'), 'utf-8')).toBe('deadbeef');
   });
 
   it('agentsUsingIt 子串防误报：LIKE 初筛命中 "kind":"skill" 字面量 / "my-skill" 子串时精确解析须排除（T7 回归锁）', async () => {
