@@ -11,6 +11,7 @@
 // 7. parseTaskAssigned 挑字段面（M4.3：task.dependsOn 剥除——依赖闸在 leader 侧，worker 零消费）。
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EventEnvelope } from '../../src/main/hub/protocol';
+import type { DelegationRecord } from '../../src/main/hub/delegation-store';
 import {
   isTrustedDownloadUrl,
   registerTrustedDownloadOrigin,
@@ -135,6 +136,29 @@ vi.mock('../../src/main/logger', () => ({
 
 // db 仅被 config-store 消费，而 config-store 已被替身接管——mock 掉避免加载 native 绑定。
 vi.mock('../../src/main/storage/db', () => ({ getDb: () => ({}) }));
+
+// delegation-store 内存替身（DB 边界——委派账本本质是 kv JSON 映射，内存 Map
+// 即可复刻读写语义）：db 已是 {} 空壳，若不接管，onStateChange('online') →
+// ensureDelegationRunner().handleOnline() → tick → superviseDrafts → store.list()
+// 每次都在 db.prepare 上抛（fire-and-forget void → unhandled rejection，全量跑
+// exit 1 的来源之一）。runner 业务语义由 delegation-runner.test.ts 锁。
+vi.mock('../../src/main/hub/delegation-store', () => ({
+  createHubDelegationStore: () => {
+    const records = new Map<string, DelegationRecord>();
+    return {
+      get: (taskId: string): DelegationRecord | null => records.get(taskId) ?? null,
+      upsert: (record: DelegationRecord): void => {
+        records.set(record.taskId, record);
+      },
+      updateState: (taskId: string, state: DelegationRecord['state'], reason?: string): void => {
+        const prev = records.get(taskId);
+        if (!prev) return;
+        records.set(taskId, { ...prev, state, ...(state === 'failed' && reason !== undefined ? { reason } : {}) });
+      },
+      list: (): DelegationRecord[] => [...records.values()],
+    };
+  },
+}));
 
 // delegation-sync 替身：生产里 handleProgress 会落 kv/行（DB 已被替身接管为空壳），
 // 桥级契约只需观察入参形状——kind 是否原样透传/剥除。

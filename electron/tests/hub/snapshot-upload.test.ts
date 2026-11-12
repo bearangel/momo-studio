@@ -83,6 +83,12 @@ beforeEach(async () => {
   m.clients.length = 0;
 });
 afterEach(() => {
+  // 单例生命周期收口：delegationRunner 是模块级单例且 hubForget 不销毁它（只有
+  // stopHub 会）——其 store 绑定建 runner 时的 DB handle，若带旧 handle 越过
+  // closeDb，下一用例 onStateChange('online') → handleOnline → tick →
+  // store.list() 即在已关闭句柄上抛（unhandled rejection）。生产对应：before-quit
+  // 先 stopHub 再关库——测试对齐该次序。
+  manager.stopHub();
   closeDb();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
   memStore.clear();

@@ -124,6 +124,11 @@ beforeEach(async () => {
   m.handlers.clear();
 });
 afterEach(() => {
+  // 单例生命周期收口（snapshot-upload.test.ts 同款）：delegationRunner 的 store
+  // 绑定建 runner 时的 DB handle，带旧 handle 越过 closeDb 会让下一用例的
+  // onStateChange('online') → handleOnline → store.list() 在已关闭句柄上抛
+  // （unhandled rejection）。生产次序：before-quit 先 stopHub 再关库。
+  manager.stopHub();
   closeDb();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
   memStore.clear();
