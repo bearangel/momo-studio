@@ -6,7 +6,7 @@
 // runtime-spawner 的子进程 message 路由调用——确认门在 executor 之前，
 // 子进程对 required 档 op 无任何绕过路径。
 import { randomUUID } from 'node:crypto';
-import { executeResourceOp, RESOURCE_OP_NAMES, confirmTierForOp, buildConfirmPayload, type OpContext, type ResourceOpDeps } from './resource-ops';
+import { executeResourceOp, RESOURCE_OP_NAMES, confirmTierForOp, buildConfirmPayload, validateCapabilityRefs, type OpContext, type ResourceOpDeps } from './resource-ops';
 import { requestAgentOpConfirm } from './agent-op-confirm';
 import { broadcastRuntimeChanged } from '../im/session-service';
 import { broadcastResourceChanged } from '../resource/changed-emit';
@@ -118,6 +118,17 @@ export async function handleResourceOpMessage(
         error: '后台任务链中没有确认人在场。能力变更请在工作空间会话中直接提出，由你本人确认。',
       });
       return true;
+    }
+    // ref 校验前置（F3）：updateCapabilities 是唯一携带可校验引用的确认档 op——
+    // 幽灵 ref 直接回错不弹卡（用户不为注定失败的变更做裁决）；op 内保留同一
+    // 校验纵深防御（validateCapabilityRefs 单一真相源）
+    if (op === 'updateCapabilities') {
+      try {
+        await validateCapabilityRefs(args['add'], args['remove'], workspaceId);
+      } catch (err) {
+        childSend({ type: 'resource-op', id: m.id, error: err instanceof Error ? err.message : String(err) });
+        return true;
+      }
     }
     const payload = buildConfirmPayload(op, args, workspaceId);
     if (!payload) {

@@ -528,6 +528,36 @@ async function callerRespawnOnIdle(defId: string, ctx: OpContext | undefined): P
   return 'next-turn';
 }
 
+/** 能力引用校验（单一真相源，F3 前置）：聚合 add/remove 全部非法引用一次抛出
+ *  （零写库）。两个消费点共用——桥侧确认门前置（幽灵 ref 直接回错不弹卡，
+ *  用户不为注定失败的变更做裁决）与本 op 内部（纵深防御：executor 直调路径
+ *  仍 fail-fast）。入参取原始 unknown：内部先经 normDelta 形状归一，形状错误
+ *  与非法引用同口径先验 */
+export async function validateCapabilityRefs(addRaw: unknown, removeRaw: unknown, workspaceId: string): Promise<void> {
+  const add = normDelta(addRaw, 'add');
+  const remove = normDelta(removeRaw, 'remove');
+  const invalid: string[] = [];
+  const toolLike = [...add.tools, ...remove.tools, ...add.pluginTools, ...remove.pluginTools];
+  if (toolLike.length > 0) {
+    // 动态 import：known-tool-names 静态链牵 plugin 装配目录，沿本文件 runtime 边界动态纪律
+    const { collectKnownToolNames } = await import('./known-tool-names');
+    const known = collectKnownToolNames(workspaceId);
+    for (const t of [...add.tools, ...remove.tools]) if (!known.has(t)) invalid.push(`tool=${t}`);
+    for (const p of [...add.pluginTools, ...remove.pluginTools]) if (!known.has(p)) invalid.push(`pluginTool=${p}`);
+  }
+  if (add.skills.length + remove.skills.length > 0) {
+    const slugs = new Set(listInstalledSkills().map((s) => s.slug));
+    for (const s of [...add.skills, ...remove.skills]) if (!slugs.has(s)) invalid.push(`skill=${s}`);
+  }
+  if (add.mcps.length + remove.mcps.length > 0) {
+    const names = new Set(listRegistered().map((m) => m.name));
+    for (const m of [...add.mcps, ...remove.mcps]) if (!names.has(m)) invalid.push(`mcp=${m}`);
+  }
+  if (invalid.length > 0) {
+    throw new Error(`非法引用: ${invalid.join(', ')}（可先 resource_list 查询可用清单）`);
+  }
+}
+
 async function opUpdateCapabilities(
   a: Record<string, unknown>,
   workspaceId: string,
@@ -550,27 +580,9 @@ async function opUpdateCapabilities(
   if (!target) throw new Error(`未找到 agent 成员: ${key}（可先 resource_list 查询真实 instanceId/slug）`);
   const { member, def } = target;
 
-  // ref 校验 fail-fast（零写库）：全部非法项聚合成一条中文错误
-  const invalid: string[] = [];
-  const toolLike = [...add.tools, ...remove.tools, ...add.pluginTools, ...remove.pluginTools];
-  if (toolLike.length > 0) {
-    // 动态 import：known-tool-names 静态链牵 plugin 装配目录，沿本文件 runtime 边界动态纪律
-    const { collectKnownToolNames } = await import('./known-tool-names');
-    const known = collectKnownToolNames(workspaceId);
-    for (const t of [...add.tools, ...remove.tools]) if (!known.has(t)) invalid.push(`tool=${t}`);
-    for (const p of [...add.pluginTools, ...remove.pluginTools]) if (!known.has(p)) invalid.push(`pluginTool=${p}`);
-  }
-  if (add.skills.length + remove.skills.length > 0) {
-    const slugs = new Set(listInstalledSkills().map((s) => s.slug));
-    for (const s of [...add.skills, ...remove.skills]) if (!slugs.has(s)) invalid.push(`skill=${s}`);
-  }
-  if (add.mcps.length + remove.mcps.length > 0) {
-    const names = new Set(listRegistered().map((m) => m.name));
-    for (const m of [...add.mcps, ...remove.mcps]) if (!names.has(m)) invalid.push(`mcp=${m}`);
-  }
-  if (invalid.length > 0) {
-    throw new Error(`非法引用: ${invalid.join(', ')}（可先 resource_list 查询可用清单）`);
-  }
+  // ref 校验 fail-fast（零写库）：validateCapabilityRefs 单一真相源——桥侧确认
+  // 门已前置同一校验，此处纵深防御（executor 直调 / 前置漏网路径仍到位）
+  await validateCapabilityRefs(add, remove, workspaceId);
 
   const otherWs = getDb()
     .prepare('SELECT COUNT(DISTINCT workspace_id) AS n FROM workspace_agent_members WHERE agent_definition_id = ? AND workspace_id != ?')

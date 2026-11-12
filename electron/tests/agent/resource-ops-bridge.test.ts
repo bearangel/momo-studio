@@ -13,6 +13,7 @@ import path from 'node:path';
 import { closeDb } from '../../src/main/storage/db';
 import { handleResourceOpMessage, notifyResourceOpSucceeded, MEMBER_AFFECTING_OPS, confirmWaitBudgetMs, memberAffecting } from '../../src/main/agent/resource-ops-bridge';
 import { confirmTierForOp, buildConfirmPayload } from '../../src/main/agent/resource-ops';
+import { getSkillsDir } from '../../src/main/skill/zip-uploader';
 import { broadcastRuntimeChanged } from '../../src/main/im/session-service';
 import { broadcastResourceChanged } from '../../src/main/resource/changed-emit';
 
@@ -205,6 +206,50 @@ describe('resource-ops-bridge 确认门（spec §7/§10）', () => {
     notifyResourceOpSucceeded('describeAgent');
     expect(broadcastResourceChanged).not.toHaveBeenCalled();
     expect(broadcastRuntimeChanged).not.toHaveBeenCalled();
+  });
+
+  it('updateCapabilities 幽灵 ref：确认门前置校验——不弹卡不执行，错误含非法项回子进程（F3）', async () => {
+    await handleResourceOpMessage(
+      { type: 'resource-op', id: 'r-ghost', op: 'updateCapabilities', args: { agent: 'x', add: { skills: ['ghost-skill'] } } },
+      'ws-1', send, executor, { background: false },
+    );
+    expect(confirmMock.requestAgentOpConfirm).not.toHaveBeenCalled();
+    expect(executor).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'resource-op', id: 'r-ghost',
+      error: expect.stringContaining('skill=ghost-skill'),
+    }));
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'resource-op', id: 'r-ghost',
+      error: expect.stringContaining('非法引用'),
+    }));
+  });
+
+  it('updateCapabilities 合法 ref：前置校验通过——卡照常弹且 executor 执行（F3）', async () => {
+    // 种子 custom skill（.sha256 标记 = listInstalled 识别前提——resource-ops.test 同款手法）
+    const dir = getSkillsDir();
+    fs.mkdirSync(`${dir}/weather`, { recursive: true });
+    fs.writeFileSync(`${dir}/weather/SKILL.md`, '---\nname: weather\ndescription: d\n---\nb');
+    fs.writeFileSync(`${dir}/weather/.sha256`, 'seed');
+    confirmMock.requestAgentOpConfirm.mockResolvedValueOnce({ allowed: true, reason: '' });
+    await handleResourceOpMessage(
+      { type: 'resource-op', id: 'r-ok', op: 'updateCapabilities', args: { agent: 'x', add: { skills: ['weather'] } } },
+      'ws-1', send, executor, { background: false },
+    );
+    expect(confirmMock.requestAgentOpConfirm).toHaveBeenCalledTimes(1);
+    expect(executor).toHaveBeenCalledWith('updateCapabilities', expect.anything(), 'ws-1', undefined, { background: false });
+  });
+
+  it('updateCapabilities 形状歪输入（add 非对象）：前置校验同口径先验，不弹卡', async () => {
+    await handleResourceOpMessage(
+      { type: 'resource-op', id: 'r-shape', op: 'updateCapabilities', args: { agent: 'x', scope: 'definition', add: 'not-an-object' } },
+      'ws-1', send, executor, { background: false },
+    );
+    expect(confirmMock.requestAgentOpConfirm).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'resource-op', id: 'r-shape',
+      error: expect.stringContaining('add'),
+    }));
   });
 
   it('buildConfirmPayload：updateCapabilities 结构化 diff（riskNote 拼接扩权与定义提示）', () => {
