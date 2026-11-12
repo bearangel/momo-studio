@@ -363,3 +363,16 @@ W4 门禁八问逐项作答写入矩阵文件（重点 ⑦：生效层 = spawn �
 - **LLM 滥用 remove 面**：减权免确认的安全论证见 §11；被 remove 后用户可经 UI 或再让 agent add 恢复
 - **update_skill 全量替换误删 references**：语义在确认卡 diff 中披露（refCount 前后对比），且 skills 目录内容可由 agent 自身重新 create——自愈闭环成立
 - **契约漂移防线**：delta parity 契约测试 + 冻结名单测试 + catalog fail-fast 三层机械锁，防「agent 写 UI 读」两链分叉
+
+## 16. 落地勘误（2026-11-12 合并 main 后补记；正文保留写作时点原文，以本节为准）
+
+| # | 正文表述 | 落地实况 | 缘由 |
+|---|---|---|---|
+| 1 | §9 migration **079** | **`080_momo_capability_management_tools.ts`** | 079 编号已被 oauth 模块迁移占用 |
+| 2 | §9 计数 **64→69**（含 §13 存量锚点「64 工具旧库」） | **65→70** | 078（list_models）已把基线推至 65，写作时点未计入 |
+| 3 | §9 yaml 起始 v2.1.0 | 起始 **v2.1.1** → 落地 v2.2.0 | 同上基线时差 |
+| 4 | §5.3/§8 definition 分支「`stopRunningInstancesByDefinition` 与 UI 同款」停掉全部实例 | **停机链豁免发起者自身实例**（caller ∈ def 成员且在跑时改挂 respawn-on-idle，返回 `effectiveFrom:'next-turn'`；其余实例停机语义不变） | 终审 Important-1：「绝不 mid-call 杀自己」是 §8 自明通则，definition 分支漏接——否则「给你自己换模型」会在允许后杀掉发起者回合 |
+| 5 | §5.4「全量替换：清目录重写 SKILL.md + references」 | **SKILL.md 恒全量替换；`references` 提供时（含显式 `[]`）替换、省略时保留既有附属文件**；非数组形状一律拒绝 | 终审裁定：省略即清空 = 静默数据销毁危险默认，对齐仓内 update 操作 undefined=不改 约定（crud.ts 先例） |
+| 6 | §13.1 测试文件 `079_*.test.ts` | `080-momo-capability-management-tools.test.ts`（连字符命名，沿仓内惯例） | 测试目录命名规范 |
+
+其余正文（七条用户裁定链、确认档位矩阵、通道协议、验收锚点）与落地一致，无勘误。
