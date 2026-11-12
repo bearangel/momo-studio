@@ -25,6 +25,7 @@ import type { McpToolInfo } from '../../src/main/mcp/types';
 import { McpHttpError } from '../../src/main/mcp/http-client';
 import { executeResourceOp } from '../../src/main/agent/resource-ops';
 import type { ListModelsResult, DescribeAgentResult, UpdateCapabilitiesResult, UpdateProfileResult, ResourceOpDeps } from '../../src/main/agent/resource-ops';
+import { insertSession, addSessionMember } from '../../src/main/storage/sessions/repo';
 
 // 与 crud-custom-def.test.ts 同款 mock：crud.ts 引入的 runtime 依赖在测试环境不可用。
 // updateCapabilities 的 restart 接线（spec §8）也经这两个边界——mock 面随 Task 5 扩：
@@ -671,6 +672,102 @@ describe('updateCapabilities', () => {
     const r = (await executeResourceOp('updateCapabilities',
       { agent: m1, add: { skills: ['weather'] } }, wsId, undefined, { background: false, callerInstanceId: 'x' })) as UpdateCapabilitiesResult;
     expect(r.needsRestart).toBe(false);
+  });
+
+  // ── dispatchNotice（OBS-1 提示层回归锁）：目标是多成员会话 leader 且本次
+  //    重启/respawn/deferred-在跑时，返回「派发工具面随重启生效」提示 ──
+
+  /** 造一个 m1 任 leader 的双成员会话（buildDispatchSnapshot 判 isLeader 的最小形状） */
+  function seedLeaderSession(): void {
+    const session = insertSession({ workspaceId: wsId, title: '新会话', titleAuto: true });
+    addSessionMember(session.id, m1, true);
+    addSessionMember(session.id, m2, false);
+  }
+
+  it('dispatchNotice：多成员会话 leader + 他人在跑重启 → restarted 并附派发面提示', async () => {
+    seedSkill('weather');
+    seedLeaderSession();
+    const { isAgentRunning } = await import('../../src/main/agent/runtime-status');
+    try {
+      vi.mocked(isAgentRunning).mockReturnValue(true);
+      const r = (await executeResourceOp('updateCapabilities',
+        { agent: m1, add: { skills: ['weather'] } }, wsId, undefined,
+        { background: false, callerInstanceId: 'someone-else' })) as UpdateCapabilitiesResult;
+      expect(r.restarted).toBe(true);
+      expect(r.dispatchNotice).toBeDefined();
+      expect(r.dispatchNotice).toContain('团队 leader');
+      expect(r.dispatchNotice).toContain('重启');
+    } finally {
+      vi.mocked(isAgentRunning).mockReturnValue(false);
+    }
+  });
+
+  it('dispatchNotice：多成员会话 leader 自改 → respawn 提示（effectiveFrom next-turn）', async () => {
+    seedSkill('weather');
+    seedLeaderSession();
+    const r = (await executeResourceOp('updateCapabilities',
+      { agent: m1, add: { skills: ['weather'] } }, wsId, undefined,
+      { background: false, callerInstanceId: m1 })) as UpdateCapabilitiesResult;
+    expect(r.effectiveFrom).toBe('next-turn');
+    expect(r.dispatchNotice).toContain('respawn');
+  });
+
+  it('dispatchNotice：多成员会话 leader + deferred 且在跑 → 待重启提示', async () => {
+    seedSkill('weather');
+    seedLeaderSession();
+    const { isAgentRunning } = await import('../../src/main/agent/runtime-status');
+    try {
+      vi.mocked(isAgentRunning).mockReturnValue(true);
+      const r = (await executeResourceOp('updateCapabilities',
+        { agent: m1, add: { skills: ['weather'] }, restart: 'deferred' }, wsId, undefined,
+        { background: false })) as UpdateCapabilitiesResult;
+      expect(r.needsRestart).toBe(true);
+      expect(r.dispatchNotice).toContain('待重启');
+    } finally {
+      vi.mocked(isAgentRunning).mockReturnValue(false);
+    }
+  });
+
+  it('dispatchNotice：非 leader（无会话）重启 → 不出提示', async () => {
+    seedSkill('weather');
+    const { isAgentRunning } = await import('../../src/main/agent/runtime-status');
+    try {
+      vi.mocked(isAgentRunning).mockReturnValue(true);
+      const r = (await executeResourceOp('updateCapabilities',
+        { agent: m1, add: { skills: ['weather'] } }, wsId, undefined,
+        { background: false, callerInstanceId: 'someone-else' })) as UpdateCapabilitiesResult;
+      expect(r.restarted).toBe(true);
+      expect(r.dispatchNotice).toBeUndefined();
+    } finally {
+      vi.mocked(isAgentRunning).mockReturnValue(false);
+    }
+  });
+
+  it('dispatchNotice：单成员会话 leader（有效成员=1）→ 不出提示（锁定「成员 >1」条件）', async () => {
+    seedSkill('weather');
+    const session = insertSession({ workspaceId: wsId, title: '新会话', titleAuto: true });
+    addSessionMember(session.id, m1, true);
+    const { isAgentRunning } = await import('../../src/main/agent/runtime-status');
+    try {
+      vi.mocked(isAgentRunning).mockReturnValue(true);
+      const r = (await executeResourceOp('updateCapabilities',
+        { agent: m1, add: { skills: ['weather'] } }, wsId, undefined,
+        { background: false, callerInstanceId: 'someone-else' })) as UpdateCapabilitiesResult;
+      expect(r.restarted).toBe(true);
+      expect(r.dispatchNotice).toBeUndefined();
+    } finally {
+      vi.mocked(isAgentRunning).mockReturnValue(false);
+    }
+  });
+
+  it('dispatchNotice：leader 未在跑 → needsRestart false 且不出提示（无存量实例持旧快照）', async () => {
+    seedSkill('weather');
+    seedLeaderSession();
+    const r = (await executeResourceOp('updateCapabilities',
+      { agent: m1, add: { skills: ['weather'] } }, wsId, undefined,
+      { background: false, callerInstanceId: 'someone-else' })) as UpdateCapabilitiesResult;
+    expect(r.needsRestart).toBe(false);
+    expect(r.dispatchNotice).toBeUndefined();
   });
 
   it('空请求（无 add 无 remove）报错', async () => {

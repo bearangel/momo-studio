@@ -10,6 +10,7 @@ import { mergeCapabilities, readAllocationLayer, readAssignmentDeltas, union, su
 import { setAssignmentDeltas } from './assignment-capabilities';
 import { applyCapabilityDelta, type CapabilityDeltaInput } from './resource-ops-delta';
 import { isAgentRunning } from './runtime-status';
+import { buildDispatchSnapshot } from './spawn-helpers';
 import { toolRefMatches } from '../plugin/assembly';
 import type { AgentDefinition, WorkspaceAgentMember, McpRef, SkillRef } from './types';
 import { getProvider, listProviders, listProviderModels } from './provider-crud';
@@ -476,6 +477,12 @@ export interface UpdateCapabilitiesResult {
   needsRestart?: boolean;
   effectiveFrom?: 'next-turn';
   notice?: string;
+  /**
+   * OBS-1：目标是「有效成员 >1 会话」的 leader 且本次重启/respawn（或 deferred
+   * 且仍在跑）时，给出「派发工具面随重启生效」提示。dispatch 快照随 spawn
+   * 定型（spec §4.7），重启在换能力面的同时重建派发面。
+   */
+  dispatchNotice?: string;
   stoppedInstances?: number;
   otherWorkspaceMembers: number;
 }
@@ -688,6 +695,24 @@ async function opUpdateCapabilities(
     needsRestart = false;
   }
 
+  // OBS-1 提示层：目标是多成员会话 leader 且本次重启/respawn（或 deferred 且
+  // 仍在跑）时，告知派发工具面随新 spawn 重建——不触发任何重启机制变更
+  let dispatchNotice: string | undefined;
+  if (
+    restarted === true ||
+    effectiveFrom !== undefined ||
+    (needsRestart === true && isAgentRunning(member.instanceId))
+  ) {
+    if (buildDispatchSnapshot(member.workspaceId, member.instanceId).isLeader) {
+      dispatchNotice =
+        restarted === true
+          ? '该成员是团队 leader：dispatch 快照随 spawn 定型，本次重启已同时重建其派发（dispatch）工具面'
+          : effectiveFrom !== undefined
+            ? '该成员是团队 leader：回合结束后 respawn 将重建 dispatch 快照，派发（dispatch）工具面随之生效'
+            : '该成员是团队 leader：dispatch 快照随 spawn 定型，派发（dispatch）工具面待重启后生效';
+    }
+  }
+
   logger.info('会话内更新成员能力', { instanceId: member.instanceId, defId: def.id, appliedTo: 'member' });
   return {
     appliedTo: 'member',
@@ -702,6 +727,7 @@ async function opUpdateCapabilities(
     ...(restarted !== undefined && { restarted }),
     ...(needsRestart !== undefined && { needsRestart }),
     ...(effectiveFrom !== undefined && { effectiveFrom }),
+    ...(dispatchNotice !== undefined && { dispatchNotice }),
     otherWorkspaceMembers: otherWs.n,
   };
 }

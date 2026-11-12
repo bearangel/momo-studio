@@ -18,7 +18,7 @@ description: 用户要求修改既有 agent / 成员 / 智能体时使用——�
    - 更新技能内容 → `update_skill`（全量替换，仅自定义源可改；builtin / marketplace 拒绝并引导 UI）
    - 更新 MCP 配置 → `update_mcp`（先测连通再落库；返回 needsAuthorization 时引导用户完成 OAuth 授权后再试）
 5. **确认结果**：确认卡被拒或超时即改道——问清顾虑、换更小的变更方案，不复读重试；工具报错会逐条列出非法引用（拼错的工具名 / skill slug / MCP 名），修正后重试
-6. **如实转告生效时机**：member 级自动重启 → 下一轮生效；definition 级只停运行实例 → 用户重新拉起后生效；更新技能 → 已挂成员不重载，下个会话生效；更新 MCP → 基本即时生效。返回含 otherWorkspaceMembers 提示时转告：「另有 N 个工作空间也有这个 agent，需要在其他工作空间一并处理吗？」
+6. **如实转告生效时机**：member 级自动重启 → 下一轮生效；definition 级只停运行实例 → 用户重新拉起后生效；更新技能 → 已挂成员不重载，下个会话生效；更新 MCP → 基本即时生效。返回含 otherWorkspaceMembers 提示时转告：「另有 N 个工作空间也有这个 agent，需要在其他工作空间一并处理吗？」返回含 dispatchNotice 时一并转告其原文——目标是团队 leader，其派发（dispatch）工具面随本次重启/respawn 重建生效（若该成员此前无派发工具，重启后即补齐）
 
 ## 输出规范
 
