@@ -57,14 +57,44 @@ function truncateForTitle(body: string): string {
 /**
  * LLM 异步命名（fire-and-forget）。内部 catch 全部错误静默（logger.warn），
  * 永不向调用方抛出/拒绝——命名失败不影响会话主流程。
+ * 失败时写稳定回退名（OBS-2）：消息原文截断（可能含命令标记）只是临时占位，
+ * 不得充当永久标题。
  */
 export function scheduleLlmTitle(sessionId: string): void {
   void generateLlmTitle(sessionId).catch((err: unknown) => {
-    logger.warn('LLM 会话命名失败（不影响会话）', {
+    logger.warn('LLM 会话命名失败（回退稳定名）', {
       sessionId,
       error: err instanceof Error ? err.message : String(err),
     });
+    applyFallbackTitle(sessionId);
   });
+}
+
+/** 命名失败稳定回退名：「新会话 · YYYY-MM-DD」（前缀与占位标题同源） */
+function fallbackTitle(): string {
+  const now = new Date();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return `${PLACEHOLDER_TITLE} · ${now.getFullYear()}-${mm}-${dd}`;
+}
+
+/**
+ * 命名失败回退（OBS-2）：LLM 命名失败时把标题换成稳定回退名。守卫沿用
+ * stage-2 竞态锁（title_auto=1）——用户已手动命名则 0 行命中放弃；title_auto
+ * 保持 1：回退名本身仍是占位（与 stage-1 截断同语义），后续 leader final
+ * 可再次触发 LLM 命名接管。写失败仅 warn（命名永不影响会话主流程）。
+ */
+function applyFallbackTitle(sessionId: string): void {
+  try {
+    getDb()
+      .prepare(`UPDATE sessions SET title = ?, updated_at = ? WHERE id = ? AND title_auto = 1`)
+      .run(fallbackTitle(), Date.now(), sessionId);
+  } catch (err) {
+    logger.warn('会话命名回退写入失败（不影响会话）', {
+      sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 async function generateLlmTitle(sessionId: string): Promise<void> {
@@ -112,7 +142,10 @@ async function generateLlmTitle(sessionId: string): Promise<void> {
   const res = await llm.chat(buildTitleMessages(firstUser.body, firstReply?.body ?? null));
 
   const title = sanitizeLlmTitle(res.content);
-  if (!title) return; // LLM 输出空白 → 视为无效，放弃
+  if (!title) {
+    applyFallbackTitle(sessionId); // LLM 输出空白 → 视为失败，稳定回退名接管
+    return;
+  }
 
   // 竞态锁：title_auto 已被置 0（用户手动改名 / 另一次命名已生效）则 0 行命中，放弃
   getDb()

@@ -312,7 +312,7 @@ describe('scheduleLlmTitle —— LLM 异步替换 + 竞态锁（spec §4.5）',
     expect(userPrompt).toContain('好的，我将实现登录页面');
   });
 
-  it('失败静默：LLM 调用 reject → title 与 title_auto 保持，不产生未处理 rejection', async () => {
+  it('失败回退（OBS-2）：LLM 调用 reject → 稳定回退名接管（消息原文不再充当标题），title_auto 保持 1，不产生未处理 rejection', async () => {
     const session = seedAutoSessionWithDialogue();
     applyFirstMessageTitle(session.id, USER_BODY_LONG);
 
@@ -320,8 +320,10 @@ describe('scheduleLlmTitle —— LLM 异步替换 + 竞态锁（spec §4.5）',
     scheduleLlmTitle(session.id);
     await flushMicrotasks();
 
-    expect(getSession(session.id)?.title).toBe(TRUNCATED_20);
-    expect(getSession(session.id)?.titleAuto).toBe(true);
+    const after = getSession(session.id);
+    expect(after?.title).toMatch(/^新会话 · \d{4}-\d{2}-\d{2}$/);
+    expect(after?.title).not.toContain('帮我写一个登录页面');
+    expect(after?.titleAuto).toBe(true);
   });
 
   it('title_auto=0（用户已命名）：跳过 LLM 调用，title 不变', async () => {
@@ -378,7 +380,7 @@ describe('scheduleLlmTitle —— LLM 异步替换 + 竞态锁（spec §4.5）',
     expect(getSession(session.id)?.titleAuto).toBe(false);
   });
 
-  it('LLM 输出空白：视为无效放弃，title 与 title_auto 保持', async () => {
+  it('LLM 输出空白（OBS-2）：视为失败 → 同样回退稳定名，title_auto 保持 1', async () => {
     const session = seedAutoSessionWithDialogue();
     applyFirstMessageTitle(session.id, USER_BODY_LONG);
 
@@ -386,8 +388,46 @@ describe('scheduleLlmTitle —— LLM 异步替换 + 竞态锁（spec §4.5）',
     scheduleLlmTitle(session.id);
     await flushMicrotasks();
 
-    expect(getSession(session.id)?.title).toBe(TRUNCATED_20);
+    const after = getSession(session.id);
+    expect(after?.title).toMatch(/^新会话 · \d{4}-\d{2}-\d{2}$/);
+    expect(after?.titleAuto).toBe(true);
+  });
+
+  it('回退竞态锁：LLM 飞行中用户手动改名 → 失败回退 0 行命中，保留用户标题', async () => {
+    const session = seedAutoSessionWithDialogue();
+
+    const flight = defer<LLMResponse>();
+    chatMock.mockImplementationOnce(() => flight.promise);
+    scheduleLlmTitle(session.id);
+    await vi.waitFor(() => expect(chatMock).toHaveBeenCalled());
+
+    // 模拟用户在 LLM 飞行中手动改名（rename + title_auto=0 终态）
+    getDb()
+      .prepare("UPDATE sessions SET title = '用户手动名', title_auto = 0 WHERE id = ?")
+      .run(session.id);
+
+    flight.reject(new Error('LLM 429 限流'));
+    await flushMicrotasks();
+
+    expect(getSession(session.id)?.title).toBe('用户手动名');
+    expect(getSession(session.id)?.titleAuto).toBe(false);
+  });
+
+  it('回退可恢复：回退名生效后再次触发 LLM 命名成功 → 标题接管（回退名本身也是占位）', async () => {
+    const session = seedAutoSessionWithDialogue();
+    applyFirstMessageTitle(session.id, USER_BODY_LONG);
+
+    chatMock.mockRejectedValueOnce(new Error('第一次失败（断网）'));
+    scheduleLlmTitle(session.id);
+    await flushMicrotasks();
+    expect(getSession(session.id)?.title).toMatch(/^新会话 · /);
     expect(getSession(session.id)?.titleAuto).toBe(true);
+
+    // 网络恢复后的下一次 leader final 再次调度 → LLM 标题接管
+    chatMock.mockResolvedValueOnce(llmResp('登录页实现'));
+    scheduleLlmTitle(session.id);
+    await vi.waitFor(() => expect(getSession(session.id)?.title).toBe('登录页实现'));
+    expect(getSession(session.id)?.titleAuto).toBe(false);
   });
 
   it('无首条用户消息：不调 LLM（无可命名素材）', async () => {
