@@ -32,7 +32,7 @@ describe('readPdf（读侧）', () => {
       doc.text('PageTwoContent');
       doc.end();
     });
-    const out = await readPdf(file);
+    const out = await readPdf(fs.readFileSync(file));
     expect(out).toContain('PageOneContent');
     expect(out).toContain('PageTwoContent');
     expect(out).toContain('第 1 页');
@@ -43,7 +43,7 @@ describe('readPdf（读侧）', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-pdf-'));
     const file = path.join(tmp, 'bad.pdf');
     fs.writeFileSync(file, 'not a pdf');
-    await expect(readPdf(file)).rejects.toThrow();
+    await expect(readPdf(fs.readFileSync(file))).rejects.toThrow();
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 });

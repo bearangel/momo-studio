@@ -20,7 +20,13 @@ const NOT_READ = (path: string) => `文件未读取。请先调用 read_file 读
 const DRIFTED = (path: string) =>
   `文件在读取后被修改（可能是 bash 或外部改动），读取指纹已失效。请重新调用 read_file 读取 ${path} 最新内容后再编辑。`;
 
-/** 计算文件当前内容指纹；文件不可读返回 null */
+/** 计算内容指纹（通道读到的字节 / 工具产出的内容——B 方案收口后 hash 的
+ *  权威来源是「agent 视角的内容」，与磁盘回读解耦） */
+function hashContent(content: string | Buffer): string {
+  return createHash('sha1').update(content).digest('hex');
+}
+
+/** 计算文件当前内容指纹（fallback 路径：调用方未持有内容时磁盘回读）；不可读返回 null */
 function hashFile(abs: string): string | null {
   try {
     return createHash('sha1').update(fs.readFileSync(abs)).digest('hex');
@@ -33,11 +39,18 @@ export class ReadTracker {
   /** sessionId → path → 读取时内容指纹（内存缓存；DB 为持久层） */
   private sessionReads = new Map<string, Map<string, string>>();
 
-  /** 标记某 session 已读取某 path（记录当前内容指纹）。
-   *  子 agent 的读取 no-op——不得解锁任何编辑（含父 agent）。 */
-  add(sessionId: string, path: string, parentStreamSessionId?: string): void {
+  /** 标记某 session 已读取某 path（记录内容指纹）。
+   *  子 agent 的读取 no-op——不得解锁任何编辑（含父 agent）。
+   *  content（B 方案收口）：调用方已持有的通道读到的内容 / 写入产物——直接
+   *  入 hash，消除二次磁盘回读；省略时保持磁盘回读 fallback（既有语义）。 */
+  add(
+    sessionId: string,
+    path: string,
+    parentStreamSessionId?: string,
+    content?: string | Buffer,
+  ): void {
     if (parentStreamSessionId !== undefined) return;
-    const hash = hashFile(path);
+    const hash = content !== undefined ? hashContent(content) : hashFile(path);
     if (hash === null) return;
     let set = this.sessionReads.get(sessionId);
     if (!set) {
@@ -89,8 +102,16 @@ export class ReadTracker {
   /**
    * 强阻塞守门：未读或读后漂移时抛错。
    * parentStreamSessionId 非空（子 agent）→ 永远抛错（fresh-session 对齐）。
+   * current（B 方案收口）：调用方已持有的通道读到的当前内容——与 add 的
+   * content 参数同源口径（agent 视角字节），proxy 加密环境下两侧一致；
+   * 省略时保持磁盘回读 fallback（既有语义）。
    */
-  assertRead(sessionId: string, parentStreamSessionId: string | undefined, path: string): void {
+  assertRead(
+    sessionId: string,
+    parentStreamSessionId: string | undefined,
+    path: string,
+    current?: string | Buffer,
+  ): void {
     if (parentStreamSessionId !== undefined) {
       throw new Error(NOT_READ(path));
     }
@@ -98,8 +119,8 @@ export class ReadTracker {
     if (recorded === null) {
       throw new Error(NOT_READ(path));
     }
-    const current = hashFile(path);
-    if (current === null || current !== recorded) {
+    const cur = current !== undefined ? hashContent(current) : hashFile(path);
+    if (cur === null || cur !== recorded) {
       throw new Error(DRIFTED(path));
     }
   }

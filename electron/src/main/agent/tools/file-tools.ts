@@ -25,6 +25,7 @@ import {
   recordDeleteTreeSafe,
   recordRenameTreeSafe,
 } from './shared/change-journal';
+import { assertNotCipher, readJournalSnapshot } from './shared/cipher-gate';
 import { runWithWriteGrant } from './write-grant-tool';
 
 /** 返回所有文件工具的声明（read_file / write_file / list_files / edit_file / mkdir / rm / mv / exists） */
@@ -157,8 +158,9 @@ export async function executeFileTool(
 
       const content = await wsFs.readFile(filePath);
       // v2.3 Read-before-Edit：read 成功即标记已读（后续 edit_file / write_file 守门依据）。
-      // 键用 assertInWorkspace 归一化的绝对路径——'./a.ts' 与 'a.ts' 等价（review M4）
-      ctx.readTracker?.add(ctx.roomId, wsFs.assertInWorkspace(filePath), ctx.parentStreamSessionId);
+      // 键用 assertInWorkspace 归一化的绝对路径——'./a.ts' 与 'a.ts' 等价（review M4）；
+      // B 方案收口：直接 hash 刚读到的内容，消除二次磁盘回读
+      ctx.readTracker?.add(ctx.roomId, wsFs.assertInWorkspace(filePath), ctx.parentStreamSessionId, content);
       const text = content.toString('utf-8');
       const allLines = text.split('\n');
       const totalLines = allLines.length;
@@ -190,14 +192,22 @@ export async function executeFileTool(
       return runWithWriteGrant(ctx, 'write_file', filePath, async () => {
         const abs = wsFs.assertInWorkspace(filePath);
         const existed = fs.existsSync(abs);
-        // v2.3 Read-before-Edit：仅对已存在文件（覆盖场景）生效；新文件豁免。
-        // 键用 abs（归一化绝对路径，review M4）——与 read_file 的标记键一致
-        if (existed) {
-          ctx.readTracker?.assertRead(ctx.roomId, ctx.parentStreamSessionId, abs);
-        }
         // v2.5 变更账本：写前记账（write-ahead）——覆盖场景取旧内容为 before；
-        // 记账失败不阻塞工具执行（Safe 包装内部降级）
-        const before = existed ? await fs.promises.readFile(abs, 'utf-8') : null;
+        // 记账失败不阻塞工具执行（Safe 包装内部降级）。
+        // B 方案收口：旧内容经通道读取；密文（EENCRYPTED / 魔数自检）→ null
+        // 快照优雅降级，写入照常；守门指纹用同一份字节（与 read_file 记账同源）
+        const beforeBuf = existed ? await readJournalSnapshot(wsFs, filePath) : null;
+        const before = beforeBuf === null ? null : beforeBuf.toString('utf-8');
+        if (existed) {
+          // v2.3 Read-before-Edit：仅对已存在文件（覆盖场景）生效；新文件豁免。
+          // 键用 abs（归一化绝对路径，review M4）——与 read_file 的标记键一致
+          ctx.readTracker?.assertRead(
+            ctx.roomId,
+            ctx.parentStreamSessionId,
+            abs,
+            beforeBuf ?? undefined,
+          );
+        }
         recordChangeSafe(
           buildRecordCtx('write_file', ctx),
           toJournalRelPath(ctx, filePath),
@@ -206,8 +216,8 @@ export async function executeFileTool(
           content,
         );
         await wsFs.writeFile(filePath, content);
-        // 写入成功后标记已读（让后续 edit_file 通过守门）
-        ctx.readTracker?.add(ctx.roomId, abs, ctx.parentStreamSessionId);
+        // 写入成功后标记已读（让后续 edit_file 通过守门；content 即 agent 已知内容）
+        ctx.readTracker?.add(ctx.roomId, abs, ctx.parentStreamSessionId, content);
         return `文件已写入: ${filePath}`;
       });
     }
@@ -230,10 +240,21 @@ export async function executeFileTool(
         const abs = wsFs.assertInWorkspace(filePath);
         if (!fs.existsSync(abs)) throw new Error(`文件不存在: ${filePath}`);
 
-        // v2.3 Read-before-Edit：强阻塞守门。键用 abs（归一化绝对路径，review M4）
-        ctx.readTracker?.assertRead(ctx.roomId, ctx.parentStreamSessionId, abs);
+        // B 方案收口：原内容经通道读取 + 密文安全闸（宁报错不毁文件——密文
+        // utf-8 乱码下 oldString 永不命中，旧实现还会把乱码写回盘）
+        const originalBuf = await wsFs.readFile(filePath);
+        assertNotCipher(originalBuf, filePath);
+        const original = originalBuf.toString('utf-8');
 
-        const original = await fs.promises.readFile(abs, 'utf-8');
+        // v2.3 Read-before-Edit：强阻塞守门。键用 abs（归一化绝对路径，review M4）；
+        // 指纹用刚读到的字节（与 read_file 记账同源）
+        ctx.readTracker?.assertRead(
+          ctx.roomId,
+          ctx.parentStreamSessionId,
+          abs,
+          originalBuf,
+        );
+
         const firstIdx = original.indexOf(oldStr);
         if (firstIdx === -1) {
           // v2.3 失败信息增强：formatEditError 含原文 5KB 快照 + 首次不一致行号 + read_file 建议
@@ -255,9 +276,11 @@ export async function executeFileTool(
           original,
           updated,
         );
-        await fs.promises.writeFile(abs, updated, 'utf-8');
+        // B 方案收口：写入经内容通道（修复裸 fs.promises.writeFile 旁路——
+        // proxy 模式下旁路写 = 明文落盘 DLP 违规）
+        await wsFs.writeFile(filePath, updated);
         // 写后注册新指纹（agent 知晓写后内容——后续编辑免重读）
-        ctx.readTracker?.add(ctx.roomId, abs, ctx.parentStreamSessionId);
+        ctx.readTracker?.add(ctx.roomId, abs, ctx.parentStreamSessionId, updated);
 
         const beforeLines = original.slice(0, firstIdx).split('\n');
         const startLine = Math.max(0, beforeLines.length - 2);
@@ -306,11 +329,17 @@ export async function executeFileTool(
         if (!fs.existsSync(srcAbs)) {
           // 源不存在：不记账，由 wsFs.rename 原样抛 ENOENT（既有行为不变）
         } else if (fs.statSync(srcAbs).isDirectory()) {
-          recordRenameTreeSafe(rc, ctx.workspaceDir, srcRel, dstRel);
+          await recordRenameTreeSafe(rc, ctx.workspaceDir, srcRel, dstRel, (p) =>
+            readJournalSnapshot(wsFs, p),
+          );
         } else {
-          const srcContent = await fs.promises.readFile(srcAbs, 'utf-8');
+          // B 方案收口：内容快照经通道读取；密文 → null 快照（rename 照常——
+          // wsFs.rename 是元数据操作，天然安全）
+          const srcBuf = await readJournalSnapshot(wsFs, src);
+          const srcContent = srcBuf === null ? null : srcBuf.toString('utf-8');
           if (fs.existsSync(dstAbs) && !fs.statSync(dstAbs).isDirectory()) {
-            const dstOld = await fs.promises.readFile(dstAbs, 'utf-8');
+            const dstBuf = await readJournalSnapshot(wsFs, dst);
+            const dstOld = dstBuf === null ? null : dstBuf.toString('utf-8');
             recordChangeSafe(rc, dstRel, 'modify', dstOld, srcContent);
           }
           recordChangeSafe(rc, dstRel, 'rename', srcContent, null, srcRel);

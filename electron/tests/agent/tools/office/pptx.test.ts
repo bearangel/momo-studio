@@ -33,7 +33,7 @@ describe('pptx round-trip（读侧）', () => {
       p.addSlide().addText('封面标题');
       p.addSlide().addText('要点一\n要点二', { x: 0.5, y: 1 });
     });
-    const out = await readPptx(file);
+    const out = await readPptx(fs.readFileSync(file));
     expect(out).toContain('封面标题');
     expect(out).toContain('要点一');
     expect(out).toContain('要点二');
@@ -44,12 +44,12 @@ describe('pptx round-trip（读侧）', () => {
     const file = await makeDeck((p) => { p.addSlide().addText('x'); });
     const ac = new AbortController();
     ac.abort();
-    await expect(readPptx(file, ac.signal)).rejects.toThrow('已中断');
+    await expect(readPptx(fs.readFileSync(file), ac.signal)).rejects.toThrow('已中断');
   });
 
   it('非 pptx 文件（zip 缺部件）→ 抛错可自诊', async () => {
     const fake = path.join(tmp, 'bad.pptx');
     fs.writeFileSync(fake, 'not a zip');
-    await expect(readPptx(fake)).rejects.toThrow();
+    await expect(readPptx(fs.readFileSync(fake))).rejects.toThrow();
   });
 });

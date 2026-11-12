@@ -38,7 +38,7 @@ describe('docx round-trip（读侧）', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-docx-'));
     const file = path.join(tmp, 'a.docx');
     fs.writeFileSync(file, buf);
-    const out = await readDocx(file);
+    const out = await readDocx(fs.readFileSync(file));
     for (const kw of ['季度报告', '正文段落', '列表项一', '表头A']) expect(out).toContain(kw);
     fs.rmSync(tmp, { recursive: true, force: true });
   });

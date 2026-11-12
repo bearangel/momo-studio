@@ -46,7 +46,7 @@ afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
 describe('readXlsxPreview', () => {
   it('逐 sheet 输出维度与预览，空 sheet 标注', async () => {
-    const out = await readXlsxPreview(abs);
+    const out = await readXlsxPreview(fs.readFileSync(abs));
     expect(out).toContain('## Sheet: 销售 (3×3)');
     expect(out).toContain('2026-01-01');
     expect(out).toContain('## Sheet: 空表');
@@ -56,21 +56,21 @@ describe('readXlsxPreview', () => {
 
 describe('readXlsxCells', () => {
   it('默认已用区域，首行为表头（markdown 表格）', async () => {
-    const out = await readXlsxCells(abs, '销售');
+    const out = await readXlsxCells(fs.readFileSync(abs),'销售');
     expect(out).toContain('| 日期 | 地区 | 金额 |');
     expect(out).toContain('| 2026-01-02 | 华北 | 200 |');
   });
   it('range 精读 + sheet 序号定位', async () => {
-    const out = await readXlsxCells(abs, 1, 'A1:B2');
+    const out = await readXlsxCells(fs.readFileSync(abs),1, 'A1:B2');
     expect(out).toContain('| 日期 | 地区 |');
     expect(out).not.toContain('华北');
   });
   it('公式默认显示缓存值（无缓存为空），formulas=true 显示原文', async () => {
-    expect(await readXlsxCells(abs, '公式')).toContain('|  |'); // A3 无缓存 result
-    expect(await readXlsxCells(abs, '公式', undefined, true)).toContain('=SUM(A1:A2)');
+    expect(await readXlsxCells(fs.readFileSync(abs),'公式')).toContain('|  |'); // A3 无缓存 result
+    expect(await readXlsxCells(fs.readFileSync(abs),'公式', undefined, true)).toContain('=SUM(A1:A2)');
   });
   it('sheet 不存在报错', async () => {
-    await expect(readXlsxCells(abs, '不存在')).rejects.toThrow(/sheet 不存在/);
+    await expect(readXlsxCells(fs.readFileSync(abs),'不存在')).rejects.toThrow(/sheet 不存在/);
   });
   it('超过 500 行上限报错并说明上限', async () => {
     const wb = new ExcelJS.Workbook();
@@ -78,7 +78,7 @@ describe('readXlsxCells', () => {
     for (let i = 0; i < 501; i++) ws.addRow([i]);
     const bigAbs = path.join(tmpDir, 'big.xlsx');
     await wb.xlsx.writeFile(bigAbs);
-    await expect(readXlsxCells(bigAbs, '大表')).rejects.toThrow(/500/);
+    await expect(readXlsxCells(fs.readFileSync(bigAbs), '大表')).rejects.toThrow(/500/);
   });
 });
 
@@ -89,7 +89,7 @@ describe('cellText 分支契约（Date/richText/hyperlink）', () => {
     ws.getCell('A1').value = new Date(Date.UTC(2026, 0, 15));
     const abs2 = path.join(tmpDir, 'date.xlsx');
     await wb.xlsx.writeFile(abs2);
-    const out = await readXlsxCells(abs2, '日期');
+    const out = await readXlsxCells(fs.readFileSync(abs2), '日期');
     expect(out).toContain('2026-01-15');
   });
   it('richText 拼接显示', async () => {
@@ -98,7 +98,7 @@ describe('cellText 分支契约（Date/richText/hyperlink）', () => {
     ws.getCell('A1').value = { richText: [{ text: '加粗' }, { text: '普通' }] } as ExcelJS.CellValue;
     const abs2 = path.join(tmpDir, 'rich.xlsx');
     await wb.xlsx.writeFile(abs2);
-    const out = await readXlsxCells(abs2, '富文本');
+    const out = await readXlsxCells(fs.readFileSync(abs2), '富文本');
     expect(out).toContain('加粗普通');
   });
 });
@@ -122,7 +122,7 @@ async function makeChartFixture(dir: string, name = 'chart.xlsx'): Promise<strin
 describe('P0 read-fix：带图表/图片的 xlsx', () => {
   it('readXlsxPreview 成功读取含图表 xlsx，并提示文件含 2 个图表', async () => {
     const abs = await makeChartFixture(tmpDir);
-    const out = await readXlsxPreview(abs);
+    const out = await readXlsxPreview(fs.readFileSync(abs));
     // 数据仍读出
     expect(out).toContain('## Sheet: 销售 (3×3)');
     expect(out).toContain('2026-01-02');
@@ -135,7 +135,7 @@ describe('P0 read-fix：带图表/图片的 xlsx', () => {
 
   it('readXlsxCells 成功取数（不阻塞业务）', async () => {
     const abs = await makeChartFixture(tmpDir);
-    const out = await readXlsxCells(abs, '销售');
+    const out = await readXlsxCells(fs.readFileSync(abs),'销售');
     expect(out).toContain('| 日期 | 地区 | 金额 |');
     expect(out).toContain('| 2026-01-01 | 华东 | 100 |');
   });
@@ -225,7 +225,7 @@ async function makeRichChartFixture(dir: string, name: string, prefixed: boolean
 describe('R4：readXlsxPreview 图表摘要', () => {
   it('2 图（c: 前缀形态）→ 部件提示 + 逐图摘要行（类型/标题/类别/数值引用），位于 sheet 节之前', async () => {
     const target = await makeRichChartFixture(tmpDir, 'rich-charts.xlsx', true);
-    const out = await readXlsxPreview(target);
+    const out = await readXlsxPreview(fs.readFileSync(target));
     expect(out).toContain('文件含 2 个图表');
     expect(out).toContain(`图表1[bar] 各门店销售额 → 类别 '门店明细'!$F$2:$F$6 / 数值 '门店明细'!$G$2:$G$6`);
     expect(out).toContain(`图表2[pie] 各门店占比 → 类别 '门店明细'!$F$2:$F$6 / 数值 '门店明细'!$H$2:$H$6`);
@@ -235,7 +235,7 @@ describe('R4：readXlsxPreview 图表摘要', () => {
 
   it('openpyxl 无前缀形态 → 同样出摘要', async () => {
     const target = await makeRichChartFixture(tmpDir, 'rich-charts-nopfx.xlsx', false);
-    const out = await readXlsxPreview(target);
+    const out = await readXlsxPreview(fs.readFileSync(target));
     expect(out).toContain('文件含 2 个图表');
     expect(out).toContain(`图表1[bar] 各门店销售额 → 类别 '门店明细'!$F$2:$F$6 / 数值 '门店明细'!$G$2:$G$6`);
     expect(out).toContain(`图表2[pie] 各门店占比 → 类别 '门店明细'!$F$2:$F$6 / 数值 '门店明细'!$H$2:$H$6`);
@@ -253,7 +253,7 @@ describe('R4：readXlsxPreview 图表摘要', () => {
       ),
     );
     fs.writeFileSync(target, buf);
-    const out = await readXlsxPreview(target);
+    const out = await readXlsxPreview(fs.readFileSync(target));
     expect(out).toContain(
       `（注：文件含 1 个图表）图表1[bar] 各门店销售额 → 类别 '门店明细'!$F$2:$F$6 / 数值 '门店明细'!$G$2:$G$6`,
     );
@@ -272,7 +272,7 @@ describe('R4：readXlsxPreview 图表摘要', () => {
       ),
     );
     fs.writeFileSync(target, buf);
-    const out = await readXlsxPreview(target);
+    const out = await readXlsxPreview(fs.readFileSync(target));
     // chart1 损坏被跳过，仅剩 chart2 摘要；部件计数仍按 2 计
     expect(out).toContain('文件含 2 个图表');
     expect(out).toContain('图表1[pie] 各门店占比');
@@ -298,7 +298,7 @@ describe('R4：readXlsxPreview 图表摘要', () => {
     let buf = injectP0ChartDrawing(await makeBaseXlsxBuffer(), { charts: 1 });
     buf = withChartXml(buf, 1, xml);
     fs.writeFileSync(target, buf);
-    const out = await readXlsxPreview(target);
+    const out = await readXlsxPreview(fs.readFileSync(target));
     expect(out).toContain(
       `图表1[bar] → ${ref('B')}、${ref('C')}、${ref('D')}、${ref('E')} 等 5 个引用`,
     );

@@ -5,10 +5,11 @@
 // 部件 + sheet rels 过滤 drawing 条目 + sheet XML 剥 <drawing/> 标签），
 // 解决 exceljs 解析 real-Excel 形态 xdr:graphicFrame / unsupported anchor
 // 类型崩溃的问题（P0 read-fix）。生成与图表注入能力由 office-pro 插件承接。
+// B 方案收口：两个读取入口入参从磁盘路径改为字节缓冲（office-tools 经内容
+// 通道读取 + 密文安全闸后传入）；sanitizeXlsxForRead 保持 Buffer 入参不变。
 
 import ExcelJS from 'exceljs';
 import AdmZip from 'adm-zip';
-import fs from 'node:fs';
 import { parseRange, asString, asStringArray } from './format';
 import { extractChartSummaries } from './xlsx-zip';
 import type { ChartSummary } from './xlsx-zip';
@@ -138,12 +139,11 @@ function chartHintBlock(chartCount: number, summaries: ChartSummary[]): string {
 }
 
 /** sheet 预览：每 sheet 一节（维度 + 前 20 行 × 12 列 markdown 表格） */
-export async function readXlsxPreview(abs: string, signal?: AbortSignal): Promise<string> {
-  const raw = fs.readFileSync(abs);
-  const { data, chartCount, chartSummaries } = sanitizeXlsxForRead(raw);
+export async function readXlsxPreview(data: Buffer, signal?: AbortSignal): Promise<string> {
+  const { data: sanitized, chartCount, chartSummaries } = sanitizeXlsxForRead(data);
   const wb = new ExcelJS.Workbook();
   // exceljs 类型层 Buffer extends ArrayBuffer，与 Node Buffer<ArrayBufferLike> 结构不兼容——断言为 ArrayBuffer，运行时字节布局一致
-  await wb.xlsx.load(data as unknown as ArrayBuffer);
+  await wb.xlsx.load(sanitized as unknown as ArrayBuffer);
   const parts: string[] = [];
   if (chartCount > 0) {
     parts.push(chartHintBlock(chartCount, chartSummaries));
@@ -177,16 +177,15 @@ export async function readXlsxPreview(abs: string, signal?: AbortSignal): Promis
 
 /** 区域精读：markdown 表格（首行为表头）；sheet 按名或 1-based 序号 */
 export async function readXlsxCells(
-  abs: string,
+  data: Buffer,
   sheet: string | number,
   range?: string,
   formulas = false,
 ): Promise<string> {
-  const raw = fs.readFileSync(abs);
-  const { data } = sanitizeXlsxForRead(raw);
+  const { data: sanitized } = sanitizeXlsxForRead(data);
   const wb = new ExcelJS.Workbook();
   // exceljs 类型层 Buffer extends ArrayBuffer，与 Node Buffer<ArrayBufferLike> 结构不兼容——断言为 ArrayBuffer，运行时字节布局一致
-  await wb.xlsx.load(data as unknown as ArrayBuffer);
+  await wb.xlsx.load(sanitized as unknown as ArrayBuffer);
   const ws = typeof sheet === 'number' ? wb.worksheets[sheet - 1] : wb.getWorksheet(sheet);
   if (!ws) {
     throw new Error(`sheet 不存在: ${typeof sheet === 'number' ? `#${sheet}` : sheet}`);

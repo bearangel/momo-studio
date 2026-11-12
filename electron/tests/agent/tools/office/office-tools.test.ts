@@ -116,3 +116,47 @@ describe('office_read / office_read_cells', () => {
     await expect(tools.execute('office_read_cells', { path: 'a.xlsx', sheet: 'Sheet1' }, abortedCtx)).resolves.toBe('已中断');
   });
 });
+
+// ── B 方案收口：密文安全闸（通道读 + 明确报错，不做垃圾解析）──
+
+describe('office 密文安全闸（B 方案收口）', () => {
+  const CIPHER_HEAD = Buffer.from(
+    '62142365DA00260100000001452D536166654E65740000004C4F434B',
+    'hex',
+  );
+
+  it('office_read 密文文档 → 明确报错（非「文件损坏」垃圾解析错误）', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'Enc.xlsx'), CIPHER_HEAD);
+    await expect(tools.execute('office_read', { path: 'Enc.xlsx' }, ctx)).rejects.toThrow(
+      /加密[\s\S]*Enc\.xlsx/,
+    );
+  });
+
+  it('office_read_cells 密文文档 → 同样明确报错', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'Enc.xlsx'), CIPHER_HEAD);
+    await expect(
+      tools.execute('office_read_cells', { path: 'Enc.xlsx', sheet: 1 }, ctx),
+    ).rejects.toThrow(/加密[\s\S]*Enc\.xlsx/);
+  });
+
+  it('office_copy 密文源 → 拒绝复制，目标不产生', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'Enc.xlsx'), CIPHER_HEAD);
+    await expect(
+      tools.execute('office_copy', { from: 'Enc.xlsx', to: 'copy.xlsx' }, ctx),
+    ).rejects.toThrow(/加密[\s\S]*Enc\.xlsx/);
+    expect(fs.existsSync(path.join(tmpDir, 'copy.xlsx'))).toBe(false);
+  });
+
+  it('office_copy 目标为密文 → journal before=null，复制照常', async () => {
+    await writeXlsxFixture('src.xlsx');
+    fs.writeFileSync(path.join(tmpDir, 'dst.xlsx'), CIPHER_HEAD);
+    // 覆盖场景守门放行：tracker 指纹与磁盘密文字节同源
+    ctx.readTracker = new ReadTracker();
+    ctx.readTracker.add('!office:room', path.join(tmpDir, 'dst.xlsx'), undefined, CIPHER_HEAD);
+    const out = await tools.execute('office_copy', { from: 'src.xlsx', to: 'dst.xlsx' }, ctx);
+    expect(out).toContain('已复制');
+    const entries = getJournalStore()?.listByStream('ws-office', ctx.streamSessionId) ?? [];
+    const e = entries.find((x) => x.op === 'modify');
+    expect(e?.beforeHash).toBeNull();
+  });
+});

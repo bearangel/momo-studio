@@ -108,20 +108,25 @@ export function recordDeleteTreeSafe(rc: RecordCtx, workspaceDir: string, relDir
  * 精确逆移（rename 条目守卫键 = beforeHash，见 journal/revert.ts）。
  * 目标侧已存在目录时 rename(2) 仅在目标为空目录时成功（ENOTEMPTY 由
  * wsFs.rename 原样抛出，工具层行为不变）；空目录被替换不损失文件内容，无需记账。
+ *
+ * B 方案收口：文件内容经 read（调用方注入的通道读取函数，通常为
+ * readJournalSnapshot 的包装）读取；密文 / EENCRYPTED → null 内容（rename
+ * 照常记账——无法快照的条目撤销时会明确失败，好过阻塞移动）。
  */
-export function recordRenameTreeSafe(
+export async function recordRenameTreeSafe(
   rc: RecordCtx,
   workspaceDir: string,
   srcRel: string,
   dstRel: string,
-): void {
+  read: (absFile: string) => Promise<Buffer | null>,
+): Promise<void> {
   if (!journalEnabled) return;
   if (degradeIfNoStore()) return;
   try {
     const absSrc = nodePath.join(workspaceDir, srcRel);
     if (!fs.existsSync(absSrc)) return;
-    walkForRename(absSrc, '', (absFile, relFromSrc) => {
-      const content = fs.readFileSync(absFile, 'utf-8');
+    await walkForRename(absSrc, '', async (absFile, relFromSrc) => {
+      const content = await read(absFile);
       recordChangeSafe(
         rc,
         nodePath.join(dstRel, relFromSrc),
@@ -140,14 +145,18 @@ export function recordRenameTreeSafe(
 }
 
 /** 目录 walker：与 recorder.walkFiles 同风格（不追踪符号链接，防递归环） */
-function walkForRename(absRoot: string, relRoot: string, cb: (absFile: string, rel: string) => void): void {
+async function walkForRename(
+  absRoot: string,
+  relRoot: string,
+  cb: (absFile: string, rel: string) => Promise<void>,
+): Promise<void> {
   for (const name of fs.readdirSync(absRoot)) {
     const abs = nodePath.join(absRoot, name);
     const rel = relRoot === '' ? name : nodePath.join(relRoot, name);
     if (fs.statSync(abs).isDirectory()) {
-      walkForRename(abs, rel, cb);
+      await walkForRename(abs, rel, cb);
     } else {
-      cb(abs, rel);
+      await cb(abs, rel);
     }
   }
 }

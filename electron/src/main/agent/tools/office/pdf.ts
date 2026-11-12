@@ -2,16 +2,16 @@
 // PDF 读取（spec 2026-11-03 §6 下线生成后仅保留读路径）：pdfjs-dist（v3 UMD
 // CJS，Node fake-worker 路径，verbosity 0 压噪）逐页提取。
 // 扫描版（无文本层）读取明确报错。仅用 getTextContent，不触渲染，无需 canvas。
+// B 方案收口：入参从磁盘路径改为字节缓冲（office-tools 经内容通道读取 +
+// 密文安全闸后传入——本模块不再裸触 fs）。
 
-import fs from 'node:fs';
 import * as pdfjsLib from 'pdfjs-dist';
 
-export async function readPdf(abs: string, signal?: AbortSignal): Promise<string> {
-  const data = new Uint8Array(fs.readFileSync(abs));
+export async function readPdf(data: Buffer, signal?: AbortSignal): Promise<string> {
   // Node 运行时约定：isEvalSupported/useWorkerFetch/disableFontFace 关掉浏览器侧
   // 能力；verbosity 0 压制 fake-worker 等告警噪声（测试输出必须干净）
   const doc = await pdfjsLib.getDocument({
-    data,
+    data: new Uint8Array(data),
     isEvalSupported: false,
     useWorkerFetch: false,
     disableFontFace: true,

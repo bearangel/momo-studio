@@ -97,3 +97,33 @@ describe('ReadTracker — 会话持久化 + 指纹守门', () => {
     expect(() => t.assertRead('sess-9', undefined, fileA)).not.toThrow();
   });
 });
+
+describe('ReadTracker — 内容直传路径（B 方案收口：消除二次磁盘读）', () => {
+  it('add(content) 不读盘：文件已被删除仍成功记录，assertRead(current=同内容) 通过', () => {
+    const t = new ReadTracker();
+    t.add('sess-c1', fileA, undefined, 'const x = 1;');
+    fs.rmSync(fileA);
+    expect(() => t.assertRead('sess-c1', undefined, fileA, 'const x = 1;')).not.toThrow();
+    expect(() => t.assertRead('sess-c1', undefined, fileA, 'const x = 2;')).toThrowError(/在读取后被修改/);
+  });
+
+  it('同源口径（proxy 加密形态）：指纹记「agent 视角内容」而非磁盘字节——磁盘不同不误判，通道内容一致即放行', () => {
+    // 模拟 proxy 模式：磁盘密文形态，agent 经通道读到明文
+    fs.writeFileSync(fileA, 'cipher-bytes-on-disk');
+    const t = new ReadTracker();
+    t.add('sess-c2', fileA, undefined, 'agent-plaintext-view');
+    // current = 通道读到的当前内容（与记录同源）→ 放行
+    expect(() => t.assertRead('sess-c2', undefined, fileA, 'agent-plaintext-view')).not.toThrow();
+    // current = 通道内容已变（密文外改动）→ 漂移拦截
+    expect(() => t.assertRead('sess-c2', undefined, fileA, 'agent-changed-view')).toThrowError(/在读取后被修改/);
+  });
+
+  it('省略 content 保持磁盘回读 fallback（既有语义不回归）', () => {
+    const t = new ReadTracker();
+    t.add('sess-c3', fileA);
+    expect(() => t.assertRead('sess-c3', undefined, fileA)).not.toThrow();
+    t.add('sess-c3', fileA, undefined, 'differs-from-disk');
+    // add 直传改写指纹后，fallback（磁盘 hash）与记录不一致 → 漂移
+    expect(() => t.assertRead('sess-c3', undefined, fileA)).toThrowError(/在读取后被修改/);
+  });
+});

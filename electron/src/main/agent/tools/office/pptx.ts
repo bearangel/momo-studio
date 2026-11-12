@@ -1,6 +1,8 @@
 // PPT 读取（spec 2026-11-03 §6 下线生成后仅保留读路径）。pptx 是 zip 容器，
 // slide XML 的 <a:t> 文本用 adm-zip + cheerio 提取（css-select 命名空间选择器
 // a\:t，行为由 round-trip 测试锁死）。生成能力由 office-pro 插件承接。
+// B 方案收口：入参从磁盘路径改为字节缓冲（office-tools 经内容通道读取 +
+// 密文安全闸后传入——本模块不再裸触 fs）。
 
 import AdmZip from 'adm-zip';
 import * as cheerio from 'cheerio';
@@ -16,8 +18,8 @@ function slideTexts(xml: string): string[] {
     .filter((t) => t.trim().length > 0);
 }
 
-export async function readPptx(abs: string, signal?: AbortSignal): Promise<string> {
-  const zip = new AdmZip(abs);
+export async function readPptx(data: Buffer, signal?: AbortSignal): Promise<string> {
+  const zip = new AdmZip(data);
   const slides = zip
     .getEntries()
     .filter((e) => SLIDE_RE.test(e.entryName))

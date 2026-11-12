@@ -16,6 +16,7 @@ import {
   toJournalRelPath,
   recordChangeSafe,
 } from './shared/change-journal';
+import { assertNotCipher } from './shared/cipher-gate';
 import { runWithWriteGrant } from './write-grant-tool';
 
 // 类外常量（Tier 划分见 spec §3）：
@@ -74,13 +75,23 @@ async function executePatch(patchText: string, ctx: ToolContext): Promise<string
   //    addedFiles 清理会删掉被覆盖的原文件且无备份（终审 I1 回滚洞）
   //    update / delete 补 Read-before-Edit 守门（2026-09-26 对齐 file-tools：
   //    原先完全旁路——未读文件可经 patch 改删）；add 创建新文件豁免
+  //    B 方案收口：update / delete 目标现内容在此经通道读取 + 密文安全闸
+  //    （密文 → 拒绝整个 patch，宁报错不毁文件）；读到的字节缓存给 applyOp
+  //    复用（hunk 应用 / delete 记账 / 守门指纹同源，消除同文件二次读）
+  const currentBuffers = new Map<string, Buffer>();
   for (const op of ast.ops) {
     const abs = ctx.wsFs.assertInWorkspace(op.path);
     if (op.kind === 'add' && fs.existsSync(abs)) {
       throw new Error(`apply_patch 失败: Add File 目标已存在: ${op.path}（如需修改请用 Update File）`);
     }
     if (op.kind !== 'add') {
-      ctx.readTracker?.assertRead(ctx.roomId, ctx.parentStreamSessionId, abs);
+      let cur: Buffer | null = null;
+      if (fs.existsSync(abs)) {
+        cur = await ctx.wsFs.readFile(op.path);
+        assertNotCipher(cur, op.path);
+        currentBuffers.set(op.path, cur);
+      }
+      ctx.readTracker?.assertRead(ctx.roomId, ctx.parentStreamSessionId, abs, cur ?? undefined);
     }
   }
 
@@ -96,16 +107,17 @@ async function executePatch(patchText: string, ctx: ToolContext): Promise<string
     }
   }
 
-  // 3. 逐 op 执行
+  // 3. 逐 op 执行（applyOp 返回写后内容——add/update 供第 5 步注册读取指纹）
   let applied = 0;
   // 跟踪 add 成功的新文件路径——回滚时需删除（spec §6.1 严格 all-or-nothing）
   const addedFiles: string[] = [];
   // v2.5 变更账本：单次 patch 共用一个 RecordCtx，逐 op 写前记账（applyOp 内）；
   // 失败回滚产生的孤儿条目由 revert 的 no-op 守卫兜底（内容已还原 → hash==beforeHash）
   const jrc = buildRecordCtx('apply_patch', ctx);
+  const finalContents: Array<string | null> = [];
   try {
     for (const op of ast.ops) {
-      await applyOp(op, ctx, addedFiles, jrc);
+      finalContents.push(await applyOp(op, ctx, addedFiles, jrc, currentBuffers));
       applied++;
     }
   } catch (err) {
@@ -122,13 +134,22 @@ async function executePatch(patchText: string, ctx: ToolContext): Promise<string
   }
 
   // 5. 成功清理 + 写后注册读取指纹（add/update 产物 agent 已知晓内容，
-  //    后续 edit_file 免重读；delete 无文件可注册）
+  //    后续 edit_file 免重读；delete 无文件可注册。B 方案收口：内容直接
+  //    来自 applyOp 产物，无二次磁盘回读）
   fs.rmSync(backupDir, { recursive: true, force: true });
-  for (const op of ast.ops) {
+  ast.ops.forEach((op, i) => {
     if (op.kind === 'add' || op.kind === 'update') {
-      ctx.readTracker?.add(ctx.roomId, ctx.wsFs.assertInWorkspace(op.path), ctx.parentStreamSessionId);
+      const content = finalContents[i];
+      if (content !== null && content !== undefined) {
+        ctx.readTracker?.add(
+          ctx.roomId,
+          ctx.wsFs.assertInWorkspace(op.path),
+          ctx.parentStreamSessionId,
+          content,
+        );
+      }
     }
-  }
+  });
   return `已应用 ${applied} 个文件`;
 }
 
@@ -158,33 +179,48 @@ function* walkDir(dir: string): Generator<string> {
   }
 }
 
-async function applyOp(op: PatchOp, ctx: ToolContext, addedFiles: string[], jrc: RecordCtx): Promise<void> {
+/** 单 op 执行。返回写后内容（add=patch 内容、update=hunk 产物；delete=null），
+ *  供成功后注册读取指纹。currentBuffers 是第 1 步缓存的通道读字节（防二次读）。 */
+async function applyOp(
+  op: PatchOp,
+  ctx: ToolContext,
+  addedFiles: string[],
+  jrc: RecordCtx,
+  currentBuffers: Map<string, Buffer>,
+): Promise<string | null> {
   switch (op.kind) {
     case 'add':
       // v2.5：add 的 after 即写入内容；Add 已在路径校验阶段拦截目标已存在
       recordChangeSafe(jrc, toJournalRelPath(ctx, op.path), 'create', null, op.content);
       await ctx.wsFs.writeFile(op.path, op.content);
       addedFiles.push(op.path);
-      break;
+      return op.content;
     case 'update':
       {
-        const current = (await ctx.wsFs.readFile(op.path)).toString('utf-8');
+        // 缓存未命中（理论上仅竞态窗口）退化为通道读，语义与第 1 步一致
+        const currentBuf = currentBuffers.get(op.path) ?? (await ctx.wsFs.readFile(op.path));
+        assertNotCipher(currentBuf, op.path);
+        const current = currentBuf.toString('utf-8');
         const updated = applyHunk(current, op.hunk);
         // v2.5：hunk 应用成功后、写盘前记账（before=快照循环同源的旧内容）
         recordChangeSafe(jrc, toJournalRelPath(ctx, op.path), 'modify', current, updated);
         await ctx.wsFs.writeFile(op.path, updated);
+        return updated;
       }
-      break;
     case 'delete': {
       const abs = ctx.wsFs.assertInWorkspace(op.path);
       // v2.5：删除前读内容记账（快照循环只 copyFile 供回滚，账本需要字符串内容）；
-      // 目标不存在时 unlink 原样抛 ENOENT（既有行为），不产生条目
-      if (fs.existsSync(abs)) {
-        const before = await fs.promises.readFile(abs, 'utf-8');
-        recordChangeSafe(jrc, toJournalRelPath(ctx, op.path), 'delete', before, null);
+      // 内容优先取第 1 步缓存（B 方案收口：经通道读 + 已过密文闸）；
+      // 目标不存在时 deletePath 原样抛 ENOENT（既有行为），不产生条目
+      const beforeBuf =
+        currentBuffers.get(op.path) ??
+        (fs.existsSync(abs) ? await ctx.wsFs.readFile(op.path) : null);
+      if (beforeBuf !== null) {
+        assertNotCipher(beforeBuf, op.path);
+        recordChangeSafe(jrc, toJournalRelPath(ctx, op.path), 'delete', beforeBuf.toString('utf-8'), null);
       }
-      await fs.promises.unlink(abs);
-      break;
+      await ctx.wsFs.deletePath(op.path);
+      return null;
     }
   }
 }

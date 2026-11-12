@@ -37,6 +37,48 @@ beforeEach(() => {
 
 afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
+describe('ApplyPatchTools — 密文安全闸（B 方案收口）', () => {
+  const CIPHER_HEAD = Buffer.from(
+    '62142365DA00260100000001452D536166654E65740000004C4F434B',
+    'hex',
+  );
+
+  it('update 目标为密文 → 拒绝整个 patch，文件字节不变', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'Enc.java'), CIPHER_HEAD);
+    const patch = `*** Update File: Enc.java
+@@ class
+-interface X {}
++interface Y {}
+`;
+    await expect(tools.execute('apply_patch', { patch }, ctx)).rejects.toThrow(/加密[\s\S]*Enc\.java/);
+    expect(fs.readFileSync(path.join(tmpDir, 'Enc.java')).equals(CIPHER_HEAD)).toBe(true);
+  });
+
+  it('delete 目标为密文 → 同样拒绝（宁报错不毁文件）', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'Enc.java'), CIPHER_HEAD);
+    const patch = `*** Delete File: Enc.java
+`;
+    await expect(tools.execute('apply_patch', { patch }, ctx)).rejects.toThrow(/加密[\s\S]*Enc\.java/);
+    expect(fs.existsSync(path.join(tmpDir, 'Enc.java'))).toBe(true);
+  });
+
+  it('多 op patch 中途遇密文 → 整体拒绝，已快照文件不动', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'a.ts'), 'aaa\n');
+    fs.writeFileSync(path.join(tmpDir, 'Enc.java'), CIPHER_HEAD);
+    const patch = `*** Add File: b.ts
++bbb
+*** Update File: Enc.java
+@@ class
+-x
++y
+`;
+    await expect(tools.execute('apply_patch', { patch }, ctx)).rejects.toThrow(/加密/);
+    expect(fs.readFileSync(path.join(tmpDir, 'a.ts'), 'utf8')).toBe('aaa\n');
+    expect(fs.existsSync(path.join(tmpDir, 'b.ts'))).toBe(false);
+    expect(fs.readFileSync(path.join(tmpDir, 'Enc.java')).equals(CIPHER_HEAD)).toBe(true);
+  });
+});
+
 describe('ApplyPatchTools — getDefs', () => {
   it('声明 apply_patch 工具', () => {
     const defs = tools.getDefs();
