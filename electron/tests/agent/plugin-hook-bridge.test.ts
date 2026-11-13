@@ -75,7 +75,8 @@ describe('requestPreToolUse', () => {
     try {
       const t0 = Date.now();
       expect(await requestPreToolUse(PAYLOAD)).toBeNull();
-      expect(Date.now() - t0).toBeGreaterThanOrEqual(PRE_TOOL_USE_TIMEOUT_MS);
+      // 容差 200ms：ELECTRON_RUN_AS_NODE 下 Electron timer 可提前唤醒（实测 4995ms）
+      expect(Date.now() - t0).toBeGreaterThanOrEqual(PRE_TOOL_USE_TIMEOUT_MS - 200);
     } finally {
       restore.restore();
     }

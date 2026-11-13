@@ -6,6 +6,14 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — ABI 统一：electron 测试跑在 ELECTRON_RUN_AS_NODE（单 ABI 稳态）
+
+`2.1.0-alpha.65`。来源：用户需求（Windows 兼容机 agent 配置固定一套，不再 Node/Electron 来回 rebuild）。
+
+- electron workspace `test` 脚本改经 `scripts/test.mjs`：ELECTRON_RUN_AS_NODE=1 下用 Electron 二进制跑 vitest——better-sqlite3/keytar 与 GUI/打包共用 Electron ABI（149）；renderer 套件保持 Node ABI（canvas prebuild 137，不加载 bsq/keytar）——两套各固定、零切换
+- 适配三处：打包态判定收敛 `util/bundled-runtime.ts`（isBundledRuntime——RUN_AS_NODE 下 resourcesPath 误判修复，catalog/agents/skills 三资源根共用）；sandboxed-exec ENV 白名单透传 ELECTRON_RUN_AS_NODE（spawn execPath 保持 node 模式，防 GUI 挂起）；plugin-hook-bridge 计时断言容差 200ms（Electron timer 提前唤醒）
+- 验证：electron 5984（ELECTRON_RUN_AS_NODE 全量绿）+ renderer 3469（Node）+ typecheck 双过；AGENTS.md 陷阱表同步新稳态
+
 ## [未发布] — 首启引导体验优化（Onboarding UX Overhaul）
 
 `2.1.0-alpha.65`。依据 spec `docs/specs/2026-11-13-onboarding-ux-overhaul-design.md` + 实施计划 `docs/plans/2026-11-13-onboarding-ux-overhaul.md`（12 任务 TDD）+ 双路线走查（16 截图，`.omo/qa-reports/2026-11-13-onboarding-walkthrough/`）。来源：用户实操反馈 3 条（模型手输/预设列表固定/跳过后空态突兀）+ 隔离走查观察 9 条。

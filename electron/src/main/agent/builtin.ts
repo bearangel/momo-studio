@@ -14,11 +14,12 @@ import path from 'node:path';
 import { parseAgentManifestWithSuggestion } from './manifest-parser';
 import { saveAgentDefinition, getAgentDefinition, listAgentDefinitions } from './crud';
 import { logger } from '../logger';
+import { isBundledRuntime } from '../util/bundled-runtime';
 import type { BuiltinSuggestion, BuiltinSuggestionMap, AgentDefinition } from './types';
 
 function resolveBuiltinAgentsDir(): string {
-  if (process.resourcesPath && !process.defaultApp) {
-    return path.join(process.resourcesPath, 'agents');
+  if (isBundledRuntime()) {
+    return path.join(process.resourcesPath!, 'agents');
   }
   return path.join(__dirname, '..', '..', '..', 'resources', 'agents');
 }

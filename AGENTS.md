@@ -36,6 +36,8 @@ nvm use 24
 npx pnpm@9.0.0 install
 
 # 测试（两个 workspace 同时跑）
+# electron 套件经 scripts/test.mjs 跑在 Electron 二进制 node 模式（ELECTRON_RUN_AS_NODE，
+# ABI 149 与 GUI/打包共用——2026-11-13 ABI 统一，不再 Node/Electron 来回 rebuild）
 npx pnpm@9.0.0 test
 
 # 单独跑一个 workspace
@@ -108,7 +110,7 @@ docs/       — 设计文档(specs) + 实施计划(plans) + 开发指南(dev)
 | 陷阱 | 症状 | 解决 |
 |---|---|---|
 | Node 版本不对 | `better-sqlite3 ERR_DLOPEN_FAILED` 或 `NODE_MODULE_VERSION mismatch` | `nvm use 24 && npx pnpm@9.0.0 rebuild better-sqlite3`。⚠️ P1 实测：workspace 根的 `pnpm rebuild better-sqlite3` 可能静默 no-op（exit 0 但二进制未变）；此时改在包目录跑 `cd node_modules/better-sqlite3 && npx prebuild-install`。验证 ABI 勿用裸 `require('better-sqlite3')`（不触发 dlopen，首构造才加载，假阴性）——用 `new Database(':memory:')` 或直接跑测试 |
-| Electron native binding 不匹配 | 启动 Electron 时 `NODE_MODULE_VERSION 137 vs 149` | `cd electron && npx electron-rebuild -f -w better-sqlite3 -w keytar`。冒烟后如需回 Node ABI 跑测试，同上行注意事项 |
+| Electron native binding 不匹配 | 启动 Electron 时 `NODE_MODULE_VERSION 137 vs 149` | `cd electron && npx electron-rebuild -f -w better-sqlite3 -w keytar`。**2026-11-13 ABI 统一后无需回滚**：electron 测试经 `scripts/test.mjs`（ELECTRON_RUN_AS_NODE）与 GUI 共用 Electron ABI；canvas 恒 Node ABI（renderer 套件不加载 bsq/keytar），两套各固定、零切换 |
 | Windows 工具链版本不足（2026-11-12 实录） | `electron-rebuild` 报 `v8-source-location.h(9,10): fatal error C1083: 无法打开包括文件 "source_location"` | VS2019（MSVC 14.28）的 STL 没有 `<source_location>`，`/std:c++latest` 也救不回来；须装 **VS2022 Build Tools**（MSVC 14.4x）。本机已装 `D:\Program Files\Microsoft Visual Studio\2022\BuildTools`（`--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended`），与 VS2019 并存、node-gyp 自动选新工具集。附带现象：`-w` 仍会尝试重编 `canvas@2.11.2`（renderer 的 jsdom 测试依赖，需 GTK/cairo）并失败——**无害**，canvas 不进 `app.asar` |
 | 安装包虚胖 ~4.5MB | `dist-installers` 安装包明显大于 dist 体量 | `electron-rebuild` 在 `better-sqlite3/build/` 留 `*.iobj`(13.6MB)/`*.ipdb`(3MB)/`*.lib`(6.6MB)，electron-builder 会打进 `app.asar.unpacked`。打包前删掉这些中间文件只留 `.node`（本次 138.5MB → 131.5MB） |
 | ABI 反复横跳后 vitest 全仓 SIGKILL | electron-rebuild ↔ prebuild-install 来回替换 `better_sqlite3.node` 后，macOS AMFI 签名态损坏——vitest worker（含 forks）加载即被击杀，但裸 `node -e "new Database(...)"` 正常 | `codesign --force --sign - node_modules/.pnpm/better-sqlite3@12.11.1/node_modules/better-sqlite3/build/Release/better_sqlite3.node`（ad-hoc 重签即愈；路径按实际 .pnpm 版本目录调整）。判别特征：SIGKILL 而非 SIGSEGV、瞬死无测试输出、`codesign -v` 可能仍报通过 |

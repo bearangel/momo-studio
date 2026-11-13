@@ -27,6 +27,7 @@ import crypto from 'node:crypto';
 import { load as yamlLoad } from 'js-yaml';
 import { resolveSkillsDir } from '../paths';
 import { logger } from '../logger';
+import { isBundledRuntime } from '../util/bundled-runtime';
 import { getDb } from '../storage/db';
 import { listAllPluginSkills } from '../plugin/assembly';
 
@@ -118,8 +119,8 @@ export function nameToSlug(name: string): string {
  * v2.11 起导出：context-expander 复用同一 builtin 根解析（单一真相源，防两处路径漂移）。
  */
 export function resolveBuiltinSkillsDir(): string {
-  if (process.resourcesPath && !process.defaultApp) {
-    return path.join(process.resourcesPath, 'skills');
+  if (isBundledRuntime()) {
+    return path.join(process.resourcesPath!, 'skills');
   }
   return path.join(__dirname, '..', '..', '..', 'resources', 'skills');
 }

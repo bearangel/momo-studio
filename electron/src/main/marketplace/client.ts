@@ -10,6 +10,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { isBundledRuntime } from '../util/bundled-runtime';
 import {
   isValidSlug,
   isValidVersion,
@@ -96,8 +97,8 @@ export function validateCatalog(raw: unknown): Catalog {
 /** 解析本地 catalog 路径（打包后从 resources 目录加载，dev 从源码目录加载） */
 function resolveLocalCatalogPath(): string {
   // 打包模式：process.resourcesPath 指向 app/Contents/Resources/ (macOS) 或 resources/ (Linux/Win)
-  if (process.resourcesPath && !process.defaultApp) {
-    return path.join(process.resourcesPath, 'marketplace', 'catalog.json');
+  if (isBundledRuntime()) {
+    return path.join(process.resourcesPath!, 'marketplace', 'catalog.json');
   }
   // Dev 模式：从编译后的 dist 向上找源码目录
   return path.resolve(__dirname, '..', '..', '..', '..', 'resources', 'marketplace', 'catalog.json');

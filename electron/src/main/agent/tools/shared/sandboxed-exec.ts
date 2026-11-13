@@ -37,6 +37,9 @@ export interface SandboxedExecResult {
 const ENV_ALLOWLIST = [
   'PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL',
   'SYSTEMROOT', 'SYSTEMDRIVE', 'USERPROFILE', 'APPDATA', 'TEMP',
+  // ELECTRON_RUN_AS_NODE（2026-11-13 ABI 统一）：测试进程跑在 Electron 二进制下，
+  // 子进程 spawn execPath（Electron）时须透传本变量保持 node 模式，否则启 GUI 挂起
+  'ELECTRON_RUN_AS_NODE',
 ] as const;
 
 function baseEnv(): Record<string, string> {
