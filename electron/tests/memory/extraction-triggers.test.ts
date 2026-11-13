@@ -56,6 +56,7 @@ import {
   transitionTaskStatus,
   getTask,
 } from '../../src/main/storage/tasks/repo';
+import { startRun } from '../../src/main/task/lifecycle-runs';
 import { insertSession } from '../../src/main/storage/sessions/repo';
 import { insertMessage } from '../../src/main/storage/messages/repo';
 import { registerSessionIpcHandlers } from '../../src/main/im/session.ipc.handlers';
@@ -72,10 +73,19 @@ function setupDb(): void {
   fs.mkdirSync(tmpRoot, { recursive: true });
   process.env.AP_USER_DATA_DIR = tmpRoot;
   runMigrations();
+  const db = getDb();
   // seed workspace（tasks / sessions 表 FK 要求）
-  getDb()
-    .prepare(`INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES (?, ?, ?, ?)`)
+  db.prepare(`INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES (?, ?, ?, ?)`)
     .run('ws1', 'Test', '/tmp', '@owner:home');
+  // v2：submitRun 验收请求挂执行会话（human_requests.session_id FK → sessions）——
+  // 收尾用例的执行会话 sess-trig-1 / sess-trig-2 落真实行
+  const now = Date.now();
+  for (const sid of ['sess-trig-1', 'sess-trig-2']) {
+    db.prepare(
+      `INSERT INTO sessions (id, workspace_id, title, title_auto, kind, settings_json, created_at, updated_at, session_type)
+       VALUES (?, 'ws1', '执行', 0, 'chat', NULL, ?, ?, NULL)`,
+    ).run(sid, now, now);
+  }
 }
 
 /** mock 子进程——on() 记录 message handler 供测试模拟子进程发 chunk（真实语义：运行中） */
@@ -114,11 +124,12 @@ function mkRunner(pool: WarmPool): AgentRunner {
   });
 }
 
-/** 建一个已到 in_progress 的任务行（draft → assigned → in_progress 合法链） */
-function seedInProgressTask(title: string): string {
-  const t = insertTask({ workspaceId: 'ws1', title, creatorUserId: '@owner:home' });
+/** 建一个已到 in_progress 的任务行（v2 生产形态：行 + run #1 + 执行会话） */
+function seedInProgressTask(title: string, executionSessionId = 'sess-trig-1'): string {
+  const t = insertTask({ workspaceId: 'ws1', title, creatorUserId: '@owner:home', executionSessionId });
   transitionTaskStatus(t.id, 'assigned');
   transitionTaskStatus(t.id, 'in_progress');
+  startRun(t.id, { trigger: 'initial', executionSessionId });
   return t.id;
 }
 
@@ -167,8 +178,9 @@ describe('AgentRunner 完成触发', () => {
     getMessageHandler(child)({ type: 'end', streamSessionId: 'ss-trig-ok', finishReason: 'stop' });
     getMessageHandler(child)({ type: 'task-end', streamSessionId: 'ss-trig-ok', taskId });
 
-    // 收尾先行（任务终态可见 + runtime 回收），提取 fire-and-forget 不影响二者
-    expect(getTask(taskId)!.status).toBe('completed');
+    // 收尾先行（任务收尾可见 + runtime 回收），提取 fire-and-forget 不影响二者
+    // v2：task-end 正常收尾 = 提交验收（submitted）
+    expect(getTask(taskId)!.status).toBe('submitted');
     expect(child.kill).toHaveBeenCalled();
     expect(scheduleExtractionSpy).toHaveBeenCalledTimes(1);
     expect(scheduleExtractionSpy).toHaveBeenCalledWith('sess-trig-1', { taskId });

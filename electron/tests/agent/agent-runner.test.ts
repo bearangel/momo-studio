@@ -39,6 +39,7 @@ import {
   transitionTaskStatus,
   getTask,
 } from '../../src/main/storage/tasks/repo';
+import { startRun } from '../../src/main/task/lifecycle-runs';
 import {
   insertMessage,
   getMessageByStreamSessionId,
@@ -362,20 +363,31 @@ function setupDb(): string {
   fs.mkdirSync(tmpRoot, { recursive: true });
   process.env.AP_USER_DATA_DIR = tmpRoot;
   runMigrations();
+  const db = getDb();
   // seed workspace（tasks / messages 表 FK 要求）
-  getDb()
-    .prepare(
-      `INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES (?, ?, ?, ?)`,
-    )
-    .run('ws1', 'Test', '/tmp', '@owner:home');
+  db.prepare(
+    `INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES (?, ?, ?, ?)`,
+  ).run('ws1', 'Test', '/tmp', '@owner:home');
+  // v2：submitRun 验收请求挂执行会话（human_requests.session_id FK → sessions）
+  db.prepare(
+    `INSERT INTO sessions (id, workspace_id, title, title_auto, kind, settings_json, created_at, updated_at, session_type)
+     VALUES ('!r:home', 'ws1', '执行', 0, 'chat', NULL, ?, ?, NULL)`,
+  ).run(Date.now(), Date.now());
   return 'ws1';
 }
 
-/** 建一个已到 in_progress 的任务行（draft → assigned → in_progress 合法链） */
+/** 建一个已到 in_progress 的任务行（v2 生产形态：行 + run #1——Task 15 起
+ *  task-end 终态走 submitRun/failRun/cancelActiveRun，需活动 run） */
 function seedInProgressTask(title: string): string {
-  const t = insertTask({ workspaceId: 'ws1', title, creatorUserId: '@owner:home' });
+  const t = insertTask({
+    workspaceId: 'ws1',
+    title,
+    creatorUserId: '@owner:home',
+    executionSessionId: '!r:home',
+  });
   transitionTaskStatus(t.id, 'assigned');
   transitionTaskStatus(t.id, 'in_progress');
+  startRun(t.id, { trigger: 'initial', executionSessionId: '!r:home' });
   return t.id;
 }
 
@@ -435,8 +447,10 @@ describe('AgentRunner task-driven 生命周期（C1/C3）', () => {
     });
 
     const row = getTask(taskId)!;
-    expect(row.status).toBe('completed');
-    expect(row.completedAt).not.toBeNull();
+    // v2：in_progress→completed 直达边已删——task-end 正常收尾 = 提交验收（submitted），
+    // 完成（completed）只经验收（acceptTask / auto_accept）进入
+    expect(row.status).toBe('submitted');
+    expect(row.submittedAt).not.toBeNull();
     expect(row.toolCallsUsed).toBe(3);
     // 先转换后回收：kill 在终态落库之后发生（同 tick 内顺序由实现保证，
     // 此处断言终态与 kill 均已发生）
@@ -685,7 +699,7 @@ describe('AgentRunner task-driven 生命周期（C1/C3）', () => {
 
     expect(child.kill).toHaveBeenCalled(); // 强制 kill
     expect(runner.activeTaskCount()).toBe(0);
-    expect(getTask(taskId)!.status).toBe('completed'); // 按 lastFinish(stop) 转换
+    expect(getTask(taskId)!.status).toBe('submitted'); // v2：按 lastFinish(stop) 提交验收
   });
 
   it('C3：task-end 先于宽限期到达 → 兜底计时器被清除，不重复收尾', async () => {
@@ -709,7 +723,7 @@ describe('AgentRunner task-driven 生命周期（C1/C3）', () => {
     // 越过宽限期后不应有第二次 kill / 状态翻转
     await new Promise((r) => setTimeout(r, 60));
     expect((child.kill as ReturnType<typeof vi.fn>).mock.calls.length).toBe(killCount);
-    expect(getTask(taskId)!.status).toBe('completed');
+    expect(getTask(taskId)!.status).toBe('submitted');
   });
 });
 
@@ -884,14 +898,14 @@ describe('AgentRunner child exit 清理链（C2）', () => {
       streamSessionId: 'ss-c2-idem',
     });
 
-    // 正常链路收尾（end stop → task-end → completed）
+    // 正常链路收尾（end stop → task-end → v2 提交验收 submitted）
     getMessageHandler(child)({ type: 'end', streamSessionId: 'ss-c2-idem', finishReason: 'stop' });
     getMessageHandler(child)({ type: 'task-end', streamSessionId: 'ss-c2-idem', taskId });
-    expect(getTask(taskId)!.status).toBe('completed');
+    expect(getTask(taskId)!.status).toBe('submitted');
 
     // 迟到的 exit 事件不得把已收尾的任务/消息改成 failed
     expect(() => runner.handleChildExit(child, 1)).not.toThrow();
-    expect(getTask(taskId)!.status).toBe('completed');
+    expect(getTask(taskId)!.status).toBe('submitted');
   });
 
   it('C2：非 in_progress 状态的任务（如 paused）不被崩溃收尾改写（状态机合法性）', async () => {

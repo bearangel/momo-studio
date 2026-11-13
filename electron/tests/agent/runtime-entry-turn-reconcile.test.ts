@@ -546,12 +546,13 @@ describe('入场闭合契约（spec §3.3）', () => {
     const body = buildKickoffBody(mkTaskRow('T-060', 'in_progress'));
     expect(body).toContain('【任务启动】#T-060');
     expect(body).toContain(KICKOFF_CLOSURE_MANDATE);
-    // 义务段三要素：触发声明 / 两条闭合通道 / 兜底说明
+    // 义务段要素（v2 Task 15）：触发声明 / 两条闭合通道（submit_task / fail_task）/
+    // 求助通道（request_human）
     expect(KICKOFF_CLOSURE_MANDATE).toContain('本回合由任务简报触发');
-    expect(KICKOFF_CLOSURE_MANDATE).toContain('complete_task');
+    expect(KICKOFF_CLOSURE_MANDATE).toContain('submit_task');
     expect(KICKOFF_CLOSURE_MANDATE).toContain('fail_task');
     expect(KICKOFF_CLOSURE_MANDATE).toContain('关闭任务');
-    expect(KICKOFF_CLOSURE_MANDATE).toContain('说明原因');
+    expect(KICKOFF_CLOSURE_MANDATE).toContain('request_human');
   });
 
   it('模板全文与三选一措辞一致（submit / fail / request_human + 一次性声明 + 前缀登记形态）', () => {

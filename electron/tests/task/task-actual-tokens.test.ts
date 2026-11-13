@@ -23,8 +23,9 @@ vi.mock('../../src/main/memory/extraction', () => ({
 }));
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
-import { getTask, insertTask, transitionTaskStatus } from '../../src/main/storage/tasks/repo';
+import { getTask, insertTask, updateTask } from '../../src/main/storage/tasks/repo';
 import { insertSession } from '../../src/main/storage/sessions/repo';
+import { startRun } from '../../src/main/task/lifecycle-runs';
 import {
   ledgerInsertDispatch,
   ledgerSettleDispatch,
@@ -57,28 +58,27 @@ function setupDb(): void {
   sessionId = insertSession({ workspaceId: 'ws', title: '协作', kind: 'chat' }).id;
 }
 
-// v2 语义：settle/task-end 的 completed 结局 = 验收已提交交付（合法边仅
-// submitted → completed）——凡断言 completed 终态的用例，种子/复位后先推到
-// submitted（模拟 run 已提交交付物），不弱化任何断言
-function seedDispatchTask(id: string, status: 'in_progress' | 'submitted' = 'in_progress'): void {
+// v2 语义（Task 15）：settle/task-end 的 completed 结局 = submitRun 提交验收
+// （dispatch 行 auto_accept 提交即验收直达 completed）——种子沿用生产 spawn
+// 形态（行 + run #1），不弱化任何断言
+function seedDispatchTask(id: string): void {
   insertTask({
     id,
     origin: 'dispatch',
     workspaceId: 'ws',
     title: '子任务',
-    status,
+    status: 'in_progress',
     creatorUserId: 'agent:inst-pm',
     assigneeAgentId: 'inst-sub',
     executionSessionId: sessionId,
     sourceSessionId: sessionId,
     startedAt: Date.now(),
+    autoAccept: true,
   });
+  startRun(id, { trigger: 'initial', executionSessionId: sessionId });
 }
 
-function seedUserTask(
-  id: string,
-  status: 'in_progress' | 'assigned' | 'submitted' = 'in_progress',
-): void {
+function seedUserTask(id: string, status: 'in_progress' | 'assigned' = 'in_progress'): void {
   insertTask({
     id,
     workspaceId: 'ws',
@@ -88,6 +88,9 @@ function seedUserTask(
     executionSessionId: sessionId,
     startedAt: status === 'assigned' ? null : Date.now(),
   });
+  if (status === 'in_progress') {
+    startRun(id, { trigger: 'initial', executionSessionId: sessionId });
+  }
 }
 
 function quotaErrorText(): string {
@@ -117,8 +120,8 @@ afterEach(() => {
 
 describe('ledgerSettleDispatch usage 累积（task_reply 入口）', () => {
   it('completed + usage → actual_tokens = prompt + completion；无 usage → NULL', () => {
-    seedDispatchTask('tk-u1', 'submitted');
-    seedDispatchTask('tk-u2', 'submitted');
+    seedDispatchTask('tk-u1');
+    seedDispatchTask('tk-u2');
     ledgerSettleDispatch('tk-u1', 'completed', undefined, { promptTokens: 100, completionTokens: 50 });
     ledgerSettleDispatch('tk-u2', 'completed');
 
@@ -133,7 +136,7 @@ describe('ledgerSettleDispatch usage 累积（task_reply 入口）', () => {
   });
 
   it('followup 复位后第二轮 settle → 跨轮累积不覆盖', () => {
-    seedDispatchTask('tk-u4', 'submitted');
+    seedDispatchTask('tk-u4');
     ledgerSettleDispatch('tk-u4', 'completed', undefined, { promptTokens: 100, completionTokens: 50 });
     expect(getTask('tk-u4')!.actualTokens).toBe(150);
 
@@ -144,7 +147,6 @@ describe('ledgerSettleDispatch usage 累积（task_reply 入口）', () => {
       subAssignmentId: 'inst-sub',
       sessionId,
     });
-    transitionTaskStatus('tk-u4', 'submitted');
     ledgerSettleDispatch('tk-u4', 'completed', undefined, { promptTokens: 60, completionTokens: 40 });
     expect(getTask('tk-u4')!.actualTokens, '读-改-写累积（150+100）').toBe(250);
   });
@@ -164,7 +166,6 @@ describe('ledgerSettleDispatch usage 累积（task_reply 入口）', () => {
       subAssignmentId: 'inst-sub',
       sessionId,
     });
-    transitionTaskStatus('tk-u5', 'submitted');
     ledgerSettleDispatch('tk-u5', 'completed', undefined, { promptTokens: 1, completionTokens: 2 });
     expect(getTask('tk-u5')!.actualTokens).toBe(18);
   });
@@ -181,7 +182,7 @@ describe('ledgerSettleDispatch usage 累积（task_reply 入口）', () => {
   });
 
   it('幂等跳过（行已终态）→ 不重复计数', () => {
-    seedDispatchTask('tk-u7', 'submitted');
+    seedDispatchTask('tk-u7');
     ledgerSettleDispatch('tk-u7', 'completed', undefined, { promptTokens: 100, completionTokens: 50 });
     ledgerSettleDispatch('tk-u7', 'completed', undefined, { promptTokens: 100, completionTokens: 50 });
     expect(getTask('tk-u7')!.actualTokens).toBe(150);
@@ -234,7 +235,7 @@ describe('AgentRunner task-end usage 累积（task-driven 入口）', () => {
   }
 
   it('user 任务 task-end 携带 usageTotal → completed 终态 + actual_tokens 累积', async () => {
-    seedUserTask('T-u1', 'submitted');
+    seedUserTask('T-u1');
     const child = await executeOnRunner('T-u1');
 
     getMessageHandler(child)({
@@ -246,12 +247,13 @@ describe('AgentRunner task-end usage 累积（task-driven 入口）', () => {
     });
 
     const row = getTask('T-u1')!;
-    expect(row.status).toBe('completed');
+    // v2：user 任务无 auto_accept——task-end 正常收尾 = 提交验收（submitted），完成待人工 accept
+    expect(row.status).toBe('submitted');
     expect(row.actualTokens).toBe(70);
   });
 
   it('task-end 无 usageTotal → actual_tokens 保持 NULL', async () => {
-    seedUserTask('T-u2', 'submitted');
+    seedUserTask('T-u2');
     const child = await executeOnRunner('T-u2');
 
     getMessageHandler(child)({
@@ -262,12 +264,12 @@ describe('AgentRunner task-end usage 累积（task-driven 入口）', () => {
     });
 
     const row = getTask('T-u2')!;
-    expect(row.status).toBe('completed');
+    expect(row.status).toBe('submitted');
     expect(row.actualTokens).toBeNull();
   });
 
   it('续跑/重跑累积：existing 100 + 本轮 70 → 170（读-改-写）', async () => {
-    seedUserTask('T-u3', 'submitted');
+    seedUserTask('T-u3');
     getDb().prepare(`UPDATE tasks SET actual_tokens = 100 WHERE id = 'T-u3'`).run();
     const child = await executeOnRunner('T-u3');
 
@@ -279,6 +281,7 @@ describe('AgentRunner task-end usage 累积（task-driven 入口）', () => {
     });
 
     expect(getTask('T-u3')!.actualTokens).toBe(170);
+    expect(getTask('T-u3')!.status).toBe('submitted');
   });
 
   it('失败路径（error）同样写 usage + failed 终态', async () => {
@@ -299,8 +302,8 @@ describe('AgentRunner task-end usage 累积（task-driven 入口）', () => {
   });
 
   it('malformed usageTotal（字符串/负数）→ 忽略不写、不抛错（IPC 漂移容忍）', async () => {
-    seedUserTask('T-u5', 'submitted');
-    seedUserTask('T-u6', 'submitted');
+    seedUserTask('T-u5');
+    seedUserTask('T-u6');
     const child5 = await executeOnRunner('T-u5');
     getMessageHandler(child5)({
       type: 'task-end',
@@ -321,7 +324,7 @@ describe('AgentRunner task-end usage 累积（task-driven 入口）', () => {
   });
 
   it('dispatch 行已由 task_reply 先行终态结算 → 迟到 task-end 同值 usage 不重复计数', async () => {
-    seedDispatchTask('q-dup-1', 'submitted');
+    seedDispatchTask('q-dup-1');
     // task_reply 入口先行结算（runTaskChatLoop 先发 reply 后发 task-end 的生产时序）
     ledgerSettleDispatch('q-dup-1', 'completed', undefined, { promptTokens: 50, completionTokens: 50 });
     const child = await executeOnRunner('q-dup-1');

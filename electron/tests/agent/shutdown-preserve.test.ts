@@ -37,6 +37,7 @@ import {
   transitionTaskStatus,
   getTask,
 } from '../../src/main/storage/tasks/repo';
+import { startRun } from '../../src/main/task/lifecycle-runs';
 import {
   insertMessage,
   getMessageByStreamSessionId,
@@ -91,6 +92,8 @@ function seedInProgressTask(title: string): string {
   const t = insertTask({ workspaceId: 'ws1', title, creatorUserId: '@owner:home' });
   transitionTaskStatus(t.id, 'assigned');
   transitionTaskStatus(t.id, 'in_progress');
+  // v2 生产形态：崩溃收尾 failRun 需活动 run（startTask 同笔建 run #1）
+  startRun(t.id, { trigger: 'initial' });
   return t.id;
 }
 

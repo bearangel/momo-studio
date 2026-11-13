@@ -5,7 +5,8 @@
 //   1) 提交全链：startRun → submitRun → run submitted + 任务 submitted +
 //      acceptance 请求 pending（kind/timeoutPolicy/deadlineAt/title/payload 全字段）+ submitted_at
 //   2) 未决非验收请求时提交被拒（spec 不变量 2，人话含「先处理未决请求」，零副作用）
-//   3) accept：任务 completed + accepted_at + acceptance answered；再 accept → 人话拒
+//   3) accept：任务 completed + accepted_at + acceptance answered；再 accept → 人话拒；
+//      循环任务验收通过后续期（completeAcceptance 单点，Task 15 C）
 //   4) reject 带理由：任务 assigned + run rejected + 理由落库 + acceptance 答复；
 //      空白理由拒（与 move 校验双保险）
 //   5) reject 后再 startRun：run#2 trigger='rework'
@@ -21,7 +22,7 @@ import path from 'node:path';
 import os from 'node:os';
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
-import { insertTask, getTask, updateTask, transitionTaskStatus } from '../../src/main/storage/tasks/repo';
+import { insertTask, getTask, updateTask, transitionTaskStatus, listTasks } from '../../src/main/storage/tasks/repo';
 import { insertSession } from '../../src/main/storage/sessions/repo';
 import { getActiveRun, listRuns } from '../../src/main/storage/tasks/runs-repo';
 import {
@@ -176,7 +177,7 @@ describe('1) submitRun 提交全链', () => {
   });
 });
 
-describe('2) 提交闸：未决非验收请求', () => {
+describe('2) 提交闸：未决非验收请求 / 暂停守卫', () => {
   it('有未决 question → 人话拒（含「先处理未决请求」），run/任务/请求零副作用', async () => {
     const taskId = seedAssignedTask();
     const run = startRun(taskId, { trigger: 'initial' });
@@ -190,13 +191,25 @@ describe('2) 提交闸：未决非验收请求', () => {
     expect(getTask(taskId)!.submittedAt).toBeNull();
     expect(pendingAcceptance(taskId)).toBeUndefined();
   });
+
+  it('任务 paused → 人话拒「先恢复或取消」（Task 15 D：暂停中不接受提交），零副作用', async () => {
+    const taskId = seedAssignedTask();
+    startRun(taskId, { trigger: 'initial' });
+    transitionTaskStatus(taskId, 'paused');
+
+    await expect(submitRun(taskId, { summary: '交付' })).rejects.toThrow('已暂停，先恢复或取消');
+
+    expect(getTask(taskId)!.status).toBe('paused');
+    expect(getActiveRun(taskId)!.status).toBe('running'); // pauseForTask 不动 run
+    expect(getActiveRun(taskId)!.deliverableJson).toBeNull();
+    expect(pendingAcceptance(taskId)).toBeUndefined();
+  });
 });
 
 describe('3) acceptTask 验收通过', () => {
   it('任务 completed(accepted_at+completed_at) + run accepted(endedAt) + acceptance answered', async () => {
     const taskId = seedAssignedTask();
     await seedSubmitted(taskId);
-    const runId = getActiveRun(taskId)!.id;
 
     await acceptTask(taskId);
 
@@ -216,6 +229,20 @@ describe('3) acceptTask 验收通过', () => {
     await expect(acceptTask(taskId)).rejects.toThrow('无活动 run');
   });
 
+  it('循环任务验收通过 → 续期生成下一实例（completeAcceptance 单点，Task 15 C）', async () => {
+    const taskId = seedAssignedTask({ recurrenceRule: 'daily@09:00' });
+    await seedSubmitted(taskId);
+
+    await acceptTask(taskId);
+
+    const children = listTasks({ workspaceId: 'ws1' }).filter(
+      (t) => t.recurrenceParentId === taskId,
+    );
+    expect(children).toHaveLength(1);
+    expect(children[0]!.status).toBe('assigned');
+    expect(children[0]!.recurrenceRule).toBe('daily@09:00');
+  });
+
   it('run 非 submitted（running 中直接验收）→ 人话拒，零副作用', async () => {
     const taskId = seedAssignedTask();
     startRun(taskId, { trigger: 'initial' });
@@ -231,7 +258,6 @@ describe('4) rejectTask 打回', () => {
   it('任务 assigned + run rejected(理由落库) + acceptance 答复 reject(reason)', async () => {
     const taskId = seedAssignedTask();
     await seedSubmitted(taskId);
-    const runId = getActiveRun(taskId)!.id;
 
     await rejectTask(taskId, '覆盖不足，补充边界用例');
 
@@ -299,7 +325,7 @@ describe('6) auto_accept 自动验收', () => {
 });
 
 describe('7) 返工上限', () => {
-  it(`reject 到第 ${MAX_RUNS_PER_TASK} 个 run 后再 reject → 人话拒并建议取消，零副作用`, async () => {
+  it(`reject 到第 ${MAX_RUNS_PER_TASK} 个 run 后再 reject → 任务转 failed（errorMessage=返工次数超限，spec §5.2）`, async () => {
     const taskId = seedAssignedTask();
     for (let cycle = 1; cycle < MAX_RUNS_PER_TASK; cycle++) {
       startRun(taskId, { trigger: cycle === 1 ? 'initial' : 'rework' });
@@ -311,13 +337,14 @@ describe('7) 返工上限', () => {
     await submitRun(taskId, { summary: '最后一轮' });
     expect(listRuns(taskId)).toHaveLength(MAX_RUNS_PER_TASK);
 
-    await expect(rejectTask(taskId, '还要打回')).rejects.toThrow('上限');
-    await expect(rejectTask(taskId, '还要打回')).rejects.toThrow('取消');
+    await expect(rejectTask(taskId, '还要打回')).resolves.toBeUndefined();
 
-    // 拒绝零副作用：任务仍在 submitted 等 accept 通道，run/验收单不动
-    expect(getTask(taskId)!.status).toBe('submitted');
-    expect(getActiveRun(taskId)!.status).toBe('submitted');
-    expect(pendingAcceptance(taskId)).toBeDefined();
+    // v2（Task 15 B，spec §5.2 原文）：超限打回 = 拒绝再次打回，任务转 failed
+    const task = getTask(taskId)!;
+    expect(task.status).toBe('failed');
+    expect(task.errorMessage).toBe('返工次数超限');
+    expect(getActiveRun(taskId)).toBeNull(); // run failed 终结
+    expect(listRuns(taskId)).toHaveLength(MAX_RUNS_PER_TASK); // 不建新 run
   });
 });
 
