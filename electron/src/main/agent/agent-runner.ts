@@ -25,7 +25,7 @@ import type { AgentRuntimeOpts, ExpandedContext, SteerReplayItem } from './runti
 import { logger } from '../logger';
 import { getTask, updateTask, type TaskRow } from '../storage/tasks/repo';
 import { isTerminal } from '../storage/tasks/state-machine';
-import { submitRun, failRun, cancelActiveRun } from '../task/lifecycle-runs';
+import { submitRun, failRun, cancelActiveRun, emitRunChanged, emitHumanChanged, type TaskRunChangedEvent, type HumanChangedEvent, type LifecycleEventMessage } from '../task/lifecycle-runs';
 import { finalizeStreamOnCrash } from './stream-relay';
 import { scheduleExtraction } from '../memory/extraction';
 import { resolveMaxToolCalls } from '../settings/crud';
@@ -206,6 +206,41 @@ function parseUsageTotalCamel(
   return { promptTokens: u.promptTokens, completionTokens: u.completionTokens };
 }
 
+/**
+ * lifecycle-event 分发（P1 修复 2026-11-14）：子进程侧 agent 工具（submit_task
+ * / request_human / fail_task）emit 的 run/human 事件经 child IPC 泵到主进程，
+ * 在此回放进本进程 lifecycle-runs 自己的 sink（registerHumanIpc 装配 →
+ * renderer 推送）。child 是自有子进程，信任级同 task-op——轻校验 + 防御性
+ * 解构，畸形载荷丢弃不抛（消息事件回调里不得崩）。返回 true 表示消息已被
+ * 本分支消费（未知通道/缺 channel 同样吞掉，防止漏进流过滤误伤）。
+ */
+function dispatchLifecycleEvent(msg: unknown): boolean {
+  const m = msg as Partial<LifecycleEventMessage>;
+  if (m.type !== 'lifecycle-event') return false;
+  if (m.channel !== 'task:runChanged' && m.channel !== 'human:changed') return true;
+  const payload = m.payload;
+  if (typeof payload !== 'object' || payload === null) return true;
+  if (m.channel === 'task:runChanged') {
+    const e = payload as TaskRunChangedEvent;
+    if (typeof e.taskId === 'string' && typeof e.runId === 'string' && typeof e.status === 'string') {
+      emitRunChanged(e.taskId, e.runId, e.status);
+    }
+  } else {
+    const e = payload as HumanChangedEvent;
+    if (
+      typeof e.sessionId === 'string' &&
+      (e.kind === 'inserted' || e.kind === 'answered' || e.kind === 'expired')
+    ) {
+      emitHumanChanged({
+        sessionId: e.sessionId,
+        ...(typeof e.requestId === 'string' ? { requestId: e.requestId } : {}),
+        kind: e.kind,
+      });
+    }
+  }
+  return true;
+}
+
 // === v2.6.0 关机保态（计划补强裁定 1） ===
 /**
  * 模块级关机标志——before-quit 链（runtime-registry.destroyAllTaskDrivenRuntimes）
@@ -330,6 +365,13 @@ export class AgentRunner {
       // create_task routing / list_workgroups 在此代执行
       if (m.type === 'task-op') {
         void this.routeTaskOpToChild(child, msg);
+        return;
+      }
+      // lifecycle-event（生命周期推送转发，2026-11-14 P1）：子进程侧 agent
+      // 工具 emit 的 run/human 事件回放进主进程自己的 sink——不带
+      // streamSessionId，须先于流过滤分发
+      if (m.type === 'lifecycle-event') {
+        dispatchLifecycleEvent(msg);
         return;
       }
       // 只处理本 task 的 chunk（同一 runtime 未来可能复用跑多 task）

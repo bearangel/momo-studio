@@ -111,9 +111,42 @@ export function setTaskRunChangedSink(fn: ((e: TaskRunChangedEvent) => void) | n
   taskRunChangedSink = fn;
 }
 
-/** run 状态变化推送单点（本模块内各转移点调用；事务提交后发射，sink 未装配 no-op） */
-function emitRunChanged(taskId: string, runId: string, status: TaskRunStatus): void {
+/** run 状态变化推送单点（本模块内各转移点调用；事务提交后发射，sink 未装配 no-op）。
+ *  导出供主进程 agent-runner 回放子进程转发的 lifecycle-event（2026-11-14 P1）。 */
+export function emitRunChanged(taskId: string, runId: string, status: TaskRunStatus): void {
   taskRunChangedSink?.({ taskId, runId, status });
+}
+
+// ── 子进程侧生命周期事件转发（2026-11-14 P1 修复）──
+//
+// agent 工具（request_human / submit_task / fail_task）在 runtime 子进程执行，
+// 本模块随 task-tools 静态进入子进程图——而 sink 只在主进程 registerHumanIpc
+// 装配，子进程内上述 emit 恒 no-op（E2E 实证：agent 侧发起的 run/human 推送
+// 主进程与 renderer 永远收不到，仅面板重挂载/轮询才更新）。
+// 修复：runtime-entry boot 时调 forwardLifecycleEvents 把两 sink 接到
+// process.send；主进程 agent-runner 消息泵按 LifecycleEventMessage 形状
+// 回放进主进程自己的 sink。两端共用本处的线协议类型（一义一名）。
+
+/** lifecycle-event 转发通道（与 renderer 推送通道名有意同形） */
+export type LifecycleEventChannel = 'task:runChanged' | 'human:changed';
+
+/** child → main 生命周期事件转发消息（子进程发送 / agent-runner 消费） */
+export interface LifecycleEventMessage {
+  type: 'lifecycle-event';
+  channel: LifecycleEventChannel;
+  payload: TaskRunChangedEvent | HumanChangedEvent;
+}
+
+/**
+ * 子进程侧转发装配：两 sink 注册成「经 send 回调外发」（runtime-entry 以
+ * process.send 接线，真实 send 回调 = 生产子进程）。沿用既有 sink 容器
+ * （setter 注入），主进程装配点不受影响——两侧是不同进程的模块实例。
+ */
+export function forwardLifecycleEvents(
+  send: (channel: LifecycleEventChannel, payload: TaskRunChangedEvent | HumanChangedEvent) => void,
+): void {
+  setTaskRunChangedSink((e) => send('task:runChanged', e));
+  setHumanChangedSink((e) => send('human:changed', e));
 }
 
 /** 单任务执行尝试上限（spec §5.2：防打回-重跑死循环） */

@@ -79,7 +79,11 @@ import { McpToolError } from '../mcp/types';
 import { buildTaskReply } from './dispatch';
 // v2（P1 Task 5）：内部事件桥——dispatch/task_reply/abort_dispatch 经 child IPC
 // 直达主进程 RouterService，取代 Matrix 自定义 event 传输
-import { sendTaskReplyEvent } from './internal-event';
+import { sendTaskReplyEvent, hasChildIpcChannel } from './internal-event';
+// 任务生命周期 v2（P1 修复 2026-11-14）：agent 工具（submit_task / request_human
+// / fail_task）在本子进程内 emit 的 run/human 推送事件，经消息泵转发主进程——
+// boot 时把 lifecycle-runs 的两 sink 接到 process.send
+import { forwardLifecycleEvents } from '../task/lifecycle-runs';
 import {
   executeDispatch,
   executeDispatchBg,
@@ -384,6 +388,15 @@ async function main(): Promise<void> {
   const config = parseConfig(JSON.parse(process.env.AGENT_CONFIG ?? '{}'));
   traceEnabled = config.devMode;
   setDispatchTraceEnabled(config.devMode);
+
+  // 生命周期推送 sink 转发（P1 修复 2026-11-14）：先于一切可能触发工具执行的
+  // 路径（task-config 监听器在后）。哨兵门同 internal-event——宿主/测试进程
+  // （如 vitest forks worker 的 tinypool IPC）禁发，只有真实 runtime 子进程接线。
+  if (hasChildIpcChannel()) {
+    forwardLifecycleEvents((channel, payload) => {
+      process.send?.({ type: 'lifecycle-event', channel, payload });
+    });
+  }
 
   // 子进程内容通道装配（spec 2026-11-11 §5.4）：proxy 模式经 file-io 桥走主进程
   // FileIoService（E-SafeNet 密文代理读取），direct 模式本地 fs + 密文硬失败
