@@ -190,8 +190,15 @@ export function ProviderStep({ ctx, onSkip }: Props) {
   };
 
   const submitNew = async (): Promise<void> => {
-    if (!name.trim() || !baseUrl.trim() || !apiKey.trim() || !modelId.trim()) {
-      setError('请完整填写名称、Base URL、API Key 与模型');
+    // T5：逐字段点名缺失（此前四项全列，用户不知道缺哪个）
+    const missing = [
+      !name.trim() && '名称',
+      !baseUrl.trim() && 'Base URL',
+      !apiKey.trim() && 'API Key',
+      !modelId.trim() && '模型名',
+    ].filter((x): x is string => x !== false);
+    if (missing.length > 0) {
+      setError(`请填写${missing.join('、')}`);
       return;
     }
     setBusy(true);
@@ -395,6 +402,7 @@ export function ProviderStep({ ctx, onSkip }: Props) {
                 type="password"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
+                placeholder="sk-..."
                 required
               />
               {modelFetch.status === 'fetched' ? (

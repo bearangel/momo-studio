@@ -186,6 +186,11 @@ export function PlanPreviewStep({ ctx }: Props) {
           </Button>
         </div>
       </div>
+      {plan.agents.length >= 2 && (
+        <p className="text-[11px] text-disabled mt-1.5">
+          启用 ≥2 个 agent 时将自动组建团队，默认会话智能体担任队长
+        </p>
+      )}
     </div>
   );
 }

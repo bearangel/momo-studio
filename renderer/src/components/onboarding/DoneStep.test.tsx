@@ -126,3 +126,14 @@ describe('DoneStep', () => {
     expect(ctx.finish).not.toHaveBeenCalled();
   });
 });
+
+describe('T5 团队行说明小字（spec 2026-11-13 §7.2）', () => {
+  it('团队行下有 @ 成员协作提示', async () => {
+    const withTeam = {
+      ...APPLY_RESULT,
+      team: { id: 't1', name: 'T', leaderName: '需求分析师' },
+    };
+    render(<DoneStep ctx={mkCtx(withTeam)} />);
+    expect(await screen.findByText(/@ 成员派发任务/)).toBeInTheDocument();
+  });
+});

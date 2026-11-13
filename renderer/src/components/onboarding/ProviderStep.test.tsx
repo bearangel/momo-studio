@@ -372,3 +372,29 @@ describe('preset/existing 模型列表动态获取（spec 2026-11-13 T1）', () 
     expect(mockFetchModels).toHaveBeenCalledWith('p1');
   });
 });
+
+describe('T5 细节（spec 2026-11-13 §7.3）', () => {
+  it('仅缺 API Key 提交 → 错误只点名缺失字段（不再四项全列）', async () => {
+    render(<ProviderStep ctx={mkCtx()} />);
+    fireEvent.click(await screen.findByText('+ 自定义供应商'));
+    fireEvent.change(screen.getByPlaceholderText('https://llm-gateway.example.com/v1'), {
+      target: { value: 'http://x/v1' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('手输模型名，验证连通后即可继续'), {
+      target: { value: 'm1' },
+    });
+    // 名称用首个无 placeholder 文本框（css input:not([placeholder]):not([type=password]) 同义）
+    const nameInput = document.querySelector(
+      'input:not([placeholder]):not([type=password])',
+    ) as HTMLInputElement;
+    fireEvent.change(nameInput, { target: { value: 'N' } });
+    fireEvent.click(screen.getByRole('button', { name: /验证并继续/ }));
+    expect(await screen.findByText('请填写API Key')).toBeInTheDocument();
+  });
+
+  it('custom 形态 API Key 有 sk-... placeholder（与 preset 形态一致）', async () => {
+    render(<ProviderStep ctx={mkCtx()} />);
+    fireEvent.click(await screen.findByText('+ 自定义供应商'));
+    expect(screen.getByPlaceholderText('sk-...')).toBeInTheDocument();
+  });
+});

@@ -141,3 +141,19 @@ describe('PlanPreviewStep', () => {
     expect(ctx.toManual).toHaveBeenCalled();
   });
 });
+
+describe('T5 组队预告（spec 2026-11-13 §7.2）', () => {
+  it('方案含 ≥2 agent → 底部出现自动组队预告行', async () => {
+    const ctx = mkCtx({
+      agents: [
+        { kind: 'preset', slug: 'general-assistant', reason: 'r', mcps: [], skills: [] },
+        { kind: 'custom', name: 'X', iconEmoji: '🤖', systemPrompt: 's', toolPreset: 'standard', reason: 'r', mcps: [], skills: [] },
+      ],
+      defaultAgentIndex: 0,
+    });
+    render(<PlanPreviewStep ctx={ctx} />);
+    expect(
+      screen.getByText(/启用 ≥2 个 agent 时将自动组建团队，默认会话智能体担任队长/),
+    ).toBeInTheDocument();
+  });
+});

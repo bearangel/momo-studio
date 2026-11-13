@@ -53,11 +53,17 @@ export function DoneStep({ ctx }: Props) {
               <span>{r.defaultAgentName}</span>
             </div>
             {r.team && (
-              <div className="flex justify-between border-b border-border-subtle py-1.5 text-xs text-secondary">
-                <b className="font-medium text-primary">已组建团队</b>
-                <span>
-                  {r.team.name} · 队长 {r.team.leaderName}
-                </span>
+              <div className="py-1.5 text-xs text-secondary">
+                <div className="flex justify-between border-b border-border-subtle py-1.5 text-xs text-secondary">
+                  <b className="font-medium text-primary">已组建团队</b>
+                  <span>
+                    {r.team.name} · 队长 {r.team.leaderName}
+                  </span>
+                </div>
+                {/* T5（spec 2026-11-13 §7.2）：自动组队预告的落点说明 */}
+                <div className="text-[10.5px] text-disabled">
+                  多 agent 协作时可在会话中 @ 成员派发任务
+                </div>
               </div>
             )}
             {r.warnings.length > 0 && (
