@@ -21,6 +21,13 @@ interface Props {
   onSkip?: () => void;
 }
 
+/** preset 形态合并列表（spec 2026-11-13 §3.3）：远端在前 + 预置去重——供应商上新即刻可见、预置永不为空 */
+function mergePresetModels(remote: string[], preset: ProviderPreset): string[] {
+  return [...remote, ...preset.models.map((m) => m.id)].filter(
+    (v, i, a) => a.indexOf(v) === i,
+  );
+}
+
 /** T1 下拉「手动输入…」哨兵值：选中即回退手输态（spec 2026-11-13 §3.3） */
 const MANUAL_OPTION = '__manual__';
 
@@ -45,6 +52,10 @@ export function ProviderStep({ ctx, onSkip }: Props) {
     truncated: boolean;
   }>({ status: 'idle', models: [], truncated: false });
   const [modelError, setModelError] = useState<string | null>(null);
+  // T1 preset「获取最新」：远端列表（null=未拉取，用静态预置）；远端在前与预置去重合并
+  const [presetRemote, setPresetRemote] = useState<string[] | null>(null);
+  const [busyFetch, setBusyFetch] = useState(false);
+  const [existingRefreshing, setExistingRefreshing] = useState(false);
 
   useEffect(() => {
     void ipc.provider.list().then(setProviders).catch(() => setProviders([]));
@@ -54,6 +65,30 @@ export function ProviderStep({ ctx, onSkip }: Props) {
   const resetModelFetch = (): void => {
     setModelFetch({ status: 'idle', models: [], truncated: false });
     setModelError(null);
+    setPresetRemote(null);
+  };
+
+  const refreshPresetModels = async (): Promise<void> => {
+    if (!preset || busyFetch) return;
+    setBusyFetch(true);
+    setModelError(null);
+    try {
+      const r = await ipc.provider.probeModels({
+        baseUrl: preset.baseUrl,
+        apiKey,
+        platform: preset.platform,
+      });
+      setPresetRemote(r.models);
+      // 选中项：预置当前值仍在新列表则保留，否则取远端首项（最新优先）
+      const merged = mergePresetModels(r.models, preset);
+      if (merged.length > 0 && !merged.includes(modelId)) setModelId(merged[0]!);
+    } catch (e) {
+      setModelError(
+        `获取最新失败：${e instanceof Error ? e.message : String(e)}——仍可用预置列表`,
+      );
+    } finally {
+      setBusyFetch(false);
+    }
   };
 
   const fetchCustomModels = async (): Promise<void> => {
@@ -102,7 +137,12 @@ export function ProviderStep({ ctx, onSkip }: Props) {
 
   const chooseExisting = async (p: ModelProvider): Promise<void> => {
     setExistingId(p.id);
+    await refreshExistingModels(p);
+  };
+
+  const refreshExistingModels = async (p: ModelProvider): Promise<void> => {
     setExistingModels([]);
+    setExistingRefreshing(true);
     try {
       const models = await ipc.provider.listModels(p.id);
       const enabled = models.filter((m) => m.enabled !== false);
@@ -111,6 +151,26 @@ export function ProviderStep({ ctx, onSkip }: Props) {
     } catch {
       setExistingModels([]);
       setModelId('');
+    } finally {
+      setExistingRefreshing(false);
+    }
+  };
+
+  /** T1 existing 刷新：fetchModels 落库后重读库内列表（半程重来路径增强） */
+  const refreshExistingFromRemote = async (): Promise<void> => {
+    if (!existingId || existingRefreshing) return;
+    const p = providers.find((x) => x.id === existingId);
+    if (!p) return;
+    setExistingRefreshing(true);
+    try {
+      await ipc.provider.fetchModels(existingId);
+      await refreshExistingModels(p);
+    } catch (e) {
+      setModelError(
+        `刷新失败：${e instanceof Error ? e.message : String(e)}——仍可用库内列表`,
+      );
+    } finally {
+      setExistingRefreshing(false);
     }
   };
 
@@ -196,14 +256,34 @@ export function ProviderStep({ ctx, onSkip }: Props) {
             </p>
           )}
           {existingId && existingModels.length > 0 && (
-            <Select label="模型" value={modelId} onChange={(e) => setModelId(e.target.value)}>
-              {existingModels.map((m) => (
-                <option key={m.modelId} value={m.modelId}>
-                  {m.modelId}
-                </option>
-              ))}
-            </Select>
+            <div className="flex items-end gap-2">
+              <div className="flex-1">
+                <Select label="模型" value={modelId} onChange={(e) => setModelId(e.target.value)}>
+                  {existingModels.map((m) => (
+                    <option key={m.modelId} value={m.modelId}>
+                      {m.modelId}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              {/* T1：实时拉远端刷新库内列表（fetchModels 既有通道） */}
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => void refreshExistingFromRemote()}
+                disabled={existingRefreshing}
+              >
+                {existingRefreshing ? (
+                  <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />
+                ) : (
+                  <RefreshCw size={13} strokeWidth={1.75} aria-hidden />
+                )}
+                刷新模型
+              </Button>
+            </div>
           )}
+          {modelError && <div className="text-xs text-status-error">{modelError}</div>}
           {error && <div className="text-xs text-status-error">{error}</div>}
           <div className="flex justify-between mt-2">
             <Button type="button" variant="ghost" onClick={() => setMode('chips')}>
@@ -265,13 +345,35 @@ export function ProviderStep({ ctx, onSkip }: Props) {
                 onChange={(e) => setApiKey(e.target.value)}
                 placeholder="sk-..."
               />
-              <Select label="模型" value={modelId} onChange={(e) => setModelId(e.target.value)}>
-                {preset.models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.id}
-                  </option>
-                ))}
-              </Select>
+              <div className="flex items-end gap-2">
+                <div className="flex-1">
+                  <Select label="模型" value={modelId} onChange={(e) => setModelId(e.target.value)}>
+                    {(presetRemote ? mergePresetModels(presetRemote, preset) : preset.models.map((m) => m.id)).map(
+                      (id) => (
+                        <option key={id} value={id}>
+                          {id}
+                        </option>
+                      ),
+                    )}
+                  </Select>
+                </div>
+                {/* T1：远端实时拉取合并——供应商上新模型即刻可见，预置项永为兜底 */}
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => void refreshPresetModels()}
+                  disabled={busyFetch || !apiKey.trim()}
+                >
+                  {busyFetch ? (
+                    <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />
+                  ) : (
+                    <RefreshCw size={13} strokeWidth={1.75} aria-hidden />
+                  )}
+                  获取最新模型
+                </Button>
+              </div>
+              {modelError && <div className="text-xs text-status-error">{modelError}</div>}
             </>
           )}
           {mode === 'custom' && (

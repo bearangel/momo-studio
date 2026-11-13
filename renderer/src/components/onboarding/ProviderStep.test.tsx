@@ -312,3 +312,51 @@ describe('custom 形态模型拉取（spec 2026-11-13 T1）', () => {
     });
   });
 });
+
+describe('preset/existing 模型列表动态获取（spec 2026-11-13 T1）', () => {
+  it('preset 拉取成功 → 远端在前 + 预置去重合并', async () => {
+    mockProbeModels.mockResolvedValue({ models: ['glm-5.3-air'], truncated: false });
+    render(<ProviderStep ctx={mkCtx()} />);
+    fireEvent.click(await screen.findByText('智谱 GLM'));
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-1' } });
+    fireEvent.click(screen.getByRole('button', { name: /获取最新模型/ }));
+    const options = await waitFor(() => {
+      const opts = screen.getAllByRole('option');
+      expect(opts.length).toBeGreaterThanOrEqual(2);
+      return opts;
+    });
+    expect(options.map((o) => o.getAttribute('value'))).toEqual(
+      expect.arrayContaining(['glm-5.3-air', 'glm-5.3']),
+    );
+    // 远端项在前
+    expect(options[0]!.getAttribute('value')).toBe('glm-5.3-air');
+  });
+
+  it('preset 拉取失败 → 预置项保留 + 行内错误', async () => {
+    mockProbeModels.mockRejectedValue(new Error('HTTP 500'));
+    render(<ProviderStep ctx={mkCtx()} />);
+    fireEvent.click(await screen.findByText('智谱 GLM'));
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-1' } });
+    fireEvent.click(screen.getByRole('button', { name: /获取最新模型/ }));
+    expect(await screen.findByText(/获取最新失败：HTTP 500/)).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /glm-5\.3/ })).toBeInTheDocument();
+  });
+
+  it('existing 点刷新 → fetchModels(id) 后重拉 listModels 刷新下拉', async () => {
+    mockList.mockResolvedValue([EXISTING]);
+    mockListModels
+      .mockResolvedValueOnce(MODELS_P1)
+      .mockResolvedValue([
+        ...MODELS_P1,
+        { ...MODELS_P1[0]!, modelId: 'glm-new' },
+      ]);
+    mockFetchModels.mockResolvedValue(['glm-5.3', 'glm-new']);
+    render(<ProviderStep ctx={mkCtx()} />);
+    fireEvent.click(await screen.findByText('使用已有供应商'));
+    fireEvent.click(await screen.findByText('智谱 GLM'));
+    await screen.findByRole('option', { name: /glm-5\.3/ });
+    fireEvent.click(screen.getByRole('button', { name: /刷新模型/ }));
+    expect(await screen.findByRole('option', { name: 'glm-new' })).toBeInTheDocument();
+    expect(mockFetchModels).toHaveBeenCalledWith('p1');
+  });
+});
