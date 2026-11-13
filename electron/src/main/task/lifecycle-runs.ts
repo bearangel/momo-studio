@@ -35,6 +35,7 @@ import {
 import {
   supersedePendingByRun,
   countPendingNonAcceptance,
+  cancelPendingByTask,
   insertHumanRequest,
   getHumanRequest,
   listByTask,
@@ -46,6 +47,7 @@ import {
   humanAnswerBody,
   type HumanAnswerInput,
 } from './human-answer-shared';
+import { spawnNextInstanceIfRecurring } from './recurrence';
 
 /**
  * 人工答复注入回调（Task 14 循环依赖修复）：answerHuman 落【人工答复】系统消息
@@ -209,8 +211,10 @@ export function failRun(taskId: string, reason: string): void {
 
   const task = getTask(taskId)!;
   // 失败原因无条件落账（run 终结证据）；paused 下任务态 paused → failed 非法边
-  // 由投影守卫跳过（用户恢复时由 resumePaused 重新归位）
-  updateTask(taskId, { errorMessage: reason });
+  // 由投影守卫跳过（用户恢复时由 resumePaused 重新归位）。
+  // completedAt：终态时间戳（D4 口径——详情面板/统计消费；与旧 runner/ledger
+  // 失败路径的 extraPatch 行为对齐）
+  updateTask(taskId, { errorMessage: reason, completedAt: Date.now() });
   if (task.status !== 'paused') {
     projectTaskStatus(taskId, 'failed');
   }
@@ -316,6 +320,10 @@ const LOCAL_ACCEPT_BY = 'user:local';
 export async function submitRun(id: string, opts: DeliverableInput): Promise<void> {
   const task = getTask(id);
   if (!task) throw new Error(`任务 ${id} 不存在`);
+  if (task.status === 'paused') {
+    // paused 是用户权威态（§6.6）——暂停中的任务不接受提交，先恢复或取消
+    throw new Error(`任务 ${id} 已暂停，先恢复或取消`);
+  }
   const active = requireActiveRun(id);
   if (active.status === 'submitted') {
     throw new Error(`任务 ${id} 已提交待验收（run #${active.runNo}），请等待验收或打回`);
@@ -403,6 +411,9 @@ function completeAcceptance(taskId: string, byNodeId: string): void {
     answerAcceptance(taskId, active.id, { decision: 'accept' }, byNodeId);
     projectTaskStatus(taskId, 'completed', { acceptedAt: now, completedAt: now });
   })();
+  // 循环续期单点（spec §7.2：completed 钩子）——人工验收与 auto_accept
+  // 「提交即验收」同点位触发，替代旧 agent-runner / move.ts 各自的调用
+  spawnNextInstanceIfRecurring(taskId);
 }
 
 /** 验收通过（两段式第二段）：completeAcceptance 的对外入口（人工验收） */
@@ -415,7 +426,8 @@ export async function acceptTask(id: string): Promise<void> {
  * 打回（spec §6.5）：reason 空白人话拒（与 move 校验双保险）；run → rejected
  * （reject_reason 落库）+ acceptance 答复 reject(reason)；任务 → assigned。
  * 打回不建新 run——回 assigned 排队，下次放行 startRun(trigger='rework')；
- * 返工上限（§5.2）：下一 run 序号将超 MAX_RUNS_PER_TASK 时人话拒并建议取消。
+ * 返工上限（§5.2）：下一 run 序号将超 MAX_RUNS_PER_TASK 时任务转 failed
+ * （errorMessage=返工次数超限，failRun 同链）——拒绝无限返工循环。
  */
 export async function rejectTask(id: string, reason: string): Promise<void> {
   const trimmed = reason.trim();
@@ -429,10 +441,11 @@ export async function rejectTask(id: string, reason: string): Promise<void> {
     );
   }
   if (countRuns(id) + 1 > MAX_RUNS_PER_TASK) {
-    throw new Error(
-      `任务 ${id} 打回重建 run 将超出执行尝试上限（${MAX_RUNS_PER_TASK} 次），不能再打回；` +
-        `如确认无法通过验收，请取消该任务`,
-    );
+    // 返工上限（spec §5.2 原文）：run 数达上限后拒绝再次打回——任务转
+    // failed（errorMessage=返工次数超限）走 failRun（§6.5 技术性失败表），
+    // 防止无限返工循环；未决验收单随任务终态失效（不再被答复）
+    failRun(id, '返工次数超限');
+    return;
   }
   const now = Date.now();
   getDb().transaction(() => {
@@ -562,4 +575,117 @@ export function answerHuman(
     });
   }
   return { disposition: 'answered' };
+}
+
+// ── 写路径收敛服务面（Task 15，spec §9.3 十处逃生门收口）──
+//
+// 下列原语供原直调 transitionTaskStatus / updateTask({status}) 的调用方收敛：
+// 状态写入全部经本模块（projectTaskStatus / transitionTaskStatus 单点），
+// 调用方不得再触碰任务 status 字段。
+
+/**
+ * 任务取消的状态面单点（§9.3 行10，lifecycle.cancelTask / 归档级联消费）：
+ * 有活动 run → cancelActiveRun（run cancelled + 未决非验收请求 superseded）；
+ * 无 run（draft/pending/assigned 等未启动行）→ 投影 cancelled；
+ * paused 行显式取消是用户动作——覆盖用户权威态（与 failRun 的静默跳过不同）。
+ * 挂起人工请求联动 cancelled（cancelPendingByTask：任务取消即全部请求失效，
+ * 含 acceptance——repo 现有 API 语义，不另造 superseded 通路）。
+ * 进程级中止（abortTaskExecution）不在此——由 lifecycle.cancelTask 联动。
+ */
+export function markTaskCancelled(taskId: string, reason?: string): void {
+  const task = getTask(taskId);
+  if (!task) throw new Error(`task ${taskId} 不存在`);
+  if (getActiveRun(taskId)) {
+    cancelActiveRun(taskId, reason);
+  }
+  const after = getTask(taskId)!;
+  if (after.status !== 'cancelled') {
+    if (!canTransition(after.status, 'cancelled')) {
+      throw new Error(`任务 ${taskId} status=${after.status}，不能取消`);
+    }
+    transitionTaskStatus(taskId, 'cancelled');
+  }
+  cancelPendingByTask(taskId);
+}
+
+/**
+ * 任务失败的状态面单点（§9.3 行5，executor failQuietly / lifecycle kickoff
+ * 失败 / dispatch 判死消费）：有活动 run → failRun；无 run 的排队行
+ * （assigned/session_queued 目标失效等）→ errorMessage + 投影 failed
+ * （终态行幂等 no-op，不抛——迟到失败不覆盖先落权威终态）。
+ */
+export function markTaskFailed(taskId: string, reason: string): void {
+  const task = getTask(taskId);
+  if (!task) throw new Error(`task ${taskId} 不存在`);
+  if (getActiveRun(taskId)) {
+    failRun(taskId, reason);
+    return;
+  }
+  if (isTerminal(task.status)) return;
+  updateTask(taskId, { errorMessage: reason, completedAt: Date.now() });
+  projectTaskStatus(taskId, 'failed');
+}
+
+/**
+ * 车道排队投影（消费面 ①-12/R6，executor 放行流程专用）：目标会话车道被占时
+ * assigned → session_queued（放行边界内的服务单点写，不另立入口）。
+ * 非法边静默跳过（投影守卫）——并发改态由兜底扫描重评估。
+ */
+export function markSessionQueued(taskId: string): void {
+  projectTaskStatus(taskId, 'session_queued');
+}
+
+/**
+ * 入队投影（消费面 ①-16/①-22，move 拖拽排队列 / activation #T 激活消费）：
+ * draft/pending → assigned（放行面入口，executor 只认 assigned/session_queued）。
+ */
+export function enqueueTask(taskId: string): void {
+  projectTaskStatus(taskId, 'assigned');
+}
+
+/**
+ * 外派路由提级（消费面 ①-23，task:update 的 routing 改道消费）：draft → pending
+ * （切非 local 路由时服务端派生提级）；非法边（非 draft）静默跳过。
+ */
+export function promoteDraftToPending(taskId: string): void {
+  projectTaskStatus(taskId, 'pending');
+}
+
+/**
+ * 配额续跑复位（§9.3 行7，quota-resume 消费）：in_progress 行的 429 配额失败
+ * 改排自动续跑——活动 run 以 failed 终结（释放单活动 run 槽，重试由
+ * startRun 建**新** run），任务权威复位 assigned + scheduled_at
+ * （in_progress→assigned 无状态机合法边——调度权威决策，见 authoritativeReset）。
+ * errorMessage 保留配额文案（等待期 UI 显示原因）。下次放行
+ * startRun(trigger='quota_retry')。
+ */
+export function resetForQuotaRetry(
+  taskId: string,
+  opts: { scheduledAt: number; errorMessage: string; routingJson: string },
+): void {
+  const active = getActiveRun(taskId);
+  if (active) {
+    updateRun(active.id, { status: 'failed', endedAt: Date.now(), rejectReason: '配额受限自动续跑' });
+  }
+  updateTask(taskId, {
+    status: 'assigned',
+    scheduledAt: opts.scheduledAt,
+    errorMessage: opts.errorMessage,
+    routingJson: opts.routingJson,
+  });
+}
+
+/**
+ * 权威复位原语（§9.3 逃生门收敛后的服务内复位通道）：绕过状态机断言直写
+ * 任务行——语义是「注册表 / 调度 / 启动对账的权威决策覆写」而非生命周期
+ * 转换（spec §3.4 修正案，旧直写路径的语义在服务内保留）。只供三类既有
+ * 权威路径消费（调用点注释须注明权威来源）：
+ *   - dispatch 账本 followup 复位（registry 复用链 id → in_progress + 新 run）
+ *   - dispatch 启动对账（boot 权威：paused → failed，编排链丢失）
+ *   - 其余生命周期转换一律走具名服务函数，不得借用本原语
+ */
+export function authoritativeReset(taskId: string, patch: Partial<TaskRow> & { status: TaskStatus }): void {
+  const task = getTask(taskId);
+  if (!task) throw new Error(`task ${taskId} 不存在`);
+  updateTask(taskId, patch);
 }

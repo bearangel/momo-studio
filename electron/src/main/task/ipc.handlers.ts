@@ -7,7 +7,8 @@
 //   - task:list        多维过滤 + 排序查询
 //   - task:get         按 id 查单条
 //   - task:update      部分字段更新（绕过状态机；正常路径请用 task:transition）
-//   - task:transition  状态机驱动的状态转换（可带 extraPatch 副作用字段）
+//   - task:transition  白名单动作（v2 收窄：paused 暂停 / cancelled 取消；
+//                      completed/failed 人话指路 task:submit/accept/reject）
 //   - task:cancel      等价 transition(id, 'cancelled')
 //   - task:start       启动任务（execution_room 决策树 + 转 in_progress + 锁定 execution_room）
 //   - task:move        看板拖拽换列/换组/排序（动作裁决单点在 move.ts，Task 6）
@@ -33,7 +34,6 @@ import {
   getTask,
   updateTask,
   setTaskPinned,
-  transitionTaskStatus,
   type TaskRow,
   type TaskStatus,
   type TaskOrigin,
@@ -46,6 +46,7 @@ import { resolveCreateStatus } from './create-status';
 import { resolveConflict, type ConflictStrategy } from './conflict-resolver';
 import { executeConflictResolution } from './conflict-executor';
 import { startTaskAndKickoff, resumePausedTask, cancelTask, abortTaskExecution } from './lifecycle';
+import { pauseForTask, promoteDraftToPending } from './lifecycle-runs';
 /**
  * D4 只读守卫（spec §3.5）：origin='dispatch' 簿记行由会话链管理，看板写通道
  * 一律拒绝（registry 是真相源；从看板取消子任务留后续交互）。
@@ -311,7 +312,8 @@ export function registerTaskHandlers(): void {
             const wasDraft = t?.status === 'draft';
             updateTask(id, applied);
             if (wasDraft && routing.mode !== 'local') {
-              transitionTaskStatus(id, 'pending');
+              // v2 收敛（消费面 ①-23，Task 15）：draft→pending 提级走服务投影单点
+              promoteDraftToPending(id);
             }
             applied = {};
             notifyExecutor();
@@ -331,19 +333,33 @@ export function registerTaskHandlers(): void {
 
   ipcMain.handle(
     'task:transition',
-    async (
-      _evt,
-      id: string,
-      to: TaskStatus,
-      extraPatch?: Parameters<typeof transitionTaskStatus>[2],
-    ): Promise<TaskRow> => {
+    async (_evt, id: string, to: TaskStatus): Promise<TaskRow> => {
       assertNotDispatchRow(id);
-      const row = transitionTaskStatus(id, to, extraPatch);
-      if (to === 'paused' || to === 'cancelled') {
+      // v2 白名单收窄（§9.3 行9，Task 15）：renderer 只剩暂停/取消两个状态动作——
+      //   - completed/failed：完成必经验收链（task:submit 提交 → task:accept /
+      //     task:reject 裁决），失败属 agent/运行时语义，renderer 不可直转
+      //   - 其余状态各有专属通道：启动 task:start、恢复 task:resume、入队/
+      //     验收 task:move / task:submit
+      if (to === 'paused') {
+        pauseForTask(id);
         abortTaskExecution(id);
+        notifyExecutor();
+        return getTask(id)!;
       }
-      notifyExecutor();
-      return row;
+      if (to === 'cancelled') {
+        await cancelTask(id);
+        return getTask(id)!;
+      }
+      if (to === 'completed' || to === 'failed') {
+        throw new Error(
+          `task:transition 不再支持直转 ${to}——完成必经验收链：请用 task:submit 提交交付，` +
+            `验收走 task:accept / task:reject`,
+        );
+      }
+      throw new Error(
+        `task:transition 仅支持暂停（paused）与取消（cancelled）——启动用 task:start，` +
+          `恢复用 task:resume，入队与验收用 task:move / task:submit`,
+      );
     },
   );
 

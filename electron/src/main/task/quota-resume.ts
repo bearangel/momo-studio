@@ -9,11 +9,10 @@
 //     无配额措辞）严格区分，后者行为不变（不自动续跑）
 //   - 时刻：错误体重置时间（按本地时间解析，未来且 24h 内才可信）+30s；解析
 //     失败按连续次数退避 5/15/30 分钟（垃圾/荒谬解析一律降级退避）
-//   - 落库：不落终态 failed，updateTask 权威复位 assigned + scheduled_at（走既有
-//     executor 放行链到点捞起；in_progress→assigned 无状态机合法转换，权威复位
-//     与 dispatch-task-ledger 的 followup 复位 / 启动对账同纪律——registry/调度
-//     权威决策，非任务生命周期转换）；error_message 保留配额错误文案（等待期
-//     UI 显示暂停原因）
+//   - 落库：不落终态 failed，经 lifecycle-runs.resetForQuotaRetry 权威复位
+//     assigned + scheduled_at（走既有 executor 放行链到点捞起；活动 run 以
+//     failed 终结、重试由 startRun 建**新** run，trigger='quota_retry'）；
+//     error_message 保留配额错误文案（等待期 UI 显示暂停原因）
 //   - 计数：routing_json 嵌套 {"quotaRetryCount":N}（零迁移；hub 路由消费方
 //     parseTaskRouting 对未知形状兜底 local，两个键空间互不干扰）；连续 3 次
 //     自动续跑用尽后回落既有终态 failed（人工介入）；任何非配额结局清零
@@ -25,6 +24,7 @@
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../storage/db';
 import { updateTask, type TaskRow } from '../storage/tasks/repo';
+import { resetForQuotaRetry } from './lifecycle-runs';
 import { insertMessage } from '../storage/messages/repo';
 import { pushSessionMessage } from '../agent/stream-relay';
 import { logger } from '../logger';
@@ -185,8 +185,10 @@ export function handleQuotaFailureSettle(taskId: string, row: TaskRow, errText: 
   const now = Date.now();
   const due = computeQuotaResumeAt(count, parseQuotaResetAt(errText, now), now);
   const nextCount = count + 1;
-  updateTask(taskId, {
-    status: 'assigned',
+  // v2 收敛（§9.3 行7，Task 15）：复位经 lifecycle-runs.resetForQuotaRetry 服务
+  // 单点（assigned + scheduled_at 语义保持；活动 run 一并 failed 终结——重试
+  // 由 startRun(trigger='quota_retry') 建新 run），updateTask({status}) 逃生门退役
+  resetForQuotaRetry(taskId, {
     scheduledAt: due,
     errorMessage: errText.slice(0, 200),
     routingJson: mergeRetryCount(row.routingJson ?? null, nextCount),

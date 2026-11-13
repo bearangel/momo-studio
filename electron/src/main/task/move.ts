@@ -24,7 +24,6 @@
 // 动作——拒绝时零副作用,绝不留「先转了态才发现组非法」的半套写(错误路径铁律)。
 import {
   getTask,
-  transitionTaskStatus,
   updateTask,
   type TaskRow,
   type TaskStatus,
@@ -32,9 +31,8 @@ import {
 import { getGroup } from '../storage/task-groups/repo';
 import { hasDelegationTarget } from './starter';
 import { notifyExecutor } from './executor';
-import { spawnNextInstanceIfRecurring } from './recurrence';
 import { startTaskAndKickoff, cancelTask } from './lifecycle';
-import { submitRun, acceptTask, rejectTask } from './lifecycle-runs';
+import { submitRun, acceptTask, rejectTask, enqueueTask } from './lifecycle-runs';
 import { columnOf, canDropIntoColumn, type BoardColumnKey } from './board-columns';
 
 export interface MoveTarget {
@@ -102,7 +100,8 @@ export async function executeMove(
             `任务存在未完成依赖（${task.blockedBy?.join('、') ?? ''}），依赖完成前不可入队`,
           );
         }
-        transitionTaskStatus(id, 'assigned');
+        // v2 收敛（消费面 ①-16，Task 15）：入队投影走服务单点（draft/pending → assigned）
+        enqueueTask(id);
         notifyExecutor();
         break;
       }
@@ -127,14 +126,14 @@ export async function executeMove(
       }
       case 'done': {
         // v2:完成必经验收。in_progress = 一步提交+验收;submitted = 验收通过。
-        // delegation_role='in' 只 submit 不 accept 的守卫在 Task 18 落地
+        // delegation_role='in' 只 submit 不 accept 的守卫在 Task 18 落地。
+        // 循环续期随 completeAcceptance 单点触发（Task 15），此处不再显式 spawn
         if (task.status === 'in_progress') {
           await submitRun(id, { summary: '' });
           await acceptTask(id);
         } else {
           await acceptTask(id); // from === 'submitted'
         }
-        spawnNextInstanceIfRecurring(id); // 循环续期(与 agent complete_task 同语义)
         notifyExecutor();
         break;
       }

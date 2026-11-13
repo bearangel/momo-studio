@@ -29,6 +29,7 @@ import { insertSession, addSessionMember, getSession } from '../storage/sessions
 import { teamExists, expandTeamMembers, getTeamLeaderInstanceId } from '../agent/team';
 import { captureTaskScanBaseline } from '../journal/baseline';
 import { startRun } from './lifecycle-runs';
+import { isQuotaResumePending } from './quota-resume';
 import { logger } from '../logger';
 
 export interface StartTaskResult {
@@ -149,8 +150,13 @@ export async function startTask(
 
     // Task 9：run 记账——全部 →in_progress 生产流量都经 startTask，单点补
     // task_runs 初始 run；ensure 幂等（boot 重扫 / 双触发不重复建 run），
-    // 嵌套事务自动降级 SAVEPOINT，与启动三步写同笔原子
-    startRun(taskId, { trigger: 'initial', executionSessionId });
+    // 嵌套事务自动降级 SAVEPOINT，与启动三步写同笔原子。
+    // Task 15（§9.3 行7）：配额续跑排队行（routing_json 带 quotaRetryCount 信封）
+    // 到点放行时 trigger='quota_retry'——与首跑 initial 区分，run 时间线可审计
+    startRun(taskId, {
+      trigger: isQuotaResumePending(taskId) ? 'quota_retry' : 'initial',
+      executionSessionId,
+    });
 
     return { task: updated, executionSessionId, createdNewRoom };
   })(opts ?? {});

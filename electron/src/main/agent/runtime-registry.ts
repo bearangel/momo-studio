@@ -26,7 +26,7 @@
 
 import { logger } from '../logger';
 import { getDb } from '../storage/db';
-import { transitionTaskStatus } from '../storage/tasks/repo';
+import { pauseForTask } from '../task/lifecycle-runs';
 import { notifyExecutor } from '../task/executor';
 import type { AgentRuntimeOpts } from './runtime-config';
 // Task 6：chunk 中继（handleStreamChunk）由 stream-relay 承载
@@ -323,14 +323,15 @@ export async function stopAgentRuntime(instanceId: string): Promise<void> {
   logger.info('stopAgentRuntime 完成（销毁 runtime + DB 同步）', { instanceId });
 }
 
-/** K7-1：该 agent 的 in_progress 任务逐个转 paused（非法转换吞错记日志——行可能被并发改态） */
+/** K7-1：该 agent 的 in_progress 任务逐个转 paused（pauseForTask 服务单点，
+ *  §9.3 行6——run 状态不动；非法转换吞错记日志——行可能被并发改态） */
 function pauseRunningTasksForAgent(instanceId: string): void {
   const rows = getDb()
     .prepare(`SELECT id FROM tasks WHERE assignee_agent_id = ? AND status = 'in_progress'`)
     .all(instanceId) as Array<{ id: string }>;
   for (const r of rows) {
     try {
-      transitionTaskStatus(r.id, 'paused', { errorMessage: 'agent 运行已被用户停止' });
+      pauseForTask(r.id, 'agent 运行已被用户停止');
     } catch (err) {
       logger.warn('停止 agent 时任务转 paused 失败（并发改态）', {
         taskId: r.id,

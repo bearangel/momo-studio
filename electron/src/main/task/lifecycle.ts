@@ -15,6 +15,7 @@
 //     transition；cancelTask = 先 transition 再调它）
 import { getTask, transitionTaskStatus, type TaskRow } from '../storage/tasks/repo';
 import { notifyExecutor, buildKickoffBody } from './executor';
+import { failRun, markTaskCancelled } from './lifecycle-runs';
 import { startTask, type StartTaskOpts, type StartTaskResult } from './starter';
 import { captureTaskScanBaseline } from '../journal/baseline';
 import { abortTasksBySessionEverywhere } from '../agent/runtime-registry';
@@ -99,10 +100,11 @@ export async function startTaskAndKickoff(
       });
     } catch (err) {
       // kickoff 失败 = 无执行驱动（半启动状态不可恢复）——与 executor
-      // failQuietly 同语义转 failed，错误信息透出给 UI
+      // failQuietly 同语义：failRun（run failed + 任务 failed，errorMessage
+      // 透出给 UI；§9.3 行5 收敛，Task 15）
       const reason = err instanceof Error ? err.message : String(err);
       try {
-        transitionTaskStatus(id, 'failed', { completedAt: Date.now(), errorMessage: `kickoff 注入失败: ${reason}` });
+        failRun(id, `kickoff 注入失败: ${reason}`);
       } catch {
         // 并发改态——终态以先到者为准
       }
@@ -140,10 +142,13 @@ export async function resumePausedTask(id: string): Promise<TaskRow> {
 
 /**
  * 取消任务（= 原 task:cancel handler 主体）：
- * transition cancelled → 联动中止运行时执行 → broadcast/notify。
+ * markTaskCancelled（§9.3 行10 状态面单点：有活动 run → cancelActiveRun，
+ * 无 run 排队行投影 cancelled；挂起人工请求联动 cancelled——repo 现有
+ * cancelPendingByTask API 语义「任务取消即全部请求失效」，含 acceptance，
+ * 不另造 superseded 通路）→ 联动中止运行时执行 → broadcast/notify。
  */
 export async function cancelTask(id: string): Promise<void> {
-  transitionTaskStatus(id, 'cancelled');
+  markTaskCancelled(id);
   abortTaskExecution(id);
   notifyExecutor();
 }

@@ -269,8 +269,9 @@ export function insertTask(
       priority, scheduled_at, recurrence_rule, deadline_at,
       queue_position, runtime_instance_id, estimated_tokens, actual_tokens, tool_calls_used, error_message,
       created_at, updated_at, started_at, completed_at,
-      group_id, pinned_at, archived_at, routing_json, delegation_id, parent_task_id, origin
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      group_id, pinned_at, archived_at, routing_json, delegation_id, parent_task_id, origin,
+      auto_accept
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.workspaceId,
@@ -306,6 +307,7 @@ export function insertTask(
     input.delegationId ?? null,
     input.parentTaskId ?? null,
     input.origin ?? 'user',
+    input.autoAccept === true ? 1 : 0,
   );
   emitPluginEvent('taskCreated', { id, workspaceId: input.workspaceId, title: input.title, status });
   return getTask(id)!;

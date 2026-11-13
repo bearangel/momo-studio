@@ -23,12 +23,12 @@ import type { ChildProcess } from 'node:child_process';
 import type { WarmPool, WarmRuntime } from './warm-pool';
 import type { AgentRuntimeOpts, ExpandedContext, SteerReplayItem } from './runtime-config';
 import { logger } from '../logger';
-import { getTask, transitionTaskStatus, type TaskRow } from '../storage/tasks/repo';
-import { canTransition, isTerminal, type TaskStatus } from '../storage/tasks/state-machine';
+import { getTask, updateTask, type TaskRow } from '../storage/tasks/repo';
+import { isTerminal } from '../storage/tasks/state-machine';
+import { submitRun, failRun, cancelActiveRun } from '../task/lifecycle-runs';
 import { finalizeStreamOnCrash } from './stream-relay';
 import { scheduleExtraction } from '../memory/extraction';
 import { resolveMaxToolCalls } from '../settings/crud';
-import { spawnNextInstanceIfRecurring } from '../task/recurrence';
 import { notifyExecutor } from '../task/executor';
 import {
   handleQuotaFailureSettle,
@@ -702,41 +702,47 @@ export class AgentRunner {
         resetQuotaRetryCount(taskId);
       }
     }
-    const to: TaskStatus = failed ? 'failed'
-      : active.lastFinish?.finishReason === 'interrupted' ? 'cancelled'
-        : 'completed';
-    if (!canTransition(row.status, to)) {
-      logger.warn('task-end 终态转换不合法，跳过', { taskId, from: row.status, to });
-      return;
-    }
-    // R3 真实 token 遥测：本回合终态转换时读-改-写累积 actual_tokens（行值在
-    // 本函数入口已加载，同步流无并发窗口；quota-resume / followup 复用同任务行
-    // 时的跨轮累积靠 (existing ?? 0) 语义保证；updateTask 不触碰 routing/routingJson
-    // 时 routing_json 原样保留——W3 配额计数契约不受影响）
+    // v2 写路径收敛（§9.3 行1，Task 15）：in_progress → completed 直达边已删——
+    //   - 正常收尾（stop / budget_exhausted）→ submitRun（两段式第一段：任务
+    //     submitted；dispatch 簿记行 auto_accept 提交即验收直达 completed；
+    //     循环续期随 completeAcceptance 单点触发）
+    //   - 失败（error）→ failRun；中断（interrupted）→ cancelActiveRun
+    // usage 累积与 toolCallsUsed 是非状态副作用字段，先行独立落账
+    //（服务函数不透传 extraPatch；updateTask 不触碰 status——收敛纪律）
     const usageDelta = taskEndInfo?.usageTotal;
-    const actualTokensPatch =
-      usageDelta !== undefined
-        ? { actualTokens: (row.actualTokens ?? 0) + usageDelta.promptTokens + usageDelta.completionTokens }
-        : {};
-    try {
-      transitionTaskStatus(taskId, to, {
-        completedAt: Date.now(),
-        ...(taskEndInfo?.toolCallsUsed !== undefined ? { toolCallsUsed: taskEndInfo.toolCallsUsed } : {}),
-        ...actualTokensPatch,
-        ...(failed
+    if (usageDelta !== undefined || taskEndInfo?.toolCallsUsed !== undefined) {
+      updateTask(taskId, {
+        ...(usageDelta !== undefined
           ? {
-              errorMessage:
-                taskEndInfo?.error ?? active.lastFinish?.error ?? 'agent 执行出错',
+              actualTokens:
+                (row.actualTokens ?? 0) + usageDelta.promptTokens + usageDelta.completionTokens,
             }
           : {}),
+        ...(taskEndInfo?.toolCallsUsed !== undefined ? { toolCallsUsed: taskEndInfo.toolCallsUsed } : {}),
       });
-      // 循环任务续期（仅 completed；spec §7.2）+ 释放槽位立即评估放行
-      if (to === 'completed') spawnNextInstanceIfRecurring(taskId);
+    }
+    try {
+      if (failed) {
+        failRun(taskId, taskEndInfo?.error ?? active.lastFinish?.error ?? 'agent 执行出错');
+      } else if (active.lastFinish?.finishReason === 'interrupted') {
+        cancelActiveRun(taskId, '用户中断');
+      } else {
+        // submitRun 是 async 契约（无 await 点，同步落库）；rejected promise
+        // 承接人话边界（无活动 run / 任务已暂停 / 已提交待验收等迟到场景）
+        void submitRun(taskId, {
+          summary: `回合正常结束（finishReason=${active.lastFinish?.finishReason ?? 'stop'}）`,
+        }).catch((err: unknown) => {
+          logger.warn('task-end 自动提交验收失败（迟到/边界窗口，状态以先落者为准）', {
+            taskId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }
+      // 释放槽位立即评估放行
       notifyExecutor();
     } catch (err) {
-      logger.warn('task-end 终态转换失败', {
+      logger.warn('task-end 终态收尾失败', {
         taskId,
-        to,
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -838,10 +844,9 @@ export class AgentRunner {
       if (!row || row.status !== 'in_progress') return;
       const errorText =
         code === null ? 'agent 运行时异常退出' : `agent 运行时异常退出（exit code=${code}）`;
-      transitionTaskStatus(taskId, 'failed', {
-        completedAt: Date.now(),
-        errorMessage: errorText,
-      });
+      // v2 收敛（§9.3 行1）：failRun——run failed(endedAt) + 未决请求 superseded +
+      // 任务 failed（errorMessage）+ completedAt 终态时间戳
+      failRun(taskId, errorText);
       // 崩溃收尾同样释放槽位——立即触发放行评估
       notifyExecutor();
     } catch (err) {
