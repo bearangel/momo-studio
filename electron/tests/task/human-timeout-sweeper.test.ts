@@ -100,6 +100,17 @@ function seedDueRequest(opts: {
   });
 }
 
+/** 种一个到期但晚于 seedDueRequest 的行（listDue 按 deadline ASC——排在种子行之后） */
+function seedLateDueRequest(opts: { timeoutPolicy: HumanTimeoutPolicy }): { id: string } {
+  return insertHumanRequest({
+    sessionId: hitlSessionId,
+    kind: 'question',
+    title: '晚到请求',
+    deadlineAt: Date.now() - 500,
+    timeoutPolicy: opts.timeoutPolicy,
+  });
+}
+
 describe('1) deny_and_wrap：system:timeout 拒绝答复 + 回调派发 + run 保持', () => {
   it('请求 answered + 回调收到 (id, deny) + 任务/run 不被失败', () => {
     const taskId = seedAssignedTask();
@@ -238,5 +249,44 @@ describe('8) 无任务请求（task_id null）fail/cancel：只动请求本身',
     expect(res.processed).toBe(2);
     expect(getHumanRequest(failReq.id)!.status).toBe('expired');
     expect(getHumanRequest(cancelReq.id)!.status).toBe('expired');
+  });
+});
+
+// ═══ T13 加固（同 commit 强制项）：单行毒化隔离 + acceptance 不走自动拒 ═══
+describe('9) 毒行隔离：单行处置异常不饿死后续行', () => {
+  it('handler 抛错的到期行被捕获跳过（异常不外溢），后续行照常处置', () => {
+    // 早 deadline 的毒行（listDue 按 deadline ASC——毒行在前）
+    const poison = seedDueRequest({ timeoutPolicy: 'deny_and_wrap', kind: 'tool_gate' });
+    seedLateDueRequest({ timeoutPolicy: 'keep_waiting' });
+    setToolGateHandler(() => {
+      throw new Error('boom');
+    });
+    try {
+      expect(() => sweepHumanTimeouts()).not.toThrow();
+      // 毒行答复已落库（tryAnswer 先于回调），仅回调侧动作中断
+      expect(getHumanRequest(poison.id)!.status).toBe('answered');
+    } finally {
+      setToolGateHandler(null);
+    }
+    // 后续行未被饿死：keep_waiting 提醒照写
+    const late = getDb()
+      .prepare(`SELECT * FROM human_requests WHERE timeout_policy = 'keep_waiting'`)
+      .get() as { last_reminded_at: number | null } | undefined;
+    expect(late?.last_reminded_at).not.toBeNull();
+  });
+});
+
+describe('10) deny_and_wrap 跳过 acceptance 行（配置防线）', () => {
+  it('acceptance 误配 deny_and_wrap → 跳过不抛、行保持 pending，后续行照常处置', () => {
+    const acceptance = seedDueRequest({ timeoutPolicy: 'deny_and_wrap', kind: 'acceptance' });
+    const normal = seedDueRequest({ timeoutPolicy: 'deny_and_wrap', kind: 'tool_gate' });
+
+    expect(() => sweepHumanTimeouts()).not.toThrow();
+
+    // acceptance 不走 answerHuman 自动拒（其通道守卫会抛——显式跳过）
+    expect(getHumanRequest(acceptance.id)!.status).toBe('pending');
+    // 正常 tool_gate 行照常 system:timeout 拒绝
+    expect(getHumanRequest(normal.id)!.status).toBe('answered');
+    expect(getHumanRequest(normal.id)!.answeredByNodeId).toBe('system:timeout');
   });
 });

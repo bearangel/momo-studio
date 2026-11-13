@@ -200,6 +200,16 @@ export function listPendingBySession(sessionId: string): HumanRequestRow[] {
   return rows.map(rowToCamel);
 }
 
+/** 按 kind 列 pending 请求（Task 13 tool_gate 孤儿回收扫描面） */
+export function listPendingByKind(kind: HumanRequestKind): HumanRequestRow[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT * FROM human_requests WHERE kind = ? AND status = 'pending' ORDER BY created_at ASC`,
+    )
+    .all(kind) as HumanRequestDbRow[];
+  return rows.map(rowToCamel);
+}
+
 export function listByTask(taskId: string): HumanRequestRow[] {
   const rows = getDb()
     .prepare('SELECT * FROM human_requests WHERE task_id = ? ORDER BY created_at ASC')

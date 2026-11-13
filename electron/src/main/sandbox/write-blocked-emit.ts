@@ -13,6 +13,15 @@ import { getSession } from '../storage/sessions/repo';
 import { loadElectronApis } from '../electron-access';
 import { detectWriteBlocked, extractBlockedPaths, normalizeGrantDirs } from '../agent/tools/sandbox-write-hint';
 import { readonlyDenyExcerpt } from '../hub/run-policy';
+import { logger } from '../logger';
+import {
+  insertHumanRequest,
+  getHumanRequest,
+  markExpired,
+  listPendingByKind,
+  type HumanRequestRow,
+} from '../storage/tasks/human-requests-repo';
+import { grantWriteDirs } from './write-grant';
 
 const commandByCallId = new Map<string, string>();
 const COMMAND_CACHE_MAX = 100;
@@ -74,6 +83,133 @@ export function clearPendingOnDeny(sessionId: string | null, dirs: string[]): vo
     const sessionHit = sessionId === null || signal.sessionId === sessionId;
     if (sessionHit && (denyAll || signal.dirs.some((d) => dirs.includes(d)))) pendingWriteBlocked.delete(streamKey);
   }
+}
+
+// ─── Task 13：tool_gate 持久化接线（spec §6.2 双写 / §6.8 重启恢复）────────────
+// 信号产生处除内存注册表外同步落 human_requests 行（kind='tool_gate'、
+// deny_and_wrap + 15min deadline 与 PENDING_TTL_MS 对齐）；面板 / sweeper 答复
+// 经 answerHuman → setToolGateHandler 注册的 handler → 授权/拒绝原语。注册表
+// 语义 100% 不变（covered 轮询子进程仍经原 grant 路径解除）。本模块为子进程
+// 可达：不得顶层 import runtime-registry / lifecycle-runs（隔离锁），deny 广播
+// 复用 setWriteDeniedBroadcaster 注入的 broadcaster（生产即 broadcastWriteGrantDenied，
+// 与 sandbox:denyWrite 同一原语），答复类型本地结构化（type-only import 也会被
+// 隔离锁的静态 BFS 当作图边）。
+
+/** tool_gate 答复载荷（HumanAnswerInput 的结构宽型——decision 判别 + 可选理由） */
+export type ToolGateAnswerLike = { decision?: string; reason?: string };
+
+/** tool_gate 请求 title 内命令摘要截断上限 */
+const TOOL_GATE_TITLE_CMD_MAX = 60;
+
+/**
+ * 写授权卡持久化（Task 13 双写）：信号产生处插 kind='tool_gate' 请求行。
+ * sessionId null（未归属卡）不落库——human_requests.session_id NOT NULL，等待
+ * 语义由内存注册表 + renderer 卡自弃承载。DB 异常只 warn 不阻断消息主路径
+ * （归属解析降级同款防线）。
+ */
+export function registerToolGateRequest(signal: WriteBlockedSignal): HumanRequestRow | null {
+  if (signal.sessionId === null) return null;
+  try {
+    return insertHumanRequest({
+      sessionId: signal.sessionId,
+      kind: 'tool_gate',
+      title: `写授权：${signal.command.slice(0, TOOL_GATE_TITLE_CMD_MAX)}`,
+      prompt: `bash 命令需要写入以下目录，请审批：\n${signal.command}\n${signal.dirs.join('\n')}`,
+      payloadJson: JSON.stringify({
+        toolGate: { toolName: 'bash', command: signal.command, dirs: signal.dirs },
+      }),
+      deadlineAt: Date.now() + PENDING_TTL_MS,
+      timeoutPolicy: 'deny_and_wrap',
+    });
+  } catch (err) {
+    logger.warn('tool_gate 请求落库失败（不阻断授权卡推送）', {
+      sessionId: signal.sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+/** 解析请求行 payload 的 toolGate 体（畸形/缺失 → null） */
+function parseToolGatePayload(row: HumanRequestRow): { command: string; dirs: string[] } | null {
+  if (row.payloadJson === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(row.payloadJson);
+    const gate =
+      typeof parsed === 'object' && parsed !== null
+        ? (parsed as { toolGate?: unknown }).toolGate
+        : null;
+    if (typeof gate !== 'object' || gate === null) return null;
+    const g = gate as { command?: unknown; dirs?: unknown };
+    if (typeof g.command !== 'string') return null;
+    if (!Array.isArray(g.dirs) || g.dirs.some((d) => typeof d !== 'string')) return null;
+    return { command: g.command, dirs: g.dirs };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * tool_gate 答复处理（Task 13：sandbox IPC 装配处经 setToolGateHandler 注册进
+ * lifecycle-runs 的 answerHuman 分派）。approve → grantWriteDirs('session') +
+ * clearPendingOnGrant（covered 轮询子进程原地重执行解除）；deny → deny 广播 +
+ * clearPendingOnDeny。dirs 取自请求行 payload（注册表清理按 session+目录相交，
+ * 无需流键）。同步语义与钩子签名一致；畸形 payload 只 warn（答复本身已经
+ * answerHuman 落库）。
+ */
+export function handleToolGateAnswer(requestId: string, answer: ToolGateAnswerLike): void {
+  const row = getHumanRequest(requestId);
+  if (!row || row.kind !== 'tool_gate') {
+    logger.warn('tool_gate 答复回调收到不存在或非 tool_gate 请求', { requestId });
+    return;
+  }
+  const gate = parseToolGatePayload(row);
+  if (gate === null) {
+    logger.warn('tool_gate 请求 payload 畸形——授权/拒绝原语跳过', { requestId });
+    return;
+  }
+  if (answer.decision === 'approve') {
+    grantWriteDirs('session', row.sessionId, gate.dirs);
+    clearPendingOnGrant('session', row.sessionId, gate.dirs);
+    logger.info('tool_gate 已批准：会话级写授权落账', {
+      requestId,
+      sessionId: row.sessionId,
+      count: gate.dirs.length,
+    });
+    return;
+  }
+  if (answer.decision === 'deny') {
+    deniedBroadcaster?.(gate.dirs);
+    clearPendingOnDeny(row.sessionId, gate.dirs);
+    logger.info('tool_gate 已拒绝：deny 广播解除子进程等待', { requestId, sessionId: row.sessionId });
+    return;
+  }
+  logger.warn('tool_gate 答复 decision 未识别（仅处理 approve/deny）', {
+    requestId,
+    decision: answer.decision,
+  });
+}
+
+/**
+ * 重启恢复（spec §6.8）：扫 pending tool_gate 请求，会话在本进程无未决写等待
+ * 登记 → markExpired。内存注册表即「有子进程正等这道闸」的主进程真源（T11）
+ * ——重启后恒空，boot 调用即把重启前全部授权卡置 expired（子进程已随主进程
+ * 消亡，无人能再答复）；本进程内仍有活等待的行保留（covered 轮询子进程仍经
+原 grant 路径解除）。「授权请求已失效」steer/系统消息注入由 Task 14 恢复链
+处理；装配调用点（boot）在 Task 16，本模块只导出。
+ */
+export function recoverOrphanToolGates(): { expired: number } {
+  sweepExpired(Date.now());
+  const liveSessions = new Set<string>();
+  for (const { signal } of pendingWriteBlocked.values()) {
+    if (signal.sessionId !== null) liveSessions.add(signal.sessionId);
+  }
+  let expired = 0;
+  for (const req of listPendingByKind('tool_gate')) {
+    if (liveSessions.has(req.sessionId)) continue;
+    if (markExpired(req.id) > 0) expired += 1;
+  }
+  return { expired };
 }
 
 // ─── M2.2 P2-1：readonly 档即时拒 ────────────────────────────────────────────
@@ -252,6 +388,7 @@ export function inspectEventBatch(events: MessageEventRow[]): WriteBlockedSignal
     // P2-1 readonly 即时拒：不登记 pending、不推卡（等待卡即时 denied 而非挂起）
     if (handleReadonlyDeny(signal)) return null;
     registerPending(signal);
+    registerToolGateRequest(signal);
     return signal;
   }
   return null;
@@ -290,6 +427,7 @@ export function writeBlockedFromChildMsg(msg: unknown): boolean {
   // P2-1 readonly 即时拒：不登记 pending、不推授权卡（deny 广播已解除子进程等待）
   if (handleReadonlyDeny(signal)) return true;
   registerPending(signal);
+  registerToolGateRequest(signal);
   const { BrowserWindow } = loadElectronApis();
   const win = BrowserWindow?.getAllWindows()[0];
   if (win && !win.isDestroyed()) {

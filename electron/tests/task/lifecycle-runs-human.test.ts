@@ -205,6 +205,10 @@ describe('2) answerHuman：answered + in_progress + 系统注入 + 唤醒', () =
     expect(sys[0]!.body.startsWith('【人工答复】')).toBe(true);
     expect(sys[0]!.body).toContain('已选：A');
     expect(pushSessionMessageMock).toHaveBeenCalledTimes(1);
+    // T11 评审顺手项：注入消息行与唤醒回合共享 streamSessionId（deliverChainResult 同构）
+    const sysRow = getDb()
+      .prepare(`SELECT stream_session_id FROM messages WHERE session_id = ? AND sender = 'system'`)
+      .get(hitlSessionId) as { stream_session_id: string };
     expect(routeUserChatMock).toHaveBeenCalledTimes(1);
     expect(routeUserChatMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -212,6 +216,7 @@ describe('2) answerHuman：answered + in_progress + 系统注入 + 唤醒', () =
         assignmentId: 'inst-leader',
         systemKickoff: true,
         body: sys[0]!.body,
+        streamSessionId: sysRow.stream_session_id,
       }),
     );
   });

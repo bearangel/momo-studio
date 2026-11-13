@@ -54,28 +54,47 @@ function settleTask(taskId: string | null, action: 'fail' | 'cancel'): void {
 export function sweepHumanTimeouts(now: number = Date.now()): { processed: number } {
   const due = listDue(now);
   for (const req of due) {
-    switch (req.timeoutPolicy) {
-      case 'deny_and_wrap': {
-        const disp = answerHuman(req.id, { decision: 'deny' }, TIMEOUT_ANSWERER);
-        if (disp.disposition === 'stale') {
-          logger.info('人工请求超时 deny 到达时已被并发处置——幂等跳过', { requestId: req.id });
+    // T13 加固：逐行 try/catch——单条毒行（回调抛错 / 畸形配置）不得饿死本轮
+    // 其余到期请求；记日志继续（该行状态停留在异常前落点，下轮重扫）
+    try {
+      switch (req.timeoutPolicy) {
+        case 'deny_and_wrap': {
+          // T13 加固：acceptance 误配 deny_and_wrap 会撞 answerHuman 的 acceptance
+          // 通道守卫（每轮必抛）——显式跳过（验收超时走 keep_waiting 提醒链）
+          if (req.kind === 'acceptance') {
+            logger.warn('acceptance 请求误配 deny_and_wrap——跳过自动拒绝（不走 answerHuman 通道）', {
+              requestId: req.id,
+            });
+            break;
+          }
+          const disp = answerHuman(req.id, { decision: 'deny' }, TIMEOUT_ANSWERER);
+          if (disp.disposition === 'stale') {
+            logger.info('人工请求超时 deny 到达时已被并发处置——幂等跳过', { requestId: req.id });
+          }
+          break;
         }
-        break;
+        case 'keep_waiting':
+        case 'escalate': {
+          // 提醒一次后在同一 deadline 周期内不再提醒（needsReminder 判重）
+          if (needsReminder(req)) markReminded(req.id, now);
+          break;
+        }
+        case 'fail': {
+          if (markExpired(req.id) > 0) settleTask(req.taskId, 'fail');
+          break;
+        }
+        case 'cancel': {
+          if (markExpired(req.id) > 0) settleTask(req.taskId, 'cancel');
+          break;
+        }
       }
-      case 'keep_waiting':
-      case 'escalate': {
-        // 提醒一次后在同一 deadline 周期内不再提醒（needsReminder 判重）
-        if (needsReminder(req)) markReminded(req.id, now);
-        break;
-      }
-      case 'fail': {
-        if (markExpired(req.id) > 0) settleTask(req.taskId, 'fail');
-        break;
-      }
-      case 'cancel': {
-        if (markExpired(req.id) > 0) settleTask(req.taskId, 'cancel');
-        break;
-      }
+    } catch (err) {
+      logger.warn('人工请求超时处置单行失败（跳过继续本轮）', {
+        requestId: req.id,
+        kind: req.kind,
+        timeoutPolicy: req.timeoutPolicy,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
   return { processed: due.length };

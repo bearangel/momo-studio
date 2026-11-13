@@ -16,8 +16,13 @@ import {
 import { getSandboxSettings, type NetworkPolicy } from './settings';
 import { detectPackageManager } from './windows';
 import { grantWriteDirs, revokeWriteDir, listWorkspaceGrants } from './write-grant';
-import { clearPendingOnDeny, clearPendingOnGrant } from './write-blocked-emit';
+import {
+  clearPendingOnDeny,
+  clearPendingOnGrant,
+  handleToolGateAnswer,
+} from './write-blocked-emit';
 import { broadcastWriteGrantDenied } from '../agent/runtime-registry';
+import { setToolGateHandler } from '../task/lifecycle-runs';
 import type { SandboxMode, SandboxWritePolicy } from './types';
 
 export interface SandboxInfo {
@@ -107,6 +112,10 @@ export async function installBwrapViaPkexec(
 }
 
 export function registerSandboxIpc(): void {
+  // Task 13：写授权卡答复接线——answerHuman 的 tool_gate 分派（面板 / sweeper
+  // 答复）→ 授权/拒绝原语。注册在主进程 IPC 装配点：write-blocked-emit 为子进程
+  // 可达模块，不可顶层依赖 lifecycle-runs（runtime-child-electron-isolation 隔离锁）
+  setToolGateHandler(handleToolGateAnswer);
   ipcMain.handle('sandbox:getState', () => buildInfo());
   ipcMain.handle('sandbox:reprobe', async () => {
     await reprobeSandbox();
