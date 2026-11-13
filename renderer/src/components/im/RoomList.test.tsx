@@ -92,6 +92,9 @@ function makeSession(overrides: Partial<SessionSummary> & { id: string }): Sessi
     groupId: null,
     groupName: null,
     sessionType: null,
+    delegationRole: null,
+    readOnly: false,
+    taskId: null,
     members: [],
     ...overrides,
   };

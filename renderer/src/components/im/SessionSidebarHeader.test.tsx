@@ -100,6 +100,9 @@ const MOCK_QUICK_SESSION: SessionSummary = {
   groupId: null,
   groupName: null,
   sessionType: 'quick',
+  delegationRole: null,
+  readOnly: false,
+  taskId: null,
   members: [QUICK_SESSION_MEMBER],
 };
 

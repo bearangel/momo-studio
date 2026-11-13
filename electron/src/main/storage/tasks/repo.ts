@@ -555,6 +555,29 @@ export function listTasks(opts: {
 }
 
 /**
+ * 会话删除守卫（生命周期 v2，spec 2026-11-13-task-human-loop-lifecycle §5.4
+ * 「活动任务关联会话禁止删除」）：会话被任务以 execution_session_id 关联且任务
+ * 处于活跃态（in_progress / waiting_human / submitted）时抛人话错误；
+ * 终态任务（completed/failed/cancelled）或无任务关联放行。
+ * session:delete IPC handler 在删除前调用——不改变 deleteSession 本身的级联语义
+ * （spec §5.4：任务保留，execution_session_id 悬空由生命周期服务兜底）。
+ */
+export function assertSessionDeletable(sessionId: string): void {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `SELECT id FROM tasks
+       WHERE execution_session_id = ?
+         AND status IN ('in_progress', 'waiting_human', 'submitted')
+       LIMIT 1`,
+    )
+    .get(sessionId) as { id: string } | undefined;
+  if (row) {
+    throw new Error('任务进行中，请先取消或完结');
+  }
+}
+
+/**
  * 取出 agent 的下一个待执行任务。
  *
  * 条件：assigneeAgentId 匹配 + status='assigned' + scheduled_at 已到（或未设）。

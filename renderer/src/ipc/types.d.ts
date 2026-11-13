@@ -1803,6 +1803,22 @@ export interface SessionSummary {
   groupName: string | null;
   /** 会话类型（spec 2026-10-22 §3.1）；null=泛化创建路径 */
   sessionType: 'quick' | 'collab' | null;
+  /**
+   * 生命周期 v2 三字段（spec 2026-11-13-task-human-loop-lifecycle §5.4）：
+   * 会话关联的最新非终态任务（tasks.execution_session_id 反查）的委派方向
+   * （'in'=外派执行 / 'out'=委派跟踪）；null=无活跃任务关联。
+   */
+  delegationRole: 'in' | 'out' | null;
+  /**
+   * 只读态（P1 唯一只读源）：= delegationRole === 'out'——委派跟踪会话
+   * 输入框禁用，用户操作收敛到任务详情/验收流。
+   */
+  readOnly: boolean;
+  /**
+   * 会话关联的最新非终态任务 id（T-xxx）；null=无活跃任务关联。
+   * 同会话多任务时取 created_at 最大的非终态行（任务详情跳转消费）。
+   */
+  taskId: string | null;
   members: SessionMemberInfo[];
 }
 

@@ -20,11 +20,11 @@ import type {
 } from '../ipc/types';
 
 const MOCK_SESSIONS_A: SessionSummary[] = [
-  { id: 'sess-a1', workspaceId: 'ws-a', title: 'A 会话 1', titleAuto: false, kind: 'chat', lastMessageAt: null, members: [], pinnedAt: null, groupId: null, groupName: null, sessionType: null },
-  { id: 'sess-a2', workspaceId: 'ws-a', title: 'A 会话 2', titleAuto: false, kind: 'chat', lastMessageAt: null, members: [], pinnedAt: null, groupId: null, groupName: null, sessionType: null },
+  { id: 'sess-a1', workspaceId: 'ws-a', title: 'A 会话 1', titleAuto: false, kind: 'chat', lastMessageAt: null, members: [], pinnedAt: null, groupId: null, groupName: null, sessionType: null, delegationRole: null, readOnly: false, taskId: null },
+  { id: 'sess-a2', workspaceId: 'ws-a', title: 'A 会话 2', titleAuto: false, kind: 'chat', lastMessageAt: null, members: [], pinnedAt: null, groupId: null, groupName: null, sessionType: null, delegationRole: null, readOnly: false, taskId: null },
 ];
 const MOCK_SESSIONS_B: SessionSummary[] = [
-  { id: 'sess-b1', workspaceId: 'ws-b', title: 'B 会话 1', titleAuto: false, kind: 'chat', lastMessageAt: null, members: [], pinnedAt: null, groupId: null, groupName: null, sessionType: null },
+  { id: 'sess-b1', workspaceId: 'ws-b', title: 'B 会话 1', titleAuto: false, kind: 'chat', lastMessageAt: null, members: [], pinnedAt: null, groupId: null, groupName: null, sessionType: null, delegationRole: null, readOnly: false, taskId: null },
 ];
 
 const MOCK_MEMBERS: SessionMemberInfo[] = [
@@ -42,6 +42,9 @@ const MOCK_QUICK_SESSION: SessionSummary = {
   groupId: null,
   groupName: null,
   sessionType: null,
+  delegationRole: null,
+  readOnly: false,
+  taskId: null,
   members: [],
 };
 
@@ -56,6 +59,9 @@ const MOCK_COLLAB_SESSION: SessionSummary = {
   groupId: null,
   groupName: null,
   sessionType: null,
+  delegationRole: null,
+  readOnly: false,
+  taskId: null,
   members: [],
 };
 
@@ -513,7 +519,7 @@ describe('session.store — 只读态与聚焦信号（v25 spec §7「会话只�
     useSessionStore.setState({
       sessions: [
         ...useSessionStore.getState().sessions,
-        { id: 'sess-empty', workspaceId: 'ws-a', title: '只读会话', titleAuto: false, kind: 'chat', lastMessageAt: null, members: [], pinnedAt: null, groupId: null, groupName: null, sessionType: null },
+        { id: 'sess-empty', workspaceId: 'ws-a', title: '只读会话', titleAuto: false, kind: 'chat', lastMessageAt: null, members: [], pinnedAt: null, groupId: null, groupName: null, sessionType: null, delegationRole: null, readOnly: false, taskId: null },
       ],
     });
 
@@ -1358,6 +1364,9 @@ describe('receiveMessage 桶内上浮（spec 2026-10-22 §4.2）', () => {
     groupId: null,
     groupName: null,
     sessionType: 'quick',
+    delegationRole: null,
+    readOnly: false,
+    taskId: null,
     ...over,
   });
   /** 构造目标会话实时消息——复用文件既有 mk 工厂（真实 ImMessage 全字段） */

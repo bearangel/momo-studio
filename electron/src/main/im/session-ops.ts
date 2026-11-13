@@ -92,6 +92,22 @@ export interface SessionSummary {
   groupName: string | null;
   /** 会话类型（spec 2026-10-22 §3.1）；null=泛化创建路径 */
   sessionType: 'quick' | 'collab' | null;
+  /**
+   * 生命周期 v2 三字段（spec 2026-11-13-task-human-loop-lifecycle §5.4）：
+   * 会话关联的最新非终态任务（tasks.execution_session_id 反查）的委派方向
+   * （'in'=外派执行 / 'out'=委派跟踪）；null=无活跃任务关联。
+   */
+  delegationRole: 'in' | 'out' | null;
+  /**
+   * 只读态（P1 唯一只读源）：= delegationRole === 'out'——委派跟踪会话
+   * 输入框禁用，用户操作收敛到任务详情/验收流。
+   */
+  readOnly: boolean;
+  /**
+   * 会话关联的最新非终态任务 id（T-xxx）；null=无活跃任务关联。
+   * 同会话多任务时取 created_at 最大的非终态行（renderer 任务详情跳转消费）。
+   */
+  taskId: string | null;
   members: SessionMemberInfo[];
 }
 
@@ -255,31 +271,67 @@ export function deleteSessionOp(id: string): void {
 }
 
 /**
- * 列出某 workspace 下的全部会话（含成员信息）。
+ * 列出某 workspace 下的全部会话（含成员信息 + 生命周期三字段）。
  * workspaceId 缺省 → 返回全部 workspace 的会话（仅迁移/调试用，
  * IM 入口应总是带 workspaceId 过滤）。
  *
  * 数据源走 listSessionsWithGroup（spec 2026-10-22 §4.1 排序契约单源），
  * 顺带把 pinned/group/sessionType 带进 summary；listAllSessions 路径不 JOIN
  * 分组名，归一为 null 以免消费方（Task 4 IPC / Task 5、7 渲染层）区分两条数据源。
+ *
+ * 生命周期三字段（spec 2026-11-13-task-human-loop-lifecycle §5.4）批量派生：
+ * 会话全集建好后一次反查 tasks（execution_session_id IN (...) AND 非终态），
+ * 同会话多任务取 created_at 最大行——避免逐会话点查 N+1。
  */
 export function getSessionsForWorkspace(workspaceId?: string): SessionSummary[] {
   const sessions: SessionWithGroupRow[] = workspaceId
     ? listSessionsWithGroup(workspaceId)
     : listAllSessions().map((s) => ({ ...s, groupName: null }));
-  return sessions.map((s) => ({
-    id: s.id,
-    workspaceId: s.workspaceId,
-    title: s.title,
-    titleAuto: s.titleAuto,
-    kind: s.kind,
-    lastMessageAt: s.lastMessageAt,
-    pinnedAt: s.pinnedAt,
-    groupId: s.groupId,
-    groupName: s.groupName ?? null,
-    sessionType: s.sessionType,
-    members: getSessionMembersInfo(s.id),
-  }));
+
+  // 最新非终态任务反查（spec §5.4）：created_at ASC 遍历后写覆盖 → 桶内最后写即最新；
+  // 终态集合与状态机三终态对齐（completed/failed/cancelled，state-machine.ts）
+  const latestTask = new Map<string, { id: string; delegationRole: 'in' | 'out' | null }>();
+  if (sessions.length > 0) {
+    const placeholders = sessions.map(() => '?').join(',');
+    const rows = getDb()
+      .prepare(
+        `SELECT id, execution_session_id, delegation_role FROM tasks
+         WHERE execution_session_id IN (${placeholders})
+           AND status NOT IN ('completed', 'failed', 'cancelled')
+         ORDER BY created_at ASC`,
+      )
+      .all(...sessions.map((s) => s.id)) as Array<{
+      id: string;
+      execution_session_id: string;
+      delegation_role: string | null;
+    }>;
+    for (const r of rows) {
+      latestTask.set(r.execution_session_id, {
+        id: r.id,
+        delegationRole: r.delegation_role === 'in' || r.delegation_role === 'out' ? r.delegation_role : null,
+      });
+    }
+  }
+
+  return sessions.map((s) => {
+    const task = latestTask.get(s.id);
+    return {
+      id: s.id,
+      workspaceId: s.workspaceId,
+      title: s.title,
+      titleAuto: s.titleAuto,
+      kind: s.kind,
+      lastMessageAt: s.lastMessageAt,
+      pinnedAt: s.pinnedAt,
+      groupId: s.groupId,
+      groupName: s.groupName ?? null,
+      sessionType: s.sessionType,
+      delegationRole: task?.delegationRole ?? null,
+      readOnly: task?.delegationRole === 'out',
+      taskId: task?.id ?? null,
+      members: getSessionMembersInfo(s.id),
+    };
+  });
 }
 
 /**

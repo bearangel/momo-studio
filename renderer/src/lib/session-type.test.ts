@@ -61,6 +61,9 @@ describe('deriveSessionType（spec §3.1 判定顺序）', () => {
       groupId: null,
       groupName: null,
       sessionType: 'collab',
+      delegationRole: null,
+      readOnly: false,
+      taskId: null,
       members: [],
     };
     expect(deriveSessionType(s)).toBe('collab');

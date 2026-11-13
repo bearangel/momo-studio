@@ -207,6 +207,9 @@ function makeSessionSummary(id: string): SessionSummary {
     groupId: null,
     groupName: null,
     sessionType: null,
+    delegationRole: null,
+    readOnly: false,
+    taskId: null,
     members: [],
   };
 }
