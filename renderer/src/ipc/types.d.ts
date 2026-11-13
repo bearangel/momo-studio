@@ -267,6 +267,16 @@ export interface TaskRow {
   updatedAt: number;
   startedAt: number | null;
   completedAt: number | null;
+  /** 生命周期 v2 五列（迁移 081，spec §5.1）：当前执行尝试指针（task_runs.id），NULL=无 run */
+  currentRunId: string | null;
+  /** 生命周期 v2 五列（迁移 081，spec §5.1）：提交验收时间戳（ms），NULL=未提交 */
+  submittedAt: number | null;
+  /** 生命周期 v2 五列（迁移 081，spec §5.1）：验收完成时间戳（ms），NULL=未验收 */
+  acceptedAt: number | null;
+  /** 生命周期 v2 五列（迁移 081，spec §5.1）：委派方向（'in'=承接外派 / 'out'=外派他人），NULL=非委派行 */
+  delegationRole: 'in' | 'out' | null;
+  /** 生命周期 v2 五列（迁移 081，spec §5.1）：验收免人工自动通过 */
+  autoAccept: boolean;
   /** 看板分组（task_groups.id，G-<seq>），NULL=未分组（看板重构 spec §2） */
   groupId: string | null;
   /** 顶置时间戳（ms），NULL=未顶置；看板列内排序键（迁移 050，boardPosition 退役） */

@@ -38,6 +38,7 @@ const base: TaskRow = {
   priority: 0, scheduledAt: null, recurrenceRule: null, deadlineAt: null, queuePosition: null,
   runtimeInstanceId: null, estimatedTokens: null, actualTokens: null, toolCallsUsed: 0,
   errorMessage: null, sourceNodeId: null, createdAt: 0, updatedAt: 0, startedAt: null, completedAt: null,
+  currentRunId: null, submittedAt: null, acceptedAt: null, delegationRole: null, autoAccept: false,
   groupId: null, pinnedAt: null, archivedAt: null, routing: { mode: 'local' }, delegationId: null, origin: 'user', parentTaskId: null,
 };
 

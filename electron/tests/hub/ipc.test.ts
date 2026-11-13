@@ -468,6 +468,7 @@ function mkTaskRow(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title'>): T
     queuePosition: null, runtimeInstanceId: null, estimatedTokens: null,
     actualTokens: null, toolCallsUsed: 0, errorMessage: null,
     createdAt: 1000, updatedAt: 1000, startedAt: null, completedAt: null,
+    currentRunId: null, submittedAt: null, acceptedAt: null, delegationRole: null, autoAccept: false,
     groupId: null, pinnedAt: null, archivedAt: null,
     routing: { mode: 'local' }, delegationId: null, parentTaskId: null,
     origin: 'user',

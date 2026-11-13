@@ -12,7 +12,7 @@
 //   - transitionTaskStatus 走 state-machine 校验，非法转换抛错；
 //     调度器 / agent runtime 调此方法时可在 extraPatch 里带 startedAt / completedAt /
 //     executionSessionId / assigneeAgentId 等副作用字段（updateTask 自动 merge + bump updated_at）
-//   - updateTask 实现为「读全行 → 合并 patch → 全字段 UPDATE」——任务字段数适中（25 个），
+//   - updateTask 实现为「读全行 → 合并 patch → 全字段 UPDATE」——任务字段数适中（30 个），
 //     全字段写一次 SQL 比动态拼 SET 子句可读性更高、也无 SQL 注入面。
 import { getDb } from '../db';
 import { emitPluginEvent } from '../../plugin/event-sources';
@@ -64,6 +64,16 @@ export interface TaskRow {
   updatedAt: number;
   startedAt: number | null;
   completedAt: number | null;
+  /** 生命周期 v2 五列（迁移 081，spec §5.1）：当前执行尝试指针（task_runs.id），NULL=无 run */
+  currentRunId: string | null;
+  /** 生命周期 v2 五列（迁移 081，spec §5.1）：提交验收时间戳（ms），NULL=未提交 */
+  submittedAt: number | null;
+  /** 生命周期 v2 五列（迁移 081，spec §5.1）：验收完成时间戳（ms），NULL=未验收 */
+  acceptedAt: number | null;
+  /** 生命周期 v2 五列（迁移 081，spec §5.1）：委派方向（'in'=承接外派 / 'out'=外派他人），NULL=非委派行 */
+  delegationRole: 'in' | 'out' | null;
+  /** 生命周期 v2 五列（迁移 081，spec §5.1）：验收免人工自动通过（dispatch 簿记行回填为 true） */
+  autoAccept: boolean;
   /** 看板分组（task_groups.id，G-<seq>），NULL=未分组（看板重构 spec §2，迁移 047） */
   groupId: string | null;
   /** 顶置时间戳（ms），NULL=未顶置；看板列内排序键（迁移 050，boardPosition 退役） */
@@ -135,6 +145,11 @@ type SqlRow = {
   updated_at: number;
   started_at: number | null;
   completed_at: number | null;
+  current_run_id: string | null;
+  submitted_at: number | null;
+  accepted_at: number | null;
+  delegation_role: string | null;
+  auto_accept: number;
   group_id: string | null;
   pinned_at: number | null;
   archived_at: number | null;
@@ -172,6 +187,11 @@ function rowToCamel(r: SqlRow): TaskRow {
     updatedAt: r.updated_at,
     startedAt: r.started_at,
     completedAt: r.completed_at,
+    currentRunId: r.current_run_id,
+    submittedAt: r.submitted_at,
+    acceptedAt: r.accepted_at,
+    delegationRole: r.delegation_role === 'in' || r.delegation_role === 'out' ? r.delegation_role : null,
+    autoAccept: r.auto_accept === 1,
     groupId: r.group_id,
     pinnedAt: r.pinned_at,
     archivedAt: r.archived_at,
@@ -298,7 +318,7 @@ export function insertTask(
  * status 字段独立校验：直接 patch 'status' 可绕过状态机——调用方需明确自己在做什么
  * （如调度器把 pending → assigned 是合法但跨多个 patch）。正常路径请用 transitionTaskStatus。
  *
- * 实现为读全行 → 合并 patch → 全字段 UPDATE：任务 25 列全字段写一次 SQL，可读性高于
+ * 实现为读全行 → 合并 patch → 全字段 UPDATE：任务 30 列全字段写一次 SQL，可读性高于
  * 动态拼 SET 子句。updatedAt 自动 bump 到 now()。
  */
 export function updateTask(id: string, patch: Partial<Omit<TaskRow, 'id' | 'createdAt'>>): void {
@@ -322,6 +342,7 @@ export function updateTask(id: string, patch: Partial<Omit<TaskRow, 'id' | 'crea
       queue_position=?, runtime_instance_id=?, estimated_tokens=?, actual_tokens=?, tool_calls_used=?, error_message=?,
       group_id=?, pinned_at=?, archived_at=?,
       updated_at=?, started_at=?, completed_at=?,
+      current_run_id=?, submitted_at=?, accepted_at=?, delegation_role=?, auto_accept=?,
       routing_json=?, delegation_id=?, parent_task_id=?, origin=?
     WHERE id=?`,
   ).run(
@@ -353,6 +374,11 @@ export function updateTask(id: string, patch: Partial<Omit<TaskRow, 'id' | 'crea
     next.updatedAt,
     next.startedAt,
     next.completedAt,
+    next.currentRunId,
+    next.submittedAt,
+    next.acceptedAt,
+    next.delegationRole,
+    next.autoAccept ? 1 : 0,
     routingJsonWrite,
     next.delegationId,
     next.parentTaskId,
