@@ -53,6 +53,7 @@ import {
   sendUserMessage,
   resolveTarget,
   setSessionRouter,
+  __resetPendingDispatchesForTest,
 } from '../../src/main/im/session-service';
 import { RouterService } from '../../src/main/agent/router-service';
 import { onLeaderFinal } from '../../src/main/im/session-naming';
@@ -131,6 +132,10 @@ beforeEach(() => {
   fs.mkdirSync(tmpRoot, { recursive: true });
   process.env.AP_USER_DATA_DIR = tmpRoot;
   runMigrations();
+  // 启动期待派发队列是模块级状态（Windows agent 2026-11-13 排队补偿）——
+  // 前序用例在 router 未就绪窗口发的消息会入队残留，末位 bootstrap 用例
+  // ensureRouterService 触发 flush 重放 → executeTask 虚增次数。逐用例清空。
+  __resetPendingDispatchesForTest();
 
   const db = getDb();
   seedWorkspace(db, 'ws1');

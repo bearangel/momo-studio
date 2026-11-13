@@ -50,6 +50,8 @@ const mockApi = {
     onMessage: vi.fn().mockReturnValue(() => {}),
     onMessageEventBatch: vi.fn().mockReturnValue(() => {}),
     onListChanged: vi.fn().mockReturnValue(() => {}),
+    // 启动期消息排队（2026-11-13）：session.store 订阅占位推送（缺面挂载即崩）
+    onPendingDispatch: vi.fn().mockReturnValue(() => {}),
   },
   system: {
     getPlatform: vi.fn().mockReturnValue('linux'),

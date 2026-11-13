@@ -75,6 +75,8 @@ const mockApi = {
     onMessage: vi.fn().mockReturnValue(() => {}),
     onMessageEventBatch: vi.fn().mockReturnValue(() => {}),
     onListChanged: vi.fn().mockReturnValue(() => {}),
+    // 启动期消息排队（Windows agent 2026-11-13）：session.store 订阅占位推送
+    onPendingDispatch: vi.fn().mockReturnValue(() => {}),
   },
   // TitleBar（P2 Task 3 空态接入）：平台 + 窗口控件通道
   system: {
