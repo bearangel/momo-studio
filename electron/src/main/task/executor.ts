@@ -181,7 +181,10 @@ function countInProgress(): number {
  * 未来时间的任务停在排队中，由 executor 30s 兜底扫描 + scheduler due-wakeup 到点捞起。
  * blocked 闸门（M3.3 spec §2.1）：存在未完成依赖（NOT EXISTS 半连接依赖边 ×
  * 依赖行状态 <> completed）的任务不进入放行——依赖完成（completed）后自然放行，
- * 与 scheduled_at 闸门正交（逐行过滤，非整池熔断）。 */
+ * 与 scheduled_at 闸门正交（逐行过滤，非整池熔断）。
+ * 外派行闸门（spec §5.1 不变量 7，P1 降级守卫 Task 18）：delegation_role='out'
+ * 的 assigned 行不本地放行——外派任务的执行/打回续跑由 hub 链路驱动，本地
+ * executor 不得重复拉起（防双执行）。 */
 function peekNextAssigned(slots: number, skip: ReadonlySet<string>): TaskRow | null {
   const skipIds = [...skip];
   // 排除子句只拼接占位符（skip 内容是内部生成的任务 id，仍走参数绑定）
@@ -191,6 +194,7 @@ function peekNextAssigned(slots: number, skip: ReadonlySet<string>): TaskRow | n
     .prepare(
       `SELECT t.id FROM tasks t
        WHERE t.status IN ('assigned', 'session_queued') ${excludeClause}
+       AND (t.delegation_role IS NULL OR t.delegation_role <> 'out')
        AND (t.scheduled_at IS NULL OR t.scheduled_at <= ?)
        AND NOT EXISTS (
          SELECT 1 FROM task_dependencies d

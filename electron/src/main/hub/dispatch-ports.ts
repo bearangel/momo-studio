@@ -67,8 +67,9 @@ export function buildDispatchSubmitPorts(): DispatchSubmitPorts {
       );
     },
     deriveBlockedBy: (taskId) => deriveBlockedBy([taskId]).get(taskId) ?? [],
-    updateDelegationLink: (taskId, delegationId, routing) => {
-      updateTask(taskId, { delegationId, routing });
+    updateDelegationLink: (taskId, delegationId, routing, p1Stamp) => {
+      // P1 降级守卫行戳（spec §14）随 delegation_id/routing 一并落行——P2 移除
+      updateTask(taskId, { delegationId, routing, ...p1Stamp });
     },
   };
 }

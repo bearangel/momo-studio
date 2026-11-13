@@ -44,7 +44,11 @@ import { logger } from '../logger';
  * |              |                 |        | 的中间态——本地行维持进行中（看板 |
  * |              |                 |        | 无等待态；等待角标由 progress kv   |
  * |              |                 |        | waiting 标志驱动，不造新行状态）  |
- * | done         | completed       | 已完成 | 终态；completedAt + 摘要「已完成」  |
+ * | done         | completed       | 已完成 | 终态；completedAt + acceptedAt +  |
+ * |              |                 |        | 摘要「已完成」。P1 降级守卫（spec |
+ * |              |                 |        | §14）：done 即完成——不经 submitted |
+ * |              |                 |        | （旧单方语义），accepted_at 同刻    |
+ * |              |                 |        | 落账；P2 移除改走两段式            |
  * | failed       | failed          | 已关闭 | 终态；errorMessage=reason 原文     |
  * | cancelled    | cancelled       | 已关闭 | 终态；task.cancel 回执驱动         |
  * | interrupted  | pending         | 待办   | 裁定：等待续传语义映射回待处理列，  |
@@ -246,6 +250,8 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
     const next = DELEGATION_STATUS_TO_TASK[hubStatus];
     if (isTerminal(row.status) && row.status !== next) return;
     if (row.status === next) return;
+    // T15 白名单逃生门之一（updateTask 直写 status）——P2 收口：P2 跨节点期
+    // 外派行状态写入归位 lifecycle-runs 服务（submitted 两段式 + 投影单点）
     ports.updateTask(row.id, { status: next, ...extra });
   };
 
@@ -267,7 +273,10 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
   return {
   handleProgress(evt) {
     // 摘要与行状态同拍落（摘要先写——行不存在时摘要仍保留，重派后可续显）；
-    // waiting 标志随 kind 翻转：等待拍置 true，恢复拍（无 kind）自然清除
+    // waiting 标志随 kind 翻转：等待拍置 true，恢复拍（无 kind）自然清除。
+    // P1 期间 waiting 拍不落任务新态（不造 waiting_human）——维持旧行为：
+    // kv waiting 标志驱动等待角标，行状态仍按 running 映射（P2 收口时随
+    // §14 降级守卫一并切两段式语义）
     saveProgress(evt.taskId, evt.excerpt, evt.lastSeq, evt.kind);
     // 1.10.0 生命周期拍（received/arranged）只更新摘要——行保持 pending（发送方
     // 视角「已接收/已安排」由摘要行呈现），不提前翻 in_progress（spec §5.1）
@@ -280,7 +289,10 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
 
     handleTerminal(status, taskId, reason) {
       if (status === 'done') {
-        applyMapped(taskId, 'done', { completedAt: ports.now() });
+        // P1 降级守卫（spec §14）：外派行 done 即完成——不经 submitted（旧单方
+        // 语义），accepted_at 与 completed_at 同刻落账（验收等价旧「完成」）；P2 移除
+        const at = ports.now();
+        applyMapped(taskId, 'done', { completedAt: at, acceptedAt: at });
         saveProgress(taskId, DONE_SUMMARY, 0);
         return;
       }
@@ -322,7 +334,7 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
           });
           return;
         }
-        ports.insertWorkerTaskRow({
+        const workerTaskId = ports.insertWorkerTaskRow({
           workspaceId: ws.id,
           title: record.title,
           status: WORKER_STATE_TO_TASK[record.state],
@@ -330,6 +342,9 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
           delegationId: record.taskId,
           startedAt: ports.now(),
         });
+        // P1 降级守卫（spec §14）：承接行 delegation_role='in' + 强制 auto_accept=1
+        // （insertTask 不含 delegation_role 列——经 updateTask 补戳；P2 移除）
+        ports.updateTask(workerTaskId, { delegationRole: 'in', autoAccept: true });
       };
       const syncState = (taskId: string, state: DelegationRecord['state'], reason?: string): void => {
         const row = ports.findTaskByDelegation(taskId);
@@ -346,6 +361,8 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
         // P2-1 worker 侧对称面：failed 附因落 errorMessage（leader handleTerminal 同款
         // 形态——reason 缺席不写，老数据/无因失败回退现状）
         if (state === 'failed' && typeof reason === 'string') extra.errorMessage = reason;
+        // T15 白名单逃生门之二（updateTask 直写 status）——P2 收口：同 applyMapped
+        // 头注，P2 外派行状态写入归位 lifecycle-runs 服务单点
         ports.updateTask(row.id, { status: next, ...extra });
       };
       return {
@@ -515,10 +532,17 @@ export async function retryDispatch(
             ...(teamPayload !== undefined ? { team: teamPayload } : {}),
           },
     });
-    // D5：重派同样回写已解析目标（group 变体换新 targetNodeId）
+    // D5：重派同样回写已解析目标（group 变体换新 targetNodeId）；P1 降级守卫
+    // （spec §14）随新 delegation_id 补 out 戳 + 强制 auto_accept=1——首派失败
+    // 留待处理的行此前无戳，重派成功与 submitRoutedTask 同构落守卫
     const resolvedRouting: TaskRouting =
       row.routing.mode === 'group' ? { ...row.routing, targetNodeId } : row.routing;
-    ports.updateTask(taskId, { delegationId, routing: resolvedRouting });
+    ports.updateTask(taskId, {
+      delegationId,
+      routing: resolvedRouting,
+      delegationRole: 'out',
+      autoAccept: true,
+    });
     return { dispatched: true, nodeId: targetNodeId, delegationId };
   } catch {
     // 瞬断（node_offline / 网络抖动）：行保留待处理（RM-M21-5，与 dispatch-submit 同哲学）

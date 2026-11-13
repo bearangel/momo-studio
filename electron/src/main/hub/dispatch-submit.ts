@@ -182,9 +182,18 @@ export interface DispatchSubmitPorts {
    * 解锁）；返回未完成直接依赖 id 列表，空 = 不阻塞
    */
   deriveBlockedBy(taskId: string): string[];
-  /** 委派成功后回写 tasks 行 delegation_id + 已解析目标 routing（D5：group
-   *  变体带上调度解析的 targetNodeId——外派卡节点徽标持久源） */
-  updateDelegationLink(taskId: string, delegationId: string, routing: TaskRouting): void;
+  /**
+   * 委派成功后回写 tasks 行 delegation_id + 已解析目标 routing（D5：group
+   *  变体带上调度解析的 targetNodeId——外派卡节点徽标持久源）+ P1 降级守卫行戳
+   *  （spec §14：外派行 delegation_role='out' 且强制 auto_accept=1——提交即验收，
+   *  等价旧「完成」单方语义；P2 移除该参数及调用方传戳）
+   */
+  updateDelegationLink(
+    taskId: string,
+    delegationId: string,
+    routing: TaskRouting,
+    p1Stamp: { delegationRole: 'out'; autoAccept: true },
+  ): void;
 }
 
 /** 活跃委派口径：pending|running|interrupted（未终态且未取消——interrupted 会重连续跑，占负载） */
@@ -339,10 +348,14 @@ export async function submitRoutedTask(
             },
     });
     // D5：已解析目标随 delegation_id 一并回写行（group 变体补 targetNodeId；
-    // node 变体本就携带——幂等同值）
+    // node 变体本就携带——幂等同值）；P1 降级守卫（spec §14）行戳随同一端口
+    // 落库——委派成功即 out + auto_accept=1（P2 移除）
     const resolvedRouting: TaskRouting =
       input.routing.mode === 'group' ? { ...input.routing, targetNodeId } : input.routing;
-    ports.updateDelegationLink(task.id, delegationId, resolvedRouting);
+    ports.updateDelegationLink(task.id, delegationId, resolvedRouting, {
+      delegationRole: 'out',
+      autoAccept: true,
+    });
     return { task: { ...task, delegationId }, dispatched: true, nodeId: targetNodeId };
   } catch (err) {
     // 瞬断（node_offline / 网络抖动）：行保留待处理，不向上抛——弹窗提交不该

@@ -80,7 +80,8 @@ function makePorts(opts: { delegateOk?: boolean; groups?: ReturnType<typeof fixt
       ...(input.draft === true ? { origin: 'peer_draft' as const } : {}),
     }, { dependsOn: input.dependsOn ?? [] }),
     deriveBlockedBy: (taskId) => deriveBlockedBy([taskId]).get(taskId) ?? [],
-    updateDelegationLink: (taskId, delegationId, routing) => { updateTask(taskId, { delegationId, routing }); },
+    // 生产同构（dispatch-ports.ts）：P1 降级守卫行戳随 delegation_id 一并落行
+    updateDelegationLink: (taskId, delegationId, routing, p1Stamp) => { updateTask(taskId, { delegationId, routing, ...p1Stamp }); },
   };
   return { ports, briefs };
 }

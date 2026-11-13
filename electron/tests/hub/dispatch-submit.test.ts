@@ -213,11 +213,17 @@ describe('submitRoutedTask — group 模式', () => {
       task: { title: '排查 WebSocket 断连', prompt: '分析 gateway 日志定位 1006 根因', permissionTier: 'confirm' },
     });
     // 回写：delegation_id + 已解析目标 routing（D5——group 变体补 targetNodeId）
-    expect(ports.updateDelegationLink).toHaveBeenCalledWith('T-rem', 'dl-100', {
-      mode: 'group',
-      groupId: 'g1',
-      targetNodeId: 'node-a',
-    });
+    // + P1 降级守卫行戳（spec §14：out + 强制 auto_accept=1）
+    expect(ports.updateDelegationLink).toHaveBeenCalledWith(
+      'T-rem',
+      'dl-100',
+      {
+        mode: 'group',
+        groupId: 'g1',
+        targetNodeId: 'node-a',
+      },
+      { delegationRole: 'out', autoAccept: true },
+    );
     expect(result.dispatched).toBe(true);
     expect(result.nodeId).toBe('node-a');
   });
@@ -334,11 +340,16 @@ describe('submitRoutedTask — node 模式', () => {
         routing: { mode: 'node', groupId: 'g1', targetNodeId: 'node-a' },
       }),
     );
-    expect(ports.updateDelegationLink).toHaveBeenCalledWith('T-rem', 'dl-100', {
-      mode: 'node',
-      groupId: 'g1',
-      targetNodeId: 'node-a',
-    });
+    expect(ports.updateDelegationLink).toHaveBeenCalledWith(
+      'T-rem',
+      'dl-100',
+      {
+        mode: 'node',
+        groupId: 'g1',
+        targetNodeId: 'node-a',
+      },
+      { delegationRole: 'out', autoAccept: true },
+    );
     expect(result.dispatched).toBe(true);
     expect(result.nodeId).toBe('node-a');
   });

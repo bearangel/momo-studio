@@ -18,7 +18,6 @@ import {
   markTaskCancelled,
   markTaskFailed,
   requestHuman,
-  resetForQuotaRetry,
   authoritativeReset,
   startRun,
   submitRun,
@@ -83,7 +82,12 @@ export function ledgerInsertDispatch(input: DispatchLedgerInput): void {
       // 隐藏、看板不可见。completedAt/submittedAt/acceptedAt 清上轮终态残值
       //（updateTask 全字段直写）；上轮滞留的活动 run（needs_input 等人后重派）
       // 一并 cancelled 终结——否则 startRun ensure 语义复用旧 run，settle 的
-      // submitRun 会撞 run 状态机非法边（waiting_human → submitted 不通）
+      // submitRun 会撞 run 状态机非法边（waiting_human → submitted 不通）。
+      // T15 复核裁定（Task 18 B2）：此处 updateRun 直写不归位 cancelActiveRun——
+      // cancelActiveRun 会连带投影任务 cancelled（发 taskStatusChanged/Completed
+      // 插件事件）再被下方 authoritativeReset 覆写为 in_progress，产生「先取消
+      // 再复活」的假事件序列；且顺序敏感：run 终结必须先于 startRun（单活动 run
+      // 唯一索引），拆到服务函数即失去同段顺序保证。保留直写（P2 随 §14 收口重审）
       const lingering = getActiveRun(input.taskId);
       if (lingering) {
         updateRun(lingering.id, {
@@ -341,7 +345,12 @@ export function reconcileDispatchTasksAtBoot(): void {
           // 生命周期转换，经 lifecycle-runs.authoritativeReset 服务单点直写
           //（spec §3.4 修正；v2 收敛 Task 15）。082 为 paused 存量行回填的
           // run#1（running）一并终结——权威复位不留活动 run 悬挂（悬挂会令下次
-          // spawn 的 startRun ensure 语义复用死 run）
+          // spawn 的 startRun ensure 语义复用死 run）。
+          // T15 复核裁定（Task 18 B2）：此处 updateRun 直写不归位 failRun——
+          // failRun 对 paused 行按 §6.6 跳过任务投影（任务仍 paused），且会
+          // supersede 未决请求（行为面变化）并重复落 errorMessage/completedAt；
+          // 权威复位语义要求 run 终结与任务直写在同一步落定，拆到服务函数即
+          // 引入中间态。保留直写（P2 随 §14 收口重审）
           const active = getActiveRun(r.id);
           if (active) {
             updateRun(active.id, { status: 'failed', endedAt: Date.now() });

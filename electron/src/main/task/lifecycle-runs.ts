@@ -21,6 +21,9 @@
 //     原子答复；打回不建新 run——任务回 assigned，下次放行 startRun(trigger='rework')
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
+// 环检查断言（T15 复核 B3，Task 18）：storage/task-groups/repo.ts（分组归档级联
+// 取消）已依赖本模块 markTaskCancelled——本模块及其传递依赖（recurrence 等）
+// 不得反向 import storage/task-groups/*，否则成环。新增 import 前先核此约束。
 import { getTask, transitionTaskStatus, updateTask, type TaskRow } from '../storage/tasks/repo';
 import { canTransition, isTerminal, type TaskStatus } from '../storage/tasks/state-machine';
 import {

@@ -258,8 +258,10 @@ export function registerTaskHandlers(): void {
       // minor-11 + 看板重构 Task 8 契约洞加固：task:update 是部分字段补丁通道，
       // 但 status / pinnedAt / archivedAt / groupId 四字段各有专属通道，
       // 直接写会绕过 move / pin / archive 的不变式（Task 7 review 发现通用 update
-      // 可绕过分组位与归档域校验）。状态变更强制走 task:transition / task:cancel
-      // （断言 + bump updated_at），分组走 task:move，顶置走 task:setPinned，
+      // 可绕过分组位与归档域校验）。状态走 task:transition / task:submit /
+      // task:accept / task:reject（v2 收窄：transition 仅 paused/cancelled，
+      // 完成必经验收链——renderer 误传/恶意传 status 一律忽略），
+      // 分组走 task:move，顶置走 task:setPinned，
       // 归档走 task:archive / task:unarchive，分组管理走 taskGroup 通道。
       // M3.3 追加：parentTaskId / dependsOn 走 task:setRelations（存在性 + 环检测
       // 专属校验），blocked / blockedBy 为只读派生态——五字段同样剥离。
@@ -300,7 +302,7 @@ export function registerTaskHandlers(): void {
         if (protectedKeys.length > 0) {
           logger.warn(
             `task:update 携带受保护字段已剥离（${protectedKeys.join('/')}）——` +
-              '状态请用 task:transition / task:cancel，分组请用 task:move，' +
+              '状态走 task:transition / task:submit / task:accept / task:reject，分组请用 task:move，' +
               '顶置请用 task:setPinned，归档请用 task:archive / task:unarchive，' +
               '分组管理请走 taskGroup 通道，任务关系（父任务/依赖）请用 task:setRelations，' +
               'blocked/blockedBy 为只读派生态',

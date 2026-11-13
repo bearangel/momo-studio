@@ -13,6 +13,9 @@
 //   - abortTaskExecution  = 原 ipc.handlers.ts 私有 abortTaskExecutionIfAny
 //     （Task 7 铺路：拆为可独立调用的单任务 abort——只中止运行时流，不携带
 //     transition；cancelTask = 先 transition 再调它）
+// v2 写路径白名单（T15 复核 B5，Task 18 确认）：transitionTaskStatus 在本文件
+// 唯一调用点是 resumePausedTask（K7-5——paused→in_progress 恢复边，搬运语义
+// 单源）。新增任务状态写入一律走 lifecycle-runs 服务函数，不得在本文件追加直调。
 import { getTask, transitionTaskStatus, type TaskRow } from '../storage/tasks/repo';
 import { notifyExecutor, buildKickoffBody } from './executor';
 import { failRun, markTaskCancelled } from './lifecycle-runs';
