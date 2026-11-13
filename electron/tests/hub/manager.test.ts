@@ -10,6 +10,7 @@
 // 6. 信任源撤销（F2）：forget / 换址收回旧 hub origin 的下载授权。
 // 7. parseTaskAssigned 挑字段面（M4.3：task.dependsOn 剥除——依赖闸在 leader 侧，worker 零消费）。
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { __setElectronApisForTest } from '../../src/main/electron-access';
 import type { EventEnvelope } from '../../src/main/hub/protocol';
 import type { DelegationRecord } from '../../src/main/hub/delegation-store';
 import {
@@ -66,10 +67,14 @@ const applier = vi.hoisted(() => ({
   ok: true as boolean,
 }));
 
-vi.mock('electron', () => ({
+// electron 注入（2026-11-13）：hub/index.ts 已改走 electron-access 的惰性取用
+// （顶层 import 'electron' 会让打包子进程 boot 即崩），而 vi.mock 只拦 transformed
+// import、不拦 electron-access 内部的 raw require——必须用显式注入喂假件。
+__setElectronApisForTest({
   BrowserWindow: {
     getAllWindows: () => [
       {
+        isDestroyed: () => false,
         webContents: {
           send: (channel: string, payload: unknown): void => {
             m.calls.push(`broadcast:${channel}`);
@@ -79,7 +84,7 @@ vi.mock('electron', () => ({
       },
     ],
   },
-}));
+});
 
 // client 层替身：只复刻状态迁移（start→connecting / stop→disconnected）与入参记录，
 // 不复刻 client 内部 setState→onStateChange 的回调副作用——manager 侧的回调消费

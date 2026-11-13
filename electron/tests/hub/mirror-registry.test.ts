@@ -10,6 +10,7 @@
 // 失忆限制（M2 协议无重放/无查询 RPC）：登记表只累积本机在线期间收到的组内广播——
 // 晚入组 / 离线期间发生的镜像不可恢复，直至同键下一次镜像事件；M3 票：hub 查询式清单 RPC。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { __setElectronApisForTest } from '../../src/main/electron-access';
 import Database from 'better-sqlite3';
 import type { Database as DB } from 'better-sqlite3';
 import fs from 'node:fs';
@@ -36,10 +37,13 @@ const m = vi.hoisted(() => ({
   seq: 0,
 }));
 
-vi.mock('electron', () => ({
+// 窗口广播假件走显式注入（hub/index.ts 现经 electron-access 惰性取用，
+// vi.mock 拦不到其内部 raw require——2026-11-13）
+__setElectronApisForTest({
   BrowserWindow: {
     getAllWindows: () => [
       {
+        isDestroyed: () => false,
         webContents: {
           send: (channel: string, payload: unknown): void => {
             m.sent.push({ channel, payload });
@@ -48,7 +52,7 @@ vi.mock('electron', () => ({
       },
     ],
   },
-}));
+});
 
 vi.mock('../../src/main/hub/client', () => ({
   createHubClient: (opts: CapturedOpts) => {

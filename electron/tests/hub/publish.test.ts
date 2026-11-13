@@ -20,6 +20,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { __setElectronApisForTest } from '../../src/main/electron-access';
 import { closeDb, getDb, runMigrations } from '../../src/main/storage/db';
 import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keychain';
 import { parseAgentManifest } from '../../src/main/agent/manifest-parser';
@@ -61,9 +62,15 @@ vi.mock('electron', () => ({
   ipcMain: {
     handle: (ch: string, fn: (...args: unknown[]) => unknown) => m.handlers.set(ch, fn),
   },
+}));
+
+// 窗口广播假件走显式注入（hub/index.ts 现经 electron-access 惰性取用，
+// vi.mock 拦不到其内部 raw require——2026-11-13）
+__setElectronApisForTest({
   BrowserWindow: {
     getAllWindows: () => [
       {
+        isDestroyed: () => false,
         webContents: {
           send: (channel: string, payload: unknown): void => {
             m.sent.push({ channel, payload });
@@ -72,7 +79,7 @@ vi.mock('electron', () => ({
       },
     ],
   },
-}));
+});
 
 vi.mock('../../src/main/hub/client', () => ({
   createHubClient: (opts: CapturedOpts) => {

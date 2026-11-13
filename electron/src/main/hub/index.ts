@@ -1,6 +1,10 @@
 // HubManager 单例——主进程生命周期接线（taskExecutor 同款模块级单例模式）。
 // 职责：读配置+凭证 → 起停 HubClient；状态/事件转发全部窗口（webContents.send）。
-import { BrowserWindow } from 'electron';
+// 禁止顶层 import 'electron'（2026-11-13 实机 P0）：本文件在 runtime 子进程静态图内
+// （runtime-entry → … → resource/hub/momo-hub → hub/index），而打包产物 asar 里没有
+// electron npm 包——顶层 import 会让子进程 boot 即 MODULE_NOT_FOUND（exit 1），
+// WarmPool 预热全灭、agent 恒不回复。统一经 electron-access 惰性取用 + 不可用降级。
+import { loadElectronApis } from '../electron-access';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
 import { createHubClient, enrollOverHttp, type HubClient, type HubConnectionState } from './client';
@@ -322,6 +326,9 @@ function isDelegationTeam(raw: unknown): raw is { members: Array<{ name: string;
 }
 
 function broadcast(channel: string, payload: unknown): void {
+  // 子进程内（无 electron API）降级为 no-op：广播只是 UI 刷新，绝不因取不到窗口抛错
+  const { BrowserWindow } = loadElectronApis();
+  if (!BrowserWindow) return;
   for (const w of BrowserWindow.getAllWindows()) w.webContents.send(channel, payload);
 }
 

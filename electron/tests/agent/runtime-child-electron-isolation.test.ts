@@ -11,6 +11,8 @@
 // src/main/electron-access.ts 的 loadElectronApis() 惰性取用并做不可用降级。
 
 import { describe, it, expect, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 
 // 模拟打包子进程：require('electron') 抛 MODULE_NOT_FOUND（工厂抛错会在被测模块
 // 顶层 require 'electron' 时向上传播——正是打包产物的真实失败形态）
@@ -18,7 +20,94 @@ vi.mock('electron', () => {
   throw new Error("Cannot find module 'electron'");
 });
 
+// ─── 真实依赖图遍历（2026-11-13 实机 P0 教训）──────────────────────────────
+// 旧版本本文件是**手工清单**（apply-patch-tools / stream-relay / git-policy），
+// 新增边（runtime-entry → … → resource/hub/momo-hub → hub/index 的顶层
+// `import { BrowserWindow } from 'electron'`）无人登记，手工清单查不出，
+// 导致打包后 runtime 子进程 boot 即 exit 1 → WarmPool 全灭 → agent 恒不回复。
+// 现改为从真实入口静态遍历相对 import，机械断言「子进程图内零 electron 值依赖」，
+// 新增模块无需登记。
+
+const SRC_MAIN = path.resolve(__dirname, '../../src/main');
+const ENTRY = path.join(SRC_MAIN, 'agent/runtime-entry.ts');
+
+/** 解析相对 specifier 到真实源文件（.ts / .tsx / 目录 index.ts） */
+function resolveRelative(fromFile: string, spec: string): string | null {
+  const base = path.resolve(path.dirname(fromFile), spec);
+  const candidates = [base + '.ts', base + '.tsx', path.join(base, 'index.ts')];
+  for (const c of candidates) if (fs.existsSync(c)) return c;
+  return null;
+}
+
+/** 从入口 BFS 收集静态依赖图内的全部源文件 */
+function collectReachable(entry: string): string[] {
+  const seen = new Set<string>();
+  const queue = [entry];
+  while (queue.length > 0) {
+    const file = queue.pop()!;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const src = fs.readFileSync(file, 'utf8');
+    const specRe = /(?:from\s+|require\(\s*)['"](\.[^'"]+)['"]/g;
+    let m: RegExpExecArray | null;
+    while ((m = specRe.exec(src)) !== null) {
+      const spec: string | undefined = m[1];
+      if (spec === undefined) continue;
+      const next = resolveRelative(file, spec);
+      if (next !== null && !seen.has(next)) queue.push(next);
+    }
+  }
+  return [...seen];
+}
+
+/** 该文件是否存在对 electron 的运行期依赖（type-only import 与 typeof import() 会被擦除，放行） */
+function electronRuntimeDeps(src: string): string[] {
+  // 先剥注释：源码里的「原实现 require('electron')…」这类说明文字不应被误判
+  const code = src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  const hits: string[] = [];
+  const importRe = /^[ \t]*import\s+(type\s+)?([^;]*?)\s+from\s+['"]electron['"]/gm;
+  let m: RegExpExecArray | null;
+  while ((m = importRe.exec(code)) !== null) {
+    // `import { type A } from` 这种内联 type 修饰仍需逐项判断——出现非 type 项即违规
+    const clause = m[2] ?? '';
+    const inlineOnlyType =
+      /^\{\s*(type\s+\w+(?:\s*,\s*type\s+\w+)*\s*,?\s*)\}$/.test(clause.trim());
+    if (m[1] === 'type' || inlineOnlyType) continue;
+    hits.push(`import ... from 'electron' → ${clause.trim().slice(0, 60)}`);
+  }
+  if (/^[ \t]*import\s+['"]electron['"]/m.test(code)) hits.push("side-effect import 'electron'");
+  if (/require\(\s*['"]electron['"]\s*\)/.test(code)) hits.push("require('electron')");
+  if (/import\(\s*['"]electron['"]\s*\)/.test(code)) hits.push("dynamic import('electron')");
+  return hits;
+}
+
+/**
+ * 唯一豁免：electron-access.ts 本身就是「惰性取 electron API」的封装层
+ * ——它内部必须 require('electron')（并 try/catch 降级），type import 也只是类型。
+ */
+const SANCTIONED = new Set(['electron-access.ts']);
+
 describe('runtime 子进程 electron 隔离（打包回归锁）', () => {
+  it('runtime-entry 静态依赖图内零 electron 运行期依赖（真实图遍历，非手列清单）', () => {
+    const files = collectReachable(ENTRY);
+    // 图规模下限自检：防止解析逻辑失效导致「空图永远绿」
+    expect(files.length).toBeGreaterThan(200);
+    // 图内必须真的覆盖到曾翻车的 hub/index（否则遍历等于没查到关键路径）
+    expect(files.some((f) => f.endsWith(path.join('hub', 'index.ts')))).toBe(true);
+
+    const offenders = files
+      .map((file) => ({
+        file: path.relative(SRC_MAIN, file).replace(/\\/g, '/'),
+        deps: SANCTIONED.has(path.basename(file)) ? [] : electronRuntimeDeps(fs.readFileSync(file, 'utf8')),
+      }))
+      .filter((x) => x.deps.length > 0)
+      .map((x) => `${x.file}: ${x.deps.join(' | ')}`);
+
+    expect(offenders).toEqual([]);
+  });
+
   it('apply-patch-tools 在 electron 不可解析时仍可加载', async () => {
     const mod = await import('../../src/main/agent/tools/apply-patch-tools');
     expect(mod.ApplyPatchTools).toBeDefined();

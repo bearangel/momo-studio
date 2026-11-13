@@ -14,6 +14,7 @@ import path from 'node:path';
 import { listPlugins, isPluginEnabled } from './registry';
 import { resolvePluginRoot } from './assembly';
 import { PLUGIN_PANEL_SCHEME } from './protocol';
+import { loadElectronApis } from '../electron-access';
 import { logger } from '../logger';
 import type { PluginRecord } from './types';
 
@@ -190,13 +191,14 @@ export function notifyPanelsChanged(
   broadcast(PLUGIN_PANEL_CHANGED_CHANNEL);
 }
 
-/** 生产广播：所有窗口 webContents.send。electron 懒加载——非 Electron 运行时
- *  （vitest）require 返回路径字符串，此时无窗口可推，静默跳过（keychain 同款先例） */
+/** 生产广播：所有窗口 webContents.send。electron 经 electron-access 惰性取用——
+ *  打包子进程（ELECTRON_RUN_AS_NODE）内 require('electron') 直接 MODULE_NOT_FOUND，
+ *  原 typeof===string 判定只能挡 vitest 形态；非 Electron 运行时可取到 undefined，
+ *  此时无窗口可推，静默跳过。 */
 function defaultBroadcast(channel: string): void {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const electron = require('electron') as typeof import('electron') | string;
-  if (typeof electron === 'string') return;
-  for (const win of electron.BrowserWindow.getAllWindows()) {
+  const { BrowserWindow } = loadElectronApis();
+  if (!BrowserWindow) return;
+  for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send(channel);
   }
 }
@@ -216,10 +218,9 @@ export function wirePanelEventPush(
 }
 
 function defaultPayloadBroadcast(channel: string, payload: { event: string; payload: unknown }): void {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const electron = require('electron') as typeof import('electron') | string;
-  if (typeof electron === 'string') return;
-  for (const win of electron.BrowserWindow.getAllWindows()) {
+  const { BrowserWindow } = loadElectronApis();
+  if (!BrowserWindow) return;
+  for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send(channel, payload);
   }
 }

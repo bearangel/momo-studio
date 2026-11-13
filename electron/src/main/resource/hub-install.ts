@@ -21,6 +21,7 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import { getDb } from '../storage/db';
+import { loadElectronApis } from '../electron-access';
 import { logger } from '../logger';
 import { registerMcpDefinition, listRegistered, deleteRegistered, isAllowedRemoteUrl } from '../mcp/host-manager';
 import { removeMcpRefsFromAgents } from '../agent/crud';
@@ -361,10 +362,11 @@ export function __clearHubInstallProgressListenersForTest(): void {
 /** 生产广播：全部窗口 webContents.send（panel-sync defaultBroadcast 同款懒加载——
  *  vitest 里 require('electron') 返回路径字符串，无窗口可推静默跳过） */
 function broadcastProgressToWindows(e: HubInstallProgressEvent): void {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const electron = require('electron') as typeof import('electron') | string;
-  if (typeof electron === 'string') return;
-  for (const win of electron.BrowserWindow.getAllWindows()) {
+  // 经 electron-access 惰性取用：打包子进程内 require('electron') 会 MODULE_NOT_FOUND
+  // （2026-11-13 P0），typeof===string 判定只挡得住 vitest 形态
+  const { BrowserWindow } = loadElectronApis();
+  if (!BrowserWindow) return;
+  for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send(HUB_INSTALL_PROGRESS_CHANNEL, e);
   }
 }

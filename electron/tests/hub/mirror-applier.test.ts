@@ -24,6 +24,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { __setElectronApisForTest } from '../../src/main/electron-access';
 import { closeDb, getDb, runMigrations } from '../../src/main/storage/db';
 import { createGroupBindingStore } from '../../src/main/hub/group-binding-store';
 import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keychain';
@@ -43,8 +44,11 @@ import type { SnapshotModelBinding, SnapshotMemberModelBinding } from '../../src
 // 进程边界替身（snapshot-builder.test.ts 同款——applier → hub-install → momo-hub 链）
 vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
-  BrowserWindow: { getAllWindows: () => [] },
 }));
+
+// 窗口广播假件走显式注入（hub/index.ts 现经 electron-access 惰性取用，
+// vi.mock 拦不到其内部 raw require——2026-11-13）
+__setElectronApisForTest({ BrowserWindow: { getAllWindows: () => [] } });
 vi.mock('../../src/main/hub/client', () => ({
   createHubClient: vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), state: (): string => 'disconnected', hubProtoVer: (): string | null => null })),
   enrollOverHttp: vi.fn(async () => ({ nodeId: 'node-1', deviceToken: 'tok-1' })),
