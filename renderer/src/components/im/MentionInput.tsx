@@ -244,6 +244,12 @@ export function MentionInput() {
       ? false
       : (s.sessions.find((x) => x.id === s.activeSessionId)?.readOnly ?? false),
   );
+  // sessions 未水合守卫（T24，T23 minor#2）：冷启动 activeSessionId 已恢复而
+  // sessions 列表仍在拉取时 find 落空 → trackingReadOnly 误判 false，编辑面
+  // 闪一帧可写窗口；loading 且列表为空期间渲染「加载中」占位，水合后按真实
+  // readOnly 分支
+  const sessionsHydrating =
+    useSessionStore((s) => s.loading) && sessions.length === 0 && activeSessionId !== null;
   const inputFocusTick = useSessionStore((s) => s.inputFocusTick);
   // 工具条选择按钮触发信号（2026-11-05）：InputToolbar 五按钮 bump
   const mentionTrigger = useSessionStore((s) => s.mentionTrigger);
@@ -1068,7 +1074,14 @@ export function MentionInput() {
       {/* 委派跟踪只读态（T23，预览合同 #18）：输入区整体禁用占位——Lock 14px +
           文案 13px text-disabled，min-height 42px / opacity .5 / 底透明。
           HumanRequestPanel 独立挂载于 composer 上方（T22），不受影响 */}
-      {trackingReadOnly ? (
+      {sessionsHydrating ? (
+        <div
+          data-testid="composer-hydrating"
+          className="flex min-h-[42px] items-center rounded-lg border border-subtle px-3 text-[13px] text-disabled opacity-50"
+        >
+          加载中…
+        </div>
+      ) : trackingReadOnly ? (
         <div
           data-testid="composer-readonly"
           className="flex min-h-[42px] items-center gap-2 rounded-lg border border-subtle px-3 text-[13px] text-disabled opacity-50"

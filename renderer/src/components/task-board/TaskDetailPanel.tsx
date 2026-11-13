@@ -17,12 +17,24 @@
 //       已归档（archivedAt 非 null）→ 只读：操作栏/编辑入口整体隐藏
 //   - "进入执行会话"（G2）：locateTaskExecution——全状态可用，完结任务也能回看执行记录
 //   - "来源消息定位"（G2）：locateMessage——跳回来源会话并锚定创建任务的原始消息
+//   - 任务生命周期 v2（Task 24，预览合同 .omo/previews/2026-11-13-task-lifecycle-board.html
+//     第 4 节 / 定值清单 #19-#21）：
+//       · run 时间线（#19）：ipc.task.listRuns 按 run_no ASC——run 状态色点
+//         （失败/打回红、执行 accent、等待人工 warning+光环、提交 accent 描边、
+//         验收绿、取消中性）、起止时间、rejected 行打回理由引用、submitted/
+//         accepted 行交付摘要一行；task:runChanged 推送按 taskId 三路刷新
+//       · 未决请求聚合（#20）：ipc.human.list({taskId})（缺省 pending）——精简
+//         只读列表行 + 「到会话处理」跳转（selectSession + 切 im 视图；不挂
+//         T22 卡组件——面板双挂载焦点冲突，Task 24 裁定）；#7 的 N 计数仅此处展示
+//       · 验收操作区（#21）：任务 submitted 态显示——通过 task.accept / 打回
+//         复用 RejectReasonDialog（#17 空理由禁用）→ task.reject；非 submitted 不显示
 import { useEffect, useState } from 'react';
 import {
   Bot,
   Calendar,
   Clock,
   MessagesSquare,
+  Shield,
   Users,
   X,
 } from 'lucide-react';
@@ -30,15 +42,25 @@ import { ipc } from '../../ipc/client';
 import { useSessionStore } from '../../stores/session.store';
 import { useStreamStore } from '../../stores/stream.store';
 import { useTaskStore } from '../../stores/task.store';
-import type { TaskRow } from '../../ipc/types';
+import { useUiStore } from '../../stores/ui.store';
+import type {
+  HumanRequestKind,
+  HumanRequestRow,
+  TaskRow,
+  TaskRunRow,
+  TaskRunStatus,
+  TaskRunTrigger,
+} from '../../ipc/types';
 import { PENDING_WRAP_UP_STYLE, taskStatusStyle } from '../../lib/task-status';
 import { hasDelegationTarget, isEditableStatus } from '../../lib/board';
 import { buildTurnReconcileNotice, collectOpenTodoItems } from '../../lib/turn-reconcile';
 import { humanizeRecurrence } from '../../lib/recurrence';
 import { locateMessage, locateTaskExecution } from '../../lib/locate-message';
+import { Badge, type BadgeTone } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { showToast } from '../ui/Toast';
 import { EditTaskDialog } from './EditTaskDialog';
+import { RejectReasonDialog } from './RejectReasonDialog';
 import { TaskChangesView } from './TaskChangesView';
 import { useTaskEntityNames } from './useTaskEntityNames';
 import { usePendingWrapUp } from './usePendingWrapUp';
@@ -61,6 +83,81 @@ function formatTime(ms: number | null): string {
   return new Date(ms).toLocaleString('zh-CN', { hour12: false });
 }
 
+// ── run 时间线（预览合同 #19）────────────────────────────────────────────────
+
+const RUN_STATUS_LABEL: Record<TaskRunStatus, string> = {
+  running: '执行中',
+  waiting_human: '等待人工',
+  submitted: '已提交待验收',
+  accepted: '验收通过',
+  rejected: '被打回',
+  failed: '失败',
+  cancelled: '已取消',
+};
+
+/** 非 initial 触发的返工/重试标记徽标文案（initial 首跑无标记，与卡片 #8 同语义） */
+const TRIGGER_BADGE: Partial<Record<TaskRunTrigger, string>> = {
+  rework: '返工',
+  quota_retry: '配额重试',
+  manual: '手动',
+};
+
+/**
+ * run 状态 → 时间线圆点（#19：失败/打回 error 实心、执行 accent-500 实心、
+ * 等待人工 warning 实心 + 3px warning-tint 光环、提交 accent 1.5px 描边空心、
+ * 验收绿实心、取消中性默认色）。返回串为静态字面量——Tailwind 扫描可见。
+ */
+function runDotClass(status: TaskRunStatus): string {
+  switch (status) {
+    case 'failed':
+    case 'rejected':
+      return 'bg-status-error';
+    case 'running':
+      return 'bg-accent-500';
+    case 'waiting_human':
+      return 'bg-status-warning shadow-[0_0_0_3px_var(--status-warning-tint)]';
+    case 'submitted':
+      return 'border-[1.5px] border-accent-500';
+    case 'accepted':
+      return 'bg-status-success';
+    default:
+      return 'bg-strong';
+  }
+}
+
+function formatRunTime(ms: number): string {
+  return new Date(ms).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' });
+}
+
+/** deliverableJson 形状（electron submitTask 落库：{ summary, files, artifacts }）；畸形 → null 降级不渲染 */
+function parseDeliverable(raw: string | null): { summary: string; files: string[] } | null {
+  if (raw === null) return null;
+  try {
+    const parsed = JSON.parse(raw) as { summary?: unknown; files?: unknown };
+    if (typeof parsed.summary !== 'string') return null;
+    const files =
+      Array.isArray(parsed.files) && parsed.files.every((f) => typeof f === 'string')
+        ? (parsed.files as string[])
+        : [];
+    return { summary: parsed.summary, files };
+  } catch {
+    return null;
+  }
+}
+
+// ── 未决请求聚合（预览合同 #20）──────────────────────────────────────────────
+
+/** kind 徽标（label/tone 与 T22 HumanRequestPanel KIND_META 同源词表，双向同步） */
+const KIND_BADGE: Record<HumanRequestKind, { label: string; tone: BadgeTone }> = {
+  tool_gate: { label: '工具门', tone: 'warning' },
+  question: { label: '提问', tone: 'accent' },
+  manual_action: { label: '人工操作', tone: 'violet' },
+  acceptance: { label: '验收', tone: 'success' },
+};
+
+/** btn-sm（#20/#21 合同 24px 高）——Button size=sm 基类 28px，按合同覆写 */
+const BTN_SM = 'h-6 px-[9px] text-[11.5px]';
+
 export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
   // 首帧初值：task.store 命中行（zustand 单例跨视图保留——切执行会话再切回
   // 看板时抽屉重开，列表已有该行，零等待渲染，消除「空白一段时间」）；
@@ -70,6 +167,11 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
   const [task, setTask] = useState<TaskRow | null>(storeTask);
   const [editOpen, setEditOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  // Task 24：run 时间线 / 未决请求 / 验收打回
+  const [runs, setRuns] = useState<TaskRunRow[]>([]);
+  const [pendingRequests, setPendingRequests] = useState<HumanRequestRow[]>([]);
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [acceptBusy, setAcceptBusy] = useState(false);
   const refreshTask = (): void => {
     void ipc.task
       .get(taskId)
@@ -78,6 +180,23 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
       })
       .catch(() => {
         // get 失败保持现状——下一轮轮询兜底
+      });
+  };
+  const refreshRuns = (): void => {
+    void ipc.task
+      .listRuns(taskId)
+      .then(setRuns)
+      .catch(() => {
+        // 拉取失败保持现状——runChanged 推送 / 下次打开兜底
+      });
+  };
+  const refreshPending = (): void => {
+    // human.list 缺省 status='pending'——只看未决（Task 16 契约）
+    void ipc.human
+      .list({ taskId })
+      .then(setPendingRequests)
+      .catch(() => {
+        // 同上：瞬时 IPC 错误不清空既有列表
       });
   };
 
@@ -95,6 +214,35 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
     return () => {
       cancelled = true;
       clearInterval(interval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    // 切任务先清旧数据，防上一任务的 runs/请求闪现
+    setRuns([]);
+    setPendingRequests([]);
+    refreshRuns();
+    refreshPending();
+    // runChanged（本任务）→ 三路刷新：runs 时间线 / 未决请求（acceptance 顶替、
+    // supersede/cancel 只发 runChanged 的兜底路径）/ 任务行（submitted → completed 投影）
+    const offRun = ipc.task.onTaskRunChanged((e) => {
+      if (cancelled || e.taskId !== taskId) return;
+      refreshRuns();
+      refreshPending();
+      refreshTask();
+    });
+    // 会话内答复（tool_gate 不改 run 状态、不发 runChanged）→ 单刷未决列表；
+    // 事件载荷无 taskId 无法定点，面板打开期间单条 human:list 代价可控
+    const offHuman = ipc.human.onChanged(() => {
+      if (cancelled) return;
+      refreshPending();
+    });
+    return () => {
+      cancelled = true;
+      offRun();
+      offHuman();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskId]);
@@ -156,6 +304,32 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
       await ipc.task.cancel(taskId);
       onClose();
     });
+  };
+
+  /** 验收/打回共通：成功后立即三路刷新（runChanged 推送亦到，显式刷防闪烁） */
+  const operateAcceptance = (action: () => Promise<unknown>): void => {
+    setActionError(null);
+    setAcceptBusy(true);
+    action()
+      .then(() => {
+        refreshTask();
+        refreshRuns();
+        refreshPending();
+      })
+      .catch((err: unknown) => {
+        setActionError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => setAcceptBusy(false));
+  };
+
+  const handleAccept = (): void => {
+    operateAcceptance(() => ipc.task.accept(taskId));
+  };
+
+  /** 未决请求「到会话处理」跳转（Task 24 裁定：精简行 + 跳转，不双挂 T22 卡） */
+  const handleGoSession = (sessionId: string): void => {
+    void useSessionStore.getState().selectSession(sessionId);
+    useUiStore.getState().setActiveView('im');
   };
 
   /** G2：执行会话定位（全状态可用——完结任务也能回看执行记录） */
@@ -354,6 +528,102 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
             </div>
           )}
         </div>
+        {/* ── run 时间线（预览合同 #19）——listRuns 按 run_no ASC；无 run 的任务整节不渲染 */}
+        {runs.length > 0 && (
+          <section data-testid="task-run-timeline" aria-label="run 时间线">
+            <div className="mb-2 text-xs font-semibold text-secondary">run 时间线</div>
+            <div className="flex flex-col">
+              {runs.map((run, i) => {
+                const deliverable =
+                  run.status === 'submitted' || run.status === 'accepted'
+                    ? parseDeliverable(run.deliverableJson)
+                    : null;
+                return (
+                  <div
+                    key={run.id}
+                    data-testid={`task-run-row-${run.runNo}`}
+                    className="relative flex gap-2.5 pb-[11px] last:pb-0"
+                  >
+                    {i < runs.length - 1 && (
+                      <div className="absolute bottom-0 left-[4px] top-[13px] w-px bg-subtle" />
+                    )}
+                    <span
+                      aria-hidden
+                      className={`z-[1] mt-1 h-[9px] w-[9px] shrink-0 rounded-full ${runDotClass(run.status)}`}
+                    />
+                    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <div className="flex flex-wrap items-center gap-1.5 text-[11.5px] font-medium text-primary">
+                        run #{run.runNo} {RUN_STATUS_LABEL[run.status]}
+                        {TRIGGER_BADGE[run.trigger] !== undefined && (
+                          <Badge tone="neutral">{TRIGGER_BADGE[run.trigger]}</Badge>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-tertiary">
+                        {formatRunTime(run.startedAt)} –{' '}
+                        {run.endedAt !== null ? formatRunTime(run.endedAt) : '至今'}
+                      </div>
+                      {run.status === 'rejected' && run.rejectReason !== null && (
+                        <div className="mt-0.5 border-l-[3px] border-strong pl-2.5 text-[11px] leading-relaxed text-secondary">
+                          {run.rejectReason}
+                        </div>
+                      )}
+                      {deliverable !== null && (
+                        <div
+                          className="truncate text-[11px] text-tertiary"
+                          title={deliverable.summary}
+                        >
+                          交付：{deliverable.summary}
+                          {deliverable.files.length > 0 ? ` · ${deliverable.files.length} 文件` : ''}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+        {/* ── 未决请求聚合（预览合同 #20）——精简只读行 + 跳转；#7 的 N 计数仅此处展示 */}
+        {pendingRequests.length > 0 && (
+          <section data-testid="task-pending-requests">
+            <div className="mb-2 text-xs font-semibold text-secondary">
+              未决请求（{pendingRequests.length}）
+            </div>
+            <PendingRequestBlock rows={pendingRequests} onGoSession={handleGoSession} />
+          </section>
+        )}
+        {/* ── 验收操作区（预览合同 #21）——仅任务 submitted 态显示（Task 24 裁定：
+            非 submitted 不渲染，预览的禁用态示意不落地） */}
+        {task.status === 'submitted' && (
+          <section data-testid="task-acceptance">
+            <div className="mb-2 text-xs font-semibold text-secondary">验收操作</div>
+            <div className="flex flex-col gap-2 rounded-lg border border-strong p-2.5">
+              <div className="text-[11px] leading-relaxed text-tertiary">
+                已提交待验收 · 打回必填理由（空理由禁用确认），打回将生成新 run 并回到排队中。
+              </div>
+              <div className="flex flex-wrap items-center gap-[7px]">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  className={BTN_SM}
+                  disabled={acceptBusy}
+                  onClick={handleAccept}
+                >
+                  验收通过
+                </Button>
+                <Button
+                  variant="danger-outline"
+                  size="sm"
+                  className={BTN_SM}
+                  disabled={acceptBusy}
+                  onClick={() => setRejectOpen(true)}
+                >
+                  打回返工
+                </Button>
+              </div>
+            </div>
+          </section>
+        )}
         {/* 变更查看（2026-09-30 预览确认）：纯只读分区替代旧「变更与回滚」——
             视觉与气泡 ChangesChip 同款，回滚统一走气泡右下角 TurnUndoButton
             （仅最后气泡渲染），任务面板不感知回滚资格。会话已删除（悬空
@@ -433,6 +703,62 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
           workspaceId={task.workspaceId}
         />
       )}
+      {rejectOpen && (
+        <RejectReasonDialog
+          task={task}
+          onConfirm={(reason) => {
+            setRejectOpen(false);
+            operateAcceptance(() => ipc.task.reject(taskId, reason));
+          }}
+          onClose={() => setRejectOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** 未决请求聚合块（#20：warning 边框 8px 圆角 + warning-tint 头 + kind 徽标行） */
+function PendingRequestBlock({
+  rows,
+  onGoSession,
+}: {
+  rows: HumanRequestRow[];
+  onGoSession: (sessionId: string) => void;
+}) {
+  // 超时预警提示（#20 头部）：有 deadline 的行里最近的剩余分钟；无 deadline 显示纯计数
+  const now = Date.now();
+  const earliestRemain = rows.reduce<number | null>((min, r) => {
+    if (r.deadlineAt === null) return min;
+    const remain = Math.max(0, Math.ceil((r.deadlineAt - now) / 60_000));
+    return min === null ? remain : Math.min(min, remain);
+  }, null);
+  return (
+    <div className="overflow-hidden rounded-lg border border-status-warning">
+      <div className="flex items-center gap-1.5 bg-status-warning-tint px-2.5 py-[7px] text-[11.5px] font-semibold text-status-warning">
+        <Shield size={12} strokeWidth={1.75} aria-hidden />
+        {rows.length} 项等待
+        {earliestRemain !== null && ` · 最早 ${earliestRemain} 分钟后超时预警`}
+      </div>
+      {rows.map((req) => (
+        <div
+          key={req.id}
+          data-testid={`task-pending-row-${req.id}`}
+          className="flex items-center gap-2 border-t border-subtle px-2.5 py-[9px] text-[11.5px]"
+        >
+          <Badge tone={KIND_BADGE[req.kind].tone}>{KIND_BADGE[req.kind].label}</Badge>
+          <span className="min-w-0 flex-1 truncate text-primary" title={req.prompt}>
+            {req.title}
+          </span>
+          <Button
+            size="sm"
+            className={BTN_SM}
+            onClick={() => onGoSession(req.sessionId)}
+            title="跳转到该请求所属会话，在请求面板中处理"
+          >
+            到会话处理
+          </Button>
+        </div>
+      ))}
     </div>
   );
 }

@@ -21,6 +21,14 @@ const mockApi = {
   task: {
     list: vi.fn().mockResolvedValue([]),
     get: vi.fn().mockResolvedValue(null),
+    // Task 24：详情抽屉内 TaskDetailPanel 挂载即拉 runs / 订阅 runChanged
+    listRuns: vi.fn().mockResolvedValue([]),
+    onTaskRunChanged: vi.fn().mockReturnValue(() => {}),
+  },
+  // Task 24：未决请求聚合 + human:changed 订阅（抽屉打开时消费）
+  human: {
+    list: vi.fn().mockResolvedValue([]),
+    onChanged: vi.fn().mockReturnValue(() => {}),
   },
   settings: {
     getGlobal: getGlobalMock,

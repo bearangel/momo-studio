@@ -45,6 +45,8 @@ const { sessionState, taskState, workspaceState } = vi.hoisted(() => ({
     // （含当前会话），MentionInput 侧过滤排除 activeSessionId。组件消费
     // s.sessions 字段，注入同 store 既有 setter 形态（直接赋值）。
     sessions: [] as SessionSummary[],
+    // sessions 水合进行中标记（T24 水合守卫消费；对齐真实 store loading 字段）
+    loading: false,
     sendMessage: vi.fn(),
     loadSessions: vi.fn(),
     activeSessionReadOnly: false,
@@ -288,6 +290,7 @@ function resetState(): void {
   sessionState.activeSessionId = 'sess-1';
   sessionState.members = [];
   sessionState.sessions = [];
+  sessionState.loading = false;
   sessionState.sendMessage = vi.fn().mockResolvedValue(undefined);
   sessionState.loadSessions = vi.fn().mockResolvedValue(undefined);
   sessionState.activeSessionReadOnly = false;
@@ -396,6 +399,28 @@ describe('MentionInput 委派跟踪只读态（T23）', () => {
     render(<MentionInput />);
     expect(screen.queryByTestId('composer-readonly')).not.toBeInTheDocument();
     expect(editor()).toHaveAttribute('contenteditable', 'true');
+  });
+
+  // T24（T23 minor#2 顺手项）：冷启动 activeSessionId 已恢复而 sessions 未水合
+  //（空列表 + loading）——find 落空会让 trackingReadOnly 误判 false，编辑面闪
+  // 一帧可写窗口；守卫渲染「加载中」占位，水合后按真实 readOnly 分支
+  it('sessions 未水合（空列表 + loading）→ 「加载中」占位，编辑面/只读占位均不渲染', () => {
+    sessionState.sessions = [];
+    sessionState.loading = true;
+    render(<MentionInput />);
+    expect(screen.getByTestId('composer-hydrating')).toHaveTextContent('加载中');
+    expect(screen.queryByTestId('composer-readonly')).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: '消息输入框' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('从电脑导入')).not.toBeInTheDocument();
+  });
+
+  it('水合完成（loading=false）→ 占位消失，按真实 readOnly 分支（跟踪只读）', () => {
+    const { rerender } = render(<MentionInput />);
+    sessionState.loading = false;
+    sessionState.sessions = [makeSummary({ id: 'sess-1', readOnly: true, delegationRole: 'out' })];
+    rerender(<MentionInput />);
+    expect(screen.queryByTestId('composer-hydrating')).not.toBeInTheDocument();
+    expect(screen.getByTestId('composer-readonly')).toHaveTextContent('只读跟踪会话 · 操作经请求面板');
   });
 });
 
