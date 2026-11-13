@@ -6,6 +6,27 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 编排簿记行看板治理：终态归档 / 来源多选过滤 / 外派空白菜单守卫
+
+`2.1.0-alpha.64`。来源：用户实测反馈（dispatch 簿记行无限累积挤占看板 500 行查询窗口、终态行零
+清理通道；外派终态卡右键弹空白菜单）。预览合同 `.omo/previews/dispatch-board-cleanup.html`（v2
+批准）+ 消费面矩阵 + 实施计划（Momus 一次通过）。
+
+- **A 终态归档**：`task:archive` / `task:unarchive` 豁免 D4 只读守卫（其余九写通道不动，isTerminal
+  兜底拦截在途行）；终态编排卡右键出「仅归档」菜单（顶置不出现——与主进程守卫两端一致）；
+  **followup 复活纪律**：`ledgerInsertDispatch` 复用分支复位时清 `archivedAt`（防运行链被归档
+  隐藏）。配额复活场景经分析不可达（quota 只认 in_progress、归档仅终态、迟到 settle 幂等短路先行）
+- **B 来源多选下拉**：`task.list` 增 `origin?: TaskOrigin[]`（IPC 两端同 commit；空数组跳过）；
+  BoardToolbar 新「来源」多选下拉（用户任务/编排任务/平行草稿，至少保留一项，摘要全名连接）；
+  查询级过滤（非视图遮盖——部分选择才收窄 500 行窗口），偏好持久化 `kanban-origin-filter`
+  （脏存储回退全选）
+- **C-1 空白菜单守卫**：DelegatedTaskCard 右键菜单增 `canCancel‖canAnswer‖canRetry‖canRedispatch`
+  开启门——终态零可用动作不弹（对齐 BoardCard 对 dispatch 行纪律），非终态菜单零变化
+- **测试**：electron 43（归档豁免/在途拒绝/复活/origin 过滤）+ renderer 123（BoardCard 终态菜单/
+  下拉交互/持久化/store 透传/外派守卫）；双 typecheck 绿；全量 electron 5977 + renderer 3437 零回归
+- **验收报告**：`.omo/qa-reports/2026-11-12-dispatch-board-cleanup/`（9 pass / 0 fail / 3 n-a；
+  明暗双主题；console 零错误；顺带发现既有 P3：BoardCard 菜单无 Escape 关闭）
+
 ## [未发布] — 亿赛通加密环境文件代理读写（File IO Proxy）
 
 `2.1.0-alpha.60`。依据 spec `docs/specs/2026-11-11-esafenet-fileio-proxy-design.md` + 实施计划
