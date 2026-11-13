@@ -3,10 +3,11 @@
 // P2 Task 3：im/files 的内嵌 ResizableSidebar 移除——RoomList/FileTree 由
 // ViewSidebar 统一承载，本组件只负责各视图的主区。
 import { useEffect, useState } from 'react';
-import { Folder } from 'lucide-react';
+import { Folder, Plus } from 'lucide-react';
 import { useUiStore } from '../../stores/ui.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useSessionStore } from '../../stores/session.store';
+import { Button } from '../ui/Button';
 import { CodeEditor } from '../editor/CodeEditor';
 import { MessageList } from '../im/MessageList';
 import { MentionInput } from '../im/MentionInput';
@@ -34,6 +35,8 @@ export function MiddlePanel() {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const sessions = useSessionStore((s) => s.sessions);
   const [showMembers, setShowMembers] = useState(false);
+  // 0-ws 兜底引导的新建对话框开关（T2：Dialog 形态取代嵌入表单）
+  const [wsDialogOpen, setWsDialogOpen] = useState(false);
 
   // 切换会话时关闭成员浮层，避免新会话显示旧成员
   useEffect(() => {
@@ -59,8 +62,8 @@ export function MiddlePanel() {
     return <SettingsView />;
   }
 
-  // 0-ws 主区引导（D1：首启创建表单随主壳迁移至此——workgroups/settings 视图
-  // 已在上方分支分发，其余视图统一落到本引导；工作组提示引导 0-ws 设备先接入）
+  // 0-ws 主区引导（T2 改造，spec 2026-11-13 §4.3：嵌入表单退役——正常入口是
+  // App 级 WorkspaceGate，此处仅防御性兜底；按钮 + Dialog 形态，取消语义成立）
   if (!workspace) {
     return (
       <div className="flex flex-1 items-center justify-center bg-canvas p-6">
@@ -70,10 +73,20 @@ export function MiddlePanel() {
             title="创建或选择一个工作空间开始"
             description="工作空间是 agent 协作与文件沙箱的根目录；也可先在左侧活动栏进入「工作组」接入节点网络"
           />
-          <CreateWorkspaceDialog
-            onClose={() => void useWorkspaceStore.getState().load()}
-            embedded
-          />
+          <Button
+            type="button"
+            onClick={() => setWsDialogOpen(true)}
+          >
+            <Plus size={14} strokeWidth={1.75} aria-hidden /> 新建工作空间
+          </Button>
+          {wsDialogOpen && (
+            <CreateWorkspaceDialog
+              onClose={() => {
+                setWsDialogOpen(false);
+                void useWorkspaceStore.getState().load();
+              }}
+            />
+          )}
         </div>
       </div>
     );

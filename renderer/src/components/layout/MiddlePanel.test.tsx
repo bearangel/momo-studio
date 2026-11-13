@@ -56,6 +56,8 @@ const mockApi = {
   workspace: {
     list: vi.fn().mockResolvedValue([]),
     create: vi.fn(),
+    // D7 目录探测（Dialog 形态提交必经；exists=true 直创不打确认层）
+    probePath: vi.fn().mockResolvedValue({ exists: true, resolvedPath: '/tmp/project', hasGit: false }),
   },
   dialog: {
     pickDirectory: vi.fn().mockResolvedValue('/tmp/picked'),
@@ -80,21 +82,30 @@ function ui(): ReactElement {
   return <MiddlePanel />;
 }
 
-describe('MiddlePanel 0-ws 主区引导（D1：首启创建表单随主壳迁入）', () => {
-  it('无 workspace → 引导文案 + 内嵌「新建工作空间」表单在场', () => {
+describe('MiddlePanel 0-ws 主区引导（T2 改造：嵌入表单退役为按钮 + Dialog，spec 2026-11-13 §4.3）', () => {
+  it('无 workspace → 引导文案 +「新建工作空间」按钮，初始无表单（不嵌 Dialog）', () => {
     render(ui());
     expect(screen.getByText('创建或选择一个工作空间开始')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /新建工作空间/ })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '新建工作空间' })).not.toBeInTheDocument();
+  });
+
+  it('点按钮 → 打开 Dialog 形态（含取消——对话框有上级界面，取消语义成立）', () => {
+    render(ui());
+    fireEvent.click(screen.getByRole('button', { name: /新建工作空间/ }));
     expect(screen.getByRole('heading', { name: '新建工作空间' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '取消' })).toBeInTheDocument();
   });
 
   it('创建成功 → store.workspaces 更新（主壳分支翻转到工作空间态的数据前提）', async () => {
     mockApi.workspace.create.mockResolvedValue(mkWs('w-new'));
     render(ui());
+    fireEvent.click(screen.getByRole('button', { name: /新建工作空间/ }));
 
     const inputs = document.querySelectorAll('input');
     fireEvent.change(inputs[0]!, { target: { value: '我的项目' } });
     fireEvent.change(inputs[1]!, { target: { value: '/tmp/project' } });
-    fireEvent.click(screen.getByRole('button', { name: '创建' }));
+    fireEvent.click(screen.getByRole('button', { name: /^创建$/ }));
 
     await waitFor(() => {
       expect(mockApi.workspace.create).toHaveBeenCalledWith({
@@ -108,9 +119,10 @@ describe('MiddlePanel 0-ws 主区引导（D1：首启创建表单随主壳迁入
     });
   });
 
-  it('表单提交缺项 → 创建按钮禁用不触发 create（空输入守卫）', () => {
+  it('Dialog 表单提交缺项 → 创建按钮禁用不触发 create（空输入守卫）', () => {
     render(ui());
-    const submit = screen.getByRole('button', { name: '创建' });
+    fireEvent.click(screen.getByRole('button', { name: /新建工作空间/ }));
+    const submit = screen.getByRole('button', { name: /^创建$/ });
     expect(submit).toBeDisabled();
     fireEvent.click(submit);
     expect(mockApi.workspace.create).not.toHaveBeenCalled();
