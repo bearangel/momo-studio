@@ -89,4 +89,37 @@ describe('tasks 看板字段', () => {
     expect(listTasks({ workspaceId: 'wsf', archived: 'all' })).toHaveLength(3);
     expect(listTasks({ workspaceId: 'wsf', groupId: 'G-009' }).map((x) => x.id)).toEqual([c.id]);
   });
+
+  // 2026-11-12 看板治理：来源多选下拉的正向集合过滤（origin IN）
+  it('listTasks origin 集合过滤：命中子集 / 空数组=不过滤 / 缺省=不过滤', async () => {
+    const u = insertTask({ workspaceId: 'ws', title: '用户行', creatorUserId: 'owner' });
+    await tick();
+    const d = insertTask({
+      workspaceId: 'ws',
+      title: '编排行',
+      creatorUserId: 'agent:pm',
+      origin: 'dispatch',
+      status: 'in_progress',
+    });
+    await tick();
+    const p = insertTask({
+      workspaceId: 'ws',
+      title: '草稿行',
+      creatorUserId: 'peer',
+      origin: 'peer_draft',
+      status: 'draft',
+    });
+    // 仅用户（=原「隐藏编排」形态）
+    expect(listTasks({ workspaceId: 'ws', origin: ['user'] }).map((x) => x.id)).toEqual([u.id]);
+    // 用户 + 平行草稿（预览 v2 摘要「来源：用户 + 平行草稿」形态）
+    expect(listTasks({ workspaceId: 'ws', origin: ['user', 'peer_draft'] }).map((x) => x.id)).toEqual([
+      u.id,
+      p.id,
+    ]);
+    // 全集三选 = 等价不过滤（排序按 created_at 升序）
+    expect(listTasks({ workspaceId: 'ws', origin: ['user', 'dispatch', 'peer_draft'] })).toHaveLength(3);
+    // 空数组跳过条件（与 sourceMessageIds 同型契约）
+    expect(listTasks({ workspaceId: 'ws', origin: [] })).toHaveLength(3);
+    expect(listTasks({ workspaceId: 'ws' })).toHaveLength(3);
+  });
 });

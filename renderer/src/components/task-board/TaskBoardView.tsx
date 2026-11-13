@@ -28,8 +28,8 @@
 // 派生默认逻辑不变（不产 dag）。
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ipc } from '../../ipc/client';
-import type { GlobalSettings, GroupRow, TaskRow } from '../../ipc/types';
-import { filterBoardTasks } from '../../lib/board';
+import type { GlobalSettings, GroupRow, TaskOrigin, TaskRow } from '../../ipc/types';
+import { filterBoardTasks, TASK_ORIGINS } from '../../lib/board';
 import { useTaskStore } from '../../stores/task.store';
 import { useGroupStore } from '../../stores/group.store';
 import { useAgentStore } from '../../stores/agent.store';
@@ -45,6 +45,8 @@ import { ArchivePanel } from './ArchivePanel';
 
 /** 泳道模式持久化 key（spec §5.3 纯 UI 偏好） */
 const LANE_MODE_STORAGE_KEY = 'kanban-lane-mode';
+/** 来源多选持久化 key（2026-11-12 看板治理：纯 UI 偏好） */
+const ORIGIN_FILTER_STORAGE_KEY = 'kanban-origin-filter';
 /** 并发上限缺省值（后端 GlobalSettings 缺 maxConcurrentTasks 字段时的 UI 兜底） */
 const MAX_CONCURRENCY_FALLBACK = 3;
 /** 列表轮询间隔（毫秒） */
@@ -74,6 +76,25 @@ function readStoredLaneMode(): LaneMode | null {
   }
 }
 
+/**
+ * 读持久化来源多选偏好（readStoredLaneMode 同款韧性）：JSON 数组须为合法来源、
+ * 非空、去重后子集——任一不满足回退全选（空看板永不因脏存储出现）。
+ */
+function readStoredOriginFilter(): TaskOrigin[] {
+  try {
+    const raw = window.localStorage.getItem(ORIGIN_FILTER_STORAGE_KEY);
+    if (raw === null) return [...TASK_ORIGINS];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [...TASK_ORIGINS];
+    const valid = [...new Set(parsed)].filter((v): v is TaskOrigin =>
+      TASK_ORIGINS.includes(v as TaskOrigin),
+    );
+    return valid.length > 0 ? valid : [...TASK_ORIGINS];
+  } catch {
+    return [...TASK_ORIGINS];
+  }
+}
+
 interface TaskBoardViewProps {
   workspaceId: string;
 }
@@ -99,6 +120,8 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
   const [createOpen, setCreateOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [archivedView, setArchivedView] = useState<ArchivedViewData>({ phase: 'idle' });
+  /** 来源多选（2026-11-12 看板治理）：持久化偏好，驱动 load 查询参数 */
+  const [originFilter, setOriginFilter] = useState<TaskOrigin[]>(() => readStoredOriginFilter());
 
   const laneMode: LaneMode = laneModePref ?? (groups.length > 0 ? 'lanes' : 'flat');
 
@@ -111,18 +134,28 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
     }
   }, []);
 
-  // mount + workspaceId 变化 → 任务 load（5s 轮询）+ 组并行拉取
+  const handleOriginFilter = useCallback((next: TaskOrigin[]): void => {
+    setOriginFilter(next);
+    try {
+      window.localStorage.setItem(ORIGIN_FILTER_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // 同上：只丢偏好，不阻塞过滤
+    }
+  }, []);
+
+  // mount + workspaceId 变化 → 任务 load（5s 轮询）+ 组并行拉取；
+  // originFilter 变化即时重拉（查询级过滤在 load 参数生效——不是视图遮盖）
   useEffect(() => {
-    void load(workspaceId);
+    void load(workspaceId, { origin: originFilter });
     void loadGroups(workspaceId).catch(() => {
       // 组拉取失败不阻塞画板渲染——组 chip 回退不显示
     });
     const refresh = (): void => {
-      void load(workspaceId);
+      void load(workspaceId, { origin: originFilter });
     };
     const interval = setInterval(refresh, REFRESH_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [workspaceId, load, loadGroups]);
+  }, [workspaceId, load, loadGroups, originFilter]);
 
   // 切 workspace 清空筛选（spec §6 与 TaskSidebarPanel 同款语义）
   useEffect(() => {
@@ -248,6 +281,8 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
         assignee={assignee}
         onAssignee={setAssignee}
         assigneeOptions={assigneeOptions}
+        originFilter={originFilter}
+        onOriginFilter={handleOriginFilter}
         laneMode={laneMode}
         onLaneMode={handleLaneMode}
         onOpenArchive={() => setArchiveOpen(true)}

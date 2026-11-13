@@ -10,7 +10,7 @@ import path from 'node:path';
 import os from 'node:os';
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
-import { getTask, listTasks } from '../../src/main/storage/tasks/repo';
+import { getTask, listTasks, updateTask } from '../../src/main/storage/tasks/repo';
 import {
   ledgerInsertDispatch,
   ledgerSettleDispatch,
@@ -93,6 +93,17 @@ describe('D4 dispatch-task-ledger（registry → tasks 单向投影）', () => {
     const row = getTask(CHAIN.taskId)!;
     expect(row.status).toBe('in_progress');
     expect(row.title).toBe('第二轮任务');
+  });
+
+  it('followup 复活已归档行（2026-11-12 看板治理）：复位 in_progress 同时清 archivedAt——否则运行链被归档隐藏、看板不可见', () => {
+    ledgerInsertDispatch(CHAIN);
+    ledgerSettleDispatch(CHAIN.taskId, 'completed');
+    updateTask(CHAIN.taskId, { archivedAt: 9999 }); // 终态后被用户归档（archive handler 同款落值）
+    expect(getTask(CHAIN.taskId)!.archivedAt).not.toBeNull();
+    ledgerInsertDispatch({ ...CHAIN, body: '第二轮（复活）' });
+    const row = getTask(CHAIN.taskId)!;
+    expect(row.status).toBe('in_progress');
+    expect(row.archivedAt).toBeNull();
   });
 
   it('settle 三态映射：completed→completed / failed→failed+errorMessage / needs_input→paused', () => {

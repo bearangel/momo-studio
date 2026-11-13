@@ -16,7 +16,8 @@
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
 import type { BoardColumnKey } from '../ipc/board-columns';
-import type { TaskCreateBatchResult, TaskCreateInput, TaskRow, TaskStatus } from '../ipc/types';
+import type { TaskCreateBatchResult, TaskCreateInput, TaskOrigin, TaskRow, TaskStatus } from '../ipc/types';
+import { TASK_ORIGINS } from '../lib/board';
 
 /**
  * 乐观状态映射（看板重构 Task 10）：目标列 → 列代表状态。
@@ -45,7 +46,14 @@ interface TaskState {
   dragging: boolean;
   setDragging: (dragging: boolean) => void;
 
-  load: (workspaceId: string) => Promise<void>;
+  /**
+   * 全生命周期拉取（v2.3 P0 修复，spec §8.1）——不按状态过滤，
+   * orderBy created_at_desc + limit 500 截断终态历史（保留最新 500 条：
+   * ASC + limit 会保留最旧 500 条、隐藏第 501 条之后的新任务）。
+   * origin（2026-11-12 看板治理）：来源多选的查询级过滤——全选/缺省不传参
+   * （兼容现状参数形状），部分选择才收窄 500 行窗口的分配。
+   */
+  load: (workspaceId: string, opts?: { origin?: TaskOrigin[] }) => Promise<void>;
   create: (input: Parameters<typeof ipc.task.create>[0]) => Promise<TaskRow>;
   /**
    * M3.3 批量创建（单 IPC task:createBatch，替换 CreateTaskDialog 逐行循环）：
@@ -89,7 +97,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   setSelectedTaskId: (id) => set({ selectedTaskId: id }),
   setDragging: (dragging) => set({ dragging }),
 
-  load: async (workspaceId) => {
+  load: async (workspaceId, opts) => {
     // 在途乐观 move / 拖拽手持中跳过本轮（Review Focus ④：
     // 5s 轮询会用在途乐观态之前的服务端快照覆盖本地，造成卡片跳回）
     if (get().pendingMoveCount > 0 || get().dragging) return;
@@ -101,8 +109,13 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       // v2.3：全生命周期拉取（spec §8.1）——单用户桌面端任务量级下
-      // 全量 + 本地过滤足够；终态历史靠 limit 500 截断（保留最新 500 条）
-      const tasks = await ipc.task.list({ workspaceId, orderBy: 'created_at_desc', limit: 500 });
+      // 全量 + 本地过滤足够；终态历史靠 limit 500 截断（保留最新 500 条）。
+      // 来源过滤：全选/缺省不带 origin 键（参数形状与既有调用方零漂移）
+      const origin =
+        opts?.origin !== undefined && opts.origin.length < TASK_ORIGINS.length
+          ? { origin: opts.origin }
+          : {};
+      const tasks = await ipc.task.list({ workspaceId, orderBy: 'created_at_desc', limit: 500, ...origin });
       set({ tasks, loading: false });
     } catch (err) {
       set({ loading: false, error: (err as Error).message });

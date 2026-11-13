@@ -505,3 +505,87 @@ describe('TaskBoardView 主区（看板重构 Task 11）', () => {
     expect(await screen.findByText(/无法加载该归档分组/)).toBeInTheDocument();
   });
 });
+
+// ── 来源多选过滤（2026-11-12 看板治理）：查询级透传 + localStorage 持久化 ──────
+describe('TaskBoardView 来源多选过滤（查询级）', () => {
+  beforeEach(() => {
+    (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
+    window.localStorage.clear();
+    useTaskStore.setState({
+      tasks: [],
+      selectedTaskId: null,
+      loading: false,
+      error: null,
+      currentWorkspaceId: 'ws-1',
+      pendingMoveCount: 0,
+      dragging: false,
+    });
+    useGroupStore.setState({
+      groups: [],
+      loading: false,
+      error: null,
+      currentWorkspaceId: null,
+      selectedGroupId: null,
+      selectedArchivedGroupId: null,
+    });
+    useAgentStore.setState({ members: [], teams: [] });
+    mockApi.task.list.mockClear().mockResolvedValue([]);
+    mockApi.taskGroup.list.mockClear().mockResolvedValue([]);
+    getGlobalMock.mockReset().mockResolvedValue({ maxToolCalls: 10, auditQuotaMb: 100 });
+  });
+
+  it('默认全选 → task.list 不带 origin 键（参数形状与现状零漂移）', async () => {
+    render(<TaskBoardView workspaceId="ws-1" />);
+    await waitFor(() => {
+      expect(mockApi.task.list).toHaveBeenCalledWith({
+        workspaceId: 'ws-1',
+        orderBy: 'created_at_desc',
+        limit: 500,
+      });
+    });
+    // 所有调用都不带 origin（含 5s 轮询窗口内的多次）
+    for (const call of mockApi.task.list.mock.calls) {
+      expect(call[0]).not.toHaveProperty('origin');
+    }
+  });
+
+  it('取消勾选「编排任务」→ 重拉带 origin:[user,peer_draft] + localStorage 持久化', async () => {
+    render(<TaskBoardView workspaceId="ws-1" />);
+    await waitFor(() => expect(mockApi.task.list).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: /按任务来源筛选/ }));
+    fireEvent.click(screen.getByRole('option', { name: /编排任务/ }));
+    await waitFor(() => {
+      expect(mockApi.task.list).toHaveBeenLastCalledWith({
+        workspaceId: 'ws-1',
+        orderBy: 'created_at_desc',
+        limit: 500,
+        origin: ['user', 'peer_draft'],
+      });
+    });
+    expect(window.localStorage.getItem('kanban-origin-filter')).toBe(
+      JSON.stringify(['user', 'peer_draft']),
+    );
+  });
+
+  it('持久化偏好恢复：localStorage 预置 ["user"] → 首拉即带 origin:["user"]', async () => {
+    window.localStorage.setItem('kanban-origin-filter', JSON.stringify(['user']));
+    render(<TaskBoardView workspaceId="ws-1" />);
+    await waitFor(() => {
+      expect(mockApi.task.list).toHaveBeenCalledWith({
+        workspaceId: 'ws-1',
+        orderBy: 'created_at_desc',
+        limit: 500,
+        origin: ['user'],
+      });
+    });
+    // 摘要回显部分选择态
+    expect(screen.getByRole('button', { name: /当前：用户任务/ })).toBeInTheDocument();
+  });
+
+  it('非法存储回退全选：垃圾 JSON / 空数组 → 不带 origin（空看板永不因脏存储出现）', async () => {
+    window.localStorage.setItem('kanban-origin-filter', '{oops');
+    render(<TaskBoardView workspaceId="ws-1" />);
+    await waitFor(() => expect(mockApi.task.list).toHaveBeenCalled());
+    expect(mockApi.task.list.mock.calls[0]![0]).not.toHaveProperty('origin');
+  });
+});

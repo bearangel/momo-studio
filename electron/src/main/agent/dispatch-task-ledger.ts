@@ -71,12 +71,16 @@ export function ledgerInsertDispatch(input: DispatchLedgerInput): void {
       // 复用是权威重置而非生命周期转换）。**禁 DELETE+reinsert**：迁移 555 行的
       // 触发器会在 tasks 行删除时把挂链 messages.task_id 置 NULL——followup 断链
       // （首轮历史从重建器消失，orchestration-e2e 实证）。
+      // archivedAt: null（2026-11-12 看板治理）：终态簿记行可能已被手动归档——
+      // followup 复活运行链必须连带解除归档，否则复位后的 in_progress 行被归档
+      // 隐藏、看板不可见
       updateTask(input.taskId, {
         status: 'in_progress',
         title: input.body.slice(0, 80),
         errorMessage: null,
         startedAt: Date.now(),
         completedAt: null, // 清上轮终态残值（updateTask 全字段直写）
+        archivedAt: null,
       });
       return;
     }

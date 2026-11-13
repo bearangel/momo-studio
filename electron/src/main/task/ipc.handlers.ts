@@ -36,6 +36,7 @@ import {
   transitionTaskStatus,
   type TaskRow,
   type TaskStatus,
+  type TaskOrigin,
 } from '../storage/tasks/repo';
 import { isTerminal } from '../storage/tasks/state-machine';
 import { getGroup } from '../storage/task-groups/repo';
@@ -48,11 +49,14 @@ import { startTaskAndKickoff, resumePausedTask, cancelTask, abortTaskExecution }
 /**
  * D4 只读守卫（spec §3.5）：origin='dispatch' 簿记行由会话链管理，看板写通道
  * 一律拒绝（registry 是真相源；从看板取消子任务留后续交互）。
+ * 豁免（2026-11-12 看板治理）：归档域（task:archive / task:unarchive）不在本
+ * 守卫范围——终态簿记行允许手动归档清理（archive handler 自有 isTerminal
+ * 兜底）；followup 复用已归档行的复活纪律在 dispatch-task-ledger 侧。
  */
 function assertNotDispatchRow(id: string): void {
   const t = getTask(id);
   if (t?.origin === 'dispatch') {
-    throw new Error('编排子任务由会话链管理，看板只读（不可编辑/移动/归档/顶置）');
+    throw new Error('编排子任务由会话链管理，看板只读（不可编辑/移动/顶置）');
   }
 }
 
@@ -110,6 +114,8 @@ interface ListOpts {
   sourceMessageIds?: string[];
   /** 归档三态透传（看板重构 Task 6）：'exclude' 默认 / 'only' 只回归档 / 'all' 全回 */
   archived?: 'exclude' | 'only' | 'all';
+  /** 按来源集合过滤（2026-11-12 看板治理：来源多选下拉）；空数组跳过条件 */
+  origin?: TaskOrigin[];
   orderBy?: 'priority' | 'scheduled_at' | 'created_at' | 'created_at_desc';
   limit?: number;
 }
@@ -370,18 +376,20 @@ export function registerTaskHandlers(): void {
 
   // 归档域（看板重构 Task 6）：仅终态任务可归档（软删，archived_at 置时间戳）；
   // 非终态拒绝——运行中任务先 cancel/complete 再归档。归档改变 task:list 默认
-  // 可见性，成功后同样广播快照
+  // 可见性，成功后同样广播快照。
+  // 2026-11-12 看板治理：dispatch 簿记行豁免 D4 守卫——终态簿记行可归档清理
+  // （isTerminal 检查对 dispatch 行同样兜底：在途链行非终态 → 拒绝路径不变）；
+  // followup 复用已归档链时 ledgerInsertDispatch 复位并清 archived_at（复活纪律）
   ipcMain.handle('task:archive', async (_evt, id: string): Promise<TaskRow> => {
     const t = getTask(id);
     if (!t) throw new Error(`task ${id} 不存在`);
-    assertNotDispatchRow(id);
     if (!isTerminal(t.status)) throw new Error('仅终态任务可归档(completed/failed/cancelled)');
     updateTask(id, { archivedAt: Date.now() });
     return getTask(id)!;
   });
 
+  // 解档同豁免（对称性：归档进得去也要出得来）；archived_at 清空不触碰状态机
   ipcMain.handle('task:unarchive', async (_evt, id: string): Promise<TaskRow> => {
-    assertNotDispatchRow(id);
     updateTask(id, { archivedAt: null });
     return getTask(id)!;
   });

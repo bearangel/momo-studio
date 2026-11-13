@@ -109,6 +109,30 @@ describe('task.store load（v2.3 全生命周期拉取）', () => {
     expect(mockApi.task.list).toHaveBeenCalledWith({ workspaceId: 'ws1', orderBy: 'created_at_desc', limit: 500 });
   });
 
+  // 2026-11-12 看板治理：来源多选的查询级透传——全选不带 origin 键（与既有
+  // 调用方参数形状零漂移），部分选择才收窄
+  it('load 部分来源 → task.list 带 origin 键；全选/缺省 → 不带（契约）', async () => {
+    await useTaskStore.getState().load('ws1', { origin: ['user', 'peer_draft'] });
+    expect(mockApi.task.list).toHaveBeenLastCalledWith({
+      workspaceId: 'ws1',
+      orderBy: 'created_at_desc',
+      limit: 500,
+      origin: ['user', 'peer_draft'],
+    });
+    await useTaskStore.getState().load('ws1', { origin: ['user', 'dispatch', 'peer_draft'] });
+    expect(mockApi.task.list).toHaveBeenLastCalledWith({
+      workspaceId: 'ws1',
+      orderBy: 'created_at_desc',
+      limit: 500,
+    });
+    await useTaskStore.getState().load('ws1');
+    expect(mockApi.task.list).toHaveBeenLastCalledWith({
+      workspaceId: 'ws1',
+      orderBy: 'created_at_desc',
+      limit: 500,
+    });
+  });
+
   it('load 成功后任务写入 store 且 loading 复位（含 in_progress/paused/终态）', async () => {
     const rows = [
       mkTask({ id: 'T-1', title: '执行中', status: 'in_progress' }),

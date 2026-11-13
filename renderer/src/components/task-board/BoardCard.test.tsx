@@ -513,20 +513,43 @@ describe('BoardCard 编排徽标与 dispatch 只读（D4）', () => {
     expect(screen.getByText(/#a3f2c1 · 任务A/)).toBeInTheDocument();
   });
 
-  // 只读入口隐藏：draft（用户行有编辑）/ in_progress（用户行有顶置）/ completed
-  // （用户行有归档）三代表态全无菜单——主进程 IPC 守卫是执法层，渲染层防挫败
-  it.each(['draft', 'in_progress', 'completed'] as const)(
-    'dispatch 行 %s 右键 → 不弹菜单（无编辑/归档/顶置）',
+  // 只读入口隐藏：draft / in_progress 两代表态无菜单（在途链看板只读）——
+  // 主进程 IPC 守卫是执法层，渲染层防挫败。终态行例外见下方归档清理用例
+  it.each(['draft', 'in_progress'] as const)('dispatch 行 %s 右键 → 不弹菜单（在途只读）', (status) => {
+    render(<BoardCard task={{ ...base, origin: 'dispatch', status }} selected={false} onClick={() => {}} />);
+    fireEvent.contextMenu(screen.getByRole('button', { name: /任务A/ }));
+    expect(screen.queryByLabelText(`任务菜单 ${base.title}`)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^顶置$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^编辑$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^归档$/ })).not.toBeInTheDocument();
+  });
+
+  // 2026-11-12 看板治理：终态簿记行右键放行归档清理菜单（预览 v2 批准形态——
+  // 菜单仅含归档，顶置不出：主进程 task:setPinned 对 dispatch 行仍拒，两端一致）
+  it.each(['completed', 'failed', 'cancelled'] as const)(
+    'dispatch 行 %s 右键 → 弹菜单且仅含「归档」（无顶置/编辑/拒收）',
     (status) => {
       render(<BoardCard task={{ ...base, origin: 'dispatch', status }} selected={false} onClick={() => {}} />);
       fireEvent.contextMenu(screen.getByRole('button', { name: /任务A/ }));
-      expect(screen.queryByLabelText(`任务菜单 ${base.title}`)).not.toBeInTheDocument();
+      expect(screen.getByLabelText(`任务菜单 ${base.title}`)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^归档$/ })).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /^顶置$/ })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /^取消顶置$/ })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /^编辑$/ })).not.toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: /^归档$/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '拒收' })).not.toBeInTheDocument();
     },
   );
+
+  it('dispatch 终态行点「归档」→ store.archive 生效（行本地剔除）', async () => {
+    useTaskStore.setState({ tasks: [{ ...base, origin: 'dispatch', status: 'completed' }], selectedTaskId: null, loading: false, error: null });
+    render(<BoardCard task={{ ...base, origin: 'dispatch', status: 'completed' }} selected={false} onClick={() => {}} />);
+    fireEvent.contextMenu(screen.getByRole('button', { name: /任务A/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^归档$/ }));
+    await waitFor(() => {
+      expect(mockApi.task.archive).toHaveBeenCalledWith(base.id);
+      expect(useTaskStore.getState().tasks).toHaveLength(0);
+    });
+  });
 
   it('用户行右键菜单不受影响（对照：in_progress 出顶置项）', () => {
     render(<BoardCard task={{ ...base, status: 'in_progress' }} selected={false} onClick={() => {}} />);

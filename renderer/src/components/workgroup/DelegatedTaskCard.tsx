@@ -450,6 +450,9 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
   // 镜像 protocolSupports；低版本 hub 按钮不出现——spec §3.4，文案级改动授权见
   // spec §5「UI 无人预览」风险行）
   const canAnswer = waiting && !isWorkerView && delegationId != null && hubSupportsMinor(hubProtoVer, 3);
+  // 2026-11-12 看板治理（C-1）：终态零可用动作时菜单不弹——对齐 BoardCard 对
+  // dispatch 行「无菜单项不弹」的纪律，消灭空白菜单
+  const menuHasItems = canCancel || canAnswer || canRetry || canRedispatch;
 
   const handleCancel = async (): Promise<void> => {
     if (delegationId != null) {
@@ -521,7 +524,7 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
         onClick={onSelect}
         onContextMenu={(e) => {
           e.preventDefault();
-          setMenu({ x: e.clientX, y: e.clientY });
+          if (menuHasItems) setMenu({ x: e.clientX, y: e.clientY });
         }}
         className={`w-full cursor-pointer rounded-md border border-subtle border-l-[3px] bg-canvas px-2.5 py-2 text-left transition-colors hover:border-strong hover:bg-surface-1 ${
           waiting ? 'border-l-status-warning' : 'border-l-status-violet'

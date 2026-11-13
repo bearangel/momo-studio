@@ -439,6 +439,8 @@ export function listTasks(opts: {
   groupId?: string | null;
   /** D4（Oracle MUST FIX 1）：排除指定来源行——dispatch 簿记行不是「会话在途任务」/ 恢复候选 */
   excludeOrigin?: string;
+  /** 按来源集合过滤（2026-11-12 看板治理：来源多选下拉）；空数组/缺省=不过滤 */
+  origin?: TaskOrigin[];
   orderBy?: 'priority' | 'scheduled_at' | 'created_at' | 'created_at_desc';
   limit?: number;
 }): TaskRow[] {
@@ -479,6 +481,11 @@ export function listTasks(opts: {
   if (opts.excludeOrigin !== undefined) {
     where.push('origin <> ?');
     params.push(opts.excludeOrigin);
+  }
+  if (opts.origin !== undefined && opts.origin.length > 0) {
+    const originPlaceholders = opts.origin.map(() => '?').join(',');
+    where.push(`origin IN (${originPlaceholders})`);
+    params.push(...opts.origin);
   }
   const archivedMode = opts.archived ?? 'exclude';
   if (archivedMode === 'exclude') where.push('archived_at IS NULL');

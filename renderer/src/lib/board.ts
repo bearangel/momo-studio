@@ -1,7 +1,7 @@
 // renderer/src/lib/board.ts
 // 看板列组装纯函数（看板重构 Task 9）：排序 / 泳道切分 / 过滤 / 组色映射。
 // 全部无副作用——调用方先 sortColumn 再按列 filter，列分组是渲染层 BoardColumn 的职责。
-import type { GroupRow, TaskRow, TaskStatus } from '../ipc/types';
+import type { GroupRow, TaskOrigin, TaskRow, TaskStatus } from '../ipc/types';
 
 /**
  * 终态集合（看板 done/closed 两列合并的底层状态；与 electron state-machine
@@ -12,6 +12,27 @@ export const TERMINAL_STATUSES: readonly TaskStatus[] = ['completed', 'failed', 
 export function isTerminalStatus(status: TaskStatus): boolean {
   return TERMINAL_STATUSES.includes(status);
 }
+
+/**
+ * 任务来源全集（2026-11-12 看板治理：来源多选下拉）——固定展示序，
+ * 与 TaskOrigin 联合类型同步（ipc types.d.ts 单源）。TaskOriginFilter 下拉、
+ * task.store load 收窄、TaskBoardView 持久化校验三方共用。
+ */
+export const TASK_ORIGINS: readonly TaskOrigin[] = ['user', 'dispatch', 'peer_draft'];
+
+/** 来源下拉展示名（全名——按钮摘要「来源：用户任务 + 平行草稿」同词表） */
+export const TASK_ORIGIN_LABELS: Record<TaskOrigin, string> = {
+  user: '用户任务',
+  dispatch: '编排任务',
+  peer_draft: '平行草稿',
+};
+
+/** 来源下拉辅助描述（预览 v2 定值） */
+export const TASK_ORIGIN_DESCS: Record<TaskOrigin, string> = {
+  user: '手动创建',
+  dispatch: 'agent 派发簿记',
+  peer_draft: '工作组接收',
+};
 
 /**
  * 编辑资格（2026-09-30 用户反馈收敛）：仅 draft / pending 可编辑——任务一旦

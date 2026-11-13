@@ -399,6 +399,9 @@ export interface TaskApiSurface {
     sourceMessageIds?: string[];
     /** 归档三态透传（看板重构 Task 6/7）：'exclude' 默认 / 'only' 只回归档 / 'all' 全回 */
     archived?: 'exclude' | 'only' | 'all';
+    /** 按来源集合过滤（2026-11-12 看板治理：来源多选下拉——勾选的来源才加载）；
+     *  空数组/缺省=不过滤（全选时 renderer 不传，兼容现状参数形状） */
+    origin?: TaskOrigin[];
     orderBy?: 'priority' | 'scheduled_at' | 'created_at' | 'created_at_desc';
     limit?: number;
   }): Promise<TaskRow[]>;

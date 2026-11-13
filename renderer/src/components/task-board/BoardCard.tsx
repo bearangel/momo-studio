@@ -116,9 +116,12 @@ export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps
         aria-pressed={selected}
         onClick={onClick}
         onContextMenu={(e) => {
-          // 全状态拦截原生菜单（UX 波 2 #1）；dispatch 簿记行只读——菜单项全无，不弹（D4）
+          // 全状态拦截原生菜单（UX 波 2 #1）；dispatch 簿记行在途只读不弹（D4），
+          // 终态放行归档清理菜单（2026-11-12 看板治理——菜单仅含归档一项）
           e.preventDefault();
-          if (task.origin !== 'dispatch') setMenu({ x: e.clientX, y: e.clientY });
+          if (task.origin !== 'dispatch' || isTerminalStatus(task.status)) {
+            setMenu({ x: e.clientX, y: e.clientY });
+          }
         }}
         className={`w-full cursor-pointer rounded-md border bg-canvas px-2.5 py-2 text-left transition-colors hover:border-strong hover:bg-surface-1 ${
           selected ? 'border-focus' : 'border-subtle'
@@ -259,24 +262,28 @@ export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps
             className="fixed z-50 min-w-[120px] rounded border border-subtle bg-surface-1 py-1 text-sm text-secondary shadow-lg"
             style={{ left: menuLeft, top: menuTop }}
           >
-            {/* 顶置开关（迁移 050）：全状态可用；重复 pin 刷新时间戳=重新压顶 */}
-            <li>
-              <button
-                type="button"
-                onClick={() => {
-                  setMenu(null);
-                  void handlePin(task.pinnedAt === null);
-                }}
-                className="flex w-full items-center gap-1.5 px-3 py-1 text-left hover:bg-surface-3"
-              >
-                {task.pinnedAt === null ? (
-                  <Pin size={12} strokeWidth={1.75} aria-hidden />
-                ) : (
-                  <PinOff size={12} strokeWidth={1.75} aria-hidden />
-                )}
-                {task.pinnedAt === null ? '顶置' : '取消顶置'}
-              </button>
-            </li>
+            {/* 顶置开关（迁移 050）：全状态可用；重复 pin 刷新时间戳=重新压顶。
+                dispatch 簿记行不出本项（主进程 task:setPinned 守卫拒——两端一致，
+                终态簿记行菜单仅含归档） */}
+            {task.origin !== 'dispatch' && (
+              <li>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenu(null);
+                    void handlePin(task.pinnedAt === null);
+                  }}
+                  className="flex w-full items-center gap-1.5 px-3 py-1 text-left hover:bg-surface-3"
+                >
+                  {task.pinnedAt === null ? (
+                    <Pin size={12} strokeWidth={1.75} aria-hidden />
+                  ) : (
+                    <PinOff size={12} strokeWidth={1.75} aria-hidden />
+                  )}
+                  {task.pinnedAt === null ? '顶置' : '取消顶置'}
+                </button>
+              </li>
+            )}
             {canReject && (
               <li>
                 <button

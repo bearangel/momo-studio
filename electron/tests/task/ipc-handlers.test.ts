@@ -528,7 +528,7 @@ describe('task:create 带 groupId（看板分组落组）', () => {
 });
 
 describe('D4 只读守卫：origin=dispatch 簿记行拒看板写通道', () => {
-  it('update/move/archive/setPinned 四通道对 dispatch 行 reject（人话报错），用户行不受影响', async () => {
+  it('update/move/setPinned/transition/cancel/resume 对 dispatch 行 reject（人话报错），用户行不受影响', async () => {
     const d = insertTask({
       workspaceId: 'ws1',
       title: '编排子任务',
@@ -542,7 +542,6 @@ describe('D4 只读守卫：origin=dispatch 簿记行拒看板写通道', () => 
     await expect(
       handlers.get('task:move')!(undefined, d.id, { kind: 'group', groupId: null }),
     ).rejects.toThrow(guardMsg);
-    await expect(handlers.get('task:archive')!(undefined, d.id)).rejects.toThrow(guardMsg);
     await expect(handlers.get('task:setPinned')!(undefined, d.id, true)).rejects.toThrow(guardMsg);
     await expect(
       handlers.get('task:transition')!(undefined, d.id, 'paused'),
@@ -552,5 +551,39 @@ describe('D4 只读守卫：origin=dispatch 簿记行拒看板写通道', () => 
     // 用户行走原路径（update 成功不抛只读错误）
     await handlers.get('task:update')!(undefined, u.id, { title: '改名' });
     expect(getTask(u.id)!.title).toBe('改名');
+  });
+});
+
+// 2026-11-12 看板治理：归档域豁免 D4 守卫——终态簿记行可手动归档清理（在途行
+// 仍被 archive 的 isTerminal 检查拦截，拒绝语义换为「仅终态可归档」）
+describe('归档域豁免：origin=dispatch 簿记行终态可归档', () => {
+  it('dispatch 终态行 archive 成功（archivedAt 落值）→ unarchive 恢复（archivedAt 清空）', async () => {
+    const d = insertTask({
+      workspaceId: 'ws1',
+      title: '已完成编排子任务',
+      creatorUserId: 'agent:pm',
+      origin: 'dispatch',
+      status: 'completed',
+    });
+    const archived = (await handlers.get('task:archive')!(undefined, d.id)) as TaskRow;
+    expect(archived.archivedAt).not.toBeNull();
+    expect(getTask(d.id)!.archivedAt).not.toBeNull();
+    const restored = (await handlers.get('task:unarchive')!(undefined, d.id)) as TaskRow;
+    expect(restored.archivedAt).toBeNull();
+    expect(getTask(d.id)!.archivedAt).toBeNull();
+  });
+
+  it('dispatch 在途行 archive 仍拒（isTerminal 兜底——运行链不可被归档隐藏）', async () => {
+    const live = insertTask({
+      workspaceId: 'ws1',
+      title: '在途编排子任务',
+      creatorUserId: 'agent:pm',
+      origin: 'dispatch',
+      status: 'in_progress',
+    });
+    await expect(handlers.get('task:archive')!(undefined, live.id)).rejects.toThrow(
+      '仅终态任务可归档',
+    );
+    expect(getTask(live.id)!.archivedAt).toBeNull();
   });
 });

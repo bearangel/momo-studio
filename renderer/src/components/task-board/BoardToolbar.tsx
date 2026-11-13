@@ -10,10 +10,12 @@
 // 独立按钮「依赖图」；分组钮语义 = lanes 亮起/toggle 回平铺（从 dag 点分组
 // 进 lanes），依赖图钮同构（dag 亮起/toggle 回平铺）。
 import { Archive, Columns3, Network, Plus, Search } from 'lucide-react';
+import type { TaskOrigin } from '../../ipc/types';
 import { cn } from '../../lib/cn';
 import { Input } from '../ui/Input';
 import { Select } from '../ui/Select';
 import { Button } from '../ui/Button';
+import { TaskOriginFilter } from './TaskOriginFilter';
 
 /** assignee 下拉单个选项；label=agentName，value=instanceId（与 task.assigneeAgentId 匹配）。
  *  TaskFilters 退役后迁入（Task 14），类型契约不变。 */
@@ -37,6 +39,9 @@ interface BoardToolbarProps {
   onAssignee: (value: string) => void;
   /** assignee 下拉选项（父层从 agent.store.members 派生，不含「全部 agent」占位） */
   assigneeOptions: AssigneeOption[];
+  /** 来源多选（2026-11-12 看板治理）：勾选集合驱动 task.list 查询级过滤 */
+  originFilter: TaskOrigin[];
+  onOriginFilter: (next: TaskOrigin[]) => void;
   laneMode: 'flat' | 'lanes' | 'dag';
   onLaneMode: (mode: 'flat' | 'lanes' | 'dag') => void;
   onOpenArchive: () => void;
@@ -50,6 +55,8 @@ export function BoardToolbar({
   assignee,
   onAssignee,
   assigneeOptions,
+  originFilter,
+  onOriginFilter,
   laneMode,
   onLaneMode,
   onOpenArchive,
@@ -87,6 +94,8 @@ export function BoardToolbar({
           </option>
         ))}
       </Select>
+      {/* 来源多选（2026-11-12 看板治理）：查询级过滤入口——预览 v2 批准形态 */}
+      <TaskOriginFilter value={originFilter} onChange={onOriginFilter} />
       {/* 泳道模式开关（Task 12 接线，UX 修复改 pill toggle）：平铺 ↔ 按组分道 */}
       <button
         type="button"

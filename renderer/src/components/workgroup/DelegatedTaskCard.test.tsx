@@ -741,12 +741,19 @@ describe('DelegatedTaskCard — 操作菜单', () => {
     expect(screen.queryByRole('button', { name: /取消任务/ })).not.toBeInTheDocument();
   });
 
-  it('M-5. done：菜单三项全不在场（终态零操作）', () => {
+  it('M-5. done：菜单不弹（终态零操作——2026-11-12 C-1 守卫：无可用动作不弹空白菜单）', () => {
     renderCard(mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'completed' }));
     openMenu();
+    expect(screen.queryByLabelText(/任务菜单 批量重命名/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /取消任务/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /重试派发/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /失败重派/ })).not.toBeInTheDocument();
+  });
+
+  it('M-5b. cancelled 同守卫：菜单不弹（终态两态全覆盖）', () => {
+    renderCard(mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'cancelled' }));
+    openMenu();
+    expect(screen.queryByLabelText(/任务菜单 批量重命名/)).not.toBeInTheDocument();
   });
 
   it('M-6. 重试派发 → hub.retryDispatch + 成功 toast + refreshTasks', async () => {
