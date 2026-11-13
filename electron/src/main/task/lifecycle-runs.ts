@@ -20,6 +20,7 @@
 //     提交生成 acceptance 请求（keep_waiting + 24h 提醒），验收/打回 tryAnswer
 //     原子答复；打回不建新 run——任务回 assigned，下次放行 startRun(trigger='rework')
 import { getDb } from '../storage/db';
+import { logger } from '../logger';
 import { getTask, transitionTaskStatus, updateTask, type TaskRow } from '../storage/tasks/repo';
 import { canTransition, isTerminal, type TaskStatus } from '../storage/tasks/state-machine';
 import {
@@ -35,10 +36,17 @@ import {
   supersedePendingByRun,
   countPendingNonAcceptance,
   insertHumanRequest,
+  getHumanRequest,
   listByTask,
   tryAnswer,
   type HumanRequestRow,
+  type HumanTimeoutPolicy,
 } from '../storage/tasks/human-requests-repo';
+import {
+  humanAnswerBody,
+  sendSystemKickoffMessage,
+  type HumanAnswerInput,
+} from './human-answer-inject';
 
 /** 单任务执行尝试上限（spec §5.2：防打回-重跑死循环） */
 export const MAX_RUNS_PER_TASK = 10;
@@ -415,4 +423,120 @@ export async function rejectTask(id: string, reason: string): Promise<void> {
     answerAcceptance(id, active.id, { decision: 'reject', reason: trimmed }, LOCAL_ACCEPT_BY);
     projectTaskStatus(id, 'assigned');
   })();
+}
+
+// ── HITL 请求 / 答复链（Task 11，spec §6）──
+
+/** 人工答复载荷（Task 13 tool_gate / Task 14 request_human / Task 16 IPC 消费） */
+export type { HumanAnswerInput } from './human-answer-inject';
+
+/** tool_gate 答复回调（Task 13 注册：approve → grantWriteDirs / deny → broadcastWriteGrantDenied） */
+export type ToolGateAnswerHandler = (requestId: string, answer: HumanAnswerInput) => void;
+
+/** tool_gate 答复回调容器（Task 13 装配时注册；null 注销） */
+let toolGateHandler: ToolGateAnswerHandler | null = null;
+
+export function setToolGateHandler(fn: ToolGateAnswerHandler | null): void {
+  toolGateHandler = fn;
+}
+
+/**
+ * 发起人工请求（spec §6 HITL）：插 human_requests 行 + 有任务且有活动 run 时
+ * enterWaitingHuman（run 层 + 任务 waiting_human 投影由其落定）。
+ * 不结束回合——回合收尾由调用方 runtime 决定。
+ * timeoutPolicy 缺省按 kind：question → keep_waiting；manual_action → escalate
+ * （P1 的 escalate 无跨节点动作，与 keep_waiting 同行为，P2 接通知升级链）。
+ * runId 透传不代填——显式 null 表示请求不绑 run（不参与 run 收尾顶替，终态窗口
+ * 判定见 answerHuman）。
+ */
+export function requestHuman(input: {
+  sessionId: string;
+  kind: 'question' | 'manual_action';
+  title: string;
+  prompt: string;
+  taskId?: string | null;
+  runId?: string | null;
+  optionsJson?: string | null;
+  payloadJson?: string | null;
+  deadlineMinutes?: number;
+  timeoutPolicy?: HumanTimeoutPolicy;
+}): HumanRequestRow {
+  const active = input.taskId ? getActiveRun(input.taskId) : null;
+  const row = insertHumanRequest({
+    sessionId: input.sessionId,
+    kind: input.kind,
+    title: input.title,
+    prompt: input.prompt,
+    taskId: input.taskId ?? null,
+    runId: input.runId ?? null,
+    optionsJson: input.optionsJson ?? null,
+    payloadJson: input.payloadJson ?? null,
+    deadlineAt:
+      input.deadlineMinutes !== undefined ? Date.now() + input.deadlineMinutes * 60_000 : null,
+    timeoutPolicy:
+      input.timeoutPolicy ?? (input.kind === 'manual_action' ? 'escalate' : 'keep_waiting'),
+  });
+  if (active) enterWaitingHuman(input.taskId!);
+  return row;
+}
+
+/**
+ * 答复人工请求（tryAnswer 原子防双答，spec §6）：
+ *   - 请求不存在 → 人话抛错；已答 / 已被顶替（cancelActiveRun / failRun superseded）
+ *     → {disposition:'stale'}，零注入零唤醒（Review Focus #1：终态任务的迟到答复
+ *     不惊动会话）
+ *   - acceptance kind → 契约错（验收走 acceptTask / rejectTask 通道）
+ *   - 请求仍 pending 但任务已终态的窗口（run 已终结、请求未绑 run 未被顶替）：
+ *     答复照落 answered，但注入 / 唤醒 / 恢复全部跳过（disposition:'answered'——
+ *     落账诚实，动作克制，Review Focus #1 后半）
+ *   - kind 分派：tool_gate → 注册回调（无注册只记日志，答复仍落库）；
+ *     question | manual_action → resumeFromWaiting + 【人工答复】系统消息唤醒
+ */
+export function answerHuman(
+  requestId: string,
+  answer: HumanAnswerInput,
+  byNodeId: string,
+): { disposition: 'answered' | 'stale' } {
+  const req = getHumanRequest(requestId);
+  if (!req) throw new Error(`人工请求 ${requestId} 不存在`);
+  if (req.kind === 'acceptance') {
+    throw new Error('acceptance 请求不走 answerHuman 通道——验收请走 acceptTask / rejectTask');
+  }
+
+  const res = tryAnswer(requestId, JSON.stringify(answer), byNodeId);
+  if (!res.ok) return { disposition: 'stale' };
+
+  // 上下文存活性（Review Focus #1）：无任务会话级请求恒活；有任务时须任务非终态
+  // 且仍有活动 run，否则只落 answered 不注入 / 不唤醒 / 不回调
+  const task = req.taskId ? getTask(req.taskId) : null;
+  const active = req.taskId ? getActiveRun(req.taskId) : null;
+  const live = !req.taskId || (task !== null && !isTerminal(task.status) && active !== null);
+
+  if (req.kind === 'tool_gate') {
+    if (!live) {
+      logger.warn('tool_gate 答复到达时任务已终态——回调跳过', { requestId, taskId: req.taskId });
+      return { disposition: 'answered' };
+    }
+    if (toolGateHandler) {
+      toolGateHandler(req.id, answer);
+    } else {
+      logger.warn('tool_gate 答复无注册回调（Task 13 未装配）——答复已落库', { requestId });
+    }
+    return { disposition: 'answered' };
+  }
+
+  // question | manual_action
+  if (!live) {
+    logger.warn('人工答复到达时任务/run 已终态——注入与唤醒跳过', {
+      requestId,
+      taskId: req.taskId,
+    });
+    return { disposition: 'answered' };
+  }
+  // 只从等人体恢复（run 非 waiting_human 的窗口态不动 run——如已 submitted）
+  if (req.taskId && active?.status === 'waiting_human') {
+    resumeFromWaiting(req.taskId);
+  }
+  sendSystemKickoffMessage(req.sessionId, humanAnswerBody(req.title, answer));
+  return { disposition: 'answered' };
 }
