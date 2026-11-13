@@ -17,6 +17,7 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import type { Workspace } from './ipc/types';
 import { useSessionStore } from './stores/session.store';
 import { useUiStore } from './stores/ui.store';
+import { useWorkspaceStore } from './stores/workspace.store';
 
 // MainShell 桩：分支断言只关心是否进入主界面；桩内挂真实 ActivityBar——
 // M2.2 P2-8 需在 App 级断言 0-ws 态活动栏（含设置项）在场且可切换。
@@ -60,6 +61,14 @@ const mockApi = {
   },
   dialog: {
     pickDirectory: vi.fn().mockResolvedValue('/tmp/picked'),
+  },
+  // WorkspaceGate 内嵌 CreateWorkspaceDialog 挂载拉取工作目录预填源
+  hub: {
+    getWorkspaceDirSettings: vi.fn().mockResolvedValue({
+      rootDir: null,
+      defaultRootDir: '/data/workspaces',
+      effectiveRootDir: '/data/workspaces',
+    }),
   },
   session: {
     // App 顶层 subscribeSessionChannels 需要三条订阅通道（K10 加 onListChanged）
@@ -178,10 +187,11 @@ describe('App 启动分支（v2.0 P1 Task 11）', () => {
     expect(screen.queryByRole('heading', { name: '新建工作空间' })).not.toBeInTheDocument();
   });
 
-  it('无 workspace → 渲染 MainShell 主壳（D1：0-ws 不整壳替换，工作组视图可达）', async () => {
+  it('无 workspace 且引导已完成/跳过 → WorkspaceGate 必填工作空间页（T2，spec 2026-11-13 §4.1）', async () => {
     mockApi.workspace.list.mockResolvedValue([]);
     render(<App />);
-    expect(await screen.findByTestId('main-shell')).toBeInTheDocument();
+    expect(await screen.findByText('设置工作空间')).toBeInTheDocument();
+    expect(screen.queryByTestId('main-shell')).not.toBeInTheDocument();
   });
 
   it('无 workspace 且引导 pending → 向导接管空态（spec 2026-10-10 §3.1）', async () => {
@@ -192,12 +202,43 @@ describe('App 启动分支（v2.0 P1 Task 11）', () => {
     expect(screen.queryByTestId('main-shell')).not.toBeInTheDocument();
   });
 
-  it('向导跳过（status=skipped）→ 0-ws 落回主壳而非向导重现', async () => {
+  it('向导跳过（status=skipped）→ 0-ws 落 WorkspaceGate 而非主壳/向导重现（T2 语义更新）', async () => {
     mockApi.workspace.list.mockResolvedValue([]);
     mockApi.onboarding.getStatus.mockResolvedValue({ status: 'skipped' });
     render(<App />);
-    expect(await screen.findByTestId('main-shell')).toBeInTheDocument();
+    expect(await screen.findByText('设置工作空间')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /AI 引导/ })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('main-shell')).not.toBeInTheDocument();
+  });
+
+  // ── T2 分支矩阵 + C1 闩锁互斥（spec 2026-11-13 §4.1）──────────────────────
+  it.each([
+    { status: 'pending', wsCount: 0, shows: 'wizard' },
+    { status: 'skipped', wsCount: 0, shows: 'gate' },
+    { status: 'completed', wsCount: 0, shows: 'gate' },
+    { status: 'completed', wsCount: 1, shows: 'main' },
+  ])('分支矩阵 status=$status ws=$wsCount → $shows', async ({ status, wsCount, shows }) => {
+    mockApi.onboarding.getStatus.mockResolvedValue({ status });
+    mockApi.workspace.list.mockResolvedValue(Array.from({ length: wsCount }, (_, i) => mkWs(`w${i}`)));
+    render(<App />);
+    if (shows === 'wizard') {
+      expect(await screen.findByText('欢迎使用 Momo Studio')).toBeInTheDocument();
+    } else if (shows === 'gate') {
+      expect(await screen.findByText('设置工作空间')).toBeInTheDocument();
+    } else {
+      expect(await screen.findByTestId('main-shell')).toBeInTheDocument();
+    }
+  });
+
+  it('C1 闩锁互斥：向导进行期 workspaces 变非空不闪 WorkspaceGate', async () => {
+    mockApi.workspace.list.mockResolvedValue([]);
+    mockApi.onboarding.getStatus.mockResolvedValue({ status: 'pending' });
+    render(<App />);
+    expect(await screen.findByText('欢迎使用 Momo Studio')).toBeInTheDocument();
+    // 向导进行期镜像推送使 ws 变非空——闩锁优先，不得闪 Gate/主壳
+    useWorkspaceStore.setState({ workspaces: [mkWs('mirror')] });
+    expect(screen.getByText('欢迎使用 Momo Studio')).toBeInTheDocument();
+    expect(screen.queryByText('设置工作空间')).not.toBeInTheDocument();
   });
 });
 
@@ -206,15 +247,15 @@ describe('App 0-ws 设置可达（M2.2 P2-8）', () => {
     useUiStore.setState({ activeView: 'im' });
   });
 
-  it('0-ws 态渲染活动栏且含「设置」项', async () => {
-    mockApi.workspace.list.mockResolvedValue([]);
+  it('渲染活动栏且含「设置」项（T2 后 0-ws 走 Gate 无主壳——可达性验证落在 ws 态）', async () => {
+    mockApi.workspace.list.mockResolvedValue([mkWs('w1')]);
     render(<App />);
     expect(await screen.findByTestId('main-shell')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '设置' })).toBeInTheDocument();
   });
 
-  it('0-ws 态点击「设置」→ 切换到 settings 视图（激活态落在设置项）', async () => {
-    mockApi.workspace.list.mockResolvedValue([]);
+  it('点击「设置」→ 切换到 settings 视图（激活态落在设置项）', async () => {
+    mockApi.workspace.list.mockResolvedValue([mkWs('w1')]);
     render(<App />);
     await screen.findByTestId('main-shell');
     fireEvent.click(screen.getByRole('button', { name: '设置' }));
@@ -284,8 +325,8 @@ describe('App 升级提示集成（P5 Task 2）', () => {
     ).toBeInTheDocument();
   });
 
-  it('getUpgradeNotice 命中且无 workspace → 0-ws 主壳同屏 UpgradeNotice（D1：不再被空态吞掉）', async () => {
-    mockApi.workspace.list.mockResolvedValue([]);
+  it('getUpgradeNotice 命中 → MainShell 同屏 UpgradeNotice（T2 后 0-ws 走 Gate；Gate 态提示待 ws 建立后主壳可见——体验性增强不阻断）', async () => {
+    mockApi.workspace.list.mockResolvedValue([mkWs('w1')]);
     mockApi.system.getUpgradeNotice.mockResolvedValue({
       exportDir: '/tmp/upgrade-export-x',
     });

@@ -21,6 +21,7 @@ import { useAgentOpConfirmStore } from './stores/agent-op-confirm.store';
 import { AgentOpConfirmCard } from './components/AgentOpConfirmCard';
 import { MainShell } from './routes/MainShell';
 import { OnboardingWizard } from './routes/OnboardingWizard';
+import { WorkspaceGate } from './routes/WorkspaceGate';
 import { TitleBar } from './components/layout/TitleBar';
 import { ClosedWorkspacesPanel } from './components/layout/WorkspaceTabs';
 import { UpgradeNotice } from './components/upgrade/UpgradeNotice';
@@ -42,10 +43,11 @@ export function App() {
   const [bootstrapped, setBootstrapped] = useState(false);
   // P5 Task 2：v1.x → 2.0 旧库升级标记（导出目录）；null = 无标记
   const [upgradeExportDir, setUpgradeExportDir] = useState<string | null>(null);
-  // 新装引导（spec 2026-10-10 §3.1）：pending → 向导；completed/skipped → 原空态。
+  // 新装引导（spec 2026-10-10 §3.1）：pending → 向导；completed/skipped + 0-ws →
+  // WorkspaceGate 必填页（T2，spec 2026-11-13 §4.1——跳过不再落主壳空态）。
   // 拉取失败按 pending（引导是容错增强，不阻塞启动）；obCheck 在向导收尾后自增重拉
   // ——跳过路径 workspaces 仍为空，须靠 status=skipped 防向导重现。
-  const [, setObStatus] = useState<'pending' | 'completed' | 'skipped'>('pending');
+  const [obStatus, setObStatus] = useState<'pending' | 'completed' | 'skipped'>('pending');
   const [obCheck, setObCheck] = useState(0);
   // C1 闩锁（终审）：向导一经挂载，进行期 store.create 使 workspaces 变非空也
   // 不得卸载——判定收敛为 wizardOpen 单点，仅在本 effect（boot / 收尾重拉）与
@@ -153,6 +155,12 @@ export function App() {
   // 向导闩锁优先于 workspaces 判空（C1：进行期 ws 创建不得卸载向导）
   if (wizardOpen) {
     return <OnboardingWizard onFinished={onWizardFinished} />;
+  }
+
+  // T2（spec 2026-11-13 §4.1）：0-ws 且引导非 pending（跳过/完成但空间被清空）→
+  // 必填工作空间页；wizardOpen 闩锁已在前排除（进行期 ws 创建不得闪 Gate）
+  if (workspaces.length === 0 && obStatus !== 'pending') {
+    return <WorkspaceGate />;
   }
 
   // D6（关标签 ≠ 删除）：workspaces 非空但可见标签全部关闭 → 重开面板

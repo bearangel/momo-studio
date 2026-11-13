@@ -242,3 +242,21 @@ describe('D7 目录不存在确认弹层', () => {
     expect(screen.queryByText(/Error invoking remote method/)).not.toBeTruthy();
   });
 });
+
+describe('hideCancel（spec 2026-11-13 T2 §4.4）', () => {
+  it('embedded + hideCancel → 不渲染「取消」按钮（向导/WorkspaceGate 场景无上级可关）', () => {
+    render(<CreateWorkspaceDialog onClose={() => undefined} embedded hideCancel />);
+    expect(screen.queryByRole('button', { name: '取消' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '创建' })).toBeInTheDocument();
+  });
+
+  it('embedded 不传 hideCancel → 取消保留（向后兼容既有 embedded 消费方）', () => {
+    render(<CreateWorkspaceDialog onClose={() => undefined} embedded />);
+    expect(screen.getByRole('button', { name: '取消' })).toBeInTheDocument();
+  });
+
+  it('Dialog 形态不传 hideCancel → 取消保留', () => {
+    render(<CreateWorkspaceDialog onClose={() => undefined} />);
+    expect(screen.getByRole('button', { name: '取消' })).toBeInTheDocument();
+  });
+});

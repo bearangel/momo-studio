@@ -29,9 +29,11 @@ interface Props {
   onClose: () => void;
   /** 内嵌形态（P2 Task 3 首启空态）：不渲染 Dialog 遮罩，由父容器定位——避免盖住 TitleBar */
   embedded?: boolean;
+  /** 隐藏取消按钮（spec 2026-11-13 T2 §4.4）：向导/WorkspaceGate 场景无上级界面可关；对话框形态缺省保留 */
+  hideCancel?: boolean;
 }
 
-export function CreateWorkspaceDialog({ onClose, embedded }: Props) {
+export function CreateWorkspaceDialog({ onClose, embedded, hideCancel }: Props) {
   const { create } = useWorkspaceStore();
   const [name, setName] = useState('');
   const [manualDir, setManualDir] = useState<string | null>(null);
@@ -145,9 +147,11 @@ export function CreateWorkspaceDialog({ onClose, embedded }: Props) {
       </div>
       {error && <div className="text-status-error text-sm">{error}</div>}
       <div className="flex gap-2 justify-end mt-2">
-        <Button variant="ghost" type="button" onClick={onClose}>
-          取消
-        </Button>
+        {!hideCancel && (
+          <Button variant="ghost" type="button" onClick={onClose}>
+            取消
+          </Button>
+        )}
         <Button type="submit" disabled={loading || !name || !dir}>
           {loading ? '创建中…' : '创建'}
         </Button>
