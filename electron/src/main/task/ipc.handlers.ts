@@ -11,6 +11,10 @@
 //                      completed/failed 人话指路 task:submit/accept/reject）
 //   - task:cancel      等价 transition(id, 'cancelled')
 //   - task:start       启动任务（execution_room 决策树 + 转 in_progress + 锁定 execution_room）
+//   - task:submit      提交验收（两段式第一段，v2 Task 16：run submitted + acceptance 请求）
+//   - task:accept      验收通过（v2 Task 16：run accepted + 任务 completed）
+//   - task:reject      打回（v2 Task 16：run rejected + 任务回 assigned；空白理由人话拒）
+//   - task:listRuns    run 历史（v2 Task 16：run_no ASC）
 //   - task:move        看板拖拽换列/换组/排序（动作裁决单点在 move.ts，Task 6）
 //   - task:archive     归档（仅终态；软删 archived_at）
 //   - task:unarchive   取消归档（清 archived_at）
@@ -46,7 +50,15 @@ import { resolveCreateStatus } from './create-status';
 import { resolveConflict, type ConflictStrategy } from './conflict-resolver';
 import { executeConflictResolution } from './conflict-executor';
 import { startTaskAndKickoff, resumePausedTask, cancelTask, abortTaskExecution } from './lifecycle';
-import { pauseForTask, promoteDraftToPending } from './lifecycle-runs';
+import {
+  pauseForTask,
+  promoteDraftToPending,
+  submitRun,
+  acceptTask,
+  rejectTask,
+  type DeliverableInput,
+} from './lifecycle-runs';
+import { listRuns } from '../storage/tasks/runs-repo';
 /**
  * D4 只读守卫（spec §3.5）：origin='dispatch' 簿记行由会话链管理，看板写通道
  * 一律拒绝（registry 是真相源；从看板取消子任务留后续交互）。
@@ -367,6 +379,42 @@ export function registerTaskHandlers(): void {
     assertNotDispatchRow(id);
     // 语义单点在 lifecycle.ts（cancelTask），move.ts 同源消费
     await cancelTask(id);
+  });
+
+  // ── v2 两段式完成 IPC 面（Task 16，spec §6.5）──
+  // submit → submitted + acceptance 请求；accept / reject → 验收裁决。
+  // 语义单点全在 lifecycle-runs（task-tools agent 工具路径同源消费），
+  // handler 只做 D4 守卫 + 调度重评估 + 行回读。
+  ipcMain.handle(
+    'task:submit',
+    async (_evt, id: string, deliverable: DeliverableInput): Promise<TaskRow> => {
+      assertNotDispatchRow(id);
+      await submitRun(id, deliverable);
+      notifyExecutor();
+      return getTask(id)!;
+    },
+  );
+
+  ipcMain.handle('task:accept', async (_evt, id: string): Promise<TaskRow> => {
+    assertNotDispatchRow(id);
+    await acceptTask(id);
+    notifyExecutor();
+    return getTask(id)!;
+  });
+
+  // 空白理由由 rejectTask 人话拒（「打回必须填写理由」——与 move 打回双保险）
+  ipcMain.handle('task:reject', async (_evt, id: string, reason: string): Promise<TaskRow> => {
+    assertNotDispatchRow(id);
+    await rejectTask(id, reason);
+    // 打回回 assigned 排队——返工放行（startRun trigger='rework'）由 executor
+    // 重评估接手，与 create/update 等写通道同纪律（K3）
+    notifyExecutor();
+    return getTask(id)!;
+  });
+
+  // run 历史列表（run_no ASC——runs-repo 单点排序）
+  ipcMain.handle('task:listRuns', async (_evt, id: string) => {
+    return listRuns(id);
   });
 
   // 看板重构 Task 6：拖拽换列走单一通道——renderer 只发目标（column/groupId），

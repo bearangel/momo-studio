@@ -37,6 +37,8 @@ import { registerResourceHandlers } from '../resource/ipc.handlers';
 import { registerAgentOpConfirmHandlers } from '../agent/agent-op-confirm';
 import { registerPluginHandlers } from '../plugin/ipc.handlers';
 import { registerTaskHandlers } from '../task/ipc.handlers';
+// 任务生命周期 v2（Task 16）：human 命名空间 + 推送 sink + sweeper 定时器装配
+import { registerHumanIpc } from '../task/human.ipc.handlers';
 import { registerTaskGroupHandlers } from '../task/groups.ipc.handlers';
 import { registerDialogHandlers } from './dialog.handlers';
 import { registerWindowIpc } from '../window-ipc';
@@ -97,6 +99,9 @@ export function registerIpcHandlers(opts: WorkspaceIpcOpts = {}): void {
   // 插件系统 P1（spec 2026-10-15）：installZip / installDevDir / setEnabled / uninstall
   registerPluginHandlers();
   registerTaskHandlers();
+  // 任务生命周期 v2（Task 16）：human:list/answer/attention + human:changed /
+  // task:runChanged 推送 + boot 孤儿回收 + 60s 超时 sweeper（内部幂等）
+  registerHumanIpc();
   // 看板重构 Task 7：taskGroup 命名空间（组 CRUD + 归档级联 + abort 补偿）
   registerTaskGroupHandlers();
   registerDialogHandlers();

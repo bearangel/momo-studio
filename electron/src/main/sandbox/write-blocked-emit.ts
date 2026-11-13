@@ -46,6 +46,9 @@ function sweepExpired(now: number): void {
     if (alive.length === 0) readonlyDeniedBySession.delete(key);
     else if (alive.length !== q.length) readonlyDeniedBySession.set(key, alive);
   }
+  for (const [key, entry] of toolGateRowByStreamKey) {
+    if (now - entry.at > PENDING_TTL_MS) toolGateRowByStreamKey.delete(key);
+  }
 }
 
 function registerPending(signal: WriteBlockedSignal): void {
@@ -102,6 +105,16 @@ export type ToolGateAnswerLike = { decision?: string; reason?: string };
 const TOOL_GATE_TITLE_CMD_MAX = 60;
 
 /**
+ * 落库去重镜像（T13 评审必办 1）：streamKey → 已落库的 tool_gate 请求行
+ * （镜像 pendingWriteBlocked 的键粒度）。两条上报链（childMsg 即报 /
+ * inspectEventBatch 迟到兜底）常对同一 incident 双命中——不去重会落孪生行，
+ * 用户批准其一后，存活孪生在 15min 被 sweeper deny_and_wrap 自动拒：
+ * 幻影超时拒绝账 + deniedBroadcaster 目录域广播误杀已批准的写授权。
+ * 镜像行已被答复/过期（真新 incident，如 deny 后重试）则照常落新行。
+ */
+const toolGateRowByStreamKey = new Map<string, { requestId: string; at: number }>();
+
+/**
  * 写授权卡持久化（Task 13 双写）：信号产生处插 kind='tool_gate' 请求行。
  * sessionId null（未归属卡）不落库——human_requests.session_id NOT NULL，等待
  * 语义由内存注册表 + renderer 卡自弃承载。DB 异常只 warn 不阻断消息主路径
@@ -110,7 +123,15 @@ const TOOL_GATE_TITLE_CMD_MAX = 60;
 export function registerToolGateRequest(signal: WriteBlockedSignal): HumanRequestRow | null {
   if (signal.sessionId === null) return null;
   try {
-    return insertHumanRequest({
+    const key = signal.streamSessionId;
+    if (key !== null) {
+      const seen = toolGateRowByStreamKey.get(key);
+      if (seen !== undefined && Date.now() - seen.at <= PENDING_TTL_MS) {
+        // 同 streamKey 且镜像行仍 pending → 同一道闸的第二链命中，跳过落库
+        if (getHumanRequest(seen.requestId)?.status === 'pending') return null;
+      }
+    }
+    const row = insertHumanRequest({
       sessionId: signal.sessionId,
       kind: 'tool_gate',
       title: `写授权：${signal.command.slice(0, TOOL_GATE_TITLE_CMD_MAX)}`,
@@ -121,6 +142,8 @@ export function registerToolGateRequest(signal: WriteBlockedSignal): HumanReques
       deadlineAt: Date.now() + PENDING_TTL_MS,
       timeoutPolicy: 'deny_and_wrap',
     });
+    if (key !== null) toolGateRowByStreamKey.set(key, { requestId: row.id, at: Date.now() });
+    return row;
   } catch (err) {
     logger.warn('tool_gate 请求落库失败（不阻断授权卡推送）', {
       sessionId: signal.sessionId,
@@ -337,6 +360,7 @@ export function __resetInspectStateForTest(): void {
   pendingWriteBlocked.clear();
   readonlySessions.clear();
   readonlyDeniedBySession.clear();
+  toolGateRowByStreamKey.clear();
 }
 
 export function inspectEventBatch(events: MessageEventRow[]): WriteBlockedSignal | null {

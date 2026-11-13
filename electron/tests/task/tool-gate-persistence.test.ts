@@ -35,6 +35,7 @@ vi.mock('../../src/main/agent/router-bootstrap', () => ({
 
 import {
   writeBlockedFromChildMsg,
+  inspectEventBatch,
   listPendingWriteBlocked,
   markSessionReadonly,
   setWriteDeniedBroadcaster,
@@ -42,6 +43,7 @@ import {
   recoverOrphanToolGates,
   __resetInspectStateForTest,
 } from '../../src/main/sandbox/write-blocked-emit';
+import type { MessageEventRow } from '../../src/main/storage/messages/events-repo';
 import { getGrantedDirs, __clearWriteGrantsForTest } from '../../src/main/sandbox/write-grant';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import {
@@ -321,5 +323,100 @@ describe('5) sweeper 自动拒绝 → deny 广播路径触发（T12 联动）', 
     } finally {
       setToolGateHandler(null);
     }
+  });
+});
+
+// ═══ 6) 双链命中去重（T13 评审必办 1）：同 streamKey 只落一行 tool_gate ═══
+describe('6) 双链去重：childMsg 即报 + inspectEventBatch 迟到兜底 → 单行，无幻影 deny', () => {
+  // 语料与事件构造照 write-blocked-emit.test.ts（HOME 真实路径——归一分支可复现）
+  const HOME = os.homedir();
+  const CARGO_FAIL = `exit_code: 1
+
+sandbox: seatbelt/net-on
+
+error: failed to open ${HOME}/.cargo/registry/cache/a.crate
+
+Caused by:
+  Operation not permitted (os error 1)`;
+  let evSeq = 0;
+  const mkStart = (callId: string, command: string): MessageEventRow => {
+    evSeq += 1;
+    return {
+      id: `e-${callId}-s-${evSeq}`, messageId: 'm-dedup', seq: evSeq, eventType: 'tool_call_start',
+      payload: { callId, toolName: 'bash', args: { command } }, createdAt: Date.now(),
+    };
+  };
+  const mkResult = (callId: string): MessageEventRow => {
+    evSeq += 1;
+    return {
+      id: `e-${callId}-r-${evSeq}`, messageId: 'm-dedup', seq: evSeq, eventType: 'tool_call_result',
+      payload: { callId, toolName: 'bash', result: CARGO_FAIL, success: false }, createdAt: Date.now(),
+    };
+  };
+
+  it('同 streamKey 两链命中 → 仅一行；批准后无孪生，sweeper 到期零 deny 广播', () => {
+    seedSession({ wsId: 'ws9', sessionId: 's-dd', streamId: 'ss-dd', messageId: 'm-dedup' });
+
+    // 链 1：childMsg 等待即报
+    writeBlockedFromChildMsg({
+      type: 'write-blocked-report',
+      streamSessionId: 'ss-dd',
+      workspaceId: 'ws9',
+      dirs: [path.join(HOME, '.cargo')],
+      command: 'cargo build',
+    });
+    // 链 2：inspectEventBatch 迟到兜底（同 incident 的事件批——消息行归同一条流）
+    const sig = inspectEventBatch([mkStart('c-dd', 'cargo build'), mkResult('c-dd')]);
+    expect(sig).not.toBeNull();
+
+    const row = latestToolGateRow('s-dd'); // 内含 toHaveLength(1)——孪生未落库
+    expect(row.status).toBe('pending');
+
+    // 用户批准 → answered
+    setToolGateHandler(handleToolGateAnswer);
+    try {
+      const disp = answerHuman(row.id, { decision: 'approve' }, 'user:panel');
+      expect(disp.disposition).toBe('answered');
+
+      // 推 deadline 至过去 + sweeper：无孪生行 → processed=0、零 deny 广播
+      // （不去重时孪生行会被 system:timeout 自动拒——幻影拒绝 + 目录域广播误杀）
+      mockBroadcastDeny.mockClear();
+      getDb().prepare(`UPDATE human_requests SET deadline_at = ? WHERE id = ?`).run(Date.now() - 1000, row.id);
+      const res = sweepHumanTimeouts();
+      expect(res.processed).toBe(0);
+      expect(mockBroadcastDeny).not.toHaveBeenCalled();
+    } finally {
+      setToolGateHandler(null);
+    }
+  });
+
+  it('镜像行已答后同 streamKey 再上报（deny 重试场景）→ 落新行', () => {
+    seedSession({ wsId: 'ws10', sessionId: 's-rt', streamId: 'ss-rt' });
+    writeBlockedFromChildMsg({
+      type: 'write-blocked-report',
+      streamSessionId: 'ss-rt',
+      workspaceId: 'ws10',
+      dirs: [path.join(HOME, '.cargo')],
+      command: 'mkdir a',
+    });
+    const first = latestToolGateRow('s-rt');
+    setToolGateHandler(handleToolGateAnswer);
+    try {
+      answerHuman(first.id, { decision: 'deny' }, 'user:panel');
+    } finally {
+      setToolGateHandler(null);
+    }
+    // 同流新 incident（重试）：镜像行已 answered → 新行照落
+    writeBlockedFromChildMsg({
+      type: 'write-blocked-report',
+      streamSessionId: 'ss-rt',
+      workspaceId: 'ws10',
+      dirs: [path.join(HOME, '.cargo')],
+      command: 'mkdir b',
+    });
+    const rows = getDb()
+      .prepare(`SELECT id FROM human_requests WHERE session_id = ? AND kind = 'tool_gate'`)
+      .all('s-rt') as Array<{ id: string }>;
+    expect(rows).toHaveLength(2);
   });
 });

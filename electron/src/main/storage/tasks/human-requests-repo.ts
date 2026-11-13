@@ -217,6 +217,36 @@ export function listByTask(taskId: string): HumanRequestRow[] {
   return rows.map(rowToCamel);
 }
 
+/**
+ * 通用列表查询（Task 16 human:list IPC 面）：sessionId / taskId 可选过滤，
+ * status 缺省 'pending'（面板默认只看未决），'all' 全量。
+ * 条件动态拼接（无过滤时退化为 status 单条件——与手工 SQL 等价）。
+ */
+export function listRequests(filter: {
+  sessionId?: string;
+  taskId?: string;
+  status?: 'pending' | 'all';
+}): HumanRequestRow[] {
+  const where: string[] = [];
+  const params: string[] = [];
+  if (filter.sessionId !== undefined) {
+    where.push('session_id = ?');
+    params.push(filter.sessionId);
+  }
+  if (filter.taskId !== undefined) {
+    where.push('task_id = ?');
+    params.push(filter.taskId);
+  }
+  if (filter.status !== 'all') where.push("status = 'pending'");
+  const rows = getDb()
+    .prepare(
+      `SELECT * FROM human_requests${where.length > 0 ? ' WHERE ' + where.join(' AND ') : ''}
+       ORDER BY created_at ASC`,
+    )
+    .all(...params) as HumanRequestDbRow[];
+  return rows.map(rowToCamel);
+}
+
 /** run 下非验收（kind != 'acceptance'）pending 计数——run 收尾判定「还有没有人等着」 */
 export function countPendingNonAcceptance(runId: string): number {
   const row = getDb()

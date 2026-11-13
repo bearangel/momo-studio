@@ -67,6 +67,52 @@ export function setHumanAnswerKickoff(fn: HumanAnswerKickoff | null): void {
   humanAnswerKickoff = fn;
 }
 
+// ── renderer 推送 sink（Task 16，spec §6 IPC 面）──
+//
+// 服务层（本模块 / sweeper）不得依赖 electron（本模块经 task-tools 等被
+// runtime 子进程静态可达——隔离锁）；human:changed / task:runChanged 推送
+// 经 setter 注入（setToolGateHandler / setHumanAnswerKickoff 同款先例），
+// 装配点在 human.ipc.handlers registerHumanIpc。未注册时 no-op（测试 /
+// 子进程侧调用零负担）。
+
+/** human:changed 推送事件：kind 为变化类型（inserted / answered / expired） */
+export interface HumanChangedEvent {
+  sessionId: string;
+  requestId?: string;
+  kind: 'inserted' | 'answered' | 'expired';
+}
+
+/** human:changed 推送 sink 容器（装配时注册；null 注销） */
+let humanChangedSink: ((e: HumanChangedEvent) => void) | null = null;
+
+export function setHumanChangedSink(fn: ((e: HumanChangedEvent) => void) | null): void {
+  humanChangedSink = fn;
+}
+
+/** 服务侧发射端（sweeper 等 import 本函数发射；sink 未装配 no-op） */
+export function emitHumanChanged(e: HumanChangedEvent): void {
+  humanChangedSink?.(e);
+}
+
+/** task:runChanged 推送事件：run 状态变化点（新建 / 每次状态转移后） */
+export interface TaskRunChangedEvent {
+  taskId: string;
+  runId: string;
+  status: TaskRunStatus;
+}
+
+/** task:runChanged 推送 sink 容器（装配时注册；null 注销） */
+let taskRunChangedSink: ((e: TaskRunChangedEvent) => void) | null = null;
+
+export function setTaskRunChangedSink(fn: ((e: TaskRunChangedEvent) => void) | null): void {
+  taskRunChangedSink = fn;
+}
+
+/** run 状态变化推送单点（本模块内各转移点调用；事务提交后发射，sink 未装配 no-op） */
+function emitRunChanged(taskId: string, runId: string, status: TaskRunStatus): void {
+  taskRunChangedSink?.({ taskId, runId, status });
+}
+
 /** 单任务执行尝试上限（spec §5.2：防打回-重跑死循环） */
 export const MAX_RUNS_PER_TASK = 10;
 
@@ -138,7 +184,7 @@ export function startRun(
     );
   }
 
-  return getDb().transaction((): TaskRunRow => {
+  const run = getDb().transaction((): TaskRunRow => {
     let run: TaskRunRow;
     try {
       run = insertRun({
@@ -161,6 +207,8 @@ export function startRun(
     ensureRunBookkeeping(taskId, run.id, run.status);
     return run;
   })();
+  emitRunChanged(taskId, run.id, 'running');
+  return run;
 }
 
 /** 取活动 run；无则人话抛错（服务入口的前置契约，调用方无需自行判空） */
@@ -179,6 +227,7 @@ function requireActiveRun(taskId: string): TaskRunRow {
 export function enterWaitingHuman(taskId: string): void {
   const active = requireActiveRun(taskId);
   updateRun(active.id, { status: 'waiting_human' });
+  emitRunChanged(taskId, active.id, 'waiting_human');
 
   const task = getTask(taskId)!;
   if (task.status !== 'paused') {
@@ -193,6 +242,7 @@ export function enterWaitingHuman(taskId: string): void {
 export function resumeFromWaiting(taskId: string): void {
   const active = requireActiveRun(taskId);
   updateRun(active.id, { status: 'running' });
+  emitRunChanged(taskId, active.id, 'running');
 
   const task = getTask(taskId)!;
   if (task.status !== 'paused') {
@@ -218,6 +268,7 @@ export function failRun(taskId: string, reason: string): void {
   if (task.status !== 'paused') {
     projectTaskStatus(taskId, 'failed');
   }
+  emitRunChanged(taskId, active.id, 'failed');
 }
 
 /**
@@ -239,6 +290,7 @@ export function cancelActiveRun(taskId: string, reason?: string): void {
   if (task.status !== 'paused') {
     projectTaskStatus(taskId, 'cancelled');
   }
+  emitRunChanged(taskId, active.id, 'cancelled');
 }
 
 /**
@@ -340,13 +392,13 @@ export async function submitRun(id: string, opts: DeliverableInput): Promise<voi
   const files = opts.files ?? [];
   const artifacts = opts.artifacts ?? [];
   const now = Date.now();
-  getDb().transaction(() => {
+  const acceptance = getDb().transaction((): HumanRequestRow => {
     updateRun(active.id, {
       status: 'submitted',
       deliverableJson: JSON.stringify({ summary: opts.summary, files, artifacts }),
     });
     projectTaskStatus(id, 'submitted', { submittedAt: now });
-    insertHumanRequest({
+    return insertHumanRequest({
       sessionId,
       taskId: id,
       runId: active.id,
@@ -359,6 +411,8 @@ export async function submitRun(id: string, opts: DeliverableInput): Promise<voi
       timeoutPolicy: 'keep_waiting',
     });
   })();
+  emitRunChanged(id, active.id, 'submitted');
+  emitHumanChanged({ sessionId, requestId: acceptance.id, kind: 'inserted' });
 
   if (task.autoAccept) {
     completeAcceptance(id, 'system:auto');
@@ -390,6 +444,7 @@ function answerAcceptance(
   if (!res.ok) {
     throw new Error(`验收请求已被关闭（${res.reason}），请刷新任务状态后重试`);
   }
+  emitHumanChanged({ sessionId: req.sessionId, requestId: req.id, kind: 'answered' });
 }
 
 /**
@@ -411,6 +466,7 @@ function completeAcceptance(taskId: string, byNodeId: string): void {
     answerAcceptance(taskId, active.id, { decision: 'accept' }, byNodeId);
     projectTaskStatus(taskId, 'completed', { acceptedAt: now, completedAt: now });
   })();
+  emitRunChanged(taskId, active.id, 'accepted');
   // 循环续期单点（spec §7.2：completed 钩子）——人工验收与 auto_accept
   // 「提交即验收」同点位触发，替代旧 agent-runner / move.ts 各自的调用
   spawnNextInstanceIfRecurring(taskId);
@@ -453,6 +509,7 @@ export async function rejectTask(id: string, reason: string): Promise<void> {
     answerAcceptance(id, active.id, { decision: 'reject', reason: trimmed }, LOCAL_ACCEPT_BY);
     projectTaskStatus(id, 'assigned');
   })();
+  emitRunChanged(id, active.id, 'rejected');
 }
 
 // ── HITL 请求 / 答复链（Task 11，spec §6）──
@@ -507,6 +564,7 @@ export function requestHuman(input: {
       input.timeoutPolicy ?? (input.kind === 'manual_action' ? 'escalate' : 'keep_waiting'),
   });
   if (active) enterWaitingHuman(input.taskId!);
+  emitHumanChanged({ sessionId: input.sessionId, requestId: row.id, kind: 'inserted' });
   return row;
 }
 
@@ -535,6 +593,7 @@ export function answerHuman(
 
   const res = tryAnswer(requestId, JSON.stringify(answer), byNodeId);
   if (!res.ok) return { disposition: 'stale' };
+  emitHumanChanged({ sessionId: req.sessionId, requestId, kind: 'answered' });
 
   // 上下文存活性（Review Focus #1）：无任务会话级请求恒活；有任务时须任务非终态
   // 且仍有活动 run，否则只落 answered 不注入 / 不唤醒 / 不回调
@@ -666,6 +725,7 @@ export function resetForQuotaRetry(
   const active = getActiveRun(taskId);
   if (active) {
     updateRun(active.id, { status: 'failed', endedAt: Date.now(), rejectReason: '配额受限自动续跑' });
+    emitRunChanged(taskId, active.id, 'failed');
   }
   updateTask(taskId, {
     status: 'assigned',

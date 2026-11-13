@@ -44,6 +44,9 @@ import type {
   PluginDupCleanupResult,
   TaskRow,
   TaskCreateBatchResult,
+  TaskRunRow,
+  HumanRequestRow,
+  HumanAnswerInput,
   UploadedSkill,
   PluginSummary,
   PluginDetail,
@@ -644,6 +647,22 @@ const api: ApiSurface = {
     // 看板重构 Task 6：拖拽换列 / 归档域（动作裁决单点在主进程 move.ts）
     // v2 生命周期（Task 8）：opts.reason 随打回（submitted→assigned）透传
     move: (id, target, opts) => invoke<TaskRow>('task:move', id, target, opts),
+    // v2 两段式完成（Task 16，语义单点 lifecycle-runs）：提交验收 / 验收 / 打回 /
+    // run 历史（run_no ASC）
+    submit: (id, deliverable) => invoke<TaskRow>('task:submit', id, deliverable),
+    accept: (id) => invoke<TaskRow>('task:accept', id),
+    reject: (id, reason) => invoke<TaskRow>('task:reject', id, reason),
+    listRuns: (id) => invoke<TaskRunRow[]>('task:listRuns', id),
+    // run 状态变化推送订阅（{ taskId, runId, status }——载荷重拉 task:listRuns /
+    // task:get 即可，不携带全行）
+    onTaskRunChanged: (callback: (e: { taskId: string; runId: string; status: TaskRunRow['status'] }) => void) => {
+      type RunChangedPayload = Parameters<typeof callback>[0];
+      const handler = (_e: IpcRendererEvent, payload: RunChangedPayload): void => callback(payload);
+      ipcRenderer.on('task:runChanged', handler);
+      return () => {
+        ipcRenderer.off('task:runChanged', handler);
+      };
+    },
     // 顶置开关（迁移 050，语义单点在主进程 repo.setTaskPinned）
     setPinned: (id, pinned) => invoke<TaskRow>('task:setPinned', id, pinned),
     archive: (id) => invoke<TaskRow>('task:archive', id),
@@ -671,6 +690,28 @@ const api: ApiSurface = {
     delete: (groupId: string) => invoke<void>('sessionGroup:delete', groupId),
     setColor: (groupId: string, color: string) =>
       invoke<void>('sessionGroup:setColor', groupId, color),
+  },
+  // 任务生命周期 v2（Task 16）：人工请求命名空间（human.ipc.handlers.ts）——
+  // HITL 面板列表 / 答复 / 会话注意力聚合 + human:changed 变更推送
+  human: {
+    list: (input) => invoke<HumanRequestRow[]>('human:list', input),
+    answer: (requestId, answer, message?) =>
+      invoke<{ disposition: 'answered' | 'stale' }>('human:answer', requestId, answer, message),
+    attention: (workspaceId) =>
+      invoke<
+        Record<
+          string,
+          { waiting: number; submitted: boolean; executorSubmitted: boolean; failed: boolean }
+        >
+      >('human:attention', workspaceId),
+    onChanged: (callback: (e: { sessionId: string; requestId?: string; kind: string }) => void) => {
+      type HumanChangedPayload = Parameters<typeof callback>[0];
+      const handler = (_e: IpcRendererEvent, payload: HumanChangedPayload): void => callback(payload);
+      ipcRenderer.on('human:changed', handler);
+      return () => {
+        ipcRenderer.off('human:changed', handler);
+      };
+    },
   },
   dialog: {
     pickDirectory: (opts) => invoke('dialog:pickDirectory', opts),

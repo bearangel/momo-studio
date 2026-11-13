@@ -24,7 +24,7 @@ import { logger } from '../logger';
 import { listDue, markExpired, markReminded } from '../storage/tasks/human-requests-repo';
 import type { HumanRequestRow } from '../storage/tasks/human-requests-repo';
 import { getActiveRun } from '../storage/tasks/runs-repo';
-import { answerHuman, cancelActiveRun, failRun } from './lifecycle-runs';
+import { answerHuman, cancelActiveRun, emitHumanChanged, failRun } from './lifecycle-runs';
 
 /** 超时自动答复者标识（answered_by_node_id 落账，与人答区分） */
 const TIMEOUT_ANSWERER = 'system:timeout';
@@ -80,11 +80,17 @@ export function sweepHumanTimeouts(now: number = Date.now()): { processed: numbe
           break;
         }
         case 'fail': {
-          if (markExpired(req.id) > 0) settleTask(req.taskId, 'fail');
+          if (markExpired(req.id) > 0) {
+            emitHumanChanged({ sessionId: req.sessionId, requestId: req.id, kind: 'expired' });
+            settleTask(req.taskId, 'fail');
+          }
           break;
         }
         case 'cancel': {
-          if (markExpired(req.id) > 0) settleTask(req.taskId, 'cancel');
+          if (markExpired(req.id) > 0) {
+            emitHumanChanged({ sessionId: req.sessionId, requestId: req.id, kind: 'expired' });
+            settleTask(req.taskId, 'cancel');
+          }
           break;
         }
       }
