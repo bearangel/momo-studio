@@ -14,6 +14,8 @@
 //       任务取消 cancel 通路只改 run 状态不发 human:changed 推送——runChanged
 //       是这些路径的唯一信号）。载荷只有 taskId/runId/status 无 sessionId，
 //       无法定点，刷新全部已跟踪会话（窗口合并后代价可控）
+//     · 两类事件均顺带合并刷新 attention（T23：徽标/待处理分区数据源，任务态
+//       翻转与未打开会话的等待计数变化也需反映——见 scheduleAttentionRefresh）
 //   - 答复经 answer 单点：ipc.human.answer + 该会话 pending 立即重拉（不等
 //     onChanged 推送，答完卡片原地消失）；acceptance 请求不走此通道（验收在
 //     面板直调 task.accept / task.reject，主进程 answerAcceptance 会发
@@ -37,6 +39,27 @@ function scheduleRefetch(sessionId: string, loadPending: (sid: string) => Promis
     const sessions = Array.from(dirtySessions);
     dirtySessions.clear();
     for (const sid of sessions) void loadPending(sid);
+  }, REFETCH_COALESCE_MS);
+}
+
+/** 最近一次 attention 刷新的工作空间（订阅事件载荷无 workspaceId，兜底刷新复用） */
+let attentionWorkspaceId: string | null = null;
+/** attention 兜底刷新合并定时器（与 pending 重拉同窗口，模块级同因） */
+let attentionTimer: number | null = null;
+
+/**
+ * 徽标聚合兜底刷新（onChanged / runChanged 事件后调，T23）：等待中计数 /
+ * submitted / failed 变化必须反映到会话列表徽标与「待处理」分区——runChanged
+ * 兜底原本只刷 pending，任务态翻转（supersede / cancel 连带的 submitted→failed
+ * 等）在徽标面上会失真，故事件后顺带整表刷 attention。与 pending 重拉共用
+ * REFETCH_COALESCE_MS 窗口合并；RoomList 挂载建立 workspace 上下文前静默跳过。
+ */
+function scheduleAttentionRefresh(refresh: (workspaceId: string) => Promise<void>): void {
+  if (attentionWorkspaceId === null) return;
+  if (attentionTimer !== null) return;
+  attentionTimer = window.setTimeout(() => {
+    attentionTimer = null;
+    void refresh(attentionWorkspaceId!);
   }, REFETCH_COALESCE_MS);
 }
 
@@ -82,6 +105,8 @@ export const useHumanStore = create<HumanState>((set, get) => ({
   },
 
   refreshAttention: async (workspaceId) => {
+    // 记住最近工作空间：订阅事件载荷无 workspaceId，兜底刷新复用此上下文
+    attentionWorkspaceId = workspaceId;
     try {
       const attention = await ipc.human.attention(workspaceId);
       set({ attentionBySession: attention });
@@ -113,6 +138,9 @@ export const useHumanStore = create<HumanState>((set, get) => ({
       if (get().pendingBySession.has(e.sessionId)) {
         scheduleRefetch(e.sessionId, get().loadPending);
       }
+      // 徽标数据源兜底：未打开过的会话同样可能产生等待中计数——attention
+      // 整表刷新不分定点（T23）
+      scheduleAttentionRefresh(get().refreshAttention);
     });
     offTaskRunChanged = ipc.task.onTaskRunChanged(() => {
       // T16 carry 兜底：supersede / cancel 通路无 human:changed 推送，
@@ -120,6 +148,8 @@ export const useHumanStore = create<HumanState>((set, get) => ({
       for (const sid of get().pendingBySession.keys()) {
         scheduleRefetch(sid, get().loadPending);
       }
+      // 任务态翻转（submitted / failed）经此通路落定——attention 顺带刷新（T23）
+      scheduleAttentionRefresh(get().refreshAttention);
     });
   },
 
@@ -128,6 +158,11 @@ export const useHumanStore = create<HumanState>((set, get) => ({
       window.clearTimeout(flushTimer);
       flushTimer = null;
     }
+    if (attentionTimer !== null) {
+      window.clearTimeout(attentionTimer);
+      attentionTimer = null;
+    }
+    attentionWorkspaceId = null;
     dirtySessions.clear();
     offHumanChanged?.();
     offHumanChanged = null;

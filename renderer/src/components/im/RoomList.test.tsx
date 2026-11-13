@@ -11,7 +11,7 @@
 // 「无成员图标」断言语义不变——类型图标恰好每行一枚成为新的锁定面。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import type { SessionGroupRow, SessionMemberInfo, SessionSummary } from '../../ipc/types';
+import type { SessionAttention, SessionGroupRow, SessionMemberInfo, SessionSummary } from '../../ipc/types';
 
 // react-colorful 桩：取色器交互面收敛为一个可驱动按钮（onChange 注入预览色）
 vi.mock('react-colorful', () => ({
@@ -40,7 +40,7 @@ vi.mock('./DefaultAgentPickerDialog', () => ({
 }));
 
 // vi.hoisted：mock store 状态在 vi.mock 工厂注册前完成初始化
-const { sessionState, workspaceState } = vi.hoisted(() => ({
+const { sessionState, workspaceState, humanState } = vi.hoisted(() => ({
   sessionState: {
     sessions: [] as SessionSummary[],
     activeSessionId: null as string | null,
@@ -57,6 +57,11 @@ const { sessionState, workspaceState } = vi.hoisted(() => ({
     activeWorkspaceId: 'ws-1',
     getActive: () => ({ id: 'ws-1', defaultAgentInstanceId: 'inst-default' }),
   },
+  humanState: {
+    attentionBySession: {} as Record<string, SessionAttention>,
+    refreshAttention: vi.fn(),
+    initSubscriptions: vi.fn(),
+  },
 }));
 
 vi.mock('../../stores/session.store', () => ({
@@ -64,6 +69,9 @@ vi.mock('../../stores/session.store', () => ({
 }));
 vi.mock('../../stores/workspace.store', () => ({
   useWorkspaceStore: (selector: (s: typeof workspaceState) => unknown) => selector(workspaceState),
+}));
+vi.mock('../../stores/human.store', () => ({
+  useHumanStore: (selector: (s: typeof humanState) => unknown) => selector(humanState),
 }));
 
 import { RoomList } from './RoomList';
@@ -147,6 +155,9 @@ function resetState(): void {
   // 显式复位防泄漏到后续 describe（曾致折叠键/建组参数落到 ws-2）
   workspaceState.activeWorkspaceId = 'ws-1';
   workspaceState.getActive = () => ({ id: 'ws-1', defaultAgentInstanceId: 'inst-default' });
+  humanState.attentionBySession = {};
+  humanState.refreshAttention = vi.fn().mockResolvedValue(undefined);
+  humanState.initSubscriptions = vi.fn();
 }
 
 beforeEach(() => {
@@ -1153,6 +1164,148 @@ describe('RoomList — 定位会话（reveal 信号：展开折叠组 + 滚动�
     sessionState.activeSessionId = null;
     render(<RoomList />);
     expect(screen.getByLabelText('定位当前会话')).toBeDisabled();
+  });
+});
+
+// ═══ 会话注意力徽标 + 「待处理」分区（T23，预览合同 2026-11-13 §2 定值 #11–#15）═══
+
+/** 分区行与列表行同名（同一会话出现两处）——按是否在分区内区分定位 */
+function listRowOf(title: string): HTMLElement {
+  const rows = screen.getAllByRole('button', { name: new RegExp(title) });
+  const row = rows.find((b) => b.closest('[data-testid="pending-section"]') == null);
+  if (row == null) throw new Error(`未找到列表行: ${title}`);
+  return row;
+}
+
+function pendingRowOf(title: string): HTMLElement {
+  const section = screen.getByTestId('pending-section');
+  return within(section).getByRole('button', { name: new RegExp(title) });
+}
+
+describe('RoomList — 行尾注意力徽标（T23 预览合同 #11/#12/#13）', () => {
+  it('等待中 N 计数徽标（warning）：多信号同现仅显最高优先一枚', () => {
+    sessionState.sessions = [makeSession({ id: 's1', title: '甲会话' })];
+    humanState.attentionBySession = {
+      s1: { waiting: 2, submitted: true, executorSubmitted: false, failed: true },
+    };
+    render(<RoomList />);
+    const row = listRowOf('甲会话');
+    expect(within(row).getByText('等待中 2')).toBeInTheDocument();
+    expect(within(row).queryByText('待验收')).not.toBeInTheDocument();
+    expect(within(row).queryByText('已提交')).not.toBeInTheDocument();
+    expect(within(row).queryByText('失败')).not.toBeInTheDocument();
+  });
+
+  it('三分支映射：待验收=accent / 已提交（executor 侧）=neutral / 失败=error', () => {
+    sessionState.sessions = [
+      makeSession({ id: 's1', title: '验收会话' }),
+      makeSession({ id: 's2', title: '执行会话' }),
+      makeSession({ id: 's3', title: '失败会话' }),
+    ];
+    humanState.attentionBySession = {
+      s1: { waiting: 0, submitted: true, executorSubmitted: false, failed: false },
+      s2: { waiting: 0, submitted: false, executorSubmitted: true, failed: false },
+      s3: { waiting: 0, submitted: false, executorSubmitted: false, failed: true },
+    };
+    render(<RoomList />);
+    expect(within(listRowOf('验收会话')).getByText('待验收')).toHaveClass(
+      'bg-surface-active',
+      'text-accent-600',
+    );
+    expect(within(listRowOf('执行会话')).getByText('已提交')).toHaveClass(
+      'bg-surface-3',
+      'text-secondary',
+    );
+    expect(within(listRowOf('失败会话')).getByText('失败')).toHaveClass(
+      'bg-status-error-tint',
+      'text-status-error',
+    );
+  });
+
+  it('无 attention 信号 → 行尾无徽标', () => {
+    sessionState.sessions = [makeSession({ id: 's1', title: '甲会话' })];
+    render(<RoomList />);
+    expect(within(listRowOf('甲会话')).queryByText(/等待中|待验收|已提交|失败/)).not.toBeInTheDocument();
+  });
+
+  it('挂载 → initSubscriptions + refreshAttention(当前 workspaceId)', () => {
+    sessionState.sessions = [makeSession({ id: 's1', title: '甲会话' })];
+    render(<RoomList />);
+    expect(humanState.initSubscriptions).toHaveBeenCalled();
+    expect(humanState.refreshAttention).toHaveBeenCalledWith('ws-1');
+  });
+});
+
+describe('RoomList — 「待处理」折叠分区（T23 预览合同 #14/#15）', () => {
+  function setupAttention(): void {
+    sessionState.sessions = [
+      makeSession({ id: 's1', title: '验收会话' }),
+      makeSession({ id: 's2', title: '等待会话' }),
+      makeSession({ id: 's3', title: '无信号会话' }),
+    ];
+    humanState.attentionBySession = {
+      s1: { waiting: 0, submitted: true, executorSubmitted: false, failed: false },
+      s2: { waiting: 3, submitted: false, executorSubmitted: false, failed: false },
+    };
+  }
+
+  it('有徽标会话列入分区，按徽标优先级排序（等待中 > 待验收）；点击行 → selectSession', () => {
+    setupAttention();
+    render(<RoomList />);
+    const section = screen.getByTestId('pending-section');
+    // 计数 = 有信号会话数（无信号会话不进分区）
+    expect(within(section).getByText('2')).toBeInTheDocument();
+    // 等待中（rank 0）排在待验收（rank 1）前
+    const waitingRow = pendingRowOf('等待会话');
+    const acceptRow = pendingRowOf('验收会话');
+    expect(
+      (waitingRow.compareDocumentPosition(acceptRow) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+    ).toBe(true);
+    // 行 = 徽标 + 标题 + 类型图标（裁定：无等待时长字段）
+    expect(within(waitingRow).getByText('等待中 3')).toBeInTheDocument();
+    expect(waitingRow.querySelector('svg')).toBeInTheDocument();
+    expect(within(waitingRow).queryByText(/分钟|小时/)).not.toBeInTheDocument();
+    expect(within(section).queryByText('无信号会话')).not.toBeInTheDocument();
+
+    fireEvent.click(pendingRowOf('验收会话'));
+    expect(sessionState.selectSession).toHaveBeenCalledWith('s1');
+  });
+
+  it('无信号空态：分区不渲染', () => {
+    sessionState.sessions = [makeSession({ id: 's1', title: '甲会话' })];
+    render(<RoomList />);
+    expect(screen.queryByTestId('pending-section')).not.toBeInTheDocument();
+  });
+
+  it('点分区头折叠：行隐藏 + 哨兵 id 写入分组折叠键；再点展开恢复', () => {
+    setupAttention();
+    render(<RoomList />);
+    fireEvent.click(screen.getByTestId('pending-section-head'));
+    expect(screen.getByTestId('pending-section')).toBeInTheDocument();
+    expect(screen.queryByTestId('pending-section-row')).not.toBeInTheDocument();
+    // 复用分组折叠存储键（collapsedIds 哨兵模式）
+    expect(JSON.parse(localStorage.getItem('momo.sessionGroups.collapsed.ws-1')!)).toEqual([
+      '__attention__',
+    ]);
+
+    fireEvent.click(screen.getByTestId('pending-section-head'));
+    expect(screen.getAllByTestId('pending-section-row')).toHaveLength(2);
+    expect(JSON.parse(localStorage.getItem('momo.sessionGroups.collapsed.ws-1')!)).toEqual([]);
+  });
+
+  it('挂载即折叠（localStorage 记忆恢复）', () => {
+    localStorage.setItem('momo.sessionGroups.collapsed.ws-1', JSON.stringify(['__attention__']));
+    setupAttention();
+    render(<RoomList />);
+    expect(screen.getByTestId('pending-section')).toBeInTheDocument();
+    expect(screen.queryByTestId('pending-section-row')).not.toBeInTheDocument();
+  });
+
+  it('搜索过滤态不渲染分区（与置顶/分组结构同为非过滤态专属）', () => {
+    setupAttention();
+    render(<RoomList />);
+    fireEvent.change(screen.getByLabelText('搜索会话'), { target: { value: '会话' } });
+    expect(screen.queryByTestId('pending-section')).not.toBeInTheDocument();
   });
 });
 

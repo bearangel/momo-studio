@@ -357,6 +357,48 @@ describe('MentionInput 只读态（v25 spec §7「会话只读」）', () => {
   });
 });
 
+// 委派跟踪只读态（T23，预览合同 #18）：session.readOnly（= delegationRole 'out'）
+// 与成员失效只读（上方 suite）是两个不同只读源——跟踪态输入区整体替换为占位
+describe('MentionInput 委派跟踪只读态（T23）', () => {
+  /** 构造活动会话 summary（默认可写；仅 T23 消费 sessions 字段的 readOnly） */
+  function makeSummary(overrides: Partial<SessionSummary> & { id: string }): SessionSummary {
+    return {
+      workspaceId: 'ws-1',
+      title: '跟踪会话',
+      titleAuto: false,
+      kind: 'chat',
+      lastMessageAt: null,
+      pinnedAt: null,
+      groupId: null,
+      groupName: null,
+      sessionType: null,
+      delegationRole: null,
+      readOnly: false,
+      taskId: null,
+      members: [],
+      ...overrides,
+    };
+  }
+
+  it('session.readOnly → 输入区整体替换为只读占位；编辑面与导入入口不渲染', () => {
+    sessionState.sessions = [makeSummary({ id: 'sess-1', readOnly: true, delegationRole: 'out' })];
+    render(<MentionInput />);
+    const locked = screen.getByTestId('composer-readonly');
+    expect(locked).toHaveTextContent('只读跟踪会话 · 操作经请求面板');
+    expect(locked.querySelector('svg')).toBeInTheDocument();
+    // 整体替换：无编辑面、无 📎 导入按钮（HumanRequestPanel 独立挂载不受影响）
+    expect(screen.queryByRole('textbox', { name: '消息输入框' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('从电脑导入')).not.toBeInTheDocument();
+  });
+
+  it('非跟踪会话（readOnly=false）→ 编辑面正常、无占位', () => {
+    sessionState.sessions = [makeSummary({ id: 'sess-1' })];
+    render(<MentionInput />);
+    expect(screen.queryByTestId('composer-readonly')).not.toBeInTheDocument();
+    expect(editor()).toHaveAttribute('contenteditable', 'true');
+  });
+});
+
 describe('MentionInput 聚焦信号（新建会话后聚焦输入框，spec §6.2 ⚡ 免弹窗直达）', () => {
   it('inputFocusTick 递增 → 编辑面获得焦点', () => {
     const { rerender } = render(<MentionInput />);

@@ -53,6 +53,15 @@ const mockApi = {
   },
   task: {
     list: vi.fn().mockResolvedValue([]),
+    // T23：RoomList 挂载 human.store.initSubscriptions → onTaskRunChanged 订阅
+    //（缺桩 commit 期抛错；no-op 不扰动既有断言）
+    onTaskRunChanged: vi.fn().mockReturnValue(() => {}),
+  },
+  // T23：RoomList 挂载 refreshAttention（徽标数据源）+ human.onChanged 订阅——
+  // 经真实 ipc Proxy 直读 window.api，缺桩 commit 期抛错
+  human: {
+    attention: vi.fn().mockResolvedValue({}),
+    onChanged: vi.fn().mockReturnValue(() => {}),
   },
   // P4：ActivityBar 扩展区——面板清单拉取 + panelsChanged 订阅（no-op 桩不扰动既有断言）
   plugin: {

@@ -170,6 +170,41 @@ describe('human.store — onChanged / runChanged 订阅', () => {
     expect(listMock).toHaveBeenCalledWith({ sessionId: 'sess-2' });
   });
 
+  // T23：两类事件顺带合并刷新 attention（徽标/待处理分区数据源——未打开会话
+  // 的等待计数、任务态翻转仅经此通路反映到会话列表）
+  it('onChanged 事件兜底刷新 attention：未跟踪会话（无 pending 拉取）也刷', async () => {
+    await useHumanStore.getState().refreshAttention('ws-1');
+    attentionMock.mockClear();
+
+    useHumanStore.getState().initSubscriptions();
+    const onChanged = humanOnChangedMock.mock.calls[0]![0];
+    onChanged({ sessionId: 'sess-other', requestId: 'req-x', kind: 'inserted' });
+    await flushCoalesce();
+
+    expect(attentionMock).toHaveBeenCalledWith('ws-1');
+  });
+
+  it('runChanged 兜底顺带刷新 attention（复用最近 workspace 上下文）', async () => {
+    await useHumanStore.getState().refreshAttention('ws-9');
+    listMock.mockClear();
+    attentionMock.mockClear();
+
+    useHumanStore.getState().initSubscriptions();
+    const onRunChanged = taskRunChangedMock.mock.calls[0]![0];
+    onRunChanged({ taskId: 'T-1', runId: 'run-1', status: 'completed' });
+    await flushCoalesce();
+
+    expect(attentionMock).toHaveBeenCalledWith('ws-9');
+  });
+
+  it('未建立 workspace 上下文（从未 refreshAttention）→ 事件不刷 attention', async () => {
+    useHumanStore.getState().initSubscriptions();
+    const onChanged = humanOnChangedMock.mock.calls[0]![0];
+    onChanged({ sessionId: 'sess-1', requestId: 'req-9', kind: 'inserted' });
+    await flushCoalesce();
+    expect(attentionMock).not.toHaveBeenCalled();
+  });
+
   it('__resetForTest 退订：此后事件不再触发拉取', async () => {
     await useHumanStore.getState().loadPending('sess-1');
     useHumanStore.getState().initSubscriptions();

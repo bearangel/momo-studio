@@ -15,9 +15,18 @@
 // 既有语义保留：标题搜索过滤 / 重命名 PromptDialog / 解散 ConfirmDialog /
 // 空态 EmptyState / 切 workspace 清过滤。写面一律直调 ipc + refreshSessionList
 // （不新增 store action，与 rename/delete 先例一致）。
+//
+// 任务生命周期 v2 Task 23（预览合同 2026-11-13-task-lifecycle-session §2）：
+// - 行尾注意力徽标（Badge 同源，#11/#12）：优先级 等待中 N > 待验收 > 已提交
+//   （executor 侧）> 失败，一行仅显最高一枚；数据源 human.store.attentionBySession
+// - 置顶区上方「待处理 N」可折叠分区（#14/#15）：默认展开、折叠经 collapsedIds
+//   哨兵 id 持久化；行 = 徽标 + 标题 + 类型图标（裁定：attention 无时间戳，
+//   不显示等待时长）；点击走既有 selectSession；空时不渲染、不改下方分桶排序
+// - 挂载/切工作区 refreshAttention(workspaceId) + 订阅幂等兜底
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent } from 'react';
 import { useSessionStore } from '../../stores/session.store';
+import { useHumanStore } from '../../stores/human.store';
 import { useUiStore } from '../../stores/ui.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useThemeStore } from '../../stores/theme.store';
@@ -25,6 +34,7 @@ import { ipc } from '../../ipc/client';
 import { PromptDialog } from '../common/PromptDialog';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { EmptyState } from '../ui/EmptyState';
+import { Badge, type BadgeTone } from '../ui/Badge';
 import { cn } from '../../lib/cn';
 import { deriveSessionType, type SessionType } from '../../lib/session-type';
 import {
@@ -38,7 +48,7 @@ import { SessionGroupColorPopover } from './SessionGroupColorPopover';
 import { BatchSessionContextMenu, GroupContextMenu, SessionContextMenu } from './SessionContextMenu';
 import { DefaultAgentPickerDialog } from './DefaultAgentPickerDialog';
 import { CollabSessionDialog } from './CollabSessionDialog';
-import type { SessionGroupRow, SessionSummary } from '../../ipc/types';
+import type { SessionAttention, SessionGroupRow, SessionSummary } from '../../ipc/types';
 import {
   ChevronDown,
   ChevronRight,
@@ -58,6 +68,26 @@ const TYPE_ICON: Record<SessionType, { Icon: typeof Zap; label: string }> = {
   collab: { Icon: Users, label: '协作会话' },
   task_execution: { Icon: ListTodo, label: '任务执行会话' },
 };
+
+/** 「待处理」分区在 collapsedIds 集合中的哨兵 id（复用分组折叠存储键与机制；
+ *  组 id 为 G-<seq> 命名空间，双下划线前缀无碰撞） */
+const PENDING_SECTION_ID = '__attention__';
+
+/** 会话注意力徽标（纯派生，预览合同 #11/#12）：一行仅显最高优先一枚 */
+interface AttentionBadge {
+  tone: BadgeTone;
+  text: string;
+  /** 优先级序：等待中 0 > 待验收 1 > 已提交（executor 侧）2 > 失败 3——「待处理」分区内排序键 */
+  rank: number;
+}
+
+function deriveAttentionBadge(att: SessionAttention): AttentionBadge | null {
+  if (att.waiting > 0) return { tone: 'warning', text: `等待中 ${att.waiting}`, rank: 0 };
+  if (att.submitted) return { tone: 'accent', text: '待验收', rank: 1 };
+  if (att.executorSubmitted) return { tone: 'neutral', text: '已提交', rank: 2 };
+  if (att.failed) return { tone: 'error', text: '失败', rank: 3 };
+  return null;
+}
 
 /** 折叠持久化键：按工作空间隔离（JSON 数组 = 折叠中的组 id 集） */
 const collapsedStorageKey = (workspaceId: string): string =>
@@ -146,6 +176,8 @@ interface SessionItemProps {
   inGroupCard: boolean;
   /** 多选选中态（方案 A：surface-active 底 + 左 2px accent 竖条） */
   selected: boolean;
+  /** 会话注意力聚合（human.store.attentionBySession 行；undefined=无信号无徽标） */
+  attention: SessionAttention | undefined;
   /** 行点击（含修饰键）：RoomList 内判定 激活/范围选/追加 */
   onRowClick: (mods: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean }) => void;
   /** 右键 → RoomList 开会话菜单（坐标取弹出点） */
@@ -166,6 +198,7 @@ function SessionItem({
   groupColor,
   inGroupCard,
   selected,
+  attention,
   onRowClick,
   onContextMenu,
   onRowDragStart,
@@ -173,6 +206,8 @@ function SessionItem({
 }: SessionItemProps) {
   const { Icon, label } = TYPE_ICON[deriveSessionType(session)];
   const pinned = session.pinnedAt != null;
+  // 徽标恒居行尾（预览合同 #13）；一行仅显最高优先一枚（#12）
+  const badge = attention != null ? deriveAttentionBadge(attention) : null;
   return (
     <div className={cn('my-0.5', inGroupCard ? 'mx-1' : 'mx-1.5')}>
       <button
@@ -234,6 +269,11 @@ function SessionItem({
           >
             <Pin size={10} strokeWidth={1.75} aria-hidden />
           </span>
+        )}
+        {badge != null && (
+          <Badge tone={badge.tone} className="shrink-0">
+            {badge.text}
+          </Badge>
         )}
       </button>
     </div>
@@ -313,6 +353,68 @@ function GroupHeader({
   );
 }
 
+// ─── 「待处理」折叠分区（预览合同 #14/#15）──────────────────────────────────
+
+interface PendingSectionProps {
+  entries: Array<{ session: SessionSummary; badge: AttentionBadge }>;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
+  onSelect: (sessionId: string) => void;
+}
+
+/** 置顶区上方的注意力聚合分区：attention 有信号的会话按徽标优先级序排列，
+ *  默认展开、折叠态经 collapsedIds 哨兵 id 持久化；行 = 徽标 + 标题 + 类型
+ *  图标收尾（裁定：attention 无时间戳，不显示等待时长）；点击走既有
+ *  selectSession。仅顶部附加——不改下方置顶/分组/未分组既有排序。 */
+function PendingSection({ entries, collapsed, onToggleCollapsed, onSelect }: PendingSectionProps) {
+  return (
+    <div
+      data-testid="pending-section"
+      className="m-1.5 overflow-hidden rounded-lg border border-subtle bg-canvas"
+    >
+      <button
+        type="button"
+        data-testid="pending-section-head"
+        aria-expanded={!collapsed}
+        onClick={onToggleCollapsed}
+        className={cn(
+          'flex h-7 w-full items-center gap-1.5 bg-surface-1 px-2.5 text-left',
+          !collapsed && 'border-b border-subtle',
+        )}
+      >
+        {collapsed ? (
+          <ChevronRight size={14} strokeWidth={1.75} className="shrink-0 text-tertiary" aria-hidden />
+        ) : (
+          <ChevronDown size={14} strokeWidth={1.75} className="shrink-0 text-tertiary" aria-hidden />
+        )}
+        <span className="text-xs font-semibold text-secondary">待处理</span>
+        <span className="text-[11px] font-normal text-tertiary">{entries.length}</span>
+      </button>
+      {!collapsed &&
+        entries.map(({ session, badge }) => {
+          const { Icon: TypeIcon } = TYPE_ICON[deriveSessionType(session)];
+          return (
+            <button
+              key={session.id}
+              type="button"
+              data-testid="pending-section-row"
+              onClick={() => onSelect(session.id)}
+              className="flex h-8 w-full items-center gap-2 px-2.5 text-left hover:bg-surface-3"
+            >
+              <Badge tone={badge.tone} className="shrink-0">
+                {badge.text}
+              </Badge>
+              <span className="flex-1 truncate text-[12.5px] text-secondary">{session.title}</span>
+              <span className="inline-flex shrink-0 text-tertiary">
+                <TypeIcon size={14} strokeWidth={1.75} aria-hidden />
+              </span>
+            </button>
+          );
+        })}
+    </div>
+  );
+}
+
 // ─── RoomList 主体 ────────────────────────────────────────────────────────────
 
 export function RoomList() {
@@ -329,6 +431,10 @@ export function RoomList() {
   const workspace = useWorkspaceStore((s) => s.getActive());
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const theme = useThemeStore((s) => s.resolved);
+  // 注意力聚合（徽标 + 待处理分区数据源，T23）
+  const attentionBySession = useHumanStore((s) => s.attentionBySession);
+  const refreshAttention = useHumanStore((s) => s.refreshAttention);
+  const initHumanSubscriptions = useHumanStore((s) => s.initSubscriptions);
 
   const [renaming, setRenaming] = useState<{ sessionId: string; oldTitle: string } | null>(null);
   // 等待 ConfirmDialog 二次确认的解散目标（null = 对话框未开）
@@ -422,6 +528,13 @@ export function RoomList() {
     // store 守卫拦截无参拉取（绝不跨仓——主进程无参走 listAllSessions 全仓）
     void loadSessions(activeWorkspaceId ?? undefined);
   }, [loadSessions, activeWorkspaceId]);
+
+  useEffect(() => {
+    // T23：挂载/切工作区刷新注意力聚合；订阅幂等兜底——IM 面板未挂载
+    // （HumanRequestPanel 未建订阅）时徽标也随 human/run 事件更新
+    initHumanSubscriptions();
+    if (activeWorkspaceId != null) void refreshAttention(activeWorkspaceId);
+  }, [activeWorkspaceId, refreshAttention, initHumanSubscriptions]);
 
   const toggleCollapsed = (groupId: string): void => {
     setCollapsedIds((prev) => {
@@ -687,6 +800,21 @@ export function RoomList() {
   }
   const colorByGroupId = new Map(groups.map((g) => [g.id, g.color] as const));
 
+  // 「待处理」分区行（预览合同 #14）：attention 有信号的会话按徽标优先级序；
+  // 仅为顶部附加聚合区，下方分桶原样保留（#15 不改排序）。搜索过滤态不渲染
+  // （与置顶/分组结构同为非过滤态专属结构）
+  const pendingEntries =
+    q === ''
+      ? visibleSessions
+          .map((session) => {
+            const att = attentionBySession[session.id];
+            const badge = att != null ? deriveAttentionBadge(att) : null;
+            return badge != null ? { session, badge } : null;
+          })
+          .filter((e): e is { session: SessionSummary; badge: AttentionBadge } => e !== null)
+          .sort((a, b) => a.badge.rank - b.badge.rank)
+      : [];
+
   // 多选范围序：非过滤态 = 置顶区 → 各组（组序）→ 未分组（DOM 顺序）；过滤态 = 拍平序
   const flatOrder =
     q === ''
@@ -734,6 +862,7 @@ export function RoomList() {
       groupColor={session.groupId != null ? colorByGroupId.get(session.groupId) : undefined}
       inGroupCard={inGroupCard}
       selected={selectedIds.has(session.id)}
+      attention={attentionBySession[session.id]}
       onRowClick={(mods) => handleRowClick(session, mods)}
       onContextMenu={(e) => {
         // 集内>1 → 批量菜单；集外 → 清空选择开单行菜单（桌面惯例）
@@ -825,6 +954,14 @@ export function RoomList() {
             if (e.target === e.currentTarget) clearSelection();
           }}
         >
+          {pendingEntries.length > 0 && (
+            <PendingSection
+              entries={pendingEntries}
+              collapsed={collapsedIds.has(PENDING_SECTION_ID)}
+              onToggleCollapsed={() => toggleCollapsed(PENDING_SECTION_ID)}
+              onSelect={(id) => void selectSession(id)}
+            />
+          )}
           {pinned.map((session) => renderSessionItem(session, true))}
           {groups.map((group) => {
             const items = byGroup.get(group.id) ?? [];
