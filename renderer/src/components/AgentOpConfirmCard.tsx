@@ -96,6 +96,10 @@ export function AgentOpConfirmCard() {
   const hasFieldChanges = (diff.fieldChanges?.length ?? 0) > 0;
   const metaParts: string[] = [];
   if (diff.target.kind === 'member') metaParts.push('确认后自动重启该成员（在途回合结束后生效）');
+  // 请求短码（D1 复盘 2026-11-13）：被拒不重试是模型纪律非硬约束——agent 连发
+  // 相同请求时新卡会覆盖式顶上，与旧卡视觉完全同质，用户无法感知「这是新请求」。
+  // 短码让连续请求可区分（法证日志场景：QA mock 循环 tool_call 顶卡被误读为卡不关）
+  metaParts.push(`请求 #${pending.requestId.slice(0, 8)}`);
   metaParts.push('10 分钟内未处置将自动拒绝');
 
   return (

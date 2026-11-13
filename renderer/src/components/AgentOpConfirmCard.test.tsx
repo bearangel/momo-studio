@@ -71,7 +71,9 @@ describe('AgentOpConfirmCard 显隐与标题族', () => {
       screen.getByText('目标：成员「翻译官」 @ 当前工作空间（member 级，仅此实例）'),
     ).toBeInTheDocument();
     expect(
-      screen.getByText('确认后自动重启该成员（在途回合结束后生效） · 10 分钟内未处置将自动拒绝'),
+      screen.getByText(
+        '确认后自动重启该成员（在途回合结束后生效） · 请求 #req-1 · 10 分钟内未处置将自动拒绝',
+      ),
     ).toBeInTheDocument();
   });
 
@@ -90,7 +92,7 @@ describe('AgentOpConfirmCard 显隐与标题族', () => {
     );
     expect(screen.getByRole('alertdialog', { name: 'Momo 请求编辑智能体档案' })).toBeInTheDocument();
     expect(screen.getByText('目标：定义「周报助手」（definition 级，全部工作空间生效）')).toBeInTheDocument();
-    expect(screen.getByText('10 分钟内未处置将自动拒绝')).toBeInTheDocument();
+    expect(screen.getByText(/请求 #req-1 · 10 分钟内未处置将自动拒绝/)).toBeInTheDocument();
     expect(screen.queryByText(/自动重启该成员/)).not.toBeInTheDocument();
   });
 

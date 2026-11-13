@@ -299,8 +299,14 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
   const sendMcpResponse = (payload: McpBridgeResponse): void => {
     try {
       child.send(payload);
-    } catch {
-      // 通道已关闭，无法回写
+    } catch (err) {
+      // 通道已关闭，无法回写——warn 留痕（D1 复盘 2026-11-13）：静默吞会让
+      // 「工具结果未达子进程」类问题零线索；子进程侧超时兜底不受影响
+      logger.warn('MCP/资源桥回写失败（通道已关闭）', {
+        assignmentId,
+        pid: child.pid,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   };
 
