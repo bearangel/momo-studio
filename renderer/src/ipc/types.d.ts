@@ -123,6 +123,8 @@ export type BuiltinSuggestionMap = Record<string, BuiltinSuggestion>;
 /**
  * 任务状态（与 electron/src/main/storage/tasks/state-machine.ts 的 TaskStatus 同步）。
  * 这里只声明当前 UI 需要的最小子集；后续 B 子系统任务可扩展字段。
+ * v2 生命周期（spec §5.1，迁移 081）新增 waiting_human（等人）/ submitted（待验收）：
+ * 完成必须经 submitted 验收，in_progress → completed 直达边已删除。
  */
 export type TaskStatus =
   | 'draft'
@@ -130,6 +132,8 @@ export type TaskStatus =
   | 'assigned'
   | 'session_queued'
   | 'in_progress'
+  | 'waiting_human'
+  | 'submitted'
   | 'paused'
   | 'completed'
   | 'failed'

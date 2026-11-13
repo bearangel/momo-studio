@@ -168,6 +168,8 @@ describe('tasks repo', () => {
     expect(inProgress.executionSessionId).toBe('r1');
     expect(inProgress.startedAt).toBeGreaterThan(0);
 
+    // v2 状态机：完成必须经 submitted 验收（in_progress → completed 直达边已删除）
+    transitionTaskStatus(t.id, 'submitted');
     const completed = transitionTaskStatus(t.id, 'completed', {
       completedAt: Date.now(),
     });
