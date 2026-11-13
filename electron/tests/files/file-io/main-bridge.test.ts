@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { handleFileIoRequestMsg } from '../../../src/main/files/file-io/main-bridge';
 import { FileIoError } from '../../../src/main/files/file-io/types';
 
@@ -56,12 +59,28 @@ describe('handleFileIoRequestMsg（主进程侧）', () => {
   });
 });
 
-describe('handleFileIoRequestMsg 工作空间囚禁（I1：opts.workspaceDir）', () => {
-  const WS = '/ws';
-  const INSIDE = '/ws/src/A.java';
-  const OUTSIDE = '/etc/passwd';
+describe('handleFileIoRequestMsg 工作空间囚禁（I1：opts.workspaceDir；M1：symlink 防线）', () => {
+  // M1 后囚禁触真实 fs（锚点 realpath 上溯）——假路径会被 fail-closed 拒掉，
+  // 故本块全部用真实临时目录（beforeEach 重建，afterEach 清理）
+  let root: string;
+  let WS: string;
+  let OUTSIDE: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(path.join(os.tmpdir(), 'momo-fiobridge-'));
+    WS = path.join(root, 'ws');
+    OUTSIDE = path.join(root, 'outside');
+    mkdirSync(WS, { recursive: true });
+    mkdirSync(OUTSIDE, { recursive: true });
+    writeFileSync(path.join(WS, 'A.java'), 'plain');
+    writeFileSync(path.join(OUTSIDE, 'secret.key'), 'top-secret');
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
 
   it('工作空间内 read / write 正常放行', async () => {
+    const INSIDE = path.join(WS, 'A.java');
     const reads: string[] = [];
     const writes: string[] = [];
     const svc = fakeSvc({
@@ -103,7 +122,7 @@ describe('handleFileIoRequestMsg 工作空间囚禁（I1：opts.workspaceDir）'
     });
     const out: Array<Record<string, unknown>> = [];
     await handleFileIoRequestMsg(
-      { type: 'file-io:req', requestId: 'x1', op: 'read', path: OUTSIDE },
+      { type: 'file-io:req', requestId: 'x1', op: 'read', path: path.join(OUTSIDE, 'secret.key') },
       (p) => out.push(p),
       svc as never,
       { workspaceDir: WS },
@@ -125,7 +144,7 @@ describe('handleFileIoRequestMsg 工作空间囚禁（I1：opts.workspaceDir）'
     });
     const out: Array<Record<string, unknown>> = [];
     await handleFileIoRequestMsg(
-      { type: 'file-io:req', requestId: 'x2', op: 'write', path: OUTSIDE, dataBase64: 'eA==' },
+      { type: 'file-io:req', requestId: 'x2', op: 'write', path: path.join(OUTSIDE, 'evil.bin'), dataBase64: 'eA==' },
       (p) => out.push(p),
       svc as never,
       { workspaceDir: WS },
@@ -144,7 +163,7 @@ describe('handleFileIoRequestMsg 工作空间囚禁（I1：opts.workspaceDir）'
     });
     const out: Array<Record<string, unknown>> = [];
     await handleFileIoRequestMsg(
-      { type: 'file-io:req', requestId: 'x3', op: 'readMany', paths: [INSIDE, OUTSIDE, '/ws/B.md'] },
+      { type: 'file-io:req', requestId: 'x3', op: 'readMany', paths: [path.join(WS, 'A.java'), path.join(OUTSIDE, 'secret.key'), path.join(WS, 'B.md')] },
       (p) => out.push(p),
       svc as never,
       { workspaceDir: WS },
@@ -172,7 +191,7 @@ describe('handleFileIoRequestMsg 工作空间囚禁（I1：opts.workspaceDir）'
     expect(out[0]).toMatchObject({ requestId: 'e1', ok: true, items: [] });
   });
 
-  it('兄弟前缀路径（/wsfoo.txt）不误伤为工作空间内', async () => {
+  it('兄弟前缀路径（wsfoo.txt）不误伤为工作空间内', async () => {
     const reads: string[] = [];
     const svc = fakeSvc({
       readFile: async (p) => {
@@ -182,7 +201,7 @@ describe('handleFileIoRequestMsg 工作空间囚禁（I1：opts.workspaceDir）'
     });
     const out: Array<Record<string, unknown>> = [];
     await handleFileIoRequestMsg(
-      { type: 'file-io:req', requestId: 'p1', op: 'read', path: '/wsfoo.txt' },
+      { type: 'file-io:req', requestId: 'p1', op: 'read', path: path.join(root, 'wsfoo.txt') },
       (p) => out.push(p),
       svc as never,
       { workspaceDir: WS },
@@ -201,10 +220,150 @@ describe('handleFileIoRequestMsg 工作空间囚禁（I1：opts.workspaceDir）'
     });
     const out: Array<Record<string, unknown>> = [];
     await handleFileIoRequestMsg(
-      { type: 'file-io:req', requestId: 'p2', op: 'read', path: '/ws/../secret.key' },
+      { type: 'file-io:req', requestId: 'p2', op: 'read', path: path.join(WS, '..', 'secret.key') },
       (p) => out.push(p),
       svc as never,
       { workspaceDir: WS },
+    );
+    expect(reads).toEqual([]);
+    expect(out[0]).toMatchObject({ ok: false, error: { code: 'EBADREQ' } });
+  });
+
+  // ─── M1（2026-11-13 审查）：symlink plant 旁路回归锁 ───────────────────────
+
+  it('M1：工作空间内 symlink 指向外部文件 → read 拒（文本在内、realpath 在外）', async () => {
+    const link = path.join(WS, 'leak.key');
+    symlinkSync(path.join(OUTSIDE, 'secret.key'), link);
+    const reads: string[] = [];
+    const svc = fakeSvc({
+      readFile: async (p) => {
+        reads.push(p);
+        return Buffer.from('leak');
+      },
+    });
+    const out: Array<Record<string, unknown>> = [];
+    await handleFileIoRequestMsg(
+      { type: 'file-io:req', requestId: 's1', op: 'read', path: link },
+      (p) => out.push(p),
+      svc as never,
+      { workspaceDir: WS },
+    );
+    expect(reads).toEqual([]);
+    expect(out[0]).toMatchObject({ ok: false, error: { code: 'EBADREQ' } });
+  });
+
+  it('M1：工作空间内 symlink 指向外部文件 → write 拒（防穿透写坏策略外目标）', async () => {
+    const link = path.join(WS, 'steal.key');
+    symlinkSync(path.join(OUTSIDE, 'secret.key'), link);
+    const writes: string[] = [];
+    const svc = fakeSvc({
+      writeFile: async (p) => {
+        writes.push(p);
+      },
+    });
+    const out: Array<Record<string, unknown>> = [];
+    await handleFileIoRequestMsg(
+      { type: 'file-io:req', requestId: 's2', op: 'write', path: link, dataBase64: 'eA==' },
+      (p) => out.push(p),
+      svc as never,
+      { workspaceDir: WS },
+    );
+    expect(writes).toEqual([]);
+    expect(out[0]).toMatchObject({ ok: false, error: { code: 'EBADREQ' } });
+  });
+
+  it('M1：symlink 目录本身在空间外（链接整个外部目录）→ 其下路径拒', async () => {
+    const linkDir = path.join(WS, 'lnk-out');
+    symlinkSync(OUTSIDE, linkDir);
+    const reads: string[] = [];
+    const svc = fakeSvc({ readFile: async (p) => { reads.push(p); return Buffer.from('x'); } });
+    const out: Array<Record<string, unknown>> = [];
+    await handleFileIoRequestMsg(
+      { type: 'file-io:req', requestId: 's3', op: 'read', path: path.join(linkDir, 'secret.key') },
+      (p) => out.push(p),
+      svc as never,
+      { workspaceDir: WS },
+    );
+    expect(reads).toEqual([]);
+    expect(out[0]).toMatchObject({ ok: false, error: { code: 'EBADREQ' } });
+  });
+
+  it('M1：symlink 指向工作空间内部 → 放行（正常软链不受影响）', async () => {
+    const link = path.join(WS, 'alias.java');
+    symlinkSync(path.join(WS, 'A.java'), link);
+    const reads: string[] = [];
+    const svc = fakeSvc({ readFile: async (p) => { reads.push(p); return Buffer.from('x'); } });
+    const out: Array<Record<string, unknown>> = [];
+    await handleFileIoRequestMsg(
+      { type: 'file-io:req', requestId: 's4', op: 'read', path: link },
+      (p) => out.push(p),
+      svc as never,
+      { workspaceDir: WS },
+    );
+    expect(reads).toEqual([link]);
+    expect(out[0]).toMatchObject({ ok: true });
+  });
+
+  it('M1：symlink 环（病态构造）→ realpath 抛错按越界拒（fail-closed）', async () => {
+    symlinkSync(path.join(WS, 'loop2'), path.join(WS, 'loop1'));
+    symlinkSync(path.join(WS, 'loop1'), path.join(WS, 'loop2'));
+    const reads: string[] = [];
+    const svc = fakeSvc({ readFile: async (p) => { reads.push(p); return Buffer.from('x'); } });
+    const out: Array<Record<string, unknown>> = [];
+    await handleFileIoRequestMsg(
+      { type: 'file-io:req', requestId: 's5', op: 'read', path: path.join(WS, 'loop1') },
+      (p) => out.push(p),
+      svc as never,
+      { workspaceDir: WS },
+    );
+    expect(reads).toEqual([]);
+    expect(out[0]).toMatchObject({ ok: false, error: { code: 'EBADREQ' } });
+  });
+
+  it('M1：悬链（dangling symlink）指向外部 → write 拒（防穿透在链接目标处创建文件）', async () => {
+    // 悬链 stat 语义不存在——若锚点上溯用 existsSync 会跳到根放行，worker 的
+    // writeFileSync 随后穿透悬链在 /outside 处创建 newfile；lstat 锚点 + realpath
+    // ENOENT 按越界拒
+    const link = path.join(WS, 'dang.newfile');
+    symlinkSync(path.join(OUTSIDE, 'newfile'), link);
+    const writes: string[] = [];
+    const svc = fakeSvc({ writeFile: async (p) => { writes.push(p); } });
+    const out: Array<Record<string, unknown>> = [];
+    await handleFileIoRequestMsg(
+      { type: 'file-io:req', requestId: 's5b', op: 'write', path: link, dataBase64: 'eA==' },
+      (p) => out.push(p),
+      svc as never,
+      { workspaceDir: WS },
+    );
+    expect(writes).toEqual([]);
+    expect(out[0]).toMatchObject({ ok: false, error: { code: 'EBADREQ' } });
+  });
+
+  it('M1：尚不存在的写目标（父链无 symlink）→ 放行（新建文件场景）', async () => {
+    const target = path.join(WS, 'newdir', 'new.java');
+    const writes: string[] = [];
+    const svc = fakeSvc({ writeFile: async (p) => { writes.push(p); } });
+    const out: Array<Record<string, unknown>> = [];
+    await handleFileIoRequestMsg(
+      { type: 'file-io:req', requestId: 's6', op: 'write', path: target, dataBase64: 'eA==' },
+      (p) => out.push(p),
+      svc as never,
+      { workspaceDir: WS },
+    );
+    expect(writes).toEqual([target]);
+    expect(out[0]).toMatchObject({ ok: true });
+  });
+
+  it('M1：工作空间根本身不存在 → fail-closed 全拒（防「删根重建任意目录」旁路）', async () => {
+    const ghost = path.join(root, 'ghost-ws');
+    const reads: string[] = [];
+    const svc = fakeSvc({ readFile: async (p) => { reads.push(p); return Buffer.from('x'); } });
+    const out: Array<Record<string, unknown>> = [];
+    await handleFileIoRequestMsg(
+      { type: 'file-io:req', requestId: 's7', op: 'read', path: path.join(ghost, 'a.java') },
+      (p) => out.push(p),
+      svc as never,
+      { workspaceDir: ghost },
     );
     expect(reads).toEqual([]);
     expect(out[0]).toMatchObject({ ok: false, error: { code: 'EBADREQ' } });
@@ -219,12 +378,13 @@ describe('handleFileIoRequestMsg 工作空间囚禁（I1：opts.workspaceDir）'
       },
     });
     const out: Array<Record<string, unknown>> = [];
+    const outsidePath = path.join(OUTSIDE, 'secret.key');
     await handleFileIoRequestMsg(
-      { type: 'file-io:req', requestId: 'l1', op: 'read', path: OUTSIDE },
+      { type: 'file-io:req', requestId: 'l1', op: 'read', path: outsidePath },
       (p) => out.push(p),
       svc as never,
     );
-    expect(reads).toEqual([OUTSIDE]);
+    expect(reads).toEqual([outsidePath]);
     expect(out[0]).toMatchObject({ requestId: 'l1', ok: true });
   });
 });
