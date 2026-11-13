@@ -105,7 +105,7 @@ const TRIGGER_BADGE: Partial<Record<TaskRunTrigger, string>> = {
 /**
  * run 状态 → 时间线圆点（#19：失败/打回 error 实心、执行 accent-500 实心、
  * 等待人工 warning 实心 + 3px warning-tint 光环、提交 accent 1.5px 描边空心、
- * 验收绿实心、取消中性默认色）。返回串为静态字面量——Tailwind 扫描可见。
+ * 验收绿 1.5px 描边空心、取消中性默认色）。返回串为静态字面量——Tailwind 扫描可见。
  */
 function runDotClass(status: TaskRunStatus): string {
   switch (status) {
@@ -119,7 +119,7 @@ function runDotClass(status: TaskRunStatus): string {
     case 'submitted':
       return 'border-[1.5px] border-accent-500';
     case 'accepted':
-      return 'bg-status-success';
+      return 'border-[1.5px] border-status-success';
     default:
       return 'bg-strong';
   }
