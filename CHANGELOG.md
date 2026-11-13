@@ -6,6 +6,18 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 首启引导体验优化（Onboarding UX Overhaul）
+
+`2.1.0-alpha.65`。依据 spec `docs/specs/2026-11-13-onboarding-ux-overhaul-design.md` + 实施计划 `docs/plans/2026-11-13-onboarding-ux-overhaul.md`（12 任务 TDD）+ 双路线走查（16 截图，`.omo/qa-reports/2026-11-13-onboarding-walkthrough/`）。来源：用户实操反馈 3 条（模型手输/预设列表固定/跳过后空态突兀）+ 隔离走查观察 9 条。
+
+- **T1 模型列表动态拉取**：新 IPC `provider:probeModels`（未落库先拉 /models、平台头分派 openai=Bearer/anthropic=x-api-key、10s 真中断、200 截断、零副作用）；向导三形态接入——custom 手输↔下拉三态（「手动输入…」回退）、preset「获取最新模型」远端+预置去重合并（供应商上新即刻可见）、existing「刷新模型」（fetchModels 通道）；顺带修正 fetchRemoteModels 对 anthropic 平台一律 Bearer 的 401 缺陷（共享底层抽取）
+- **T2 WorkspaceGate**：跳过引导/0-ws 且非 pending → 独立必填工作空间页（无跳过出口、hideCancel）；MiddlePanel 首启空态嵌入表单退役为按钮+Dialog；App 分支矩阵 + C1 闩锁互斥回归锁
+- **T3 终点直通**：完成页「开始使用」→ 自动建默认 agent 快速会话（复用 session.store 全链）→ 主界面会话直开输入框可用；失败 toast 降级不阻断
+- **T4 交互修复**：requirement/manualAgents「上一步」直跳 provider（绕开 workspace 直通弹回）；chips 空态「重新选择」退役（仅 preset/custom 渲染）
+- **T5 反馈与文案**：生成等待 8s 阶段轮换文案 + 等待期即可「转手动配置」（abandoned ref 丢弃迟到结果）；组队预告两处（preview 底部行 + done 团队行 @ 成员小字）；逐字段校验点名缺失；custom API Key placeholder
+- **T6**：TitleBar 向导态 mac 渲染产品标识（win 已常显）
+- **测试**：新增 electron 7（probeModels）+ renderer 17（拉取三态/合并/刷新/Gate/hideCancel/矩阵/闩锁/直通/等待/文案）；全量 electron 5982 + renderer 3467 零回归（rebase main 后）；验收走查 `.omo/qa-reports/2026-11-13-onboarding-overhaul-verify/`（9 pass / 0 fail / 1 n-a(partial)；minor：fetched 态缺「重新获取」按钮 deferred）
+
 ## [未发布] — 编排簿记行看板治理：终态归档 / 来源多选过滤 / 外派空白菜单守卫
 
 `2.1.0-alpha.64`。来源：用户实测反馈（dispatch 簿记行无限累积挤占看板 500 行查询窗口、终态行零
