@@ -7,6 +7,8 @@ import { vi, describe, it, expect, beforeEach } from 'vitest';
 import type { WizardCtx } from '../../routes/OnboardingWizard';
 
 const mockMarkDone = vi.fn();
+const mockCreateQuick = vi.fn();
+const mockShowToast = vi.fn();
 
 vi.mock('../../ipc/client', () => ({
   ipc: {
@@ -15,6 +17,18 @@ vi.mock('../../ipc/client', () => ({
     },
   },
 }));
+
+// T3（spec 2026-11-13 §5）：mock 打在 store 模块（momo-test-rules——不 mock 两跳外的 ipc）
+vi.mock('../../stores/session.store', () => ({
+  useSessionStore: {
+    getState: () => ({ createQuickSession: mockCreateQuick }),
+  },
+}));
+
+vi.mock('../ui/Toast', async () => {
+  const actual = await vi.importActual<typeof import('../ui/Toast')>('../ui/Toast');
+  return { ...actual, showToast: (...a: unknown[]) => mockShowToast(...a) };
+});
 
 import { DoneStep } from './DoneStep';
 
@@ -78,11 +92,28 @@ describe('DoneStep', () => {
     expect(await screen.findByText('一切就绪')).toBeInTheDocument();
   });
 
-  it('开始使用 → markDone({skipped:false}) + finish', async () => {
+  it('开始使用 → markDone({skipped:false}) → createQuickSession(ctx.workspaceId) → finish（T3 终点直通）', async () => {
+    mockCreateQuick.mockResolvedValue(true);
     const ctx = mkCtx(APPLY_RESULT);
     render(<DoneStep ctx={ctx} />);
     fireEvent.click(await screen.findByRole('button', { name: /开始使用/ }));
     await waitFor(() => expect(mockMarkDone).toHaveBeenCalledWith({ skipped: false }));
+    await waitFor(() => expect(mockCreateQuick).toHaveBeenCalledWith('ws-1'));
+    // 顺序：markDone → createQuickSession → finish
+    expect(ctx.finish).toHaveBeenCalled();
+    expect(mockShowToast).not.toHaveBeenCalled();
+  });
+
+  it('T3 降级：createQuickSession 失败 → toast 提示 + 不阻断 finish', async () => {
+    mockCreateQuick.mockResolvedValue(false);
+    const ctx = mkCtx(APPLY_RESULT);
+    render(<DoneStep ctx={ctx} />);
+    fireEvent.click(await screen.findByRole('button', { name: /开始使用/ }));
+    await waitFor(() =>
+      expect(mockShowToast).toHaveBeenCalledWith(
+        expect.stringContaining('快速会话创建失败'),
+      ),
+    );
     expect(ctx.finish).toHaveBeenCalled();
   });
 

@@ -5,7 +5,9 @@
 import { useState } from 'react';
 import { CheckCircle2 } from 'lucide-react';
 import { ipc } from '../../ipc/client';
+import { useSessionStore } from '../../stores/session.store';
 import { Button } from '../ui/Button';
+import { showToast } from '../ui/Toast';
 import type { WizardCtx } from '../../routes/OnboardingWizard';
 
 interface Props {
@@ -18,13 +20,18 @@ export function DoneStep({ ctx }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const start = async (): Promise<void> => {
-    // I2（终审）：markDone 失败显式呈现，向导不关（spec §9）
+    // I2（终审）：markDone 失败显式呈现，向导不关（spec §9）——且不建会话
     try {
       await ipc.onboarding.markDone({ skipped: false });
-      ctx.finish();
     } catch (e) {
       setError(`保存引导状态失败（${e instanceof Error ? e.message : String(e)}），请重试`);
+      return;
     }
+    // T3（spec 2026-11-13 §5）：终点直通——默认 agent 快速会话即开即用
+    //（与主界面「快速会话」按钮同源链路）；失败降级 toast，不阻断进入主界面
+    const ok = await useSessionStore.getState().createQuickSession(ctx.workspaceId);
+    if (!ok) showToast('快速会话创建失败，可稍后在会话列表手动新建');
+    ctx.finish();
   };
 
   return (
