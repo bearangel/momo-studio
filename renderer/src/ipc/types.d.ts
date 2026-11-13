@@ -2620,6 +2620,12 @@ export interface ApiSurface {
     getApiKey(id: string): Promise<string | null>;
     /** Task 6：GET {baseUrl}/models 拉取远端模型 id 列表（失败抛 IPC error） */
     fetchModels(id: string): Promise<string[]>;
+    /** T1 probe：未落库先拉远端模型 id（引导表单帮填；零副作用，key 不落 keychain） */
+    probeModels(input: {
+      baseUrl: string;
+      apiKey: string;
+      platform: ProviderPlatform;
+    }): Promise<{ models: string[]; truncated: boolean }>;
     /** Task 6：某供应商的模型列表（按加入时间升序） */
     listModels(id: string): Promise<ProviderModel[]>;
     /** Task 6：手动添加模型（幂等，ghost provider 时抛 FOREIGN KEY 错误） */

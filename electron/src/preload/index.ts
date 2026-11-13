@@ -242,6 +242,8 @@ const api: ApiSurface = {
     getApiKey: (id) => invoke('provider:getApiKey', id),
     // Task 6：供应商模型列表管理
     fetchModels: (id) => invoke('provider:fetchModels', id),
+    // T1 probe：未落库先拉模型列表（引导帮填，零副作用）
+    probeModels: (input) => invoke('provider:probeModels', input),
     listModels: (id) => invoke('provider:listModels', id),
     addModel: (id, modelId) => invoke('provider:addModel', id, modelId),
     setModelEnabled: (id, modelId, enabled) => invoke('provider:setModelEnabled', id, modelId, enabled),

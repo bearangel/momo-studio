@@ -11,6 +11,7 @@ import {
   fetchRemoteModels, listProviderModels, upsertProviderModel,
   setProviderModelEnabled, removeProviderModel, setProviderModelWindow,
   setProviderModelThinking, setProviderModelVision, markProviderVerified,
+  probeModels,
 } from './provider-crud';
 import { listProviderPresets } from '../llm/provider-presets';
 // 本机回环域名（允许 http，如本地 Ollama）；非本机必须 https 防 MITM/凭据外泄
@@ -111,6 +112,13 @@ export function registerProviderHandlers(): void {
   // fetchModels 失败（网络/401/形状不符/ghost）直接抛错 → IPC error 传给 renderer
 
   ipcMain.handle('provider:fetchModels', (_e, id: string) => fetchRemoteModels(id));
+
+  // 未落库先拉模型列表（引导表单帮填，spec 2026-11-13 §3.2）——零副作用，key 不落 keychain
+  ipcMain.handle(
+    'provider:probeModels',
+    (_e, input: { baseUrl: string; apiKey: string; platform: 'openai' | 'anthropic' }) =>
+      probeModels(input),
+  );
 
   ipcMain.handle('provider:listModels', (_e, id: string) => listProviderModels(id));
 

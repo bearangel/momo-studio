@@ -391,24 +391,30 @@ export function removeProviderModel(providerId: string, modelId: string): void {
   ).run(providerId, modelId);
 }
 
-// ─── 远端模型列表拉取（Task 6）───────────────────────────────────────────────
+// ─── 远端模型列表拉取（Task 6 + 2026-11-13 T1 共享底层）─────────────────────
+
+/** 平台请求头分派（spec 2026-11-13 §3.2）：openai=Bearer；anthropic=x-api-key+version */
+function modelEndpointHeaders(apiKey: string, platform: string): Record<string, string> {
+  if (platform === 'anthropic') {
+    return { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' };
+  }
+  return { Authorization: `Bearer ${apiKey}` };
+}
 
 /**
- * 从供应商 API 拉取可用模型列表：GET {baseUrl}/models（OpenAI 兼容格式），
- * Bearer key 取自 keychain。返回 data[].id 字符串数组。
- * 失败（网络 / 非 2xx / 非 JSON / 形状不符 / ghost provider）一律抛错，
- * 由 IPC 层转成 renderer 可见的 error。
+ * 共享底层：GET {base}/models 拉取模型 id 列表（OpenAI 兼容 data[].id 形状）。
+ * URL 校验 + 协议白名单（http/https）+ 非本机 http 放行 warn + 平台头分派 + 解析。
+ * timeoutMs 缺省不超时（fetchRemoteModels 现行行为）；probeModels 传 10s（真中断）。
  */
-export async function fetchRemoteModels(providerId: string): Promise<string[]> {
-  const provider = getProvider(providerId);
-  if (!provider) throw new Error(`供应商不存在: ${providerId}`);
-  const apiKey = await getProviderApiKey(providerId);
-
-  // 2026-11-10 放宽：非回环 http 不再强制 https（内网 oneapi/本地中转常见纯 http），
-  // 与 testConnection 同姿态——放行拉取，仅记日志提醒；协议白名单（http/https）外仍拒绝。
+export async function fetchModelIdsFromEndpoint(
+  baseUrl: string,
+  apiKey: string,
+  platform: string,
+  timeoutMs?: number,
+): Promise<string[]> {
   let parsed: URL;
   try {
-    parsed = new URL(provider.baseUrl);
+    parsed = new URL(baseUrl);
   } catch {
     throw new Error('baseUrl 格式无效');
   }
@@ -416,36 +422,91 @@ export async function fetchRemoteModels(providerId: string): Promise<string[]> {
     throw new Error('仅支持 http/https 协议');
   }
   if (parsed.protocol === 'http:' && !isLoopbackHost(parsed.hostname)) {
-    logger.warn('供应商 baseUrl 为非本机 http（明文传输），继续拉取模型列表（用户自担）', {
-      providerId,
+    logger.warn('模型列表拉取 baseUrl 为非本机 http（明文传输），继续（用户自担）', {
       host: parsed.hostname,
     });
   }
-
-  const base = provider.baseUrl.replace(/\/$/, '');
-  const resp = await fetch(`${base}/models`, {
-    headers: { Authorization: `Bearer ${apiKey ?? ''}` },
-  });
-  if (!resp.ok) {
-    throw new Error(`HTTP ${resp.status}`);
-  }
-  let body: unknown;
+  const ctrl = timeoutMs !== undefined ? new AbortController() : undefined;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : undefined;
   try {
-    body = await resp.json();
-  } catch (err) {
-    throw new Error(`响应不是有效 JSON: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  const data = (body as { data?: unknown }).data;
-  if (!Array.isArray(data)) {
-    throw new Error('响应格式不符合 /models 约定（缺少 data 数组）');
-  }
-  const ids: string[] = [];
-  for (const item of data) {
-    const id = (item as { id?: unknown }).id;
-    if (typeof id !== 'string' || id.length === 0) {
-      throw new Error('响应格式不符合 /models 约定（data 条目缺少字符串 id）');
+    const resp = await fetch(`${baseUrl.replace(/\/$/, '')}/models`, {
+      headers: modelEndpointHeaders(apiKey, platform),
+      ...(ctrl ? { signal: ctrl.signal } : {}),
+    });
+    if (resp.status === 401 || resp.status === 403) {
+      throw new Error(`API Key 无效或无权限（HTTP ${resp.status}）`);
     }
-    ids.push(id);
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+    let body: unknown;
+    try {
+      body = await resp.json();
+    } catch (err) {
+      throw new Error(`响应不是有效 JSON: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const data = (body as { data?: unknown }).data;
+    if (!Array.isArray(data)) {
+      throw new Error('响应格式不符合 /models 约定（缺少 data 数组）');
+    }
+    const ids: string[] = [];
+    for (const item of data) {
+      const id = (item as { id?: unknown }).id;
+      if (typeof id !== 'string' || id.length === 0) {
+        throw new Error('响应格式不符合 /models 约定（data 条目缺少字符串 id）');
+      }
+      ids.push(id);
+    }
+    return ids;
+  } catch (err) {
+    if (ctrl?.signal.aborted) {
+      throw new Error('获取模型列表超时（10 秒），请重试或手输模型名');
+    }
+    throw err;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
-  return ids;
+}
+
+/**
+ * 从供应商 API 拉取可用模型列表（落库后通道）：keychain 取 key，
+ * 平台头按 provider.platform 分派（anthropic 走 x-api-key，2026-11-13 修正）。
+ * 失败（网络 / 非 2xx / 非 JSON / 形状不符 / ghost provider）一律抛错，
+ * 由 IPC 层转成 renderer 可见的 error。
+ */
+export async function fetchRemoteModels(providerId: string): Promise<string[]> {
+  const provider = getProvider(providerId);
+  if (!provider) throw new Error(`供应商不存在: ${providerId}`);
+  const apiKey = await getProviderApiKey(providerId);
+  return fetchModelIdsFromEndpoint(provider.baseUrl, apiKey ?? '', provider.platform);
+}
+
+/** probeModels 上限（spec 2026-11-13 §3.2）：超出截断 + truncated 标志 */
+const PROBE_MODELS_LIMIT = 200;
+const PROBE_MODELS_TIMEOUT_MS = 10_000;
+
+/**
+ * 未落库先拉模型列表（引导表单帮填，spec 2026-11-13 §3.2）：零副作用——
+ * 不写 DB / keychain，key 即用即弃；与 fetchRemoteModels 共享同一底层，
+ * 端点拼接与请求头永远一致。返回升序去重前的稳定排序 + 截断标志。
+ */
+export async function probeModels(input: {
+  baseUrl: string;
+  apiKey: string;
+  platform: 'openai' | 'anthropic';
+}): Promise<{ models: string[]; truncated: boolean }> {
+  if (!input.baseUrl.trim() || !input.apiKey.trim()) {
+    throw new Error('baseUrl 与 API Key 不能为空');
+  }
+  const ids = await fetchModelIdsFromEndpoint(
+    input.baseUrl.trim(),
+    input.apiKey,
+    input.platform,
+    PROBE_MODELS_TIMEOUT_MS,
+  );
+  const sorted = [...ids].sort((a, b) => a.localeCompare(b));
+  return {
+    models: sorted.slice(0, PROBE_MODELS_LIMIT),
+    truncated: sorted.length > PROBE_MODELS_LIMIT,
+  };
 }
