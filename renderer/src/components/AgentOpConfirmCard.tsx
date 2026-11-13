@@ -95,7 +95,7 @@ export function AgentOpConfirmCard() {
   const hasDeltaRows = diff.adds.length > 0 || diff.removes.length > 0;
   const hasFieldChanges = (diff.fieldChanges?.length ?? 0) > 0;
   const metaParts: string[] = [];
-  if (diff.target.kind === 'member') metaParts.push('确认后自动重启该成员');
+  if (diff.target.kind === 'member') metaParts.push('确认后自动重启该成员（在途回合结束后生效）');
   metaParts.push('10 分钟内未处置将自动拒绝');
 
   return (

@@ -66,7 +66,7 @@ describe('agent-op-confirm.store（spec 2026-11-12 §7）', () => {
     expect(useAgentOpConfirmStore.getState().pending).toBeNull();
   });
 
-  it('reply IPC 拒绝 → 卡保留可重试（不静默吞状态）', async () => {
+  it('reply IPC 拒绝 → 卡恢复供重试（不静默吞状态）', async () => {
     useAgentOpConfirmStore.getState().receive(payload());
     replyMock.mockRejectedValue(new Error('通道不可用'));
     await useAgentOpConfirmStore.getState().reply(true);
@@ -76,6 +76,30 @@ describe('agent-op-confirm.store（spec 2026-11-12 §7）', () => {
     await useAgentOpConfirmStore.getState().reply(true);
     expect(replyMock).toHaveBeenCalledTimes(2);
     expect(useAgentOpConfirmStore.getState().pending).toBeNull();
+  });
+
+  // D1 回归锁（2026-11-13 真机两轮复现）：首笔回包迟迟不达（裁决已被主进程
+  // 受理）时，模态遮罩不得阻塞整页——消卡是乐观的，不依赖 invoke 落地。
+  it('reply invoke 永不落定 → 立即消卡（乐观 dismiss，遮罩不等回包）', async () => {
+    useAgentOpConfirmStore.getState().receive(payload());
+    replyMock.mockImplementation(() => new Promise(() => {}));
+    void useAgentOpConfirmStore.getState().reply(true);
+    // 微任务两拍内（await ipc 前后）即应已消卡
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useAgentOpConfirmStore.getState().pending).toBeNull();
+    // replyPromise 永不落定是 mock 语义本身——不 await（挂起 promise 无 rejection，
+    // 不构成 unhandled；用例在此结束即回归锁成立）
+  });
+
+  it('reply reject 时若新请求已顶上 → 不覆盖新卡（旧请求主进程超时兜底）', async () => {
+    useAgentOpConfirmStore.getState().receive(payload({ requestId: 'req-old' }));
+    replyMock.mockRejectedValue(new Error('通道不可用'));
+    const replyPromise = useAgentOpConfirmStore.getState().reply(true);
+    // invoke 在途期间新请求到达（覆盖式单卡）
+    useAgentOpConfirmStore.getState().receive(payload({ requestId: 'req-new' }));
+    await replyPromise;
+    expect(useAgentOpConfirmStore.getState().pending?.requestId).toBe('req-new');
   });
 
   it('无 pending 时 reply → 不调 IPC', async () => {

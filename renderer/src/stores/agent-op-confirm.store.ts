@@ -28,14 +28,20 @@ export const useAgentOpConfirmStore = create<AgentOpConfirmState>((set, get) => 
   reply: async (allowed) => {
     const p = get().pending;
     if (!p) return;
+    // 乐观消卡（D1，2026-11-13 真机两轮复现）：裁决先到先得，主进程侧
+    // 10 分钟超时 / child 退出兜底拒绝——消卡不等 invoke 回包。实测首笔回包
+    // 可能迟迟不达（裁决已被受理落库），等待会让模态遮罩阻塞整页数分钟；
+    // 先消卡，IPC 明确 reject 时恢复本卡供重试。
+    set({ pending: null });
     try {
-      // skipped=true（他窗先到/已超时）也清卡——本卡本就应已关闭，静默收敛
+      // skipped=true（他窗先到/已超时）无需处理——本卡本就应已关闭，静默收敛
       await ipc.agent.replyAgentOpConfirm(p.requestId, allowed);
     } catch {
-      // IPC 失败：卡保留可重试；主进程侧 10 分钟超时兜底拒绝，不静默吞状态
-      return;
+      // 回执确定失败：恢复本卡供重试。若期间已有新请求顶上（单卡覆盖式）
+      // 则不覆盖新卡——旧请求由主进程超时兜底拒绝，不静默吞状态。
+      const cur = get().pending;
+      if (cur === null || cur.requestId === p.requestId) set({ pending: p });
     }
-    set({ pending: null });
   },
 
   dismissExpired: () => {

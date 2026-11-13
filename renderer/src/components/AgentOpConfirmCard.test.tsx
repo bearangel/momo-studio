@@ -71,7 +71,7 @@ describe('AgentOpConfirmCard 显隐与标题族', () => {
       screen.getByText('目标：成员「翻译官」 @ 当前工作空间（member 级，仅此实例）'),
     ).toBeInTheDocument();
     expect(
-      screen.getByText('确认后自动重启该成员 · 10 分钟内未处置将自动拒绝'),
+      screen.getByText('确认后自动重启该成员（在途回合结束后生效） · 10 分钟内未处置将自动拒绝'),
     ).toBeInTheDocument();
   });
 
