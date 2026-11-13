@@ -11,6 +11,8 @@
 //     not_pending（读只发生在未命中之后，不构成 read-then-write 竞态窗口）
 //   - supersedePendingByRun 只翻非验收（kind != 'acceptance'）pending；两个批量
 //     翻转函数均返回受影响条数（changes），供调用方做幂等判定
+//   - markExpired / markReminded 带 WHERE status='pending' 原子守卫——sweep 窗口
+//     内被人工答复的行不被误翻 expired / 误写提醒（幂等 no-op）
 //   - listDue 只扫 pending（已答/已过期行不该再进超期处理）
 //   - 行转 camelCase（本地 rowToCamel，文件内私有）
 import { randomUUID } from 'node:crypto';
@@ -237,10 +239,25 @@ export function tryAnswer(
   return exists ? { ok: false, reason: 'not_pending' } : { ok: false, reason: 'not_found' };
 }
 
-export function markExpired(id: string): void {
+export function markExpired(id: string): number {
+  // pending 原子守卫：sweep 窗口内被答复/顶替的行不得误翻 expired（幂等 no-op）；
+  // 返回受影响条数（changes），供 sweeper 判定是否继续任务侧 fail/cancel 动作
+  return getDb()
+    .prepare(
+      `UPDATE human_requests SET status = 'expired', updated_at = ?
+       WHERE id = ? AND status = 'pending'`,
+    )
+    .run(Date.now(), id).changes;
+}
+
+/** 提醒落账（keep_waiting/escalate 超时提醒判重依据）；pending 守卫同 markExpired */
+export function markReminded(id: string, now: number): void {
   getDb()
-    .prepare(`UPDATE human_requests SET status = 'expired', updated_at = ? WHERE id = ?`)
-    .run(Date.now(), id);
+    .prepare(
+      `UPDATE human_requests SET last_reminded_at = ?, updated_at = ?
+       WHERE id = ? AND status = 'pending'`,
+    )
+    .run(now, now, id);
 }
 
 /** run 收尾：非验收 pending → superseded（新 run 接管）；acceptance 不动。返回条数 */

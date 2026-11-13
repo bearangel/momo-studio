@@ -28,6 +28,7 @@ import {
   countPendingNonAcceptance,
   tryAnswer,
   markExpired,
+  markReminded,
   supersedePendingByRun,
   cancelPendingByTask,
   listDue,
@@ -211,10 +212,28 @@ describe('human_requests repo', () => {
     expect(listDue(Date.now())).toHaveLength(0);
   });
 
-  it('markExpired 置 expired', () => {
+  it('markExpired 只翻 pending：返回命中条数；已答/已过期幂等 no-op（sweep 窗口竞态防线）', () => {
     const r = insertHumanRequest({ sessionId: 'ses1', kind: 'question', title: 'q', deadlineAt: 1 });
-    markExpired(r.id);
+    expect(markExpired(r.id)).toBe(1);
     expect(getHumanRequest(r.id)?.status).toBe('expired');
+    // 幂等：已 expired 再翻不命中
+    expect(markExpired(r.id)).toBe(0);
+    // sweep 窗口竞态：请求已被人工答复后 markExpired 不得误翻 expired
+    const a = insertHumanRequest({ sessionId: 'ses1', kind: 'question', title: 'a', deadlineAt: 1 });
+    tryAnswer(a.id, '{}', 'n');
+    expect(markExpired(a.id)).toBe(0);
+    expect(getHumanRequest(a.id)?.status).toBe('answered');
+  });
+
+  it('markReminded 写 lastRemindedAt：只动 pending 行（answered 不写）', () => {
+    const r = insertHumanRequest({ sessionId: 'ses1', kind: 'question', title: 'q' });
+    markReminded(r.id, 12345);
+    expect(getHumanRequest(r.id)?.lastRemindedAt).toBe(12345);
+    // pending 守卫：已答复行不写提醒时刻
+    const a = insertHumanRequest({ sessionId: 'ses1', kind: 'question', title: 'a' });
+    tryAnswer(a.id, '{}', 'n');
+    markReminded(a.id, 999);
+    expect(getHumanRequest(a.id)?.lastRemindedAt).toBeNull();
   });
 
   it('cancelPendingByTask 只翻该任务 pending，返回条数；无任务行不动', () => {
