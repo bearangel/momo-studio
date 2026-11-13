@@ -7,7 +7,7 @@
 // D1a（预览 S1）：底部左侧加「跳过，稍后在设置中配置」——无 key 用户可跳过
 // 本步；markDone/收闩/错误呈现由向导层 handleSkip 拥有（WelcomeStep 同模式）。
 import { useEffect, useState } from 'react';
-import { Link2, Loader2 } from 'lucide-react';
+import { Link2, Loader2, RefreshCw } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import type { ModelProvider, ProviderPreset, ProviderPlatform, ProviderModel } from '../../ipc/types';
 import { Button } from '../ui/Button';
@@ -20,6 +20,9 @@ interface Props {
   /** 跳过本步（D1a）：由向导层注入——markDone({skipped:true}) 后收闩；失败在向导层显错 */
   onSkip?: () => void;
 }
+
+/** T1 下拉「手动输入…」哨兵值：选中即回退手输态（spec 2026-11-13 §3.3） */
+const MANUAL_OPTION = '__manual__';
 
 export function ProviderStep({ ctx, onSkip }: Props) {
   const [providers, setProviders] = useState<ModelProvider[]>([]);
@@ -35,11 +38,46 @@ export function ProviderStep({ ctx, onSkip }: Props) {
   const [existingModels, setExistingModels] = useState<ProviderModel[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // T1 模型列表拉取（spec 2026-11-13 §3.3）：custom 形态字段级状态机
+  const [modelFetch, setModelFetch] = useState<{
+    status: 'idle' | 'fetching' | 'fetched';
+    models: string[];
+    truncated: boolean;
+  }>({ status: 'idle', models: [], truncated: false });
+  const [modelError, setModelError] = useState<string | null>(null);
 
   useEffect(() => {
     void ipc.provider.list().then(setProviders).catch(() => setProviders([]));
     void ipc.provider.listPresets().then(setPresets).catch(() => setPresets([]));
   }, []);
+
+  const resetModelFetch = (): void => {
+    setModelFetch({ status: 'idle', models: [], truncated: false });
+    setModelError(null);
+  };
+
+  const fetchCustomModels = async (): Promise<void> => {
+    if (modelFetch.status === 'fetching') return;
+    setModelFetch({ status: 'fetching', models: [], truncated: false });
+    setModelError(null);
+    try {
+      const r = await ipc.provider.probeModels({
+        baseUrl: baseUrl.trim(),
+        apiKey,
+        platform,
+      });
+      setModelFetch({ status: 'fetched', models: r.models, truncated: r.truncated });
+      // 选中项：原手输值仍在列表则优先保留，否则取首项
+      if (r.models.length > 0) {
+        setModelId(r.models.includes(modelId) ? modelId : r.models[0]!);
+      }
+    } catch (e) {
+      setModelFetch({ status: 'idle', models: [], truncated: false });
+      setModelError(
+        `获取失败：${e instanceof Error ? e.message : String(e)}——可手输模型名继续`,
+      );
+    }
+  };
 
   const choosePreset = (p: ProviderPreset): void => {
     setPreset(p);
@@ -49,6 +87,7 @@ export function ProviderStep({ ctx, onSkip }: Props) {
     setModelId(p.models[0]?.id ?? '');
     setMode('preset');
     setError(null);
+    resetModelFetch();
   };
 
   const chooseCustom = (): void => {
@@ -58,6 +97,7 @@ export function ProviderStep({ ctx, onSkip }: Props) {
     setModelId('');
     setMode('custom');
     setError(null);
+    resetModelFetch();
   };
 
   const chooseExisting = async (p: ModelProvider): Promise<void> => {
@@ -255,13 +295,61 @@ export function ProviderStep({ ctx, onSkip }: Props) {
                 onChange={(e) => setApiKey(e.target.value)}
                 required
               />
-              <Input
-                label="模型名"
-                value={modelId}
-                onChange={(e) => setModelId(e.target.value)}
-                placeholder="手输模型名，验证连通后即可继续"
-                required
-              />
+              {modelFetch.status === 'fetched' ? (
+                <Select
+                  label="模型名"
+                  value={modelId}
+                  onChange={(e) => {
+                    if (e.target.value === MANUAL_OPTION) {
+                      setModelFetch({ status: 'idle', models: [], truncated: false });
+                      return;
+                    }
+                    setModelId(e.target.value);
+                  }}
+                >
+                  {modelFetch.models.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                  <option value={MANUAL_OPTION}>手动输入…</option>
+                </Select>
+              ) : (
+                <div className="flex items-end gap-2">
+                  <div className="flex-1">
+                    <Input
+                      label="模型名"
+                      value={modelId}
+                      onChange={(e) => setModelId(e.target.value)}
+                      placeholder="手输模型名，验证连通后即可继续"
+                      required
+                    />
+                  </div>
+                  {/* T1：凭 baseUrl+key 未落库先拉（probeModels 零副作用），帮填不替代验证 */}
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => void fetchCustomModels()}
+                    disabled={
+                      modelFetch.status === 'fetching' || !baseUrl.trim() || !apiKey.trim()
+                    }
+                  >
+                    {modelFetch.status === 'fetching' ? (
+                      <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />
+                    ) : (
+                      <RefreshCw size={13} strokeWidth={1.75} aria-hidden />
+                    )}
+                    获取模型列表
+                  </Button>
+                </div>
+              )}
+              {modelFetch.truncated && (
+                <p className="text-[11px] text-status-warning">
+                  该供应商模型较多，仅显示前 200 个
+                </p>
+              )}
+              {modelError && <div className="text-xs text-status-error">{modelError}</div>}
             </>
           )}
           {mode !== 'chips' && (

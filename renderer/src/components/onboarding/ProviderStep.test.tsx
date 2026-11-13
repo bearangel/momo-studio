@@ -12,6 +12,8 @@ const mockTestConnection = vi.fn();
 const mockList = vi.fn();
 const mockListPresets = vi.fn();
 const mockListModels = vi.fn();
+const mockProbeModels = vi.fn();
+const mockFetchModels = vi.fn();
 
 vi.mock('../../ipc/client', () => ({
   ipc: {
@@ -21,6 +23,8 @@ vi.mock('../../ipc/client', () => ({
       listModels: (...a: unknown[]) => mockListModels(...a),
       create: (...a: unknown[]) => mockCreate(...a),
       testConnection: (...a: unknown[]) => mockTestConnection(...a),
+      probeModels: (...a: unknown[]) => mockProbeModels(...a),
+      fetchModels: (...a: unknown[]) => mockFetchModels(...a),
     },
     settings: {
       updateGlobal: (...a: unknown[]) => mockUpdateGlobal(...a),
@@ -238,5 +242,73 @@ describe('ProviderStep — 跳过出口（D1a，预览 S1）', () => {
     render(<ProviderStep ctx={ctx} />);
     await screen.findByText('+ 自定义供应商');
     expect(screen.queryByRole('button', { name: '跳过，稍后在设置中配置' })).not.toBeInTheDocument();
+  });
+});
+
+describe('custom 形态模型拉取（spec 2026-11-13 T1）', () => {
+  /** 进入 custom 形态并填 BaseURL + Key */
+  async function enterCustomFilled(): Promise<void> {
+    fireEvent.click(await screen.findByText('+ 自定义供应商'));
+    fireEvent.change(screen.getByPlaceholderText('https://llm-gateway.example.com/v1'), {
+      target: { value: 'http://127.0.0.1:9911/v1' },
+    });
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-demo' } });
+  }
+
+  it('baseUrl/key 未填全时「获取模型列表」禁用', async () => {
+    render(<ProviderStep ctx={mkCtx()} />);
+    fireEvent.click(await screen.findByText('+ 自定义供应商'));
+    expect(screen.getByRole('button', { name: /获取模型列表/ })).toBeDisabled();
+    // 填齐后解禁
+    fireEvent.change(screen.getByPlaceholderText('https://llm-gateway.example.com/v1'), {
+      target: { value: 'http://127.0.0.1:9911/v1' },
+    });
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-demo' } });
+    expect(screen.getByRole('button', { name: /获取模型列表/ })).toBeEnabled();
+  });
+
+  it('拉取成功 → Input 变 Select（含「手动输入…」）；选手动输入回退 Input', async () => {
+    mockProbeModels.mockResolvedValue({ models: ['glm-5.3', 'glm-5.3-air'], truncated: false });
+    render(<ProviderStep ctx={mkCtx()} />);
+    await enterCustomFilled();
+    fireEvent.click(screen.getByRole('button', { name: /获取模型列表/ }));
+    // fetched 态：下拉出现且首项自动选中（displayValue 定位，跳过 fetching 帧的 Input）
+    const select = await screen.findByDisplayValue('glm-5.3');
+    expect(select.tagName).toBe('SELECT');
+    expect(screen.queryByPlaceholderText('手输模型名，验证连通后即可继续')).not.toBeInTheDocument();
+    // 选「手动输入…」→ 回退手输 Input
+    fireEvent.change(select, { target: { value: '__manual__' } });
+    expect(
+      screen.getByPlaceholderText('手输模型名，验证连通后即可继续'),
+    ).toBeInTheDocument();
+  });
+
+  it('拉取失败 → 保留手输 Input + 行内错误；truncated 时提示可见', async () => {
+    mockProbeModels.mockRejectedValue(new Error('API Key 无效或无权限（HTTP 401）'));
+    render(<ProviderStep ctx={mkCtx()} />);
+    await enterCustomFilled();
+    fireEvent.click(screen.getByRole('button', { name: /获取模型列表/ }));
+    expect(
+      screen.getByPlaceholderText('手输模型名，验证连通后即可继续'),
+    ).toBeInTheDocument();
+    expect(await screen.findByText(/获取失败：API Key 无效或无权限/)).toBeInTheDocument();
+    // 第二轮：成功但 truncated
+    mockProbeModels.mockResolvedValue({ models: ['m-1', 'm-2'], truncated: true });
+    fireEvent.click(screen.getByRole('button', { name: /获取模型列表/ }));
+    expect(await screen.findByText(/仅显示前 200 个/)).toBeInTheDocument();
+  });
+
+  it('拉取成功时保留已在列表中的原手输值', async () => {
+    mockProbeModels.mockResolvedValue({ models: ['glm-5.3', 'my-model'], truncated: false });
+    render(<ProviderStep ctx={mkCtx()} />);
+    await enterCustomFilled();
+    fireEvent.change(screen.getByPlaceholderText('手输模型名，验证连通后即可继续'), {
+      target: { value: 'my-model' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /获取模型列表/ }));
+    // fetching 帧的 Input 同值——等待其变为 SELECT 才算 fetched 态保留原值
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('my-model').tagName).toBe('SELECT');
+    });
   });
 });
