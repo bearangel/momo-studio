@@ -642,7 +642,8 @@ const api: ApiSurface = {
     // B9：任务冲突处理（5 策略）
     resolveConflict: (input) => invoke('task:resolveConflict', input),
     // 看板重构 Task 6：拖拽换列 / 归档域（动作裁决单点在主进程 move.ts）
-    move: (id, target) => invoke<TaskRow>('task:move', id, target),
+    // v2 生命周期（Task 8）：opts.reason 随打回（submitted→assigned）透传
+    move: (id, target, opts) => invoke<TaskRow>('task:move', id, target, opts),
     // 顶置开关（迁移 050，语义单点在主进程 repo.setTaskPinned）
     setPinned: (id, pinned) => invoke<TaskRow>('task:setPinned', id, pinned),
     archive: (id) => invoke<TaskRow>('task:archive', id),

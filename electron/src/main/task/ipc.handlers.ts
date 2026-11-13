@@ -355,12 +355,15 @@ export function registerTaskHandlers(): void {
 
   // 看板重构 Task 6：拖拽换列走单一通道——renderer 只发目标（column/groupId），
   // 动作裁决（start/complete/cancel/换组/no-op）全部在 executeMove 单点；
-  // 成功后广播快照，远端看板镜像即时同步
-  ipcMain.handle('task:move', async (_evt, id: string, target: MoveTarget): Promise<TaskRow> => {
-    assertNotDispatchRow(id);
-    const row = await executeMove(id, target);
-    return row;
-  });
+  // v2 生命周期（Task 8）：opts.reason 随打回（submitted→assigned）透传
+  ipcMain.handle(
+    'task:move',
+    async (_evt, id: string, target: MoveTarget, opts?: { reason?: string }): Promise<TaskRow> => {
+      assertNotDispatchRow(id);
+      const row = await executeMove(id, target, opts);
+      return row;
+    },
+  );
 
   // 顶置开关（迁移 050）：全状态可 pin；语义单点在 repo.setTaskPinned
   // （重复 pin 刷新时间戳 = 重新压顶）。排序属本地看板视图域，但快照广播

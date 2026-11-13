@@ -6,8 +6,16 @@
 // .ts，污染存在时 renderer build 必失败（Task 14 收尾发现）。列常量与该联合
 // 的双向等值由 board-columns.ts 编译期断言锁死。
 
-/** 看板五列 key（值域与 board-columns.ts 的 BOARD_COLUMN_KEYS 常量双向锁） */
-export type BoardColumnKey = 'backlog' | 'assigned' | 'active' | 'done' | 'closed';
+/** 看板七列 key（值域与 board-columns.ts 的 BOARD_COLUMN_KEYS 常量双向锁；
+ *  v2 生命周期新增 waiting/review 两列——spec 2026-11-13-task-lifecycle-v2 §1） */
+export type BoardColumnKey =
+  | 'backlog'
+  | 'assigned'
+  | 'active'
+  | 'waiting'
+  | 'review'
+  | 'done'
+  | 'closed';
 
 export interface SystemInfo {
   platform: string;
@@ -436,6 +444,9 @@ export interface TaskApiSurface {
    * 看板重构 Task 6 → 2026-09-30 排序退役：拖拽换列/换组单一通道——renderer
    * 只发目标（column/groupId），动作裁决（start/complete/cancel/换组/no-op）
    * 全部在主进程 executeMove 单点；列内顺序由 pinned/创建时间决定（无落点锚）
+   *
+   * v2 生命周期（Task 8）：打回（submitted → assigned 列）必须携带 reason，
+   * 缺省/空白主进程人话拒绝「打回必须填写理由」
    */
   move(
     id: string,
@@ -443,6 +454,7 @@ export interface TaskApiSurface {
       column: BoardColumnKey;
       groupId: string | null;
     },
+    opts?: { reason?: string },
   ): Promise<TaskRow>;
   /**
    * 顶置开关（迁移 050）：全状态可用；pin 写当前时间（排序键，重复 pin 刷新

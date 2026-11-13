@@ -9,14 +9,19 @@
 //     拖拽不再携带落点锚点,boardPosition 链随迁移 050 删除)
 //   - 同列跨组 = 纯换泳道(不动状态;含 paused——controller 修订:断点续跑是
 //     重副作用,只走卡片/抽屉按钮(task:resume),不被拖拽手势误触发)
-//   - →assigned:draft 须有委派目标;pending 手动放行(均 transition + notify)
+//   - →assigned:draft 须有委派目标;pending 手动放行(均 transition + notify);
+//     submitted = 打回(reason 必填,先校验后调 rejectTask——v2 Task 8)
 //   - →active:assigned/session_queued 走 startTaskAndKickoff
-//   - →done:in_progress → completed(+completedAt)+ 循环续期 + notify
+//   - →waiting:一律拒(等待中由系统驱动,HITL 答复进出)
+//   - →review:in_progress 走 submitRun(提交验收——v2 Task 8 骨架,Task 10 接线)
+//   - →done:in_progress 走 submitRun+acceptTask(一步提交+验收);submitted 走
+//     acceptTask(验收通过);v2 起 in_progress→completed 直达边已删,旧
+//     transition completed 路径随之退役
 //   - →closed:任意非终态走 cancelTask(确认框在 renderer,主进程不二次确认)
 //   - →backlog 一律拒(只出不进);终态跨列一律拒
 //
-// 校验次序纪律:所有纯读校验(存在性/可投性/换组合法性)先于任何写动作——
-// 拒绝时零副作用,绝不留「先转了态才发现组非法」的半套写(错误路径铁律)。
+// 校验次序纪律:所有纯读校验(存在性/可投性/换组合法性/打回理由)先于任何写
+// 动作——拒绝时零副作用,绝不留「先转了态才发现组非法」的半套写(错误路径铁律)。
 import {
   getTask,
   transitionTaskStatus,
@@ -29,6 +34,7 @@ import { hasDelegationTarget } from './starter';
 import { notifyExecutor } from './executor';
 import { spawnNextInstanceIfRecurring } from './recurrence';
 import { startTaskAndKickoff, cancelTask } from './lifecycle';
+import { submitRun, acceptTask, rejectTask } from './lifecycle-runs';
 import { columnOf, canDropIntoColumn, type BoardColumnKey } from './board-columns';
 
 export interface MoveTarget {
@@ -36,7 +42,16 @@ export interface MoveTarget {
   groupId: string | null;
 }
 
-export async function executeMove(id: string, target: MoveTarget): Promise<TaskRow> {
+/** v2 Task 8：打回（submitted→assigned）理由随行；其余列移动缺省不传 */
+export interface MoveOpts {
+  reason?: string;
+}
+
+export async function executeMove(
+  id: string,
+  target: MoveTarget,
+  opts?: MoveOpts,
+): Promise<TaskRow> {
   // 预检①:存在性 + 归档(getTask 单点;lifecycle 三函数不再各自预检,Task 4 review 约定)。
   // 归档卡即使同列换组也拒——恢复归任务归档域,不经 move
   const task = getTask(id);
@@ -69,6 +84,14 @@ export async function executeMove(id: string, target: MoveTarget): Promise<TaskR
   if (!sameColumn) {
     switch (target.column) {
       case 'assigned': {
+        // submitted→assigned = 打回：理由必填校验先于任何 lifecycle 调用
+        // (缺/空白 → 人话拒绝,零副作用;错误消息非「未接线」即校验先行的证明)
+        if (task.status === 'submitted') {
+          const reason = opts?.reason?.trim();
+          if (!reason) throw new Error('打回必须填写理由');
+          await rejectTask(id, reason);
+          break;
+        }
         // draft 无委派目标 → 手动放行只会建出无人接待的空会话(与 starter K2 同语义)
         if (task.status === 'draft' && !hasDelegationTarget(task)) {
           throw new Error('任务未设置委派目标,请先编辑任务指派 agent/团队/会话');
@@ -94,8 +117,23 @@ export async function executeMove(id: string, target: MoveTarget): Promise<TaskR
         await startTaskAndKickoff(id); // assigned / session_queued
         break;
       }
+      case 'waiting':
+        // 预检②已拒(等待中只出不进),不可达;占位保 switch 穷尽 + 主进程兜底
+        throw new Error('等待中列由系统驱动,不可手动拖入');
+      case 'review': {
+        // in_progress→review = 提交验收(唯一合法来源,其余格预检②已拒)
+        await submitRun(id, { summary: '' });
+        break;
+      }
       case 'done': {
-        transitionTaskStatus(id, 'completed', { completedAt: Date.now() });
+        // v2:完成必经验收。in_progress = 一步提交+验收;submitted = 验收通过。
+        // delegation_role='in' 只 submit 不 accept 的守卫在 Task 18 落地
+        if (task.status === 'in_progress') {
+          await submitRun(id, { summary: '' });
+          await acceptTask(id);
+        } else {
+          await acceptTask(id); // from === 'submitted'
+        }
         spawnNextInstanceIfRecurring(id); // 循环续期(与 agent complete_task 同语义)
         notifyExecutor();
         break;
@@ -116,6 +154,9 @@ export async function executeMove(id: string, target: MoveTarget): Promise<TaskR
 
 function dropRejectReason(from: TaskStatus, to: BoardColumnKey): string {
   if (to === 'backlog') return `任务不能移回待办列(状态机不允许 ${from} → draft/pending)`;
+  if (to === 'waiting') {
+    return `等待中列由系统驱动(状态 ${from} 等待人工),不可手动拖入`;
+  }
   if (from === 'completed' || from === 'failed' || from === 'cancelled') {
     return `终态任务(${from})不可再变更`;
   }

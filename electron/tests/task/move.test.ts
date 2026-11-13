@@ -57,13 +57,20 @@ const seed = (status: TaskStatus, extra: Partial<TaskRow> = {}) =>
 
 /**
  * 经生产合法链 seed 派生态(momo-test-rules 第 1 条:直插 status 不贴真实运行时)。
- * assigned → in_progress(+会话) → paused / completed / cancelled 按需续走。
+ * v2 状态机:assigned → in_progress(+会话) → submitted → completed 按需续走
+ * (in_progress → completed 直达边已删,completed 必经 submitted 验收)。
  */
-function seedViaChain(status: 'in_progress' | 'paused' | 'completed', extra: Partial<TaskRow> = {}): TaskRow {
+function seedViaChain(
+  status: 'in_progress' | 'submitted' | 'paused' | 'completed',
+  extra: Partial<TaskRow> = {},
+): TaskRow {
   const t = seed('assigned', { assigneeAgentId: 'i-1', ...extra });
   transitionTaskStatus(t.id, 'in_progress', { executionSessionId: 'sess-1' });
   if (status === 'paused') transitionTaskStatus(t.id, 'paused');
-  if (status === 'completed') transitionTaskStatus(t.id, 'completed', { completedAt: Date.now() });
+  if (status === 'completed') {
+    transitionTaskStatus(t.id, 'submitted', { submittedAt: Date.now() });
+    transitionTaskStatus(t.id, 'completed', { completedAt: Date.now() });
+  }
   return getTask(t.id)!;
 }
 
@@ -166,21 +173,25 @@ describe('executeMove 语义表——跨列动作映射', () => {
     expect(resumeMock).not.toHaveBeenCalled();
   });
 
-  it('in_progress→done:transition completed + completedAt', async () => {
+  it('in_progress→done:路由 submitRun+acceptTask(占位期抛未接线,零副作用)', async () => {
+    // v2 生命周期:完成必经验收——done 不再直转 completed,改走 lifecycle-runs;
+    // Task 10 接线前占位抛「未接线」,接线断言由 move-v2.test.ts 的 todo 组接管
     const t = seedViaChain('in_progress');
-    await executeMove(t.id, { column: 'done', groupId: null });
+    await expect(executeMove(t.id, { column: 'done', groupId: null })).rejects.toThrow(
+      'lifecycle-runs 未接线',
+    );
     const after = getTask(t.id)!;
-    expect(after.status).toBe('completed');
-    expect(after.completedAt).not.toBeNull();
+    expect(after.status).toBe('in_progress'); // 拒绝零副作用:状态/时间戳全不动
+    expect(after.completedAt).toBeNull();
   });
 
-  it('in_progress→done 且带循环规则:生成下一实例(与 agent complete_task 同语义)', async () => {
+  it('in_progress→done 且带循环规则:占位期不生成下一实例(接线后续期随验收走)', async () => {
     const t = seedViaChain('in_progress', { recurrenceRule: 'daily@09:00' });
-    await executeMove(t.id, { column: 'done', groupId: null });
+    await expect(executeMove(t.id, { column: 'done', groupId: null })).rejects.toThrow(
+      'lifecycle-runs 未接线',
+    );
     const children = listTasks({ workspaceId: WS }).filter((r) => r.recurrenceParentId === t.id);
-    expect(children).toHaveLength(1);
-    // 泳道语义重构 §4.3：续期实例落 assigned（建即入队，未来时间由闸门管）
-    expect(children[0]!.status).toBe('assigned');
+    expect(children).toHaveLength(0); // 半套写不落:未验收不续期
   });
 
   it('in_progress→closed:走 cancelTask(确认框在 renderer,main 不再二次确认)', async () => {
