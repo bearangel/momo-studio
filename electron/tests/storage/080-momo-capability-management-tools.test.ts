@@ -119,10 +119,11 @@ describe('migration 080 Momo 能力管理工具回填（65 → 70）', () => {
     expect(new Set(MOMO_V22_ALL_BUILTIN_TOOL_REFS).size).toBe(MOMO_V22_ALL_BUILTIN_TOOL_REFS.length);
   });
 
-  it('用例 F：080 注册为最新迁移（追加在数组末尾，哨兵自 079 测试移入）', () => {
+  it('用例 F：080 注册在链中且顺延完整（末位哨兵已移交 082 测试）', () => {
     const versions = loadMigrations().map((m) => m.version);
     expect(versions).toContain(80);
-    expect(versions[versions.length - 1]).toBe(80);
+    // 任务生命周期 v2（081/082）注册后 080 不再是末位迁移——锁顺延关系而非终位（070 先例）
+    expect(versions[versions.length - 1]).toBeGreaterThan(80);
     // 版本唯一性（重复注册会让 runner 静默跳过第二条，属契约破坏）
     expect(new Set(versions).size).toBe(versions.length);
   });

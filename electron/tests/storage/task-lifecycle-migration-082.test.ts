@@ -38,6 +38,15 @@ function setupTestDbRaw(): DB {
 }
 
 describe('migration 082 backfill', () => {
+  it('082 注册为最新迁移（追加在数组末尾，哨兵自 080 测试移入）', () => {
+    const versions = loadMigrations().map((m) => m.version);
+    expect(versions).toContain(81);
+    expect(versions).toContain(82);
+    expect(versions[versions.length - 1]).toBe(82);
+    // 版本唯一性（重复注册会让 runner 静默跳过第二条，属契约破坏）
+    expect(new Set(versions).size).toBe(versions.length);
+  });
+
   it('存量 in_progress 补 run #1 + current_run_id；终态任务不补', () => {
     const db = setupTestDbRaw();
     const ins = db.prepare(`INSERT INTO tasks (id, workspace_id, title, status, creator_user_id, created_at, updated_at, started_at, origin)
