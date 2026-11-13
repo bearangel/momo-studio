@@ -6,6 +6,15 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 启动期消息排队与占位气泡 + agent 子进程打包启动崩修复
+
+`2.1.0-alpha.66`。来源：用户 Windows 打包版实测两症状——启动后 ~40-60s 内发消息 agent 不回复；alpha.63/64 起发消息直接 `runtime 退出 code:1`（WarmPool 全灭）。
+
+- **启动期消息排队 + 占位气泡**（fd05331f）：RouterService 未就绪窗口内消息只落库不派发、日志仅一条 warn，UI 零反馈，体感「agent 不回复」。主进程 im/session-service 增待派发队列（上限 50）+ 新 IPC `session:pendingDispatch`（sessionId/count/timedOut/agentName/iconEmoji）——router 缺失时入队而非丢弃；就绪后 `flushPendingDispatches()` 按入队顺序补派发（单条失败只 warn 不阻断），完成推 count=0 清占位；超 60s 未就绪推 timedOut，UI 转红提示可重发（消息不丢）。renderer 新增 PendingDispatchBubble + session.store `pendingDispatchBySession` + MessageList 底部渲染；preload/types 通道契约两端同 commit
+- **占位态拉取通道补齐**（a2ecf07b）：入队事件早于窗口 ready ~0.4s（启动期首条消息典型时序）时推送无窗口可发，占位气泡永不出现——session-service 增 `listPendingDispatchStates()` 快照（pendingTimedOut 集合可还原超时红态）+ 拉取式 IPC `session:pendingDispatches` 与推送互补；store 在订阅挂载与切会话时各补拉一次（覆盖式，顺带清 flush 后残留）
+- **agent 子进程打包启动即崩修复**（f3f9b99b）：hub/index.ts 顶层 `import { BrowserWindow } from 'electron'` 经 capability 接线进入 runtime 子进程静态依赖图，打包 asar 无 electron npm 包 → boot 即 MODULE_NOT_FOUND → WarmPool 全灭（alpha.62 未触发是因当时接线尚未把 resource-ops-bridge 拉进 require 图）。五处（hub/index、panel-sync ×2、hub-install、changed-emit）改 `loadElectronApis()` 惰性取用；回归锁重写为从 runtime-entry.ts 真实遍历静态依赖图，断言零 electron 运行期依赖
+- **测试隔离收口**（c9d00e8d）：排队链路落地后补 mock 面——App / OnboardingWizard.latch 补 onPendingDispatch、router-leader 待派发队列逐用例清空，消除跨用例串扰
+
 ## [未发布] — ABI 统一：electron 测试跑在 ELECTRON_RUN_AS_NODE（单 ABI 稳态）
 
 `2.1.0-alpha.65`。来源：用户需求（Windows 兼容机 agent 配置固定一套，不再 Node/Electron 来回 rebuild）。
@@ -60,6 +69,54 @@
 - **冒烟**：`scripts/esafenet-probe.mjs`（`--self-test` / `--file` 明文密文判定 / `--write-probe-dir` 三段写入探针）
 - **测试**：electron `tests/files` 196（含 PATH 引用恒等回归锁、die→ECHILD→自愈、120 文件批量保序、桥协议配对与越界拒绝）+ renderer 面板 8；双 workspace typecheck 绿；全量套件与 main 基线 A/B 一致（agent-threads 预存失败无新增）
 - **门禁**：发布前需 P0 书面合规确认 + P3 研发机实测（读明文 / 写入探针 / 批量 / 退出回收 / 安装包 asar 路径）+ 设置面板真实 App 截图验收
+
+## [未发布] — 稳定性批：dispatch 账本终态预检 / EPIPE 双保险 / downloadFile 竞态
+
+`2.1.0-alpha.59`（downloadFile 清理为 `alpha.63` 补遗）。来源：会话停止竞速实录与生产日志实证的三个异常路径。
+
+- **dispatch 账本非法转换预检**（c2218a2d）：settle / cancel / 判死三入口对已落权威终态的簿记行预检跳过——迟到钩子不再覆盖先落终态，cancelled→failed 等非法转换投影噪声归零
+- **safeSend callback 承接异步 EPIPE**（0ab6c0d8）：写失败经回调进 warn，与既有 error 事件吞并网构成双保险，绝不抛穿
+- **runtime 子进程 error 事件吞并网**（2a7a6d7d）：EPIPE 可异步以 error 事件投递、无监听即 Uncaught 弹窗（会话停止竞速实录）——新增 child-error-net 统一挂到 runtime-spawner 子进程
+- **downloadFile 半成品清理时序修正**（81f0a427，`alpha.63`）：删除改在流 close 后执行，消除 open 迟到把半成品「复活」的竞态
+
+## [未发布] — 插件桥 callService 超时按调用可配
+
+`2.1.0-alpha.60`。来源：email 插件大邮件慢链路立项的宿主侧前置（固定 10s 对慢 service 调用不够用）。
+
+- **超时按调用提示**（57a931d7）：`requestPluginCallService` 增 `opts.timeoutMs`，经 `clampCallServiceTimeoutMs` 钳制到 [1s, 60s]、缺省 10s 不变；`PluginToolCtx.callService` 类型与装配透传（契约两端同 commit）——慢链路可按调用放宽，又防误配值无限等
+- **边界与默认契约锁**（1b403975）：plugin-hook-bridge 测试补钳制边界 / 默认行为不变 / 提示真实生效三类用例
+
+## [未发布] — 文件面三修复：大库文件名搜索 / 大文件预览占位 / 右键菜单视口钳制
+
+`2.1.0-alpha.60`。来源：生产实证三症状——ws2 `.momo-scratch` 11,604 条致文件名搜索全灭；200MB PDF 点击卡死；屏幕底部文件右键菜单溢出视口。
+
+- **文件名搜索时间预算 + 相对路径匹配 + 目录钻入**（3df8efe1）：searchNames 遍历预算按条目数 10000 计，DFS 下单个大目录即可吃光预算、后续目录永不访问；且只匹配 basename、renderer 又过滤目录条目——输入目录名必空。改时间预算 1500ms + 100 万条绝对兜底（本仓 269,639 条实测 0.4–0.9s 走完）；匹配 basename → 相对路径（大小写不敏感），排序 basename 命中 → 目录 → 路径自然序；返回形状 `{hits, truncated}`（结果满上限不算截断），截断时「文件」弹层与文件树搜索显示「扫描已达上限，结果可能不完整」、零命中且截断空态改口「未在已扫描范围内找到」；目录条目不再丢弃（Folder 图标），选中目录 = 钻入——按钮弹层改写菜单内搜索词、手动 @ 经 RichComposer `replaceBeforeCaret` 改写编辑器局部（目录不插 pill）；契约三层同 commit 成对（workspace-fs / ipc.handlers / preload 泛型 / types.d.ts / 三处消费方）
+- **大文件 2MB 预览占位**（bf444d38）：`file:readForEditor` 原先整读后 utf-8 round-trip 判二进制——200MB PDF 实测主进程阻塞 5.5s、RSS 664MB、点击即卡死。改先 statSize，超 2MB 直接返回 `{kind:'tooLarge', size}` 不读内容，≤2MB 保持原判定并按实读长度复核 stat/read 竞态；EditorFileContent 增 tooLarge（electron / renderer 两端同步），renderer 占位 pendingBinary 升级 pendingFileNotice 承载 binary / tooLarge 两态
+- **右键菜单视口钳制**（531e7c06）：文件树 / 看板卡 / 外派任务卡 / 工作空间标签四处光标定位菜单按 clientX/clientY 直接 fixed 定位、溢出视口下缘——抽 `useClampedMenuPosition` 共享钩子（mount 后按实际尺寸回移、8px 留白）四处统一接入
+
+## [未发布] — 设置面三小修：Node.js 路径文件选择器补齐
+
+`2.1.0-alpha.59`。来源：亿赛通文件代理设置面板（FileIoSettingsPanel）交付期走查收尾。
+
+- **文件选择按钮**（ca7aaec2）：Node.js 路径输入增文件选择按钮——选择对话框 IPC + preload 透传 + 面板接线，契约同 commit
+- **失败错误态**（eb4a8283）：文件选择对话框失败落错误态展示，不再静默无反馈
+- **行布局对齐**（7a35a95c）：Node.js 路径行高度对齐与输入框撑满布局修正
+
+## [未发布] — 会话进度分段折叠时间线卡
+
+`2.1.0-alpha.59`。来源：长任务 30+ 条【进度分段】行刷屏，且新进度行持续把上翻阅读拽回底部（每 ~2 分钟一次）。
+
+- **纯函数层**（96944254）：`progress-segment`——【进度分段】行识别、body 防御解析、连续行折叠分组；`formatHHmm` 单源导出共享
+- **时间线卡三态**（719f9021）：连续进度分段收敛单卡 ProgressTimelineCard——收起摘要 / 展开时间线 / 单条直显；滚动贴底锚点豁免进度行（dispatch 回执等结构事件保留贴底）
+- **测试**：progress-segment 解析分组纯函数锁 + ProgressTimelineCard 三态 + MessageList 贴底豁免回归（5 文件 +384 行）
+
+## [未发布] — 看板列宽自适应与列内流式换行
+
+`2.1.0-alpha.59`。来源：小屏看板横向滚动、大屏列尾留白；P1 预览合同 `.omo/previews/board-fluid-lane-layout.html` 获批后落码。
+
+- **列宽五列均分**（a53dd7cf）：列容器 `w-[232px] shrink-0` → `flex-1 + min-w-[184px]`（最小总宽 968px，窄于此由泳道 `overflow-x-auto` 回退滚动）
+- **列体流式网格**：单列堆叠 → `grid auto-fill minmax(168px, 1fr)` 流式换行；顶置分隔线 / 空态 `col-span-full` 占满整行；列头 hint 窄列省略号截断——小屏不再横向滚动、大屏不留白
+- **回归锁与实测**：4 条用例先红后绿；renderer 全量 3338 过；真实 App 三档宽度 getComputedStyle 实测对齐
 
 ## [未发布] — office-pro 插件：office 生成能力代码工坊化 + 核心生成类下线
 
