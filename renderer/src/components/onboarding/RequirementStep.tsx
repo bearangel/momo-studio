@@ -3,7 +3,7 @@
 // AI 路线需求描述步（spec 2026-10-10 §8 + 预览帧④-A/④变体）：
 // textarea（4000 上限计数）→ 生成（loading）→ 成功存方案进 ctx 推进预览；
 // 失败错误卡 [重试] [转手动]（保留前序成果，spec §9）。
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { MAX_REQUIREMENT_CHARS } from '../../lib/onboarding-constants';
@@ -18,25 +18,47 @@ export function RequirementStep({ ctx }: Props) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // T5（spec 2026-11-13 §7）：8s 阶段轮换文案；等待期转手动后迟到结果丢弃
+  const [phase, setPhase] = useState(0);
+  const abandonedRef = useRef(false);
+
+  useEffect(() => {
+    if (!busy) {
+      setPhase(0);
+      return;
+    }
+    const t = setInterval(() => setPhase((p) => Math.min(p + 1, 1)), 8_000);
+    return () => clearInterval(t);
+  }, [busy]);
 
   const generate = async (): Promise<void> => {
     if (!text.trim() || busy) return;
     setBusy(true);
     setError(null);
+    abandonedRef.current = false;
     try {
       const r = await ipc.onboarding.generatePlan({
         requirement: text.trim().slice(0, MAX_REQUIREMENT_CHARS),
         providerId: ctx.providerId,
         modelId: ctx.modelId,
       });
+      if (abandonedRef.current) return; // 已转手动——迟到结果静默丢弃
       ctx.setPlan(r.plan);
       ctx.setPlanWarnings(r.warnings);
       ctx.go('preview');
     } catch (e) {
+      if (abandonedRef.current) return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (!abandonedRef.current) setBusy(false);
     }
+  };
+
+  /** T5：等待期即可转手动（不等失败）——前序成果保留语义不变 */
+  const toManualNow = (): void => {
+    abandonedRef.current = true;
+    setBusy(false);
+    ctx.toManual();
   };
 
   const shown = text.slice(0, MAX_REQUIREMENT_CHARS);
@@ -60,7 +82,12 @@ export function RequirementStep({ ctx }: Props) {
         {busy && (
           <div className="flex items-center gap-2 text-[13px] text-tertiary">
             <Loader2 size={16} strokeWidth={1.75} className="animate-spin" />
-            AI 正在生成配置方案…通常需要 10–30 秒
+            <span>
+              {phase === 0 ? '正在分析你的需求' : '正在挑选合适的 agent'}（通常需要 10–30 秒）
+            </span>
+            <Button type="button" variant="ghost" size="sm" onClick={toManualNow}>
+              转手动配置
+            </Button>
           </div>
         )}
         {error && (
@@ -73,7 +100,7 @@ export function RequirementStep({ ctx }: Props) {
               <Button type="button" onClick={() => void generate()} disabled={busy}>
                 重试
               </Button>
-              <Button type="button" variant="ghost" onClick={ctx.toManual}>
+              <Button type="button" variant="ghost" onClick={toManualNow}>
                 转手动配置
               </Button>
             </div>

@@ -101,3 +101,52 @@ describe('上一步目标（T4，spec 2026-11-13 §6——绕开 workspace 直�
     expect(ctx.go).toHaveBeenCalledWith('provider');
   });
 });
+
+describe('等待体验（T5，spec 2026-11-13 §7）', () => {
+  it('busy 期文案 8s 阶段轮换：分析需求 → 挑选 agent', async () => {
+    vi.useFakeTimers();
+    mockGenerate.mockReturnValue(new Promise(() => undefined)); // 永不 resolve
+    try {
+      render(<RequirementStep ctx={mkCtx()} />);
+      fireEvent.change(screen.getByLabelText('工作需求'), {
+        target: { value: '整理周报' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /生成配置方案/ }));
+      // busy 即刻进入（React act 内同步刷新由 RTL 处理——用同步断言轮询）
+      await vi.waitFor(() => {
+        expect(screen.getByText(/正在分析你的需求/)).toBeInTheDocument();
+      });
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(screen.getByText(/正在挑选合适的 agent/)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('busy 期「转手动配置」可点，点击后立即 toManual；迟到成功结果被丢弃（不回 preview）', async () => {
+    let resolvePlan!: (v: { plan: typeof PLAN; warnings: string[] }) => void;
+    mockGenerate.mockReturnValue(
+      new Promise((res) => {
+        resolvePlan = res;
+      }),
+    );
+    const ctx = mkCtx();
+    render(<RequirementStep ctx={ctx} />);
+    fireEvent.change(screen.getByLabelText('工作需求'), {
+      target: { value: '整理周报' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /生成配置方案/ }));
+    // 等待期出口在场且可点（不再等失败才给）
+    const toManualBtn = await screen.findByRole('button', { name: '转手动配置' });
+    expect(toManualBtn).toBeEnabled();
+    fireEvent.click(toManualBtn);
+    expect(ctx.toManual).toHaveBeenCalled();
+    expect(ctx.go).not.toHaveBeenCalledWith('preview');
+    // 迟到成功：静默丢弃——不得推进 preview / 写 plan
+    resolvePlan({ plan: PLAN, warnings: [] });
+    await waitFor(() => {
+      expect(ctx.setPlan).not.toHaveBeenCalled();
+      expect(ctx.go).not.toHaveBeenCalledWith('preview');
+    });
+  });
+});
