@@ -55,6 +55,7 @@ import { migration077 } from './077_momo_resource_creation_tools';
 import { migration078 } from './078_momo_list_models_tool';
 import { migration079 } from './079_oauth_module';
 import { migration080 } from './080_momo_capability_management_tools';
+import * as migration081 from './081_task_lifecycle_v2';
 
 export interface Migration {
   version: number;
@@ -1234,6 +1235,12 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 迁移先于内置定义落库执行）。SQL 住在独立模块 080_momo_capability_management_tools.ts。
     version: migration080.version,
     sql: migration080.sql,
+  },
+  {
+    // 任务生命周期 v2（spec 2026-11-13 §5.5）：tasks 五列 / messages.meta_json /
+    // task_runs / human_requests。SQL 住在独立模块 081_task_lifecycle_v2.ts。
+    version: migration081.version,
+    sql: migration081.up,
   },
 ];
 
