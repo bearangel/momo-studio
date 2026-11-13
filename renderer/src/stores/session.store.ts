@@ -23,6 +23,7 @@ import type {
   ImMessage,
   MessageContext,
   MessageEventRow,
+  PendingDispatchState,
   SessionMemberInfo,
   SessionSummary,
 } from '../ipc/types';
@@ -86,6 +87,14 @@ interface SessionState {
   commandPendingBySession: Map<string, string>;
 
   /**
+   * 启动期消息排队占位态（session:pendingDispatch 推送，spec 2026-11-13）：
+   * sessionId → 待派发条数/agent 身份/是否等待超时。count>0 时消息列表底部
+   * 渲染「正在启动智能体」占位气泡（MessageList 的 PendingDispatchBubble），
+   * 让用户在 RouterService 就绪前就看到 agent 在动；count=0 时移除。
+   */
+  pendingDispatchBySession: Map<string, PendingDispatchState>;
+
+  /**
    * 拉取会话列表，默认激活第一个会话并加载其消息。
    * workspaceId 缺省时回退到 currentWorkspaceId；两者皆无时不发 IPC
    * （跨仓泄漏封堵——绝不走主进程全仓 listAllSessions）。
@@ -108,6 +117,11 @@ interface SessionState {
   loadMembers: (sessionId: string) => Promise<void>;
   /** 接收主进程推送的实时消息（按 SQLite messages.id 去重） */
   receiveMessage: (msg: ImMessage) => void;
+  /**
+   * 启动期排队占位态推送消费（session:pendingDispatch）：count>0 显示
+   * 「正在启动智能体」占位气泡，count=0 移除。
+   */
+  receivePendingDispatch: (state: PendingDispatchState) => void;
   /**
    * A 子系统：接收主进程 MessageEventBuffer flush 推送的批量 events。
    * 按 eventsByMessage 累积，同 event id 不重复。
@@ -200,6 +214,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   membersError: null,
   commandHint: null,
   commandPendingBySession: new Map(),
+  pendingDispatchBySession: new Map(),
   pendingCreateGroupId: null,
   setPendingCreateGroupId: (id) => set({ pendingCreateGroupId: id }),
   revealSessionId: null,
@@ -396,6 +411,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     } catch (err) {
       set({ members: [], membersError: `加载成员列表失败：${(err as Error).message}` });
     }
+  },
+
+  receivePendingDispatch: (state) => {
+    set((s) => {
+      const next = new Map(s.pendingDispatchBySession);
+      if (state.count > 0) next.set(state.sessionId, state);
+      else next.delete(state.sessionId);
+      return { pendingDispatchBySession: next };
+    });
   },
 
   receiveMessage: (msg) => {
@@ -640,10 +664,16 @@ export function subscribeSessionChannels(): () => void {
   });
   // K10：主进程新建执行会话 → 轻量刷新列表（不动激活会话）
   const off3 = ipc.session.onListChanged(() => useSessionStore.getState().pullSessionList());
+  // 启动期消息排队占位态（2026-11-13）：RouterService 未就绪时用户消息入队，
+  // 主进程推 count>0 → 列表底部显示「正在启动智能体」占位；补派发后推 count=0 移除。
+  const off4 = ipc.session.onPendingDispatch((state) =>
+    useSessionStore.getState().receivePendingDispatch(state),
+  );
   return () => {
     off1();
     off2();
     off3();
+    off4();
   };
 }
 

@@ -17,6 +17,8 @@ const { sessionState } = vi.hoisted(() => ({
     loadingOlderBySession: new Map<string, boolean>(),
     hasMoreBySession: new Map<string, boolean>(),
     loadOlder: () => Promise.resolve(),
+    // 启动期排队占位（2026-11-13）：MessageList 新增 selector，缺字段会让组件崩
+    pendingDispatchBySession: new Map<string, unknown>(),
   },
 }));
 

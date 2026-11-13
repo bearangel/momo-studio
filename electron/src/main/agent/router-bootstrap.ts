@@ -27,7 +27,7 @@ import {
   setTaskUserActionHandler,
 } from './router-service';
 import { setBridgeRouter } from './internal-event-bridge';
-import { setSessionRouter } from '../im/session-service';
+import { setSessionRouter, flushPendingDispatches } from '../im/session-service';
 import { setFinalListener } from './stream-relay';
 import { onLeaderFinal } from '../im/session-naming';
 import { ensureMemberRuntime } from './start-chain';
@@ -64,6 +64,14 @@ export async function ensureRouterService(
   currentRouterService.start();
   setBridgeRouter(currentRouterService);
   setSessionRouter(currentRouterService);
+  // 启动期排队补偿（2026-11-13 P0 补强）：RouterService 就绪意味着「用户消息
+  // 终于能派发」——把预热池 boot 窗口内入队的消息按序补派发（占位气泡随之消失）。
+  // 不 await：boot 路径不能被消息派发阻塞；失败在 flush 内部逐条 warn。
+  void flushPendingDispatches().catch((err: unknown) => {
+    logger.warn('启动期消息补派发异常', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
   setFinalListener(onLeaderFinal);
   // v2.9 事件驱动 dispatch：runner 空闲边沿 → PM 空闲快照 + 投递自动送达结果
   // （B4(i)：forcedExit = 强制截断——Router 据此补投已翻转未投递的链；

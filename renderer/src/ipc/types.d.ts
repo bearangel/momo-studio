@@ -1780,6 +1780,28 @@ export interface SessionApiSurface {
   onMessageEventBatch(callback: (batch: MessageEventBatch) => void): () => void;
   /** K10：订阅会话列表变化推送（session:listChanged——主进程主动新建执行会话时触发） */
   onListChanged(callback: () => void): () => void;
+  /**
+   * 订阅「启动期消息排队」占位态（session:pendingDispatch）。
+   * RouterService 未就绪（预热池 boot 窗口）时用户消息入队并发本事件；count=0
+   * 表示队列已清空（是时候移除占位气泡了）。timedOut=超过等待阈值仍未就绪，
+   * UI 可转红提示重发（消息不丢，就绪后仍会补派发）。
+   */
+  onPendingDispatch(callback: (state: PendingDispatchState) => void): () => void;
+}
+
+/**
+ * 启动期消息排队占位态（session:pendingDispatch 载荷，spec 2026-11-13）。
+ * 生产者：electron/src/main/im/session-service.ts（enqueue / flush / 超时提示）。
+ */
+export interface PendingDispatchState {
+  sessionId: string;
+  /** 该会话待派发条数；0 = 已清空 */
+  count: number;
+  /** 等待超时（UI 提示可重发）；消息仍在队列，就绪后照常派发 */
+  timedOut: boolean;
+  /** 最近一条的 agent 名字 / emoji（占位气泡头部展示） */
+  agentName: string;
+  iconEmoji: string;
 }
 
 /**

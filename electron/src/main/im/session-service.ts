@@ -66,6 +66,144 @@ export function setSessionRouter(svc: SessionRouter | null): void {
   router = svc;
 }
 
+// ─── 启动期待派发队列（2026-11-13 实机 P0 补强）─────────────────────────────
+//
+// 背景：RouterService 由首个 runner 注册时 lazy 启动，而 runner 注册要等各
+// agent 预热池 boot 完成——真机实测启动期约 50s。该窗口内用户发的消息此前
+// **只落库不派发**（仅一条 warn 日志），UI 无任何反馈 → 用户体感「agent 不回复」。
+//
+// 现在：入队 + 推 renderer 占位态（agent 侧「正在启动智能体」气泡，让用户看到
+// agent 在动）；RouterService 就绪后由 router-bootstrap 调
+// flushPendingDispatches() 按入队顺序补派发，占位消失、真实流式回复接管。
+
+/** 一条待派发的用户消息（字段与 routeUserChat 入参一一对应 + UI 展示用身份） */
+interface PendingDispatch {
+  sessionId: string;
+  assignmentId: string;
+  body: string;
+  systemKickoff: boolean;
+  sourceTaskId: string | null;
+  context?: MessageContext;
+  /** 占位气泡展示用（路由目标成员的名字 / emoji，入队时快照） */
+  agentName: string;
+  iconEmoji: string;
+  enqueuedAt: number;
+}
+
+/** 推送 renderer 的占位态载荷（session:pendingDispatch 通道） */
+export interface PendingDispatchState {
+  sessionId: string;
+  /** 该会话待派发条数；0 = 队列已清空（renderer 据此移除占位气泡） */
+  count: number;
+  /** 超过等待阈值仍未就绪 → UI 转红提示可重发（消息不丢，就绪后仍会派发） */
+  timedOut: boolean;
+  /** 最近一条的 agent 名字/emoji（占位气泡头部展示） */
+  agentName: string;
+  iconEmoji: string;
+}
+
+/** 队列上限：启动期用户手速上限远低于此；超限丢最旧并留痕（防异常堆积） */
+const PENDING_DISPATCH_LIMIT = 50;
+/** 占位超时提示阈值（只影响 UI 提示，不丢消息） */
+const PENDING_DISPATCH_TIMEOUT_MS = 60_000;
+
+const pendingDispatches: PendingDispatch[] = [];
+/** sessionId → 占位超时提示定时器（每会话一个，新入队重置） */
+const pendingTimers = new Map<string, NodeJS.Timeout>();
+
+function pendingCountOf(sessionId: string): number {
+  let n = 0;
+  for (const p of pendingDispatches) if (p.sessionId === sessionId) n += 1;
+  return n;
+}
+
+/** 推送该会话的最新占位态（count=0 即「已清空」信号） */
+function notifyPendingDispatch(sessionId: string, timedOut: boolean): void {
+  const mine = pendingDispatches.filter((p) => p.sessionId === sessionId);
+  const last = mine[mine.length - 1];
+  const state: PendingDispatchState = {
+    sessionId,
+    count: mine.length,
+    timedOut: mine.length > 0 ? timedOut : false,
+    agentName: last?.agentName ?? '',
+    iconEmoji: last?.iconEmoji ?? '',
+  };
+  pushToMainWindow('session:pendingDispatch', state);
+}
+
+function enqueuePendingDispatch(p: PendingDispatch): void {
+  pendingDispatches.push(p);
+  if (pendingDispatches.length > PENDING_DISPATCH_LIMIT) {
+    const dropped = pendingDispatches.shift();
+    logger.warn('启动期派发队列超限，丢弃最旧一条', { sessionId: dropped?.sessionId });
+    if (dropped) notifyPendingDispatch(dropped.sessionId, false);
+  }
+  notifyPendingDispatch(p.sessionId, false);
+
+  const existing = pendingTimers.get(p.sessionId);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(() => {
+    pendingTimers.delete(p.sessionId);
+    // 仍未就绪 → 只提示可重发，消息留在队列里等 flush
+    if (pendingCountOf(p.sessionId) > 0) notifyPendingDispatch(p.sessionId, true);
+  }, PENDING_DISPATCH_TIMEOUT_MS);
+  timer.unref?.();
+  pendingTimers.set(p.sessionId, timer);
+}
+
+/**
+ * 按入队顺序补派发全部待发消息（router-bootstrap 在 RouterService 就绪后调用）。
+ * 无 router 时 no-op（幂等：多次调用安全）。单条失败只 warn，不阻断后续。
+ */
+export async function flushPendingDispatches(): Promise<void> {
+  if (!router) return;
+  if (pendingDispatches.length === 0) {
+    // 仍可能要清残留定时器（理论上不会走到）
+    for (const t of pendingTimers.values()) clearTimeout(t);
+    pendingTimers.clear();
+    return;
+  }
+  const batch = pendingDispatches.splice(0, pendingDispatches.length);
+  const touched = new Set(batch.map((p) => p.sessionId));
+  const active = router;
+  for (const p of batch) {
+    try {
+      await active.routeUserChat({
+        sessionId: p.sessionId,
+        assignmentId: p.assignmentId,
+        body: p.body,
+        systemKickoff: p.systemKickoff,
+        sourceTaskId: p.sourceTaskId,
+        ...(p.context ? { context: p.context } : {}),
+      });
+    } catch (err) {
+      logger.warn('补派发失败（消息已落库，不重试）', {
+        sessionId: p.sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  for (const sessionId of touched) {
+    const t = pendingTimers.get(sessionId);
+    if (t) clearTimeout(t);
+    pendingTimers.delete(sessionId);
+    notifyPendingDispatch(sessionId, false);
+  }
+  logger.info('启动期消息补派发完成', { count: batch.length, sessions: touched.size });
+}
+
+/** 测试用：清空队列与定时器 */
+export function __resetPendingDispatchesForTest(): void {
+  for (const t of pendingTimers.values()) clearTimeout(t);
+  pendingTimers.clear();
+  pendingDispatches.length = 0;
+}
+
+/** 测试用：当前队列快照（只读） */
+export function __pendingDispatchesForTest(): ReadonlyArray<Readonly<PendingDispatch>> {
+  return pendingDispatches.map((p) => ({ ...p }));
+}
+
 /**
  * 推送到当前主窗口 renderer（动态解析）。
  *
@@ -254,11 +392,25 @@ export async function sendUserMessage(input: {
         ...(input.context ? { context: input.context } : {}),
       });
     } else {
-      // router 缺席（RouterService 未启动/销毁）必须留痕——防静默死路
-      // （Task 9 评审：零 runner 启动也已保证 router 在位，此分支仅剩极端时序）
-      logger.warn('路由目标已解析但 RouterService 未就绪，消息跳过派发', {
+      // router 缺席（RouterService 尚未 lazily 启动）——启动期（~50s 预热池窗口）
+      // 的常态。入队而非丢弃：推 renderer 占位气泡（agent「正在启动智能体」），
+      // RouterService 就绪后由 router-bootstrap flush 补派发。
+      const targetMember = members.find((m) => m.instanceId === target);
+      enqueuePendingDispatch({
+        sessionId: input.sessionId,
+        assignmentId: target,
+        body: input.body,
+        systemKickoff: input.systemKickoff === true,
+        sourceTaskId: input.sourceTaskId ?? null,
+        ...(input.context ? { context: input.context } : {}),
+        agentName: targetMember?.agentName ?? '',
+        iconEmoji: targetMember?.iconEmoji ?? '',
+        enqueuedAt: Date.now(),
+      });
+      logger.info('RouterService 未就绪，消息入队等待补派发', {
         sessionId: input.sessionId,
         target,
+        queued: pendingCountOf(input.sessionId),
       });
     }
   }

@@ -25,6 +25,7 @@ import type {
   McpEntryUpdateInput,
   MessageContext,
   MessageEventBatch,
+  PendingDispatchState,
   OnboardingApplyResult,
   OnboardingStatus,
   RegisterMcpInput,
@@ -458,6 +459,15 @@ const api: ApiSurface = {
       ipcRenderer.on('session:listChanged', handler);
       return () => {
         ipcRenderer.off('session:listChanged', handler);
+      };
+    },
+    // 启动期消息排队占位态（2026-11-13）：RouterService 未就绪时用户消息入队，
+    // count>0 → renderer 显示「正在启动智能体」占位气泡；count=0 → 移除。
+    onPendingDispatch: (callback) => {
+      const handler = (_evt: IpcRendererEvent, state: PendingDispatchState): void => callback(state);
+      ipcRenderer.on('session:pendingDispatch', handler);
+      return () => {
+        ipcRenderer.off('session:pendingDispatch', handler);
       };
     },
   },

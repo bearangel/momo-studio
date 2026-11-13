@@ -11,7 +11,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useSessionStore, subscribeSessionChannels } from './session.store';
 import { useStreamStore } from './stream.store';
-import type { ImMessage, MessageEventRow, SessionMemberInfo, SessionSummary } from '../ipc/types';
+import type {
+  ImMessage,
+  MessageEventRow,
+  PendingDispatchState,
+  SessionMemberInfo,
+  SessionSummary,
+} from '../ipc/types';
 
 const MOCK_SESSIONS_A: SessionSummary[] = [
   { id: 'sess-a1', workspaceId: 'ws-a', title: 'A 会话 1', titleAuto: false, kind: 'chat', lastMessageAt: null, members: [], pinnedAt: null, groupId: null, groupName: null, sessionType: null },
@@ -73,6 +79,7 @@ const mockApi = {
     onMessage: vi.fn().mockReturnValue(() => {}),
     onMessageEventBatch: vi.fn().mockReturnValue(() => {}),
     onListChanged: vi.fn().mockReturnValue(() => {}),
+    onPendingDispatch: vi.fn().mockReturnValue(() => {}),
   },
 };
 
@@ -1410,3 +1417,36 @@ describe('receiveMessage 桶内上浮（spec 2026-10-22 §4.2）', () => {
   });
 });
 
+
+describe('session.store · receivePendingDispatch（启动期排队占位，2026-11-13）', () => {
+  it('count>0 写入占位态，count=0 移除', () => {
+    const st = useSessionStore.getState();
+    st.receivePendingDispatch({
+      sessionId: 'sess-r',
+      count: 2,
+      timedOut: false,
+      agentName: '代码专家',
+      iconEmoji: '🧑‍💻',
+    });
+    expect(useSessionStore.getState().pendingDispatchBySession.get('sess-r')).toMatchObject({ count: 2 });
+
+    st.receivePendingDispatch({
+      sessionId: 'sess-r',
+      count: 0,
+      timedOut: false,
+      agentName: '',
+      iconEmoji: '',
+    });
+    expect(useSessionStore.getState().pendingDispatchBySession.has('sess-r')).toBe(false);
+  });
+
+  it('subscribeSessionChannels 接线 session:pendingDispatch', () => {
+    const off = subscribeSessionChannels();
+    expect(mockApi.session.onPendingDispatch).toHaveBeenCalled();
+    const calls = mockApi.session.onPendingDispatch.mock.calls;
+    const cb = calls[calls.length - 1]![0] as (s: PendingDispatchState) => void;
+    cb({ sessionId: 'sess-w', count: 1, timedOut: true, agentName: 'A', iconEmoji: '🤖' });
+    expect(useSessionStore.getState().pendingDispatchBySession.get('sess-w')?.timedOut).toBe(true);
+    off();
+  });
+});

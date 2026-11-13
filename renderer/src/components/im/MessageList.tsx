@@ -19,6 +19,7 @@ import { isTopLevelMessage } from '../../lib/locate-message';
 import { isTurnAnchor } from '../../lib/sender';
 import { groupProgressSegments, isProgressSegmentMessage } from '../../lib/progress-segment';
 import { ProgressTimelineCard } from './ProgressTimelineCard';
+import { PendingDispatchBubble } from './PendingDispatchBubble';
 
 export function MessageList() {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
@@ -31,6 +32,11 @@ export function MessageList() {
   );
   const hasMore = useSessionStore((s) =>
     activeSessionId ? s.hasMoreBySession.get(activeSessionId) ?? true : true,
+  );
+  // 启动期排队占位（spec 2026-11-13）：RouterService 未就绪时用户消息入队，
+  // 主进程推 pendingDispatch → 底部渲染「正在启动智能体」气泡，就绪后移除。
+  const pendingDispatch = useSessionStore((s) =>
+    activeSessionId ? s.pendingDispatchBySession.get(activeSessionId) : undefined,
   );
   const loadOlder = useSessionStore((s) => s.loadOlder);
   // v2.0 P1 Task 11：无登录概念——单用户本地应用，本地用户消息 sender 固定 'owner'
@@ -186,6 +192,8 @@ export function MessageList() {
           </div>
         ),
       )}
+      {/* 启动期排队占位（spec 2026-11-13）：位于消息流末尾，就绪后由真实流式回复接管 */}
+      {activeSessionId && pendingDispatch && <PendingDispatchBubble state={pendingDispatch} />}
     </div>
   );
 }

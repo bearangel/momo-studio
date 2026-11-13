@@ -31,6 +31,8 @@ import { insertTask, getTask } from '../../src/main/storage/tasks/repo';
 import { logger } from '../../src/main/logger';
 import { __setElectronApisForTest } from '../../src/main/electron-access';
 import {
+  __resetPendingDispatchesForTest,
+  __pendingDispatchesForTest,
   resolveTarget,
   sendUserMessage,
   broadcastRuntimeChanged,
@@ -107,6 +109,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  __resetPendingDispatchesForTest();
   setSessionRouter(null);
   __setElectronApisForTest(null);
   closeDb();
@@ -378,11 +381,13 @@ describe('sendUserMessage 全链', () => {
 
     const rows = db.prepare('SELECT id FROM messages WHERE session_id = ?').all(s.id) as unknown[];
     expect(rows).toHaveLength(1);
-    // 目标已解析但 router 缺席 → warn 留痕（不再静默死路）
-    expect(logger.warn).toHaveBeenCalledWith(
-      '路由目标已解析但 RouterService 未就绪，消息跳过派发',
-      expect.objectContaining({ sessionId: s.id, target: 'inst-a' }),
-    );
+    // 目标已解析但 router 缺席 → 入队补偿（2026-11-13）：消息不再静默丢弃，
+    // 而是进待派发队列 + 推 renderer 占位态，等 RouterService 就绪后 flush。
+    expect(__pendingDispatchesForTest()).toHaveLength(1);
+    expect(__pendingDispatchesForTest()[0]).toMatchObject({
+      sessionId: s.id,
+      assignmentId: 'inst-a',
+    });
   });
 
   it('会话不存在 → 抛错（含 sessionId）', async () => {
