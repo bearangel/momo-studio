@@ -29,6 +29,16 @@ import type {
 } from '../ipc/types';
 import { useStreamStore } from './stream.store';
 
+/**
+ * pendingDispatch 代数守卫（模块级，单调自增）：invoke 回包
+ * （session:pendingDispatches 快照拉取）与 event 通道推送
+ * （session:pendingDispatch）是两条独立 IPC 通道，Electron 不保证跨通道有序——
+ * hydrate 的旧快照回包可能晚于新推送落地，整包应用会把刚推送的占位清掉/复活。
+ * 规则：hydrate 发起与每次推送各进新一代；回包落地前代数已变即整包丢弃，
+ * 推送数据永远不被旧快照覆盖（两个并发 hydrate 的回包乱序同样被防护）。
+ */
+let pendingDispatchSeq = 0;
+
 interface SessionState {
   sessions: SessionSummary[];
   activeSessionId: string | null;
@@ -421,6 +431,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   receivePendingDispatch: (state) => {
+    // 每次推送进新一代：使在途 hydrate 的旧快照回包落地时代数失配、整包丢弃
+    pendingDispatchSeq += 1;
     set((s) => {
       const next = new Map(s.pendingDispatchBySession);
       if (state.count > 0) next.set(state.sessionId, state);
@@ -430,8 +442,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   hydratePendingDispatches: async () => {
+    // 发起即进新一代并记录：回包落地前若已有新推送/新 hydrate（代数已变），
+    // 本快照视为过期，整包丢弃（见模块头 pendingDispatchSeq 注释）
+    const seq = ++pendingDispatchSeq;
     try {
       const states = await ipc.session.pendingDispatches();
+      if (seq !== pendingDispatchSeq) return; // 旧快照过期——丢弃，不覆盖新推送
       set((s) => {
         const next = new Map(s.pendingDispatchBySession);
         // 服务端快照为准：有则覆盖、无则清（防 flush 后残留占位）

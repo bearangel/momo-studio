@@ -588,4 +588,51 @@ describe('TaskBoardView 来源多选过滤（查询级）', () => {
     await waitFor(() => expect(mockApi.task.list).toHaveBeenCalled());
     expect(mockApi.task.list.mock.calls[0]![0]).not.toHaveProperty('origin');
   });
+
+  // ── originFilter 防抖（2026-11-13 代码审查跟进）：连续勾选不打爆 IPC ──────────
+  it('勾选变更 250ms 内不重拉；窗口过后带新 origin 重拉一次（localStorage 即时持久化）', async () => {
+    render(<TaskBoardView workspaceId="ws-1" />);
+    await waitFor(() => expect(mockApi.task.list).toHaveBeenCalled());
+    const baseline = mockApi.task.list.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: /按任务来源筛选/ }));
+    fireEvent.click(screen.getByRole('option', { name: /编排任务/ }));
+    // 勾选即时：偏好已持久化（不防抖），但防抖窗口内无新 IPC
+    expect(mockApi.task.list.mock.calls.length).toBe(baseline);
+    expect(window.localStorage.getItem('kanban-origin-filter')).toBe(
+      JSON.stringify(['user', 'peer_draft']),
+    );
+    await waitFor(
+      () =>
+        expect(mockApi.task.list).toHaveBeenLastCalledWith({
+          workspaceId: 'ws-1',
+          orderBy: 'created_at_desc',
+          limit: 500,
+          origin: ['user', 'peer_draft'],
+        }),
+      { timeout: 2000 },
+    );
+  });
+
+  it('250ms 内连续两次勾选 → 只重拉一次且带末态 origin（中间态不打 IPC）', async () => {
+    render(<TaskBoardView workspaceId="ws-1" />);
+    await waitFor(() => expect(mockApi.task.list).toHaveBeenCalled());
+    const baseline = mockApi.task.list.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: /按任务来源筛选/ }));
+    fireEvent.click(screen.getByRole('option', { name: /编排任务/ })); // → [user, peer_draft]
+    fireEvent.click(screen.getByRole('option', { name: /平行草稿/ })); // → [user]
+    await waitFor(
+      () => expect(mockApi.task.list.mock.calls.length).toBe(baseline + 1),
+      { timeout: 2000 },
+    );
+    expect(mockApi.task.list).toHaveBeenLastCalledWith({
+      workspaceId: 'ws-1',
+      orderBy: 'created_at_desc',
+      limit: 500,
+      origin: ['user'],
+    });
+    // 中间态 ['user','peer_draft'] 从未发起过 IPC
+    for (const call of mockApi.task.list.mock.calls.slice(baseline)) {
+      expect(call[0]).not.toMatchObject({ origin: ['user', 'peer_draft'] });
+    }
+  });
 });

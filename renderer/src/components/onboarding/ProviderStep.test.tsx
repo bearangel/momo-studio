@@ -2,7 +2,7 @@
 //
 // 供应商配置步测试（spec 2026-10-10 §8 + 预览确认稿）：
 // 已有供应商快捷路径 / 预设新建验证失败行内错误 / 预设新建成功推进 / 自定义形态。
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import type { WizardCtx } from '../../routes/OnboardingWizard';
 
@@ -413,5 +413,137 @@ describe('T-fix#2 preset truncated 提示（Oracle Minor #2）', () => {
     fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-1' } });
     fireEvent.click(screen.getByRole('button', { name: /获取最新模型/ }));
     expect(await screen.findByText(/仅显示前 200 个/)).toBeInTheDocument();
+  });
+});
+
+// ── 异步护栏（2026-11-13 代码审查跟进）：请求令牌守卫——慢响应不得覆盖用户
+//    更新的选择/手输；输入变更重置陈旧列表；在途按钮 disabled ──────────────────
+describe('异步护栏（请求令牌守卫）', () => {
+  /** 受控延迟 promise：模拟慢回包（测试手动决定落地时机） */
+  function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  }
+
+  /** 进入 custom 形态并填 BaseURL + Key（与 T1 describe 同款前置） */
+  async function enterCustomFilled(): Promise<void> {
+    fireEvent.click(await screen.findByText('+ 自定义供应商'));
+    fireEvent.change(screen.getByPlaceholderText('https://llm-gateway.example.com/v1'), {
+      target: { value: 'http://127.0.0.1:9911/v1' },
+    });
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-demo' } });
+  }
+
+  it('custom 拉取在途时改 baseUrl → 慢回包丢弃：仍手输 Input、无陈旧列表、无报错', async () => {
+    const slow = deferred<{ models: string[]; truncated: boolean }>();
+    mockProbeModels.mockReturnValueOnce(slow.promise);
+    render(<ProviderStep ctx={mkCtx()} />);
+    await enterCustomFilled();
+    fireEvent.click(screen.getByRole('button', { name: /获取模型列表/ }));
+    // 在途时改 baseUrl → modelFetch 重置回 idle（陈旧列表不得残留展示）
+    fireEvent.change(screen.getByPlaceholderText('https://llm-gateway.example.com/v1'), {
+      target: { value: 'http://other.example.com/v1' },
+    });
+    expect(screen.getByPlaceholderText('手输模型名，验证连通后即可继续')).toBeInTheDocument();
+    await act(async () => {
+      slow.resolve({ models: ['stale-model'], truncated: false });
+    });
+    // 慢回包落地被令牌守卫整包丢弃
+    expect(screen.queryByDisplayValue('stale-model')).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue('__manual__')).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('手输模型名，验证连通后即可继续')).toBeInTheDocument();
+    expect(screen.queryByText(/获取失败/)).not.toBeInTheDocument();
+  });
+
+  it('custom 已拉取后改 API Key → 模型下拉重置回手输 Input（陈旧列表不残留）', async () => {
+    mockProbeModels.mockResolvedValue({ models: ['m-1', 'm-2'], truncated: false });
+    render(<ProviderStep ctx={mkCtx()} />);
+    await enterCustomFilled();
+    fireEvent.click(screen.getByRole('button', { name: /获取模型列表/ }));
+    await waitFor(() => expect(screen.getByDisplayValue('m-1').tagName).toBe('SELECT'));
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-changed' } });
+    expect(screen.getByPlaceholderText('手输模型名，验证连通后即可继续')).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'm-1' })).not.toBeInTheDocument();
+  });
+
+  it('custom 已拉取后切换平台 → 同样重置（连接参数三个维度全覆盖）', async () => {
+    mockProbeModels.mockResolvedValue({ models: ['m-1'], truncated: false });
+    render(<ProviderStep ctx={mkCtx()} />);
+    await enterCustomFilled();
+    fireEvent.click(screen.getByRole('button', { name: /获取模型列表/ }));
+    await waitFor(() => expect(screen.getByDisplayValue('m-1').tagName).toBe('SELECT'));
+    fireEvent.change(screen.getByLabelText('平台'), { target: { value: 'anthropic' } });
+    expect(screen.getByPlaceholderText('手输模型名，验证连通后即可继续')).toBeInTheDocument();
+  });
+
+  it('custom 拉取在途 → 获取按钮 disabled（防重复发起）；回包后恢复', async () => {
+    const slow = deferred<{ models: string[]; truncated: boolean }>();
+    mockProbeModels.mockReturnValueOnce(slow.promise);
+    render(<ProviderStep ctx={mkCtx()} />);
+    await enterCustomFilled();
+    fireEvent.click(screen.getByRole('button', { name: /获取模型列表/ }));
+    expect(screen.getByRole('button', { name: /获取模型列表/ })).toBeDisabled();
+    await act(async () => {
+      slow.resolve({ models: ['m-1'], truncated: false });
+    });
+    // fetched 态换为下拉——手输分支（含获取按钮）退场，回包已消化
+    await waitFor(() => expect(screen.getByDisplayValue('m-1').tagName).toBe('SELECT'));
+  });
+
+  it('preset 获取最新在途 → 按钮 disabled；期间换预设 → 慢回包丢弃、新预设预置列表不受污染', async () => {
+    const PRESETS2 = [
+      PRESETS[0]!,
+      {
+        key: 'other',
+        name: '另一家',
+        baseUrl: 'https://other.example.com/v1',
+        platform: 'openai' as const,
+        thinkingWire: 'effort' as const,
+        models: [
+          { id: 'o-1', contextWindow: 128000, outputTokens: 8192, reasoning: { kind: 'none' as const } },
+        ],
+      },
+    ];
+    mockListPresets.mockResolvedValue(PRESETS2);
+    const slow = deferred<{ models: string[]; truncated: boolean }>();
+    mockProbeModels.mockReturnValueOnce(slow.promise);
+    render(<ProviderStep ctx={mkCtx()} />);
+    fireEvent.click(await screen.findByText('智谱 GLM'));
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-1' } });
+    fireEvent.click(screen.getByRole('button', { name: /获取最新模型/ }));
+    expect(screen.getByRole('button', { name: /获取最新模型/ })).toBeDisabled();
+    // 慢回包在途时用户换预设
+    fireEvent.click(screen.getByRole('button', { name: '重新选择' }));
+    fireEvent.click(await screen.findByText('另一家'));
+    await act(async () => {
+      slow.resolve({ models: ['stale-remote'], truncated: false });
+    });
+    // 新预设的下拉只见其预置项（慢回包的远端列表被丢弃），选中值保持预置首项
+    expect(screen.queryByRole('option', { name: 'stale-remote' })).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue('o-1')).toBeInTheDocument();
+  });
+
+  it('existing 快慢竞态：先点 A（慢）再点 B（快）→ B 的模型生效，A 慢回包丢弃', async () => {
+    const EXISTING_B = { ...EXISTING, id: 'p2', name: '备用网关' };
+    mockList.mockResolvedValue([EXISTING, EXISTING_B]);
+    const slowA = deferred<typeof MODELS_P1>();
+    mockListModels.mockImplementation(async (id: string) =>
+      id === 'p1'
+        ? slowA.promise
+        : [{ ...MODELS_P1[0]!, providerId: 'p2', modelId: 'm-p2' }],
+    );
+    render(<ProviderStep ctx={mkCtx()} />);
+    fireEvent.click(await screen.findByText('使用已有供应商'));
+    fireEvent.click(await screen.findByText('智谱 GLM'));
+    fireEvent.click(await screen.findByText('备用网关'));
+    expect(await screen.findByRole('option', { name: 'm-p2' })).toBeInTheDocument();
+    await act(async () => {
+      slowA.resolve([{ ...MODELS_P1[0]!, modelId: 'm-p1' }]);
+    });
+    expect(screen.queryByRole('option', { name: 'm-p1' })).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue('m-p2')).toBeInTheDocument();
   });
 });

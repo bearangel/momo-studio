@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { FolderOpen } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
+import { showToast } from '../ui/Toast';
 import { ipc } from '../../ipc/client';
 import type { FileIoMode, FileIoStatus } from '../../ipc/types';
 
@@ -40,21 +41,34 @@ export function FileIoSettingsPanel(): React.ReactElement {
 
   const save = (mode: FileIoMode): void => {
     if (!status) return;
+    const prev = status;
     setStatus({ ...status, mode });
-    // 乐观 UI：保存 fire-and-forget，随后 probe 刷新最终态（与沙箱面板弱一致）
+    // 乐观 UI：保存成功才 probe 刷新最终态（与沙箱面板弱一致）；失败回滚 + toast
     void ipc.settings
       .updateGlobal({ fileIo: { mode, nodePath: nodePath.trim() || undefined } })
-      .catch(() => {});
-    void ipc.fileIo.probe().then(setStatus).catch(() => {});
+      .then(() => ipc.fileIo.probe())
+      .then((s) => setStatus(s))
+      .catch(() => {
+        // 保存失败：回滚乐观 radio 到保存前值 + toast 提示（不得静默吞错）
+        setStatus(prev);
+        showToast('保存失败，请重试');
+      });
   };
 
-  // nodePath 落库并重探测（onBlur 与「浏览」选择共用；fire-and-forget，同 save 弱一致）
+  // nodePath 落库并重探测（onBlur 与「浏览」选择共用；失败回滚输入框 + toast）
   const persistNodePath = (path: string): void => {
     if (!status) return;
+    // 保存前输入框值（「浏览」场景 = 换路径前的旧值——React 状态未及 flush 时闭包即旧值）
+    const prev = nodePath;
     void ipc.settings
       .updateGlobal({ fileIo: { mode: status.mode, nodePath: path.trim() || undefined } })
-      .catch(() => {});
-    void ipc.fileIo.probe().then(setStatus).catch(() => {});
+      .then(() => ipc.fileIo.probe())
+      .then((s) => setStatus(s))
+      .catch(() => {
+        // 落库失败：回滚输入框到保存前值 + toast 提示（不得静默吞错）
+        setNodePath(prev);
+        showToast('保存失败，请重试');
+      });
   };
 
   const browseNodePath = async (): Promise<void> => {

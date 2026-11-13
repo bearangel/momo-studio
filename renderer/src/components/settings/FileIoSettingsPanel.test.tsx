@@ -2,11 +2,15 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { FileIoSettingsPanel } from './FileIoSettingsPanel';
+import * as ToastMod from '../ui/Toast';
 
 const getState = vi.fn();
 const probe = vi.fn();
 const pickNodePath = vi.fn();
 const updateGlobal = vi.fn();
+// toast 消费面 spy（CreateWorkspaceDialog.test 同款）：组件命名导入 showToast，
+// spyOn 模块命名空间即可拦截（不 mock 整个 Toast 模块）
+const showToastSpy = vi.spyOn(ToastMod, 'showToast');
 
 const api = {
   fileIo: { getState, probe, pickNodePath },
@@ -36,6 +40,7 @@ beforeEach(() => {
   // 只替换 window.api、保留 jsdom 真实 window（整体覆盖 window 会让 React
   // commit 阶段读不到 document/Element 直接崩溃——对齐 HubSettingsPanel.test 锚点）
   (globalThis as unknown as { window: { api: typeof api } }).window.api = api;
+  showToastSpy.mockClear();
 });
 
 describe('FileIoSettingsPanel', () => {
@@ -129,5 +134,42 @@ describe('FileIoSettingsPanel', () => {
     // 上次快照仍在（三档 radio + 状态卡未被卸载成「加载中」）
     expect(screen.getByText('直接读写（默认）')).toBeInTheDocument();
     expect(screen.queryByText('加载中...')).not.toBeInTheDocument();
+  });
+
+  // ── 保存失败路径（2026-11-13 代码审查跟进）：空吞改回滚 + toast ──────────────
+  it('切换模式保存失败 → radio 回滚到保存前值 + toast「保存失败，请重试」', async () => {
+    render(<FileIoSettingsPanel />);
+    await screen.findByText('Node 代理');
+    updateGlobal.mockRejectedValueOnce(new Error('boom'));
+    fireEvent.click(screen.getByLabelText('Node 代理'));
+    await waitFor(() => expect(showToastSpy).toHaveBeenCalledWith('保存失败，请重试'));
+    // 乐观 radio 回滚：保存前是 direct
+    await waitFor(() => {
+      expect(screen.getByLabelText('直接读写（默认）')).toBeChecked();
+      expect(screen.getByLabelText('Node 代理')).not.toBeChecked();
+    });
+  });
+
+  it('「浏览」落库失败 → 输入框回滚到保存前路径 + toast（不静默吞错）', async () => {
+    pickNodePath.mockResolvedValueOnce('/new/node');
+    updateGlobal.mockRejectedValueOnce(new Error('boom'));
+    render(<FileIoSettingsPanel />);
+    await screen.findByText('直接读写（默认）');
+    fireEvent.click(screen.getByRole('button', { name: '浏览' }));
+    await waitFor(() => expect(showToastSpy).toHaveBeenCalledWith('保存失败，请重试'));
+    expect((screen.getByLabelText('Node.js 路径（可选）') as HTMLInputElement).value).toBe(
+      'C:\\nodejs\\node.exe',
+    );
+  });
+
+  it('手输路径 blur 落库失败 → toast 提示（输入保留所见值，不再空 catch）', async () => {
+    render(<FileIoSettingsPanel />);
+    await screen.findByText('直接读写（默认）');
+    updateGlobal.mockRejectedValueOnce(new Error('boom'));
+    const input = screen.getByLabelText('Node.js 路径（可选）') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '/tmp/node' } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(showToastSpy).toHaveBeenCalledWith('保存失败，请重试'));
+    expect(input.value).toBe('/tmp/node');
   });
 });

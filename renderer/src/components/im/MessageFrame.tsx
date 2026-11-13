@@ -5,13 +5,12 @@
 // isSelf 决定左右对齐与自己消息隐藏名字（与原 MessageBubble 普通气泡行为一致）。
 import type { ReactNode } from 'react';
 import { cn } from '../../lib/cn';
+import { formatHHmm } from '../../lib/time';
 import { avatarEmoji, shortName } from './avatars';
 
-/** epoch ms → HH:mm（本地时区）。2026-11-11 起导出共享：lib/progress-segment 进度折叠卡单源复用 */
-export function formatHHmm(ts: number): string {
-  const d = new Date(ts);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
+// 兼容 re-export（2026-11-13 实现下沉 lib/time）：既有 import 方（含
+// lib/progress-segment 之外可能出现的直接引用）不破——新代码请直接 import lib/time
+export { formatHHmm } from '../../lib/time';
 
 interface Props {
   /** 发送者 Matrix userId（@xxx:server）；用于头像 emoji 与回退短名 */

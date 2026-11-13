@@ -1451,3 +1451,68 @@ describe('session.store · receivePendingDispatch（启动期排队占位，2026
     off();
   });
 });
+
+// ── hydratePendingDispatches 代际守卫（2026-11-13 代码审查跟进）：
+//    invoke 回包（快照拉取）与 event 推送（pendingDispatch）跨通道无序，
+//    旧快照回包落地不得清掉/复活新推送的占位 ──────────────────────────────
+describe('session.store · hydratePendingDispatches 代际守卫', () => {
+  function snap(sessionId: string, count: number): PendingDispatchState {
+    return { sessionId, count, timedOut: false, agentName: `A-${sessionId}`, iconEmoji: '' };
+  }
+
+  it('快照落库：有则覆盖、快照外残留清除', async () => {
+    useSessionStore.getState().receivePendingDispatch(snap('sess-stale', 1));
+    mockApi.session.pendingDispatches.mockResolvedValueOnce([snap('sess-a1', 2)]);
+    await useSessionStore.getState().hydratePendingDispatches();
+    const m = useSessionStore.getState().pendingDispatchBySession;
+    expect(m.get('sess-a1')).toMatchObject({ count: 2 });
+    expect(m.has('sess-stale')).toBe(false);
+  });
+
+  it('hydrate 在途时新推送到达 → 旧快照回包整包丢弃（推送占位不被清掉/复活）', async () => {
+    let resolveSnap!: (v: PendingDispatchState[]) => void;
+    mockApi.session.pendingDispatches.mockReturnValueOnce(
+      new Promise<PendingDispatchState[]>((res) => {
+        resolveSnap = res;
+      }),
+    );
+    const inflight = useSessionStore.getState().hydratePendingDispatches();
+    // 跨通道无序：推送先于快照回包到达
+    useSessionStore.getState().receivePendingDispatch({
+      sessionId: 'sess-push',
+      count: 3,
+      timedOut: true,
+      agentName: 'P',
+      iconEmoji: '',
+    });
+    resolveSnap([snap('sess-snap', 1)]);
+    await inflight;
+    const m = useSessionStore.getState().pendingDispatchBySession;
+    expect(m.get('sess-push')).toMatchObject({ count: 3, timedOut: true });
+    expect(m.has('sess-snap')).toBe(false);
+  });
+
+  it('并发 hydrate 回包乱序 → 后发起者权威，先发起的旧回包丢弃', async () => {
+    let resolveA!: (v: PendingDispatchState[]) => void;
+    let resolveB!: (v: PendingDispatchState[]) => void;
+    mockApi.session.pendingDispatches
+      .mockReturnValueOnce(
+        new Promise<PendingDispatchState[]>((res) => {
+          resolveA = res;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise<PendingDispatchState[]>((res) => {
+          resolveB = res;
+        }),
+      );
+    const inflightA = useSessionStore.getState().hydratePendingDispatches();
+    const inflightB = useSessionStore.getState().hydratePendingDispatches();
+    resolveB([snap('sess-b', 2)]); // 后发起者先落
+    resolveA([snap('sess-a', 1)]); // 先发起者后落——过期丢弃
+    await Promise.all([inflightA, inflightB]);
+    const m = useSessionStore.getState().pendingDispatchBySession;
+    expect(m.get('sess-b')).toMatchObject({ count: 2 });
+    expect(m.has('sess-a')).toBe(false);
+  });
+});

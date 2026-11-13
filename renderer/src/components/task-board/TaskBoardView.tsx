@@ -51,6 +51,8 @@ const ORIGIN_FILTER_STORAGE_KEY = 'kanban-origin-filter';
 const MAX_CONCURRENCY_FALLBACK = 3;
 /** 列表轮询间隔（毫秒） */
 const REFRESH_INTERVAL_MS = 5000;
+/** originFilter 变更重拉防抖（毫秒）：连续勾选不打爆 IPC（每次变更即一次全量 task.list） */
+const ORIGIN_FILTER_DEBOUNCE_MS = 250;
 
 type LaneMode = 'flat' | 'lanes' | 'dag';
 
@@ -122,6 +124,10 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
   const [archivedView, setArchivedView] = useState<ArchivedViewData>({ phase: 'idle' });
   /** 来源多选（2026-11-12 看板治理）：持久化偏好，驱动 load 查询参数 */
   const [originFilter, setOriginFilter] = useState<TaskOrigin[]>(() => readStoredOriginFilter());
+  // originFilter 的防抖镜像（load 实际订阅它）：变更 250ms 后才同步生效驱动重拉。
+  // localStorage 持久化不防抖（偏好即时存，见 handleOriginFilter）；挂载首帧同值
+  // setState 被 React 短路，不产生多余重拉。
+  const [originFilterApplied, setOriginFilterApplied] = useState<TaskOrigin[]>(originFilter);
 
   const laneMode: LaneMode = laneModePref ?? (groups.length > 0 ? 'lanes' : 'flat');
 
@@ -143,19 +149,26 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
     }
   }, []);
 
-  // mount + workspaceId 变化 → 任务 load（5s 轮询）+ 组并行拉取；
-  // originFilter 变化即时重拉（查询级过滤在 load 参数生效——不是视图遮盖）
+  // 防抖同步：originFilter 变更 250ms 后写入镜像值（cleanup 清挂起定时器——
+  // 窗口内连续变更只有最后一次生效，中间态不打 IPC）
   useEffect(() => {
-    void load(workspaceId, { origin: originFilter });
+    const t = setTimeout(() => setOriginFilterApplied(originFilter), ORIGIN_FILTER_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [originFilter]);
+
+  // mount + workspaceId 变化 → 任务 load（5s 轮询）+ 组并行拉取；
+  // originFilter 经防抖镜像生效（查询级过滤在 load 参数生效——不是视图遮盖）
+  useEffect(() => {
+    void load(workspaceId, { origin: originFilterApplied });
     void loadGroups(workspaceId).catch(() => {
       // 组拉取失败不阻塞画板渲染——组 chip 回退不显示
     });
     const refresh = (): void => {
-      void load(workspaceId, { origin: originFilter });
+      void load(workspaceId, { origin: originFilterApplied });
     };
     const interval = setInterval(refresh, REFRESH_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [workspaceId, load, loadGroups, originFilter]);
+  }, [workspaceId, load, loadGroups, originFilterApplied]);
 
   // 切 workspace 清空筛选（spec §6 与 TaskSidebarPanel 同款语义）
   useEffect(() => {

@@ -5,8 +5,8 @@
 // sender='system' 的顶层进度行，长任务 30+ 条刷屏。本层在 MessageList 渲染前
 // 把连续进度行折叠为一组（ProgressTimelineCard 单卡承载）。纯函数，无副作用。
 import type { ImMessage } from '../ipc/types';
-// 单源复用 MessageFrame 的时间格式化（HH:mm），避免两份实现漂移
-import { formatHHmm } from '../components/im/MessageFrame';
+// 单源复用 lib/time 的 HH:mm 格式化（2026-11-13 下沉），消除 lib→components 反向依赖
+import { formatHHmm } from './time';
 
 /** 进度行 body 固定前缀（对齐主进程模板常量；renderer 侧只识别不生成） */
 export const PROGRESS_SEGMENT_PREFIX = '【进度分段】';
@@ -67,7 +67,7 @@ export function groupProgressSegments(visible: ImMessage[]): ProgressRenderItem[
   return items;
 }
 
-/** epoch ms → 本地 HH:mm（零填充）；单源委托 MessageFrame.formatHHmm */
+/** epoch ms → 本地 HH:mm（零填充）；单源委托 lib/time.formatHHmm */
 export function formatProgressTime(ts: number): string {
   return formatHHmm(ts);
 }

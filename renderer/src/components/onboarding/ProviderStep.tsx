@@ -6,7 +6,7 @@
 // （先验证后落库——失败零副作用），成功才 create 并推进。
 // D1a（预览 S1）：底部左侧加「跳过，稍后在设置中配置」——无 key 用户可跳过
 // 本步；markDone/收闩/错误呈现由向导层 handleSkip 拥有（WelcomeStep 同模式）。
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link2, Loader2, RefreshCw } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import type { ModelProvider, ProviderPreset, ProviderPlatform, ProviderModel } from '../../ipc/types';
@@ -56,6 +56,11 @@ export function ProviderStep({ ctx, onSkip }: Props) {
   const [presetRemote, setPresetRemote] = useState<{ models: string[]; truncated: boolean } | null>(null);
   const [busyFetch, setBusyFetch] = useState(false);
   const [existingRefreshing, setExistingRefreshing] = useState(false);
+  // 异步护栏：请求令牌守卫（RequirementStep abandonedRef 同款语义）。每次远端请求
+  // 发起 / 表单切换 / custom 输入变更都自增代数，响应落地前比对当前 token——
+  // 过期即整包丢弃，防慢响应覆盖用户更新的选择或手输（custom 拉取 / preset
+  // 获取最新 / existing 刷新三个异步共用）。
+  const fetchSeq = useRef(0);
 
   useEffect(() => {
     void ipc.provider.list().then(setProviders).catch(() => setProviders([]));
@@ -63,13 +68,19 @@ export function ProviderStep({ ctx, onSkip }: Props) {
   }, []);
 
   const resetModelFetch = (): void => {
+    // 在途远端响应作废（令牌自增——已发请求的落地比对必失配，连同错误回包一起丢弃）
+    fetchSeq.current += 1;
     setModelFetch({ status: 'idle', models: [], truncated: false });
     setModelError(null);
     setPresetRemote(null);
+    // 表单已切走：在途请求的 finally 不得解锁新表单的 busy 锁，此处就地复位
+    setBusyFetch(false);
+    setExistingRefreshing(false);
   };
 
   const refreshPresetModels = async (): Promise<void> => {
     if (!preset || busyFetch) return;
+    const seq = ++fetchSeq.current;
     setBusyFetch(true);
     setModelError(null);
     try {
@@ -78,21 +89,25 @@ export function ProviderStep({ ctx, onSkip }: Props) {
         apiKey,
         platform: preset.platform,
       });
+      if (seq !== fetchSeq.current) return; // 慢响应过期——用户已换预设/表单，整包丢弃
       setPresetRemote({ models: r.models, truncated: r.truncated });
       // 选中项：预置当前值仍在新列表则保留，否则取远端首项（最新优先）
       const merged = mergePresetModels(r.models, preset);
       if (merged.length > 0 && !merged.includes(modelId)) setModelId(merged[0]!);
     } catch (e) {
+      if (seq !== fetchSeq.current) return;
       setModelError(
         `获取最新失败：${e instanceof Error ? e.message : String(e)}——仍可用预置列表`,
       );
     } finally {
-      setBusyFetch(false);
+      // 过期请求不得解锁新请求的 busy 锁（新请求各自管理自己的锁）
+      if (seq === fetchSeq.current) setBusyFetch(false);
     }
   };
 
   const fetchCustomModels = async (): Promise<void> => {
     if (modelFetch.status === 'fetching') return;
+    const seq = ++fetchSeq.current;
     setModelFetch({ status: 'fetching', models: [], truncated: false });
     setModelError(null);
     try {
@@ -101,12 +116,14 @@ export function ProviderStep({ ctx, onSkip }: Props) {
         apiKey,
         platform,
       });
+      if (seq !== fetchSeq.current) return; // 慢响应过期——用户已改输入/切表单，整包丢弃
       setModelFetch({ status: 'fetched', models: r.models, truncated: r.truncated });
       // 选中项：原手输值仍在列表则优先保留，否则取首项
       if (r.models.length > 0) {
         setModelId(r.models.includes(modelId) ? modelId : r.models[0]!);
       }
     } catch (e) {
+      if (seq !== fetchSeq.current) return;
       setModelFetch({ status: 'idle', models: [], truncated: false });
       setModelError(
         `获取失败：${e instanceof Error ? e.message : String(e)}——可手输模型名继续`,
@@ -141,18 +158,21 @@ export function ProviderStep({ ctx, onSkip }: Props) {
   };
 
   const refreshExistingModels = async (p: ModelProvider): Promise<void> => {
+    const seq = ++fetchSeq.current;
     setExistingModels([]);
     setExistingRefreshing(true);
     try {
       const models = await ipc.provider.listModels(p.id);
+      if (seq !== fetchSeq.current) return; // 用户已换供应商——慢回包整包丢弃
       const enabled = models.filter((m) => m.enabled !== false);
       setExistingModels(enabled.length > 0 ? enabled : models);
       setModelId(enabled[0]?.modelId ?? models[0]?.modelId ?? '');
     } catch {
+      if (seq !== fetchSeq.current) return;
       setExistingModels([]);
       setModelId('');
     } finally {
-      setExistingRefreshing(false);
+      if (seq === fetchSeq.current) setExistingRefreshing(false);
     }
   };
 
@@ -162,19 +182,23 @@ export function ProviderStep({ ctx, onSkip }: Props) {
     if (!existingId || existingRefreshing) return;
     const p = providers.find((x) => x.id === existingId);
     if (!p) return;
+    const seq = ++fetchSeq.current;
     setExistingRefreshing(true);
     try {
       const ids = await ipc.provider.fetchModels(existingId);
+      // 用户已换供应商：旧供应商的 ids 不再入库（addModel 幂等但无谓），整链终止
+      if (seq !== fetchSeq.current) return;
       for (const id of ids) {
         await ipc.provider.addModel(existingId, id);
       }
       await refreshExistingModels(p);
     } catch (e) {
+      if (seq !== fetchSeq.current) return;
       setModelError(
         `刷新失败：${e instanceof Error ? e.message : String(e)}——仍可用库内列表`,
       );
     } finally {
-      setExistingRefreshing(false);
+      if (seq === fetchSeq.current) setExistingRefreshing(false);
     }
   };
 
@@ -395,14 +419,25 @@ export function ProviderStep({ ctx, onSkip }: Props) {
           {mode === 'custom' && (
             <>
               <Input label="名称" value={name} onChange={(e) => setName(e.target.value)} required />
-              <Select label="平台" value={platform} onChange={(e) => setPlatform(e.target.value as ProviderPlatform)}>
+              <Select
+                label="平台"
+                value={platform}
+                onChange={(e) => {
+                  setPlatform(e.target.value as ProviderPlatform);
+                  // 连接参数变更：已拉取的模型列表对新高维失效，重置回手输（陈旧列表不得残留展示）
+                  resetModelFetch();
+                }}
+              >
                 <option value="openai">OpenAI 兼容</option>
                 <option value="anthropic">Anthropic</option>
               </Select>
               <Input
                 label="Base URL"
                 value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
+                onChange={(e) => {
+                  setBaseUrl(e.target.value);
+                  resetModelFetch();
+                }}
                 placeholder="https://llm-gateway.example.com/v1"
                 required
               />
@@ -410,7 +445,10 @@ export function ProviderStep({ ctx, onSkip }: Props) {
                 label="API Key"
                 type="password"
                 value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
+                onChange={(e) => {
+                  setApiKey(e.target.value);
+                  resetModelFetch();
+                }}
                 placeholder="sk-..."
                 required
               />
