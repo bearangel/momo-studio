@@ -53,7 +53,11 @@ import {
   requestHuman,
   answerHuman,
   setToolGateHandler,
+  setHumanAnswerKickoff,
 } from '../../src/main/task/lifecycle-runs';
+// 注入装配（Task 14 循环依赖修复后 lifecycle-runs 不再静态引 inject——生产由
+// registerSandboxIpc 注册，测试在此同款装配锁「注册→注入生效」契约）
+import { sendSystemKickoffMessage } from '../../src/main/task/human-answer-inject';
 
 const tmpRoot = path.join(
   os.tmpdir(),
@@ -71,6 +75,7 @@ beforeEach(() => {
     .prepare(`INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES (?, ?, ?, ?)`)
     .run('ws1', 'Test', '/tmp', '@owner:home');
   hitlSessionId = insertSession({ workspaceId: 'ws1', title: 'HITL', kind: 'chat' }).id;
+  setHumanAnswerKickoff(sendSystemKickoffMessage);
   routeUserChatMock.mockReset().mockResolvedValue(undefined);
   pushSessionMessageMock.mockClear();
 });

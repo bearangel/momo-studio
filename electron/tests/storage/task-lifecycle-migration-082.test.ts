@@ -38,13 +38,15 @@ function setupTestDbRaw(): DB {
 }
 
 describe('migration 082 backfill', () => {
-  it('082 注册为最新迁移（追加在数组末尾，哨兵自 080 测试移入）', () => {
+  it('082 注册为顺延迁移（末位哨兵已随 083 追加移交——070→080→082 先例）', () => {
     const versions = loadMigrations().map((m) => m.version);
     expect(versions).toContain(81);
     expect(versions).toContain(82);
-    expect(versions[versions.length - 1]).toBe(82);
     // 版本唯一性（重复注册会让 runner 静默跳过第二条，属契约破坏）
     expect(new Set(versions).size).toBe(versions.length);
+    // 版本有序（runner 依赖升序执行）
+    const sorted = [...versions].sort((a, b) => a - b);
+    expect(versions).toEqual(sorted);
   });
 
   it('存量 in_progress 补 run #1 + current_run_id；终态任务不补', () => {

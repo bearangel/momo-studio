@@ -22,7 +22,8 @@ import {
   handleToolGateAnswer,
 } from './write-blocked-emit';
 import { broadcastWriteGrantDenied } from '../agent/runtime-registry';
-import { setToolGateHandler } from '../task/lifecycle-runs';
+import { setToolGateHandler, setHumanAnswerKickoff } from '../task/lifecycle-runs';
+import { sendSystemKickoffMessage } from '../task/human-answer-inject';
 import type { SandboxMode, SandboxWritePolicy } from './types';
 
 export interface SandboxInfo {
@@ -116,6 +117,10 @@ export function registerSandboxIpc(): void {
   // 答复）→ 授权/拒绝原语。注册在主进程 IPC 装配点：write-blocked-emit 为子进程
   // 可达模块，不可顶层依赖 lifecycle-runs（runtime-child-electron-isolation 隔离锁）
   setToolGateHandler(handleToolGateAnswer);
+  // Task 14：question / manual_action 答复注入接线——answerHuman 的【人工答复】
+  // 系统消息 + 会话唤醒。lifecycle-runs 不可顶层依赖 human-answer-inject（重运行时
+  // 网经 starter→tools 链成环，setToolGateHandler 同款注入器解法），此处装配注册
+  setHumanAnswerKickoff(sendSystemKickoffMessage);
   ipcMain.handle('sandbox:getState', () => buildInfo());
   ipcMain.handle('sandbox:reprobe', async () => {
     await reprobeSandbox();

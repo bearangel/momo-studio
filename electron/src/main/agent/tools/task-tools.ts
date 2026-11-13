@@ -1,37 +1,45 @@
 // electron/src/main/agent/tools/task-tools.ts
 //
-// 任务工具（v2 B10）——暴露给 agent 用，让 agent 能读任务上下文、创建 / 完成任务。
+// 任务工具（v2 B10 + 任务生命周期 v2 Task 14）——暴露给 agent 用，让 agent 能读
+// 任务上下文、创建任务、发起人工请求、提交验收、标记失败。
 //
-// 9 个工具的语义：
+// 11 个工具的语义：
 //   - read_task(taskId)             → TaskContext 摘要（go through MemoryProvider）
 //   - read_task_history(taskId)     → execution_room 内的 messages
 //   - read_task_progress(taskId)    → task 关联的所有 message_events
 //   - list_delegation_targets()     → 三类委派目标清单（agent 成员 / 团队 / 会话）
 //   - create_task(input)            → 新建任务（K1 落态：有目标 assigned / 有计划 pending / 否则 draft）
-//   - complete_task(taskId)         → 标记 completed
-//   - fail_task(taskId, reason)     → 标记 failed + errorMessage
+//   - request_human(kind,title,...) → 发起人工请求（question/manual_action），任务挂等人体
+//   - submit_task(taskId,summary)   → 提交验收（两段式第一段：任务 submitted，验收权在发起方）
+//   - complete_task(taskId,…)       → 已废弃别名 = submit_task（完成必经验收，spec §6.5）
+//   - fail_task(taskId, reason)     → run + 任务 failed + errorMessage
 //   - list_tasks(filter?)           → 多维过滤列表（结果附 groupName）
 //   - list_task_groups()            → 看板分组清单（活跃组，create_task groupId 的发现入口，Task 8）
 //
-// 全部是 SQLite 薄包装，所有数据库读写都走已有的 tasks repo / messages repo /
-//   events repo / agent crud / team / sessions repo / SQLiteMemoryProvider；本文件不含 SQL。
+// 全部是 SQLite 薄包装，所有数据库读写都走已有的 tasks repo / runs repo /
+//   lifecycle-runs 服务 / messages repo / events repo / agent crud / team /
+//   sessions repo / SQLiteMemoryProvider；本文件不含 SQL。
 //
 // 设计要点：
 //   - read 路径走 MemoryProvider.getTaskContext（统一 agent 上下文入口，未来切到
 //     FullMemoryProvider 时本模块无感升级）。
-//   - write 路径走 tasks repo（insertTask / transitionTaskStatus），状态机校验由
-//     repo 内部保证——非法转换（如 draft → completed 跳过 in_progress）抛错。
+//   - write 路径走 tasks repo + lifecycle-runs（任务态投影单点）——submit/fail
+//     不再直接 transitionTaskStatus（in_progress → completed 边已随 v2 删除，
+//     完成必经验收）；状态机校验由 repo / 服务内部保证。
 //   - read_task_progress 不走 MemoryProvider 因为它要求全部事件（含 thinking_delta /
 //     text_delta 流式增量），而 getTaskContext 过滤掉了 noise 事件。
-//   - 顶层导出 7 个独立函数（便于测试 / 复用），同时导出 TaskTools 类
+//   - 顶层导出独立函数（便于测试 / 复用），同时导出 TaskTools 类
 //     实现 ToolModule 接口（注册到 tools/index.ts）。
 import { getMemoryProvider } from '../../memory';
 import {
-  transitionTaskStatus,
   getTask,
   listTasks as listTasksRepo,
   type TaskRow,
 } from '../../storage/tasks/repo';
+import { isTerminal } from '../../storage/tasks/state-machine';
+import { getActiveRun, listRuns } from '../../storage/tasks/runs-repo';
+import type { HumanRequestRow } from '../../storage/tasks/human-requests-repo';
+import { failRun, requestHuman, submitRun } from '../../task/lifecycle-runs';
 import { insertTaskWithRelations } from '../../task/relations';
 import { listMessagesBySession, type MessageRow } from '../../storage/messages/repo';
 import {
@@ -43,7 +51,6 @@ import { getWorkspace } from '../../workspace/crud';
 import { submitRoutedTask, type DispatchSubmitPorts } from '../../hub/dispatch-submit';
 import { createHubConfigStore } from '../../hub/config-store';
 import { getDb } from '../../storage/db';
-import { spawnNextInstanceIfRecurring } from '../../task/recurrence';
 import { notifyExecutor } from '../../task/executor';
 import { hasDelegationTarget } from '../../task/starter';
 import { resolveCreateStatus } from '../../task/create-status';
@@ -383,31 +390,94 @@ function selfNodeIdOrNull(): string | null {
 }
 
 /**
- * complete_task：标记任务完成。
+ * request_human：发起人工请求（spec §6 HITL，question / manual_action）。
  *
- * 走 transitionTaskStatus('completed')——状态机校验要求当前状态在
- * { in_progress, paused, pending_review } 之一。非法转换抛错。
- * 自动设 completedAt = now()。
+ * 任务绑定：无需（也不接受）任务 ID 入参——按会话解析活动任务
+ * （execution_session_id = sessionId 且非终态，取最新一条）；会话无活动任务时
+ * 落会话级请求（task_id NULL，仅会话徽标，T11 语义）。
+ * runId 绑定策略（T11 review carry）：仅当活动任务的活动 run 属于本会话
+ * （run.execution_session_id === sessionId）时绑定——绑了 run 的请求在 run 收尾
+ * （fail/cancel）时被顶替，任务语义干净；run 不属本会话（旧链路未回填）时
+ * 显式 null = 不绑 run，终态窗口判定见 answerHuman。
+ * options（question）序列化 optionsJson；steps（manual_action）序列化
+ * payloadJson={manualAction:{steps}}；落请求后有活动 run 即挂等人体（任务
+ * waiting_human 投影由 lifecycle-runs 落定）。不结束回合——回合收尾由 chat loop
+ * 自然收尾（turn 纪律由 turn-reconcile 催促）。
  */
-export async function completeTask(taskId: string): Promise<void> {
-  transitionTaskStatus(taskId, 'completed', { completedAt: Date.now() });
-  // 终态钩子（Task 5）：循环任务续期（仅 completed；spec §7.2）+ 释放槽位立即评估放行
-  spawnNextInstanceIfRecurring(taskId);
-  notifyExecutor();
+export function requestHumanFromAgent(input: {
+  sessionId: string;
+  kind: 'question' | 'manual_action';
+  title: string;
+  prompt: string;
+  options?: Array<{ id: string; label: string; description?: string }>;
+  steps?: Array<{ id: string; label: string }>;
+  deadlineMinutes?: number;
+}): HumanRequestRow {
+  const activeTask = listTasksRepo({ executionSessionId: input.sessionId })
+    .filter((t) => !isTerminal(t.status))
+    .reduce<TaskRow | null>(
+      (latest, t) => (latest === null || t.createdAt > latest.createdAt ? t : latest),
+      null,
+    );
+  const activeRun = activeTask ? getActiveRun(activeTask.id) : null;
+  return requestHuman({
+    sessionId: input.sessionId,
+    kind: input.kind,
+    title: input.title,
+    prompt: input.prompt,
+    taskId: activeTask?.id ?? null,
+    runId: activeRun?.executionSessionId === input.sessionId ? activeRun.id : null,
+    optionsJson: input.options ? JSON.stringify(input.options) : null,
+    payloadJson: input.steps ? JSON.stringify({ manualAction: { steps: input.steps } }) : null,
+    deadlineMinutes: input.deadlineMinutes,
+  });
+}
+
+/** submit_task 的交付载荷（spec §5.2 deliverable_json 同构） */
+export interface SubmitTaskInput {
+  summary: string;
+  files?: string[];
+  artifacts?: Array<{ label: string; value: string }>;
 }
 
 /**
- * fail_task：标记任务失败 + 写入错误原因。
- *
- * 转 failed + 写 errorMessage + 设 completedAt（业务上"完成"了不管是正常完成还是失败）。
- * 状态机校验：仅 in_progress / paused 可转 failed。
+ * submit_task：提交验收（两段式第一段，spec §6.5）——活动 run → submitted
+ * （deliverable 落库）+ 任务 → submitted + 生成 acceptance 请求。
+ * 完成权限不在 agent：验收/打回由发起方（acceptTask / rejectTask / auto_accept）
+ * 裁决；有未决人工请求（tool_gate 等）时人话拒绝（提交闸，lifecycle-runs 内控）。
+ */
+export async function submitTask(
+  taskId: string,
+  opts: SubmitTaskInput,
+): Promise<{ status: 'submitted'; runNo: number }> {
+  await submitRun(taskId, opts);
+  // runNo 取最新 run 行——auto_accept「提交即验收」路径 run 已转终态，
+  // getActiveRun 会落空，listRuns 按序取末位才能两种路径同形返回
+  const runs = listRuns(taskId);
+  const last = runs[runs.length - 1];
+  if (!last) throw new Error(`任务 ${taskId} 提交后未找到 run 记录`);
+  return { status: 'submitted', runNo: last.runNo };
+}
+
+/**
+ * complete_task（v2 起为废弃别名）：等价 submit_task，summary 缺省 ''。
+ * in_progress → completed 直达边已随任务生命周期 v2 删除——完成必经验收，
+ * 旧「标记完成」语义由发起方验收（acceptTask）承接。
+ */
+export async function completeTask(
+  taskId: string,
+  opts?: SubmitTaskInput,
+): Promise<{ status: 'submitted'; runNo: number }> {
+  return submitTask(taskId, opts ?? { summary: '' });
+}
+
+/**
+ * fail_task：标记任务失败 + 写入错误原因（run 与任务一并落 failed）。
+ * 走 lifecycle-runs.failRun——活动 run failed(endedAt) + 未决非验收请求 superseded +
+ * 任务 failed（errorMessage=reason）；失败释放执行槽位，立即触发放行评估。
  */
 export async function failTask(taskId: string, reason: string): Promise<void> {
-  transitionTaskStatus(taskId, 'failed', {
-    errorMessage: reason,
-    completedAt: Date.now(),
-  });
-  // 终态钩子（Task 5）：失败同样释放槽位——立即触发放行评估
+  failRun(taskId, reason);
   notifyExecutor();
 }
 
@@ -550,6 +620,64 @@ function parseStringArrayArgOptional(value: unknown, name: string): string[] | u
   return value as string[];
 }
 
+/** request_human 的 options（仅 question）：Array<{id,label,description?}>，异形人话抛错 */
+function parseOptionItemsArg(
+  value: unknown,
+): Array<{ id: string; label: string; description?: string }> | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error('参数 "options" 不是数组');
+  return value.map((item, i) => {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      throw new Error(`options[${i}] 形状非法：须为 {id,label,description?} 对象`);
+    }
+    const rec = item as Record<string, unknown>;
+    if (typeof rec['id'] !== 'string' || typeof rec['label'] !== 'string') {
+      throw new Error(`options[${i}] 缺少 id / label 字符串字段`);
+    }
+    const description = rec['description'];
+    if (description !== undefined && typeof description !== 'string') {
+      throw new Error(`options[${i}].description 不是字符串`);
+    }
+    return description !== undefined
+      ? { id: rec['id'], label: rec['label'], description }
+      : { id: rec['id'], label: rec['label'] };
+  });
+}
+
+/** request_human 的 steps（仅 manual_action）：Array<{id,label}>，异形人话抛错 */
+function parseStepItemsArg(value: unknown): Array<{ id: string; label: string }> | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error('参数 "steps" 不是数组');
+  return value.map((item, i) => {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      throw new Error(`steps[${i}] 形状非法：须为 {id,label} 对象`);
+    }
+    const rec = item as Record<string, unknown>;
+    if (typeof rec['id'] !== 'string' || typeof rec['label'] !== 'string') {
+      throw new Error(`steps[${i}] 缺少 id / label 字符串字段`);
+    }
+    return { id: rec['id'], label: rec['label'] };
+  });
+}
+
+/** submit_task / complete_task 的 artifacts：Array<{label,value}>，异形人话抛错 */
+function parseArtifactItemsArg(
+  value: unknown,
+): Array<{ label: string; value: string }> | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error('参数 "artifacts" 不是数组');
+  return value.map((item, i) => {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      throw new Error(`artifacts[${i}] 形状非法：须为 {label,value} 对象`);
+    }
+    const rec = item as Record<string, unknown>;
+    if (typeof rec['label'] !== 'string' || typeof rec['value'] !== 'string') {
+      throw new Error(`artifacts[${i}] 缺少 label / value 字符串字段`);
+    }
+    return { label: rec['label'], value: rec['value'] };
+  });
+}
+
 /** 无指派创建的 warning 文案（委派信息闭环 ③：让 agent 立即知道死局与出路） */
 const NO_ASSIGNMENT_WARNING =
   '任务未指派委派目标（assigneeAgentId / targetTeamId / targetSessionId 均为空）。' +
@@ -559,9 +687,10 @@ const NO_ASSIGNMENT_WARNING =
   '2) 告知用户在看板手动处理本条死任务（取消或编辑指派）。';
 
 /**
- * 任务工具模块（v2 B10）：注册 9 个工具 read_task / read_task_history /
- *   read_task_progress / list_delegation_targets / create_task / complete_task /
- *   fail_task / list_tasks / list_task_groups。
+ * 任务工具模块（v2 B10 + 任务生命周期 v2 Task 14）：注册 11 个工具 read_task /
+ *   read_task_history / read_task_progress / list_delegation_targets / create_task /
+ *   request_human / submit_task / complete_task（submit 别名）/ fail_task /
+ *   list_tasks / list_task_groups。
  *
  * 结果通过 JSON.stringify 回给 LLM（message 数据天然是结构化的，JSON 表达最清晰）。
  */
@@ -577,6 +706,8 @@ const TASK_CATALOG_META: Record<string, ToolMeta> = {
   list_task_groups: { displayName: '任务分组', category: '任务', categoryEmoji: '🗃️', defaultOn: false },
   list_workgroups: { displayName: '工作组清单', category: '任务', categoryEmoji: '🗃️', defaultOn: true },
   create_task: { displayName: '创建任务', category: '任务', categoryEmoji: '🗃️', defaultOn: false, riskNote: '任务板状态变更' },
+  request_human: { displayName: '人工请求', category: '任务', categoryEmoji: '🗃️', defaultOn: false, riskNote: '任务板状态变更' },
+  submit_task: { displayName: '提交验收', category: '任务', categoryEmoji: '🗃️', defaultOn: false, riskNote: '任务板状态变更' },
   complete_task: { displayName: '完成任务', category: '任务', categoryEmoji: '🗃️', defaultOn: false, riskNote: '任务板状态变更' },
   fail_task: { displayName: '标记失败', category: '任务', categoryEmoji: '🗃️', defaultOn: false, riskNote: '任务板状态变更' },
 };
@@ -697,13 +828,118 @@ export class TaskTools implements ToolModule {
         },
       },
       {
-        name: 'complete_task',
+        name: 'request_human',
         description:
-          '把任务标记为 completed。状态机校验：当前状态须为 in_progress / paused / pending_review。',
+          '当你无法继续、需要人提供信息/决策/系统外操作时调用。调用后立即结束本回合，不要继续等待或轮询；人答复后你会收到【人工答复】消息并继续。kind: question=提问(可带选项)，manual_action=请人做系统外的事(steps)。无需传任务 ID——请求自动绑定当前会话的活动任务（无活动任务时会话级请求，仅该会话显示徽标）。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            kind: {
+              type: 'string',
+              enum: ['question', 'manual_action'],
+              description: 'question=提问(可带选项)；manual_action=请人做系统外的事(steps)',
+            },
+            title: { type: 'string', description: '请求标题（徽标 / 答复面板主文案）' },
+            prompt: {
+              type: 'string',
+              description: '给人看的具体问题或操作说明（答复面板正文）',
+            },
+            options: {
+              type: 'array',
+              description:
+                '（仅 kind=question）候选项；人点选后你会收到【人工答复】携带已选项 id',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string', description: '选项标识（答复回传）' },
+                  label: { type: 'string', description: '选项展示文案' },
+                  description: { type: 'string', description: '选项补充说明（可选）' },
+                },
+                required: ['id', 'label'],
+              },
+            },
+            steps: {
+              type: 'array',
+              description: '（仅 kind=manual_action）请人执行的系统外操作步骤清单',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string', description: '步骤标识' },
+                  label: { type: 'string', description: '步骤展示文案' },
+                },
+                required: ['id', 'label'],
+              },
+            },
+            deadlineMinutes: {
+              type: 'number',
+              description: '期望答复时限（分钟；超时按策略提醒，不自动作废）',
+            },
+          },
+          required: ['kind', 'title', 'prompt'],
+        },
+      },
+      {
+        name: 'submit_task',
+        description:
+          '当前任务的实现已完成时调用，提交交付说明(summary/files/artifacts)。提交后任务进入待验收状态，由发起方验收；不要宣告『任务已完成』——你没有完成权限，只有提交权限。有未决人工请求（如写授权）时会被拒绝，先处理未决请求。',
         inputSchema: {
           type: 'object',
           properties: {
             taskId: { type: 'string', description: '任务 ID' },
+            summary: {
+              type: 'string',
+              description: '交付说明：做了什么、怎么验证（验收面板主文案）',
+            },
+            files: {
+              type: 'array',
+              items: { type: 'string' },
+              description: '交付文件路径清单（相对工作空间）',
+            },
+            artifacts: {
+              type: 'array',
+              description: '结构化交付物（测试报告 / 关键结论等）',
+              items: {
+                type: 'object',
+                properties: {
+                  label: { type: 'string', description: '交付物名称' },
+                  value: { type: 'string', description: '交付物内容' },
+                },
+                required: ['label', 'value'],
+              },
+            },
+          },
+          required: ['taskId', 'summary'],
+        },
+      },
+      {
+        name: 'complete_task',
+        description:
+          '已废弃别名——等价 submit_task，请改用 submit_task。提交后任务进入待验收状态，由发起方验收；你没有完成权限，只有提交权限。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            taskId: { type: 'string', description: '任务 ID' },
+            summary: {
+              type: 'string',
+              description: '（可选，缺省空）交付说明——请改用 submit_task 携带完整交付',
+            },
+            files: {
+              type: 'array',
+              items: { type: 'string' },
+              description: '（可选）交付文件路径清单',
+            },
+            artifacts: {
+              type: 'array',
+              description: '（可选）结构化交付物',
+              items: {
+                type: 'object',
+                properties: {
+                  label: { type: 'string', description: '交付物名称' },
+                  value: { type: 'string', description: '交付物内容' },
+                },
+                required: ['label', 'value'],
+              },
+            },
           },
           required: ['taskId'],
         },
@@ -711,7 +947,7 @@ export class TaskTools implements ToolModule {
       {
         name: 'fail_task',
         description:
-          '把任务标记为 failed 并写入错误原因。状态机校验：当前状态须为 in_progress / paused。',
+          '把任务标记为失败并写入错误原因（当前 run 一并落 failed）。仅用于技术性失败。需要人帮助改用 request_human；放弃任务请告知用户取消。',
         inputSchema: {
           type: 'object',
           properties: {
@@ -786,6 +1022,8 @@ export class TaskTools implements ToolModule {
       name === 'read_task_progress' ||
       name === 'list_delegation_targets' ||
       name === 'create_task' ||
+      name === 'request_human' ||
+      name === 'submit_task' ||
       name === 'complete_task' ||
       name === 'fail_task' ||
       name === 'list_tasks' ||
@@ -875,10 +1113,54 @@ export class TaskTools implements ToolModule {
         }
         return JSON.stringify(result);
       }
-      case 'complete_task': {
+      case 'request_human': {
+        const kind = args.kind;
+        if (kind !== 'question' && kind !== 'manual_action') {
+          throw new Error('参数 "kind" 须为 "question"（提问）或 "manual_action"（请人操作系统外的事）');
+        }
+        const options = parseOptionItemsArg(args.options);
+        const steps = parseStepItemsArg(args.steps);
+        // 字段与 kind 交叉校验：防 LLM 混用（提问带 steps / 手工操作带选项）落出畸形容
+        if (kind === 'question' && steps !== undefined) {
+          throw new Error('steps 仅 kind=manual_action 可用——提问候选项请用 options');
+        }
+        if (kind === 'manual_action' && options !== undefined) {
+          throw new Error('options 仅 kind=question 可用——请人执行的步骤请用 steps');
+        }
+        const deadlineMinutes =
+          typeof args.deadlineMinutes === 'number' ? args.deadlineMinutes : undefined;
+        const row = requestHumanFromAgent({
+          sessionId: ctx.roomId,
+          kind,
+          title: parseStringArg(args.title, 'title'),
+          prompt: parseStringArg(args.prompt, 'prompt'),
+          ...(options !== undefined ? { options } : {}),
+          ...(steps !== undefined ? { steps } : {}),
+          ...(deadlineMinutes !== undefined ? { deadlineMinutes } : {}),
+        });
+        // {requestId, status:'waiting'} 即可——回合自然收尾，人答复后经
+        // 【人工答复】系统消息唤醒继续（工具描述已向 LLM 声明该纪律）
+        return JSON.stringify({ requestId: row.id, status: 'waiting' });
+      }
+      case 'submit_task': {
         const taskId = parseStringArg(args.taskId, 'taskId');
-        await completeTask(taskId);
-        return JSON.stringify({ ok: true, taskId, status: 'completed' });
+        const result = await submitTask(taskId, {
+          summary: parseStringArg(args.summary, 'summary'),
+          files: parseStringArrayArgOptional(args.files, 'files'),
+          artifacts: parseArtifactItemsArg(args.artifacts),
+        });
+        return JSON.stringify(result);
+      }
+      case 'complete_task': {
+        // v2 别名：等价 submit_task（summary 缺省 ''）；schema 保留旧形状兼容存量提示词
+        const taskId = parseStringArg(args.taskId, 'taskId');
+        const summary = parseStringArgOptional(args.summary, 'summary');
+        const result = await completeTask(taskId, {
+          ...(summary !== undefined ? { summary } : { summary: '' }),
+          files: parseStringArrayArgOptional(args.files, 'files'),
+          artifacts: parseArtifactItemsArg(args.artifacts),
+        });
+        return JSON.stringify(result);
       }
       case 'fail_task': {
         const taskId = parseStringArg(args.taskId, 'taskId');

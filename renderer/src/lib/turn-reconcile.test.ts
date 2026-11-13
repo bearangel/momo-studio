@@ -25,23 +25,23 @@ const electronRuntimeEntry = readFileSync(
   'utf-8',
 );
 
-/** spec §3.2 逐字模板（带未清项）——renderer 镜像与 electron 源双侧锁同一份文本 */
+/** 任务生命周期 v2（Task 14）三选一模板（带未清项）——renderer 镜像与 electron 源双侧锁同一份文本 */
 const EXPECTED_WITH_ITEMS = `${TURN_RECONCILE_NOTICE_PREFIX}（非新任务请求）：任务 T-9 仍处于 in_progress，待办存在未清项：
   - 修复登录（进行中）
   - 补充测试（待处理）
-请二选一：
-(a) 完成剩余项，调用 todowrite 如实更新，并调用 complete_task 关闭任务；
-(b) 确认剩余项不应/不能现在完成：调用 todowrite 如实更新状态，在终文中说明原因，
-    任务保持 in_progress 留待用户处理。
+请三选一：
+(a) 实现已完成：调用 todowrite 如实更新，并调用 submit_task 提交验收（你没有完成权限，只有提交权限）；
+(b) 技术性失败无法继续：调用 fail_task 并说明原因（需要人帮助改用 request_human）；
+(c) 需要人提供信息/决策/系统外操作：调用 request_human，调用后立即结束本回合等待【人工答复】。
 严禁重复执行已完成的事项。本提醒一次性，不会再触发。`;
 
-/** spec §3.2 空列表降级分支（闭合言语行为缺失单独触发） */
+/** 三选一模板空列表降级分支（闭合言语行为缺失单独触发） */
 const EXPECTED_EMPTY_ITEMS = `${TURN_RECONCILE_NOTICE_PREFIX}（非新任务请求）：任务 T-9 仍处于 in_progress，待办存在未清项：
-  （无未清待办——但任务尚未调用 complete_task / fail_task 关闭）
-请二选一：
-(a) 完成剩余项，调用 todowrite 如实更新，并调用 complete_task 关闭任务；
-(b) 确认剩余项不应/不能现在完成：调用 todowrite 如实更新状态，在终文中说明原因，
-    任务保持 in_progress 留待用户处理。
+  （无未清待办——但任务尚未调用 submit_task / fail_task / request_human 收尾）
+请三选一：
+(a) 实现已完成：调用 todowrite 如实更新，并调用 submit_task 提交验收（你没有完成权限，只有提交权限）；
+(b) 技术性失败无法继续：调用 fail_task 并说明原因（需要人帮助改用 request_human）；
+(c) 需要人提供信息/决策/系统外操作：调用 request_human，调用后立即结束本回合等待【人工答复】。
 严禁重复执行已完成的事项。本提醒一次性，不会再触发。`;
 
 describe('催收尾模板镜像同步（renderer ↔ electron runtime-entry）', () => {
@@ -70,19 +70,21 @@ describe('催收尾模板镜像同步（renderer ↔ electron runtime-entry）',
     expect(electronRuntimeEntry).toContain(
       '（非新任务请求）：任务 ${taskId} 仍处于 in_progress，待办存在未清项：',
     );
-    expect(electronRuntimeEntry).toContain("'请二选一：\\n'");
+    expect(electronRuntimeEntry).toContain("'请三选一：\\n'");
     expect(electronRuntimeEntry).toContain(
-      "'(a) 完成剩余项，调用 todowrite 如实更新，并调用 complete_task 关闭任务；\\n'",
+      "'(a) 实现已完成：调用 todowrite 如实更新，并调用 submit_task 提交验收（你没有完成权限，只有提交权限）；\\n'",
     );
     expect(electronRuntimeEntry).toContain(
-      "'(b) 确认剩余项不应/不能现在完成：调用 todowrite 如实更新状态，在终文中说明原因，\\n'",
+      "'(b) 技术性失败无法继续：调用 fail_task 并说明原因（需要人帮助改用 request_human）；\\n'",
     );
-    expect(electronRuntimeEntry).toContain("'    任务保持 in_progress 留待用户处理。\\n'");
+    expect(electronRuntimeEntry).toContain(
+      "'(c) 需要人提供信息/决策/系统外操作：调用 request_human，调用后立即结束本回合等待【人工答复】。\\n'",
+    );
     expect(electronRuntimeEntry).toContain(
       "'严禁重复执行已完成的事项。本提醒一次性，不会再触发。'",
     );
     expect(electronRuntimeEntry).toContain(
-      "'  （无未清待办——但任务尚未调用 complete_task / fail_task 关闭）'",
+      "'  （无未清待办——但任务尚未调用 submit_task / fail_task / request_human 收尾）'",
     );
     expect(electronRuntimeEntry).toContain('`  - ${t.subject}（${TODO_STATUS_LABEL[t.status]}）`');
     expect(electronRuntimeEntry).toContain("pending: '待处理'");

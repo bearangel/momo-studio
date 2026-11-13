@@ -511,7 +511,7 @@ describe('TaskDetailPanel 待收尾徽标与催收尾按钮（spec §3.5/§3.6�
     fireEvent.click(await screen.findByRole('button', { name: '催收尾' }));
     await waitFor(() => expect(mockApi.session.send).toHaveBeenCalledTimes(1));
     const [, body] = mockApi.session.send.mock.calls[0]!;
-    expect(body).toContain('（无未清待办——但任务尚未调用 complete_task / fail_task 关闭）');
+    expect(body).toContain('（无未清待办——但任务尚未调用 submit_task / fail_task / request_human 收尾）');
   });
 
   it('发送失败 → toast 显示错误（不静默吞异常）', async () => {

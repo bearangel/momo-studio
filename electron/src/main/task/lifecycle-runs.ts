@@ -44,9 +44,26 @@ import {
 } from '../storage/tasks/human-requests-repo';
 import {
   humanAnswerBody,
-  sendSystemKickoffMessage,
   type HumanAnswerInput,
-} from './human-answer-inject';
+} from './human-answer-shared';
+
+/**
+ * 人工答复注入回调（Task 14 循环依赖修复）：answerHuman 落【人工答复】系统消息
+ * + 唤醒会话的动作。默认未注册（本模块经 starter/executor 被 tools 链静态引用，
+ * 不得顶层依赖 human-answer-inject 的重运行时网——router-bootstrap→…→tools/catalog
+ * 顶层求值回指 task-tools 模块环，tests/agent/tools 全目录加载即炸）。
+ * 主进程装配点（sandbox/ipc.handlers registerSandboxIpc）注册
+ * sendSystemKickoffMessage（setToolGateHandler 同款注入器先例）；未注册时答复
+ * 照落库，注入跳过并 warn（与 tool_gate 无回调分支同纪律）。
+ */
+export type HumanAnswerKickoff = (sessionId: string, body: string) => void;
+
+/** 人工答复注入回调容器（装配时注册；null 注销） */
+let humanAnswerKickoff: HumanAnswerKickoff | null = null;
+
+export function setHumanAnswerKickoff(fn: HumanAnswerKickoff | null): void {
+  humanAnswerKickoff = fn;
+}
 
 /** 单任务执行尝试上限（spec §5.2：防打回-重跑死循环） */
 export const MAX_RUNS_PER_TASK = 10;
@@ -428,7 +445,7 @@ export async function rejectTask(id: string, reason: string): Promise<void> {
 // ── HITL 请求 / 答复链（Task 11，spec §6）──
 
 /** 人工答复载荷（Task 13 tool_gate / Task 14 request_human / Task 16 IPC 消费） */
-export type { HumanAnswerInput } from './human-answer-inject';
+export type { HumanAnswerInput } from './human-answer-shared';
 
 /** tool_gate 答复回调（Task 13 注册：approve → grantWriteDirs / deny → broadcastWriteGrantDenied） */
 export type ToolGateAnswerHandler = (requestId: string, answer: HumanAnswerInput) => void;
@@ -537,6 +554,12 @@ export function answerHuman(
   if (req.taskId && active?.status === 'waiting_human') {
     resumeFromWaiting(req.taskId);
   }
-  sendSystemKickoffMessage(req.sessionId, humanAnswerBody(req.title, answer));
+  if (humanAnswerKickoff) {
+    humanAnswerKickoff(req.sessionId, humanAnswerBody(req.title, answer));
+  } else {
+    logger.warn('【人工答复】注入未装配（setHumanAnswerKickoff 未注册）——答复已落库', {
+      requestId,
+    });
+  }
   return { disposition: 'answered' };
 }

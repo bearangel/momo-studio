@@ -11,43 +11,19 @@
 //      （不走 steer 分流）；streamSessionId 与消息行共享 = 回合标识（deliverChainResult 同构）
 // 唤醒目标：会话 leader 接待语义（与 sendUserMessage / pickRoutingTarget 同源；
 // 执行会话 assignee 建会时已标 is_leader=1，见 starter.createNewTaskRoom）。
+// 纯载荷类型与正文构造在 human-answer-shared.ts（Task 14 拆分：本模块的重运行时
+// 依赖不得经 lifecycle-runs 进入 starter→tools 链的模块环）；此处 re-export 保住
+// 既有导入面（T13 tool-gate / T16 IPC 从本模块取 HumanAnswerInput 不受影响）。
 import { randomUUID } from 'node:crypto';
 import { getRouterService } from '../agent/router-bootstrap';
 import { pushSessionMessage } from '../agent/stream-relay';
 import { insertMessage } from '../storage/messages/repo';
 import { getSessionMembersInfo } from '../im/session-ops';
 import { logger } from '../logger';
+import { humanAnswerBody } from './human-answer-shared';
 
-/** 答复消息正文上限（超长截尾——防把大段附言灌进会话历史） */
-const BODY_MAX_CHARS = 500;
-
-/** 人工答复载荷（Task 13 tool_gate / Task 14 request_human / Task 16 IPC 共用） */
-export interface HumanAnswerInput {
-  decision?: 'approve' | 'deny' | 'accept' | 'reject';
-  text?: string;
-  selected?: string[];
-  completed?: boolean;
-  reason?: string;
-}
-
-const DECISION_TEXT: Record<NonNullable<HumanAnswerInput['decision']>, string> = {
-  approve: '批准',
-  deny: '拒绝',
-  accept: '接受',
-  reject: '驳回',
-};
-
-/** 构造【人工答复】正文：结构化摘要（决定/已选/附言/操作结果/理由），中文，≤500 字截尾 */
-export function humanAnswerBody(title: string, answer: HumanAnswerInput): string {
-  const parts: string[] = [`【人工答复】「${title}」`];
-  if (answer.decision !== undefined) parts.push(`决定：${DECISION_TEXT[answer.decision]}`);
-  if (answer.selected?.length) parts.push(`已选：${answer.selected.join('、')}`);
-  if (answer.text) parts.push(`附言：${answer.text}`);
-  if (answer.completed !== undefined) parts.push(`操作结果：${answer.completed ? '已完成' : '未完成'}`);
-  if (answer.reason) parts.push(`理由：${answer.reason}`);
-  const body = parts.join('\n');
-  return body.length > BODY_MAX_CHARS ? body.slice(0, BODY_MAX_CHARS) : body;
-}
+export type { HumanAnswerInput } from './human-answer-shared';
+export { humanAnswerBody } from './human-answer-shared';
 
 /** 会话唤醒目标：leader 接待（与 pickRoutingTarget 同语义；无 leader → null 跳过唤醒） */
 function resolveWakeTarget(sessionId: string): string | null {

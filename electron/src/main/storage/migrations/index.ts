@@ -57,6 +57,7 @@ import { migration079 } from './079_oauth_module';
 import { migration080 } from './080_momo_capability_management_tools';
 import * as migration081 from './081_task_lifecycle_v2';
 import * as migration082 from './082_task_lifecycle_backfill';
+import { migration083 } from './083_momo_lifecycle_v2_tools';
 
 export interface Migration {
   version: number;
@@ -1249,6 +1250,14 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // SQL 住在独立模块 082_task_lifecycle_backfill.ts。
     version: migration082.version,
     sql: migration082.up,
+  },
+  {
+    // Momo 默认工具全集 70 → 72（任务生命周期 v2 Task 14）：+request_human /
+    // submit_task 整列替换进存量 Momo 行（074/077/078/080 同式替换语义；
+    // 新装库 no-op——迁移先于内置定义落库执行）。SQL 住在独立模块
+    // 083_momo_lifecycle_v2_tools.ts。
+    version: migration083.version,
+    sql: migration083.sql,
   },
 ];
 
