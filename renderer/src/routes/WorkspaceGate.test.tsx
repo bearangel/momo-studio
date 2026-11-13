@@ -70,7 +70,7 @@ describe('WorkspaceGate（spec 2026-11-13 T2）', () => {
     fireEvent.change(screen.getByPlaceholderText('选择或输入目录路径'), {
       target: { value: '/tmp/ws' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '创建', exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: /^创建$/ }));
     expect(await screen.findByText('设置工作空间')).toBeInTheDocument();
     expect(screen.queryByPlaceholderText('我的项目')).not.toBeInTheDocument();
   });
