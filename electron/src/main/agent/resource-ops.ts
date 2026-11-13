@@ -8,7 +8,7 @@ import { createCustomDef, addMember, generateAgentUserId, updateAgentDefinition,
 import { listAgentDefinitions, getAgentDefinition, listMembers, getMemberByInstanceId } from './agent-queries';
 import { mergeCapabilities, readAllocationLayer, readAssignmentDeltas, union, subtract, type MergedCapabilities } from './capability-merger';
 import { setAssignmentDeltas } from './assignment-capabilities';
-import { applyCapabilityDelta, type CapabilityDeltaInput } from './resource-ops-delta';
+import { applyCapabilityDelta, hasCapabilityAdditions, type CapabilityDeltaInput } from './resource-ops-delta';
 import { isAgentRunning } from './runtime-status';
 import { buildDispatchSnapshot } from './spawn-helpers';
 import { toolRefMatches } from '../plugin/assembly';
@@ -67,14 +67,9 @@ export function confirmTierForOp(op: string, args: Record<string, unknown>): 're
   if (op === 'updateProfile' || op === 'updateSkill' || op === 'updateMcp') return 'required';
   if (op === 'updateCapabilities') {
     if (args['scope'] === 'definition') return 'required';
-    const add = args['add'];
-    if (typeof add === 'object' && add !== null && !Array.isArray(add)) {
-      const r = add as Record<string, unknown>;
-      for (const k of ['skills', 'mcps', 'tools', 'pluginTools'] as const) {
-        if (Array.isArray(r[k]) && (r[k] as unknown[]).length > 0) return 'required';
-      }
-    }
-    return 'none';
+    // add 类别集单源自 delta 模块（2026-11-13 审查跟进）：delta 未来扩容新
+    // 类别时档位矩阵自动跟随，杜绝「新增类别静默绕过确认门」的锁步漂移
+    return hasCapabilityAdditions(args['add']) ? 'required' : 'none';
   }
   return 'none';
 }

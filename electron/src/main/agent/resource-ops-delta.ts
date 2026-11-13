@@ -14,6 +14,20 @@ export interface EffectiveState { tools: string[]; mcps: string[]; skills: strin
 function union(a: string[], b: string[]): string[] { return [...new Set([...a, ...b])]; }
 function subtract(a: string[], b: string[]): string[] { const s = new Set(b); return a.filter((x) => !s.has(x)); }
 
+/**
+ * add 请求是否含实质扩权内容——确认档位判定（confirmTierForOp）的类别集
+ * 单源（2026-11-13 审查跟进）。delta 类别扩容时本函数与 applyCapabilityDelta
+ * 同文件同步，档位矩阵不再各自枚举键集，杜绝「新增类别静默绕过确认门」。
+ * 语义：非对象/数组/空对象/全空数组 → false（纯 member 纯 remove 免确认）。
+ */
+export function hasCapabilityAdditions(add: unknown): boolean {
+  if (typeof add !== 'object' || add === null || Array.isArray(add)) return false;
+  const r = add as Record<string, unknown>;
+  return (['skills', 'mcps', 'tools', 'pluginTools'] as const).some(
+    (k) => Array.isArray(r[k]) && r[k].length > 0,
+  );
+}
+
 /** 数组入参归一：非数组或含非字符串项 → undefined（调用方 fail-fast 已挡，这里防御归一） */
 function refs(v: unknown): string[] { return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []; }
 

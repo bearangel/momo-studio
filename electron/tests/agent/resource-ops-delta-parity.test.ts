@@ -2,7 +2,7 @@
 // 契约锁（spec §6.4）：主进程 applyCapabilityDelta 与 renderer computeDeltas 同语义。
 // capability-helpers.ts 为纯 TS（无 DOM 依赖），跨 workspace 相对导入在 vitest 可行。
 import { describe, it, expect } from 'vitest';
-import { applyCapabilityDelta } from '../../src/main/agent/resource-ops-delta';
+import { applyCapabilityDelta, hasCapabilityAdditions } from '../../src/main/agent/resource-ops-delta';
 import { computeDeltas, EMPTY_DELTAS } from '../../../renderer/src/lib/capability-helpers';
 
 const base = { tools: ['read_file'], mcps: [], skills: ['create-agent'], baseGrantedPlugin: ['plugin:office/run_js'] };
@@ -106,5 +106,26 @@ describe('parity：与 renderer computeDeltas 同输入同输出（spec §6.4 �
     const theirs = computeDeltas(mkCaps(base.tools, [], []), mkCaps(base.tools, [], ['create-agent']));
     expect(ours.removedSkills).toEqual(['create-agent']);
     expect(theirs.removedSkills).toEqual(['create-agent']);
+  });
+});
+
+// 锁步矩阵（2026-11-13 审查跟进）：hasCapabilityAdditions 是确认档位判定的
+// 类别集单源——delta 输入形状（CapabilityDeltaInput 四键）与判定键集必须
+// 永远一致，扩容新类别时两处同 commit 演进，防「新增类别静默绕过确认门」
+describe('hasCapabilityAdditions（确认档类别集单源）', () => {
+  it('CapabilityDeltaInput 四类别任一非空数组 → true', () => {
+    expect(hasCapabilityAdditions({ skills: ['x'] })).toBe(true);
+    expect(hasCapabilityAdditions({ mcps: ['x'] })).toBe(true);
+    expect(hasCapabilityAdditions({ tools: ['x'] })).toBe(true);
+    expect(hasCapabilityAdditions({ pluginTools: ['x'] })).toBe(true);
+  });
+
+  it('全空数组 / 空对象 / 数组 / null / undefined / 非 object → false（纯 remove 免确认）', () => {
+    expect(hasCapabilityAdditions({ tools: [], skills: [] })).toBe(false);
+    expect(hasCapabilityAdditions({})).toBe(false);
+    expect(hasCapabilityAdditions(['tools'])).toBe(false);
+    expect(hasCapabilityAdditions(null)).toBe(false);
+    expect(hasCapabilityAdditions(undefined)).toBe(false);
+    expect(hasCapabilityAdditions('tools')).toBe(false);
   });
 });

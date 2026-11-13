@@ -134,6 +134,9 @@ function notifyPendingDispatch(sessionId: string, timedOut: boolean): void {
 }
 
 function enqueuePendingDispatch(p: PendingDispatch): void {
+  // 顺序承诺（2026-11-13 审查核实）：调用点（sendUserMessage）在 insertMessage
+  // 落库之后才入队——超限丢最旧丢的只是「派发」，消息本体已在 message_events
+  //（时间线可见，仅不派发回复），与「超时不丢消息」语义一致。
   pendingDispatches.push(p);
   pendingTimedOut.delete(p.sessionId);
   if (pendingDispatches.length > PENDING_DISPATCH_LIMIT) {
@@ -184,43 +187,53 @@ export function listPendingDispatchStates(): PendingDispatchState[] {
 /**
  * 按入队顺序补派发全部待发消息（router-bootstrap 在 RouterService 就绪后调用）。
  * 无 router 时 no-op（幂等：多次调用安全）。单条失败只 warn，不阻断后续。
+ *
+ * drain 串行化（2026-11-13 审查跟进）：flush 进行中 sendUserMessage 不再走
+ * 直路由（见 sendUserMessage 的 router && !flushing 判定）而继续入队——否则
+ * drain 的逐条 await 期间，后发的新消息可经直路由超越队内更早消息，同会话
+ * 启动窗口内出现处理序倒挂。drain 用 while 循环消化期间新入队消息，收尾才
+ * 放行直路由。重入（drain 中再调 flush）直接返回，由在途循环接管。
  */
+let flushingPendingDispatches = false;
+
 export async function flushPendingDispatches(): Promise<void> {
   if (!router) return;
-  if (pendingDispatches.length === 0) {
-    // 仍可能要清残留定时器（理论上不会走到）
-    for (const t of pendingTimers.values()) clearTimeout(t);
-    pendingTimers.clear();
-    return;
-  }
-  const batch = pendingDispatches.splice(0, pendingDispatches.length);
-  const touched = new Set(batch.map((p) => p.sessionId));
-  const active = router;
-  for (const p of batch) {
-    try {
-      await active.routeUserChat({
-        sessionId: p.sessionId,
-        assignmentId: p.assignmentId,
-        body: p.body,
-        systemKickoff: p.systemKickoff,
-        sourceTaskId: p.sourceTaskId,
-        ...(p.context ? { context: p.context } : {}),
-      });
-    } catch (err) {
-      logger.warn('补派发失败（消息已落库，不重试）', {
-        sessionId: p.sessionId,
-        error: err instanceof Error ? err.message : String(err),
-      });
+  if (flushingPendingDispatches) return;
+  flushingPendingDispatches = true;
+  try {
+    while (pendingDispatches.length > 0) {
+      const batch = pendingDispatches.splice(0, pendingDispatches.length);
+      const touched = new Set(batch.map((p) => p.sessionId));
+      const active = router;
+      for (const p of batch) {
+        try {
+          await active.routeUserChat({
+            sessionId: p.sessionId,
+            assignmentId: p.assignmentId,
+            body: p.body,
+            systemKickoff: p.systemKickoff,
+            sourceTaskId: p.sourceTaskId,
+            ...(p.context ? { context: p.context } : {}),
+          });
+        } catch (err) {
+          logger.warn('补派发失败（消息已落库，不重试）', {
+            sessionId: p.sessionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      for (const sessionId of touched) {
+        const t = pendingTimers.get(sessionId);
+        if (t) clearTimeout(t);
+        pendingTimers.delete(sessionId);
+        pendingTimedOut.delete(sessionId);
+        notifyPendingDispatch(sessionId, false);
+      }
+      logger.info('启动期消息补派发完成', { count: batch.length, sessions: touched.size });
     }
+  } finally {
+    flushingPendingDispatches = false;
   }
-  for (const sessionId of touched) {
-    const t = pendingTimers.get(sessionId);
-    if (t) clearTimeout(t);
-    pendingTimers.delete(sessionId);
-    pendingTimedOut.delete(sessionId);
-    notifyPendingDispatch(sessionId, false);
-  }
-  logger.info('启动期消息补派发完成', { count: batch.length, sessions: touched.size });
 }
 
 /** 测试用：清空队列与定时器 */
@@ -229,6 +242,7 @@ export function __resetPendingDispatchesForTest(): void {
   pendingTimers.clear();
   pendingTimedOut.clear();
   pendingDispatches.length = 0;
+  flushingPendingDispatches = false;
 }
 
 /** 测试用：当前队列快照（只读） */
@@ -412,9 +426,10 @@ export async function sendUserMessage(input: {
   const members = getSessionMembersInfo(input.sessionId);
   const target = pickRoutingTarget(members, input.mentionedInstanceIds ?? []);
   if (target) {
-    if (router) {
+    if (router && !flushingPendingDispatches) {
       // routeUserChat.assignmentId：RouterService 现行契约字段（值即 instance_id），
-      // 随 Task 9 路由改造一并更名。
+      // 随 Task 9 路由改造一并更名。drain 进行中不入直路由（见
+      // flushPendingDispatches 头注——防新消息超越队内更早消息）。
       await router.routeUserChat({
         sessionId: input.sessionId,
         assignmentId: target,
@@ -424,9 +439,10 @@ export async function sendUserMessage(input: {
         ...(input.context ? { context: input.context } : {}),
       });
     } else {
-      // router 缺席（RouterService 尚未 lazily 启动）——启动期（~50s 预热池窗口）
-      // 的常态。入队而非丢弃：推 renderer 占位气泡（agent「正在启动智能体」），
-      // RouterService 就绪后由 router-bootstrap flush 补派发。
+      // router 缺席（RouterService 尚未 lazily 启动）或 drain 进行中——入队
+      // 而非丢弃/直路由：推 renderer 占位气泡（agent「正在启动智能体」），
+      // RouterService 就绪后由 router-bootstrap flush 补派发；drain 场景由
+      // 在途循环按序消化。
       const targetMember = members.find((m) => m.instanceId === target);
       enqueuePendingDispatch({
         sessionId: input.sessionId,

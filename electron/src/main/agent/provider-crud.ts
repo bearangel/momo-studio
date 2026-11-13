@@ -426,6 +426,9 @@ export async function fetchModelIdsFromEndpoint(
       host: parsed.hostname,
     });
   }
+  // M2（2026-11-13 审查留痕）：baseUrl 由 renderer 输入、经主进程 fetch（无
+  // CORS 约束）——每次拉取记录目标 host（不含 key），供事后审计异常探测
+  logger.info('模型列表远端拉取', { host: parsed.host, protocol: parsed.protocol });
   const ctrl = timeoutMs !== undefined ? new AbortController() : undefined;
   const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : undefined;
   try {

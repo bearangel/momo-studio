@@ -220,4 +220,39 @@ describe('flushPendingDispatches（RouterService 就绪后补派发）', () => {
     expect(routeUserChat).toHaveBeenCalledTimes(2);
     expect(__pendingDispatchesForTest()).toHaveLength(0);
   });
+
+  // drain 串行化回归锁（2026-11-13 审查跟进）：flush 逐条 await 期间新消息
+  // 不得经直路由超越队内更早消息——必须入队并由 drain 循环按序消化
+  it('drain 进行中新消息入队按序消化，不走直路由（防顺序倒挂）', async () => {
+    const sessionId = seedSingleAgentSession();
+    installFakeWindow();
+    await sendUserMessage({ sessionId, body: '队首' });
+
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const routeUserChat = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await firstGate;
+      })
+      .mockResolvedValue(undefined);
+    setSessionRouter({ routeUserChat } as unknown as Parameters<typeof setSessionRouter>[0]);
+
+    const flushPromise = flushPendingDispatches();
+    // flush 同步段已发起队首派发并挂起；此刻 router 在位但 drain 在途
+    expect(routeUserChat).toHaveBeenCalledTimes(1);
+    await sendUserMessage({ sessionId, body: 'drain 中新消息' });
+    expect(routeUserChat).toHaveBeenCalledTimes(1);
+    expect(__pendingDispatchesForTest()).toHaveLength(1);
+
+    releaseFirst();
+    await flushPromise;
+    expect(routeUserChat.mock.calls.map((c) => (c[0] as { body: string }).body)).toEqual([
+      '队首',
+      'drain 中新消息',
+    ]);
+    expect(__pendingDispatchesForTest()).toHaveLength(0);
+  });
 });
