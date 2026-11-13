@@ -1,18 +1,18 @@
 // electron/tests/task/move-v2.test.ts
 //
-// 任务生命周期 v2 Task 8 回归锁：看板七列（等待中/待验收）+ move() 打回/验收路由骨架。
+// 任务生命周期 v2 Task 8 回归锁：看板七列（等待中/待验收）+ move() 打回/验收路由。
 // 本文件锁三件事（brief 裁定范围）：
 //   1. 列判定：waiting_human → 'waiting'、submitted → 'review' 等七列归列 + 禁投规则
 //      （canDropIntoColumn 语义表关键格——waiting 只出不进 / review 只收提交 / done 收
 //      in_progress|submitted / assigned 收 draft|pending|submitted 打回）
 //   2. 打回理由校验：submitted → assigned 缺/空白 reason → 主进程先于任何 lifecycle
-//      调用抛「打回必须填写理由」（lifecycle-runs 占位未接线——错误消息不是「未接线」
-//      即为校验先行的证明），且拒绝零副作用
-//   3. 路由接线占位（it.todo）：in_progress→review / in_progress→done / submitted→done /
-//      submitted→assigned 带理由 四条走 lifecycle-runs 的路由，Task 10 接线后回头补跑
+//      调用抛「打回必须填写理由」（错误消息非 lifecycle-runs 服务错误即校验先行的证明），
+//      且拒绝零副作用
+//   3. 路由接线（Task 10 转正）：in_progress→review / in_progress→done / submitted→done /
+//      submitted→assigned 带理由 四条走 lifecycle-runs 真实两段式链
 //
 // mock 边界（momo-test-rules，照 move.test.ts 先例）：只 mock lifecycle 三函数；
-// lifecycle-runs 不 mock——占位抛「未接线」正是本 task 可观测契约的一部分。
+// lifecycle-runs 不 mock——真实落库（run/acceptance 请求）正是接线断言的对象。
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -31,7 +31,11 @@ import {
   transitionTaskStatus,
   type TaskRow,
 } from '../../src/main/storage/tasks/repo';
+import { insertSession } from '../../src/main/storage/sessions/repo';
+import { getActiveRun, listRuns } from '../../src/main/storage/tasks/runs-repo';
+import { listByTask } from '../../src/main/storage/tasks/human-requests-repo';
 import { executeMove } from '../../src/main/task/move';
+import { startRun, submitRun } from '../../src/main/task/lifecycle-runs';
 import { columnOf, canDropIntoColumn } from '../../src/main/task/board-columns';
 import { cancelTask } from '../../src/main/task/lifecycle';
 
@@ -44,6 +48,9 @@ const tmpRoot = path.join(
   `ap-move-v2-${Date.now()}-${Math.random().toString(36).slice(2)}`,
 );
 
+/** 执行会话（human_requests.session_id FK → sessions；验收请求挂它） */
+let execSessionId = '';
+
 /** 直插任务（draft/pending/assigned 直插即生产合法；派生态走 seedViaChain） */
 const seed = (status: 'draft' | 'pending' | 'assigned', extra: Partial<TaskRow> = {}) =>
   insertTask({ workspaceId: WS, title: 't', creatorUserId: 'owner', status, ...extra });
@@ -53,9 +60,12 @@ const seed = (status: 'draft' | 'pending' | 'assigned', extra: Partial<TaskRow> 
  * v2 状态机：assigned → in_progress(+会话) → submitted / completed 按需续走
  * （in_progress → completed 直达边已删，completed 必经 submitted 验收）。
  */
-function seedViaChain(status: 'in_progress' | 'submitted' | 'completed'): TaskRow {
-  const t = seed('assigned', { assigneeAgentId: 'i-1' });
-  transitionTaskStatus(t.id, 'in_progress', { executionSessionId: 'sess-1' });
+function seedViaChain(
+  status: 'in_progress' | 'submitted' | 'completed',
+  extra: Partial<TaskRow> = {},
+): TaskRow {
+  const t = seed('assigned', { assigneeAgentId: 'i-1', ...extra });
+  transitionTaskStatus(t.id, 'in_progress', { executionSessionId: execSessionId });
   if (status === 'submitted') {
     transitionTaskStatus(t.id, 'submitted', { submittedAt: Date.now() });
   }
@@ -64,6 +74,21 @@ function seedViaChain(status: 'in_progress' | 'submitted' | 'completed'): TaskRo
     transitionTaskStatus(t.id, 'completed', { completedAt: Date.now() });
   }
   return getTask(t.id)!;
+}
+
+/**
+ * 接线组专用：生产链 seed（assigned → startRun → in_progress + run#1 running）。
+ * move 路由的动作（submitRun 等）要求活动 run 存在——纯 transition 链无 run。
+ */
+function seedRunningTask(extra: Partial<TaskRow> = {}): TaskRow {
+  const t = seed('assigned', { assigneeAgentId: 'i-1', executionSessionId: execSessionId, ...extra });
+  startRun(t.id, { trigger: 'initial', executionSessionId: execSessionId });
+  return getTask(t.id)!;
+}
+
+/** 任务下 acceptance 请求（唯一） */
+function acceptanceOf(taskId: string) {
+  return listByTask(taskId).find((r) => r.kind === 'acceptance');
 }
 
 beforeEach(() => {
@@ -75,6 +100,7 @@ beforeEach(() => {
   getDb()
     .prepare(`INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES (?, ?, ?, ?)`)
     .run(WS, 'Test', '/tmp', 'owner');
+  execSessionId = insertSession({ workspaceId: WS, title: '执行', kind: 'chat' }).id;
 });
 
 afterEach(() => {
@@ -169,9 +195,62 @@ describe('打回理由校验（submitted → assigned）', () => {
   });
 });
 
-describe('lifecycle-runs 路由接线（Task 10 接线后补跑，占位期抛未接线）', () => {
-  it.todo('in_progress → review 路由 submitRun(id, { summary: "" })');
-  it.todo('in_progress → done 路由 submitRun 后 acceptTask（一步提交+验收）');
-  it.todo('submitted → done 路由 acceptTask(id)（验收通过）');
-  it.todo('submitted → assigned 带理由路由 rejectTask(id, reason)（打回）');
+describe('lifecycle-runs 路由接线（Task 10 已接线：两段式完成语义）', () => {
+  it('in_progress → review 路由 submitRun：任务 submitted + submitted_at + 验收请求 pending', async () => {
+    const t = seedRunningTask();
+
+    await executeMove(t.id, { column: 'review', groupId: null });
+
+    const after = getTask(t.id)!;
+    expect(after.status).toBe('submitted');
+    expect(after.submittedAt).not.toBeNull();
+    expect(getActiveRun(t.id)!.status).toBe('submitted');
+    const req = acceptanceOf(t.id)!;
+    expect(req.status).toBe('pending');
+    expect(req.kind).toBe('acceptance');
+  });
+
+  it('in_progress → done 路由 submitRun 后 acceptTask（一步提交+验收）', async () => {
+    const t = seedRunningTask();
+
+    await executeMove(t.id, { column: 'done', groupId: null });
+
+    const after = getTask(t.id)!;
+    expect(after.status).toBe('completed');
+    expect(after.acceptedAt).not.toBeNull();
+    expect(after.completedAt).not.toBeNull();
+    expect(getActiveRun(t.id)).toBeNull();
+    expect(listRuns(t.id)[0]!.status).toBe('accepted');
+    expect(acceptanceOf(t.id)!.status).toBe('answered');
+  });
+
+  it('submitted → done 路由 acceptTask(id)（验收通过）', async () => {
+    const t = seedRunningTask();
+    await submitRun(t.id, { summary: '' }); // 先到待验收列（生产链：review 落点）
+
+    await executeMove(t.id, { column: 'done', groupId: null });
+
+    const after = getTask(t.id)!;
+    expect(after.status).toBe('completed');
+    expect(after.acceptedAt).not.toBeNull();
+    expect(listRuns(t.id)[0]!.status).toBe('accepted');
+    expect(acceptanceOf(t.id)!.status).toBe('answered');
+  });
+
+  it('submitted → assigned 带理由路由 rejectTask(id, reason)（打回）', async () => {
+    const t = seedRunningTask();
+    await submitRun(t.id, { summary: '' });
+
+    await executeMove(t.id, { column: 'assigned', groupId: null }, { reason: '需要返工' });
+
+    const after = getTask(t.id)!;
+    expect(after.status).toBe('assigned');
+    expect(getActiveRun(t.id)).toBeNull();
+    const run = listRuns(t.id)[0]!;
+    expect(run.status).toBe('rejected');
+    expect(run.rejectReason).toBe('需要返工');
+    const req = acceptanceOf(t.id)!;
+    expect(req.status).toBe('answered');
+    expect(JSON.parse(req.answerJson!)).toEqual({ decision: 'reject', reason: '需要返工' });
+  });
 });

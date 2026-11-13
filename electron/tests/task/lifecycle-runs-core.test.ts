@@ -128,14 +128,32 @@ describe('2) startRun 幂等（Review Focus #3）', () => {
     expect(getTask(taskId)!.currentRunId).toBe(existing.id);
   });
 
-  it('活动 run 处于 waiting_human → 同样返回既有行（不新建 run 打断 HITL）', () => {
+  it('活动 run 处于 waiting_human → 同样返回既有行（不新建 run 打断 HITL），任务态不被回推 in_progress', () => {
     const taskId = seedAssignedTask();
-    const existing = insertRun({ taskId, status: 'waiting_human', trigger: 'initial' });
+    startRun(taskId, { trigger: 'initial' });
+    enterWaitingHuman(taskId); // 生产链落定：run + 任务双 waiting_human
+    const existing = getActiveRun(taskId)!;
 
     const returned = startRun(taskId);
 
     expect(returned.id).toBe(existing.id);
     expect(listRuns(taskId)).toHaveLength(1);
+    // 记账不得越权推进：等人体态由 HITL 链拥有，startRun 补记账保持原样
+    expect(getTask(taskId)!.status).toBe('waiting_human');
+  });
+
+  it('活动 run 处于 submitted → 同样返回既有行，任务保持 submitted', () => {
+    const taskId = seedAssignedTask();
+    startRun(taskId, { trigger: 'initial' });
+    updateRun(getActiveRun(taskId)!.id, { status: 'submitted' });
+    transitionTaskStatus(taskId, 'submitted', { submittedAt: Date.now() });
+    const existing = getActiveRun(taskId)!;
+
+    const returned = startRun(taskId);
+
+    expect(returned.id).toBe(existing.id);
+    expect(listRuns(taskId)).toHaveLength(1);
+    expect(getTask(taskId)!.status).toBe('submitted');
   });
 });
 
@@ -232,6 +250,18 @@ describe('5) run 终结：failRun / cancelActiveRun', () => {
     expect(row.endedAt).not.toBeNull();
     expect(getHumanRequest(reqId)!.status).toBe('superseded');
     expect(getTask(taskId)!.status).toBe('cancelled');
+  });
+
+  it('paused 下 cancelActiveRun：run 终结、任务保持 paused（终态投影让位于用户权威态，与 failRun 同语义）', () => {
+    const taskId = seedAssignedTask();
+    startRun(taskId, { trigger: 'initial' });
+    pauseForTask(taskId);
+
+    cancelActiveRun(taskId, '暂停中取消执行');
+
+    expect(getActiveRun(taskId)).toBeNull();
+    expect(listRuns(taskId)[0]!.status).toBe('cancelled');
+    expect(getTask(taskId)!.status).toBe('paused'); // 不被 cancelled 投影覆盖
   });
 });
 

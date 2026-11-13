@@ -31,7 +31,9 @@ import {
   type TaskStatus,
 } from '../../src/main/storage/tasks/repo';
 import { createGroup, archiveGroup } from '../../src/main/storage/task-groups/repo';
+import { insertSession } from '../../src/main/storage/sessions/repo';
 import { executeMove } from '../../src/main/task/move';
+import { startRun, submitRun } from '../../src/main/task/lifecycle-runs';
 import { setTaskRelations } from '../../src/main/task/relations';
 import {
   startTaskAndKickoff,
@@ -173,25 +175,54 @@ describe('executeMove 语义表——跨列动作映射', () => {
     expect(resumeMock).not.toHaveBeenCalled();
   });
 
-  it('in_progress→done:路由 submitRun+acceptTask(占位期抛未接线,零副作用)', async () => {
+  it('in_progress→done:路由 submitRun+acceptTask(一步提交+验收,Task 10 已接线)', async () => {
     // v2 生命周期:完成必经验收——done 不再直转 completed,改走 lifecycle-runs;
-    // Task 10 接线前占位抛「未接线」,接线断言由 move-v2.test.ts 的 todo 组接管
-    const t = seedViaChain('in_progress');
-    await expect(executeMove(t.id, { column: 'done', groupId: null })).rejects.toThrow(
-      'lifecycle-runs 未接线',
-    );
+    // 动作语义的细节锁在 lifecycle-runs-submit.test.ts / move-v2.test.ts,此处锁路由选择
+    const ses = insertSession({ workspaceId: WS, title: '执行', kind: 'chat' });
+    const t = seed('assigned', { assigneeAgentId: 'i-1', executionSessionId: ses.id });
+    startRun(t.id, { trigger: 'initial', executionSessionId: ses.id });
+    expect(getTask(t.id)?.status).toBe('in_progress');
+
+    await executeMove(t.id, { column: 'done', groupId: null });
+
     const after = getTask(t.id)!;
-    expect(after.status).toBe('in_progress'); // 拒绝零副作用:状态/时间戳全不动
-    expect(after.completedAt).toBeNull();
+    expect(after.status).toBe('completed'); // 提交+验收一步到位
+    expect(after.completedAt).not.toBeNull();
   });
 
-  it('in_progress→done 且带循环规则:占位期不生成下一实例(接线后续期随验收走)', async () => {
-    const t = seedViaChain('in_progress', { recurrenceRule: 'daily@09:00' });
-    await expect(executeMove(t.id, { column: 'done', groupId: null })).rejects.toThrow(
-      'lifecycle-runs 未接线',
-    );
+  it('in_progress→done 且带循环规则:验收通过后续期(children=1,落 assigned)', async () => {
+    const ses = insertSession({ workspaceId: WS, title: '执行', kind: 'chat' });
+    const t = seed('assigned', {
+      assigneeAgentId: 'i-1',
+      executionSessionId: ses.id,
+      recurrenceRule: 'daily@09:00',
+    });
+    startRun(t.id, { trigger: 'initial', executionSessionId: ses.id });
+
+    await executeMove(t.id, { column: 'done', groupId: null });
+
+    expect(getTask(t.id)?.status).toBe('completed');
     const children = listTasks({ workspaceId: WS }).filter((r) => r.recurrenceParentId === t.id);
-    expect(children).toHaveLength(0); // 半套写不落:未验收不续期
+    expect(children).toHaveLength(1); // 验收通过才续期
+    expect(children[0]!.status).toBe('assigned'); // 续期即入队
+  });
+
+  it('submitted→done 且带循环规则:验收通过同样续期', async () => {
+    const ses = insertSession({ workspaceId: WS, title: '执行', kind: 'chat' });
+    const t = seed('assigned', {
+      assigneeAgentId: 'i-1',
+      executionSessionId: ses.id,
+      recurrenceRule: 'daily@09:00',
+    });
+    startRun(t.id, { trigger: 'initial', executionSessionId: ses.id });
+    await submitRun(t.id, { summary: '' }); // 先到待验收列
+
+    await executeMove(t.id, { column: 'done', groupId: null });
+
+    expect(getTask(t.id)?.status).toBe('completed');
+    const children = listTasks({ workspaceId: WS }).filter((r) => r.recurrenceParentId === t.id);
+    expect(children).toHaveLength(1);
+    expect(children[0]!.status).toBe('assigned');
   });
 
   it('in_progress→closed:走 cancelTask(确认框在 renderer,main 不再二次确认)', async () => {

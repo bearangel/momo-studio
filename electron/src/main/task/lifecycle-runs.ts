@@ -16,10 +16,11 @@
 //     投影（refreshTaskProjection / startRun 的 in_progress 推进）不覆盖 paused
 //   - 三步写（插 run + currentRunId 回写 + 任务态转换）包同一事务；
 //     被 starter.ts 事务嵌套调用时 better-sqlite3 自动降级为 SAVEPOINT
-//   - submitRun / acceptTask / rejectTask 是 Task 10 的接线位——签名与 move.ts
-//     路由调用点逐字对齐，本 task 保持占位抛「未接线」
+//   - submitRun / acceptTask / rejectTask 两段式完成语义（Task 10，spec §6.5）：
+//     提交生成 acceptance 请求（keep_waiting + 24h 提醒），验收/打回 tryAnswer
+//     原子答复；打回不建新 run——任务回 assigned，下次放行 startRun(trigger='rework')
 import { getDb } from '../storage/db';
-import { getTask, transitionTaskStatus, updateTask } from '../storage/tasks/repo';
+import { getTask, transitionTaskStatus, updateTask, type TaskRow } from '../storage/tasks/repo';
 import { canTransition, isTerminal, type TaskStatus } from '../storage/tasks/state-machine';
 import {
   insertRun,
@@ -27,11 +28,16 @@ import {
   updateRun,
   countRuns,
   type TaskRunRow,
+  type TaskRunStatus,
   type TaskRunTrigger,
 } from '../storage/tasks/runs-repo';
 import {
   supersedePendingByRun,
   countPendingNonAcceptance,
+  insertHumanRequest,
+  listByTask,
+  tryAnswer,
+  type HumanRequestRow,
 } from '../storage/tasks/human-requests-repo';
 
 /** 单任务执行尝试上限（spec §5.2：防打回-重跑死循环） */
@@ -49,26 +55,29 @@ function isUniqueConstraintError(err: unknown): boolean {
 /**
  * 投影单点守卫：目标态可达才走 transitionTaskStatus（同态 / 非法边跳过）。
  * 只服务本模块内的任务态写入——所有路径都不得绕过此处直写 status。
+ * extraPatch 透传副作用字段（submittedAt / acceptedAt 等时间戳，repo 自动合并）。
  */
-function projectTaskStatus(taskId: string, target: TaskStatus): void {
+function projectTaskStatus(taskId: string, target: TaskStatus, extraPatch?: Partial<TaskRow>): void {
   const task = getTask(taskId);
   if (!task) throw new Error(`task ${taskId} 不存在`);
   if (task.status === target) return; // 同态 no-op（transitionTaskStatus 对同态会抛）
   if (!canTransition(task.status, target)) return; // 非法边不抛——投影是纠偏不是断言
-  transitionTaskStatus(taskId, target);
+  transitionTaskStatus(taskId, target, extraPatch);
 }
 
 /**
  * run 记账单点：currentRunId 指向活动 run + 任务态投影 in_progress。
  * 漂移才写（幂等调用零多余 UPDATE）；终态不动（迟到结算）；
  * paused 不覆盖（§6.6 用户权威态）。
+ * 只有 running run 才推进 in_progress——waiting_human/submitted 的任务投影由
+ * HITL 链 / submitRun 各自落定，startRun 补记账不得越权回推（Task 9 review 修订）。
  */
-function ensureRunBookkeeping(taskId: string, runId: string): void {
+function ensureRunBookkeeping(taskId: string, runId: string, runStatus: TaskRunStatus): void {
   const task = getTask(taskId)!;
   if (task.currentRunId !== runId) {
     updateTask(taskId, { currentRunId: runId });
   }
-  if (!isTerminal(task.status) && task.status !== 'paused') {
+  if (runStatus === 'running' && !isTerminal(task.status) && task.status !== 'paused') {
     projectTaskStatus(taskId, 'in_progress');
   }
 }
@@ -88,10 +97,10 @@ export function startRun(
   opts?: { trigger?: TaskRunTrigger; executionSessionId?: string | null },
 ): TaskRunRow {
   // 幂等快路径：已有活动 run（running/waiting_human/submitted）——补记账防漂移
-  // （currentRunId 未回写 / 任务态滞留 assigned），不重插不抛
+  // （currentRunId 未回写 / 任务态滞留），不重插不抛；等人体/待验收态不被回推
   const existing = getActiveRun(taskId);
   if (existing) {
-    ensureRunBookkeeping(taskId, existing.id);
+    ensureRunBookkeeping(taskId, existing.id, existing.status);
     return existing;
   }
 
@@ -116,13 +125,13 @@ export function startRun(
       if (isUniqueConstraintError(err)) {
         const raced = getActiveRun(taskId);
         if (raced) {
-          ensureRunBookkeeping(taskId, raced.id);
+          ensureRunBookkeeping(taskId, raced.id, raced.status);
           return raced;
         }
       }
       throw err;
     }
-    ensureRunBookkeeping(taskId, run.id);
+    ensureRunBookkeeping(taskId, run.id, run.status);
     return run;
   })();
 }
@@ -195,7 +204,12 @@ export function cancelActiveRun(taskId: string, reason?: string): void {
   });
   supersedePendingByRun(active.id);
 
-  projectTaskStatus(taskId, 'cancelled');
+  const task = getTask(taskId)!;
+  // paused 下不投影 cancelled（与 failRun 同语义：取消证据已落 run 终态，
+  // 任务态让位于用户权威态，由用户恢复 / 显式取消动作另行裁决）
+  if (task.status !== 'paused') {
+    projectTaskStatus(taskId, 'cancelled');
+  }
 }
 
 /**
@@ -251,24 +265,154 @@ export function refreshTaskProjection(taskId: string): void {
   }
 }
 
-// ── Task 10 接线位：提交验收 / 验收 / 打回（占位，move.ts 路由已对齐签名）──
+// ── 两段式完成语义：提交验收 / 验收通过 / 打回（Task 10，spec §6.5）──
 
-/** 提交验收（Task 10 接线：结束当前 run 为 submitted、任务转 submitted） */
-export async function submitRun(id: string, opts: { summary: string }): Promise<void> {
-  void id;
-  void opts;
-  throw new Error('lifecycle-runs 未接线（Task 10）');
+/** 提交载荷（spec §5.2 deliverable_json 与 §5.3.1 acceptance 载荷同构） */
+export interface DeliverableInput {
+  summary: string;
+  files?: string[];
+  artifacts?: Array<{ label: string; value: string }>;
 }
 
-/** 验收通过（Task 10 接线：run 转 accepted、任务转 completed + acceptedAt） */
+/** 验收请求提醒期限（§6.7：acceptance 默认 keep_waiting，24h 提醒） */
+const ACCEPTANCE_DEADLINE_MS = 24 * 3600_000;
+
+/** 本地人工验收的答复节点（Task 16 IPC 接用户身份时替换为真实 node id） */
+const LOCAL_ACCEPT_BY = 'user:local';
+
+/**
+ * 提交验收（两段式第一段，spec §6.5）：活动 run → submitted（deliverable_json
+ * 落库）+ 任务 → submitted（submitted_at）+ 生成 acceptance 请求。
+ * 提交闸（不变量 §5.1-2）：countPendingNonAcceptance(run) 必须为 0；
+ * 验收请求 sessionId 挂任务 execution_session_id（无则 source_session_id，
+ * 皆无人话拒——请求必须有可操作会话）。
+ * auto_accept=1（dispatch 簿记行回填）→ 提交即验收，system:auto 答复。
+ */
+export async function submitRun(id: string, opts: DeliverableInput): Promise<void> {
+  const task = getTask(id);
+  if (!task) throw new Error(`任务 ${id} 不存在`);
+  const active = requireActiveRun(id);
+  if (active.status === 'submitted') {
+    throw new Error(`任务 ${id} 已提交待验收（run #${active.runNo}），请等待验收或打回`);
+  }
+  const pending = countPendingNonAcceptance(active.id);
+  if (pending > 0) {
+    throw new Error(`任务 ${id} 有 ${pending} 条未决人工请求，请先处理未决请求后再提交验收`);
+  }
+  const sessionId = task.executionSessionId ?? task.sourceSessionId;
+  if (!sessionId) {
+    throw new Error(`任务 ${id} 无关联会话（执行/来源会话均缺失），无法生成验收请求`);
+  }
+
+  const files = opts.files ?? [];
+  const artifacts = opts.artifacts ?? [];
+  const now = Date.now();
+  getDb().transaction(() => {
+    updateRun(active.id, {
+      status: 'submitted',
+      deliverableJson: JSON.stringify({ summary: opts.summary, files, artifacts }),
+    });
+    projectTaskStatus(id, 'submitted', { submittedAt: now });
+    insertHumanRequest({
+      sessionId,
+      taskId: id,
+      runId: active.id,
+      kind: 'acceptance',
+      title: `${id} 提交验收（run #${active.runNo}）`,
+      payloadJson: JSON.stringify({
+        acceptance: { runNo: active.runNo, summary: opts.summary, files, artifacts },
+      }),
+      deadlineAt: now + ACCEPTANCE_DEADLINE_MS,
+      timeoutPolicy: 'keep_waiting',
+    });
+  })();
+
+  if (task.autoAccept) {
+    completeAcceptance(id, 'system:auto');
+  }
+}
+
+/** 找 run 下未决验收请求（submitRun 生成的 acceptance 单；无则 null） */
+function findPendingAcceptance(taskId: string, runId: string): HumanRequestRow | null {
+  return (
+    listByTask(taskId).find(
+      (r) => r.runId === runId && r.kind === 'acceptance' && r.status === 'pending',
+    ) ?? null
+  );
+}
+
+/**
+ * 验收请求答复单点：pending 单 tryAnswer；请求已被取消/顶替（如任务同时被取消）
+ * 时不强行答——任务态转移随后照走，任务若已终态由状态机抛人话边界（Task 10 裁定）。
+ */
+function answerAcceptance(
+  taskId: string,
+  runId: string,
+  answer: { decision: 'accept' } | { decision: 'reject'; reason: string },
+  byNodeId: string,
+): void {
+  const req = findPendingAcceptance(taskId, runId);
+  if (!req) return;
+  const res = tryAnswer(req.id, JSON.stringify(answer), byNodeId);
+  if (!res.ok) {
+    throw new Error(`验收请求已被关闭（${res.reason}），请刷新任务状态后重试`);
+  }
+}
+
+/**
+ * 验收通过主体（acceptTask 与 auto_accept「提交即验收」共用）：
+ * run → accepted(endedAt) + acceptance answered + 任务 → completed
+ * （accepted_at + completed_at 同刻落账）。run 非 submitted 人话拒（Review Focus #4）。
+ */
+function completeAcceptance(taskId: string, byNodeId: string): void {
+  const active = requireActiveRun(taskId);
+  if (active.status !== 'submitted') {
+    throw new Error(
+      `任务 ${taskId} 当前 run（run #${active.runNo}）状态为 ${active.status}，` +
+        `只有已提交待验收（submitted）的 run 可执行验收操作`,
+    );
+  }
+  const now = Date.now();
+  getDb().transaction(() => {
+    updateRun(active.id, { status: 'accepted', endedAt: now });
+    answerAcceptance(taskId, active.id, { decision: 'accept' }, byNodeId);
+    projectTaskStatus(taskId, 'completed', { acceptedAt: now, completedAt: now });
+  })();
+}
+
+/** 验收通过（两段式第二段）：completeAcceptance 的对外入口（人工验收） */
 export async function acceptTask(id: string): Promise<void> {
-  void id;
-  throw new Error('lifecycle-runs 未接线（Task 10）');
+  if (!getTask(id)) throw new Error(`任务 ${id} 不存在`);
+  completeAcceptance(id, LOCAL_ACCEPT_BY);
 }
 
-/** 打回（Task 10 接线：run 转 rejected 带 reason、任务转 assigned 建新 run） */
+/**
+ * 打回（spec §6.5）：reason 空白人话拒（与 move 校验双保险）；run → rejected
+ * （reject_reason 落库）+ acceptance 答复 reject(reason)；任务 → assigned。
+ * 打回不建新 run——回 assigned 排队，下次放行 startRun(trigger='rework')；
+ * 返工上限（§5.2）：下一 run 序号将超 MAX_RUNS_PER_TASK 时人话拒并建议取消。
+ */
 export async function rejectTask(id: string, reason: string): Promise<void> {
-  void id;
-  void reason;
-  throw new Error('lifecycle-runs 未接线（Task 10）');
+  const trimmed = reason.trim();
+  if (!trimmed) throw new Error('打回必须填写理由');
+  if (!getTask(id)) throw new Error(`任务 ${id} 不存在`);
+  const active = requireActiveRun(id);
+  if (active.status !== 'submitted') {
+    throw new Error(
+      `任务 ${id} 当前 run（run #${active.runNo}）状态为 ${active.status}，` +
+        `只有已提交待验收（submitted）的 run 可执行验收操作`,
+    );
+  }
+  if (countRuns(id) + 1 > MAX_RUNS_PER_TASK) {
+    throw new Error(
+      `任务 ${id} 打回重建 run 将超出执行尝试上限（${MAX_RUNS_PER_TASK} 次），不能再打回；` +
+        `如确认无法通过验收，请取消该任务`,
+    );
+  }
+  const now = Date.now();
+  getDb().transaction(() => {
+    updateRun(active.id, { status: 'rejected', endedAt: now, rejectReason: trimmed });
+    answerAcceptance(id, active.id, { decision: 'reject', reason: trimmed }, LOCAL_ACCEPT_BY);
+    projectTaskStatus(id, 'assigned');
+  })();
 }
