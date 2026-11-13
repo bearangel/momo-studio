@@ -11,6 +11,7 @@ import { Button } from '../ui/Button';
 import { CodeEditor } from '../editor/CodeEditor';
 import { MessageList } from '../im/MessageList';
 import { MentionInput } from '../im/MentionInput';
+import { HumanRequestPanel } from '../im/HumanRequestPanel';
 import { MembersPanel } from '../im/MembersPanel';
 import { InputToolbar } from '../im/InputToolbar';
 import { RoomToolBudgetBadge } from '../im/RoomToolBudgetBadge';
@@ -125,6 +126,10 @@ export function MiddlePanel() {
             onToggleMembers={() => setShowMembers((v) => !v)}
             disabled={!activeSessionId}
           />
+          {/* 会话请求面板（任务生命周期 v2 T22）：composer 上方唯一人工行动入口，
+              未决时出现；任务执行会话 / 普通会话 / 只读跟踪会话（session.readOnly
+              T17——操作收敛到请求面板）都挂，P2 扩展远端请求代答 */}
+          {activeSessionId && <HumanRequestPanel sessionId={activeSessionId} />}
           <MentionInput />
           {showMembers && activeSessionId && (
             <>
