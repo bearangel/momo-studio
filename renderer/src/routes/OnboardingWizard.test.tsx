@@ -22,6 +22,14 @@ vi.mock('../ipc/client', () => ({
       list: vi.fn().mockResolvedValue([]),
       listPresets: vi.fn().mockResolvedValue([]),
     },
+    // WorkspaceStep 内嵌 CreateWorkspaceDialog 挂载即拉工作目录预填源
+    hub: {
+      getWorkspaceDirSettings: vi.fn().mockResolvedValue({
+        rootDir: null,
+        defaultRootDir: '/data/workspaces',
+        effectiveRootDir: '/data/workspaces',
+      }),
+    },
     onboarding: {
       getStatus: vi.fn(),
       markDone: vi.fn().mockResolvedValue(undefined),

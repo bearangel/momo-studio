@@ -38,6 +38,14 @@ const mockApi = {
     onListChanged: vi.fn().mockReturnValue(() => {}),
   },
   dialog: { pickDirectory: vi.fn().mockResolvedValue(null) },
+  // 向导 WorkspaceStep 内嵌表单挂载即拉工作目录预填源（缺面 → unhandled error）
+  hub: {
+    getWorkspaceDirSettings: vi.fn().mockResolvedValue({
+      rootDir: null,
+      defaultRootDir: '/data/workspaces',
+      effectiveRootDir: '/data/workspaces',
+    }),
+  },
   session: {
     onMessage: vi.fn().mockReturnValue(() => {}),
     onMessageEventBatch: vi.fn().mockReturnValue(() => {}),
