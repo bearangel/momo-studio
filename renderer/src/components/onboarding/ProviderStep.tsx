@@ -469,8 +469,8 @@ export function ProviderStep({ ctx, onSkip }: Props) {
                   上一步
                 </Button>
               )}
-              {(
-                /* 同上：选错预设/误入手填 → 回 chips 重选（existing 已有「返回新建」） */
+              {(mode === 'preset' || mode === 'custom') && (
+                /* T4：仅子表单出现——chips 空态与「上一步」语义重叠（existing 已有「返回新建」） */
                 <Button type="button" variant="ghost" onClick={() => setMode('chips')}>
                   重新选择
                 </Button>

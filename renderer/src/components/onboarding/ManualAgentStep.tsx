@@ -109,8 +109,9 @@ export function ManualAgentStep({ ctx }: Props) {
   return (
     <div className="w-[450px]">
       <div className="flex justify-start mb-2">
-        {/* 验收补修（2026-11-02）：回工作空间步——与 Provider/Workspace 上一步同模式 */}
-        <Button type="button" variant="ghost" onClick={() => ctx.go('workspace')}>
+        {/* T4：上一步直跳 provider——workspace 已建成不可重选，经 workspace 会被
+            直通 effect 立即弹回（spec 2026-11-13 §6） */}
+        <Button type="button" variant="ghost" onClick={() => ctx.go('provider')}>
           上一步
         </Button>
       </div>

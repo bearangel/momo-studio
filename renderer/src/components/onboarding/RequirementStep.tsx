@@ -80,9 +80,11 @@ export function RequirementStep({ ctx }: Props) {
           </div>
         )}
         <div className="flex justify-between">
-          <Button type="button" variant="ghost" onClick={() => ctx.go('workspace')}>
-            上一步
-          </Button>
+        {/* T4：上一步直跳 provider——workspace 已建成不可重选（spec §3.2 防御性
+            跳过），经 workspace 会被直通 effect 立即弹回原步 */}
+        <Button type="button" variant="ghost" onClick={() => ctx.go('provider')}>
+          上一步
+        </Button>
           <Button type="button" onClick={() => void generate()} disabled={busy || !shown.trim()}>
             {busy ? '生成中…' : '生成配置方案'}
           </Button>

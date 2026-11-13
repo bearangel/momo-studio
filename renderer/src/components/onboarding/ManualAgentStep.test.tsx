@@ -156,3 +156,12 @@ describe('ManualAgentStep', () => {
     expect(ctx.go).not.toHaveBeenCalled();
   });
 });
+
+describe('上一步目标（T4，spec 2026-11-13 §6——绕开 workspace 直通弹回）', () => {
+  it('点「上一步」→ ctx.go("provider")（不回 workspace）', () => {
+    const ctx = mkCtx();
+    render(<ManualAgentStep ctx={ctx} />);
+    fireEvent.click(screen.getByRole('button', { name: '上一步' }));
+    expect(ctx.go).toHaveBeenCalledWith('provider');
+  });
+});

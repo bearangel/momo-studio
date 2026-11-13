@@ -245,6 +245,18 @@ describe('ProviderStep — 跳过出口（D1a，预览 S1）', () => {
   });
 });
 
+describe('「重新选择」渲染条件（T4，spec 2026-11-13 §6——chips 空态语义收窄）', () => {
+  it('chips 态不渲染「重新选择」（仅「上一步」）；preset/custom 子表单才出现', async () => {
+    render(<ProviderStep ctx={mkCtx()} onSkip={() => undefined} />);
+    await screen.findByText('+ 自定义供应商');
+    expect(screen.queryByText('重新选择')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('+ 自定义供应商'));
+    expect(screen.getByText('重新选择')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('重新选择'));
+    expect(screen.queryByText('重新选择')).not.toBeInTheDocument();
+  });
+});
+
 describe('custom 形态模型拉取（spec 2026-11-13 T1）', () => {
   /** 进入 custom 形态并填 BaseURL + Key */
   async function enterCustomFilled(): Promise<void> {
