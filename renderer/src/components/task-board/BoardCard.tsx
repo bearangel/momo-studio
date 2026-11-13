@@ -16,7 +16,7 @@
 //     violet「平行草稿」来源徽标；draft 态追加「拒收」（确认即删——取消 +
 //     归档两级既有动作承载行消失，主进程监督器上报 declined 给发送方）；
 //     「安排」= 现有编辑入口（EditTaskDialog 指派 agent/团队，无新代码）
-import { Archive, Bot, Calendar, CircleSlash, Clock, Inbox, Lock, MessagesSquare, Pencil, Pin, PinOff, Repeat, Users } from 'lucide-react';
+import { Archive, Bot, Calendar, CircleSlash, Clock, Inbox, Lock, MessagesSquare, Pencil, Pin, PinOff, Repeat, TriangleAlert, Users } from 'lucide-react';
 import { useState, type CSSProperties } from 'react';
 import type { TaskRow } from '../../ipc/types';
 import { BLOCKED_STYLE, PENDING_WRAP_UP_STYLE, taskStatusStyle } from '../../lib/task-status';
@@ -242,6 +242,14 @@ export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps
       {task.status === 'in_progress' && task.startedAt && (
         <div className="mt-1 text-[11px] text-tertiary">
           已用 {Math.round((Date.now() - task.startedAt) / 60000)} min · {task.toolCallsUsed} 工具调用
+        </div>
+      )}
+      {task.status === 'failed' && task.errorMessage && (
+        /* 失败 errorMessage 一行（预览定值清单 #10）：TriangleAlert 11px + error 字
+           11px 一行截断，title 悬停全文；详情面板（T24）见完整上下文 */
+        <div className="mt-1 flex min-w-0 items-center gap-1 text-[11px] text-status-error" title={task.errorMessage}>
+          <TriangleAlert size={11} strokeWidth={1.75} aria-hidden className="shrink-0" />
+          <span className="truncate">{task.errorMessage}</span>
         </div>
       )}
       </button>

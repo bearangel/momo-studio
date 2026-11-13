@@ -54,6 +54,7 @@ import { DelegatedTaskCard, useDelegationBoard } from '../workgroup/DelegatedTas
 import { Lane } from './Lane';
 import { useBoardDrop, dropConfirmContent } from './useBoardDrop';
 import { AssignTargetDialog } from './AssignTargetDialog';
+import { RejectReasonDialog } from './RejectReasonDialog';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 
 /** PointerSensor 激活位移阈值（px）：小于该位移视为点击（选中卡片），不启动拖拽 */
@@ -303,6 +304,8 @@ export function BoardCanvas({ tasks, groups, laneMode, selectedId, onSelect, wor
 
   const activeTask = drop.activeDragId !== null ? (tasks.find((t) => t.id === drop.activeDragId) ?? null) : null;
   const activeDragStatus = activeTask?.status ?? null;
+  const pendingReject = drop.pendingReject;
+  const rejectTask = pendingReject !== null ? (tasks.find((t) => t.id === pendingReject.taskId) ?? null) : null;
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: DRAG_ACTIVATION_DISTANCE_PX } }),
@@ -479,6 +482,11 @@ export function BoardCanvas({ tasks, groups, laneMode, selectedId, onSelect, wor
           workspaceId={workspaceId}
           onCancel={drop.cancelAssign}
         />
+      )}
+      {/* v2 生命周期 Task 21:submitted → assigned 打回——必填理由弹框
+          (确认携 opts.reason move;取消零调用卡片归位) */}
+      {drop.pendingReject !== null && rejectTask !== null && (
+        <RejectReasonDialog task={rejectTask} onConfirm={drop.confirmReject} onClose={drop.cancelReject} />
       )}
     </DndContext>
   );

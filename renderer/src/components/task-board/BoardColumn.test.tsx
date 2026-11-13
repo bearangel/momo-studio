@@ -267,3 +267,69 @@ describe('BoardColumn 拖拽视觉反馈', () => {
     expect(section.className).not.toContain('bg-surface-2');
   });
 });
+
+// ── v2 生命周期（Task 21）：七列渲染 + 验收拖悬提示条 + 等待中列禁投 ───────────
+// 列契约单源 BOARD_COLUMNS（T8 已扩七列）；提示条定值清单 #14 仅 submitted→done。
+describe('BoardColumn v2 生命周期七列（Task 21）', () => {
+  const columnOfKey = (key: string): BoardColumnDef => BOARD_COLUMNS.find((c) => c.key === key)!;
+  const waiting = columnOfKey('waiting');
+  const review = columnOfKey('review');
+  const done = columnOfKey('done');
+  const assignedCol = columnOfKey('assigned');
+
+  it('BOARD_COLUMNS 七列契约：新增 等待中/待验收 列头 label+hint（计数随卡数）', () => {
+    expect(BOARD_COLUMNS).toHaveLength(7);
+    const { unmount } = render(
+      <BoardColumn column={waiting} tasks={[mkTask({ id: 'W1', title: '等待卡', status: 'waiting_human' })]} />,
+    );
+    // 列头 label 经 region 可访问名锚定（卡上徽标同文案，纯文本查询会撞）
+    const waitingRegion = screen.getByRole('region', { name: '等待中' });
+    expect(waitingRegion).toHaveTextContent('等人工（系统驱动）');
+    expect(waitingRegion).toHaveTextContent('1');
+    unmount();
+    render(<BoardColumn column={review} tasks={[mkTask({ id: 'S1', title: '验收卡', status: 'submitted' })]} />);
+    const reviewRegion = screen.getByRole('region', { name: '待验收' });
+    expect(reviewRegion).toHaveTextContent('已提交待验收');
+  });
+
+  it('waiting_human / submitted 卡渲染对应状态徽标（task-status 终值投影）', () => {
+    const { unmount } = render(
+      <BoardColumn column={waiting} tasks={[mkTask({ id: 'W1', title: '等待卡', status: 'waiting_human' })]} />,
+    );
+    // 徽标按 tone 类锚定（列头 label 也是 span，纯文本选择器会撞列名）
+    expect(screen.getByText('等待中', { selector: 'span.bg-status-warning-tint' })).toBeInTheDocument();
+    unmount();
+    render(
+      <BoardColumn column={review} tasks={[mkTask({ id: 'S1', title: '验收卡', status: 'submitted' })]} />,
+    );
+    expect(screen.getByText('待验收', { selector: 'span.bg-surface-active' })).toBeInTheDocument();
+  });
+
+  it('submitted 拖悬 done 列 → 验收通过提示条（定值 #14）；其余拖悬组合不出现', () => {
+    const { unmount } = render(
+      <BoardColumn column={done} tasks={[]} dropFromStatus="submitted" dropTargetActive />,
+    );
+    expect(screen.getByTestId('accept-drop-hint')).toHaveTextContent('松开 → 验收通过');
+    unmount();
+    // in_progress → done（一步提交+验收）：合法落点但非 submitted 悬停，无提示条
+    render(<BoardColumn column={done} tasks={[]} dropFromStatus="in_progress" dropTargetActive />);
+    expect(screen.queryByTestId('accept-drop-hint')).not.toBeInTheDocument();
+  });
+
+  it('submitted 悬停 done 但 dropTargetActive=false → 无提示条（悬卡片补位未触发）', () => {
+    render(<BoardColumn column={done} tasks={[]} dropFromStatus="submitted" dropTargetActive={false} />);
+    expect(screen.queryByTestId('accept-drop-hint')).not.toBeInTheDocument();
+  });
+
+  it('submitted 拖悬 assigned 列（打回目标）→ 无验收提示条（提示语专属验收通过）', () => {
+    render(<BoardColumn column={assignedCol} tasks={[]} dropFromStatus="submitted" dropTargetActive />);
+    expect(screen.queryByTestId('accept-drop-hint')).not.toBeInTheDocument();
+  });
+
+  it('等待中列恒禁投：任意源状态 → forbidden + 「不可投放」', () => {
+    render(<BoardColumn column={waiting} tasks={[]} dropFromStatus="in_progress" />);
+    const section = screen.getByRole('region', { name: '等待中' });
+    expect(section).toHaveAttribute('data-drop-state', 'forbidden');
+    expect(screen.getByText('不可投放')).toBeInTheDocument();
+  });
+});

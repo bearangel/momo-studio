@@ -10,6 +10,9 @@
 //   - Task 13 追加:resolveDrop.requireConfirm(in_progress→done/closed 二次确认)、
 //     确认文案(dropConfirmContent)、useBoardDrop 落点协调(renderHook 驱动:
 //     确认拦截/取消零调用/wire 剥离/失败 toast/拖悬目标列高亮)
+//   - v2 生命周期(Task 21)追加:submitted→assigned 打回拦截(pendingReject/
+//     confirmReject 携 reason/空白守卫)、submitted→done 验收直达、
+//     in_progress→review 提交、等待中列恒禁投
 //
 // DOM 级拖拽模拟(pointer/keyboard 事件序列驱动 DndContext)在 jsdom 下依赖
 // getBoundingClientRect 全零矩形——碰撞检测不可信,按 task-12 brief 裁定改为
@@ -419,7 +422,7 @@ describe('BoardCanvas dag 模式（M3.3 §2.2 DAG 视图）', () => {
   it('DAG-7. flat/lanes 模式不渲染 dag 板（渲染门控：dag 分支只在 dag 模式进入）', () => {
     render(<BoardCanvas tasks={dagTasks()} groups={groups} laneMode="flat" selectedId={null} onSelect={() => {}} workspaceId="ws1" />);
     expect(screen.queryByTestId('dag-board')).not.toBeInTheDocument();
-    // flat 模式照常五列 + sortable 注册
+    // flat 模式照常七列 + sortable 注册
     expect(screen.getByText('待办')).toBeInTheDocument();
   });
 });
@@ -677,5 +680,114 @@ describe('useBoardDrop 落点协调', () => {
     act(() => result.current.dragEnd('R1', 'col:flat:done'));
     expect(result.current.dropHint).toBeNull();
     expect(result.current.activeDragId).toBeNull();
+  });
+});
+
+// ── v2 生命周期(Task 21):submitted 拖拽语义——打回必填理由 / 验收直达 ─────────
+// 拖入规则单源 canDropIntoColumn(定值 #22):submitted→assigned=打回(拦截弹框,
+// move 携 opts.reason);submitted→done=验收通过(直接 move);in_progress→review
+// =提交验收(直接 move);等待中列恒禁投(系统驱动)。
+describe('useBoardDrop 打回与验收语义(v2 生命周期)', () => {
+  const groups = [mkGroup({ id: 'G-1', name: '组一', position: 1 })];
+
+  function setup(tasks: TaskRow[], laneMode: 'flat' | 'lanes' = 'flat') {
+    const dropIndex = buildDropIndex(splitLanes(tasks, groups, laneMode), laneMode);
+    return renderHook(() => useBoardDrop({ tasks, laneMode, dropIndex }), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <>
+          <Toast />
+          {children}
+        </>
+      ),
+    });
+  }
+
+  beforeEach(() => {
+    (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
+    useTaskStore.setState({ tasks: [], dragging: false, pendingMoveCount: 0 });
+    mockApi.task.move.mockClear().mockResolvedValue(null);
+  });
+
+  it('submitted → assigned 松手 → 拦截进 pendingReject,move 零调用(取消零副作用前置)', () => {
+    const tasks = [mkTask({ id: 'S1', title: '待验收卡', status: 'submitted', groupId: null })];
+    const { result } = setup(tasks);
+    act(() => result.current.dragStart('S1'));
+    act(() => result.current.dragEnd('S1', 'col:flat:assigned'));
+    expect(mockApi.task.move).not.toHaveBeenCalled();
+    expect(result.current.pendingReject?.taskId).toBe('S1');
+    expect(result.current.pendingReject?.resolution.column).toBe('assigned');
+    expect(useTaskStore.getState().dragging).toBe(false);
+  });
+
+  it('cancelReject → 清拦截态,move 仍零调用(卡片归位)', () => {
+    const tasks = [mkTask({ id: 'S1', title: '待验收卡', status: 'submitted', groupId: null })];
+    const { result } = setup(tasks);
+    act(() => result.current.dragEnd('S1', 'col:flat:assigned'));
+    act(() => result.current.cancelReject());
+    expect(result.current.pendingReject).toBeNull();
+    expect(mockApi.task.move).not.toHaveBeenCalled();
+  });
+
+  it('confirmReject(理由) → move 收到 (id, assigned 目标, {reason});pendingReject 清空', async () => {
+    const tasks = [mkTask({ id: 'S1', title: '待验收卡', status: 'submitted', groupId: null })];
+    const { result } = setup(tasks);
+    act(() => result.current.dragEnd('S1', 'col:flat:assigned'));
+    await act(async () => {
+      result.current.confirmReject('迁移脚本缺回滚语句，补上再提交');
+    });
+    expect(mockApi.task.move).toHaveBeenCalledTimes(1);
+    // wire 契约:reason 经 opts 第三参透传(主进程 executeMove 打回校验消费)
+    expect(mockApi.task.move.mock.calls[0]).toEqual([
+      'S1',
+      { column: 'assigned', groupId: null },
+      { reason: '迁移脚本缺回滚语句，补上再提交' },
+    ]);
+    expect(result.current.pendingReject).toBeNull();
+  });
+
+  it('confirmReject 空白理由 → 兜底守卫不发 move(弹窗禁用钮之外的二次防线)', async () => {
+    const tasks = [mkTask({ id: 'S1', title: '待验收卡', status: 'submitted', groupId: null })];
+    const { result } = setup(tasks);
+    act(() => result.current.dragEnd('S1', 'col:flat:assigned'));
+    await act(async () => {
+      result.current.confirmReject('   ');
+    });
+    expect(mockApi.task.move).not.toHaveBeenCalled();
+    expect(result.current.pendingReject).toBeNull();
+  });
+
+  it('submitted → done 松手 → 验收通过直接 move,不进确认流不进打回流', async () => {
+    const tasks = [
+      mkTask({ id: 'S1', title: '待验收卡', status: 'submitted', groupId: null }),
+      mkTask({ id: 'D1', title: '完成卡', status: 'completed', groupId: null }),
+    ];
+    const { result } = setup(tasks);
+    await act(async () => {
+      result.current.dragEnd('S1', 'col:flat:done');
+    });
+    expect(mockApi.task.move).toHaveBeenCalledTimes(1);
+    expect(mockApi.task.move.mock.calls[0]).toEqual(['S1', { column: 'done', groupId: null }]);
+    expect(result.current.pendingConfirm).toBeNull();
+    expect(result.current.pendingReject).toBeNull();
+  });
+
+  it('in_progress → review 松手 → 提交验收直接 move(新列既有链路回归)', async () => {
+    const tasks = [mkTask({ id: 'R1', title: '运行卡', status: 'in_progress', groupId: null })];
+    const { result } = setup(tasks);
+    await act(async () => {
+      result.current.dragEnd('R1', 'col:flat:review');
+    });
+    expect(mockApi.task.move).toHaveBeenCalledTimes(1);
+    expect(mockApi.task.move.mock.calls[0]![1]!.column).toBe('review');
+  });
+
+  it('任意卡拖悬等待中列 → 禁投(canDropIntoColumn 单源:系统驱动列恒禁入)', () => {
+    const tasks = [mkTask({ id: 'R1', title: '运行卡', status: 'in_progress', groupId: null })];
+    const { result } = setup(tasks);
+    act(() => result.current.dragStart('R1'));
+    act(() => result.current.dragOver('R1', 'col:flat:waiting'));
+    expect(result.current.dropHint).toBeNull();
+    act(() => result.current.dragEnd('R1', 'col:flat:waiting'));
+    expect(mockApi.task.move).not.toHaveBeenCalled();
   });
 });

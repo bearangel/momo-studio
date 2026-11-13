@@ -38,6 +38,13 @@ export interface PendingAssign {
   groupId: string | null;
 }
 
+/** 待打回（v2 生命周期 Task 21）：submitted → assigned 的拦截产物——弹框
+ *  补齐打回理由后携 opts.reason move；取消零调用卡片归位 */
+export interface PendingReject {
+  taskId: string;
+  resolution: DropResolution;
+}
+
 /** 拖悬目标列（排序退役后替代插入指示线的落点反馈） */
 export interface DropHint {
   column: BoardColumnKey;
@@ -86,6 +93,12 @@ export function useBoardDrop(opts: { tasks: TaskRow[]; laneMode: 'flat' | 'lanes
   pendingAssign: PendingAssign | null;
   /** 弹框取消:清拦截态零副作用(卡片归位) */
   cancelAssign: () => void;
+  /** v2 生命周期:待打回(submitted → assigned);RejectReasonDialog 确认后携 reason move */
+  pendingReject: PendingReject | null;
+  /** 打回确认(reason 必填,空白守卫兜底) */
+  confirmReject: (reason: string) => void;
+  /** 打回取消:清拦截态零副作用(卡片归位) */
+  cancelReject: () => void;
   dropHint: DropHint | null;
 } {
   const { tasks, laneMode, dropIndex } = opts;
@@ -94,12 +107,13 @@ export function useBoardDrop(opts: { tasks: TaskRow[]; laneMode: 'flat' | 'lanes
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<PendingDropConfirm | null>(null);
   const [pendingAssign, setPendingAssign] = useState<PendingAssign | null>(null);
+  const [pendingReject, setPendingReject] = useState<PendingReject | null>(null);
   const [dropHint, setDropHint] = useState<DropHint | null>(null);
 
   const performMove = useCallback(
-    async (taskId: string, resolution: DropResolution): Promise<void> => {
+    async (taskId: string, resolution: DropResolution, opts?: { reason?: string }): Promise<void> => {
       try {
-        await move(taskId, toMoveTarget(resolution));
+        await move(taskId, toMoveTarget(resolution), opts);
       } catch (err) {
         // 主进程拒绝消息已保证中文文案(dropRejectReason 等),直出不改写
         showToast((err as Error).message);
@@ -166,9 +180,15 @@ export function useBoardDrop(opts: { tasks: TaskRow[]; laneMode: 'flat' | 'lanes
         setPendingConfirm({ taskId, resolution });
         return;
       }
+      const activeRow = tasks.find((t) => t.id === taskId);
+      // v2 生命周期（Task 21，定值 #22）：submitted → assigned = 打回返工——
+      // 必填理由，先弹 RejectReasonDialog；确认才携 reason move，取消零副作用
+      if (resolution.column === 'assigned' && activeRow?.status === 'submitted') {
+        setPendingReject({ taskId, resolution });
+        return;
+      }
       // §4.4:无目标 draft 拖入排队中 → 指派弹框接管(不发 move,取消零副作用);
       // 有目标直接 move 入队。谓词单源 lib/board.hasDelegationTarget
-      const activeRow = tasks.find((t) => t.id === taskId);
       if (
         resolution.column === 'assigned' &&
         activeRow !== undefined &&
@@ -201,6 +221,23 @@ export function useBoardDrop(opts: { tasks: TaskRow[]; laneMode: 'flat' | 'lanes
     setPendingAssign(null);
   }, []);
 
+  /** 打回确认：理由 trim 后随 move 透传（空白守卫兜底——弹窗确认钮已禁用，
+   *  主进程同款校验双保险）；清拦截态 */
+  const confirmReject = useCallback(
+    (reason: string): void => {
+      const pending = pendingReject;
+      setPendingReject(null);
+      const trimmed = reason.trim();
+      if (!pending || !trimmed) return;
+      void performMove(pending.taskId, pending.resolution, { reason: trimmed });
+    },
+    [pendingReject, performMove],
+  );
+
+  const cancelReject = useCallback((): void => {
+    setPendingReject(null);
+  }, []);
+
   return {
     activeDragId,
     dragStart,
@@ -212,6 +249,9 @@ export function useBoardDrop(opts: { tasks: TaskRow[]; laneMode: 'flat' | 'lanes
     cancelConfirm,
     pendingAssign,
     cancelAssign,
+    pendingReject,
+    confirmReject,
+    cancelReject,
     dropHint,
   };
 }

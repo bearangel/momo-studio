@@ -5,7 +5,7 @@
 //     语义色 token）/ 组名 / 任务计数 / 折叠 chevron / 组菜单 GroupMenu
 //     （重命名·换色·归档组——Task 14 经 useGroupActions 公共逻辑实装；
 //     未分组道无菜单）
-//   - 折叠态只留 header；展开态 5 列横排（BoardColumn × BOARD_COLUMNS）
+//   - 折叠态只留 header；展开态列横排（BoardColumn × BOARD_COLUMNS，v2 生命周期起七列）
 //   - 卡片渲染由 BoardCanvas 注入（SortableBoardCard）；拖拽手持源状态
 //     透传 BoardColumn 做禁投预判（canDropIntoColumn → droppable disabled + 变暗）；
 //     拖悬目标列高亮按 dropHint（column+groupId）匹配透传（排序退役后

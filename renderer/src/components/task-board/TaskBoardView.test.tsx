@@ -1,7 +1,7 @@
 // renderer/src/components/task-board/TaskBoardView.test.tsx
 //
 // 看板主区测试（看板重构 Task 12 同步改造）：
-//   - 未选中任务 → 标题栏 + BoardToolbar + 画板（五列 + 卡片）
+//   - 未选中任务 → 标题栏 + BoardToolbar + 画板（七列 + 卡片）
 //   - selectedTaskId → TaskDetailDrawer 右侧抽屉叠加（主区互斥渲染退役，
 //     画板仍在）；泳道模式开关已接线（Task 12）+ localStorage 持久化 + 有组默认泳道
 //   - 并发徽标（迁入 BoardToolbar，文案格式不变）：getGlobal 缺字段 fallback 3 /
@@ -133,7 +133,7 @@ describe('TaskBoardView 主区（看板重构 Task 11）', () => {
     getGlobalMock.mockReset().mockResolvedValue({ maxToolCalls: 10, auditQuotaMb: 100 });
   });
 
-  it('未选中任务时渲染工具栏 + 五列画板，任务卡进对应列', () => {
+  it('未选中任务时渲染工具栏 + 七列画板，任务卡进对应列', () => {
     const fixture = [mkTask({ id: 't1', title: '任务1', status: 'pending', priority: 5 })];
     mockApi.task.list.mockResolvedValue(fixture);
     useTaskStore.setState({ tasks: fixture });
@@ -147,8 +147,8 @@ describe('TaskBoardView 主区（看板重构 Task 11）', () => {
     expect(laneToggle).toBeEnabled();
     expect(laneToggle).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('button', { name: /归档/ })).toBeEnabled();
-    // 五列（BOARD_COLUMNS 契约）
-    for (const label of ['待办', '排队中', '进行中', '已完成', '已关闭']) {
+    // 七列（BOARD_COLUMNS 契约；v2 生命周期新增 等待中/待验收）
+    for (const label of ['待办', '排队中', '进行中', '等待中', '待验收', '已完成', '已关闭']) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
     // pending → 待办列

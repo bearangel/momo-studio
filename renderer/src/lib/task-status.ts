@@ -13,7 +13,7 @@ const STATUS_LABEL: Record<TaskStatusKey, string> = {
   assigned: '排队中',
   session_queued: '排队中',
   in_progress: '进行中',
-  // v2 生命周期二态（spec §5.1，迁移 081）：临时标签，最终样式归 Task 21
+  // v2 生命周期二态（spec §5.1，迁移 081；预览包 2/2 定值清单 #6 终值）
   waiting_human: '等待中',
   submitted: '待验收',
   paused: '已暂停',
@@ -33,9 +33,10 @@ const STATUS_TONE: Record<TaskStatusKey, BadgeTone> = {
   assigned: 'accent',
   session_queued: 'warning',
   in_progress: 'accent',
-  // v2 生命周期二态：临时 neutral，最终配色归 Task 21
-  waiting_human: 'neutral',
-  submitted: 'neutral',
+  // v2 生命周期二态终值（预览 2026-11-13-task-lifecycle-board.html 定值清单 #6）：
+  // 等待中=warning（等人工系琥珀）、待验收=accent（验收动作系蓝紫）
+  waiting_human: 'warning',
+  submitted: 'accent',
   paused: 'violet',
   completed: 'success',
   cancelled: 'neutral',

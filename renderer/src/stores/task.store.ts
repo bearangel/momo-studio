@@ -72,8 +72,13 @@ interface TaskState {
   /**
    * 拖拽落点单一通道（看板重构 Task 6/10）：本地先乐观变（列代表状态 +
    * groupId），IPC 成功用返回行覆盖，失败回滚目标行并 rethrow（上层 toast）。
+   * opts.reason 随打回（submitted→assigned）透传（v2 生命周期 Task 8）。
    */
-  move: (id: string, target: Parameters<typeof ipc.task.move>[1]) => Promise<void>;
+  move: (
+    id: string,
+    target: Parameters<typeof ipc.task.move>[1],
+    opts?: Parameters<typeof ipc.task.move>[2],
+  ) => Promise<void>;
   /**
    * 顶置开关（迁移 050）：乐观置 pinnedAt（本地 Date.now() 即时生效排序），
    * IPC 成功用权威行覆盖，失败回滚目标行并 rethrow（上层 toast）。
@@ -149,7 +154,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     set((s) => ({ tasks: s.tasks.map((t) => (t.id === id ? updated : t)) }));
   },
 
-  move: async (id, target) => {
+  move: async (id, target, opts) => {
     // 行级快照：失败时只回滚目标行（非整表快照——并发在途的其他 move
     // 成功行不被踩踏；若期间列表已被 reset/切换，id 不匹配自然 no-op）
     const snapshotRow = get().tasks.find((t) => t.id === id) ?? null;
@@ -162,7 +167,9 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       ),
     }));
     try {
-      const updated = await ipc.task.move(id, target);
+      // opts 透传打回理由（Task 21）；未传时保持两参调用形态（既有 wire 契约不变）
+      const updated =
+        opts !== undefined ? await ipc.task.move(id, target, opts) : await ipc.task.move(id, target);
       // 权威行覆盖：服务端状态机裁决 + updatedAt 等服务端字段生效
       set((s) => ({ tasks: s.tasks.map((t) => (t.id === id ? updated : t)) }));
     } catch (err) {
