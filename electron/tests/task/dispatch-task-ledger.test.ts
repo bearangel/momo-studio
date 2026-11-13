@@ -10,7 +10,7 @@ import path from 'node:path';
 import os from 'node:os';
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
-import { getTask, listTasks, updateTask } from '../../src/main/storage/tasks/repo';
+import { getTask, listTasks, updateTask, transitionTaskStatus } from '../../src/main/storage/tasks/repo';
 import {
   ledgerInsertDispatch,
   ledgerSettleDispatch,
@@ -86,6 +86,8 @@ describe('D4 dispatch-task-ledger（registry → tasks 单向投影）', () => {
 
   it('followup 链复用：终态行 updateTask 权威复位回 in_progress（禁 DELETE——迁移 555 触发器会把挂链消息 task_id 置 NULL 断链）', () => {
     ledgerInsertDispatch(CHAIN);
+    // v2 语义：settle completed = 验收已提交交付——前置经 submitted（完成必经验收）
+    transitionTaskStatus(CHAIN.taskId, 'submitted');
     ledgerSettleDispatch(CHAIN.taskId, 'completed');
     expect(getTask(CHAIN.taskId)!.status).toBe('completed');
     // 下一轮派发（同链 id）——行 id 稳定不动（触发器零触发）
@@ -97,6 +99,7 @@ describe('D4 dispatch-task-ledger（registry → tasks 单向投影）', () => {
 
   it('followup 复活已归档行（2026-11-12 看板治理）：复位 in_progress 同时清 archivedAt——否则运行链被归档隐藏、看板不可见', () => {
     ledgerInsertDispatch(CHAIN);
+    transitionTaskStatus(CHAIN.taskId, 'submitted');
     ledgerSettleDispatch(CHAIN.taskId, 'completed');
     updateTask(CHAIN.taskId, { archivedAt: 9999 }); // 终态后被用户归档（archive handler 同款落值）
     expect(getTask(CHAIN.taskId)!.archivedAt).not.toBeNull();
@@ -119,6 +122,7 @@ describe('D4 dispatch-task-ledger（registry → tasks 单向投影）', () => {
     expect(row.status, 'needs_input=HITL 等待人工——paused 语义准确（spec 自审修正）').toBe('paused');
 
     ledgerInsertDispatch(CHAIN);
+    transitionTaskStatus(CHAIN.taskId, 'submitted');
     ledgerSettleDispatch(CHAIN.taskId, 'completed');
     row = getTask(CHAIN.taskId)!;
     expect(row.status).toBe('completed');

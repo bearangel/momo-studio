@@ -296,6 +296,7 @@ describe('startTaskAndKickoff blocked 派发闸（M3.3）', () => {
       status: 'assigned',
     });
     transitionTaskStatus(dep.id, 'in_progress', { executionSessionId: 's-dep' });
+    transitionTaskStatus(dep.id, 'submitted');
     transitionTaskStatus(dep.id, 'completed', { completedAt: Date.now() });
     const t = insertTask({
       workspaceId: 'ws1',

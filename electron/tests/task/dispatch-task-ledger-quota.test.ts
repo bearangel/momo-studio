@@ -11,7 +11,7 @@ import path from 'node:path';
 import os from 'node:os';
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
-import { getTask } from '../../src/main/storage/tasks/repo';
+import { getTask, transitionTaskStatus } from '../../src/main/storage/tasks/repo';
 import { insertSession } from '../../src/main/storage/sessions/repo';
 import {
   ledgerInsertDispatch,
@@ -233,6 +233,7 @@ describe('ledgerSettleDispatch 配额自动续跑调度（QUOTA_LIMITED ≠ 终�
     ledgerInsertDispatch({ ...CHAIN, sessionId });
     ledgerSettleDispatch(CHAIN.taskId, 'failed', quotaErrorText(null)); // 计数 1，assigned
     ledgerInsertDispatch({ ...CHAIN, sessionId }); // 复位 in_progress
+    transitionTaskStatus(CHAIN.taskId, 'submitted'); // v2：settle completed = 验收已提交交付
     ledgerSettleDispatch(CHAIN.taskId, 'completed');
 
     expect(getTask(CHAIN.taskId)!.status).toBe('completed');

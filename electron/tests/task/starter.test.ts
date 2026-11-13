@@ -244,9 +244,10 @@ describe('startTask execution_room 决策树', () => {
       title: 'T1',
       creatorUserId: '@owner:home',
     });
-    // completed 终态启动应失败
+    // completed 终态启动应失败（经 submitted 验收链到达，v2 完成必经验收）
     transitionTaskStatus(t.id, 'assigned');
     transitionTaskStatus(t.id, 'in_progress');
+    transitionTaskStatus(t.id, 'submitted');
     transitionTaskStatus(t.id, 'completed');
     await expect(startTask(t.id)).rejects.toThrow(/status/);
   });
