@@ -56,6 +56,7 @@ import { migration078 } from './078_momo_list_models_tool';
 import { migration079 } from './079_oauth_module';
 import { migration080 } from './080_momo_capability_management_tools';
 import * as migration081 from './081_task_lifecycle_v2';
+import * as migration082 from './082_task_lifecycle_backfill';
 
 export interface Migration {
   version: number;
@@ -1241,6 +1242,13 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // task_runs / human_requests。SQL 住在独立模块 081_task_lifecycle_v2.ts。
     version: migration081.version,
     sql: migration081.up,
+  },
+  {
+    // 任务生命周期 v2 回填（spec 2026-11-13 §5.5）：存量 in_progress/paused
+    // 补 run #1 + current_run_id；origin='dispatch' 行 auto_accept=1。
+    // SQL 住在独立模块 082_task_lifecycle_backfill.ts。
+    version: migration082.version,
+    sql: migration082.up,
   },
 ];
 
