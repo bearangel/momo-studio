@@ -413,6 +413,39 @@ describe('T5 细节（spec 2026-11-13 §7.3）', () => {
     expect(await screen.findByText('请填写API Key')).toBeInTheDocument();
   });
 
+  // P3 回归锁（2026-11-13 真机冒烟）：改完字段错误即清——不挂到下次提交
+  it('校验错误出现后编辑任一字段 → 错误文案即时清除', async () => {
+    render(<ProviderStep ctx={mkCtx()} />);
+    fireEvent.click(await screen.findByText('+ 自定义供应商'));
+    fireEvent.click(screen.getByRole('button', { name: /验证并继续/ }));
+    expect(await screen.findByText(/请填写名称/)).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('https://llm-gateway.example.com/v1'), {
+      target: { value: 'http://x/v1' },
+    });
+    expect(screen.queryByText(/请填写名称/)).not.toBeInTheDocument();
+  });
+
+  it('连接失败错误出现后编辑 Key → 错误文案即时清除（连接错误同待遇）', async () => {
+    mockTestConnection.mockResolvedValueOnce({ ok: false, error: 'HTTP 401' });
+    render(<ProviderStep ctx={mkCtx()} />);
+    fireEvent.click(await screen.findByText('+ 自定义供应商'));
+    fireEvent.change(screen.getByPlaceholderText('https://llm-gateway.example.com/v1'), {
+      target: { value: 'http://x/v1' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('手输模型名，验证连通后即可继续'), {
+      target: { value: 'm1' },
+    });
+    const nameInput = document.querySelector(
+      'input:not([placeholder]):not([type=password])',
+    ) as HTMLInputElement;
+    fireEvent.change(nameInput, { target: { value: 'N' } });
+    fireEvent.change(screen.getByPlaceholderText('sk-...'), { target: { value: 'sk-x' } });
+    fireEvent.click(screen.getByRole('button', { name: /验证并继续/ }));
+    expect(await screen.findByText(/验证失败：HTTP 401/)).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('sk-...'), { target: { value: 'sk-y' } });
+    expect(screen.queryByText(/验证失败：HTTP 401/)).not.toBeInTheDocument();
+  });
+
   it('custom 形态 API Key 有 sk-... placeholder（与 preset 形态一致）', async () => {
     render(<ProviderStep ctx={mkCtx()} />);
     fireEvent.click(await screen.findByText('+ 自定义供应商'));

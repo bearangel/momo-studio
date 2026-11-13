@@ -45,6 +45,11 @@ export function ProviderStep({ ctx, onSkip }: Props) {
   const [existingModels, setExistingModels] = useState<ProviderModel[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // P3（2026-11-13 真机冒烟）：校验/连接错误随字段编辑即时清除——否则改完
+  // 字段错误仍挂到下次提交，误导「还没改对」
+  const clearSubmitError = (): void => {
+    if (error !== null) setError(null);
+  };
   // T1 模型列表拉取（spec 2026-11-13 §3.3）：custom 形态字段级状态机
   const [modelFetch, setModelFetch] = useState<{
     status: 'idle' | 'fetching' | 'fetched';
@@ -293,7 +298,14 @@ export function ProviderStep({ ctx, onSkip }: Props) {
           {existingId && existingModels.length > 0 && (
             <div className="flex items-end gap-2">
               <div className="flex-1">
-                <Select label="模型" value={modelId} onChange={(e) => setModelId(e.target.value)}>
+                <Select
+                  label="模型"
+                  value={modelId}
+                  onChange={(e) => {
+                    clearSubmitError();
+                    setModelId(e.target.value);
+                  }}
+                >
                   {existingModels.map((m) => (
                     <option key={m.modelId} value={m.modelId}>
                       {m.modelId}
@@ -378,6 +390,7 @@ export function ProviderStep({ ctx, onSkip }: Props) {
                 type="password"
                 value={apiKey}
                 onChange={(e) => {
+                  clearSubmitError();
                   setApiKey(e.target.value);
                   // 远端列表是旧 key 拉的——换 key 即作废（本地预置不受影响仍可选）；
                   // 在途拉取由 fetchSeq 令牌在回包落地时丢弃
@@ -387,7 +400,14 @@ export function ProviderStep({ ctx, onSkip }: Props) {
               />
               <div className="flex items-end gap-2">
                 <div className="flex-1">
-                  <Select label="模型" value={modelId} onChange={(e) => setModelId(e.target.value)}>
+                  <Select
+                    label="模型"
+                    value={modelId}
+                    onChange={(e) => {
+                      clearSubmitError();
+                      setModelId(e.target.value);
+                    }}
+                  >
                     {(presetRemote ? mergePresetModels(presetRemote.models, preset) : preset.models.map((m) => m.id)).map(
                       (id) => (
                         <option key={id} value={id}>
@@ -423,11 +443,20 @@ export function ProviderStep({ ctx, onSkip }: Props) {
           )}
           {mode === 'custom' && (
             <>
-              <Input label="名称" value={name} onChange={(e) => setName(e.target.value)} required />
+              <Input
+                label="名称"
+                value={name}
+                onChange={(e) => {
+                  clearSubmitError();
+                  setName(e.target.value);
+                }}
+                required
+              />
               <Select
                 label="平台"
                 value={platform}
                 onChange={(e) => {
+                  clearSubmitError();
                   setPlatform(e.target.value as ProviderPlatform);
                   // 连接参数变更：已拉取的模型列表对新高维失效，重置回手输（陈旧列表不得残留展示）
                   resetModelFetch();
@@ -440,6 +469,7 @@ export function ProviderStep({ ctx, onSkip }: Props) {
                 label="Base URL"
                 value={baseUrl}
                 onChange={(e) => {
+                  clearSubmitError();
                   setBaseUrl(e.target.value);
                   resetModelFetch();
                 }}
@@ -451,6 +481,7 @@ export function ProviderStep({ ctx, onSkip }: Props) {
                 type="password"
                 value={apiKey}
                 onChange={(e) => {
+                  clearSubmitError();
                   setApiKey(e.target.value);
                   resetModelFetch();
                 }}
@@ -462,6 +493,7 @@ export function ProviderStep({ ctx, onSkip }: Props) {
                   label="模型名"
                   value={modelId}
                   onChange={(e) => {
+                    clearSubmitError();
                     if (e.target.value === MANUAL_OPTION) {
                       setModelFetch({ status: 'idle', models: [], truncated: false });
                       return;
@@ -482,7 +514,10 @@ export function ProviderStep({ ctx, onSkip }: Props) {
                     <Input
                       label="模型名"
                       value={modelId}
-                      onChange={(e) => setModelId(e.target.value)}
+                      onChange={(e) => {
+                        clearSubmitError();
+                        setModelId(e.target.value);
+                      }}
                       placeholder="手输模型名，验证连通后即可继续"
                       required
                     />
