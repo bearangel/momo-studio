@@ -346,6 +346,21 @@ describe('preset/existing 模型列表动态获取（spec 2026-11-13 T1）', () 
     expect(options[0]!.getAttribute('value')).toBe('glm-5.3-air');
   });
 
+  it('preset 拉取成功后改 apiKey → 陈旧远端列表即清，本地预置仍可选', async () => {
+    mockProbeModels.mockResolvedValue({ models: ['glm-5.3-air'], truncated: false });
+    render(<ProviderStep ctx={mkCtx()} />);
+    fireEvent.click(await screen.findByText('智谱 GLM'));
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-1' } });
+    fireEvent.click(screen.getByRole('button', { name: /获取最新模型/ }));
+    await waitFor(() => {
+      expect(screen.getByRole('option', { name: /glm-5\.3-air/ })).toBeInTheDocument();
+    });
+    // 换 key：旧 key 拉的远端列表作废，本地预置保留
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-2' } });
+    expect(screen.queryByRole('option', { name: /glm-5\.3-air/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /glm-5\.3$/ })).toBeInTheDocument();
+  });
+
   it('preset 拉取失败 → 预置项保留 + 行内错误', async () => {
     mockProbeModels.mockRejectedValue(new Error('HTTP 500'));
     render(<ProviderStep ctx={mkCtx()} />);

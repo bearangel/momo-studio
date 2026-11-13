@@ -635,4 +635,31 @@ describe('TaskBoardView 来源多选过滤（查询级）', () => {
       expect(call[0]).not.toMatchObject({ origin: ['user', 'peer_draft'] });
     }
   });
+
+  // ws×过滤竞态（2026-11-13 遗留收口）：防抖窗口内切工作区 → 主 effect 立即按
+  // 新 ws + 最新过滤拉一次；在途防抖定时器（闭包携带旧 ws）被清，不再补拉
+  it('过滤变更 250ms 内切 workspace → 仅一次按新 ws+新过滤的即时拉取（无双拉）', async () => {
+    const view = render(<TaskBoardView workspaceId="ws-1" />);
+    await waitFor(() => expect(mockApi.task.list).toHaveBeenCalled());
+    const baseline = mockApi.task.list.mock.calls.length;
+
+    fireEvent.click(screen.getByRole('button', { name: /按任务来源筛选/ }));
+    fireEvent.click(screen.getByRole('option', { name: /编排任务/ })); // → [user, peer_draft]
+    // 防抖在途时切 ws（rerender 换 prop）
+    view.rerender(<TaskBoardView workspaceId="ws-2" />);
+
+    await waitFor(
+      () =>
+        expect(mockApi.task.list).toHaveBeenLastCalledWith({
+          workspaceId: 'ws-2',
+          orderBy: 'created_at_desc',
+          limit: 500,
+          origin: ['user', 'peer_draft'],
+        }),
+      { timeout: 2000 },
+    );
+    // 等 600ms（防抖窗口 250ms 的两倍以上）确认无第二次补拉
+    await new Promise((r) => setTimeout(r, 600));
+    expect(mockApi.task.list.mock.calls.length).toBe(baseline + 1);
+  });
 });

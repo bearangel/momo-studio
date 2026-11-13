@@ -26,7 +26,7 @@
 // workspace 切换由父层（MiddlePanel）控制，本组件按 workspaceId prop 重 load。
 // M3.3：第三值 dag（依赖图视图，spec §2.2）——只由用户手动选择持久化，
 // 派生默认逻辑不变（不产 dag）。
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ipc } from '../../ipc/client';
 import type { GlobalSettings, GroupRow, TaskOrigin, TaskRow } from '../../ipc/types';
 import { filterBoardTasks, TASK_ORIGINS } from '../../lib/board';
@@ -124,10 +124,10 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
   const [archivedView, setArchivedView] = useState<ArchivedViewData>({ phase: 'idle' });
   /** 来源多选（2026-11-12 看板治理）：持久化偏好，驱动 load 查询参数 */
   const [originFilter, setOriginFilter] = useState<TaskOrigin[]>(() => readStoredOriginFilter());
-  // originFilter 的防抖镜像（load 实际订阅它）：变更 250ms 后才同步生效驱动重拉。
-  // localStorage 持久化不防抖（偏好即时存，见 handleOriginFilter）；挂载首帧同值
-  // setState 被 React 短路，不产生多余重拉。
-  const [originFilterApplied, setOriginFilterApplied] = useState<TaskOrigin[]>(originFilter);
+  // 过滤即时 ref：主 effect / 5s 轮询读它——ws 切换时立即带最新过滤拉取，
+  // 不经防抖镜像（旧实现切 ws 先按滞后镜像拉一次、防抖到期再拉一次，双拉）
+  const originFilterRef = useRef(originFilter);
+  originFilterRef.current = originFilter;
 
   const laneMode: LaneMode = laneModePref ?? (groups.length > 0 ? 'lanes' : 'flat');
 
@@ -149,26 +149,40 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
     }
   }, []);
 
-  // 防抖同步：originFilter 变更 250ms 后写入镜像值（cleanup 清挂起定时器——
-  // 窗口内连续变更只有最后一次生效，中间态不打 IPC）
+  // 过滤变更 → 250ms 防抖重拉（连续勾选不打爆 IPC——每次变更即一次全量
+  // task.list）；localStorage 持久化不防抖（偏好即时存，见 handleOriginFilter）。
+  // ws 切换不入防抖：主 effect 已按最新过滤即时拉取，本 effect 借 cleanup 清掉
+  // 在途定时器（闭包携带旧 ws 的补拉不再发生）后直接返回。
+  const firstFilterRun = useRef(true);
+  const prevWsRef = useRef(workspaceId);
   useEffect(() => {
-    const t = setTimeout(() => setOriginFilterApplied(originFilter), ORIGIN_FILTER_DEBOUNCE_MS);
+    if (prevWsRef.current !== workspaceId) {
+      prevWsRef.current = workspaceId;
+      return;
+    }
+    if (firstFilterRun.current) {
+      firstFilterRun.current = false;
+      return;
+    }
+    const t = setTimeout(() => {
+      void load(workspaceId, { origin: originFilter });
+    }, ORIGIN_FILTER_DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [originFilter]);
+  }, [originFilter, workspaceId, load]);
 
-  // mount + workspaceId 变化 → 任务 load（5s 轮询）+ 组并行拉取；
-  // originFilter 经防抖镜像生效（查询级过滤在 load 参数生效——不是视图遮盖）
+  // mount + workspaceId 变化 → 任务 load（5s 轮询，读过滤 ref 最新值）+ 组并行拉取；
+  // originFilter 经防抖 effect 生效（查询级过滤在 load 参数生效——不是视图遮盖）
   useEffect(() => {
-    void load(workspaceId, { origin: originFilterApplied });
+    void load(workspaceId, { origin: originFilterRef.current });
     void loadGroups(workspaceId).catch(() => {
       // 组拉取失败不阻塞画板渲染——组 chip 回退不显示
     });
     const refresh = (): void => {
-      void load(workspaceId, { origin: originFilterApplied });
+      void load(workspaceId, { origin: originFilterRef.current });
     };
     const interval = setInterval(refresh, REFRESH_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [workspaceId, load, loadGroups, originFilterApplied]);
+  }, [workspaceId, load, loadGroups]);
 
   // 切 workspace 清空筛选（spec §6 与 TaskSidebarPanel 同款语义）
   useEffect(() => {

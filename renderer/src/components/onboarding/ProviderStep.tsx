@@ -377,7 +377,12 @@ export function ProviderStep({ ctx, onSkip }: Props) {
                 label="API Key"
                 type="password"
                 value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
+                onChange={(e) => {
+                  setApiKey(e.target.value);
+                  // 远端列表是旧 key 拉的——换 key 即作废（本地预置不受影响仍可选）；
+                  // 在途拉取由 fetchSeq 令牌在回包落地时丢弃
+                  setPresetRemote(null);
+                }}
                 placeholder="sk-..."
               />
               <div className="flex items-end gap-2">
