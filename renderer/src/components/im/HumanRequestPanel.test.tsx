@@ -389,6 +389,50 @@ describe('HumanRequestPanel — 多卡堆叠态', () => {
     await mountPanel();
     expect(screen.queryByTestId('human-stack-head')).toBeNull();
   });
+
+  it('同 kind 换卡状态隔离：两张 question 切换不串选中/草稿（KindCard key 锁）', async () => {
+    const rowA = makeRow({
+      id: 'req-qa',
+      kind: 'question',
+      optionsJson: JSON.stringify([
+        { id: 'opt-a1', label: 'A 选项一' },
+        { id: 'opt-a2', label: 'A 选项二' },
+      ]),
+    });
+    const rowB = makeRow({
+      id: 'req-qb',
+      kind: 'question',
+      prompt: 'B 的问题正文',
+      optionsJson: JSON.stringify([{ id: 'opt-b1', label: 'B 选项一' }]),
+    });
+    listMock.mockResolvedValue([rowA, rowB]);
+    await mountPanel();
+
+    // A 展开（首卡）：选 A 的第二项 + 草稿
+    fireEvent.click(screen.getByText('A 选项二'));
+    fireEvent.change(screen.getByLabelText('补充说明（可选）'), {
+      target: { value: 'A 的草稿' },
+    });
+
+    // 切到 B（同 kind 折叠行换卡——缺 key 时 QuestionBody 实例复用、状态串卡）
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('human-collapsed-req-qb'));
+    });
+
+    // B 全新实例：草稿为空、A 的选项不在场（选中态回 B 自己的首项）
+    expect(screen.getByLabelText('补充说明（可选）')).toHaveValue('');
+    expect(screen.queryByText('A 选项二')).not.toBeInTheDocument();
+
+    // 直接提交 → 载荷只含 B 自己的选项 id（缺 key 时会串成 opt-a2）
+    fireEvent.change(screen.getByLabelText('补充说明（可选）'), {
+      target: { value: 'B 的说明' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '提交' }));
+    });
+    expect(answerMock).toHaveBeenCalledWith('req-qb', { selected: ['opt-b1'], text: 'B 的说明' }, undefined);
+    expect(answerMock).not.toHaveBeenCalledWith(expect.stringContaining('req-q'), expect.objectContaining({ selected: ['opt-a2'] }), undefined);
+  });
 });
 
 describe('HumanRequestPanel — 推送刷新', () => {

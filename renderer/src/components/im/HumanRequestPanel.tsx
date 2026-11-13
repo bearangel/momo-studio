@@ -693,7 +693,9 @@ export function HumanRequestPanel({ sessionId }: { sessionId: string }) {
         )}
       >
         {pending.length >= 2 && <StackHead rows={pending} now={now} />}
-        {expanded !== null && <KindCard row={expanded} now={now} />}
+        {/* key=requestId：换卡强制重挂载——同 kind 卡复用实例会让 body 内
+            useState（选中/草稿/理由/勾选/error）跨卡串值 */}
+        {expanded !== null && <KindCard key={expanded.id} row={expanded} now={now} />}
         {rest.map((r) => (
           <CollapsedRow key={r.id} row={r} now={now} onExpand={() => setExpandedId(r.id)} />
         ))}
