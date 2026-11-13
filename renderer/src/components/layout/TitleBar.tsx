@@ -43,6 +43,19 @@ export function TitleBar({ wizardMode = false }: TitleBarProps) {
       )}
       {/* mac 原生红绿灯占位 ~78x28，把第一个 tab 让出来避免被遮 */}
       {mac && <div style={{ width: 78 }} className="shrink-0" />}
+      {/* T6（spec 2026-11-13 §8）：向导态 mac 渲染产品标识消解空条带——
+          非向导态不加（与首个 tab 挤占）；win 已常显标识 */}
+      {mac && wizardMode && (
+        <span className="flex items-center gap-1.5 pr-2 text-xs text-secondary">
+          <span
+            className="flex items-center justify-center rounded-md bg-accent-500 text-inverse"
+            style={{ width: 18, height: 18 }}
+          >
+            <Sparkles size={11} strokeWidth={2} aria-hidden />
+          </span>
+          Momo Studio
+        </span>
+      )}
       <WorkspaceTabs hideCreateButton={wizardMode} />
       {/* tabs 与窗口控件之间的空白拖拽区 */}
       <div className="flex-1 h-full" />

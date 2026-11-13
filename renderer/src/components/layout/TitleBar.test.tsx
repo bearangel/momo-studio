@@ -146,3 +146,17 @@ describe('TitleBar', () => {
     expect(spacer?.style.width ?? '').not.toBe('78px');
   });
 });
+
+describe('T6 向导态产品标识（spec 2026-11-13 §8）', () => {
+  it('mac + wizardMode → 78px 占位后渲染 Momo Studio 字标（消解空条带）', () => {
+    mockApi.system.getPlatform.mockReturnValue('darwin');
+    render(<TitleBar wizardMode />);
+    expect(screen.getByText('Momo Studio')).toBeInTheDocument();
+  });
+
+  it('mac 非 wizardMode → 无字标（不与 tabs 挤占）', () => {
+    mockApi.system.getPlatform.mockReturnValue('darwin');
+    render(<TitleBar />);
+    expect(screen.queryByText('Momo Studio')).not.toBeInTheDocument();
+  });
+});
