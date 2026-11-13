@@ -110,6 +110,8 @@ const PENDING_DISPATCH_TIMEOUT_MS = 60_000;
 const pendingDispatches: PendingDispatch[] = [];
 /** sessionId → 占位超时提示定时器（每会话一个，新入队重置） */
 const pendingTimers = new Map<string, NodeJS.Timeout>();
+/** 已提示超时的会话（快照拉取时带上 timedOut，供 renderer 首挂载还原红态） */
+const pendingTimedOut = new Set<string>();
 
 function pendingCountOf(sessionId: string): number {
   let n = 0;
@@ -133,6 +135,7 @@ function notifyPendingDispatch(sessionId: string, timedOut: boolean): void {
 
 function enqueuePendingDispatch(p: PendingDispatch): void {
   pendingDispatches.push(p);
+  pendingTimedOut.delete(p.sessionId);
   if (pendingDispatches.length > PENDING_DISPATCH_LIMIT) {
     const dropped = pendingDispatches.shift();
     logger.warn('启动期派发队列超限，丢弃最旧一条', { sessionId: dropped?.sessionId });
@@ -145,10 +148,37 @@ function enqueuePendingDispatch(p: PendingDispatch): void {
   const timer = setTimeout(() => {
     pendingTimers.delete(p.sessionId);
     // 仍未就绪 → 只提示可重发，消息留在队列里等 flush
-    if (pendingCountOf(p.sessionId) > 0) notifyPendingDispatch(p.sessionId, true);
+    if (pendingCountOf(p.sessionId) > 0) {
+      pendingTimedOut.add(p.sessionId);
+      notifyPendingDispatch(p.sessionId, true);
+    }
   }, PENDING_DISPATCH_TIMEOUT_MS);
   timer.unref?.();
   pendingTimers.set(p.sessionId, timer);
+}
+
+// ─── 启动期待派发队列（session-service，spec 2026-11-13）─────────────────
+//
+// 队列态既推送（session:pendingDispatch）也可拉取（session:pendingDispatches）：
+// 推送在窗口 ready 之前发出会丢失（启动期首条消息的典型时序），renderer 挂载/
+// 切会话时拉一次快照补齐。
+export function listPendingDispatchStates(): PendingDispatchState[] {
+  const bySession = new Map<string, PendingDispatch[]>();
+  for (const p of pendingDispatches) {
+    const arr = bySession.get(p.sessionId);
+    if (arr) arr.push(p);
+    else bySession.set(p.sessionId, [p]);
+  }
+  return [...bySession.entries()].map(([sessionId, list]) => {
+    const last = list[list.length - 1];
+    return {
+      sessionId,
+      count: list.length,
+      timedOut: pendingTimedOut.has(sessionId),
+      agentName: last?.agentName ?? '',
+      iconEmoji: last?.iconEmoji ?? '',
+    };
+  });
 }
 
 /**
@@ -187,6 +217,7 @@ export async function flushPendingDispatches(): Promise<void> {
     const t = pendingTimers.get(sessionId);
     if (t) clearTimeout(t);
     pendingTimers.delete(sessionId);
+    pendingTimedOut.delete(sessionId);
     notifyPendingDispatch(sessionId, false);
   }
   logger.info('启动期消息补派发完成', { count: batch.length, sessions: touched.size });
@@ -196,6 +227,7 @@ export async function flushPendingDispatches(): Promise<void> {
 export function __resetPendingDispatchesForTest(): void {
   for (const t of pendingTimers.values()) clearTimeout(t);
   pendingTimers.clear();
+  pendingTimedOut.clear();
   pendingDispatches.length = 0;
 }
 

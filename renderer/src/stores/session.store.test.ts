@@ -80,6 +80,7 @@ const mockApi = {
     onMessageEventBatch: vi.fn().mockReturnValue(() => {}),
     onListChanged: vi.fn().mockReturnValue(() => {}),
     onPendingDispatch: vi.fn().mockReturnValue(() => {}),
+    pendingDispatches: vi.fn().mockResolvedValue([]),
   },
 };
 

@@ -439,6 +439,8 @@ const api: ApiSurface = {
     // 归组/移出分组：groupId=null 移出；主进程校验组属该会话所在工作空间
     moveToGroup: (sessionId: string, groupId: string | null) =>
       invoke('session:moveToGroup', sessionId, groupId),
+    // 启动期排队占位态快照（2026-11-13）：推送在窗口 ready 前会丢，renderer 拉一次补齐
+    pendingDispatches: () => invoke<PendingDispatchState[]>('session:pendingDispatches'),
     onMessage: (callback) => {
       const handler = (_evt: IpcRendererEvent, msg: ImMessage): void => callback(msg);
       ipcRenderer.on('session:message', handler);

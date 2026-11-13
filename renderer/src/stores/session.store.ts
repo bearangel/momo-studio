@@ -123,6 +123,11 @@ interface SessionState {
    */
   receivePendingDispatch: (state: PendingDispatchState) => void;
   /**
+   * 拉取排队占位态快照（session:pendingDispatches）：推送在窗口 ready 前会丢
+   * （启动期首条消息的典型时序），挂载 / 切会话时补齐。
+   */
+  hydratePendingDispatches: () => Promise<void>;
+  /**
    * A 子系统：接收主进程 MessageEventBuffer flush 推送的批量 events。
    * 按 eventsByMessage 累积，同 event id 不重复。
    */
@@ -273,6 +278,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   selectSession: async (sessionId) => {
+    // 排队占位态补齐：推送可能在窗口 ready 前发出（启动期首条消息），切会话时拉快照
+    void get().hydratePendingDispatches();
     // 乐观只读判定：列表 summary 的 members 与详情同源（三表 JOIN 有效成员），
     // 先按它置位避免切会话闪烁；随后 loadMembers 权威重算
     const summary = get().sessions.find((s) => s.id === sessionId);
@@ -420,6 +427,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       else next.delete(state.sessionId);
       return { pendingDispatchBySession: next };
     });
+  },
+
+  hydratePendingDispatches: async () => {
+    try {
+      const states = await ipc.session.pendingDispatches();
+      set((s) => {
+        const next = new Map(s.pendingDispatchBySession);
+        // 服务端快照为准：有则覆盖、无则清（防 flush 后残留占位）
+        for (const st of states) next.set(st.sessionId, st);
+        const alive = new Set(states.map((st) => st.sessionId));
+        for (const key of [...next.keys()]) if (!alive.has(key)) next.delete(key);
+        return { pendingDispatchBySession: next };
+      });
+    } catch {
+      // 快照拉取失败不阻塞会话切换：推送通道到达时会自愈
+    }
   },
 
   receiveMessage: (msg) => {
@@ -669,6 +692,8 @@ export function subscribeSessionChannels(): () => void {
   const off4 = ipc.session.onPendingDispatch((state) =>
     useSessionStore.getState().receivePendingDispatch(state),
   );
+  // 首次挂载补齐一次快照（推送可能早于窗口 ready 丢失）
+  void useSessionStore.getState().hydratePendingDispatches();
   return () => {
     off1();
     off2();

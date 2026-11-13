@@ -25,7 +25,12 @@ import {
   type SessionSummary,
   type CollabTarget,
 } from './session-ops';
-import { sendUserMessage, handleSessionCommand } from './session-service';
+import {
+  sendUserMessage,
+  handleSessionCommand,
+  listPendingDispatchStates,
+  type PendingDispatchState,
+} from './session-service';
 import { SESSION_COMMANDS } from './commands';
 import { getSession, type SessionRow } from '../storage/sessions/repo';
 import {
@@ -172,6 +177,13 @@ export function registerSessionIpcHandlers(): void {
   // 会话列表（含成员）。workspaceId 缺省 → 全部 workspace（仅迁移/调试用）。
   ipcMain.handle('session:list', async (_evt, workspaceId?: string) => {
     return getSessionsForWorkspace(workspaceId);
+  });
+
+  // 启动期排队占位态快照（session:pendingDispatches，2026-11-13）：
+  // 推送通道 session:pendingDispatch 只在入队/flush 时发；renderer 首次挂载或
+  // 推送时窗口尚未 ready（常见：启动期第一条消息）会收不到——按需拉取补齐。
+  ipcMain.handle('session:pendingDispatches', async () => {
+    return listPendingDispatchStates();
   });
 
   // 单会话详情：session 行 + 成员信息。会话不存在抛错（renderer 转错误提示）。

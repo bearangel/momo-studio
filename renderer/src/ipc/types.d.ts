@@ -1781,6 +1781,11 @@ export interface SessionApiSurface {
   /** K10：订阅会话列表变化推送（session:listChanged——主进程主动新建执行会话时触发） */
   onListChanged(callback: () => void): () => void;
   /**
+   * 启动期排队占位态快照（session:pendingDispatches）：推送通道在窗口 ready 前
+   * 发出会丢失（启动期首条消息的典型时序），renderer 挂载 / 切会话时拉一次补齐。
+   */
+  pendingDispatches(): Promise<PendingDispatchState[]>;
+  /**
    * 订阅「启动期消息排队」占位态（session:pendingDispatch）。
    * RouterService 未就绪（预热池 boot 窗口）时用户消息入队并发本事件；count=0
    * 表示队列已清空（是时候移除占位气泡了）。timedOut=超过等待阈值仍未就绪，
