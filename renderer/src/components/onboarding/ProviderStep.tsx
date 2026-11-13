@@ -52,8 +52,8 @@ export function ProviderStep({ ctx, onSkip }: Props) {
     truncated: boolean;
   }>({ status: 'idle', models: [], truncated: false });
   const [modelError, setModelError] = useState<string | null>(null);
-  // T1 preset「获取最新」：远端列表（null=未拉取，用静态预置）；远端在前与预置去重合并
-  const [presetRemote, setPresetRemote] = useState<string[] | null>(null);
+  // T1 preset「获取最新」：远端列表（null=未拉取，用静态预置）；远端在前与预置去重合并；truncated 供提示
+  const [presetRemote, setPresetRemote] = useState<{ models: string[]; truncated: boolean } | null>(null);
   const [busyFetch, setBusyFetch] = useState(false);
   const [existingRefreshing, setExistingRefreshing] = useState(false);
 
@@ -78,7 +78,7 @@ export function ProviderStep({ ctx, onSkip }: Props) {
         apiKey,
         platform: preset.platform,
       });
-      setPresetRemote(r.models);
+      setPresetRemote({ models: r.models, truncated: r.truncated });
       // 选中项：预置当前值仍在新列表则保留，否则取远端首项（最新优先）
       const merged = mergePresetModels(r.models, preset);
       if (merged.length > 0 && !merged.includes(modelId)) setModelId(merged[0]!);
@@ -156,14 +156,18 @@ export function ProviderStep({ ctx, onSkip }: Props) {
     }
   };
 
-  /** T1 existing 刷新：fetchModels 落库后重读库内列表（半程重来路径增强） */
+  /** T1 existing 刷新（Oracle 终审修正）：fetchModels 是纯拉取零落库——调用方须
+   * 逐个 addModel 幂等入库（ProviderModelList/Picker 既定模式）后重读表刷新 */
   const refreshExistingFromRemote = async (): Promise<void> => {
     if (!existingId || existingRefreshing) return;
     const p = providers.find((x) => x.id === existingId);
     if (!p) return;
     setExistingRefreshing(true);
     try {
-      await ipc.provider.fetchModels(existingId);
+      const ids = await ipc.provider.fetchModels(existingId);
+      for (const id of ids) {
+        await ipc.provider.addModel(existingId, id);
+      }
       await refreshExistingModels(p);
     } catch (e) {
       setModelError(
@@ -355,7 +359,7 @@ export function ProviderStep({ ctx, onSkip }: Props) {
               <div className="flex items-end gap-2">
                 <div className="flex-1">
                   <Select label="模型" value={modelId} onChange={(e) => setModelId(e.target.value)}>
-                    {(presetRemote ? mergePresetModels(presetRemote, preset) : preset.models.map((m) => m.id)).map(
+                    {(presetRemote ? mergePresetModels(presetRemote.models, preset) : preset.models.map((m) => m.id)).map(
                       (id) => (
                         <option key={id} value={id}>
                           {id}
@@ -380,6 +384,11 @@ export function ProviderStep({ ctx, onSkip }: Props) {
                   获取最新模型
                 </Button>
               </div>
+              {presetRemote?.truncated && (
+                <p className="text-[11px] text-status-warning">
+                  该供应商模型较多，仅显示前 200 个
+                </p>
+              )}
               {modelError && <div className="text-xs text-status-error">{modelError}</div>}
             </>
           )}

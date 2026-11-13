@@ -137,3 +137,18 @@ describe('T5 团队行说明小字（spec 2026-11-13 §7.2）', () => {
     expect(await screen.findByText(/@ 成员派发任务/)).toBeInTheDocument();
   });
 });
+
+describe('T-fix#4 开始使用防抖（Oracle Minor #4）', () => {
+  it('点击后异步链进行中按钮禁用——双击不重复建会话', async () => {
+    let resolveQuick!: (v: boolean) => void;
+    mockCreateQuick.mockReturnValue(new Promise((res) => { resolveQuick = res; }));
+    mockMarkDone.mockResolvedValue(undefined);
+    const ctx = mkCtx(APPLY_RESULT);
+    render(<DoneStep ctx={ctx} />);
+    fireEvent.click(await screen.findByRole('button', { name: /开始使用/ }));
+    // 异步链进行中：按钮转为禁用态（文案「正在进入…」）
+    expect(screen.getByRole('button', { name: /正在进入/ })).toBeDisabled();
+    resolveQuick(true);
+    await waitFor(() => expect(ctx.finish).toHaveBeenCalled());
+  });
+});

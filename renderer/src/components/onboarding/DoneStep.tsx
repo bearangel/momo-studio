@@ -18,13 +18,18 @@ export function DoneStep({ ctx }: Props) {
   const r = ctx.applyResult;
   const agentNames = r ? r.applied.map((a) => a.name).join(' · ') : '';
   const [error, setError] = useState<string | null>(null);
+  // T-fix#4：start 异步链（markDone + createQuickSession）期间防抖——双击不重复建会话
+  const [starting, setStarting] = useState(false);
 
   const start = async (): Promise<void> => {
+    if (starting) return;
+    setStarting(true);
     // I2（终审）：markDone 失败显式呈现，向导不关（spec §9）——且不建会话
     try {
       await ipc.onboarding.markDone({ skipped: false });
     } catch (e) {
       setError(`保存引导状态失败（${e instanceof Error ? e.message : String(e)}），请重试`);
+      setStarting(false); // 允许重试
       return;
     }
     // T3（spec 2026-11-13 §5）：终点直通——默认 agent 快速会话即开即用
@@ -79,8 +84,8 @@ export function DoneStep({ ctx }: Props) {
           {error}
         </p>
       )}
-      <Button type="button" className="w-full" onClick={() => void start()}>
-        开始使用
+      <Button type="button" className="w-full" disabled={starting} onClick={() => void start()}>
+        {starting ? '正在进入…' : '开始使用'}
       </Button>
     </div>
   );

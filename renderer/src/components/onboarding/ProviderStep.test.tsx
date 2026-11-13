@@ -14,6 +14,7 @@ const mockListPresets = vi.fn();
 const mockListModels = vi.fn();
 const mockProbeModels = vi.fn();
 const mockFetchModels = vi.fn();
+const mockAddModel = vi.fn();
 
 vi.mock('../../ipc/client', () => ({
   ipc: {
@@ -25,6 +26,7 @@ vi.mock('../../ipc/client', () => ({
       testConnection: (...a: unknown[]) => mockTestConnection(...a),
       probeModels: (...a: unknown[]) => mockProbeModels(...a),
       fetchModels: (...a: unknown[]) => mockFetchModels(...a),
+      addModel: (...a: unknown[]) => mockAddModel(...a),
     },
     settings: {
       updateGlobal: (...a: unknown[]) => mockUpdateGlobal(...a),
@@ -354,22 +356,26 @@ describe('preset/existing 模型列表动态获取（spec 2026-11-13 T1）', () 
     expect(screen.getByRole('option', { name: /glm-5\.3/ })).toBeInTheDocument();
   });
 
-  it('existing 点刷新 → fetchModels(id) 后重拉 listModels 刷新下拉', async () => {
+  it('existing 点刷新 → fetchModels 拉取 ids → addModel 幂等入库 → 下拉见新模型（mock 保真：模拟表）', async () => {
+    // Oracle 终审修正：主进程 fetchRemoteModels 纯拉取零落库——生产者模式是
+    // 「调用方逐个 addModel 入库」（ProviderModelList/Picker 同款）。mock 用可变
+    // 表建模：listModels 读表、addModel 写表、fetchModels 只返回远端 ids。
+    const table = new Map(MODELS_P1.map((m) => [m.modelId, { ...m }]));
     mockList.mockResolvedValue([EXISTING]);
-    mockListModels
-      .mockResolvedValueOnce(MODELS_P1)
-      .mockResolvedValue([
-        ...MODELS_P1,
-        { ...MODELS_P1[0]!, modelId: 'glm-new' },
-      ]);
+    mockListModels.mockImplementation(async () => [...table.values()]);
+    mockAddModel.mockImplementation(async (_id: string, modelId: string) => {
+      table.set(modelId, { ...MODELS_P1[0]!, modelId });
+    });
     mockFetchModels.mockResolvedValue(['glm-5.3', 'glm-new']);
     render(<ProviderStep ctx={mkCtx()} />);
     fireEvent.click(await screen.findByText('使用已有供应商'));
     fireEvent.click(await screen.findByText('智谱 GLM'));
     await screen.findByRole('option', { name: /glm-5\.3/ });
+    expect(screen.queryByRole('option', { name: 'glm-new' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /刷新模型/ }));
     expect(await screen.findByRole('option', { name: 'glm-new' })).toBeInTheDocument();
     expect(mockFetchModels).toHaveBeenCalledWith('p1');
+    expect(mockAddModel).toHaveBeenCalledWith('p1', 'glm-new');
   });
 });
 
@@ -396,5 +402,16 @@ describe('T5 细节（spec 2026-11-13 §7.3）', () => {
     render(<ProviderStep ctx={mkCtx()} />);
     fireEvent.click(await screen.findByText('+ 自定义供应商'));
     expect(screen.getByPlaceholderText('sk-...')).toBeInTheDocument();
+  });
+});
+
+describe('T-fix#2 preset truncated 提示（Oracle Minor #2）', () => {
+  it('preset 拉取 truncated → preset 段显示仅显示前 200 个提示', async () => {
+    mockProbeModels.mockResolvedValue({ models: ['m-1'], truncated: true });
+    render(<ProviderStep ctx={mkCtx()} />);
+    fireEvent.click(await screen.findByText('智谱 GLM'));
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-1' } });
+    fireEvent.click(screen.getByRole('button', { name: /获取最新模型/ }));
+    expect(await screen.findByText(/仅显示前 200 个/)).toBeInTheDocument();
   });
 });
