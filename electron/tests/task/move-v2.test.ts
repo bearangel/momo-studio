@@ -29,6 +29,7 @@ import {
   insertTask,
   getTask,
   transitionTaskStatus,
+  updateTask,
   type TaskRow,
 } from '../../src/main/storage/tasks/repo';
 import { insertSession } from '../../src/main/storage/sessions/repo';
@@ -235,6 +236,24 @@ describe('lifecycle-runs 路由接线（Task 10 已接线：两段式完成语�
     expect(after.acceptedAt).not.toBeNull();
     expect(listRuns(t.id)[0]!.status).toBe('accepted');
     expect(acceptanceOf(t.id)!.status).toBe('answered');
+  });
+
+  it('delegation_role=in 的 in_progress → done 只走 submitRun（提交即验收，不二次 acceptTask）', async () => {
+    const t = seedRunningTask();
+    // 生产同款补戳（delegation-sync P1 降级守卫）：承接行 updateTask 'in' + 强制 auto_accept
+    updateTask(t.id, { delegationRole: 'in', autoAccept: true });
+
+    await executeMove(t.id, { column: 'done', groupId: null });
+
+    // auto_accept 下 submitRun 内部完成验收：终态等效 completed，move 不抛
+    // （旧路径此处必抛「无 submitted run」——任务已完成但报错，误导）
+    const after = getTask(t.id)!;
+    expect(after.status).toBe('completed');
+    expect(after.acceptedAt).not.toBeNull();
+    expect(after.completedAt).not.toBeNull();
+    expect(listRuns(t.id)[0]!.status).toBe('accepted');
+    expect(acceptanceOf(t.id)!.status).toBe('answered');
+    expect(JSON.parse(acceptanceOf(t.id)!.answerJson!)).toEqual({ decision: 'accept' });
   });
 
   it('submitted → assigned 带理由路由 rejectTask(id, reason)（打回）', async () => {

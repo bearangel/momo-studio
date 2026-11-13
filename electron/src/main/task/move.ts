@@ -14,9 +14,10 @@
 //   - →active:assigned/session_queued 走 startTaskAndKickoff
 //   - →waiting:一律拒(等待中由系统驱动,HITL 答复进出)
 //   - →review:in_progress 走 submitRun(提交验收——v2 Task 8 骨架,Task 10 接线)
-//   - →done:in_progress 走 submitRun+acceptTask(一步提交+验收);submitted 走
-//     acceptTask(验收通过);v2 起 in_progress→completed 直达边已删,旧
-//     transition completed 路径随之退役
+//   - →done:in_progress 走 submitRun+acceptTask(一步提交+验收);delegation_role='in'
+//     只走 submitRun(提交即验收——P1 强制 auto_accept,P2 撤强制后此守卫变为必须:
+//     只提交、验收权在发起方);submitted 走 acceptTask(验收通过);v2 起
+//     in_progress→completed 直达边已删,旧 transition completed 路径随之退役
 //   - →closed:任意非终态走 cancelTask(确认框在 renderer,主进程不二次确认)
 //   - →backlog 一律拒(只出不进);终态跨列一律拒
 //
@@ -126,11 +127,17 @@ export async function executeMove(
       }
       case 'done': {
         // v2:完成必经验收。in_progress = 一步提交+验收;submitted = 验收通过。
-        // delegation_role='in' 只 submit 不 accept 的守卫在 Task 18 落地。
+        // delegation_role='in'（承接外派）守卫在 P1 内即生效:验收权在发起方
+        // （spec §14 降级语义），P1 承接行强制 auto_accept=1，submitRun 提交即
+        // 验收完成终态——跳过 acceptTask，避免对已 accepted 的 run 二次验收抛
+        // 「无 submitted run」误导报错;P2 移除强制 auto_accept 后此守卫变为必须
+        // （只提交，等发起方验收）。
         // 循环续期随 completeAcceptance 单点触发（Task 15），此处不再显式 spawn
         if (task.status === 'in_progress') {
           await submitRun(id, { summary: '' });
-          await acceptTask(id);
+          if (task.delegationRole !== 'in') {
+            await acceptTask(id);
+          }
         } else {
           await acceptTask(id); // from === 'submitted'
         }
