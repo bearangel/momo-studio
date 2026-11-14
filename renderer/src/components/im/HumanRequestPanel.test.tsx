@@ -503,6 +503,39 @@ describe('HumanRequestPanel — S6 镜像行（远端来源 / 代答提示 / pee
     expect(screen.getByText('代答后 远端节点 原地继续')).toBeInTheDocument();
   });
 
+  // ── S9（A4，S6 Important-1 清偿）：工作站段（payload remote.workstation）──
+
+  it('工作站段在场 → 徽标全形态「来自 研发工作站 · dev-ws」（CONTRACT #1）', async () => {
+    listMock.mockResolvedValue([
+      mirrorRow({ payloadJson: JSON.stringify({ remote: { workstation: 'dev-ws' } }) }),
+    ]);
+    await mountPanel();
+
+    expect(screen.getByText('来自 研发工作站 · dev-ws')).toBeInTheDocument();
+    expect(screen.queryByText('来自 研发工作站')).not.toBeInTheDocument();
+  });
+
+  it('acceptance 镜像：remote 段与 acceptance 段同 payload 并列（互不挤占）', async () => {
+    const payload = JSON.parse(ACCEPTANCE_JSON) as Record<string, unknown>;
+    payload['remote'] = { workstation: 'dev-ws' };
+    listMock.mockResolvedValue([
+      mirrorRow({ id: 'req-acc-ws', kind: 'acceptance', payloadJson: JSON.stringify(payload), taskId: 'T-101' }),
+    ]);
+    await mountPanel();
+
+    expect(screen.getByText('来自 研发工作站 · dev-ws')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '验收通过' })).toBeInTheDocument();
+  });
+
+  it('remote 段畸形（workstation 非串/空串）→ 降级仅节点名（既有行为）', async () => {
+    listMock.mockResolvedValue([
+      mirrorRow({ payloadJson: JSON.stringify({ remote: { workstation: 42 } }) }),
+    ]);
+    await mountPanel();
+
+    expect(screen.getByText('来自 研发工作站')).toBeInTheDocument();
+  });
+
   it('peer 镜像干预行 → 中性卡：无任何操作钮、无代答入口（CONTRACT #4/#5）', async () => {
     listMock.mockResolvedValue([mirrorRow({ id: 'req-peer', peerMirror: true })]);
     await mountPanel();

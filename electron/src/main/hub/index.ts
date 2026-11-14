@@ -101,6 +101,26 @@ const originGroupsClient = createGroupClient((method, payload, timeoutMs) =>
 );
 
 /**
+ * S9（A4 工作站段）镜像行 remote 段数据源：执行节点 → 组清单成员
+ * boundWorkspaceName（仅 peer 组投影携带；lf 组缺席 → null 降级仅节点名）。
+ * 镜像事件低频（干预/提交），逐事件直拉不设缓存；hub 不可达 → null 不阻断镜像。
+ */
+const mirrorWorkstationOf = async (nodeId: string): Promise<string | null> => {
+  try {
+    const { groups } = await originGroupsClient.list();
+    for (const g of groups) {
+      const m = g.members.find((x) => x.nodeId === nodeId);
+      if (m !== undefined && typeof m.boundWorkspaceName === 'string') {
+        return m.boundWorkspaceName;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+/**
  * 镜像登记表查询面（IPC hub:mirrorRegistry 消费；RM-M21-7 四消费方同源：
  * T3 节点卡徽标 / T4 查看选择器 / T7 调度器 mirroredBy / T8 新建弹窗守门）。
  *
@@ -581,8 +601,10 @@ function startClient(
         // + 跟踪会话里程碑（幂等键 UNIQUE(origin_node_id, remote_id)）。断连窗口
         // （沿 S3/S4 口径）：onEvent 只在 online 后触发——错过的事件无补偿，
         // 重连后由 S7 对账兜底。
-        if (evt.method === EVT.taskIntervention) handleTaskInterventionMirror(evt.payload);
-        else handleTaskSubmittedMirror(evt.payload);
+        // S9（A4）：镜像行经组清单解析工作站段（失败降级 null——桥内自吞）
+        const mirrorPorts = { workstationOf: mirrorWorkstationOf };
+        if (evt.method === EVT.taskIntervention) void handleTaskInterventionMirror(evt.payload, mirrorPorts);
+        else void handleTaskSubmittedMirror(evt.payload, mirrorPorts);
         return;
       }
       // ── leader 侧委派事件桥（M2e T12）：hub 定向→本机 leader 的账本迁移与进度拍，

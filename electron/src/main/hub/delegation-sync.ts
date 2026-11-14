@@ -62,7 +62,7 @@ import { logger } from '../logger';
  * |              |                 |        | 新状态；后续 running 拍合法回升）  |
  *
  * 写侧不走 transitionTaskStatus 状态机断言：外派行的状态权威是 hub 账本，
- * 本地九态转换表为本地 agent 执行管线设计（pending→in_progress 在该管线非法，
+ * 本地十一态转换表为本地 agent 执行管线设计（pending→in_progress 在该管线非法，
  * 在外派链是常态）；以「终态粘滞 + 映射表」替代转换合法性约束。
  */
 export const DELEGATION_STATUS_TO_TASK: Record<DelegationStatus, TaskStatus> = {
@@ -87,8 +87,9 @@ const WORKER_STATE_TO_TASK: Record<DelegationRecord['state'], TaskStatus> = {
   cancelled: 'cancelled',
 };
 
-/** interrupted 进度摘要（等待续传语义的呈现文案——卡片进度行消费） */
-export const INTERRUPTED_SUMMARY = '目标节点连接中断，等待重连续传';
+/** interrupted 进度摘要（等待续传语义的呈现文案——卡片进度行消费；S9 对齐
+ *  CONTRACT 2026-11-14-tracking #18 定值「节点离线，恢复后自动续跑」） */
+export const INTERRUPTED_SUMMARY = '节点离线，恢复后自动续跑';
 
 /** done 终态的进度摘要兜底（协议 done 不带 reason） */
 const DONE_SUMMARY = '已完成';
@@ -309,9 +310,15 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
         // 同刻，hub 账本权威），warn 留痕疑似降级回退。象限判据 = 行戳（派发时刻
         // 定型的版本门决定，事件时刻免查版本）：delegation_role='out' 且未强制
         // auto_accept 即两段式派发行；P1 行（auto_accept=1）与手工委派（无 out
-        // 戳）不告警。
+        // 戳）不告警。S8 Important-1（S9 清偿）：行已终态（submitted→验收已收口 /
+        // done 重投）是滞后对账而非降级——同态零写不告警，防对账滞后/重投误报。
         const stamped = ports.findTaskByDelegation(taskId);
-        if (stamped !== null && stamped.delegationRole === 'out' && stamped.autoAccept !== true) {
+        if (
+          stamped !== null &&
+          !isTerminal(stamped.status) &&
+          stamped.delegationRole === 'out' &&
+          stamped.autoAccept !== true
+        ) {
           logger.warn('1.11 两段式链路收到 done 拍——疑似降级回退（终局兜底照常收口）', {
             taskId: stamped.id,
             delegationId: taskId,

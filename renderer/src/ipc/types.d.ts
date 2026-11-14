@@ -3583,7 +3583,7 @@ export interface HubMirrorRegistryRow {
   mirroredAt: number;
 }
 
-// ── 委派 leader 侧（M2e T12，协议 delegation.ts 镜像；M3.1 七态）────────────
+// ── 委派 leader 侧（M2e T12，协议 delegation.ts 镜像；M3.1 七态 + 1.11.0 submitted = 八态）──
 
 /** 委派账本态（协议 DelegationStatus 镜像——waiting=M3.1 running 中等待用户确认的
  *  中间态；submitted=1.11.0 run 完成待验收中间态——v2 生命周期验收闸的 hub 侧投影） */
@@ -3601,6 +3601,13 @@ export interface HubTaskRecord {
   title: string;
   createdAt: number;
   updatedAt: number;
+  /** 执行尝试号（1.11.0 协议投影；缺省不带键——旧 hub/旧行 run_no 缺省即 1，
+   *  消费方 ?? 1 兜底；打回 +1——卡片 run #N 徽标数据源） */
+  runNo?: number;
+  /** 最近一次提交时刻（1.11.0；worker report submitted 驱动落账；未提交不带键） */
+  submittedAt?: number;
+  /** 验收通过时刻（1.11.0；发起方 task.accept 驱动落账，终态 done 伴随；未验收不带键） */
+  acceptedAt?: number;
 }
 
 export interface HubTaskListResult {

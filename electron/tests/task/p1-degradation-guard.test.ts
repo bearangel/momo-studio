@@ -486,6 +486,32 @@ describe('S8 版本门 — done 拍按象限（行戳判据；终局兜底不改
     expect(warnCalls).toHaveLength(0);
   });
 
+  it('2a-4. S8 Important-1（S9 清偿）：两段式行已终态（submitted→验收已收口 / done 重投）→ 不误报降级回退', () => {
+    const w = makeSyncWorld();
+    w.rows.set(
+      'T-done-late',
+      mkRow({
+        id: 'T-done-late',
+        title: '两段式已收口行',
+        status: 'completed',
+        startedAt: 111,
+        completedAt: 222,
+        delegationId: 'hub-done-4',
+        delegationRole: 'out',
+        autoAccept: false,
+      }),
+    );
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    createDelegationSync(w.ports).handleTerminal('done', 'hub-done-4');
+    const warnCalls = warnSpy.mock.calls;
+    warnSpy.mockRestore();
+
+    const row = w.rows.get('T-done-late')!;
+    expect(row.status).toBe('completed');
+    expect(row.completedAt).toBe(222); // 同态零写：首写 completedAt 不重盖（T12 Low-1 语义）
+    expect(warnCalls).toHaveLength(0); // 滞后对账/重投 ≠ 降级回退——守卫不告警
+  });
+
   it('2b. waiting 拍 → 行维持进行中 + kv waiting 标志（不造 waiting_human 新态）', () => {
     const w = makeSyncWorld();
     w.rows.set(

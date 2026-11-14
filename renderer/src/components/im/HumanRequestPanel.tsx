@@ -281,12 +281,27 @@ function remoteNodeLabel(row: HumanRequestRow): string {
   return row.originNodeName ?? '远端节点';
 }
 
-/** 远端来源徽标（CONTRACT #1/#2）：accent tone + Network 11px；卡头标题后同位 */
+/**
+ * 镜像行工作站段（S6 Important-1 清偿，S9）：S5 镜像落库时经组清单解析的
+ * boundWorkspaceName 存于 payload_json `remote.workstation` 段——「来自 {节点} ·
+ * {工作站}」徽标数据源。缺席/异形 → null（降级仅节点名，既有行为）。
+ */
+function remoteWorkstation(row: HumanRequestRow): string | null {
+  const parsed = parseJson(row.payloadJson);
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const ws = (parsed as { remote?: { workstation?: unknown } }).remote?.workstation;
+  return typeof ws === 'string' && ws !== '' ? ws : null;
+}
+
+/** 远端来源徽标（CONTRACT #1/#2）：accent tone + Network 11px；卡头标题后同位；
+ *  工作站段在场时「来自 {节点名} · {工作站}」，缺席降级仅节点名 */
 function RemoteOriginBadge({ row }: { row: HumanRequestRow }) {
+  const workstation = remoteWorkstation(row);
   return (
     <Badge tone="accent">
       <Network size={11} strokeWidth={1.75} aria-hidden />
       来自 {remoteNodeLabel(row)}
+      {workstation !== null ? ` · ${workstation}` : ''}
     </Badge>
   );
 }

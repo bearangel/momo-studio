@@ -770,6 +770,32 @@ function parseMirrorDeliverable(raw: unknown): {
 }
 
 /**
+ * S5 镜像消费端口（S6 Important-1 清偿，S9）：镜像行落库时经组清单解析执行节点
+ * 绑定空间名 → payload_json `remote.workstation` 段（面板「来自 {节点} · {工作
+ * 站}」徽标数据源）。组清单成员 boundWorkspaceName 仅 peer 组投影携带（lf 组
+ * 缺席）→ 解析不到时降级 null（徽标仅节点名，既有行为）。可选端口：缺席（旧
+ * 接线/测试直调）→ 镜像行不带 remote 段，既有断言形状零变化。
+ */
+export interface OriginMirrorPorts {
+  workstationOf?(targetNodeId: string): Promise<string | null>;
+}
+
+/**
+ * 镜像 payload 合成 remote 标记段：base 缺席且无工作站 → undefined（payloadJson
+ * 保持 null 既有形状）；执行方 payload 自带 remote 键一律剥除（展示字段由发起方
+ * 单点解析，不留执行方伪造面）。
+ */
+function withRemoteSegment(
+  base: Record<string, unknown> | undefined,
+  workstation: string | null,
+): Record<string, unknown> | undefined {
+  if (base === undefined && workstation === null) return undefined;
+  const rest = { ...(base ?? {}) };
+  delete rest.remote;
+  return { ...rest, ...(workstation !== null ? { remote: { workstation } } : {}) };
+}
+
+/**
  * task.intervention 事件消费（hub/index onEvent 装配；hub 定向→本机发起方，
  * lf 组——peer 组不转发本事件）：worker 人工请求 → 本地镜像行
  * （UNIQUE(origin_node_id, remote_id) 幂等键——origin_node_id 取外派行
@@ -779,8 +805,13 @@ function parseMirrorDeliverable(raw: unknown): {
  * 镜像行 + 既有 kv waiting 徽标派生）。里程碑 kind='remote_intervention'，
  * 以镜像行存在性判重（行已存在则跳过——取舍：免 messages 表 meta 幂等键查重，
  * UNIQUE 行本身就是事件消费的唯一落点）。total 语义同 S3/S4。
+ * S9（A4）：端口在场时先经组清单解析工作站（失败降级 null 不阻断镜像），落
+ * payload remote 段；端口缺席 → 全程同步（旧测试直调形状零变化）。
  */
-export function handleTaskInterventionMirror(payload: unknown): void {
+export async function handleTaskInterventionMirror(
+  payload: unknown,
+  ports?: OriginMirrorPorts,
+): Promise<void> {
   try {
     if (typeof payload !== 'object' || payload === null) return;
     const p = payload as { taskId?: unknown; intervention?: unknown };
@@ -825,6 +856,11 @@ export function handleTaskInterventionMirror(payload: unknown): void {
       });
       return;
     }
+    // S9（A4）：工作站解析失败降级 null——不阻断镜像落库（remote 段缺席=面板降级）
+    const workstation =
+      ports?.workstationOf !== undefined
+        ? await ports.workstationOf(workerNodeId).catch(() => null)
+        : null;
     const row = insertHumanRequest({
       sessionId,
       taskId: task.id,
@@ -832,8 +868,10 @@ export function handleTaskInterventionMirror(payload: unknown): void {
       kind: intervention.kind,
       title: intervention.title,
       prompt: intervention.prompt,
-      payloadJson:
-        intervention.payload !== undefined ? JSON.stringify(intervention.payload) : null,
+      payloadJson: (() => {
+        const composed = withRemoteSegment(intervention.payload, workstation);
+        return composed !== undefined ? JSON.stringify(composed) : null;
+      })(),
       optionsJson:
         intervention.options !== undefined ? JSON.stringify(intervention.options) : null,
       deadlineAt: intervention.deadlineAt ?? null,
@@ -872,9 +910,13 @@ export function handleTaskInterventionMirror(payload: unknown): void {
  * (委派 id, runNo)）+ 里程碑 kind='remote_submitted'（以镜像行存在性判重）。
  * 任务已终态 → 静默幂等（双通道并存期：delegation-sync done 拍→completed
  * 直写可能先收口，S8 版本门内退役旧通道）。execution_session_id / 执行节点
- * 缺失 → 状态照收口，仅跳过镜像行与里程碑（warn 兜底）。
+ * 缺失 → 状态照收口，仅跳过镜像行与里程碑（warn 兜底）。S9（A4）：端口在场
+ * 时 acceptance 镜像 payload 落 remote 工作站段（缺席降级，端口缺席同步形状）。
  */
-export function handleTaskSubmittedMirror(payload: unknown): void {
+export async function handleTaskSubmittedMirror(
+  payload: unknown,
+  ports?: OriginMirrorPorts,
+): Promise<void> {
   try {
     if (typeof payload !== 'object' || payload === null) return;
     const p = payload as { taskId?: unknown; runNo?: unknown; deliverable?: unknown };
@@ -951,20 +993,31 @@ export function handleTaskSubmittedMirror(payload: unknown): void {
       return;
     }
     const deliverable = parseMirrorDeliverable(p.deliverable);
+    // S9（A4）：工作站解析失败降级 null——不阻断 acceptance 镜像落库
+    const workstation =
+      ports?.workstationOf !== undefined
+        ? await ports.workstationOf(workerNodeId).catch(() => null)
+        : null;
     const row = insertHumanRequest({
       sessionId,
       taskId: task.id,
       runId,
       kind: 'acceptance',
-      title: `${task.id} 提交验收（run #${runNo}）`,
-      payloadJson: JSON.stringify({
-        acceptance: {
-          runNo,
-          summary: deliverable.summary,
-          files: deliverable.files,
-          artifacts: deliverable.artifacts,
-        },
-      }),
+      // S9（A5 短 id 统一）：#T-{id} 引用形态（tasks.id 本身即短 T-<seq> 形）
+      title: `#${task.id} 提交验收（run #${runNo}）`,
+      payloadJson: JSON.stringify(
+        withRemoteSegment(
+          {
+            acceptance: {
+              runNo,
+              summary: deliverable.summary,
+              files: deliverable.files,
+              artifacts: deliverable.artifacts,
+            },
+          },
+          workstation,
+        ),
+      ),
       deadlineAt: Date.now() + ACCEPTANCE_DEADLINE_MS,
       timeoutPolicy: 'keep_waiting',
       delegationId,

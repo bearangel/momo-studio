@@ -379,3 +379,76 @@ describe('10) session-空变体：execution_session_id 缺失 → 状态收口�
     expect(milestoneRows()).toHaveLength(0);
   });
 });
+
+// ── 11) S9（A4 工作站段 + A5 短 id）：payload remote 标记段与 #T 标题 ──────────
+
+describe('11) S9 工作站段：镜像 payload remote 标记段', () => {
+  it('端口解析成功 → intervention/acceptance payload 均带 remote.workstation', async () => {
+    seedOutTask();
+    await handleTaskInterventionMirror(interventionEvent(), {
+      workstationOf: async () => 'dev-ws',
+    });
+    const iv = listRequests({ status: 'all' })[0]!;
+    expect(JSON.parse(iv.payloadJson!)).toEqual({
+      tool: 'bash',
+      target: '/tmp/x',
+      remote: { workstation: 'dev-ws' },
+    });
+
+    await handleTaskSubmittedMirror(submittedEvent({ deliverable: { summary: 's' } }), {
+      workstationOf: async () => 'dev-ws',
+    });
+    const acc = listRequests({ status: 'all' })[1]!;
+    expect(JSON.parse(acc.payloadJson!)).toEqual({
+      acceptance: { runNo: 1, summary: 's', files: [], artifacts: [] },
+      remote: { workstation: 'dev-ws' },
+    });
+  });
+
+  it('解析 null（lf 组无绑定态投影）/ 端口失败 → 无 remote 段（降级仅节点名）且不阻断镜像落库', async () => {
+    seedOutTask();
+    await handleTaskInterventionMirror(interventionEvent(), {
+      workstationOf: async () => null,
+    });
+    expect(JSON.parse(listRequests({ status: 'all' })[0]!.payloadJson!)).toEqual({
+      tool: 'bash',
+      target: '/tmp/x',
+    });
+
+    await handleTaskSubmittedMirror(submittedEvent(), {
+      workstationOf: () => Promise.reject(new Error('hub 离线')),
+    });
+    const acc = listRequests({ status: 'all' })[1]!;
+    expect(JSON.parse(acc.payloadJson!)).toEqual({
+      acceptance: { runNo: 1, summary: '', files: [], artifacts: [] },
+    });
+  });
+
+  it('执行方 payload 自带 remote 键 → 剥除/覆盖为发起方解析值（展示字段不留伪造面）', async () => {
+    seedOutTask();
+    const evt = interventionEvent() as { intervention: { payload: Record<string, unknown> } };
+    evt.intervention.payload = { tool: 'bash', remote: { workstation: '伪造值' } };
+    await handleTaskInterventionMirror(evt, { workstationOf: async () => '真值' });
+    expect(JSON.parse(listRequests({ status: 'all' })[0]!.payloadJson!)).toEqual({
+      tool: 'bash',
+      remote: { workstation: '真值' },
+    });
+
+    // 无解析值时同样剥除（worker 侧 remote 键不透传）——换 interventionId 避 UNIQUE 幂等跳过
+    const evt2 = interventionEvent() as { intervention: { interventionId: string; payload: Record<string, unknown> } };
+    evt2.intervention.interventionId = 'iv-strip';
+    evt2.intervention.payload = { tool: 'bash', remote: { workstation: '伪造值' } };
+    await handleTaskInterventionMirror(evt2, { workstationOf: async () => null });
+    expect(JSON.parse(listRequests({ status: 'all' })[1]!.payloadJson!)).toEqual({
+      tool: 'bash',
+    });
+  });
+
+  it('A5 短 id：acceptance 标题 #T 引用形态（tasks.id 即短 T-<seq>，无需截短）', async () => {
+    const task = seedOutTask();
+    await handleTaskSubmittedMirror(submittedEvent());
+    const row = listRequests({ status: 'all' })[0]!;
+    expect(row.title).toBe(`#${task.id} 提交验收（run #1）`);
+    expect(task.id).toMatch(/^T-\d+$/); // id 生成本就是短形态——截短不适用（报告结论）
+  });
+});

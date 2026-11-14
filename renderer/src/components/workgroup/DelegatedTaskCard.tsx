@@ -5,8 +5,10 @@
 //   - 双视角（routing/byNode 驱动）：leader=节点徽标（Bot+目标节点名，ledger
 //     targetNodeId 解析；待派发=「组内调度 · 待派发」在待处理列）；worker=
 //     「来自 {来源}」徽标（Zap+byNode）+ mono #T-id（S6：被委派任务画进看板）
-//   - 六态徽标：spinner 执行中 / CircleCheck 已完成 / CircleX 失败 /
-//     CircleHelp 等待节点确认（waiting）；待派发（delegationId 空）无状态徽标
+//   - 八态徽标（S9，CONTRACT #16）：spinner 执行中(violet) / 执行方处理中(waiting
+//     中性——lf 角标兜底 + peer 发起方视角) / 待验收(submitted accent+ClipboardCheck) /
+//     CircleCheck 已完成 / CircleX 失败 / CircleHelp 等待节点确认（lf 角标，M3.1）；
+//     待派发（delegationId 空）无状态徽标；interrupted=已中断 + WifiOff 副行(#18)
 //   - 左 3px 状态色边：默认 status-violet（.routed）/ waiting status-warning（.routed-w）
 //   - 进度行：surface-2 圆角摘要（kv 持久 + hub:taskProgress 推送合并）；
 //     waiting 态 warning tint + worker 侧加粗「打开会话批准/拒绝」引导
@@ -25,7 +27,7 @@
 // 外派卡不接拖拽（useSortable 零注册）：行状态由 hub 账本驱动，本地 move 会
 // 与远端真相打架——列间迁移只能经委派事件回写。
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Ban, Bot, CalendarCheck, Check, CircleCheck, CircleHelp, CircleSlash, CircleX, Inbox, Lock, RefreshCw, RotateCcw, Users, X, Zap } from 'lucide-react';
+import { Ban, Bot, CalendarCheck, Check, CircleCheck, CircleHelp, CircleSlash, CircleX, ClipboardCheck, Inbox, Lock, RefreshCw, RotateCcw, Users, WifiOff, X, Zap } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useHubStore } from '../../stores/hub.store';
 import { cacheDelegationGroupNames, useHubDelegationStore } from '../../stores/hub-delegation.store';
@@ -55,6 +57,17 @@ function shortNodeId(nodeId: string): string {
 /** groupId 短码（M4.2 组徽标——组名映射缺失时的兜底呈现，与 nodeId 短码同格式） */
 function shortGroupId(groupId: string): string {
   return groupId.length > 8 ? `${groupId.slice(0, 4)}…${groupId.slice(-4)}` : groupId;
+}
+
+/** interrupted 进度行兜底文案（CONTRACT #18 定值；与 delegation-sync
+ *  INTERRUPTED_SUMMARY 同文——kv 摘要缺席时呈现） */
+const INTERRUPTED_LINE = '节点离线，恢复后自动续跑';
+
+/** 提交时刻展示：同日 HH:mm，跨日 M月D日 HH:mm（RemoteViewPane.formatDayTime 同口径） */
+function formatClock(ts: number): string {
+  const d = new Date(ts);
+  const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return d.toDateString() === new Date().toDateString() ? hhmm : `${d.getMonth() + 1}月${d.getDate()}日 ${hhmm}`;
 }
 
 /** M3.1 版本过低类错误码（rejection message 前缀 [code]——主进程 ipc.handlers 编码） */
@@ -286,7 +299,7 @@ function useDelegationBoardData(refreshTasks?: () => void): DelegationBoardConte
   );
 }
 
-// ── 六态推导 ────────────────────────────────────────────────────────────────
+// ── 八态推导（CONTRACT 2026-11-14-tracking #16——S9 收口）─────────────────────
 
 /** 行状态 → hub 八态反推（ledger 缺席时的兜底：重启/离线对账前） */
 function inferHubStatus(t: TaskRow): HubDelegationStatus | null {
@@ -387,10 +400,16 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
         ? (board.localWaiting[received.sessionId] ?? null)
         : null;
   const effectiveWaitingSummary = waitingSummary !== null ? waitingSummary : derivedWaitingSummary;
-  // M3.1 七态：账本 waiting 是 running 的中间态——等待角标判定逻辑不动（仍由
-  // 摘要信号驱动），仅把 waiting 纳入「可点亮」的账本态集合（1.3.0 前 hub 不回此态）
-  const waiting =
+  // M3.1：账本 waiting 是 running 的中间态——等待角标判定逻辑仍由摘要信号驱动，
+  // 把 waiting 纳入「可点亮」的账本态集合（1.3.0 前 hub 不回此态）
+  const waitingSignal =
     effectiveWaitingSummary != null && (hubStatus === 'running' || hubStatus === 'pending' || hubStatus === 'waiting');
+  // S9 权限矩阵（CONTRACT #5）：peer 平行组发起方对执行方等待无代答权——角标
+  // 不亮、无操作（中性「执行方处理中」由 StatusBadge/中性进度行承载）；worker
+  // 承接视角保留角标（本地自答引导，peer_draft 戳两侧行共用故按视角分流）
+  const peerOriginatorView = task.origin === 'peer_draft' && !isWorkerView;
+  const waiting = waitingSignal && !peerOriginatorView;
+  const peerWaiting = waitingSignal && peerOriginatorView;
   const terminal = task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled';
 
   // 1.10.0 拒收态（spec §3.3）：failed + reason `declined:` 前缀 → 徽标「已拒收」，
@@ -448,6 +467,21 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
         : task.errorMessage
       : null) ??
     (delegationId != null ? (board.progress[delegationId]?.excerpt ?? null) : null);
+
+  // S9 run 标记/时间展示（协议 1.11 TaskRecord 投影，A3）：runNo>1 = 返工 run →
+  // 中性「run #N」徽标；submitted 态进度行合成「run #N 已结束 · 交付待发起方验收」
+  // （+ submittedAt 提交时刻——行 submittedAt 兜底：S5 镜像直写，账本字段缺席同义）
+  const ledgerRecord = delegationId != null ? (board.ledger[delegationId] ?? null) : null;
+  const runNo = ledgerRecord?.runNo ?? null;
+  const submittedAt = ledgerRecord?.submittedAt ?? task.submittedAt;
+  const submittedLine =
+    hubStatus === 'submitted'
+      ? `run #${runNo ?? 1} 已结束 · 交付待发起方验收${submittedAt != null ? ` · ${formatClock(submittedAt)} 提交` : ''}`
+      : null;
+  // interrupted 进度行正文：kv 摘要（delegation-sync INTERRUPTED_SUMMARY 落）缺席时
+  // 以 CONTRACT #18 定值文案兜底（重启/对账滞后路径不裸奔）
+  const interruptedLine = hubStatus === 'interrupted' ? (progressExcerpt ?? INTERRUPTED_LINE) : null;
+  const lineText = submittedLine ?? interruptedLine ?? progressExcerpt;
 
   const canCancel = delegationId != null
     ? hubStatus === 'pending' || hubStatus === 'running' || hubStatus === 'waiting' || hubStatus === 'interrupted'
@@ -567,6 +601,10 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
                   {groupBadgeLabel}
                 </Badge>
               )}
+              {runNo != null && runNo > 1 && (
+                /* S9（A3）返工 run 标记：CONTRACT #8「run #N」中性徽标同语义（首 run 不标） */
+                <Badge className="h-auto px-1.5 py-0.5 text-[10px] leading-none">run #{runNo}</Badge>
+              )}
             </>
           )}
           <span className="ml-auto flex shrink-0 items-center gap-1">
@@ -610,11 +648,15 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
             )}
           </span>
         </div>
-        {(waiting || progressExcerpt != null) && (
+        {(waiting || peerWaiting || lineText != null) && (
           <div
             data-progress-line
             className={`mt-1.5 flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] leading-[1.5] ${
-              waiting ? 'bg-status-warning-tint text-status-warning' : 'bg-surface-2 text-tertiary'
+              waiting || interruptedLine != null
+                ? 'bg-status-warning-tint text-status-warning'
+                : hubStatus === 'failed'
+                  ? 'bg-surface-2 text-status-error'
+                  : 'bg-surface-2 text-tertiary'
             }`}
           >
             {!waiting && hubStatus === 'running' && (
@@ -624,12 +666,16 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
                 className="h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-status-violet border-t-transparent"
               />
             )}
+            {interruptedLine != null && (
+              /* CONTRACT #18：中断副行 WifiOff 12px（节点离线·恢复后续跑） */
+              <WifiOff size={12} strokeWidth={1.75} aria-hidden className="shrink-0" />
+            )}
             {/* P2-3：摘要/失败原因截断显示，title 悬浮全文（reason 链：hub failed 载荷 → errorMessage 列 → 此行） */}
             <span
               className="min-w-0 flex-1 truncate"
-              title={waiting ? (effectiveWaitingSummary ?? undefined) : (progressExcerpt ?? undefined)}
+              title={waiting || peerWaiting ? (effectiveWaitingSummary ?? undefined) : (lineText ?? undefined)}
             >
-              {waiting ? effectiveWaitingSummary : progressExcerpt}
+              {waiting || peerWaiting ? effectiveWaitingSummary : lineText}
               {waiting && isWorkerView && (
                 <b className="font-semibold"> · 打开会话批准/拒绝</b>
               )}
@@ -780,38 +826,35 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
   );
 }
 
-/** 八态徽标（待派发 null → 不渲染——节点槽已带「待派发」文案，S1；waiting=
- *  M3.1 账本中间态，常态由等待角标（摘要信号驱动）覆盖——本条仅对账滞后/
- *  kv 缺失时兜底呈现等待语义；submitted=v2 生命周期待验收中间态，S1 仅保
- *  中性不裸奔，完整八态样式在 S9 收口） */
+/** 八态徽标（CONTRACT #16/#17 定值——待派发 null → 不渲染：节点槽已带「待派发」
+ *  文案，S1；lf 等待常态由等待角标（摘要信号驱动，M3.1）覆盖，waiting 条目是
+ *  对账滞后/kv 缺失与 peer 发起方视角的中性兜底「执行方处理中」） */
 function StatusBadge({ status }: { status: HubDelegationStatus | null }): ReactNode {
   if (status == null) return null;
   switch (status) {
     case 'running':
-    case 'waiting':
       return (
-        <Badge tone={status === 'running' ? 'violet' : 'warning'} className="h-auto gap-1 px-1.5 py-0.5 text-[10px] leading-none">
-          {status === 'running' ? (
-            <>
-              <span
-                role="img"
-                aria-label="执行中"
-                className="h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-status-violet border-t-transparent"
-              />
-              执行中
-            </>
-          ) : (
-            <>
-              <CircleHelp size={12} strokeWidth={1.75} aria-hidden />
-              等待节点确认
-            </>
-          )}
+        <Badge tone="violet" className="h-auto gap-1 px-1.5 py-0.5 text-[10px] leading-none">
+          <span
+            role="img"
+            aria-label="执行中"
+            className="h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-status-violet border-t-transparent"
+          />
+          执行中
         </Badge>
       );
-    case 'submitted':
-      /* v2 待验收（S1 中性占位——「待验收」语义明确即可，视觉定值随 S9 八态收口） */
+    case 'waiting':
+      /* S9 八态收口（CONTRACT #16）：中性「执行方处理中」——lf 可答角标另叠 M3.1 */
       return (
-        <Badge className="h-auto px-1.5 py-0.5 text-[10px] leading-none">待验收</Badge>
+        <Badge className="h-auto px-1.5 py-0.5 text-[10px] leading-none">执行方处理中</Badge>
+      );
+    case 'submitted':
+      /* 1.11.0 待验收（CONTRACT #16：accent + ClipboardCheck 12px 沿邻态） */
+      return (
+        <Badge tone="accent" className="h-auto gap-1 px-1.5 py-0.5 text-[10px] leading-none">
+          <ClipboardCheck size={12} strokeWidth={1.75} aria-hidden />
+          待验收
+        </Badge>
       );
     case 'done':
       return (

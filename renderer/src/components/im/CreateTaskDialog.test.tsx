@@ -23,14 +23,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CreateTaskDialog, parseTaskLine, TASK_HITL_REQUIRED_MINOR, TEAM_DELEGATION_REQUIRED_MINOR } from './CreateTaskDialog';
 import { useGroupStore } from '../../stores/group.store';
+import { useHubStore } from '../../stores/hub.store';
 import { useTaskStore } from '../../stores/task.store';
-import type { GroupRow, RoutingPrecheckResult, Team, Workspace, WorkspaceAgentMember } from '../../ipc/types';
+import type { GroupRow, HubStatus, RoutingPrecheckResult, Team, Workspace, WorkspaceAgentMember } from '../../ipc/types';
 
 // vi.hoisted 保证 mock fn 在 vi.mock 工厂（会被提升到文件顶部）执行时已存在，
 // 同时能在每个 test 内通过 mockResolvedValueOnce 精确控制返回值。
 const {
   mockTaskCreate, mockTaskCreateBatch, mockListAssignments, mockTeamList, mockSessionList, mockTaskGroupList,
   mockRoutingPrecheck, mockSubmitRoutedTask, mockGetDelegationSettings, mockWorkspaceList, showToastMock,
+  mockHubGetStatus, mockHubGetNodes, mockHubOnStateChanged, mockHubOnNodePresence,
 } = vi.hoisted(() => ({
   mockTaskCreate: vi.fn(),
   mockTaskCreateBatch: vi.fn(),
@@ -43,6 +45,11 @@ const {
   mockGetDelegationSettings: vi.fn().mockResolvedValue({ acceptTasks: true, maxConcurrent: 2, hitlTimeoutMinutes: 15 }),
   mockWorkspaceList: vi.fn(),
   showToastMock: vi.fn(),
+  // S9（B3）hub 侧预检黄字：hub.store init 接线面（默认未连接——hubProtoVer null）
+  mockHubGetStatus: vi.fn().mockResolvedValue(null),
+  mockHubGetNodes: vi.fn().mockResolvedValue([]),
+  mockHubOnStateChanged: vi.fn(() => () => {}),
+  mockHubOnNodePresence: vi.fn(() => () => {}),
 }));
 
 vi.mock('../../ipc/client', () => ({
@@ -57,6 +64,10 @@ vi.mock('../../ipc/client', () => ({
       routingPrecheck: mockRoutingPrecheck,
       submitRoutedTask: mockSubmitRoutedTask,
       getDelegationSettings: mockGetDelegationSettings,
+      getStatus: mockHubGetStatus,
+      getNodes: mockHubGetNodes,
+      onStateChanged: mockHubOnStateChanged,
+      onNodePresence: mockHubOnNodePresence,
     },
   },
 }));
@@ -1373,6 +1384,57 @@ describe('CreateTaskDialog — 外派团队执行（M5.3 X3）', () => {
       expect((screen.getByLabelText('目标成员') as HTMLSelectElement).value).toBe('node-a'),
     );
     expect(screen.queryByText(/旧语义完成/)).not.toBeInTheDocument();
+  });
+
+  // ── S9（B3）「任一侧」检查：hub 版本可见面（hub.store hubProtoVer——弹窗内
+  //    init 接线）≥/＜1.11 二分支 ──
+
+  /** 在线 hub 状态夹具（hubProtoVer 注入——hub.store 快照直供） */
+  function hubStatusWith(ver: string | null): HubStatus {
+    return {
+      configured: true, state: 'online', hubUrl: 'https://hub.example.com:8787',
+      nodeName: '办公机', nodeId: 'node-self', lastError: null, lastErrorCode: null, hubProtoVer: ver,
+    };
+  }
+
+  it('HITL-3. 目标 1.11 但 hub 1.10 → hub 侧黄字旧语义完成提示（任一侧门）', async () => {
+    mockRoutingPrecheck.mockReset().mockResolvedValue(
+      precheckFixture({
+        nodeCaps: [
+          { nodeId: 'node-a', name: 'office-mac', protoVer: '1.11.0' },
+          { nodeId: 'node-b', name: 'lab-node', protoVer: '1.11.1' },
+        ],
+      }),
+    );
+    mockHubGetStatus.mockReset().mockResolvedValue(hubStatusWith('1.10.0'));
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '指定节点' }));
+    fireEvent.change(await screen.findByLabelText('目标成员'), { target: { value: 'node-a' } });
+    expect(
+      await screen.findByText('hub 协议 1.10.0 低于 1.11——任务将按旧语义完成（对方完成即验收，无两段式提交）'),
+    ).toBeInTheDocument();
+    mockHubGetStatus.mockReset().mockResolvedValue(null);
+  });
+
+  it('HITL-4. hub 版本未知（未协商 null）→ 不提示（宁缺勿误——主进程派发门权威）', async () => {
+    mockRoutingPrecheck.mockReset().mockResolvedValue(
+      precheckFixture({
+        nodeCaps: [{ nodeId: 'node-a', name: 'office-mac', protoVer: '1.11.0' }],
+      }),
+    );
+    mockHubGetStatus.mockReset().mockResolvedValue(hubStatusWith(null));
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '指定节点' }));
+    fireEvent.change(await screen.findByLabelText('目标成员'), { target: { value: 'node-a' } });
+    await waitFor(() =>
+      expect((screen.getByLabelText('目标成员') as HTMLSelectElement).value).toBe('node-a'),
+    );
+    expect(screen.queryByText(/旧语义完成/)).not.toBeInTheDocument();
+    mockHubGetStatus.mockReset().mockResolvedValue(null);
   });
 });
 

@@ -251,10 +251,13 @@ describe('DelegatedTaskCard — leader 侧六态', () => {
     expect(matches.some((el) => el.closest('[data-progress-line]') !== null)).toBe(true);
   });
 
-  it('L-4. failed：error 失败徽标 + errorMessage 进度行', () => {
+  it('L-4. failed：error 失败徽标 + errorMessage 进度行（S9 #20：surface-2 底 + error 字）', () => {
     renderCard(mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'failed', errorMessage: '执行失败:测试炸了' }));
     expect(screen.getByText('失败')).toBeInTheDocument();
-    expect(screen.getByText('执行失败:测试炸了')).toBeInTheDocument();
+    const line = screen.getByText('执行失败:测试炸了').closest('[data-progress-line]');
+    expect(line).not.toBeNull();
+    expect(line!.className).toContain('text-status-error');
+    expect(line!.className).toContain('bg-surface-2');
   });
 
   // ── M2.2 P2-3：failed reason 全文透传（truncate + title 全文）──
@@ -282,16 +285,19 @@ describe('DelegatedTaskCard — leader 侧六态', () => {
     expect(screen.getByText('已取消')).toBeInTheDocument();
   });
 
-  it('L-6. interrupted（ledger 权威）：warning 已中断徽标 + 中断摘要行', () => {
+  it('L-6. interrupted（ledger 权威）：warning 已中断徽标 + 中断摘要行（S9 #18：warning tint + WifiOff）', () => {
     renderCard(
       mkTask({ id: 'T-100', title: '批量重命名 legacy API 端点', status: 'pending' }),
       boardCtx({
         ledger: { 'T-8f21abcd': { taskId: 'T-8f21abcd', workspaceName: 'dev-ws', targetNodeId: 'node-b', status: 'interrupted', title: '批量重命名', createdAt: 1, updatedAt: 2 } },
-        progress: { 'T-8f21abcd': { excerpt: '目标节点连接中断，等待重连续传', lastSeq: 0, at: 5 } },
+        progress: { 'T-8f21abcd': { excerpt: '节点离线，恢复后自动续跑', lastSeq: 0, at: 5 } },
       }),
     );
     expect(screen.getByText('已中断')).toBeInTheDocument();
-    expect(screen.getByText('目标节点连接中断，等待重连续传')).toBeInTheDocument();
+    const line = screen.getByText('节点离线，恢复后自动续跑').closest('[data-progress-line]');
+    expect(line).not.toBeNull();
+    expect(line!.className).toContain('bg-status-warning-tint');
+    expect(line!.querySelector('svg.lucide-wifi-off, svg')).not.toBeNull();
   });
 
   it('L-7. hub pending（已派发待执行）：warning 待执行徽标', () => {
@@ -981,8 +987,8 @@ describe('DelegatedTaskCard — 代答留痕行与 waiting 兜底（M3.1）', ()
     expect(document.querySelector('[data-answered-line]')).toBeNull();
   });
 
-  it('R-3. 账本 waiting 兜底：ledger status=waiting 且等待信号在场 → 等待角标点亮（七态判定不回退）；无等待信号 → StatusBadge 兜底「等待节点确认」', () => {
-    // 七态：waiting 与 running 同样可点亮等待角标（摘要信号驱动，逻辑不动）
+  it('R-3. 账本 waiting 兜底：ledger status=waiting 且等待信号在场 → 等待角标点亮（八态判定不回退）；无等待信号 → StatusBadge 兜底「执行方处理中」（S9 #16 中性）', () => {
+    // 八态：waiting 与 running 同样可点亮等待角标（摘要信号驱动，逻辑不动）
     const { unmount } = renderCard(
       mkTask({ id: 'T-100', title: '为支付回调写集成测试', status: 'in_progress' }),
       waitingLeaderBoard({
@@ -992,7 +998,7 @@ describe('DelegatedTaskCard — 代答留痕行与 waiting 兜底（M3.1）', ()
     );
     expect(screen.getByText('等待节点确认')).toBeInTheDocument();
     unmount();
-    // 对账滞后兜底：ledger waiting 但 kv 等待标志缺失 → StatusBadge 呈现等待语义
+    // 对账滞后兜底：ledger waiting 但 kv 等待标志缺失 → StatusBadge 中性呈现（S9）
     renderCard(
       mkTask({ id: 'T-101', title: '排查生产 500', status: 'in_progress', delegationId: 'T-deadbeef' }),
       boardCtx({
@@ -1000,7 +1006,8 @@ describe('DelegatedTaskCard — 代答留痕行与 waiting 兜底（M3.1）', ()
         ledger: { 'T-deadbeef': { taskId: 'T-deadbeef', workspaceName: 'dev-ws', targetNodeId: 'node-b', status: 'waiting', title: '排查生产 500', createdAt: 1, updatedAt: 2 } },
       }),
     );
-    expect(screen.getByText('等待节点确认')).toBeInTheDocument();
+    expect(screen.getByText('执行方处理中')).toBeInTheDocument();
+    expect(screen.queryByText('等待节点确认')).not.toBeInTheDocument();
   });
 
   it('R-4. 账本 waiting 可取消（hub 1.3 canTransition：cancelled 自 waiting 合法——升 1.3 前该时段显 running 可取消，行为保持）', async () => {
@@ -1185,5 +1192,167 @@ describe('DelegatedTaskCard — 右键菜单视口钳制（溢出屏幕修复）
     const menu = screen.getByLabelText('任务菜单 批量重命名 legacy API 端点');
     expect(parseFloat(menu.style.left)).toBe(window.innerWidth - MENU_WIDTH - 8);
     expect(parseFloat(menu.style.top)).toBe(window.innerHeight - MENU_HEIGHT - 8);
+  });
+});
+
+// ── S9 八态与权限渲染（CONTRACT 2026-11-14-tracking #16–#20 + 权限矩阵 #5）────
+
+describe('DelegatedTaskCard — S9 八态收口', () => {
+  it('E-1. submitted：accent「待验收」徽标（ClipboardCheck 12px）+ 进度行「run #N 已结束 · 交付待发起方验收 · HH:mm 提交」', () => {
+    const submittedAt = Date.now();
+    renderCard(
+      mkTask({ id: 'T-100', title: '订单超时自动取消', status: 'submitted' }),
+      boardCtx({
+        ledger: {
+          'T-8f21abcd': {
+            taskId: 'T-8f21abcd', workspaceName: 'dev-ws', targetNodeId: 'node-b',
+            status: 'submitted', title: '订单超时自动取消', createdAt: 1, updatedAt: 2,
+            runNo: 1, submittedAt,
+          },
+        },
+      }),
+    );
+    const badge = screen.getByText('待验收');
+    expect(badge.className).toContain('bg-surface-active'); // accent tone（CONTRACT #16）
+    expect(badge.querySelector('svg')).not.toBeNull(); // ClipboardCheck 12px（B2 Minor#4）
+    expect(screen.getByText(/run #1 已结束 · 交付待发起方验收 · \d{2}:\d{2} 提交/)).toBeInTheDocument();
+  });
+
+  it('E-2. run 标记（A3）：ledger runNo>1 → 中性「run #N」徽标；首 run/缺省 → 零渲染', () => {
+    const { unmount } = renderCard(
+      mkTask({ id: 'T-100', title: '支付回调重试', status: 'in_progress' }),
+      boardCtx({
+        ledger: {
+          'T-8f21abcd': {
+            taskId: 'T-8f21abcd', workspaceName: 'dev-ws', targetNodeId: 'node-b',
+            status: 'running', title: '支付回调重试', createdAt: 1, updatedAt: 2, runNo: 2,
+          },
+        },
+      }),
+    );
+    expect(screen.getByText('run #2')).toBeInTheDocument();
+    unmount();
+    renderCard(
+      mkTask({ id: 'T-100', title: '支付回调重试', status: 'in_progress' }),
+      boardCtx({
+        ledger: {
+          'T-8f21abcd': {
+            taskId: 'T-8f21abcd', workspaceName: 'dev-ws', targetNodeId: 'node-b',
+            status: 'running', title: '支付回调重试', createdAt: 1, updatedAt: 2, runNo: 1,
+          },
+        },
+      }),
+    );
+    expect(screen.queryByText(/run #\d/)).not.toBeInTheDocument();
+  });
+
+  it('E-3. interrupted kv 摘要缺席 → CONTRACT #18 定值文案兜底行（不裸奔）', () => {
+    renderCard(
+      mkTask({ id: 'T-100', title: '会员积分重构', status: 'pending' }),
+      boardCtx({
+        ledger: { 'T-8f21abcd': { taskId: 'T-8f21abcd', workspaceName: 'dev-ws', targetNodeId: 'node-b', status: 'interrupted', title: '会员积分重构', createdAt: 1, updatedAt: 2 } },
+      }),
+    );
+    expect(screen.getByText('已中断')).toBeInTheDocument();
+    expect(screen.getByText('节点离线，恢复后自动续跑').closest('[data-progress-line]')).not.toBeNull();
+  });
+});
+
+describe('DelegatedTaskCard — S9 权限矩阵（peer 平行组 vs lf 主从组，CONTRACT #4/#5）', () => {
+  afterEach(() => {
+    useHubStore.setState({ status: null });
+  });
+
+  /** peer 草稿外派行（origin='peer_draft'——发送方视角，1.10.0 两侧行共用戳） */
+  function peerDraftTask(): TaskRow {
+    return mkTask({
+      id: 'T-200',
+      title: '登录回归兼容性确认',
+      status: 'in_progress',
+      origin: 'peer_draft',
+      routing: { mode: 'node', groupId: 'g1', targetNodeId: 'node-c' },
+    });
+  }
+
+  it('PE-1. peer 发起方等待：无「等待节点确认」角标、无代答菜单；中性「执行方处理中」徽标 + 中性进度行（无操作）', () => {
+    const status: HubStatus = {
+      configured: true, state: 'online', hubUrl: 'http://h', nodeName: 'self', nodeId: 'node-self',
+      lastError: null, lastErrorCode: null, hubProtoVer: '1.11.0',
+    };
+    useHubStore.setState({ status });
+    renderCard(
+      peerDraftTask(),
+      boardCtx({
+        nodeNames: { 'node-c': 'lab-node' },
+        ledger: {
+          'T-8f21abcd': {
+            taskId: 'T-8f21abcd', workspaceName: 'dev-ws', targetNodeId: 'node-c',
+            status: 'waiting', title: '登录回归兼容性确认', createdAt: 1, updatedAt: 2,
+          },
+        },
+      }),
+      '节点 C 侧等待人工 · 主从组可经面板代答',
+    );
+    // 无等待角标（lf 专属）；账本 waiting → StatusBadge 中性兜底
+    expect(screen.queryByText('等待节点确认')).not.toBeInTheDocument();
+    expect(screen.getByText('执行方处理中')).toBeInTheDocument();
+    // 中性进度行承载等待摘要（非 warning tint——peer 无操作）
+    const line = screen.getByText('节点 C 侧等待人工 · 主从组可经面板代答').closest('[data-progress-line]');
+    expect(line).not.toBeNull();
+    expect(line!.className).toContain('bg-surface-2');
+    expect(line!.className).not.toContain('bg-status-warning-tint');
+    // 左缘条中性 violet（非角标态 warning，CONTRACT #19）
+    const card = screen.getByRole('button', { name: /登录回归/ });
+    expect(card.className).toContain('border-l-status-violet');
+    // 无代答入口（右键菜单无批准/拒绝项）
+    fireEvent.contextMenu(card);
+    expect(screen.queryByTestId('approve-arm')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('deny-arm')).not.toBeInTheDocument();
+  });
+
+  it('PE-2. lf 对照：同数据非 peer 行 → 等待角标 + 代答菜单在场（M3.1 既有不回退）', () => {
+    const status: HubStatus = {
+      configured: true, state: 'online', hubUrl: 'http://h', nodeName: 'self', nodeId: 'node-self',
+      lastError: null, lastErrorCode: null, hubProtoVer: '1.11.0',
+    };
+    useHubStore.setState({ status });
+    renderCard(
+      mkTask({
+        id: 'T-201',
+        title: '为支付回调写集成测试',
+        status: 'in_progress',
+        routing: { mode: 'node', groupId: 'g1', targetNodeId: 'node-b' },
+      }),
+      boardCtx({
+        nodeNames: { 'node-b': 'office-mac' },
+        ledger: {
+          'T-8f21abcd': {
+            taskId: 'T-8f21abcd', workspaceName: 'dev-ws', targetNodeId: 'node-b',
+            status: 'waiting', title: '为支付回调写集成测试', createdAt: 1, updatedAt: 2,
+          },
+        },
+      }),
+      'agent 等待写授权：rm -rf node_modules',
+    );
+    expect(screen.getByText('等待节点确认')).toBeInTheDocument();
+    fireEvent.contextMenu(screen.getByRole('button', { name: /为支付回调/ }));
+    expect(screen.getByTestId('approve-arm')).toBeInTheDocument();
+    expect(screen.getByTestId('deny-arm')).toBeInTheDocument();
+  });
+
+  it('PE-3. worker 承接视角（peer_draft 行）→ 角标保留「等你确认」+ 本地引导（peer 戳两侧行共用，按视角分流）', () => {
+    renderCard(
+      mkTask({
+        id: 'T-900',
+        title: '登录回归兼容性确认',
+        status: 'in_progress',
+        origin: 'peer_draft',
+        routing: { mode: 'node', groupId: '', targetNodeId: 'node-self' },
+      }),
+      boardCtx({ selfNodeId: 'node-self' }),
+      'agent 请求 shell 命令（rm -rf node_modules）',
+    );
+    expect(screen.getByText('等你确认')).toBeInTheDocument();
+    expect(screen.getByText(/打开会话批准\/拒绝/)).toBeInTheDocument();
   });
 });

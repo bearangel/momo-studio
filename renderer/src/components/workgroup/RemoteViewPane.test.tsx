@@ -142,6 +142,42 @@ describe('RemoteViewPane 打开与四页签', () => {
     expect(screen.getByText('远端任务')).toBeDefined();
     expect(screen.getByText(/#T101 · /)).toBeInTheDocument();
   });
+
+  // ── S9（A2）：ViewTaskStatusBadge 十一态全值域同源判定（task-status
+  //    TASK_STATUS_KEYS 单源——新增状态只改 task-status 表，此处零漂移）──
+  it('十一态全值域渲染 taskStatusStyle label；未知状态回中性原文兜底（S9 A2）', async () => {
+    const eleven: Array<[string, string]> = [
+      ['draft', '草稿'],
+      ['pending', '待分配'],
+      ['assigned', '排队中'],
+      ['session_queued', '排队中'],
+      ['in_progress', '进行中'],
+      ['waiting_human', '等待中'],
+      ['submitted', '待验收'],
+      ['paused', '已暂停'],
+      ['completed', '已完成'],
+      ['cancelled', '已取消'],
+      ['failed', '失败'],
+    ];
+    api.hub.viewTasks.mockResolvedValue({
+      tasks: [
+        ...eleven.map(([status], i) => ({
+          taskId: `#T${i}`, title: `任务-${status}`, status, updatedAt: Date.now(),
+        })),
+        { taskId: '#T99', title: '异态任务', status: 'teleported', updatedAt: Date.now() },
+      ],
+    });
+    openPanel();
+    render(<RemoteViewPane />);
+    await waitFor(() => expect(screen.getByRole('tab', { name: '任务 12' })).toBeDefined());
+    fireEvent.click(screen.getByRole('tab', { name: /任务/ }));
+    for (const [, label] of eleven) {
+      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
+    }
+    expect(screen.getAllByText('排队中')).toHaveLength(2); // assigned + session_queued 同 label
+    // 未知状态：中性徽标原文透传（不静默吞、不崩）
+    expect(screen.getByText('teleported')).toBeInTheDocument();
+  });
 });
 
 describe('S4 全宽头部与只读横幅', () => {
