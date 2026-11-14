@@ -6,6 +6,17 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 任务生命周期 v2 P2（跨节点 · hub 1.11）
+
+`2.1.0-alpha.69`。依据 spec `docs/specs/2026-11-13-task-human-loop-lifecycle-design.md` §7.3/§8 + 实施计划 `docs/plans/2026-11-14-task-lifecycle-v2-p2.md`（21 任务双仓 SDD，hub 仓 v0.7.0 已发 tag）。P1 本地闭环的跨节点半场：主从组发起方代答、外派两段式提交/验收/打回、平行组零转发、断线对账。
+
+- **hub 仓 0.7.0（协议 1.10.0→1.11.0，tag v0.7.0 已推）**：`submitted` 账本态（六条新转换边）+ 迁移 v10（delegations run_no/submitted_at/accepted_at + delegation_interventions 表）；四新 RPC——`task.intervene`（worker 干预上报幂等落行 + lf 定向事件/peer 中性进度零泄漏 + 发起方低版本降级）、`task.answer` 双向结构化（原子 first-wins + peer 发起方 forbidden_responder + interventionAnswered 对端事件）、`task.accept/reject`（发起方 by_node_id 单点权威 + 打回 run_no 递增）、`task.interventions` 对账（两端可查 + 投影完整还原）；report submitted 接入（runNo 透传 + deliverable 通道）；中性进度 lastSeq 定约 0；版本门三态矩阵——全量 421 测试绿（基线 360）
+- **studio worker 侧桥（6f0ee9bb + a8e73337 + 1241c51f + e598aa48）**：request_human/tool_gate → task.intervene 桥（子进程第三通道经 child 消息泵转发 + 旧版本降级本地等待，降级原因落会话 delegation_milestone）；submit_task → report submitted；interventionAnswered → 本地答复统一路由（幂等收敛）；accepted/rejected → 本地终态与返工 + S2 停靠项出清
+- **发起方镜像与跟踪会话（355df08b + 666101fc）**：submitted/intervention 镜像行（UNIQUE(origin_node_id, remote_id) 幂等 + run 懒建首达即 submitted）+ 里程碑判重；委派跟踪会话三入口幂等单源（首派/重派/boot 回填）+ 服务端只读闸（终审遗留清偿）+ 代答路由（镜像行 → hub task.answer；accept/reject 先本地后远端；peer 双层防线人话拒+中性卡）
+- **对账与收口（2a5f67b1 + 4d4f6b72）**：断线重连双侧对账幂等收敛（worker 补应用/发起方补镜像+收敛不注入）+ tool_gate 单入口化（SandboxNotice 退役）+ write-blocked emit 补发；P1 降级守卫移除——四象限版本门（hub × worker，未知保守缺省），双端 ≥1.11 启用跨节点两段式
+- **渲染与合同（19f75ed2 + 3081d731）**：协议 pin v0.7.0 + inferHubStatus/RemoteViewPane 状态域补全；八态完整化（submitted 待验收 accent/interrupted 离线徽标/waiting lf-peer 视角分流）+ 工作站徽标（镜像落库经组清单解析 boundWorkspaceName，执行方 remote 键落库前剥除防伪造）+ hub 侧预检黄字「任一侧」
+- **SimHub 契约（b16cc814）**：四场景全链编排（lf 提交验收/reject 返工 runNo 透传/peer 拒答+验收/断线重连幂等计数）+ hub:taskList 投影透传锁——electron 全量 6308 绿 + renderer 3593 绿 + 双 typecheck
+
 ## [未发布] — 审查修复批次：D1 确认卡闭环 / file-io symlink 防线 / 异步令牌守卫
 
 `2.1.0-alpha.67`。alpha.66 打包后的审查与真机冒烟跟进批（九提交），无新增功能面，全部为缺陷与防御性收口。
