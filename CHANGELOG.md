@@ -6,9 +6,20 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 审查修复批次：D1 确认卡闭环 / file-io symlink 防线 / 异步令牌守卫
+
+`2.1.0-alpha.67`。alpha.66 打包后的审查与真机冒烟跟进批（九提交），无新增功能面，全部为缺陷与防御性收口。
+
+- **能力确认卡不自动关闭 D1 闭环**（9e9a775f + 21c65318）：允许裁决已受理落库但卡与遮罩滞留。先按「invoke 回包丢失」做乐观消卡（点击即清 pending，IPC 明确 reject 才恢复本卡，新请求顶上时不覆盖）——保留为防御；后续法证确认真因是 QA mock-llm 按 `includes('改能力')` 永久命中历史消息导致二次 tool_call（非产品缺陷），据此更正原假设；确认卡 meta 增请求短码（requestId 前 8 位）区分连续请求
+- **file-io 桥囚禁叠加 symlink realpath 防线**（4254c6cc，审查 M1）：纯字符串 `isInsideDir` 可被工作空间内 symlink 绕过（文本在内、realpath 在外）。修复为命中后过锚点防线——最近存在祖先 realpath 必须仍落工作空间 realpath 内，根缺失 fail-closed；八例回归锁（外指读写据 / 外指目录拒 / 内指放行 / 环拒 / 悬链写拒 / 新建放行 / 删根全拒 / 既有语义保持）
+- **启动期排队时序收口**（7786743a）：flush 逐条 await 期间新消息不再走直路由（防超时队内更早消息的同会话顺序倒挂），改 while 循环按序消化；isBundledRuntime 二修——改按 resourcesPath 布局判别（`MOMO_RUNTIME_CHILD` 哨兵与 forks 池测试进程撞语义，曾误判 8 文件 15 用例）
+- **renderer 异步与竞态**（0a271eaf + 9c0fa80c + 25571424）：ProviderStep `fetchSeq` 令牌守卫三个远端异步（慢回包整包丢弃含错误分支）；session.store pendingDispatch 代数守卫（invoke 回包与 event 推送跨通道无序，旧快照不覆盖新占位）；TaskBoardView 防抖镜像改过滤 ref + ws 切换单次拉取（消除双拉与旧过滤闪烁）；preset 换 key 清陈旧远端列表；onboarding 校验/连接错误随字段编辑即时清
+- **防御与体验小修**（7786743a + 0a271eaf）：确认档位判定单源化（hasCapabilityAdditions 下沉 resource-ops-delta，防新增类别静默绕过确认门）；probeModels 记 host 留痕（审查 M2）；FileIoSettingsPanel 保存失败回滚乐观 UI + toast；useClampedMenuPosition 增 ResizeObserver 重钳制；formatHHmm 下沉 lib/time
+- **测试**：新增 electron bundled-runtime 矩阵锁、file-io symlink 八例、排队顺序回归锁；renderer time / use-clamped-menu-position / session.store 代数守卫；补 Windows 排队提交的 mock 面隔离（App / latch / router-leader 逐用例清队列）
+
 ## [未发布] — 任务生命周期 v2 P1（本地闭环）
 
-`2.1.0-alpha.67`。依据 spec `docs/specs/2026-11-13-task-human-loop-lifecycle-design.md` + 实施计划 `docs/plans/2026-11-13-task-lifecycle-v2-p1.md`（25 任务分派 + 逐 commit 独立评审）+ 消费面矩阵 `.omo/feature-matrices/2026-11-13-task-lifecycle-v2.md`。来源：完成语义两段式改造——agent 只能「提交」，完成必经人工验收。
+`2.1.0-alpha.68`（远端 alpha.67 打包批次并行占用，本批顺延）。依据 spec `docs/specs/2026-11-13-task-human-loop-lifecycle-design.md` + 实施计划 `docs/plans/2026-11-13-task-lifecycle-v2-p1.md`（25 任务分派 + 逐 commit 独立评审）+ 消费面矩阵 `.omo/feature-matrices/2026-11-13-task-lifecycle-v2.md`。来源：完成语义两段式改造——agent 只能「提交」，完成必经人工验收。
 
 - **三表与回填**（4f318b04..51196227）：migration 081 三表结构——tasks 增五列（current_run_id / submitted_at / accepted_at / delegation_role / auto_accept）+ task_runs（执行尝试读写单点）+ human_requests（人工请求持久化）；082 存量回填（in_progress 补 run#1、dispatch 簿记行自动验收）；状态机 v2 新二态 waiting_human / submitted（2117da07）——in_progress→completed 直写边删除，完成必经验收（两段式：agent submitTask → 人工 accept/reject）
 - **写路径收敛**（cbe2f049..72b1af42）：任务状态写入收敛至 lifecycle-runs 服务单点（§9.3 十处逃生门收口——task-tools / move / agent-runner 等直写改走 submitRun/failRun 投影），运行时断裂窗口关闭后 electron 全量 6147/0
