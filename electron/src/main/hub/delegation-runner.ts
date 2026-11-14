@@ -197,6 +197,17 @@ export interface DelegationRunner {
   handleCancelled(payload: { taskId: string }): void;
   /** 重连恢复（onStateChange→online）：中断对账 + 立即冲一拍 */
   handleOnline(): Promise<void>;
+  /**
+   * S4 验收消费停靠出清：hub task.accepted/rejected 消费后，清掉 settleRun 因
+   * 本地 submitted 停靠的 active 项（terminal 已置、tick 惰性跳过、账本零上报）。
+   * accepted：本地账本对齐 done（hub 已终局，不上报——再报 done 是对已终态账本
+   * 的重复拍）；rejected：账本保持 running，任务回 assigned 由本地 executor 放行
+   * 重跑（trigger 自动 initial——本地 run 计数自治，hub runNo 仅展示对账用），
+   * 重跑进度经监督器接管（peer-draft）/既有进度拍链自然恢复。
+   * 无停靠项（classic 未接管 / 已出清 / 重启丢失）幂等 no-op；accepted 侧账本
+   * 对齐仍执行（重启窗口的迟到消费也能终结监督器，防 duplicate 终态直报）。
+   */
+  settleAcceptance(taskId: string, outcome: 'accepted' | 'rejected'): void;
   destroy(): void;
 }
 
@@ -261,7 +272,8 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
     // 验收直接终决（hub canTransition 对 submitted→done|failed|running 均放行）；
     // 验收权威在发起方（task.accept/reject，S4 消费回本地终态）。停靠语义：
     // 留在 active（terminal 已置 → tick 惰性跳过；重连对账 peer-draft 记录整段
-    // continue、classic 承接行无本地 submitted 面），账本保持 running 零上报。
+    // continue、classic 承接行无本地 submitted 面），账本保持 running 零上报——
+    // 停靠项出清走 S4：验收消费（settleAcceptance）随终态/返工落定后清出。
     if (terminal.status !== 'aborted' && localTaskAwaitingAcceptance(taskId)) {
       logger.info('回合终态到达但本地任务已提交待验收——停靠等待发起方验收（不上报终态）', {
         taskId,
@@ -776,6 +788,22 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
         store.updateState(taskId, 'cancelled');
         logger.info('委派已取消（本地无在跑回合，仅清算账本）', { taskId });
       }
+    },
+
+    settleAcceptance(taskId, outcome) {
+      const run = active.get(taskId);
+      if (run) {
+        // 停靠出清：unwatch 已在停靠时调用（幂等）；terminal 兜底置位防 tick 拍
+        run.unwatch();
+        run.terminal = run.terminal ?? { status: 'aborted' };
+        active.delete(taskId);
+      }
+      if (outcome === 'accepted') {
+        // hub 账本已 done（本事件的来源即终局）——本地账本对齐 + 零上报；
+        // 无停靠项时仍对齐（重启窗口迟到消费终结监督器，防 duplicate done 直报）
+        store.updateState(taskId, 'done');
+      }
+      logger.info('验收结果已消费，停靠项出清', { taskId, outcome, hadDocked: run !== undefined });
     },
 
     async handleOnline() {

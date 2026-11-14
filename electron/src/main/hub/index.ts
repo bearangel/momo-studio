@@ -48,7 +48,13 @@ import { insertTask, updateTask, getTask, listTasks } from '../storage/tasks/rep
 import { getActiveRun } from '../storage/tasks/runs-repo';
 import { acceptTask, setRemoteInterveneSink } from '../task/lifecycle-runs';
 import { setToolGateRowSink } from '../sandbox/write-blocked-emit';
-import { createRemoteInterveneHandler, handleInterventionAnswered } from './remote-intervene-bridge';
+import {
+  createRemoteInterveneHandler,
+  handleInterventionAnswered,
+  handleTaskAccepted,
+  handleTaskRejected,
+  type WorkerTerminalConsumePorts,
+} from './remote-intervene-bridge';
 import { isTerminal } from '../storage/tasks/state-machine';
 import { createMirrorRegistry, type MirrorRegistryRow } from './mirror-registry';
 import { ViewServer } from './view-server';
@@ -533,6 +539,25 @@ function startClient(
         // 错过的代答无补偿（自然降级：请求行仍 pending，节点所有者可自答），重连
         // 后由 S7 对账兜底。
         handleInterventionAnswered(evt.payload);
+        return;
+      }
+      if (evt.method === EVT.taskAccepted || evt.method === EVT.taskRejected) {
+        // worker 侧验收结果消费（P2 S4）：hub 定向→本机 worker（payload.taskId =
+        // hub 委派 id，桥内经 delegation_id 反查本地承接行）→ 复用
+        // completeAcceptance / rejectTask 写路径落本地终态与返工 + 停靠出清。
+        // 断连窗口（沿 S3 口径）：onEvent 只在 online 后触发——错过的验收结果无
+        // 事件补偿（自然降级：任务保持 submitted，节点所有者可本地验收/打回），
+        // 重连后由 S7 对账兜底。
+        const consumePorts: WorkerTerminalConsumePorts = {
+          selfNodeId: () => configStore().read()?.nodeId ?? nodeId,
+          // 停靠项只存在于已创建的 runner（handleAssigned/handleOnline 建档）；
+          // 无 runner = 无停靠，幂等 no-op
+          settleDocked: (taskId, outcome) => {
+            delegationRunner?.settleAcceptance(taskId, outcome);
+          },
+        };
+        if (evt.method === EVT.taskAccepted) void handleTaskAccepted(evt.payload, consumePorts);
+        else void handleTaskRejected(evt.payload, consumePorts);
         return;
       }
       // ── leader 侧委派事件桥（M2e T12）：hub 定向→本机 leader 的账本迁移与进度拍，

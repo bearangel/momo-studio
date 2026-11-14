@@ -528,8 +528,10 @@ function answerAcceptance(
  * 验收通过主体（acceptTask 与 auto_accept「提交即验收」共用）：
  * run → accepted(endedAt) + acceptance answered + 任务 → completed
  * （accepted_at + completed_at 同刻落账）。run 非 submitted 人话拒（Review Focus #4）。
+ * 导出供 worker 远端验收消费（P2 S4——remote-intervene-bridge 以 remote 答复方
+ * 调用；写路径收敛红线：跨节点消费不另立第三套终态写入）。
  */
-function completeAcceptance(taskId: string, byNodeId: string): void {
+export function completeAcceptance(taskId: string, byNodeId: string): void {
   const active = requireActiveRun(taskId);
   if (active.status !== 'submitted') {
     throw new Error(
@@ -561,8 +563,9 @@ export async function acceptTask(id: string): Promise<void> {
  * 打回不建新 run——回 assigned 排队，下次放行 startRun(trigger='rework')；
  * 返工上限（§5.2）：下一 run 序号将超 MAX_RUNS_PER_TASK 时任务转 failed
  * （errorMessage=返工次数超限，failRun 同链）——拒绝无限返工循环。
+ * byNodeId 缺省本地验收方；worker 远端打回消费（P2 S4）传 remote 答复方。
  */
-export async function rejectTask(id: string, reason: string): Promise<void> {
+export async function rejectTask(id: string, reason: string, byNodeId: string = LOCAL_ACCEPT_BY): Promise<void> {
   const trimmed = reason.trim();
   if (!trimmed) throw new Error('打回必须填写理由');
   if (!getTask(id)) throw new Error(`任务 ${id} 不存在`);
@@ -583,7 +586,7 @@ export async function rejectTask(id: string, reason: string): Promise<void> {
   const now = Date.now();
   getDb().transaction(() => {
     updateRun(active.id, { status: 'rejected', endedAt: now, rejectReason: trimmed });
-    answerAcceptance(id, active.id, { decision: 'reject', reason: trimmed }, LOCAL_ACCEPT_BY);
+    answerAcceptance(id, active.id, { decision: 'reject', reason: trimmed }, byNodeId);
     projectTaskStatus(id, 'assigned');
   })();
   emitRunChanged(id, active.id, 'rejected');

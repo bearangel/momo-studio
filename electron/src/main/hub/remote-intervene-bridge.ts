@@ -24,10 +24,12 @@ import { logger } from '../logger';
 import type { HubClient } from './client';
 import { TASK_RPC, TASK_HITL_REQUIRED_MINOR, type InterventionKind, type InterventionRequest } from './protocol';
 import { TASK_WIRE } from './delegation-wire';
+import { getDb } from '../storage/db';
 import { getHumanRequest, type HumanRequestRow } from '../storage/tasks/human-requests-repo';
-import type { TaskRow } from '../storage/tasks/repo';
+import { getTask, type TaskRow } from '../storage/tasks/repo';
 import type { TaskRunRow } from '../storage/tasks/runs-repo';
-import { answerHuman, type RemoteInterveneEvent } from '../task/lifecycle-runs';
+import { isTerminal } from '../storage/tasks/state-machine';
+import { answerHuman, completeAcceptance, rejectTask, type RemoteInterveneEvent } from '../task/lifecycle-runs';
 import type { HumanAnswerInput } from '../task/human-answer-shared';
 import { truncateCodePoints } from '../util/redact';
 import { insertMessage } from '../storage/messages/repo';
@@ -39,13 +41,38 @@ const REASON_MAX = 512;
 const SUMMARY_FALLBACK_CODEPOINTS = 400;
 
 /**
- * 降级里程碑落执行会话（评审轮 1，Review Focus #1——brief「里程碑记录降级原因」）：
- * messages 行 sender='system'、event_type='delegation_milestone'、结构化 meta 落
- * context_json（repo 的 meta 载体列，human-answer-inject metaJson 同位）=
- * {kind, reason, code?}，与 S5 发起方侧跟踪会话里程碑同 event_type（双端一致，
- * spec §7.3 契约同型）。写后 pushSessionMessage 实时推 renderer；**不唤醒 agent**
- * （无 systemKickoff——降级是旁路事件，不消费回合）。execution_session_id 空
+ * 里程碑落执行会话公用底座（S2 降级 / S4 验收消费同 event_type）：messages 行
+ * sender='system'、event_type='delegation_milestone'、结构化 meta 落
+ * context_json（repo 的 meta 载体列，human-answer-inject metaJson 同位），
+ * 与 S5 发起方侧跟踪会话里程碑同 event_type（双端一致，spec §7.3 契约同型）。
+ * 写后 pushSessionMessage 实时推 renderer；**不唤醒 agent**（无 systemKickoff
+ * ——里程碑是旁路事件，不消费回合；rejected 的 reason 经会话历史进入返工
+ * 上下文，协议「打回理由进 agent 上下文」由此承载）。execution_session_id 空
  * （无会话可写，如 source-only 任务）跳过，logger 兜底（与 dispatch 口径一致）。
+ */
+function writeSessionMilestone(task: TaskRow, body: string, meta: Record<string, unknown>): void {
+  const sessionId = task.executionSessionId;
+  if (sessionId === null || sessionId === '') {
+    logger.warn('delegation 里程碑未写入（任务无关联执行会话，logger 兜底）', {
+      taskId: task.id,
+      meta,
+    });
+    return;
+  }
+  const row = insertMessage({
+    sessionId,
+    sender: 'system',
+    eventType: 'delegation_milestone',
+    body,
+    taskId: task.id,
+    contextJson: JSON.stringify(meta),
+  });
+  pushSessionMessage(row);
+}
+
+/**
+ * 降级里程碑落执行会话（评审轮 1，Review Focus #1——brief「里程碑记录降级原因」）：
+ * writeSessionMilestone 的 S2 降级包装（kind/reason/code 结构化 + 人话 body）。
  */
 function writeDegradedMilestone(input: {
   task: TaskRow;
@@ -54,28 +81,15 @@ function writeDegradedMilestone(input: {
   code?: string;
   suffix: string;
 }): void {
-  const sessionId = input.task.executionSessionId;
-  if (sessionId === null || sessionId === '') {
-    logger.warn('降级里程碑未写入（任务无关联执行会话，logger 兜底）', {
-      taskId: input.task.id,
-      kind: input.kind,
-      reason: input.reason,
-    });
-    return;
-  }
-  const row = insertMessage({
-    sessionId,
-    sender: 'system',
-    eventType: 'delegation_milestone',
-    body: `${input.kind === 'intervene_degraded' ? '干预上报降级' : '提交上报降级'}（${input.reason}）：${input.suffix}`,
-    taskId: input.task.id,
-    contextJson: JSON.stringify({
+  writeSessionMilestone(
+    input.task,
+    `${input.kind === 'intervene_degraded' ? '干预上报降级' : '提交上报降级'}（${input.reason}）：${input.suffix}`,
+    {
       kind: input.kind,
       reason: input.reason,
       ...(input.code !== undefined ? { code: input.code } : {}),
-    }),
-  });
-  pushSessionMessage(row);
+    },
+  );
 }
 
 /** 进程/DB 边界端口（唯一 mock 面；生产接线 hub/index.ts） */
@@ -431,6 +445,175 @@ export function handleInterventionAnswered(payload: unknown): void {
     });
   } catch (err) {
     logger.warn('远端代答消费内部异常（事件丢弃，本地行为不受影响）', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+// ── worker 消费远端验收/打回（P2 S4，spec 2026-11-13 §8.2/§8.6）─────────────────
+
+/** S4 消费端口（hub/index onEvent 装配；事件入口直调 + DB 真实——S3 同款纪律） */
+export interface WorkerTerminalConsumePorts {
+  /** 本机 nodeId（外派镜像行不消费——isWorkerExecution 判向） */
+  selfNodeId(): string | null;
+  /** 验收消费后的停靠出清（delegation-runner settleAcceptance；未装配/无停靠项幂等） */
+  settleDocked(taskId: string, outcome: 'accepted' | 'rejected'): void;
+}
+
+/**
+ * 远端验收/打回的答复方标记：协议 1.11 的 TaskAcceptedEvent / TaskRejectedEvent
+ * 不携带验收者身份（hub 账本单源定向）——以发起方统称落账，区别本地
+ * 'user:local'（LOCAL_ACCEPT_BY）与自动 'system:auto'。
+ */
+const REMOTE_ORIGIN_BY = 'remote:origin';
+
+/**
+ * hub 委派 id → 本地承接行（delegation_id 反查，delegation-sync
+ * findTaskByDelegation 同键；classic 'in' 行与 peer-draft 承接行同覆盖）。
+ */
+function findTaskByDelegationId(delegationId: string): TaskRow | null {
+  const row = getDb()
+    .prepare('SELECT id FROM tasks WHERE delegation_id = ?')
+    .get(delegationId) as { id: string } | undefined;
+  if (row === undefined) return null;
+  return getTask(row.id);
+}
+
+/** S4 消费公共前置：载荷 taskId（hub 委派 id）→ 本机执行方的本地承接行；
+ *  任务不存在 / 非 delegation-bound / 外派镜像行（'out'/路由指向远端）→ null
+ *  （静默幂等——镜像行共享 delegation_id，leader 侧状态由 S5 RPC 回执驱动）。
+ *  返回 delegationId 已收窄非空（settleDocked 锚定键）。 */
+function resolveWorkerTask(
+  payloadTaskId: unknown,
+  selfNodeId: string | null,
+): { task: TaskRow; delegationId: string } | null {
+  if (typeof payloadTaskId !== 'string' || payloadTaskId === '') return null;
+  const task = findTaskByDelegationId(payloadTaskId);
+  if (task === null) return null;
+  const delegationId = task.delegationId;
+  if (delegationId === null) return null;
+  if (!isWorkerExecution(task, selfNodeId)) return null;
+  return { task, delegationId };
+}
+
+/** 载荷 runNo 容错拾取（协议必带；异形剥除——里程碑 meta 对账展示用，不参与判定） */
+function payloadRunNo(raw: unknown): number | undefined {
+  return typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined;
+}
+
+/**
+ * task.accepted 事件消费（hub/index onEvent 装配；hub 定向→本机 worker）：
+ * 发起方验收通过 → 复用 completeAcceptance 写路径（run accepted + acceptance
+ * 请求行 tryAnswer 答复 + 任务 completed/accepted_at 同刻落账——§5.1 不变量 6
+ * 写路径收敛，不另立终态写入）+ 里程碑 kind='accepted'（meta 记 runNo 对账）+
+ * 停靠出清（settleRun docked 项）。
+ * 幂等：任务已终态（P1 auto_accept 降级先行收口 / 重放）→ 静默；非 submitted
+ * → 静默（迟到或乱序，S7 对账兜底）。total 语义——事件处理绝不向上抛
+ * （onEvent 无错误回传通道）。
+ */
+export async function handleTaskAccepted(
+  payload: unknown,
+  ports: WorkerTerminalConsumePorts,
+): Promise<void> {
+  try {
+    if (typeof payload !== 'object' || payload === null) return;
+    const p = payload as { taskId?: unknown; runNo?: unknown };
+    const resolved = resolveWorkerTask(p.taskId, ports.selfNodeId());
+    if (resolved === null) {
+      logger.info('远端验收通过到达但无本机承接行（幂等收敛，丢弃）', {
+        taskId: typeof p.taskId === 'string' ? p.taskId : undefined,
+      });
+      return;
+    }
+    const { task, delegationId } = resolved;
+    if (isTerminal(task.status)) {
+      logger.info('远端验收通过到达但任务已终态（幂等收敛，丢弃）', {
+        taskId: task.id,
+        status: task.status,
+      });
+      return;
+    }
+    if (task.status !== 'submitted') {
+      logger.info('远端验收通过到达但任务非 submitted（乱序/迟到，丢弃）', {
+        taskId: task.id,
+        status: task.status,
+      });
+      return;
+    }
+    completeAcceptance(task.id, REMOTE_ORIGIN_BY);
+    writeSessionMilestone(task, '验收通过（发起方已确认交付，任务完成）', {
+      kind: 'accepted',
+      ...(payloadRunNo(p.runNo) !== undefined ? { runNo: payloadRunNo(p.runNo) } : {}),
+    });
+    ports.settleDocked(delegationId, 'accepted');
+    logger.info('远端验收通过已消费（completeAcceptance 复用路径）', {
+      taskId: task.id,
+      delegationId,
+      status: 'completed',
+    });
+  } catch (err) {
+    logger.warn('远端验收通过消费内部异常（事件丢弃，S7 对账兜底）', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * task.rejected 事件消费（hub/index onEvent 装配；hub 定向→本机 worker）：
+ * 发起方打回 → 复用 rejectTask 写路径（run rejected + reject_reason 落库 +
+ * acceptance 答复 reject(reason) + 任务回 assigned；返工上限超限走其内建
+ * failRun 分支）+ 里程碑 kind='rejected'（body/meta 含 reason，meta 记 runNo）+
+ * 停靠出清。返工重启：任务回 assigned 后由本地 executor 正常放行（starter
+ * trigger 自动 initial——本地 run 计数自治，与 hub runNo 对齐**不强制**：hub
+ * runNo 仅展示对账用）；打回理由经里程碑落执行会话历史，随返工回合进 agent
+ * 上下文（协议「reason 进 agent 上下文」的本地承载）。
+ * 幂等与 total 语义同 handleTaskAccepted。
+ */
+export async function handleTaskRejected(
+  payload: unknown,
+  ports: WorkerTerminalConsumePorts,
+): Promise<void> {
+  try {
+    if (typeof payload !== 'object' || payload === null) return;
+    const p = payload as { taskId?: unknown; runNo?: unknown; reason?: unknown };
+    if (typeof p.reason !== 'string' || p.reason.trim() === '') return; // 打回必带理由（协议契约）
+    const resolved = resolveWorkerTask(p.taskId, ports.selfNodeId());
+    if (resolved === null) {
+      logger.info('远端打回到达但无本机承接行（幂等收敛，丢弃）', {
+        taskId: typeof p.taskId === 'string' ? p.taskId : undefined,
+      });
+      return;
+    }
+    const { task, delegationId } = resolved;
+    if (isTerminal(task.status)) {
+      logger.info('远端打回到达但任务已终态（幂等收敛，丢弃）', {
+        taskId: task.id,
+        status: task.status,
+      });
+      return;
+    }
+    if (task.status !== 'submitted') {
+      logger.info('远端打回到达但任务非 submitted（乱序/迟到，丢弃）', {
+        taskId: task.id,
+        status: task.status,
+      });
+      return;
+    }
+    const reason = p.reason.trim();
+    await rejectTask(task.id, reason, REMOTE_ORIGIN_BY);
+    writeSessionMilestone(task, `任务被打回（需返工）：${reason}`, {
+      kind: 'rejected',
+      reason,
+      ...(payloadRunNo(p.runNo) !== undefined ? { runNo: payloadRunNo(p.runNo) } : {}),
+    });
+    ports.settleDocked(delegationId, 'rejected');
+    logger.info('远端打回已消费（rejectTask 复用路径，任务回 assigned 待返工）', {
+      taskId: task.id,
+      delegationId,
+      reason,
+    });
+  } catch (err) {
+    logger.warn('远端打回消费内部异常（事件丢弃，S7 对账兜底）', {
       error: err instanceof Error ? err.message : String(err),
     });
   }
