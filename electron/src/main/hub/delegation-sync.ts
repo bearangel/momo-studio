@@ -34,7 +34,7 @@ import { blockedDispatchError } from '../task/dependency-gate';
 import { logger } from '../logger';
 
 /**
- * 七态映射表（hub 委派账本态 → 本地 tasks 行状态——测试锁 + 文档单源）：
+ * 八态映射表（hub 委派账本态 → 本地 tasks 行状态——测试锁 + 文档单源）：
  *
  * | hub 委派态   | 本地 TaskStatus | 看板列 | 说明                              |
  * |--------------|-----------------|--------|-----------------------------------|
@@ -44,6 +44,10 @@ import { logger } from '../logger';
  * |              |                 |        | 的中间态——本地行维持进行中（看板 |
  * |              |                 |        | 无等待态；等待角标由 progress kv   |
  * |              |                 |        | waiting 标志驱动，不造新行状态）  |
+ * | submitted    | submitted       | 待验收 | 1.11.0 v2 生命周期：run 完成待验收 |
+ * |              |                 |        | 的中间态——同形映射本地行 submitted |
+ * |              |                 |        | （验收闸打回/通过由 v2 验收链驱动，|
+ * |              |                 |        | S9 收口；低版本 hub 不回此态）     |
  * | done         | completed       | 已完成 | 终态；completedAt + acceptedAt +  |
  * |              |                 |        | 摘要「已完成」。P1 降级守卫（spec |
  * |              |                 |        | §14）：done 即完成——不经 submitted |
@@ -63,6 +67,7 @@ export const DELEGATION_STATUS_TO_TASK: Record<DelegationStatus, TaskStatus> = {
   pending: 'pending',
   running: 'in_progress',
   waiting: 'in_progress',
+  submitted: 'submitted',
   done: 'completed',
   failed: 'failed',
   cancelled: 'cancelled',

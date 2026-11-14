@@ -288,7 +288,7 @@ function useDelegationBoardData(refreshTasks?: () => void): DelegationBoardConte
 
 // ── 六态推导 ────────────────────────────────────────────────────────────────
 
-/** 行状态 → hub 六态反推（ledger 缺席时的兜底：重启/离线对账前） */
+/** 行状态 → hub 八态反推（ledger 缺席时的兜底：重启/离线对账前） */
 function inferHubStatus(t: TaskRow): HubDelegationStatus | null {
   switch (t.status) {
     case 'in_progress':
@@ -299,9 +299,17 @@ function inferHubStatus(t: TaskRow): HubDelegationStatus | null {
       return 'failed';
     case 'cancelled':
       return 'cancelled';
+    case 'waiting_human':
+      // v2 生命周期等人态（1.11.0）：与 hub waiting 等待确认卡同语义
+      return 'waiting';
+    case 'submitted':
+      // v2 生命周期待验收态（1.11.0）：run 完成等发起方验收 → hub submitted
+      // 账本态（低版本 hub 不回此态，仅在协议 ≥ 1.11 的账本/行上出现）
+      return 'submitted';
     default:
       // pending（含 interrupted 回落——中断事实在摘要行呈现）/ 其他态：
-      // delegationId 空 = 待派发（null），有 = 账本 pending
+      // delegationId 空 = 待派发（null），有 = 账本 pending。
+      // v2 两态已在上显式覆盖，此兜底仅为未来未知态保留（不静默误归）
       return t.delegationId != null ? 'pending' : null;
   }
 }
@@ -772,9 +780,10 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
   );
 }
 
-/** 七态徽标（待派发 null → 不渲染——节点槽已带「待派发」文案，S1；waiting=
+/** 八态徽标（待派发 null → 不渲染——节点槽已带「待派发」文案，S1；waiting=
  *  M3.1 账本中间态，常态由等待角标（摘要信号驱动）覆盖——本条仅对账滞后/
- *  kv 缺失时兜底呈现等待语义） */
+ *  kv 缺失时兜底呈现等待语义；submitted=v2 生命周期待验收中间态，S1 仅保
+ *  中性不裸奔，完整八态样式在 S9 收口） */
 function StatusBadge({ status }: { status: HubDelegationStatus | null }): ReactNode {
   if (status == null) return null;
   switch (status) {
@@ -798,6 +807,11 @@ function StatusBadge({ status }: { status: HubDelegationStatus | null }): ReactN
             </>
           )}
         </Badge>
+      );
+    case 'submitted':
+      /* v2 待验收（S1 中性占位——「待验收」语义明确即可，视觉定值随 S9 八态收口） */
+      return (
+        <Badge className="h-auto px-1.5 py-0.5 text-[10px] leading-none">待验收</Badge>
       );
     case 'done':
       return (

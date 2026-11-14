@@ -3574,8 +3574,9 @@ export interface HubMirrorRegistryRow {
 
 // ── 委派 leader 侧（M2e T12，协议 delegation.ts 镜像；M3.1 七态）────────────
 
-/** 委派账本七态（协议 DelegationStatus 镜像——waiting=M3.1 running 中等待用户确认的中间态） */
-export type HubDelegationStatus = 'pending' | 'running' | 'waiting' | 'done' | 'failed' | 'interrupted' | 'cancelled';
+/** 委派账本态（协议 DelegationStatus 镜像——waiting=M3.1 running 中等待用户确认的
+ *  中间态；submitted=1.11.0 run 完成待验收中间态——v2 生命周期验收闸的 hub 侧投影） */
+export type HubDelegationStatus = 'pending' | 'running' | 'waiting' | 'submitted' | 'done' | 'failed' | 'interrupted' | 'cancelled';
 
 /** 委派账本条目（协议 TaskRecord 镜像——七字段 + M4.2 组归属字段） */
 export interface HubTaskRecord {

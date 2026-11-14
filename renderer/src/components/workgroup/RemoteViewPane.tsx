@@ -59,7 +59,7 @@ function formatDayTime(ts: number): string {
 
 /** 任务状态徽标（task-status 语义色单源；未知状态回中性兜底） */
 function ViewTaskStatusBadge({ status }: { status: string }) {
-  const known = status in { draft: 1, pending: 1, assigned: 1, session_queued: 1, in_progress: 1, paused: 1, completed: 1, cancelled: 1, failed: 1 };
+  const known = status in { draft: 1, pending: 1, assigned: 1, session_queued: 1, in_progress: 1, waiting_human: 1, submitted: 1, paused: 1, completed: 1, cancelled: 1, failed: 1 };
   if (!known) return <Badge>{status}</Badge>;
   const style = taskStatusStyle(status as TaskStatus);
   return <Badge tone={style.tone}>{style.label}</Badge>;
