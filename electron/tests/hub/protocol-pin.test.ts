@@ -120,9 +120,9 @@ function manifestSample(resources: unknown): unknown {
   };
 }
 
-describe('hub pin v0.7.0（1.11.0 v2 HITL 生命周期底座）', () => {
-  it('pin 生效：实装 momo-hub-protocol 版本 = 0.7.0（electron/package.json #v0.7.0）', () => {
-    expect(pkg.version).toBe('0.7.0');
+describe('hub pin v0.7.1（1.11.0 v2 HITL 生命周期底座）', () => {
+  it('pin 生效：实装 momo-hub-protocol 版本 = 0.7.1（electron/package.json #v0.7.1）', () => {
+    expect(pkg.version).toBe('0.7.1');
   });
 
   it('v0.1.5 语义目录样本过 validateHubCatalog（生产消费链同校验器）', () => {
