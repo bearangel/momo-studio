@@ -52,7 +52,9 @@ import {
   createRemoteInterveneHandler,
   handleInterventionAnswered,
   handleTaskAccepted,
+  handleTaskInterventionMirror,
   handleTaskRejected,
+  handleTaskSubmittedMirror,
   type WorkerTerminalConsumePorts,
 } from './remote-intervene-bridge';
 import { isTerminal } from '../storage/tasks/state-machine';
@@ -558,6 +560,16 @@ function startClient(
         };
         if (evt.method === EVT.taskAccepted) void handleTaskAccepted(evt.payload, consumePorts);
         else void handleTaskRejected(evt.payload, consumePorts);
+        return;
+      }
+      if (evt.method === EVT.taskIntervention || evt.method === EVT.taskSubmitted) {
+        // 发起方镜像消费（P2 S5）：hub 定向→本机发起方（lf 组；peer 组不转发
+        // intervention，submitted 走账本对账）→ 镜像 human_requests 行 + run 懒建
+        // + 跟踪会话里程碑（幂等键 UNIQUE(origin_node_id, remote_id)）。断连窗口
+        // （沿 S3/S4 口径）：onEvent 只在 online 后触发——错过的事件无补偿，
+        // 重连后由 S7 对账兜底。
+        if (evt.method === EVT.taskIntervention) handleTaskInterventionMirror(evt.payload);
+        else handleTaskSubmittedMirror(evt.payload);
         return;
       }
       // ── leader 侧委派事件桥（M2e T12）：hub 定向→本机 leader 的账本迁移与进度拍，

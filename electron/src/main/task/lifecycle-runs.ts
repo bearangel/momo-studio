@@ -424,8 +424,9 @@ export interface DeliverableInput {
   artifacts?: Array<{ label: string; value: string }>;
 }
 
-/** 验收请求提醒期限（§6.7：acceptance 默认 keep_waiting，24h 提醒） */
-const ACCEPTANCE_DEADLINE_MS = 24 * 3600_000;
+/** 验收请求提醒期限（§6.7：acceptance 默认 keep_waiting，24h 提醒）——发起方
+ *  镜像 acceptance 行同刻度复用（remote-intervene-bridge S5） */
+export const ACCEPTANCE_DEADLINE_MS = 24 * 3600_000;
 
 /** 本地人工验收的答复节点（Task 16 IPC 接用户身份时替换为真实 node id） */
 const LOCAL_ACCEPT_BY = 'user:local';

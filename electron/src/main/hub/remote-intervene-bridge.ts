@@ -25,11 +25,24 @@ import type { HubClient } from './client';
 import { TASK_RPC, TASK_HITL_REQUIRED_MINOR, type InterventionKind, type InterventionRequest } from './protocol';
 import { TASK_WIRE } from './delegation-wire';
 import { getDb } from '../storage/db';
-import { getHumanRequest, type HumanRequestRow } from '../storage/tasks/human-requests-repo';
-import { getTask, type TaskRow } from '../storage/tasks/repo';
-import type { TaskRunRow } from '../storage/tasks/runs-repo';
+import {
+  getHumanRequest,
+  insertHumanRequest,
+  findRemoteMirrorRequest,
+  type HumanRequestRow,
+} from '../storage/tasks/human-requests-repo';
+import { getTask, updateTask, type TaskRow } from '../storage/tasks/repo';
+import { getActiveRun, insertRun, type TaskRunRow } from '../storage/tasks/runs-repo';
 import { isTerminal } from '../storage/tasks/state-machine';
-import { answerHuman, completeAcceptance, rejectTask, type RemoteInterveneEvent } from '../task/lifecycle-runs';
+import {
+  ACCEPTANCE_DEADLINE_MS,
+  answerHuman,
+  completeAcceptance,
+  emitHumanChanged,
+  emitRunChanged,
+  rejectTask,
+  type RemoteInterveneEvent,
+} from '../task/lifecycle-runs';
 import type { HumanAnswerInput } from '../task/human-answer-shared';
 import { truncateCodePoints } from '../util/redact';
 import { insertMessage } from '../storage/messages/repo';
@@ -614,6 +627,354 @@ export async function handleTaskRejected(
     });
   } catch (err) {
     logger.warn('远端打回消费内部异常（事件丢弃，S7 对账兜底）', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+// ── 发起方镜像消费（P2 S5，spec 2026-11-13 §8.3/§8.6）─────────────────────────
+
+/**
+ * S5 消费公共前置：载荷 taskId（hub 委派 id）→ 本机发起方的外派行。与 S4
+ * resolveWorkerTask 镜像对称：期望 delegation_role='out'（dispatch-submit 委派
+ * 成功即戳）；不存在 / 非 delegation-bound / 非 'out'（本机承接行 / 普通本地行）
+ * → null（静默幂等——worker 侧事件不会路由到发起方，命中即异形或迟到）。
+ */
+function resolveOriginTask(
+  payloadTaskId: unknown,
+): { task: TaskRow; delegationId: string } | null {
+  if (typeof payloadTaskId !== 'string' || payloadTaskId === '') return null;
+  const task = findTaskByDelegationId(payloadTaskId);
+  if (task === null) return null;
+  const delegationId = task.delegationId;
+  if (delegationId === null) return null;
+  if (task.delegationRole !== 'out') return null;
+  return { task, delegationId };
+}
+
+/**
+ * 外派行 → 执行节点 id（镜像行 origin_node_id 唯一来源）：dispatch-submit D5
+ * 委派回执把已解析目标回写 routing（node 变体本就携带；group 变体补
+ * targetNodeId）——「已派到谁」的持久单源。取不到（routing 损坏回退 local /
+ * group 未回填）→ null，调用方降级跳过镜像（UNIQUE(origin_node_id, remote_id)
+ * 对 NULL 不生效，双 NULL 行不幂等——宁可缺镜像不留不可判重的行）。
+ */
+function outRowWorkerNodeId(task: TaskRow): string | null {
+  const r = task.routing;
+  if (r.mode === 'node') return r.targetNodeId;
+  if (r.mode === 'group' && typeof r.targetNodeId === 'string' && r.targetNodeId !== '') {
+    return r.targetNodeId;
+  }
+  return null;
+}
+
+/** task.intervention 载荷内层（协议 InterventionRequest 形状；逐字段形状守卫，
+ *  任一必带字段异形整包丢弃不消费——presence 桥同款纪律） */
+interface MirrorIntervention {
+  interventionId: string;
+  runNo: number;
+  kind: 'tool_gate' | 'question' | 'manual_action';
+  title: string;
+  prompt: string;
+  payload?: Record<string, unknown>;
+  options?: Array<{ id: string; label: string; description?: string }>;
+  deadlineAt?: number;
+}
+
+function parseMirrorIntervention(raw: unknown): MirrorIntervention | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const v = raw as {
+    interventionId?: unknown;
+    runNo?: unknown;
+    kind?: unknown;
+    title?: unknown;
+    prompt?: unknown;
+    payload?: unknown;
+    options?: unknown;
+    deadlineAt?: unknown;
+  };
+  if (typeof v.interventionId !== 'string' || v.interventionId === '') return null;
+  if (typeof v.runNo !== 'number' || !Number.isFinite(v.runNo)) return null;
+  if (v.kind !== 'tool_gate' && v.kind !== 'question' && v.kind !== 'manual_action') return null;
+  if (typeof v.title !== 'string') return null;
+  if (typeof v.prompt !== 'string') return null;
+  if (
+    v.payload !== undefined &&
+    (typeof v.payload !== 'object' || v.payload === null || Array.isArray(v.payload))
+  ) {
+    return null;
+  }
+  if (v.options !== undefined) {
+    if (!Array.isArray(v.options)) return null;
+    for (const item of v.options) {
+      if (typeof item !== 'object' || item === null) return null;
+      const o = item as { id?: unknown; label?: unknown; description?: unknown };
+      if (typeof o.id !== 'string' || typeof o.label !== 'string') return null;
+      if (o.description !== undefined && typeof o.description !== 'string') return null;
+    }
+  }
+  if (v.deadlineAt !== undefined && typeof v.deadlineAt !== 'number') return null;
+  return {
+    interventionId: v.interventionId,
+    runNo: v.runNo,
+    kind: v.kind,
+    title: v.title,
+    prompt: v.prompt,
+    // 守卫已剥 null/数组，收窄到纯对象（TS 只给 object——cast 是收窄不是逃逸）
+    ...(v.payload !== undefined ? { payload: v.payload as Record<string, unknown> } : {}),
+    ...(v.options !== undefined
+      ? {
+          options: v.options as Array<{ id: string; label: string; description?: string }>,
+        }
+      : {}),
+    ...(v.deadlineAt !== undefined ? { deadlineAt: v.deadlineAt } : {}),
+  };
+}
+
+/**
+ * task.submitted 载荷 deliverable（协议自由形状 Record）→ acceptance 镜像载荷：
+ * summary/files/artifacts 逐字段形状校验，异形或缺席降级空值（summary='' /
+ * files=[] / artifacts=[]）——不因载荷畸形拒绝状态收口（hub 账本才是权威）。
+ */
+function parseMirrorDeliverable(raw: unknown): {
+  summary: string;
+  files: string[];
+  artifacts: Array<{ label: string; value: string }>;
+} {
+  const out = { summary: '', files: [] as string[], artifacts: [] as Array<{ label: string; value: string }> };
+  if (typeof raw !== 'object' || raw === null) return out;
+  const d = raw as { summary?: unknown; files?: unknown; artifacts?: unknown };
+  if (typeof d.summary === 'string') out.summary = d.summary;
+  if (Array.isArray(d.files) && d.files.every((f) => typeof f === 'string')) out.files = d.files;
+  if (
+    Array.isArray(d.artifacts) &&
+    d.artifacts.every(
+      (a) =>
+        typeof a === 'object' && a !== null &&
+        typeof (a as { label?: unknown }).label === 'string' &&
+        typeof (a as { value?: unknown }).value === 'string',
+    )
+  ) {
+    out.artifacts = d.artifacts as Array<{ label: string; value: string }>;
+  }
+  return out;
+}
+
+/**
+ * task.intervention 事件消费（hub/index onEvent 装配；hub 定向→本机发起方，
+ * lf 组——peer 组不转发本事件）：worker 人工请求 → 本地镜像行
+ * （UNIQUE(origin_node_id, remote_id) 幂等键——origin_node_id 取外派行
+ * routing 回写的执行节点、remote_id=interventionId，两者取不到则降级跳过镜像
+ * + logger.warn）。session_id 挂任务 execution_session_id（S6 跟踪会话接通前
+ * 可能为空——同上跳过，S6 建会话后自然落点）。任务态不动（waiting_human 由
+ * 镜像行 + 既有 kv waiting 徽标派生）。里程碑 kind='remote_intervention'，
+ * 以镜像行存在性判重（行已存在则跳过——取舍：免 messages 表 meta 幂等键查重，
+ * UNIQUE 行本身就是事件消费的唯一落点）。total 语义同 S3/S4。
+ */
+export function handleTaskInterventionMirror(payload: unknown): void {
+  try {
+    if (typeof payload !== 'object' || payload === null) return;
+    const p = payload as { taskId?: unknown; intervention?: unknown };
+    const intervention = parseMirrorIntervention(p.intervention);
+    if (intervention === null) return;
+    const resolved = resolveOriginTask(p.taskId);
+    if (resolved === null) {
+      logger.info('远端干预到达但无本机外派行（幂等收敛，丢弃）', {
+        taskId: typeof p.taskId === 'string' ? p.taskId : undefined,
+        interventionId: intervention.interventionId,
+      });
+      return;
+    }
+    const { task, delegationId } = resolved;
+    if (isTerminal(task.status)) {
+      logger.info('远端干预到达但任务已终态（幂等收敛，丢弃）', {
+        taskId: task.id,
+        status: task.status,
+      });
+      return;
+    }
+    const workerNodeId = outRowWorkerNodeId(task);
+    if (workerNodeId === null) {
+      logger.warn('干预镜像跳过：外派行路由缺执行节点（origin_node_id 不可空——双 NULL 不幂等）', {
+        taskId: task.id,
+        delegationId,
+      });
+      return;
+    }
+    const sessionId = task.executionSessionId;
+    if (sessionId === null || sessionId === '') {
+      logger.warn('干预镜像跳过：任务无关联执行会话（S6 跟踪会话接通后自然落点）', {
+        taskId: task.id,
+        delegationId,
+      });
+      return;
+    }
+    if (findRemoteMirrorRequest(workerNodeId, intervention.interventionId) !== null) {
+      logger.info('干预镜像行已存在（UNIQUE 幂等，跳过镜像与里程碑）', {
+        taskId: task.id,
+        interventionId: intervention.interventionId,
+      });
+      return;
+    }
+    const row = insertHumanRequest({
+      sessionId,
+      taskId: task.id,
+      runId: null,
+      kind: intervention.kind,
+      title: intervention.title,
+      prompt: intervention.prompt,
+      payloadJson:
+        intervention.payload !== undefined ? JSON.stringify(intervention.payload) : null,
+      optionsJson:
+        intervention.options !== undefined ? JSON.stringify(intervention.options) : null,
+      deadlineAt: intervention.deadlineAt ?? null,
+      delegationId,
+      originNodeId: workerNodeId,
+      remoteId: intervention.interventionId,
+    });
+    emitHumanChanged({ sessionId, requestId: row.id, kind: 'inserted' });
+    writeSessionMilestone(task, `远端人工请求（${intervention.kind}）：${intervention.title}`, {
+      kind: 'remote_intervention',
+      interventionId: intervention.interventionId,
+      runNo: intervention.runNo,
+      delegationId,
+    });
+    logger.info('远端干预镜像已落库', {
+      taskId: task.id,
+      delegationId,
+      interventionId: intervention.interventionId,
+      kind: intervention.kind,
+      runNo: intervention.runNo,
+    });
+  } catch (err) {
+    logger.warn('远端干预镜像消费内部异常（事件丢弃，S7 对账兜底）', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * task.submitted 事件消费（hub/index onEvent 装配；hub 定向→本机发起方）：
+ * run 懒建（spec §8.4——首个到达的就是 submitted，不伪造 running；trigger
+ * 'initial'）+ current_run_id 指针 + 任务态直写 submitted（§5.1 白名单
+ * delegation-sync 豁免惯例：外派行状态权威是 hub 账本，发起方任务可能仍在
+ * pending/assigned，不经本地状态机链）+ 镜像 acceptance 请求行
+ * （remote_id=`${delegationId}#${runNo}` 合成幂等键——事件唯一标识即
+ * (委派 id, runNo)）+ 里程碑 kind='remote_submitted'（以镜像行存在性判重）。
+ * 任务已终态 → 静默幂等（双通道并存期：delegation-sync done 拍→completed
+ * 直写可能先收口，S8 版本门内退役旧通道）。execution_session_id / 执行节点
+ * 缺失 → 状态照收口，仅跳过镜像行与里程碑（warn 兜底）。
+ */
+export function handleTaskSubmittedMirror(payload: unknown): void {
+  try {
+    if (typeof payload !== 'object' || payload === null) return;
+    const p = payload as { taskId?: unknown; runNo?: unknown; deliverable?: unknown };
+    if (typeof p.taskId !== 'string' || p.taskId === '') return;
+    if (typeof p.runNo !== 'number' || !Number.isFinite(p.runNo)) return;
+    const resolved = resolveOriginTask(p.taskId);
+    if (resolved === null) {
+      logger.info('远端提交到达但无本机外派行（幂等收敛，丢弃）', {
+        taskId: p.taskId,
+        runNo: p.runNo,
+      });
+      return;
+    }
+    const { task, delegationId } = resolved;
+    if (isTerminal(task.status)) {
+      logger.info('远端提交到达但任务已终态（双通道并存期幂等，丢弃）', {
+        taskId: task.id,
+        status: task.status,
+      });
+      return;
+    }
+    const runNo = p.runNo;
+    const workerNodeId = outRowWorkerNodeId(task);
+    const mirrorRemoteId = `${delegationId}#${runNo}`;
+    if (workerNodeId !== null && findRemoteMirrorRequest(workerNodeId, mirrorRemoteId) !== null) {
+      logger.info('提交镜像行已存在（UNIQUE 幂等，跳过）', {
+        taskId: task.id,
+        delegationId,
+        runNo,
+      });
+      return;
+    }
+
+    // run 懒建：无活动 run 才建（spec §8.4 首达即 submitted）。既有活动 run
+    // runNo 与事件不符（返工重提的迟到锚定）时沿用活动行仅 warn——发起方 run
+    // 账目的返工循环对账由 S6/S7 收口，本处不伪造 rejected 换号。
+    const existing = getActiveRun(task.id);
+    let runId: string;
+    if (existing === null) {
+      const run = insertRun({
+        taskId: task.id,
+        runNo,
+        status: 'submitted',
+        trigger: 'initial',
+        executionSessionId: task.executionSessionId,
+      });
+      runId = run.id;
+      emitRunChanged(task.id, run.id, 'submitted');
+    } else {
+      if (existing.runNo !== runNo) {
+        logger.warn('提交镜像锚定弱化：活动 run 号与事件不符（沿用活动行，S7 对账兜底）', {
+          taskId: task.id,
+          activeRunNo: existing.runNo,
+          eventRunNo: runNo,
+        });
+      }
+      runId = existing.id;
+    }
+    updateTask(task.id, { status: 'submitted', submittedAt: Date.now(), currentRunId: runId });
+
+    if (workerNodeId === null) {
+      logger.warn('提交镜像跳过：外派行路由缺执行节点（origin_node_id 不可空——双 NULL 不幂等；状态已收口）', {
+        taskId: task.id,
+        delegationId,
+      });
+      return;
+    }
+    const sessionId = task.executionSessionId;
+    if (sessionId === null || sessionId === '') {
+      logger.warn('提交镜像跳过：任务无关联执行会话（S6 跟踪会话接通后自然落点；状态已收口）', {
+        taskId: task.id,
+        delegationId,
+      });
+      return;
+    }
+    const deliverable = parseMirrorDeliverable(p.deliverable);
+    const row = insertHumanRequest({
+      sessionId,
+      taskId: task.id,
+      runId,
+      kind: 'acceptance',
+      title: `${task.id} 提交验收（run #${runNo}）`,
+      payloadJson: JSON.stringify({
+        acceptance: {
+          runNo,
+          summary: deliverable.summary,
+          files: deliverable.files,
+          artifacts: deliverable.artifacts,
+        },
+      }),
+      deadlineAt: Date.now() + ACCEPTANCE_DEADLINE_MS,
+      timeoutPolicy: 'keep_waiting',
+      delegationId,
+      originNodeId: workerNodeId,
+      remoteId: mirrorRemoteId,
+    });
+    emitHumanChanged({ sessionId, requestId: row.id, kind: 'inserted' });
+    writeSessionMilestone(task, `远端已提交验收（run #${runNo}）`, {
+      kind: 'remote_submitted',
+      runNo,
+      delegationId,
+    });
+    logger.info('远端提交镜像已落库（run 懒建 + acceptance 行）', {
+      taskId: task.id,
+      delegationId,
+      runNo,
+    });
+  } catch (err) {
+    logger.warn('远端提交镜像消费内部异常（事件丢弃，S7 对账兜底）', {
       error: err instanceof Error ? err.message : String(err),
     });
   }

@@ -189,6 +189,19 @@ export function getHumanRequest(id: string): HumanRequestRow | null {
   return row ? rowToCamel(row) : null;
 }
 
+/**
+ * 镜像幂等查重（UNIQUE(origin_node_id, remote_id) 的读侧单点，P2 S5）：
+ * 发起方镜像消费（task.intervention / task.submitted）写行前判定——行已存在
+ * 即迟到重放，跳过镜像与里程碑。两参数必须均非空（SQLite UNIQUE 对 NULL 不
+ * 生效，双 NULL 不幂等——调用方保证，见 S5 origin_node_id 取值路径裁定）。
+ */
+export function findRemoteMirrorRequest(originNodeId: string, remoteId: string): HumanRequestRow | null {
+  const row = getDb()
+    .prepare('SELECT * FROM human_requests WHERE origin_node_id = ? AND remote_id = ?')
+    .get(originNodeId, remoteId) as HumanRequestDbRow | undefined;
+  return row ? rowToCamel(row) : null;
+}
+
 /** 会话内 pending 请求（按 created_at ASC——面板按请求先后展示） */
 export function listPendingBySession(sessionId: string): HumanRequestRow[] {
   const rows = getDb()

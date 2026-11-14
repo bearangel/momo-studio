@@ -295,7 +295,10 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
     handleTerminal(status, taskId, reason) {
       if (status === 'done') {
         // P1 降级守卫（spec §14）：外派行 done 即完成——不经 submitted（旧单方
-        // 语义），accepted_at 与 completed_at 同刻落账（验收等价旧「完成」）；P2 移除
+        // 语义），accepted_at 与 completed_at 同刻落账（验收等价旧「完成」）。
+        // P2 S5 起 task.submitted 镜像消费与此直写双通道并存：submitted 事件到达
+        // 时任务已 completed（本路径先收口）→ S5 消费侧静默幂等；本直写保留至
+        // S8 版本门内统一退役。
         const at = ports.now();
         applyMapped(taskId, 'done', { completedAt: at, acceptedAt: at });
         saveProgress(taskId, DONE_SUMMARY, 0);
