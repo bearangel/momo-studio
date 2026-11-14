@@ -10,7 +10,7 @@ import { assertBoardGroupValid, createTaskFromForm } from '../task/ipc.handlers'
 import type { DispatchSubmitPorts } from './dispatch-submit';
 import { insertTaskWithRelations } from '../task/relations';
 import { deriveBlockedBy } from '../storage/tasks/dependencies-repo';
-import { getTask, updateTask } from '../storage/tasks/repo';
+import { updateTask } from '../storage/tasks/repo';
 import { listTeams } from '../agent/team';
 import { ensureTrackingSession } from './tracking-session';
 
@@ -68,9 +68,10 @@ export function buildDispatchSubmitPorts(): DispatchSubmitPorts {
       );
     },
     deriveBlockedBy: (taskId) => deriveBlockedBy([taskId]).get(taskId) ?? [],
-    updateDelegationLink: (taskId, delegationId, routing, p1Stamp) => {
-      // P1 降级守卫行戳（spec §14）随 delegation_id/routing 一并落行——P2 移除
-      updateTask(taskId, { delegationId, routing, ...p1Stamp });
+    updateDelegationLink: (taskId, delegationId, routing, delegationStamp) => {
+      // delegation_role 行戳随 delegation_id/routing 一并落行——S8 版本门内
+      // auto_accept 由调用方按象限决定（双端 ≥1.11 两段式不带键）
+      updateTask(taskId, { delegationId, routing, ...delegationStamp });
     },
     // S6 跟踪会话：幂等/标题单源在 hub/tracking-session.ts；组清单复用同一
     // groups client（节点名解析，不可达 → 标题降级「远端节点」）

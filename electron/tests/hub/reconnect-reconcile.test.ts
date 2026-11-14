@@ -259,6 +259,46 @@ describe('1) worker 断线期 answered → 重连对账应用', () => {
       expect.objectContaining({ sessionId: execSessionId, systemKickoff: true }),
     );
   });
+
+  it('S8 补锁（S7 评审遗留）：worker answered 二次对账计数级幂等——systemRows 仍 1、routeUserChat 仍 1 次', async () => {
+    const { taskId } = seedWorkerTask();
+    seedSessionLeader(execSessionId);
+    const req = requestHuman({
+      sessionId: execSessionId,
+      kind: 'question',
+      title: '确认方案',
+      prompt: 'A 还是 B？',
+      taskId,
+      runId: getActiveRun(taskId)!.id,
+    });
+    const deps = {
+      client: mkClient({
+        all: [
+          rec({
+            interventionId: req.id,
+            kind: 'question',
+            status: 'answered',
+            answer: { text: '首答' },
+            answeredBy: 'node-leader',
+            answeredAt: Date.now(),
+          }),
+        ],
+      }),
+    };
+    await reconcileOnReconnect(deps);
+    expect(systemRows(execSessionId)).toHaveLength(1);
+    expect(routeUserChatMock).toHaveBeenCalledTimes(1);
+
+    // 同快照二次对账：行已非 pending → handleInterventionAnswered 静默丢弃——
+    // 不二次注入【人工答复】、不二次唤醒（计数级断言，首答保留）
+    await reconcileOnReconnect(deps);
+
+    const row = getHumanRequest(req.id)!;
+    expect(row.status).toBe('answered');
+    expect(JSON.parse(row.answerJson!)).toEqual({ text: '首答' });
+    expect(systemRows(execSessionId)).toHaveLength(1);
+    expect(routeUserChatMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ── 2) 发起方断线期：pending 补镜像 / answered 镜像行收敛 ─────────────────────

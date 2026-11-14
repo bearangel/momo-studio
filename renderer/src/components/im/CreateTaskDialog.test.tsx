@@ -21,7 +21,7 @@
 // 返回形状与 types.d.ts 契约对齐。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { CreateTaskDialog, parseTaskLine, TEAM_DELEGATION_REQUIRED_MINOR } from './CreateTaskDialog';
+import { CreateTaskDialog, parseTaskLine, TASK_HITL_REQUIRED_MINOR, TEAM_DELEGATION_REQUIRED_MINOR } from './CreateTaskDialog';
 import { useGroupStore } from '../../stores/group.store';
 import { useTaskStore } from '../../stores/task.store';
 import type { GroupRow, RoutingPrecheckResult, Team, Workspace, WorkspaceAgentMember } from '../../ipc/types';
@@ -970,6 +970,10 @@ it('TEAM_DELEGATION_REQUIRED_MINOR 双写锚定协议包单源（momo-hub-protoc
   expect(TEAM_DELEGATION_REQUIRED_MINOR).toBe(9);
 });
 
+it('TASK_HITL_REQUIRED_MINOR 双写锚定协议包单源（momo-hub-protocol 0.7.0 协议 1.11.0 = 11）', () => {
+  expect(TASK_HITL_REQUIRED_MINOR).toBe(11);
+});
+
 function mkMember(instanceId: string, agentName: string, workspaceId = 'ws1'): WorkspaceAgentMember {
   return {
     instanceId,
@@ -1322,6 +1326,53 @@ describe('CreateTaskDialog — 外派团队执行（M5.3 X3）', () => {
     fireEvent.click(screen.getByRole('radio', { name: '团队协作' }));
     fireEvent.change(screen.getByLabelText(/批量任务书/), { target: { value: '行一' } });
     expect(screen.getByRole('button', { name: '创建 1 个任务' })).toBeDisabled();
+  });
+
+  // ── S8 版本门预检黄字（spec 2026-11-13 §8.5）：单 agent 指定节点 × 目标
+  //    <1.11/未知 → 旧语义完成提示；黄字不拦提交 ──
+
+  it('HITL-1. 指定节点单 agent × 目标协议 1.10 → 黄字旧语义完成提示（含节点名与版本）', async () => {
+    mockRoutingPrecheck.mockReset().mockResolvedValue(
+      precheckFixture({
+        nodeCaps: [
+          { nodeId: 'node-a', name: 'office-mac', protoVer: '1.10.0' },
+          { nodeId: 'node-b', name: 'lab-node', protoVer: '1.11.0' },
+        ],
+      }),
+    );
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '指定节点' }));
+    fireEvent.change(await screen.findByLabelText('目标成员'), { target: { value: 'node-a' } });
+    expect(
+      await screen.findByText(
+        '目标节点 office-mac 协议 1.10.0 低于 1.11——任务将按旧语义完成（对方完成即验收，无两段式提交）',
+      ),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/标题\*/), { target: { value: '旧链路外派' } });
+    expect(screen.getByRole('button', { name: '创建任务' })).toBeEnabled(); // 黄字不拦提交
+  });
+
+  it('HITL-2. 指定节点单 agent × 目标协议 1.11 → 无黄字（两段式链路）', async () => {
+    mockRoutingPrecheck.mockReset().mockResolvedValue(
+      precheckFixture({
+        nodeCaps: [
+          { nodeId: 'node-a', name: 'office-mac', protoVer: '1.11.0' },
+          { nodeId: 'node-b', name: 'lab-node', protoVer: '1.11.1' },
+        ],
+      }),
+    );
+    render(
+      <CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" workspaceName="dev-ws" />,
+    );
+    fireEvent.click(await screen.findByRole('radio', { name: '指定节点' }));
+    fireEvent.change(await screen.findByLabelText('目标成员'), { target: { value: 'node-a' } });
+    // chip 不在（单 agent 分支）——等待目标选择落定后断言无黄字
+    await waitFor(() =>
+      expect((screen.getByLabelText('目标成员') as HTMLSelectElement).value).toBe('node-a'),
+    );
+    expect(screen.queryByText(/旧语义完成/)).not.toBeInTheDocument();
   });
 });
 

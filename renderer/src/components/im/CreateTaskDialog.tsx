@@ -98,6 +98,21 @@ type MirrorCoverage = { status: 'idle' } | { status: 'none' } | { status: 'ok'; 
  */
 export const TEAM_DELEGATION_REQUIRED_MINOR = 9;
 
+/**
+ * 任务生命周期 v2 两段式门槛 minor（与 electron 侧 momo-hub-protocol
+ * TASK_HITL_REQUIRED_MINOR=11 单源对齐——双写锚定同上；export 供机械锁）。
+ */
+export const TASK_HITL_REQUIRED_MINOR = 11;
+
+/** 节点是否支持两段式提交（minor ≥ 门槛；缺省/空/异形视为旧——与主进程
+ *  dispatch-submit.ts twoPhaseDelegationActive 同口径，黄字预检与派发门不漂移） */
+function supportsTwoPhase(protoVer: string | undefined): boolean {
+  if (protoVer === undefined || protoVer === '') return false;
+  const m = /^(\d+)\.(\d+)(?:\.\d+)?$/.exec(protoVer.trim());
+  if (!m) return false;
+  return Number(m[2]) >= TASK_HITL_REQUIRED_MINOR;
+}
+
 /** 节点是否支持团队派发（minor ≥ 门槛；缺省/空/异形视为旧——与主进程
  *  dispatch-submit.ts supportsTeamDelegation 同口径，黄字预检与提交闸不漂移） */
 function supportsTeamDelegation(protoVer: string | undefined): boolean {
@@ -537,6 +552,22 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
     return null;
   })();
 
+  // S8 版本门预检黄字（spec 2026-11-13 §8.5）：单 agent 指定节点派发、目标
+  // 协议 <1.11/未知 → 按旧语义完成（对方完成即验收，无两段式提交）——黄字
+  // 不拦提交（与团队预检同纪律；组内调度目标由提交时调度决定，无法预判不提示）
+  const hitlPrecheckNote: ReactNode = (() => {
+    if (mode !== 'single' || !remoteRouting || peerDraft) return null;
+    if (execMode !== 'agent' || routing.mode !== 'node' || precheck === null) return null;
+    const ver = precheck.nodeCaps?.find((c) => c.nodeId === routing.targetNodeId)?.protoVer;
+    if (supportsTwoPhase(ver)) return null;
+    const memberName = precheck.groups
+      .find((g) => g.groupId === routing.groupId)
+      ?.members.find((m) => m.nodeId === routing.targetNodeId)?.name;
+    return warnBar(
+      `目标节点 ${memberName ?? routing.targetNodeId} 协议 ${ver ?? '未知'} 低于 1.11——任务将按旧语义完成（对方完成即验收，无两段式提交）`,
+    );
+  })();
+
   // ── M5.3 执行方式区（单/批共用）：权限档位之下、表单尾部（预览条款 7）；
   //    批量分支同款渲染（用户 2026-10-31 裁定，覆盖原条款 8）──
   const executionModeSection = (
@@ -555,9 +586,12 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
                   />
                 </div>
                 {execMode === 'agent' ? (
-                  <p className="text-xs leading-relaxed text-tertiary">
-                    任务落到目标节点后由单个 agent 处理（默认 agent，或按 agent 指定）
-                  </p>
+                  <>
+                    <p className="text-xs leading-relaxed text-tertiary">
+                      任务落到目标节点后由单个 agent 处理（默认 agent，或按 agent 指定）
+                    </p>
+                    {hitlPrecheckNote}
+                  </>
                 ) : (
                   <>
                     <Select

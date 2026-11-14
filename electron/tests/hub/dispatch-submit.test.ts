@@ -706,11 +706,18 @@ describe('submitRoutedTask — M5.3 团队派发', () => {
     expect(result.nodeId).toBe('node-a'); // 无负载差异 → 首候选
   });
 
-  it('hub 闸只对团队生效：单 agent 路径在 1.8.0/无协商下零变化（不消费 hubProtoVer）', async () => {
+  it('hub 闸只对团队拦截：单 agent 路径在 1.8.0/无协商下照常派发（hubProtoVer 仅用于 S8 版本门行戳判定）', async () => {
     const ports = makePorts({ groups: protoGroup(), registry: protoRegistry(), hubProtoVer: '1.8.0' });
     const result = await submitRoutedTask(baseInput({ mode: 'node', groupId: 'g1', targetNodeId: 'node-b' }), ports);
     expect(result.dispatched).toBe(true);
-    expect(ports.hubProtoVer).not.toHaveBeenCalled();
+    // S8 版本门：行戳象限判定消费 hub 协商版本（1.8.0 <1.11 → P1 强制 auto_accept）
+    expect(ports.hubProtoVer).toHaveBeenCalled();
+    expect(ports.updateDelegationLink).toHaveBeenCalledWith(
+      'T-rem',
+      'dl-100',
+      expect.anything(),
+      { delegationRole: 'out', autoAccept: true },
+    );
   });
 });
 

@@ -184,6 +184,8 @@ function ensureDelegationSync(): DelegationSync {
       return ws ? { id: ws.id } : null;
     },
     selfNodeId: () => configStore().read()?.nodeId ?? null,
+    // S8 版本门 worker 侧判据（连接随 hubConfigure/Forget 重建——惰性读当前连接）
+    hubProtoVer: () => hubProtoVer(),
     now: () => Date.now(),
   });
   // 投影回写是辅助面：DB 异常不得断掉事件桥（renderer 广播与 hub 账本主链

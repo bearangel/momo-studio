@@ -26,7 +26,7 @@ import type { Database } from 'better-sqlite3';
 import type { DelegationStatus } from './protocol';
 import type { DelegationRecord, HubDelegationStore } from './delegation-store';
 import type { PermissionTier, DelegationTaskBrief } from './dispatch-submit';
-import { expandTeamPayload } from './dispatch-submit';
+import { expandTeamPayload, twoPhaseDelegationActive, workerTwoPhaseActive } from './dispatch-submit';
 import type { TaskRouting } from './task-routing';
 import type { TaskRow, TaskStatus } from '../storage/tasks/repo';
 import { isTerminal } from '../storage/tasks/state-machine';
@@ -49,10 +49,12 @@ import { logger } from '../logger';
  * |              |                 |        | （验收闸打回/通过由 v2 验收链驱动，|
  * |              |                 |        | S9 收口；低版本 hub 不回此态）     |
  * | done         | completed       | 已完成 | 终态；completedAt + acceptedAt +  |
- * |              |                 |        | 摘要「已完成」。P1 降级守卫（spec |
- * |              |                 |        | §14）：done 即完成——不经 submitted |
- * |              |                 |        | （旧单方语义），accepted_at 同刻    |
- * |              |                 |        | 落账；P2 移除改走两段式            |
+ * |              |                 |        | 摘要「已完成」。S8 版本门（spec    |
+ * |              |                 |        | §8.5）：<1.11 象限 = P1 旧单方    |
+ * |              |                 |        | 语义权威通道；双端 ≥1.11 象限      |
+ * |              |                 |        | submitted→验收为主，done 拍降级为 |
+ * |              |                 |        | 终局对账兜底（completed 直写不改，|
+ * |              |                 |        | 到达即 warn 疑似降级回退）         |
  * | failed       | failed          | 已关闭 | 终态；errorMessage=reason 原文     |
  * | cancelled    | cancelled       | 已关闭 | 终态；task.cancel 回执驱动         |
  * | interrupted  | pending         | 待办   | 裁定：等待续传语义映射回待处理列，  |
@@ -210,6 +212,13 @@ export interface DelegationSyncPorts {
   findWorkspaceByName(name: string): { id: string } | null;
   /** 本机 nodeId（worker 行 routing.targetNodeId——本机视角判向） */
   selfNodeId(): string | null;
+  /**
+   * S8 版本门 worker 侧判据：当前 hub 协商协议版本（hello 回执；未连接 null）。
+   * worker 以 hub 版本单边判定（发起方版本不可知也无需知——发起方旧则 hub
+   * 不发 intervention 事件、intervene 在 hub 侧降级中性，spec §8.5 裁定）。
+   * 可选：缺席视为旧（P1 降级）——旧接线零变化。
+   */
+  hubProtoVer?(): string | null;
   now(): number;
 }
 
@@ -294,11 +303,20 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
 
     handleTerminal(status, taskId, reason) {
       if (status === 'done') {
-        // P1 降级守卫（spec §14）：外派行 done 即完成——不经 submitted（旧单方
-        // 语义），accepted_at 与 completed_at 同刻落账（验收等价旧「完成」）。
-        // P2 S5 起 task.submitted 镜像消费与此直写双通道并存：submitted 事件到达
-        // 时任务已 completed（本路径先收口）→ S5 消费侧静默幂等；本直写保留至
-        // S8 版本门内统一退役。
+        // S8 版本门（spec §8.5）：双端 ≥1.11 象限的权威完成通道是 submitted→
+        // 验收（S5 镜像 + S6 路由），done 拍到达意味着 worker 旧版兜底 / S2 桥
+        // 降级 / 对账滞后——终局兜底行为不改（done 即完成：completed + accepted_at
+        // 同刻，hub 账本权威），warn 留痕疑似降级回退。象限判据 = 行戳（派发时刻
+        // 定型的版本门决定，事件时刻免查版本）：delegation_role='out' 且未强制
+        // auto_accept 即两段式派发行；P1 行（auto_accept=1）与手工委派（无 out
+        // 戳）不告警。
+        const stamped = ports.findTaskByDelegation(taskId);
+        if (stamped !== null && stamped.delegationRole === 'out' && stamped.autoAccept !== true) {
+          logger.warn('1.11 两段式链路收到 done 拍——疑似降级回退（终局兜底照常收口）', {
+            taskId: stamped.id,
+            delegationId: taskId,
+          });
+        }
         const at = ports.now();
         applyMapped(taskId, 'done', { completedAt: at, acceptedAt: at });
         saveProgress(taskId, DONE_SUMMARY, 0);
@@ -350,9 +368,14 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
           delegationId: record.taskId,
           startedAt: ports.now(),
         });
-        // P1 降级守卫（spec §14）：承接行 delegation_role='in' + 强制 auto_accept=1
-        // （insertTask 不含 delegation_role 列——经 updateTask 补戳；P2 移除）
-        ports.updateTask(workerTaskId, { delegationRole: 'in', autoAccept: true });
+        // S8 版本门（spec §8.5 worker 侧裁定）：delegation_role='in' 恒戳（判向
+        // 单源，与象限无关）；auto_accept 仅 hub <1.11/未知象限强制（P1 降级
+        // 守卫——done 单方完成），hub ≥1.11 两段式象限不设（承接行走
+        // submitted→远端验收）
+        ports.updateTask(workerTaskId, {
+          delegationRole: 'in',
+          ...(workerTwoPhaseActive(ports.hubProtoVer?.() ?? null) ? {} : { autoAccept: true }),
+        });
       };
       const syncState = (taskId: string, state: DelegationRecord['state'], reason?: string): void => {
         const row = ports.findTaskByDelegation(taskId);
@@ -416,6 +439,10 @@ export interface RedispatchPorts {
   delegate(brief: DelegationTaskBrief): Promise<{ taskId: string }>;
   /** 1.10.0 平行组判定（组模型 mode==='peer'）——草稿重派分流的数据源；可选 */
   isPeerGroup?(groupId: string): Promise<boolean>;
+  /** S8 版本门：hub 协商协议版本（可选——缺席视为旧 → P1 降级戳，旧接线零变化） */
+  hubProtoVer?(): string | null;
+  /** S8 版本门：组内目标节点 hello 上报协议版本（可选——缺席视为未知 → P1 降级戳） */
+  workerProtoVerOf?(groupId: string, nodeId: string): Promise<string | undefined>;
   /**
    * P2 S6 跟踪会话（可选——生产接线 hub/ipc.handlers；缺省跳过）：重派成功
    * 与首派同构补建（首派失败留待处理的行此前无会话）。幂等在实现单源
@@ -546,16 +573,23 @@ export async function retryDispatch(
             ...(teamPayload !== undefined ? { team: teamPayload } : {}),
           },
     });
-    // D5：重派同样回写已解析目标（group 变体换新 targetNodeId）；P1 降级守卫
-    // （spec §14）随新 delegation_id 补 out 戳 + 强制 auto_accept=1——首派失败
-    // 留待处理的行此前无戳，重派成功与 submitRoutedTask 同构落守卫
+    // D5：重派同样回写已解析目标（group 变体换新 targetNodeId）。S8 版本门
+    // （spec §8.5）：delegation_role='out' 恒戳（首派失败留待处理的行此前无
+    // 戳，重派成功与 submitRoutedTask 同构补判向戳）；auto_accept 仅 <1.11
+    // 象限强制（与首派同门——防「重派反而把两段式打回 auto_accept」的倒退）
     const resolvedRouting: TaskRouting =
       row.routing.mode === 'group' ? { ...row.routing, targetNodeId } : row.routing;
+    const workerProtoVer =
+      ports.workerProtoVerOf !== undefined
+        ? await ports.workerProtoVerOf(row.routing.groupId, targetNodeId)
+        : undefined;
     ports.updateTask(taskId, {
       delegationId,
       routing: resolvedRouting,
       delegationRole: 'out',
-      autoAccept: true,
+      ...(twoPhaseDelegationActive(ports.hubProtoVer?.() ?? null, workerProtoVer)
+        ? {}
+        : { autoAccept: true }),
     });
     // S6 跟踪会话：重派成功与首派同构补建（幂等在实现单源）；失败不断链——
     // 委派已成功，会话属辅助面（boot 回填兜底）

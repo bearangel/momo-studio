@@ -104,7 +104,7 @@ export async function reconcileOnReconnect(deps: ReconnectReconcileDeps): Promis
         )
         .all() as Array<{ id: string; delegation_id: string }>;
     } catch (err) {
-      logger.warn('重连对账：外派行枚举失败（跳过发起方阶段）', {
+      logger.warn('重连对账：外派行枚举失败（跳过发起方阶段，下次重连再对账）', {
         error: err instanceof Error ? err.message : String(err),
       });
       return [];
@@ -130,10 +130,21 @@ export async function reconcileOnReconnect(deps: ReconnectReconcileDeps): Promis
     }
     const workerNodeId = outRowWorkerNodeId(task);
     for (const rec of records) {
-      if (rec.status === 'pending') {
-        handleTaskInterventionMirror({ taskId: row.delegation_id, intervention: rec });
-      } else if (rec.status === 'answered' && workerNodeId !== null) {
-        convergeMirrorAnswered(rec, workerNodeId);
+      // S7 评审 Minor：镜像应用总语义在消费函数内部，此处再包一层防
+      // convergeMirrorAnswered 的 repo 调用抛错打断整行/整轮对账
+      try {
+        if (rec.status === 'pending') {
+          handleTaskInterventionMirror({ taskId: row.delegation_id, intervention: rec });
+        } else if (rec.status === 'answered' && workerNodeId !== null) {
+          convergeMirrorAnswered(rec, workerNodeId);
+        }
+      } catch (err) {
+        logger.warn('重连对账：发起方镜像应用失败（该记录跳过，下次重连再对账）', {
+          taskId: row.id,
+          delegationId: row.delegation_id,
+          interventionId: rec.interventionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
   }
