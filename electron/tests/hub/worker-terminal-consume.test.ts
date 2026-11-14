@@ -375,6 +375,10 @@ describe('5) 停靠出清：accepted 消费后 docked 项出清 + 账本对齐 +
           : null;
       },
       selfNodeId: () => SELF_NODE,
+      // P2 v2 接线端口桩（真实接线面在 worker-runner-v2-wiring.test 锁）
+      linkExecutionSession: () => undefined,
+      startLifecycleRun: () => undefined,
+      pendingHumanRequests: () => 0,
     };
     const runner = createDelegationRunner({ ports, store, tickMs: 500 });
     return {

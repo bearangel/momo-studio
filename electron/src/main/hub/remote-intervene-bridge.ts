@@ -487,8 +487,10 @@ const REMOTE_ORIGIN_BY = 'remote:origin';
  * 承接行共享 delegation_id——反查必须限定 delegation_role 消除任意取行：
  * expect='worker' 取 'in'（classic 承接）优先、次选 role NULL（peer-draft
  * 承接行无戳）；expect='origin' 取 'out'（发起方镜像）。无匹配角色行 → null。
+ * P2 worker-runner 接线（delegation-ports 产品）复用 'worker' 变体——
+ * 一义一名，反查语义单源。
  */
-function findTaskByDelegationId(delegationId: string, expect: 'worker' | 'origin'): TaskRow | null {
+export function findTaskByDelegationId(delegationId: string, expect: 'worker' | 'origin'): TaskRow | null {
   const rows = getDb()
     .prepare('SELECT id, delegation_role FROM tasks WHERE delegation_id = ?')
     .all(delegationId) as Array<{ id: string; delegation_role: string | null }>;

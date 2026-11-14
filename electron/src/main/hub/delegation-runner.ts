@@ -140,6 +140,19 @@ export interface DelegationRunPorts {
     executionSessionId: string | null;
   } | null;
   selfNodeId(): string | null;
+  /**
+   * v2 生命周期接线（P2 worker-runner，生产实现 delegation-ports 产品函数）。
+   * 三端口以 runner 的 taskId（= delegation id）为键，实现侧反查本地承接行：
+   *  - linkExecutionSession：回写 execution_session_id（幂等）——request_human
+   *    按执行会话反查任务的锚点（S2 桥 task.intervene 上行依赖该绑定）
+   *  - startLifecycleRun：lifecycle-runs.startRun {trigger:'initial',
+   *    executionSessionId}（幂等 ensure 语义；task_runs 记账 + in_progress 投影
+   *    与 wrapWorkerStore 收敛无冲突）
+   *  - pendingHumanRequests：任务未决非验收人工请求计数（settleRun done 守卫）
+   */
+  linkExecutionSession(taskId: string, sessionId: string): void;
+  startLifecycleRun(taskId: string, sessionId: string): void;
+  pendingHumanRequests(taskId: string): number;
 }
 
 interface ActiveRun {
@@ -147,7 +160,7 @@ interface ActiveRun {
   sessionId: string;
   /** 进度游标：仅在上报成功后推进（断线不丢增量） */
   cursor: number;
-  /** 待发进度拍（合并语义：始终覆盖为最新批尾；waiting 态带 kind 标注） */
+  /** 待发进度拍（合并语义：始终覆盖为最新批尾；等待态带 kind 标注） */
   pendingBeat: { lastSeq: number; excerpt: string; kind?: 'waiting-input' | 'denied' } | null;
   /** 首拍 running 之后的回合 prompt 摘要（无文本增量时的 excerpt 兜底） */
   promptExcerpt: string;
@@ -155,6 +168,12 @@ interface ActiveRun {
   waitingSince: number | null;
   /** L1：超时注入时刻（denied+steer 已下发；双倍超时兜底判据。恢复清 null 允许再等待周期） */
   hitlInjectedAt: number | null;
+  /**
+   * P2 v2：request_human 等待中标记（settleRun 守卫延迟结算时置位、终态结算清位）。
+   * 仅标记不复用 sessionWaiting 拍——那是写授权信号源；request_human 等待的
+   * hub 侧可见性由 task.intervene（S2 桥）承担，runner 不发等待拍。
+   */
+  awaitingHuman: boolean;
   unwatch: () => void;
   terminal: TurnTerminal | null;
 }
@@ -265,6 +284,36 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
 
   const settleRun = (taskId: string, run: ActiveRun, terminal: TurnTerminal): void => {
     if (run.terminal) return; // 幂等：终态只清算一次
+    // P2 v2 守卫（先于 terminal 置位——延迟结算的回合之后还可正常结算）：回合 done
+    // 但任务仍有未决人工请求（request_human 落行）——agent 按契约结束回合等人，
+    // 此时 done 不是委派终态（E2E 实证：等待回合被当完成 → 双侧 completed 而
+    // question 行仍 pending）。不结算不报：置 awaitingHuman + 复挂 watcher（生产
+    // watchTurn 单次订阅语义——终态 fire 后订阅已自灭）；答复注入的新回合终态
+    // 再次 fire 时复评，pending 清零 → 正常结算。failed/aborted 不守卫（真失败
+    // 照报）。查询异常按无未决处理（localTaskAwaitingAcceptance 同款保守——降级
+    // 走既有终态链，不留永卡 running）。
+    if (terminal.status === 'done') {
+      let pending = 0;
+      try {
+        pending = ports.pendingHumanRequests(taskId);
+      } catch (err) {
+        logger.warn('等待人工请求计数异常（按无未决结算）', {
+          taskId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      if (pending > 0) {
+        run.awaitingHuman = true;
+        logger.info('回合因等待人工结束，保持执行（不结算不报）', {
+          taskId,
+          sessionId: run.sessionId,
+          pending,
+        });
+        attachWatcher(taskId, run);
+        return;
+      }
+      run.awaitingHuman = false;
+    }
     run.terminal = terminal;
     run.unwatch();
     // S2 执行态挂钩：本地任务已提交待验收（submitted）——回合终态不作委派终态。
@@ -313,6 +362,35 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
       if (!current || current.sessionId !== run.sessionId) return; // 迟到终态（已取消/已换会话）
       settleRun(taskId, current, t);
     });
+  };
+
+  /**
+   * v2 生命周期接线（P2 worker-runner）：store.upsert 建本地承接行后回写
+   * execution_session_id（request_human 按执行会话反查任务的锚点——缺它则请求
+   * 落会话级、S2 桥 delegation 判定失败、task.intervene 永不上行）+ startRun
+   * {trigger:'initial'}（task_runs 记账）。无条件执行（降级象限同样正确：会话
+   * 绑定与不误报 done 对 P1 语义无害——request_human 在降级下是本地等待，守卫
+   * 同样防误报）。total 语义：接线失败只 warn 降级 v1 行为，不断委派执行链。
+   */
+  const wireLifecycleV2 = (taskId: string, sessionId: string): void => {
+    try {
+      ports.linkExecutionSession(taskId, sessionId);
+    } catch (err) {
+      logger.warn('v2 接线：execution_session_id 回写失败（降级 v1）', {
+        taskId,
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    try {
+      ports.startLifecycleRun(taskId, sessionId);
+    } catch (err) {
+      logger.warn('v2 接线：lifecycle run 启动失败（降级 v1）', {
+        taskId,
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   };
 
   /**
@@ -438,12 +516,15 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
       promptExcerpt: excerptOfPrompt(evt.task.prompt),
       waitingSince: null,
       hitlInjectedAt: null,
+      awaitingHuman: false,
       unwatch: () => undefined,
       terminal: null,
     };
     active.set(evt.taskId, run);
     attachWatcher(evt.taskId, run);
     store.upsert(record);
+    // P2 v2 接线：承接行已建（wrapWorkerStore.ensureRow），回写会话绑定 + run 记账
+    wireLifecycleV2(evt.taskId, sessionId);
     // 首拍 running 必发（先于执行——T9 语义 pending→done 直报被拒）；excerpt 恒非空
     const firstOk = await sendReport(evt.taskId, {
       status: 'running',
@@ -623,6 +704,7 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
       promptExcerpt: excerptOfPrompt(record.title),
       waitingSince: null,
       hitlInjectedAt: null,
+      awaitingHuman: false,
       unwatch: () => undefined,
       terminal: null,
     };
@@ -636,6 +718,9 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
     }, 0);
     // upsert 全量写（保留 draft/localTaskId/groupId）——updateState 只写 state/reason
     store.upsert({ ...record, sessionId, state: 'running', updatedAt: Date.now() });
+    // P2 v2 接线（幂等）：executor startTask 通常已回写会话/建 run——此处确保
+    // 两条账都在（快路径形态差异不依赖上游写全）
+    wireLifecycleV2(record.taskId, sessionId);
     logger.info('平行草稿执行接管', { taskId: record.taskId, sessionId, localTaskId });
     void sendReport(record.taskId, {
       status: 'running',
@@ -857,6 +942,7 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
           promptExcerpt: excerptOfPrompt(record.title),
           waitingSince: null,
           hitlInjectedAt: null,
+          awaitingHuman: false,
           unwatch: () => undefined,
           terminal: null,
         };

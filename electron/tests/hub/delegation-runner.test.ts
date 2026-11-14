@@ -162,6 +162,12 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
     },
     findDraftRow: (delegationId) => draftRows.get(delegationId) ?? null,
     selfNodeId: () => 'node-self',
+    // P2 v2 接线端口桩：本文件测 runner 编排逻辑（fake 边界），真实 DB 接线面
+    // 在 worker-runner-v2-wiring.test 锁——pendingHumanRequests 恒 0 = 守卫不触发，
+    // 既有终态结算断言全部保持
+    linkExecutionSession: () => undefined,
+    startLifecycleRun: () => undefined,
+    pendingHumanRequests: () => 0,
     ...overrides,
   };
 

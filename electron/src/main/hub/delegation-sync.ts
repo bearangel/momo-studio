@@ -76,6 +76,17 @@ export const DELEGATION_STATUS_TO_TASK: Record<DelegationStatus, TaskStatus> = {
   interrupted: 'pending',
 };
 
+/**
+ * 八态映射的象限消费单点（P2 S8 四象限，spec §8.5）：waiting 在 twoPhase 象限
+ * 映射本地 v2 等人态 waiting_human（跨节点两段式下「等待人工」是真实任务态）；
+ * 降级象限维持 P1 的 in_progress（表值——看板无等待态，等待角标由 progress kv
+ * waiting 标志驱动）。其余七态两象限同值（表单源）。
+ */
+export function mapHubStatus(status: DelegationStatus, twoPhase: boolean): TaskStatus {
+  if (status === 'waiting') return twoPhase ? 'waiting_human' : DELEGATION_STATUS_TO_TASK.waiting;
+  return DELEGATION_STATUS_TO_TASK[status];
+}
+
 /** worker 本地账本六态 → 行状态（1.10.0 平行草稿前置两态：draft=待安排、
  *  arranged=已安排——行状态同形映射，看板「草稿/待办」列承载） */
 const WORKER_STATE_TO_TASK: Record<DelegationRecord['state'], TaskStatus> = {
@@ -262,7 +273,7 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
   ): void => {
     const row = ports.findTaskByDelegation(delegationId);
     if (!row) return;
-    const next = DELEGATION_STATUS_TO_TASK[hubStatus];
+    const next = mapHubStatus(hubStatus, workerTwoPhaseActive(ports.hubProtoVer?.() ?? null));
     if (isTerminal(row.status) && row.status !== next) return;
     if (row.status === next) return;
     // T15 白名单逃生门之一（updateTask 直写 status）——P2 收口：P2 跨节点期
@@ -289,16 +300,20 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
   handleProgress(evt) {
     // 摘要与行状态同拍落（摘要先写——行不存在时摘要仍保留，重派后可续显）；
     // waiting 标志随 kind 翻转：等待拍置 true，恢复拍（无 kind）自然清除。
-    // P1 期间 waiting 拍不落任务新态（不造 waiting_human）——维持旧行为：
-    // kv waiting 标志驱动等待角标，行状态仍按 running 映射（P2 收口时随
-    // §14 降级守卫一并切两段式语义）
+    // P2 收口（P1 注释的延期项兑现）：twoPhase 象限 waiting-input 拍 → waiting
+    // 映射（本地行 waiting_human，v2 等人是真实任务态）；降级象限维持旧行为
+    // ——kv waiting 标志驱动等待角标，行状态仍按 running 映射。
     saveProgress(evt.taskId, evt.excerpt, evt.lastSeq, evt.kind);
     // 1.10.0 生命周期拍（received/arranged）只更新摘要——行保持 pending（发送方
     // 视角「已接收/已安排」由摘要行呈现），不提前翻 in_progress（spec §5.1）
     if (evt.kind === 'received' || evt.kind === 'arranged') return;
     const row = ports.findTaskByDelegation(evt.taskId);
     if (row && !isTerminal(row.status)) {
-      applyMapped(evt.taskId, 'running', { startedAt: row.startedAt ?? ports.now() });
+      const waitingBeat =
+        evt.kind === 'waiting-input' && workerTwoPhaseActive(ports.hubProtoVer?.() ?? null);
+      applyMapped(evt.taskId, waitingBeat ? 'waiting' : 'running', {
+        startedAt: row.startedAt ?? ports.now(),
+      });
     }
   },
 
@@ -389,6 +404,9 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
         if (!row) return;
         const next = WORKER_STATE_TO_TASK[state];
         if (isTerminal(row.status) && row.status !== next) return; // 终态粘滞
+        // 同态零写（applyMapped T12 Low-1 同款）：v2 等人（waiting_human）期间的
+        // 其他列写不回滚状态、终态时间戳不重盖章
+        if (row.status === next) return;
         // 1.10.0 降级防护（2026-11-07 双会话事故）：arranged→assigned 仅对仍处
         // draft 的行生效——executor 可能在监督器 arranged 检测前就已启动任务
         // （in_progress），此时写回 assigned 会把运行中行降级出候选池，crash 后

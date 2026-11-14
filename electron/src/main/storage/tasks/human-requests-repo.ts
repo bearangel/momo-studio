@@ -271,6 +271,21 @@ export function countPendingNonAcceptance(runId: string): number {
   return row.n;
 }
 
+/**
+ * 任务下非验收 pending 计数（P2 worker-runner settleRun done 守卫）：按 task 键
+ * 覆盖 run 绑定与 task 绑定两种落行形态（requestHumanFromAgent 的 runId 绑定
+ * 以 run.executionSessionId 匹配为前提——行缺失形态下请求只有 task_id）。
+ */
+export function countPendingNonAcceptanceByTask(taskId: string): number {
+  const row = getDb()
+    .prepare(
+      `SELECT COUNT(*) AS n FROM human_requests
+       WHERE task_id = ? AND status = 'pending' AND kind != 'acceptance'`,
+    )
+    .get(taskId) as { n: number };
+  return row.n;
+}
+
 export function tryAnswer(
   id: string,
   answerJson: string,
