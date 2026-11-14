@@ -10,6 +10,9 @@
 //     降级：本地验收兜底（acceptTask）收口 completed，P1「单方完成」旧行为；
 //     done 终态上报由既有 delegation-runner 监督器/重连对账链承载，此处不双发）
 //
+// P2 S3（本文件下半部）：worker 消费远端代答——hub 定向 task.interventionAnswered
+// 事件 → 本地 answerHuman 统一路由（详见 handleInterventionAnswered 头注释）。
+//
 // 桥判定（worker 视角单源，与 delegation-sync/delegation-ports 同口径）：
 // tasks.delegation_id 非空 且（delegation_role='in' 或 routing node 变体
 // targetNodeId=本机——peer-draft 承接行无 delegation_role，按路由判向）。
@@ -21,10 +24,11 @@ import { logger } from '../logger';
 import type { HubClient } from './client';
 import { TASK_RPC, TASK_HITL_REQUIRED_MINOR, type InterventionKind, type InterventionRequest } from './protocol';
 import { TASK_WIRE } from './delegation-wire';
-import type { HumanRequestRow } from '../storage/tasks/human-requests-repo';
+import { getHumanRequest, type HumanRequestRow } from '../storage/tasks/human-requests-repo';
 import type { TaskRow } from '../storage/tasks/repo';
 import type { TaskRunRow } from '../storage/tasks/runs-repo';
-import type { RemoteInterveneEvent } from '../task/lifecycle-runs';
+import { answerHuman, type RemoteInterveneEvent } from '../task/lifecycle-runs';
+import type { HumanAnswerInput } from '../task/human-answer-shared';
 import { truncateCodePoints } from '../util/redact';
 import { insertMessage } from '../storage/messages/repo';
 import { pushSessionMessage } from '../agent/stream-relay';
@@ -194,7 +198,9 @@ export function createRemoteInterveneHandler(
     if (!task || task.delegationId === null) return;
     if (!isWorkerExecution(task, ports.selfNodeId())) return;
     const client = ports.clientGetter();
-    if (client === null) {
+    // S2 评审顺手项：非 online 连接同 client === null 一并降级（对称 submitToHub——
+    // 半开连接上发 RPC 只会挂到超时，降级本地等待是更快收敛路径）
+    if (client === null || client.state() !== 'online') {
       logger.warn('干预桥降级：hub 未连接，请求转本地等待（节点所有者自答）', {
         requestId: request.id,
         taskId: task.id,
@@ -209,9 +215,19 @@ export function createRemoteInterveneHandler(
     }
     const payload = parsePayloadObject(request);
     const options = parseInterventionOptions(request);
+    const activeRun = ports.getActiveRun(task.id);
+    if (activeRun === null) {
+      // S2 评审顺手项：?? 1 兜底命中即锚定弱化（hub/对端按 runNo 对不上旧请求）——
+      // warn 留痕供排障（多为终态窗口迟到的落行事件）
+      logger.warn('干预上报时无活动 run——runNo 兜底 1（锚定弱化）', {
+        requestId: request.id,
+        taskId: task.id,
+        kind: request.kind,
+      });
+    }
     const intervention: InterventionRequest = {
       interventionId: request.id,
-      runNo: ports.getActiveRun(task.id)?.runNo ?? 1,
+      runNo: activeRun?.runNo ?? 1,
       kind,
       title: request.title,
       prompt: request.prompt,
@@ -337,4 +353,85 @@ export function createRemoteInterveneHandler(
       });
     }
   };
+}
+
+// ── worker 消费远端代答（P2 S3，spec 2026-11-13 §8.6）─────────────────────────
+
+/** 协议 InterventionAnswer → 本地 HumanAnswerInput：字段同名直传
+ *  （decision/text/selected/completed），任一字段异形整包丢弃不消费（协议宽容
+ *  「hub 不校验组合」——形状守卫是本端唯一防线） */
+function parseInterventionAnswer(raw: unknown): HumanAnswerInput | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const a = raw as { decision?: unknown; text?: unknown; selected?: unknown; completed?: unknown };
+  if (a.decision !== undefined && a.decision !== 'approve' && a.decision !== 'deny') return null;
+  if (a.text !== undefined && typeof a.text !== 'string') return null;
+  if (
+    a.selected !== undefined &&
+    (!Array.isArray(a.selected) || !a.selected.every((s) => typeof s === 'string'))
+  ) {
+    return null;
+  }
+  if (a.completed !== undefined && typeof a.completed !== 'boolean') return null;
+  return {
+    ...(a.decision !== undefined ? { decision: a.decision } : {}),
+    ...(a.text !== undefined ? { text: a.text } : {}),
+    ...(a.selected !== undefined ? { selected: a.selected } : {}),
+    ...(a.completed !== undefined ? { completed: a.completed } : {}),
+  };
+}
+
+/**
+ * task.interventionAnswered 事件消费（hub/index onEvent 装配；hub 定向→本机
+ * worker）：interventionId = 本地 human_requests.id（S2 桥单点生成约定，taskId
+ * 是 hub 账本 id 非本地 tasks.id——仅日志用）。统一走 answerHuman 一条路覆盖
+ * 三 kind（question/manual_action 注入唤醒链、tool_gate 授权回调钩——P1 kind
+ * 分派单源，零特判）；answeredBy 记 `remote:<答方节点id>`（区分本地 'local'/
+ * 超时 'system:timeout'）。幂等收敛：行不存在 / 已非 pending → 静默丢弃
+ * logger.info（hub 侧 first_wins 已收敛，迟到重放无消费面）；total 语义——
+ * 事件处理绝不向上抛（onEvent 无错误回传通道）。
+ */
+export function handleInterventionAnswered(payload: unknown): void {
+  try {
+    if (typeof payload !== 'object' || payload === null) return;
+    const p = payload as {
+      taskId?: unknown;
+      interventionId?: unknown;
+      answer?: unknown;
+      answeredBy?: unknown;
+    };
+    if (typeof p.interventionId !== 'string' || p.interventionId === '') return;
+    if (typeof p.answeredBy !== 'string') return;
+    const answer = parseInterventionAnswer(p.answer);
+    if (answer === null) return;
+    const taskIdForLog = typeof p.taskId === 'string' ? p.taskId : undefined;
+
+    const req = getHumanRequest(p.interventionId);
+    if (req === null) {
+      logger.info('远端代答到达但本地无此人工请求（幂等收敛，丢弃）', {
+        interventionId: p.interventionId,
+        taskId: taskIdForLog,
+      });
+      return;
+    }
+    if (req.status !== 'pending') {
+      logger.info('远端代答到达但请求已非 pending（幂等收敛，丢弃）', {
+        interventionId: p.interventionId,
+        status: req.status,
+        kind: req.kind,
+      });
+      return;
+    }
+    const disp = answerHuman(req.id, answer, `remote:${p.answeredBy}`);
+    logger.info('远端代答已消费（answerHuman 统一路由）', {
+      interventionId: req.id,
+      taskId: taskIdForLog,
+      kind: req.kind,
+      disposition: disp.disposition,
+      answeredBy: p.answeredBy,
+    });
+  } catch (err) {
+    logger.warn('远端代答消费内部异常（事件丢弃，本地行为不受影响）', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }

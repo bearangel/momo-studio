@@ -48,7 +48,7 @@ import { insertTask, updateTask, getTask, listTasks } from '../storage/tasks/rep
 import { getActiveRun } from '../storage/tasks/runs-repo';
 import { acceptTask, setRemoteInterveneSink } from '../task/lifecycle-runs';
 import { setToolGateRowSink } from '../sandbox/write-blocked-emit';
-import { createRemoteInterveneHandler } from './remote-intervene-bridge';
+import { createRemoteInterveneHandler, handleInterventionAnswered } from './remote-intervene-bridge';
 import { isTerminal } from '../storage/tasks/state-machine';
 import { createMirrorRegistry, type MirrorRegistryRow } from './mirror-registry';
 import { ViewServer } from './view-server';
@@ -524,6 +524,15 @@ function startClient(
         if (typeof p.taskId === 'string') {
           ensureDelegationRunner(nodeId).handleCancelled({ taskId: p.taskId });
         }
+        return;
+      }
+      if (evt.method === EVT.taskInterventionAnswered) {
+        // worker 侧远端代答消费（P2 S3）：hub 定向→本机 worker（interventionId =
+        // 本地 human_requests.id，S2 桥约定）→ answerHuman 统一路由（三类 kind 零
+        // 特判）。订阅随连接生命周期（onEvent 只在 online 后触发）——断连窗口内
+        // 错过的代答无补偿（自然降级：请求行仍 pending，节点所有者可自答），重连
+        // 后由 S7 对账兜底。
+        handleInterventionAnswered(evt.payload);
         return;
       }
       // ── leader 侧委派事件桥（M2e T12）：hub 定向→本机 leader 的账本迁移与进度拍，
