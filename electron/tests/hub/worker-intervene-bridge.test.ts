@@ -24,8 +24,7 @@ import { getActiveRun } from '../../src/main/storage/tasks/runs-repo';
 import {
   insertHumanRequest,
   getHumanRequest,
-} from '../../src/main/storage/tasks/human-requests-repo';
-import {
+} from '../../src/main/storage/tasks/human-requests-repo';import {
   setRemoteInterveneSink,
   requestHuman,
   startRun,
@@ -306,6 +305,103 @@ describe('request_created → task.intervene', () => {
 
     expect(getHumanRequest(row.id)?.status).toBe('pending'); // 降级：本地等待照旧
     expect(getTask(taskId)?.status).toBe('waiting_human'); // 等人体不被降级破坏
+  });
+});
+
+// ── 3) 降级里程碑持久记录（评审轮 1：delegation_milestone 系统消息） ─────────
+
+interface MilestoneRow {
+  sender: string;
+  event_type: string;
+  body: string;
+  task_id: string | null;
+  context_json: string | null;
+}
+
+function milestoneRows(): MilestoneRow[] {
+  return getDb()
+    .prepare(
+      "SELECT sender, event_type, body, task_id, context_json FROM messages WHERE event_type = 'delegation_milestone'",
+    )
+    .all() as MilestoneRow[];
+}
+
+describe('降级里程碑（Review Focus #1——降级原因落执行会话）', () => {
+  it('intervene 降级（unsupported_method）→ 会话出现 delegation_milestone 行（meta kind/reason/code）', async () => {
+    const client = mkFakeClient({
+      requestImpl: async () => {
+        throw new RpcRemoteError('unsupported_method', '节点不支持的方法: task.intervene');
+      },
+    });
+    wireBridge(client);
+
+    const taskId = seedDelegatedTask('dl-10');
+    const run = startRun(taskId, { trigger: 'initial', executionSessionId: execSessionId });
+    requestHuman({
+      sessionId: execSessionId,
+      kind: 'question',
+      title: '需要确认',
+      prompt: '选 A',
+      taskId,
+      runId: run.id,
+    });
+    await flushAsync();
+
+    const rows = milestoneRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.sender).toBe('system');
+    expect(rows[0]!.event_type).toBe('delegation_milestone');
+    expect(rows[0]!.task_id).toBe(taskId);
+    expect(rows[0]!.body).toContain('干预上报降级');
+    expect(rows[0]!.body).toContain('已转本地等待，节点所有者可在请求面板处理');
+    expect(JSON.parse(rows[0]!.context_json!)).toEqual({
+      kind: 'intervene_degraded',
+      reason: 'task.intervene 失败：节点不支持的方法: task.intervene',
+      code: 'unsupported_method',
+    });
+  });
+
+  it('report 降级（sendRes false）→ 同款 delegation_milestone 行（meta kind=submit_degraded/reason）', async () => {
+    const client = mkFakeClient({ sendResOk: false });
+    wireBridge(client);
+
+    const taskId = seedDelegatedTask('dl-11');
+    startRun(taskId, { trigger: 'initial', executionSessionId: execSessionId });
+    await submitRun(taskId, { summary: '交付' });
+    await flushAsync();
+
+    const rows = milestoneRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.sender).toBe('system');
+    expect(rows[0]!.task_id).toBe(taskId);
+    expect(rows[0]!.body).toContain('提交上报降级');
+    expect(rows[0]!.body).toContain('任务按旧语义完成');
+    expect(JSON.parse(rows[0]!.context_json!)).toEqual({
+      kind: 'submit_degraded',
+      reason: 'sendRes 失败（连接半关）',
+    });
+  });
+
+  it('任务无执行会话（execution_session_id 空）→ 降级零写入不抛（logger 兜底）', async () => {
+    const client = mkFakeClient({ online: false });
+    const { handler } = mkBridge(client);
+
+    const t = insertTask({
+      workspaceId: 'ws1',
+      title: '无会话委派任务',
+      creatorUserId: '@owner:home',
+      status: 'assigned',
+      delegationId: 'dl-12',
+      routing: { mode: 'node', groupId: 'g-1', targetNodeId: SELF_NODE },
+    });
+    startRun(t.id, { trigger: 'initial' });
+    getDb().prepare("UPDATE tasks SET status = 'submitted' WHERE id = ?").run(t.id);
+
+    expect(() =>
+      handler({ kind: 'run_submitted', taskId: t.id, runNo: 1, deliverable: { summary: '交付' } }),
+    ).not.toThrow();
+    await flushAsync();
+    expect(milestoneRows()).toHaveLength(0);
   });
 });
 

@@ -26,11 +26,53 @@ import type { TaskRow } from '../storage/tasks/repo';
 import type { TaskRunRow } from '../storage/tasks/runs-repo';
 import type { RemoteInterveneEvent } from '../task/lifecycle-runs';
 import { truncateCodePoints } from '../util/redact';
+import { insertMessage } from '../storage/messages/repo';
+import { pushSessionMessage } from '../agent/stream-relay';
 
 /** hub delegations.ts REASON_MAX 镜像（reason 超限整包拒——deliverable 通道上限） */
 const REASON_MAX = 512;
 /** 超长 deliverable 降级截断的 summary 预算（JSON 转义膨胀留裕量） */
 const SUMMARY_FALLBACK_CODEPOINTS = 400;
+
+/**
+ * 降级里程碑落执行会话（评审轮 1，Review Focus #1——brief「里程碑记录降级原因」）：
+ * messages 行 sender='system'、event_type='delegation_milestone'、结构化 meta 落
+ * context_json（repo 的 meta 载体列，human-answer-inject metaJson 同位）=
+ * {kind, reason, code?}，与 S5 发起方侧跟踪会话里程碑同 event_type（双端一致，
+ * spec §7.3 契约同型）。写后 pushSessionMessage 实时推 renderer；**不唤醒 agent**
+ * （无 systemKickoff——降级是旁路事件，不消费回合）。execution_session_id 空
+ * （无会话可写，如 source-only 任务）跳过，logger 兜底（与 dispatch 口径一致）。
+ */
+function writeDegradedMilestone(input: {
+  task: TaskRow;
+  kind: 'intervene_degraded' | 'submit_degraded';
+  reason: string;
+  code?: string;
+  suffix: string;
+}): void {
+  const sessionId = input.task.executionSessionId;
+  if (sessionId === null || sessionId === '') {
+    logger.warn('降级里程碑未写入（任务无关联执行会话，logger 兜底）', {
+      taskId: input.task.id,
+      kind: input.kind,
+      reason: input.reason,
+    });
+    return;
+  }
+  const row = insertMessage({
+    sessionId,
+    sender: 'system',
+    eventType: 'delegation_milestone',
+    body: `${input.kind === 'intervene_degraded' ? '干预上报降级' : '提交上报降级'}（${input.reason}）：${input.suffix}`,
+    taskId: input.task.id,
+    contextJson: JSON.stringify({
+      kind: input.kind,
+      reason: input.reason,
+      ...(input.code !== undefined ? { code: input.code } : {}),
+    }),
+  });
+  pushSessionMessage(row);
+}
 
 /** 进程/DB 边界端口（唯一 mock 面；生产接线 hub/index.ts） */
 export interface RemoteInterveneBridgePorts {
@@ -157,6 +199,12 @@ export function createRemoteInterveneHandler(
         requestId: request.id,
         taskId: task.id,
       });
+      writeDegradedMilestone({
+        task,
+        kind: 'intervene_degraded',
+        reason: 'hub 离线',
+        suffix: '已转本地等待，节点所有者可在请求面板处理',
+      });
       return;
     }
     const payload = parsePayloadObject(request);
@@ -183,11 +231,19 @@ export function createRemoteInterveneHandler(
         });
       })
       .catch((err: unknown) => {
+        const code = err instanceof Error && 'code' in err ? String((err as { code?: unknown }).code) : undefined;
         logger.warn('干预桥降级：task.intervene 失败，请求转本地等待（节点所有者自答）', {
           requestId: request.id,
           taskId: task.delegationId,
-          code: err instanceof Error && 'code' in err ? String((err as { code?: unknown }).code) : undefined,
+          code,
           error: err instanceof Error ? err.message : String(err),
+        });
+        writeDegradedMilestone({
+          task,
+          kind: 'intervene_degraded',
+          reason: `task.intervene 失败：${err instanceof Error ? err.message : String(err)}`,
+          ...(code !== undefined ? { code } : {}),
+          suffix: '已转本地等待，节点所有者可在请求面板处理',
         });
       });
   };
@@ -201,6 +257,14 @@ export function createRemoteInterveneHandler(
     // P1 旧行为收口：本地验收兜底（auto_accept 已完成的行跳过；done 终态上报由
     // delegation-runner 监督器/重连对账链承载，桥不双发）
     const fresh = ports.getTask(taskId);
+    if (fresh) {
+      writeDegradedMilestone({
+        task: fresh,
+        kind: 'submit_degraded',
+        reason: cause,
+        suffix: '任务按旧语义完成',
+      });
+    }
     if (fresh && fresh.status === 'submitted') {
       void ports
         .acceptTask(taskId)
