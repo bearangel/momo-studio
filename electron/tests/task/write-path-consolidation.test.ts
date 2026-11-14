@@ -57,6 +57,9 @@ const WRITE_PATH_WHITELIST: readonly string[] = [
   'task/lifecycle.ts',
   'task/starter.ts',
   'hub/delegation-sync.ts',
+  // P2 S5 豁免惯例：发起方 submitted 镜像消费对 out 行直写 submitted
+  // （tests/hub/origin-submitted-mirror.test.ts §3「pending → submitted 直写」锁）
+  'hub/remote-intervene-bridge.ts',
   'task/dispatcher.ts',
 ];
 

@@ -486,10 +486,13 @@ export interface TaskApiSurface {
       artifacts?: Array<{ label: string; value: string }>;
     },
   ): Promise<TaskRow>;
-  /** 验收通过（Task 16）：run accepted + 任务 completed；非 submitted 态人话拒绝 */
-  accept(id: string): Promise<TaskRow>;
-  /** 打回（Task 16）：run rejected + 任务回 assigned 排队返工；空白理由人话拒绝 */
-  reject(id: string, reason: string): Promise<TaskRow>;
+  /** 验收通过（Task 16）：run accepted + 任务 completed；非 submitted 态人话拒绝。
+   *  P2 S6：远端提交（镜像 acceptance）验收后附 remoteWarning（hub 通知失败人话，
+   *  本地已收口不回滚） */
+  accept(id: string): Promise<TaskRow & { remoteWarning?: string }>;
+  /** 打回（Task 16）：run rejected + 任务回 assigned 排队返工；空白理由人话拒绝。
+   *  P2 S6 remoteWarning 同 accept */
+  reject(id: string, reason: string): Promise<TaskRow & { remoteWarning?: string }>;
   /** run 历史（Task 16，run_no ASC） */
   listRuns(id: string): Promise<TaskRunRow[]>;
   /**
@@ -638,6 +641,7 @@ export interface HumanRequestRow {
   runId: string | null;
   sessionId: string;
   delegationId: string | null;
+  /** 镜像行来源节点 id（S5 发起方镜像消费落的行非空——渲染层判空区分本地/镜像） */
   originNodeId: string | null;
   remoteId: string | null;
   kind: HumanRequestKind;
@@ -656,6 +660,13 @@ export interface HumanRequestRow {
   answeredAt: number | null;
   createdAt: number;
   updatedAt: number;
+  /**
+   * S6 human:list 投影附加键（仅镜像行携带）：来源节点名（presence 快照解析，
+   * 离线/未知为 null——文案降级「远端节点」）
+   */
+  originNodeName?: string | null;
+  /** S6：镜像行属平行组（peer 无代答入口——中性卡渲染；acceptance 不受影响） */
+  peerMirror?: boolean;
 }
 
 /** human:attention 单会话聚合值 */

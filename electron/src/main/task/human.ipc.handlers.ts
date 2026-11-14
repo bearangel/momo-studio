@@ -18,15 +18,23 @@ import { getDb } from '../storage/db';
 import { logger } from '../logger';
 import { loadElectronApis } from '../electron-access';
 import { createHubConfigStore } from '../hub/config-store';
+import { hubGetPresenceNodes } from '../hub/index';
 import {
   answerHuman,
+  emitHumanChanged,
   setHumanChangedSink,
   setTaskRunChangedSink,
   type HumanAnswerInput,
 } from './lifecycle-runs';
 import { sweepHumanTimeouts } from './human-timeout-sweeper';
 import { recoverOrphanToolGates } from '../sandbox/write-blocked-emit';
-import { listRequests } from '../storage/tasks/human-requests-repo';
+import {
+  getHumanRequest,
+  listRequests,
+  tryAnswer,
+  type HumanRequestRow,
+} from '../storage/tasks/human-requests-repo';
+import { getTask } from '../storage/tasks/repo';
 
 /** 推送到当前主窗口 renderer（session-service pushToMainWindow 同法：按推送时点
  *  动态解析当前窗口——窗口销毁重建不断链；非主进程环境静默跳过） */
@@ -110,6 +118,137 @@ export function aggregateAttention(workspaceId: string): Record<string, SessionA
   return out;
 }
 
+// ── 跨节点代答路由（P2 S6，spec 2026-11-13 §8.6 发起方侧）───────────────────
+//
+// 镜像行（origin_node_id 非空——S5 发起方镜像消费落的行）的答复不投本地
+// answerHuman（本地无执行、注入无落点），改转 hub task.answer（结构化
+// interventionId+answer；hub 权威校验 + first_wins 收敛）→ 对端 worker 经
+// interventionAnswered 事件统一路由。转发器由 hub 域注入（ipc/index.ts 接线
+// hubRequest——两域模块零 import，防循环）；未注入（hub 域未装配，测试/单机）
+// 时镜像行人话拒。
+
+/** 镜像行代答转发入参（hub task.answer 新形态载荷的发起方投影） */
+export interface MirrorAnswerForwardInput {
+  delegationId: string;
+  remoteId: string;
+  answer: HumanAnswerInput;
+}
+
+/** hub task.answer 响应 disposition（协议 TaskAnswerRes） */
+export type MirrorAnswerDisposition = 'granted' | 'denied' | 'stale' | 'answered';
+
+let mirrorAnswerForwarder:
+  | ((input: MirrorAnswerForwardInput) => Promise<MirrorAnswerDisposition>)
+  | null = null;
+
+/** hub 域注入点（ipc/index.ts 装配；null 注销） */
+export function setMirrorAnswerForwarder(
+  fn: ((input: MirrorAnswerForwardInput) => Promise<MirrorAnswerDisposition>) | null,
+): void {
+  mirrorAnswerForwarder = fn;
+}
+
+/** hub 在线节点快照名解析（presence seed；离线/未知节点 → null） */
+function originNodeNameOf(nodeId: string): string | null {
+  try {
+    return hubGetPresenceNodes().find((n) => n.nodeId === nodeId)?.nodeName ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** human:list 线上行（repo 行 + S6 镜像行附加键；renderer types.d.ts 同形可选） */
+export type HumanRequestWireRow = HumanRequestRow & {
+  /** 镜像行来源节点名（presence 快照解析；离线/未知 → null） */
+  originNodeName?: string | null;
+  /** 镜像行属平行组（peer 判定见 projectHumanListRows 头注） */
+  peerMirror?: boolean;
+};
+
+/**
+ * human:list 投影（S6 renderer 数据面）：镜像行附 `originNodeName`（远端来源
+ * 徽标「来自 {节点}」文案源——presence 快照名解析，离线节点缺省）与
+ * `peerMirror`（peer 判定 = 外派行 origin='peer_draft'——平行组草稿行唯一
+ * 携带该 origin〔draft 仅 peer 组合法，组模式建组时定型不可变〕，本地持久、
+ * 零 hub RPC 依赖；与 delegation-sync isPeerGroup 判组语义一致）。本地行零附加键。
+ */
+export function projectHumanListRows(rows: HumanRequestRow[]): HumanRequestWireRow[] {
+  return rows.map((row) => {
+    if (row.originNodeId === null || row.remoteId === null) return row;
+    const task = row.taskId !== null ? getTask(row.taskId) : null;
+    return {
+      ...row,
+      originNodeName: originNodeNameOf(row.originNodeId),
+      ...(task?.origin === 'peer_draft' ? { peerMirror: true } : {}),
+    };
+  });
+}
+
+/**
+ * 代答路由（human:answer 通道单点，导出供测试直调）：
+ *   - 本地行（origin_node_id 空）→ 既有 answerHuman 直达（零变化）
+ *   - 镜像行 × 平行组（外派行 origin='peer_draft'）→ 人话拒（双层防线主进程
+ *     层——UI 无入口 + hub forbidden 三层兜底）
+ *   - 镜像行 × 主从组 → hub task.answer { taskId: delegation_id,
+ *     interventionId: remote_id, answer }；成功后本地镜像行落 answered
+ *     （tryAnswer 原子门闩 + human:changed 推送——面板原地收敛）；hub stale /
+ *     对端错误人话回 renderer（面板 ErrorLine），行保持 pending 可重试。
+ */
+export async function answerHumanRouted(
+  requestId: string,
+  answer: HumanAnswerInput,
+  message?: string,
+): Promise<{ disposition: 'answered' | 'stale' }> {
+  if (typeof requestId !== 'string' || requestId === '') throw new Error('requestId 缺失');
+  if (typeof answer !== 'object' || answer === null || Array.isArray(answer)) {
+    throw new Error('answer 非法');
+  }
+  if (message !== undefined && typeof message !== 'string') throw new Error('message 非法');
+  const merged: HumanAnswerInput =
+    message !== undefined && message !== ''
+      ? { ...answer, text: answer.text !== undefined && answer.text !== '' ? `${answer.text}\n${message}` : message }
+      : answer;
+
+  const req = getHumanRequest(requestId);
+  if (req === null) throw new Error(`人工请求 ${requestId} 不存在`);
+  // 直接条件（非布尔旗标）保住 originNodeId/remoteId 的 else 路径类型收窄
+  if (req.kind === 'acceptance' || req.originNodeId === null || req.remoteId === null) {
+    // 本地行直达；acceptance kind（含镜像 acceptance）由 answerHuman 通道守卫
+    // 人话拒——验收走 task:accept / task:reject（S6 路由见 task/ipc.handlers）
+    return answerHuman(requestId, merged, resolveLocalNodeId());
+  }
+
+  const task = req.taskId !== null ? getTask(req.taskId) : null;
+  if (task?.origin === 'peer_draft') {
+    throw new Error('平行组不转发人工请求，请在执行节点处理');
+  }
+  const forward = mirrorAnswerForwarder;
+  if (forward === null || req.delegationId === null) {
+    throw new Error('hub 未接入，无法代答远端请求——请在执行节点处理或重新接入 momo-hub');
+  }
+
+  let hubDisposition: MirrorAnswerDisposition;
+  try {
+    hubDisposition = await forward({
+      delegationId: req.delegationId,
+      remoteId: req.remoteId,
+      answer: merged,
+    });
+  } catch (err) {
+    // 对端离线 / RPC 错误 → 人话回 renderer（面板 toast），行保持 pending 可重试
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`代答发送失败：${detail}`);
+  }
+  if (hubDisposition === 'stale') return { disposition: 'stale' };
+
+  // 本地镜像行落 answered（幂等门闩：并发窗口内已被处置 → stale 透传）
+  const res = tryAnswer(requestId, JSON.stringify(merged), resolveLocalNodeId());
+  if (!res.ok) return { disposition: 'stale' };
+  emitHumanChanged({ sessionId: req.sessionId, requestId, kind: 'answered' });
+  return { disposition: 'answered' };
+}
+
+
 /** sweeper 扫描间隔（spec §6 超时策略；oauth lifecycle 60s 同档） */
 const SWEEP_INTERVAL_MS = 60_000;
 
@@ -158,17 +297,19 @@ export function registerHumanIpc(): void {
     if (a.status !== undefined && a.status !== 'pending' && a.status !== 'all') {
       throw new Error('status 只支持 pending / all');
     }
-    return listRequests({
-      sessionId: a.sessionId as string | undefined,
-      taskId: a.taskId as string | undefined,
-      status: a.status as 'pending' | 'all' | undefined,
-    });
+    return projectHumanListRows(
+      listRequests({
+        sessionId: a.sessionId as string | undefined,
+        taskId: a.taskId as string | undefined,
+        status: a.status as 'pending' | 'all' | undefined,
+      }),
+    );
   });
 
   /**
-   * 答复人工请求：message 附言并入 answer.text（换行拼接——答复正文单字段）；
-   * 答复者节点 = hub 自身 nodeId（未配置 'local'）。acceptance kind 由
-   * answerHuman 通道守卫人话拒（验收走 task:accept / task:reject）。
+   * 答复人工请求（P2 S6 起经 answerHumanRouted 跨节点路由）：message 附言并入
+   * answer.text（换行拼接）；acceptance kind 人话拒（验收走 task:accept /
+   * task:reject）；镜像行走 hub task.answer（详见 answerHumanRouted 头注）。
    */
   ipcMain.handle(
     'human:answer',
@@ -177,18 +318,8 @@ export function registerHumanIpc(): void {
       requestId: string,
       answer: HumanAnswerInput,
       message?: string,
-    ): { disposition: 'answered' | 'stale' } => {
-      if (typeof requestId !== 'string' || requestId === '') throw new Error('requestId 缺失');
-      if (typeof answer !== 'object' || answer === null || Array.isArray(answer)) {
-        throw new Error('answer 非法');
-      }
-      if (message !== undefined && typeof message !== 'string') throw new Error('message 非法');
-      const merged: HumanAnswerInput =
-        message !== undefined && message !== ''
-          ? { ...answer, text: answer.text !== undefined && answer.text !== '' ? `${answer.text}\n${message}` : message }
-          : answer;
-      return answerHuman(requestId, merged, resolveLocalNodeId());
-    },
+    ): Promise<{ disposition: 'answered' | 'stale' }> =>
+      answerHumanRouted(requestId, answer, message),
   );
 
   ipcMain.handle('human:attention', (_evt, workspaceId: string) => {
@@ -204,6 +335,7 @@ export function __teardownHumanIpcForTest(): void {
   if (sweepTimer) clearInterval(sweepTimer);
   sweepTimer = null;
   registered = false;
+  mirrorAnswerForwarder = null;
   setHumanChangedSink(null);
   setTaskRunChangedSink(null);
 }

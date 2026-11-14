@@ -335,3 +335,47 @@ describe('8) 外派行路由缺目标节点 → 镜像跳过（双 NULL 不幂�
     expect(milestoneRows()).toHaveLength(0);
   });
 });
+
+// ── 9) S5 review Minor #1/#2 补锁（P2 S6 顺手）──────────────────────────────
+
+describe('9) rework-runNo 分支：活动 run 号与事件不符 → 沿用活动行不建新 run', () => {
+  it('run#1 已存在时 submitted(runNo=2) 到达 → run 不增、acceptance 锚定既有 run', () => {
+    const task = seedOutTask();
+    handleTaskSubmittedMirror(submittedEvent({ deliverable: { summary: '首次提交' } }));
+    const firstRun = getActiveRun(task.id)!;
+
+    // 返工重提形态：同任务新 runNo 的 submitted 事件（任务仍非终态）
+    handleTaskSubmittedMirror(
+      submittedEvent({ runNo: 2, deliverable: { summary: '返工再提' } }),
+    );
+
+    expect(listRuns(task.id)).toHaveLength(1); // 不伪造 rejected 换号（S7 对账兜底）
+    const rows = listRequests({ status: 'all' });
+    expect(rows).toHaveLength(2);
+    const second = rows[1]!;
+    expect(second.remoteId).toBe(`${DELEGATION_ID}#2`);
+    expect(second.runId).toBe(firstRun.id); // 弱化锚定：沿用活动 run 行
+    expect(getTask(task.id)!.status).toBe('submitted');
+    // 里程碑照记（remote_submitted runNo=2）
+    const metas = milestoneRows().map((m) => m.meta);
+    expect(metas).toContainEqual({
+      kind: 'remote_submitted',
+      runNo: 2,
+      delegationId: DELEGATION_ID,
+    });
+  });
+});
+
+describe('10) session-空变体：execution_session_id 缺失 → 状态收口但镜像/里程碑跳过', () => {
+  it('run 懒建照常；acceptance 行与里程碑零落库不抛', () => {
+    const task = seedOutTask({ sessionId: null });
+    expect(() => handleTaskSubmittedMirror(submittedEvent())).not.toThrow();
+
+    expect(getTask(task.id)!.status).toBe('submitted'); // hub 账本权威，状态先收口
+    const run = getActiveRun(task.id);
+    expect(run).not.toBeNull();
+    expect(run!.executionSessionId).toBeNull();
+    expect(listRequests({ status: 'all' })).toHaveLength(0);
+    expect(milestoneRows()).toHaveLength(0);
+  });
+});

@@ -194,6 +194,14 @@ export interface DispatchSubmitPorts {
     routing: TaskRouting,
     p1Stamp: { delegationRole: 'out'; autoAccept: true },
   ): void;
+  /**
+   * P2 S6 跟踪会话创建（可选——生产接线 dispatch-ports；tests 注入 fake）：
+   * 委派成功后为外派行建跟踪会话（sessions kind='task_execution' 无成员 +
+   * execution_session_id 指向）。幂等在实现单源（hub/tracking-session.ts——
+   * 已有指向即复用）；异常由 submitRoutedTask 兜底吞掉（委派已成功，会话属
+   * 辅助面），不翻转 dispatched 结果。
+   */
+  ensureTrackingSession?(input: { taskId: string; targetNodeId: string | null }): Promise<unknown>;
 }
 
 /** 活跃委派口径：pending|running|interrupted（未终态且未取消——interrupted 会重连续跑，占负载） */
@@ -356,6 +364,17 @@ export async function submitRoutedTask(
       delegationRole: 'out',
       autoAccept: true,
     });
+    // S6 跟踪会话：委派成功即建（幂等在实现单源）。会话属辅助面——创建失败
+    // 不翻转 dispatched（warn 留痕，boot 回填兜底）
+    try {
+      await ports.ensureTrackingSession?.({ taskId: task.id, targetNodeId });
+    } catch (err) {
+      logger.warn('跟踪会话创建失败（委派已成功，boot 回填兜底）', {
+        taskId: task.id,
+        targetNodeId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     return { task: { ...task, delegationId }, dispatched: true, nodeId: targetNodeId };
   } catch (err) {
     // 瞬断（node_offline / 网络抖动）：行保留待处理，不向上抛——弹窗提交不该

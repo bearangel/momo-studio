@@ -22,6 +22,7 @@ import {
 } from './dispatch-submit';
 import { retryDispatch, type RedispatchPorts } from './delegation-sync';
 import { buildDispatchSubmitPorts } from './dispatch-ports';
+import { ensureTrackingSession } from './tracking-session';
 import { assertBoardGroupValid, createTaskFromForm } from '../task/ipc.handlers';
 import { insertTaskWithRelations } from '../task/relations';
 import { getWorkspace } from '../workspace/crud';
@@ -242,6 +243,10 @@ export function registerHubIpc(): void {
     getTeamSnapshot: (workspaceId, teamId) => dispatchSubmitPorts.getTeamSnapshot(workspaceId, teamId),
     // 同上：delegate rejection 被 retryDispatch 吞掉（dispatched=false 留待处理），不包
     delegate: (brief) => hubRequest(TASK_RPC.delegate, brief, undefined),
+    // S6 跟踪会话：重派成功补建（幂等/标题单源 hub/tracking-session.ts）；
+    // 组清单复用 dispatchSubmitPorts（节点名解析）
+    ensureTrackingSession: (input) =>
+      ensureTrackingSession(input, { listGroups: () => dispatchSubmitPorts.listGroups() }),
     updateTask: (taskId, patch) => {
       updateTask(taskId, patch);
     },

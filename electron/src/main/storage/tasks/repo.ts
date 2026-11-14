@@ -555,6 +555,44 @@ export function listTasks(opts: {
 }
 
 /**
+ * 只读跟踪会话判定（P2 S6 服务端闸，spec 2026-11-13 §8.5）：会话是某
+ * delegation_role='out' 且非终态任务的 execution_session_id → true。
+ * 终态集合与 session-ops getSessionsForWorkspace 的 SessionSummary 派生同源
+ * （completed/failed/cancelled）——任务完结后跟踪会话随 renderer readOnly
+ * 一并解锁，服务端闸不得比 UI 更严。
+ */
+export function hasActiveOutboundTask(sessionId: string): boolean {
+  const row = getDb()
+    .prepare(
+      `SELECT 1 FROM tasks
+       WHERE execution_session_id = ? AND delegation_role = 'out'
+         AND status NOT IN ('completed', 'failed', 'cancelled')
+       LIMIT 1`,
+    )
+    .get(sessionId);
+  return row !== undefined;
+}
+
+/**
+ * 跟踪会话回填候选（P2 S6 装配对账，spec 2026-11-13 §8.5）：已派发
+ * （delegation_id 非空）、delegation_role='out'、非终态、尚无执行会话的行
+ * ——S6 之前的外派行与「派发成功但回填失败」的行经 boot/hub init 对账补建
+ * 跟踪会话（P1 矩阵遗留项）。
+ */
+export function findActiveOutboundWithoutSession(): TaskRow[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT * FROM tasks
+       WHERE delegation_id IS NOT NULL AND delegation_role = 'out'
+         AND execution_session_id IS NULL
+         AND status NOT IN ('completed', 'failed', 'cancelled')
+       ORDER BY created_at ASC`,
+    )
+    .all() as SqlRow[];
+  return rows.map(rowToCamel);
+}
+
+/**
  * 会话删除守卫（生命周期 v2，spec 2026-11-13-task-human-loop-lifecycle §5.4
  * 「活动任务关联会话禁止删除」）：会话被任务以 execution_session_id 关联且任务
  * 处于活跃态（in_progress / waiting_human / submitted）时抛人话错误；

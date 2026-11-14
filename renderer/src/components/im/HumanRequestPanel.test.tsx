@@ -465,3 +465,110 @@ describe('HumanRequestPanel — 推送刷新', () => {
     expect(screen.queryByText('旧版 token 是否继续兼容？')).not.toBeInTheDocument();
   });
 });
+
+// ── P2 S6 镜像行（CONTRACT 2026-11-14-tracking #1–#5/#12）──────────────────
+
+describe('HumanRequestPanel — S6 镜像行（远端来源 / 代答提示 / peer 中性卡）', () => {
+  const mirrorRow = (overrides: Partial<HumanRequestRow> = {}): HumanRequestRow =>
+    makeRow({
+      id: 'req-mir',
+      taskId: 'T-101',
+      delegationId: 'dl-9',
+      originNodeId: 'node-b',
+      originNodeName: '研发工作站',
+      remoteId: 'iv-9',
+      kind: 'question',
+      optionsJson: QUESTION_OPTS_JSON,
+      ...overrides,
+    });
+
+  it('远端来源徽标「来自 研发工作站」+ 代答提示行「代答后 … 原地继续」（CONTRACT #1–#3）', async () => {
+    listMock.mockResolvedValue([mirrorRow()]);
+    await mountPanel();
+
+    expect(screen.getByText('来自 研发工作站')).toBeInTheDocument();
+    expect(screen.getByText('代答后 研发工作站 原地继续')).toBeInTheDocument();
+    // 代答仍走 human.answer 通道（主进程路由 hub task.answer）
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '提交' }));
+    });
+    expect(answerMock).toHaveBeenCalledWith('req-mir', { selected: ['keep'] }, undefined);
+  });
+
+  it('节点名缺席 → 文案降级「远端节点」（presence 快照无此节点）', async () => {
+    listMock.mockResolvedValue([mirrorRow({ originNodeName: null })]);
+    await mountPanel();
+
+    expect(screen.getByText('来自 远端节点')).toBeInTheDocument();
+    expect(screen.getByText('代答后 远端节点 原地继续')).toBeInTheDocument();
+  });
+
+  it('peer 镜像干预行 → 中性卡：无任何操作钮、无代答入口（CONTRACT #4/#5）', async () => {
+    listMock.mockResolvedValue([mirrorRow({ id: 'req-peer', peerMirror: true })]);
+    await mountPanel();
+
+    expect(screen.getByText('执行方等待人工处理 · 无需你操作')).toBeInTheDocument();
+    expect(screen.getByText('平行组不转发人工请求，请在执行节点处理')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '提交' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('human-peer-neutral-req-peer')).toBeInTheDocument();
+  });
+
+  it('peer 镜像 acceptance 行 → 不替换中性卡（平行组发起方保留验收权）', async () => {
+    listMock.mockResolvedValue([
+      mirrorRow({ id: 'req-acc-peer', kind: 'acceptance', peerMirror: true, payloadJson: ACCEPTANCE_JSON, taskId: 'T-101' }),
+    ]);
+    await mountPanel();
+
+    expect(screen.queryByTestId('human-peer-neutral-req-acc-peer')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '验收通过' })).toBeInTheDocument();
+  });
+
+  it('镜像 acceptance：why 注走 hub 送回变体 + remoteWarning 人话呈现（CONTRACT #12）', async () => {
+    listMock.mockResolvedValueOnce([
+      mirrorRow({ id: 'req-acc', kind: 'acceptance', payloadJson: ACCEPTANCE_JSON, taskId: 'T-101' }),
+    ]).mockResolvedValue([]);
+    acceptMock.mockResolvedValue({
+      remoteWarning: '远端验收通知失败：连接已重置（本地已验收，执行节点将在重连后对账）',
+    });
+    await mountPanel();
+
+    expect(screen.getByText('来自 研发工作站')).toBeInTheDocument();
+    expect(
+      screen.getByText('打回将带理由生成新 run，经 hub 送回 研发工作站 重开执行'),
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '验收通过' }));
+    });
+    expect(acceptMock).toHaveBeenCalledWith('T-101');
+    expect(
+      screen.getByText('远端验收通知失败：连接已重置（本地已验收，执行节点将在重连后对账）'),
+    ).toBeInTheDocument();
+  });
+
+  it('代答发送失败（对端离线）→ 人话错误行呈现（面板 toast 出口）', async () => {
+    listMock.mockResolvedValue([mirrorRow({ id: 'req-err' })]);
+    answerMock.mockRejectedValue(new Error('代答发送失败：hub 未连接，请先在设置中接入 momo-hub'));
+    await mountPanel();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '提交' }));
+    });
+    expect(
+      screen.getByText('代答发送失败：hub 未连接，请先在设置中接入 momo-hub'),
+    ).toBeInTheDocument();
+    // 行保持 pending：卡片仍在（可重试）
+    expect(screen.getByRole('button', { name: '提交' })).toBeInTheDocument();
+  });
+
+  it('折叠行远端变体：行内「（来自 研发工作站）」后缀，不加徽标（CONTRACT #2）', async () => {
+    listMock.mockResolvedValue([
+      makeRow({ id: 'req-first', kind: 'tool_gate', payloadJson: TOOL_GATE_JSON }),
+      mirrorRow({ id: 'req-collapsed' }),
+    ]);
+    await mountPanel();
+
+    const collapsed = screen.getByTestId('human-collapsed-req-collapsed');
+    expect(collapsed).toHaveTextContent('（来自 研发工作站）');
+  });
+});

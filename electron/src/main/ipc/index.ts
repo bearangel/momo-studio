@@ -44,6 +44,14 @@ import { registerDialogHandlers } from './dialog.handlers';
 import { registerWindowIpc } from '../window-ipc';
 // M0 节点互联（spec 2026-10-23）：hub 连接管理四通道 + 两推送
 import { registerHubIpc } from '../hub/ipc.handlers';
+// P2 S6 跨节点路由端口装配：hub 请求面注入 task 域（镜像代答 / 远端验收通知）
+// ——hub/index 与 task/ipc.handlers 双向零 import（setMirrorAnswerForwarder 等
+// setter 注入，setSessionRouter / setRemoteInterveneSink 同款纪律）
+import { hubRequest } from '../hub/index';
+import { TASK_RPC } from '../hub/protocol';
+import type { InterventionAnswer } from '../hub/protocol';
+import { setMirrorAnswerForwarder } from '../task/human.ipc.handlers';
+import { setRemoteTerminalForwarder } from '../task/ipc.handlers';
 // 新装引导（spec 2026-10-10）：status / 方案生成 / 方案应用 / 完成标记
 import { registerOnboardingHandlers } from '../onboarding/ipc.handlers';
 import type { WorkspaceIpcOpts } from '../workspace/ipc.handlers';
@@ -109,6 +117,47 @@ export function registerIpcHandlers(opts: WorkspaceIpcOpts = {}): void {
   registerOnboardingHandlers();
   // M0 节点互联（spec 2026-10-23）：hub 连接管理四通道 + 两推送
   registerHubIpc();
+  // P2 S6：跨节点代答 / 远端验收通知转发器接线（hubRequest 错误语义单点——
+  // 未连接人话 / hub 原文 / 超时）。task.answer 顶层 decision 为协议旧兼容
+  // 必填（interventionId 在场时 hub 只消费 answer 段）；HumanAnswerInput 的
+  // accept/reject 决策与 reason 字段按协议 InterventionAnswer 收敛映射。
+  setMirrorAnswerForwarder(async ({ delegationId, remoteId, answer }) => {
+    const decision =
+      answer.decision === 'deny' || answer.decision === 'reject'
+        ? 'deny'
+        : answer.decision !== undefined
+          ? 'approve'
+          : undefined;
+    const text =
+      answer.reason !== undefined && answer.reason !== ''
+        ? [answer.text, answer.reason].filter((s) => s !== undefined && s !== '').join('\n')
+        : answer.text;
+    const interventionAnswer: InterventionAnswer = {
+      ...(decision !== undefined ? { decision } : {}),
+      ...(text !== undefined && text !== '' ? { text } : {}),
+      ...(answer.selected !== undefined ? { selected: answer.selected } : {}),
+      ...(answer.completed !== undefined ? { completed: answer.completed } : {}),
+    };
+    return (
+      await hubRequest<{ disposition: 'granted' | 'denied' | 'stale' | 'answered' }>(
+        TASK_RPC.answer,
+        {
+          taskId: delegationId,
+          decision: decision ?? 'approve',
+          interventionId: remoteId,
+          answer: interventionAnswer,
+        },
+        undefined,
+      )
+    ).disposition;
+  });
+  setRemoteTerminalForwarder(async ({ delegationId, outcome, reason }) => {
+    await hubRequest(
+      outcome === 'accepted' ? TASK_RPC.accept : TASK_RPC.reject,
+      outcome === 'accepted' ? { taskId: delegationId } : { taskId: delegationId, reason },
+      undefined,
+    );
+  });
   // 窗口控制（自绘 titlebar）——注册先于窗口创建，getWin 每次调用时懒查首个窗口
   registerWindowIpc(() => BrowserWindow.getAllWindows()[0] ?? null);
 }

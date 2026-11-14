@@ -59,6 +59,7 @@ import {
   type DeliverableInput,
 } from './lifecycle-runs';
 import { listRuns } from '../storage/tasks/runs-repo';
+import { listByTask } from '../storage/tasks/human-requests-repo';
 /**
  * D4 只读守卫（spec §3.5）：origin='dispatch' 簿记行由会话链管理，看板写通道
  * 一律拒绝（registry 是真相源；从看板取消子任务留后续交互）。
@@ -195,6 +196,106 @@ export function createTaskFromForm(input: CreateInput): TaskRow {
   );
   notifyExecutor();
   return created;
+}
+
+// ── 跨节点验收路由（P2 S6，spec 2026-11-13 §8.6 发起方侧）───────────────────
+//
+// delegation_role='out' 且提交来自远端（pending acceptance 镜像行 origin_node_id
+// 非空）的验收/打回：本地 completeAcceptance / rejectTask 先行（本地是账本，
+// 状态权威），之后再调 hub task.accept / task.reject 通知执行节点（hub 是对
+// worker 的通知通道——worker 侧 S4 消费 accepted/rejected 落本地终态与返工）。
+// 远端通知失败不回滚本地（取舍：本地账本已收口；worker 断联窗口由 S7 重连
+// 对账兜底），人话 remoteWarning 随行返回供 renderer toast。转发器由 hub 域
+// 注入（ipc/index.ts 接线 hubRequest——两域模块零 import，防循环）。
+
+/** 远端验收/打回通知入参（hub task.accept / task.reject 载荷投影） */
+export interface RemoteTerminalForwardInput {
+  delegationId: string;
+  outcome: 'accepted' | 'rejected';
+  /** 打回必带（协议契约：reason 进 worker agent 上下文） */
+  reason?: string;
+}
+
+let remoteTerminalForwarder: ((input: RemoteTerminalForwardInput) => Promise<void>) | null = null;
+
+/** hub 域注入点（ipc/index.ts 装配；null 注销） */
+export function setRemoteTerminalForwarder(
+  fn: ((input: RemoteTerminalForwardInput) => Promise<void>) | null,
+): void {
+  remoteTerminalForwarder = fn;
+}
+
+/** 远端提交判定：out 行 + 当前 pending acceptance 为镜像行（提交来自远端） */
+function isRemoteSubmitted(task: TaskRow): boolean {
+  if (task.delegationRole !== 'out' || task.delegationId === null) return false;
+  const pendingAcceptance = listByTask(task.id)
+    .filter((r) => r.kind === 'acceptance' && r.status === 'pending')
+    .pop();
+  return pendingAcceptance?.originNodeId != null;
+}
+
+/** 验收通过（S6 路由单点，导出供测试直调）：先本地后远端 + remoteWarning 透传 */
+export async function acceptTaskRouted(id: string): Promise<TaskRow & { remoteWarning?: string }> {
+  const before = getTask(id);
+  const remote = before !== null && isRemoteSubmitted(before);
+  await acceptTask(id);
+  notifyExecutor();
+  return { ...getTask(id)!, ...(await forwardRemoteTerminal(before, remote, 'accepted')) };
+}
+
+/** 打回返工（S6 路由单点，导出供测试直调）：先本地后远端 + remoteWarning 透传 */
+export async function rejectTaskRouted(
+  id: string,
+  reason: string,
+): Promise<TaskRow & { remoteWarning?: string }> {
+  const before = getTask(id);
+  const remote = before !== null && isRemoteSubmitted(before);
+  await rejectTask(id, reason);
+  // 打回回 assigned 排队——返工放行（startRun trigger='rework'）由 executor
+  // 重评估接手，与 create/update 等写通道同纪律（K3）
+  notifyExecutor();
+  return {
+    ...getTask(id)!,
+    ...(await forwardRemoteTerminal(before, remote, 'rejected', reason)),
+  };
+}
+
+/** 远端通知 + 失败人话（本地不回滚）；非远端提交或未装配 → 无键 */
+async function forwardRemoteTerminal(
+  before: TaskRow | null,
+  remote: boolean,
+  outcome: 'accepted' | 'rejected',
+  reason?: string,
+): Promise<{ remoteWarning?: string } | undefined> {
+  if (!remote || before?.delegationId == null) return undefined;
+  const forward = remoteTerminalForwarder;
+  if (forward === null) {
+    logger.warn('远端验收通知未装配（hub 域未接线），本地已收口', {
+      taskId: before.id,
+      outcome,
+    });
+    return undefined;
+  }
+  try {
+    await forward({
+      delegationId: before.delegationId,
+      outcome,
+      ...(outcome === 'rejected' && reason !== undefined ? { reason } : {}),
+    });
+    return undefined;
+  } catch (err) {
+    // 本地是账本：已 accept/reject 不回滚——worker 侧 S7 重连对账兜底
+    const detail = err instanceof Error ? err.message : String(err);
+    const action = outcome === 'accepted' ? '验收' : '打回';
+    logger.warn(`远端${action}通知失败（本地已收口，S7 对账兜底）`, {
+      taskId: before.id,
+      delegationId: before.delegationId,
+      error: detail,
+    });
+    return {
+      remoteWarning: `远端${action}通知失败：${detail}（本地已${action}，执行节点将在重连后对账）`,
+    };
+  }
 }
 
 export function registerTaskHandlers(): void {
@@ -397,22 +498,19 @@ export function registerTaskHandlers(): void {
     },
   );
 
-  ipcMain.handle('task:accept', async (_evt, id: string): Promise<TaskRow> => {
+  ipcMain.handle('task:accept', async (_evt, id: string): Promise<TaskRow & { remoteWarning?: string }> => {
     assertNotDispatchRow(id);
-    await acceptTask(id);
-    notifyExecutor();
-    return getTask(id)!;
+    return acceptTaskRouted(id);
   });
 
   // 空白理由由 rejectTask 人话拒（「打回必须填写理由」——与 move 打回双保险）
-  ipcMain.handle('task:reject', async (_evt, id: string, reason: string): Promise<TaskRow> => {
-    assertNotDispatchRow(id);
-    await rejectTask(id, reason);
-    // 打回回 assigned 排队——返工放行（startRun trigger='rework'）由 executor
-    // 重评估接手，与 create/update 等写通道同纪律（K3）
-    notifyExecutor();
-    return getTask(id)!;
-  });
+  ipcMain.handle(
+    'task:reject',
+    async (_evt, id: string, reason: string): Promise<TaskRow & { remoteWarning?: string }> => {
+      assertNotDispatchRow(id);
+      return rejectTaskRouted(id, reason);
+    },
+  );
 
   // run 历史列表（run_no ASC——runs-repo 单点排序）
   ipcMain.handle('task:listRuns', async (_evt, id: string) => {

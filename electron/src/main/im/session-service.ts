@@ -35,7 +35,7 @@ import { messageToContext } from '../memory/context-map';
 import type { LLMMessage } from '../agent/llm-provider';
 import { detectConflict } from '../task/conflict-detector';
 import { activateMentionedTasks } from '../task/activation';
-import { listTasks, getTask } from '../storage/tasks/repo';
+import { listTasks, getTask, hasActiveOutboundTask } from '../storage/tasks/repo';
 import { applyFirstMessageTitle } from './session-naming';
 import { getSessionMembersInfo, type SessionMemberInfo } from './session-ops';
 import { SESSION_COMMANDS, isKnownSessionCommand, COMPACT_ACK_EVENT_TYPE } from './commands';
@@ -356,6 +356,24 @@ export async function sendUserMessage(input: {
 }): Promise<SendUserMessageResult> {
   const session = getSession(input.sessionId);
   if (!session) throw new Error(`会话不存在: ${input.sessionId}`);
+
+  // 只读跟踪会话服务端闸（P2 S6，终审 Finding #4 清偿）：delegation_role='out'
+  // 任务的执行会话拒绝一切用户消息——P1 renderer 已隐藏 composer（SessionSummary
+  // readOnly，T17），本闸兜底直连 IPC / 异常路径（判定与 SessionSummary 派生
+  // 同源：非终态 out 行才拦，任务完结后随 UI 一并解锁）。闸查询失败放行
+  // （warn 留痕）——DB 异常时不得拖垮全部会话的消息主链，退化为 UI 层 readOnly 面。
+  let gated = false;
+  try {
+    gated = hasActiveOutboundTask(input.sessionId);
+  } catch (err) {
+    logger.warn('只读跟踪会话闸查询失败（放行，退化 UI readOnly 面）', {
+      sessionId: input.sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  if (gated) {
+    throw new Error('只读跟踪会话：操作经请求面板进行');
+  }
 
   const msg = insertMessage({
     sessionId: input.sessionId,

@@ -658,8 +658,9 @@ function resolveOriginTask(
  * targetNodeId）——「已派到谁」的持久单源。取不到（routing 损坏回退 local /
  * group 未回填）→ null，调用方降级跳过镜像（UNIQUE(origin_node_id, remote_id)
  * 对 NULL 不生效，双 NULL 行不幂等——宁可缺镜像不留不可判重的行）。
+ * P2 S6 起导出：tracking-session 回填复用同口径（判组单源纪律）。
  */
-function outRowWorkerNodeId(task: TaskRow): string | null {
+export function outRowWorkerNodeId(task: TaskRow): string | null {
   const r = task.routing;
   if (r.mode === 'node') return r.targetNodeId;
   if (r.mode === 'group' && typeof r.targetNodeId === 'string' && r.targetNodeId !== '') {

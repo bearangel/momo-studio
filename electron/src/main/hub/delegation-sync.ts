@@ -416,6 +416,12 @@ export interface RedispatchPorts {
   delegate(brief: DelegationTaskBrief): Promise<{ taskId: string }>;
   /** 1.10.0 平行组判定（组模型 mode==='peer'）——草稿重派分流的数据源；可选 */
   isPeerGroup?(groupId: string): Promise<boolean>;
+  /**
+   * P2 S6 跟踪会话（可选——生产接线 hub/ipc.handlers；缺省跳过）：重派成功
+   * 与首派同构补建（首派失败留待处理的行此前无会话）。幂等在实现单源
+   * （hub/tracking-session.ts）；异常由 retryDispatch 兜底吞掉。
+   */
+  ensureTrackingSession?(input: { taskId: string; targetNodeId: string | null }): Promise<unknown>;
   updateTask(id: string, patch: Partial<TaskRow>): void;
   now(): number;
 }
@@ -551,6 +557,17 @@ export async function retryDispatch(
       delegationRole: 'out',
       autoAccept: true,
     });
+    // S6 跟踪会话：重派成功与首派同构补建（幂等在实现单源）；失败不断链——
+    // 委派已成功，会话属辅助面（boot 回填兜底）
+    try {
+      await ports.ensureTrackingSession?.({ taskId, targetNodeId });
+    } catch (err) {
+      logger.warn('重派跟踪会话创建失败（委派已成功，boot 回填兜底）', {
+        taskId,
+        targetNodeId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     return { dispatched: true, nodeId: targetNodeId, delegationId };
   } catch {
     // 瞬断（node_offline / 网络抖动）：行保留待处理（RM-M21-5，与 dispatch-submit 同哲学）

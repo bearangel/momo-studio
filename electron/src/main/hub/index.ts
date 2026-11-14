@@ -25,7 +25,7 @@ import {
 import { EVT, type EventEnvelope, type RequestEnvelope, type ResponseEnvelope, type RpcErrorPayload } from './protocol';
 import { MIRROR_WIRE, type MirrorApplyPayload, type MirrorApplyOutcome } from './mirror-wire';
 import { applyMirrorSnapshot } from './mirror-applier';
-import { bridgeGroupChanged } from './groups';
+import { bridgeGroupChanged, createGroupClient } from './groups';
 import type { HubResponderResult } from './client';
 import { createDelegationRunner, type AssignedTaskEvent, type DelegationRunner } from './delegation-runner';
 import { sessionWaitingProduct, wireDelegationRunnerPorts } from './delegation-ports';
@@ -64,6 +64,7 @@ import { createHubViewSettingsStore, type HubViewSettings } from './view-setting
 import { VIEW_WIRE } from './view-wire';
 import { VIEW_RPC } from './protocol';
 import { isPermissionTier } from './run-policy';
+import { backfillTrackingSessions } from './tracking-session';
 
 export interface HubStatus {
   configured: boolean;
@@ -93,6 +94,10 @@ const delegationSettingsStore = () => createHubDelegationSettingsStore(getDb());
 const viewSettingsStore = () => createHubViewSettingsStore(getDb());
 const workspaceDirStore = () => createHubWorkspaceDirStore(getDb());
 const mirrorRegistry = () => createMirrorRegistry(getDb());
+// 发起方对账用组客户端（S6 跟踪会话回填——目标节点名解析；复用 hubRequest 关联器）
+const originGroupsClient = createGroupClient((method, payload, timeoutMs) =>
+  hubRequest(method, payload, timeoutMs),
+);
 
 /**
  * 镜像登记表查询面（IPC hub:mirrorRegistry 消费；RM-M21-7 四消费方同源：
@@ -776,6 +781,27 @@ export async function initHub(): Promise<void> {
   // ready），runtime 子进程虽静态可达本模块，不执行本函数——子进程侧 emit 由
   // forwardLifecycleEvents 第三通道 process.send 转发回主进程本桥。
   ensureRemoteInterveneBridge();
+
+  // S6 跟踪会话回填（P1 矩阵遗留项，spec 2026-11-13 §8.5）：既有 active 外派行
+  // 无执行会话 → 补建。纯本地对账（hub RPC 仅用于节点名解析，失败降级
+  // 「远端节点」）；fire-and-forget——失败不阻塞连接启动，下次 boot 重试。
+  void backfillTrackingSessions({
+    listGroups: async () => {
+      try {
+        return (await originGroupsClient.list()).groups;
+      } catch {
+        return [];
+      }
+    },
+  })
+    .then((count) => {
+      if (count > 0) logger.info('外派跟踪会话回填完成', { count });
+    })
+    .catch((err: unknown) => {
+      logger.warn('外派跟踪会话回填失败（不阻塞启动）', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
   const cfg = configStore().read();
   if (!cfg) return;
