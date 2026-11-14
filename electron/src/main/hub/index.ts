@@ -44,7 +44,12 @@ import {
   type DelegationSync,
 } from './delegation-sync';
 import { listWorkspaces } from '../workspace/crud';
-import { insertTask, updateTask, getTask } from '../storage/tasks/repo';
+import { insertTask, updateTask, getTask, listTasks } from '../storage/tasks/repo';
+import { getActiveRun } from '../storage/tasks/runs-repo';
+import { acceptTask, setRemoteInterveneSink } from '../task/lifecycle-runs';
+import { setToolGateRowSink } from '../sandbox/write-blocked-emit';
+import { createRemoteInterveneHandler } from './remote-intervene-bridge';
+import { isTerminal } from '../storage/tasks/state-machine';
 import { createMirrorRegistry, type MirrorRegistryRow } from './mirror-registry';
 import { ViewServer } from './view-server';
 import { createHubViewSettingsStore, type HubViewSettings } from './view-settings';
@@ -720,11 +725,55 @@ function normUrl(hubUrl: string): string { return hubUrl.trim().replace(/\/$/, '
 
 /** app ready 后调用：已配置且有凭证则自动连接。 */
 export async function initHub(): Promise<void> {
+  // worker 干预/提交桥装配（P2 S2）——先于任何可能触发 lifecycle 事件的执行；
+  // 幂等 flag 防重复注册。装配只在主进程跑（initHub 调用点唯一：main/index app
+  // ready），runtime 子进程虽静态可达本模块，不执行本函数——子进程侧 emit 由
+  // forwardLifecycleEvents 第三通道 process.send 转发回主进程本桥。
+  ensureRemoteInterveneBridge();
+
   const cfg = configStore().read();
   if (!cfg) return;
   const token = await getDeviceToken();
   if (!token) { logger.warn('hub 已配置但 keychain 无 device token（跳过连接）'); return; }
   startClient(cfg.hubUrl, cfg.nodeName, token, cfg.nodeId);
+}
+
+// ── worker 干预/提交桥装配（P2 S2，spec 2026-11-13 §8.6）─────────────────────
+//
+// lifecycle-runs 的 RemoteInterveneEvent sink + write-blocked-emit 的 tool_gate
+// 行 sink 双注册进 hub/remote-intervene-bridge（delegation 判定 + task.intervene /
+// task.report submitted 外发 + 旧版本降级）。注入器方向与 setToolGateHandler
+// 先例一致：桥模块（hub 域）反向注册进 task/sandbox 域的 sink 容器，两域模块
+// 本体零 import。幂等 flag：initHub 每次调用只装配一次。
+
+let remoteInterveneBridgeArmed = false;
+
+function ensureRemoteInterveneBridge(): void {
+  if (remoteInterveneBridgeArmed) return;
+  remoteInterveneBridgeArmed = true;
+  const handler = createRemoteInterveneHandler({
+    clientGetter: () => client,
+    selfNodeId: () => configStore().read()?.nodeId ?? null,
+    getTask: (id) => getTask(id),
+    getActiveRun: (id) => getActiveRun(id),
+    // requestHumanFromAgent 的 activeTask 解析同口径：执行会话最新非终态任务
+    findActiveTaskByExecutionSession: (sessionId) => {
+      const rows = listTasks({ executionSessionId: sessionId })
+        .filter((t) => !isTerminal(t.status))
+        .sort((a, b) => b.createdAt - a.createdAt);
+      return rows[0] ?? null;
+    },
+    acceptTask: (id) => acceptTask(id),
+  });
+  setRemoteInterveneSink(handler);
+  // tool_gate 行（主进程双写链落行）→ 同形 request_created 事件直发桥
+  setToolGateRowSink((row) => {
+    try {
+      handler({ kind: 'request_created', request: row });
+    } catch {
+      // handler 自身 total；此处防御性兜底（sink 在授权卡推送主路径上同步调用）
+    }
+  });
 }
 
 export async function hubConfigure(input: { hubUrl: string; nodeName: string }): Promise<HubStatus> {

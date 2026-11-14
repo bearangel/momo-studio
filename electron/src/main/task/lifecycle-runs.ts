@@ -117,6 +117,34 @@ export function emitRunChanged(taskId: string, runId: string, status: TaskRunSta
   taskRunChangedSink?.({ taskId, runId, status });
 }
 
+// ── 远程干预桥 sink（P2 S2，spec 2026-11-13 §8.6 worker 侧）──
+//
+// worker 节点上 delegation-bound 任务的 HITL/提交事件外发面：requestHuman /
+// submitRun 落行成功后发射，主进程桥（hub/remote-intervene-bridge 经
+// setRemoteInterveneSink 装配）判定 delegation 归属后调 hub task.intervene /
+// task.report submitted。注入器纪律同 setToolGateHandler（本模块为 runtime
+// 子进程可达——不得反向依赖 hub 域；子进程内未装配时 no-op，事件经
+// forwardLifecycleEvents 第三通道 process.send 转发主进程）。
+
+/** 远程干预桥事件：request_created=人工请求落行（question/manual_action/tool_gate）
+ *  ；run_submitted=run 提交验收（runNo + 交付载荷，reason 序列化在桥侧） */
+export type RemoteInterveneEvent =
+  | { kind: 'request_created'; request: HumanRequestRow }
+  | { kind: 'run_submitted'; taskId: string; runNo: number; deliverable: DeliverableInput };
+
+/** 远程干预桥 sink 容器（主进程装配时注册；null 注销） */
+let remoteInterveneSink: ((e: RemoteInterveneEvent) => void) | null = null;
+
+export function setRemoteInterveneSink(fn: ((e: RemoteInterveneEvent) => void) | null): void {
+  remoteInterveneSink = fn;
+}
+
+/** 服务侧发射端（requestHuman / submitRun / write-blocked-emit 桥装配消费；
+ *  导出供主进程 agent-runner 回放子进程转发；sink 未装配 no-op） */
+export function emitRemoteIntervene(e: RemoteInterveneEvent): void {
+  remoteInterveneSink?.(e);
+}
+
 // ── 子进程侧生命周期事件转发（2026-11-14 P1 修复）──
 //
 // agent 工具（request_human / submit_task / fail_task）在 runtime 子进程执行，
@@ -127,26 +155,31 @@ export function emitRunChanged(taskId: string, runId: string, status: TaskRunSta
 // process.send；主进程 agent-runner 消息泵按 LifecycleEventMessage 形状
 // 回放进主进程自己的 sink。两端共用本处的线协议类型（一义一名）。
 
-/** lifecycle-event 转发通道（与 renderer 推送通道名有意同形） */
-export type LifecycleEventChannel = 'task:runChanged' | 'human:changed';
+/** lifecycle-event 转发通道（与 renderer 推送通道名有意同形；remote-intervene
+ *  为 S2 第三通道——worker 干预/提交桥专用，无 renderer 直消费面） */
+export type LifecycleEventChannel = 'task:runChanged' | 'human:changed' | 'remote-intervene';
 
 /** child → main 生命周期事件转发消息（子进程发送 / agent-runner 消费） */
 export interface LifecycleEventMessage {
   type: 'lifecycle-event';
   channel: LifecycleEventChannel;
-  payload: TaskRunChangedEvent | HumanChangedEvent;
+  payload: TaskRunChangedEvent | HumanChangedEvent | RemoteInterveneEvent;
 }
 
 /**
- * 子进程侧转发装配：两 sink 注册成「经 send 回调外发」（runtime-entry 以
+ * 子进程侧转发装配：三 sink 注册成「经 send 回调外发」（runtime-entry 以
  * process.send 接线，真实 send 回调 = 生产子进程）。沿用既有 sink 容器
  * （setter 注入），主进程装配点不受影响——两侧是不同进程的模块实例。
  */
 export function forwardLifecycleEvents(
-  send: (channel: LifecycleEventChannel, payload: TaskRunChangedEvent | HumanChangedEvent) => void,
+  send: (
+    channel: LifecycleEventChannel,
+    payload: TaskRunChangedEvent | HumanChangedEvent | RemoteInterveneEvent,
+  ) => void,
 ): void {
   setTaskRunChangedSink((e) => send('task:runChanged', e));
   setHumanChangedSink((e) => send('human:changed', e));
+  setRemoteInterveneSink((e) => send('remote-intervene', e));
 }
 
 /** 单任务执行尝试上限（spec §5.2：防打回-重跑死循环） */
@@ -449,6 +482,14 @@ export async function submitRun(id: string, opts: DeliverableInput): Promise<voi
   })();
   emitRunChanged(id, active.id, 'submitted');
   emitHumanChanged({ sessionId, requestId: acceptance.id, kind: 'inserted' });
+  // S2：delegation-bound 任务时主进程桥据此外发 task.report submitted（先于
+  // auto_accept 收口——子进程异步转发下桥侧读到的是终态，判定见桥内幂等守卫）
+  emitRemoteIntervene({
+    kind: 'run_submitted',
+    taskId: id,
+    runNo: active.runNo,
+    deliverable: { summary: opts.summary, files, artifacts },
+  });
 
   if (task.autoAccept) {
     completeAcceptance(id, 'system:auto');
@@ -601,6 +642,9 @@ export function requestHuman(input: {
   });
   if (active) enterWaitingHuman(input.taskId!);
   emitHumanChanged({ sessionId: input.sessionId, requestId: row.id, kind: 'inserted' });
+  // S2：delegation-bound 任务时主进程桥据此外发 task.intervene（子进程 emit 经
+  // forwardLifecycleEvents 第三通道转发；本地任务/未装配 no-op 零负担）
+  emitRemoteIntervene({ kind: 'request_created', request: row });
   return row;
 }
 

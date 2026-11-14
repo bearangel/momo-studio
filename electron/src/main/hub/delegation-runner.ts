@@ -239,10 +239,37 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
     return main.length > 0 ? main : reason;
   };
 
+  /**
+   * 委派关联的本地任务是否已提交待验收（S2 执行态挂钩）：findDraftRow 虽以草稿
+   * 命名，生产端口实现是 delegation_id → 本地 tasks 行的通用反查（classic 承接行
+   * /peer-draft 承接行同键）。查询异常按否处理（保守走既有终态链）。
+   */
+  const localTaskAwaitingAcceptance = (taskId: string): boolean => {
+    try {
+      return ports.findDraftRow(taskId)?.status === 'submitted';
+    } catch {
+      return false;
+    }
+  };
+
   const settleRun = (taskId: string, run: ActiveRun, terminal: TurnTerminal): void => {
     if (run.terminal) return; // 幂等：终态只清算一次
     run.terminal = terminal;
     run.unwatch();
+    // S2 执行态挂钩：本地任务已提交待验收（submitted）——回合终态不作委派终态。
+    // worker 桥已把 hub 账本推到 submitted，此处再报 done/failed 会越过发起方
+    // 验收直接终决（hub canTransition 对 submitted→done|failed|running 均放行）；
+    // 验收权威在发起方（task.accept/reject，S4 消费回本地终态）。停靠语义：
+    // 留在 active（terminal 已置 → tick 惰性跳过；重连对账 peer-draft 记录整段
+    // continue、classic 承接行无本地 submitted 面），账本保持 running 零上报。
+    if (terminal.status !== 'aborted' && localTaskAwaitingAcceptance(taskId)) {
+      logger.info('回合终态到达但本地任务已提交待验收——停靠等待发起方验收（不上报终态）', {
+        taskId,
+        sessionId: run.sessionId,
+        turnStatus: terminal.status,
+      });
+      return;
+    }
     active.delete(taskId);
     const localState: DelegationRecord['state'] = terminal.status === 'done' ? 'done' : 'failed';
     const reason =

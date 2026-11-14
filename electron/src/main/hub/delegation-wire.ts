@@ -47,15 +47,23 @@ export interface TaskAnswerWorkerRes {
 /** task.report 载荷——值形状与 hub 协议包 TaskReportPayload 逐字对齐。
  *  status 'pending'（1.10.0 平行模式）= 生命周期拍专用值：不改 hub 账本状态、
  *  不回填 sessionId，仅转发 progress（承载 received/arranged 拍）——hub 侧
- *  acceptReport 对终态账本静默忽略该值。 */
+ *  acceptReport 对终态账本静默忽略该值。
+ *  status 'submitted'（1.11.0，任务生命周期 v2 P2）= run 完成待验收：账本
+ *  running|waiting→submitted 迁移 + submitted_at 落账，task.submitted 定向发起
+ *  方；reason 承载 deliverable JSON（H7 通道约定：hub JSON.parse 成纯对象则作
+ *  deliverable 透传，≤REASON_MAX=512）。 */
 export interface TaskReportPayload {
-  status: 'running' | 'done' | 'failed' | 'pending';
+  status: 'running' | 'done' | 'failed' | 'pending' | 'submitted';
   /** 委派会话 id（MC1 独立委派会话——首次 running 上报建立，hub 回填账本 session_id）。 */
   sessionId?: string;
-  /** failed 附因（约定值：'declined'=目标拒派；'local_session_lost'=续传时本地会话已丢失）。 */
+  /** failed 附因（约定值：'declined'（目标拒派，§5.3）/ 'local_session_lost'（续传时会话丢失））；
+   *  submitted 时为 deliverable JSON 串（H7 通道约定，hub 侧解析透传）。 */
   reason?: string;
-  /** 进度段（running 上报可携带）：lastSeq 单调不丢（RF#5），excerpt 恒非空。 */
+  /** 进度拍（running 上报可携带）：lastSeq 单调不丢（RF#5），excerpt 恒非空。 */
   progress?: TaskReportProgress;
+  /** 执行尝试号（1.11.0，仅 submitted 上报携带）：打回后新 run 提交时必带；
+   *  缺省沿用 hub 账本行 run_no（1.10 上报形态零变化）。 */
+  runNo?: number;
 }
 
 /** 进度拍：委派会话 message_events 尾部摘要（excerpt 为截断文本）。
