@@ -32,10 +32,12 @@ import {
   forwardLifecycleEvents,
   requestHuman,
   setHumanChangedSink,
+  setRemoteInterveneSink,
   setTaskRunChangedSink,
   startRun,
   submitRun,
   type HumanChangedEvent,
+  type RemoteInterveneEvent,
   type TaskRunChangedEvent,
 } from '../../src/main/task/lifecycle-runs';
 import { AgentRunner } from '../../src/main/agent/agent-runner';
@@ -45,6 +47,7 @@ import { WarmPool } from '../../src/main/agent/warm-pool';
 function restoreSinks(): void {
   setHumanChangedSink(null);
   setTaskRunChangedSink(null);
+  setRemoteInterveneSink(null);
 }
 
 // ═══ 1) 子进程侧：forwardLifecycleEvents 接线（真实 DB） ═════════════════════
@@ -149,6 +152,44 @@ describe('1) forwardLifecycleEvents：子进程侧 sink 转发（真实 DB）', 
     await expect(submitRun(taskId, { summary: '交付' })).resolves.toBeUndefined();
     expect(listByTask(taskId).some((r) => r.kind === 'acceptance')).toBe(true);
   });
+
+  // ─── S2（2026-11-14）：remote-intervene 第三通道（worker 干预/提交桥转发） ───
+
+  it('requestHuman / submitRun → send 回调收到 remote-intervene（request_created + run_submitted）', async () => {
+    const sent: Array<{ channel: string; payload: unknown }> = [];
+    forwardLifecycleEvents((channel, payload) => sent.push({ channel, payload }));
+
+    // 两事件各用独立任务（request_human 落行后 run 挂等人体，同任务无法直接提交）
+    const askTaskId = seedAssignedTask();
+    const askRun = startRun(askTaskId, { trigger: 'initial', executionSessionId: execSessionId });
+    const row = requestHuman({
+      sessionId: execSessionId,
+      kind: 'question',
+      title: '需要确认',
+      prompt: '选 A',
+      taskId: askTaskId,
+      runId: askRun.id,
+    });
+    const submitTaskId = seedAssignedTask();
+    const submitRun1 = startRun(submitTaskId, { trigger: 'initial', executionSessionId: execSessionId });
+    await submitRun(submitTaskId, { summary: '交付完成', files: ['a.ts'] });
+
+    const remoteEvents = sent
+      .filter((e) => e.channel === 'remote-intervene')
+      .map((e) => e.payload as RemoteInterveneEvent);
+    // request_created：载荷=落库行原样（interventionId 桥消费的单源）
+    expect(remoteEvents).toContainEqual({
+      kind: 'request_created',
+      request: expect.objectContaining({ id: row.id, kind: 'question', taskId: askTaskId }),
+    });
+    // run_submitted：runNo + deliverable 原样透传（reason 序列化在主进程桥侧）
+    expect(remoteEvents).toContainEqual({
+      kind: 'run_submitted',
+      taskId: submitTaskId,
+      runNo: submitRun1.runNo,
+      deliverable: { summary: '交付完成', files: ['a.ts'], artifacts: [] },
+    });
+  });
 });
 
 // ═══ 2) 主进程侧：agent-runner messageHandler 的 lifecycle-event 分支 ════════
@@ -244,6 +285,51 @@ describe('2) agent-runner lifecycle-event 分支（主进程侧分发）', () =>
     });
 
     expect(humanEvents).toEqual([{ sessionId: 's-1', requestId: 'hr-1', kind: 'inserted' }]);
+    expect(runner.activeTaskCount()).toBe(1);
+    await runner.destroy();
+  });
+
+  it('remote-intervene 载荷 → 主进程 remoteInterveneSink 收到原样事件（S2 第三通道）', async () => {
+    const { child, emit } = mkFakeChild();
+    const warmPool = new WarmPool({ spawn: () => Promise.resolve(child) });
+    await warmPool.warm('inst1');
+    const runner = new AgentRunner({
+      agentAssignmentId: 'inst1',
+      agentUserId: 'agent-bot-x1',
+      workspaceId: 'ws1',
+      config: {} as never,
+      warmPool,
+    });
+    await runner.executeTask({
+      taskId: null,
+      executionSessionId: '!r:home',
+      body: 'x',
+      streamSessionId: 'ss-1',
+    });
+
+    const remoteEvents: RemoteInterveneEvent[] = [];
+    setRemoteInterveneSink((e) => remoteEvents.push(e));
+
+    emit({
+      type: 'lifecycle-event',
+      channel: 'remote-intervene',
+      payload: { kind: 'run_submitted', taskId: 'T-9', runNo: 2, deliverable: { summary: '交付' } },
+    });
+    emit({
+      type: 'lifecycle-event',
+      channel: 'remote-intervene',
+      payload: { kind: 'request_created', request: { id: 'hr-1', sessionId: 's-1', kind: 'question' } },
+    });
+    // 畸形载荷防御性丢弃不抛错（request 缺 id / runNo 非数字）
+    expect(() => {
+      emit({ type: 'lifecycle-event', channel: 'remote-intervene', payload: { kind: 'request_created', request: { kind: 'question' } } });
+      emit({ type: 'lifecycle-event', channel: 'remote-intervene', payload: { kind: 'run_submitted', taskId: 'T-9', runNo: 'x', deliverable: { summary: 's' } } });
+    }).not.toThrow();
+
+    expect(remoteEvents).toEqual([
+      { kind: 'run_submitted', taskId: 'T-9', runNo: 2, deliverable: { summary: '交付' } },
+      { kind: 'request_created', request: { id: 'hr-1', sessionId: 's-1', kind: 'question' } },
+    ]);
     expect(runner.activeTaskCount()).toBe(1);
     await runner.destroy();
   });

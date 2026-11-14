@@ -25,7 +25,7 @@ import {
 import { EVT, type EventEnvelope, type RequestEnvelope, type ResponseEnvelope, type RpcErrorPayload } from './protocol';
 import { MIRROR_WIRE, type MirrorApplyPayload, type MirrorApplyOutcome } from './mirror-wire';
 import { applyMirrorSnapshot } from './mirror-applier';
-import { bridgeGroupChanged } from './groups';
+import { bridgeGroupChanged, createGroupClient } from './groups';
 import type { HubResponderResult } from './client';
 import { createDelegationRunner, type AssignedTaskEvent, type DelegationRunner } from './delegation-runner';
 import { sessionWaitingProduct, wireDelegationRunnerPorts } from './delegation-ports';
@@ -44,13 +44,28 @@ import {
   type DelegationSync,
 } from './delegation-sync';
 import { listWorkspaces } from '../workspace/crud';
-import { insertTask, updateTask, getTask } from '../storage/tasks/repo';
+import { insertTask, updateTask, getTask, listTasks } from '../storage/tasks/repo';
+import { getActiveRun } from '../storage/tasks/runs-repo';
+import { acceptTask, setRemoteInterveneSink } from '../task/lifecycle-runs';
+import { setToolGateRowSink } from '../sandbox/write-blocked-emit';
+import {
+  createRemoteInterveneHandler,
+  handleInterventionAnswered,
+  handleTaskAccepted,
+  handleTaskInterventionMirror,
+  handleTaskRejected,
+  handleTaskSubmittedMirror,
+  type WorkerTerminalConsumePorts,
+} from './remote-intervene-bridge';
+import { isTerminal } from '../storage/tasks/state-machine';
+import { reconcileOnReconnect } from './reconnect-reconcile';
 import { createMirrorRegistry, type MirrorRegistryRow } from './mirror-registry';
 import { ViewServer } from './view-server';
 import { createHubViewSettingsStore, type HubViewSettings } from './view-settings';
 import { VIEW_WIRE } from './view-wire';
 import { VIEW_RPC } from './protocol';
 import { isPermissionTier } from './run-policy';
+import { backfillTrackingSessions } from './tracking-session';
 
 export interface HubStatus {
   configured: boolean;
@@ -80,6 +95,30 @@ const delegationSettingsStore = () => createHubDelegationSettingsStore(getDb());
 const viewSettingsStore = () => createHubViewSettingsStore(getDb());
 const workspaceDirStore = () => createHubWorkspaceDirStore(getDb());
 const mirrorRegistry = () => createMirrorRegistry(getDb());
+// 发起方对账用组客户端（S6 跟踪会话回填——目标节点名解析；复用 hubRequest 关联器）
+const originGroupsClient = createGroupClient((method, payload, timeoutMs) =>
+  hubRequest(method, payload, timeoutMs),
+);
+
+/**
+ * S9（A4 工作站段）镜像行 remote 段数据源：执行节点 → 组清单成员
+ * boundWorkspaceName（仅 peer 组投影携带；lf 组缺席 → null 降级仅节点名）。
+ * 镜像事件低频（干预/提交），逐事件直拉不设缓存；hub 不可达 → null 不阻断镜像。
+ */
+const mirrorWorkstationOf = async (nodeId: string): Promise<string | null> => {
+  try {
+    const { groups } = await originGroupsClient.list();
+    for (const g of groups) {
+      const m = g.members.find((x) => x.nodeId === nodeId);
+      if (m !== undefined && typeof m.boundWorkspaceName === 'string') {
+        return m.boundWorkspaceName;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
 
 /**
  * 镜像登记表查询面（IPC hub:mirrorRegistry 消费；RM-M21-7 四消费方同源：
@@ -165,6 +204,8 @@ function ensureDelegationSync(): DelegationSync {
       return ws ? { id: ws.id } : null;
     },
     selfNodeId: () => configStore().read()?.nodeId ?? null,
+    // S8 版本门 worker 侧判据（连接随 hubConfigure/Forget 重建——惰性读当前连接）
+    hubProtoVer: () => hubProtoVer(),
     now: () => Date.now(),
   });
   // 投影回写是辅助面：DB 异常不得断掉事件桥（renderer 广播与 hub 账本主链
@@ -478,6 +519,16 @@ function startClient(
   client?.stop();
   // 新连接开始 → 上个连接的快照作废（重播不得推陈旧节点）
   presenceSeed = null;
+  // S4 worker 终态消费端口（onEvent 事件面与 S7 对账阶段 1.5 共用单源——
+  // selfNodeId / settleDocked 装配两处同源，防漂移）
+  const terminalConsumePorts = (): WorkerTerminalConsumePorts => ({
+    selfNodeId: () => configStore().read()?.nodeId ?? nodeId,
+    // 停靠项只存在于已创建的 runner（handleAssigned/handleOnline 建档）；
+    // 无 runner = 无停靠，幂等 no-op
+    settleDocked: (taskId, outcome) => {
+      delegationRunner?.settleAcceptance(taskId, outcome);
+    },
+  });
   client = createHubClient({
     url: wsUrlOf(hubUrl),
     nodeName,
@@ -491,6 +542,12 @@ function startClient(
         // 重连恢复（T11）：中断任务对账续传 + 缓冲进度拍冲刷（fire-and-forget——
         // 状态回调不 await 恢复链，连接状态机不被对账阻塞）
         void ensureDelegationRunner(nodeId).handleOnline();
+        // S7 断线对账（spec §8.6 断连窗口补偿）：错过的代答/干预/提交事件经
+        // task.interventions + task.list 拉取幂等收敛（阶段 1.5 补收 worker 侧
+        // accepted/rejected——终结跨节点死锁窗口）；内部失败容忍，不阻塞重连链
+        if (client !== null) {
+          void reconcileOnReconnect({ client, consumePorts: terminalConsumePorts() });
+        }
         // 查看开关重报（T13 交接——RM2-9：hub 断线清除 consent 回默认 true，
         // 重连必须重报本地设置，否则关闭态节点重连后即恢复可查看）
         void reportViewConsent();
@@ -519,6 +576,40 @@ function startClient(
         if (typeof p.taskId === 'string') {
           ensureDelegationRunner(nodeId).handleCancelled({ taskId: p.taskId });
         }
+        return;
+      }
+      if (evt.method === EVT.taskInterventionAnswered) {
+        // worker 侧远端代答消费（P2 S3）：hub 定向→本机 worker（interventionId =
+        // 本地 human_requests.id，S2 桥约定）→ answerHuman 统一路由（三类 kind 零
+        // 特判）。订阅随连接生命周期（onEvent 只在 online 后触发）——断连窗口内
+        // 错过的代答无补偿（自然降级：请求行仍 pending，节点所有者可自答），重连
+        // 后由 S7 对账兜底。
+        handleInterventionAnswered(evt.payload);
+        return;
+      }
+      if (evt.method === EVT.taskAccepted || evt.method === EVT.taskRejected) {
+        // worker 侧验收结果消费（P2 S4）：hub 定向→本机 worker（payload.taskId =
+        // hub 委派 id，桥内经 delegation_id 反查本地承接行）→ 复用
+        // completeAcceptance / rejectTask 写路径落本地终态与返工 + 停靠出清。
+        // 断连窗口（沿 S3 口径）：onEvent 只在 online 后触发——错过的验收结果无
+        // 事件补偿（降级期任务保持 submitted，节点所有者可本地验收/打回），重连后
+        // 由 S7 对账兜底（阶段 1.5 worker 终态补收：hub done→accepted /
+        // runNo 超前 running→rejected）。
+        const consumePorts = terminalConsumePorts();
+        if (evt.method === EVT.taskAccepted) void handleTaskAccepted(evt.payload, consumePorts);
+        else void handleTaskRejected(evt.payload, consumePorts);
+        return;
+      }
+      if (evt.method === EVT.taskIntervention || evt.method === EVT.taskSubmitted) {
+        // 发起方镜像消费（P2 S5）：hub 定向→本机发起方（lf 组；peer 组不转发
+        // intervention，submitted 走账本对账）→ 镜像 human_requests 行 + run 懒建
+        // + 跟踪会话里程碑（幂等键 UNIQUE(origin_node_id, remote_id)）。断连窗口
+        // （沿 S3/S4 口径）：onEvent 只在 online 后触发——错过的事件无补偿，
+        // 重连后由 S7 对账兜底。
+        // S9（A4）：镜像行经组清单解析工作站段（失败降级 null——桥内自吞）
+        const mirrorPorts = { workstationOf: mirrorWorkstationOf };
+        if (evt.method === EVT.taskIntervention) void handleTaskInterventionMirror(evt.payload, mirrorPorts);
+        else void handleTaskSubmittedMirror(evt.payload, mirrorPorts);
         return;
       }
       // ── leader 侧委派事件桥（M2e T12）：hub 定向→本机 leader 的账本迁移与进度拍，
@@ -720,11 +811,76 @@ function normUrl(hubUrl: string): string { return hubUrl.trim().replace(/\/$/, '
 
 /** app ready 后调用：已配置且有凭证则自动连接。 */
 export async function initHub(): Promise<void> {
+  // worker 干预/提交桥装配（P2 S2）——先于任何可能触发 lifecycle 事件的执行；
+  // 幂等 flag 防重复注册。装配只在主进程跑（initHub 调用点唯一：main/index app
+  // ready），runtime 子进程虽静态可达本模块，不执行本函数——子进程侧 emit 由
+  // forwardLifecycleEvents 第三通道 process.send 转发回主进程本桥。
+  ensureRemoteInterveneBridge();
+
+  // S6 跟踪会话回填（P1 矩阵遗留项，spec 2026-11-13 §8.5）：既有 active 外派行
+  // 无执行会话 → 补建。纯本地对账（hub RPC 仅用于节点名解析，失败降级
+  // 「远端节点」）；fire-and-forget——失败不阻塞连接启动，下次 boot 重试。
+  void backfillTrackingSessions({
+    listGroups: async () => {
+      try {
+        return (await originGroupsClient.list()).groups;
+      } catch {
+        return [];
+      }
+    },
+  })
+    .then((count) => {
+      if (count > 0) logger.info('外派跟踪会话回填完成', { count });
+    })
+    .catch((err: unknown) => {
+      logger.warn('外派跟踪会话回填失败（不阻塞启动）', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+
   const cfg = configStore().read();
   if (!cfg) return;
   const token = await getDeviceToken();
   if (!token) { logger.warn('hub 已配置但 keychain 无 device token（跳过连接）'); return; }
   startClient(cfg.hubUrl, cfg.nodeName, token, cfg.nodeId);
+}
+
+// ── worker 干预/提交桥装配（P2 S2，spec 2026-11-13 §8.6）─────────────────────
+//
+// lifecycle-runs 的 RemoteInterveneEvent sink + write-blocked-emit 的 tool_gate
+// 行 sink 双注册进 hub/remote-intervene-bridge（delegation 判定 + task.intervene /
+// task.report submitted 外发 + 旧版本降级）。注入器方向与 setToolGateHandler
+// 先例一致：桥模块（hub 域）反向注册进 task/sandbox 域的 sink 容器，两域模块
+// 本体零 import。幂等 flag：initHub 每次调用只装配一次。
+
+let remoteInterveneBridgeArmed = false;
+
+function ensureRemoteInterveneBridge(): void {
+  if (remoteInterveneBridgeArmed) return;
+  remoteInterveneBridgeArmed = true;
+  const handler = createRemoteInterveneHandler({
+    clientGetter: () => client,
+    selfNodeId: () => configStore().read()?.nodeId ?? null,
+    getTask: (id) => getTask(id),
+    getActiveRun: (id) => getActiveRun(id),
+    // requestHumanFromAgent 的 activeTask 解析同口径：执行会话最新非终态任务
+    findActiveTaskByExecutionSession: (sessionId) => {
+      const rows = listTasks({ executionSessionId: sessionId })
+        .filter((t) => !isTerminal(t.status))
+        .sort((a, b) => b.createdAt - a.createdAt);
+      return rows[0] ?? null;
+    },
+    acceptTask: (id) => acceptTask(id),
+  });
+  setRemoteInterveneSink(handler);
+  // tool_gate 行（主进程双写链落行）→ 同形 request_created 事件直发桥
+  setToolGateRowSink((row) => {
+    try {
+      handler({ kind: 'request_created', request: row });
+    } catch {
+      // handler 自身 total；此处防御性兜底（sink 在授权卡推送主路径上同步调用）
+    }
+  });
 }
 
 export async function hubConfigure(input: { hubUrl: string; nodeName: string }): Promise<HubStatus> {

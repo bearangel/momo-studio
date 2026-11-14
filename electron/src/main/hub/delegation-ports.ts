@@ -11,11 +11,14 @@ import { createCollabSession } from '../im/session-ops';
 import { sendUserMessage, broadcastSessionListChanged } from '../im/session-service';
 import { getRouterService } from '../agent/router-bootstrap';
 import { getSession } from '../storage/sessions/repo';
-import { insertTask } from '../storage/tasks/repo';
+import { insertTask, updateTask } from '../storage/tasks/repo';
+import { countPendingNonAcceptanceByTask } from '../storage/tasks/human-requests-repo';
+import { startRun } from '../task/lifecycle-runs';
 import { clearSessionGrants, grantWriteDirs } from '../sandbox/write-grant';
 import { listPendingWriteBlocked } from '../sandbox/write-blocked-emit';
 import { createGroupBindingStore } from './group-binding-store';
 import { planRunPolicy, type PermissionTier } from './run-policy';
+import { findTaskByDelegationId } from './remote-intervene-bridge';
 import type { DelegationRunPorts, DelegationTail, TurnTerminal } from './delegation-runner';
 import type { HubDelegationSettings } from './delegation-settings';
 import { TASK_WIRE, type TaskReportPayload } from './delegation-wire';
@@ -245,6 +248,56 @@ export function sessionWaitingProduct(sessionId: string): { waiting: boolean; su
   }
 }
 
+// ── v2 生命周期接线产品（P2 worker-runner）───────────────────────────────────
+//
+// lifecycle-runs 经本装配进入委派链（delegation-runner 零 import——S2 端口注入
+// 纪律，fake-ports 可测性保持）。隔离面：lifecycle-runs 本就是 runtime 子进程
+// 静态图内模块（task-tools 链，sink 容器未装配时 no-op 的子进程安全设计），
+// 此处新增 import 不引入 electron 运行期依赖（runtime-child-electron-isolation
+// 锁保持绿）。taskId 形参一律是 runner 的 taskId（= delegation id），行解析复用
+// S4 的 role 感知反查单源。
+
+/**
+ * delegation id → 本地承接行回写 execution_session_id（幂等；同值零写）。
+ * request_human 按执行会话反查任务的锚点——缺它请求落会话级（task_id NULL）、
+ * S2 桥 delegation 判定失败、task.intervene 永不上行（E2E 实证根因 1）。
+ * 导出供真 DB 回归锁直测。
+ */
+export function linkExecutionSessionProduct(delegationId: string, sessionId: string): void {
+  const row = findTaskByDelegationId(delegationId, 'worker');
+  if (row === null) {
+    logger.warn('v2 接线跳过：delegation 无本地承接行', { delegationId, sessionId });
+    return;
+  }
+  if (row.executionSessionId === sessionId) return;
+  updateTask(row.id, { executionSessionId: sessionId });
+}
+
+/**
+ * 本地承接行 startRun {trigger:'initial', executionSessionId}（幂等 ensure 语义
+ * 由 lifecycle-runs 保证；in_progress 投影与 wrapWorkerStore 收敛无冲突——
+ * ensureRow 落行即 in_progress，同态跳过）。导出供真 DB 回归锁直测。
+ */
+export function startLifecycleRunProduct(delegationId: string, sessionId: string): void {
+  const row = findTaskByDelegationId(delegationId, 'worker');
+  if (row === null) {
+    logger.warn('v2 接线跳过：delegation 无本地承接行', { delegationId, sessionId });
+    return;
+  }
+  startRun(row.id, { trigger: 'initial', executionSessionId: sessionId });
+}
+
+/**
+ * 任务未决非验收人工请求计数（settleRun done 守卫数据源——等待人工的回合不
+ * 误报 done）。按 task 键计数（覆盖 run 绑定与 task 绑定两种落行形态）；
+ * 无承接行 / 无请求 → 0。导出供真 DB 回归锁直测。
+ */
+export function pendingHumanRequestsProduct(delegationId: string): number {
+  const row = findTaskByDelegationId(delegationId, 'worker');
+  if (row === null) return 0;
+  return countPendingNonAcceptanceByTask(row.id);
+}
+
 export function wireDelegationRunnerPorts(opts: WireDelegationPortsOpts): DelegationRunPorts {
   const { clientGetter, selfNodeId, settings } = opts;
   return {
@@ -368,5 +421,8 @@ export function wireDelegationRunnerPorts(opts: WireDelegationPortsOpts): Delega
       return row ? { id: row.id, status: row.status, executionSessionId: row.execution_session_id } : null;
     },
     selfNodeId,
+    linkExecutionSession: linkExecutionSessionProduct,
+    startLifecycleRun: startLifecycleRunProduct,
+    pendingHumanRequests: pendingHumanRequestsProduct,
   };
 }

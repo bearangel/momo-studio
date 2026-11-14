@@ -506,8 +506,8 @@ CREATE INDEX IF NOT EXISTS idx_delegation_interventions_delegation
 |---|---|---|---|
 | `task.intervene` | worker → hub | `{ taskId, intervention: { interventionId, runNo, kind, title, prompt, payload?, options?, deadlineAt? } }` | 创建请求；hub 持久化并定向转发发起方 |
 | `task.interventions` | 任意方 → hub | `{ taskId? }` | 重连对账：拉取未决/已答请求；缺省返回本节点作为发起方或执行方的全部相关请求 |
-| `task.accept` | origin → hub | `{ taskId, runNo }` | 验收通过 |
-| `task.reject` | origin → hub | `{ taskId, runNo, reason }` | 打回，新 run |
+| `task.accept` | origin → hub | `{ taskId }`（runNo 由 hub 账本单源——P2 实施裁定 2026-11-14：发起方无需指定，防 leader 转移后旧发起方被拦的孤儿态） | 验收通过 |
+| `task.reject` | origin → hub | `{ taskId, reason }`（同上裁定） | 打回，新 run |
 | `task.answer` | **任意授权节点** → hub | 见下 | 双向答复；hub 转发对端 |
 
 `task.answer` 载荷扩展（向后兼容）：

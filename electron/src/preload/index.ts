@@ -650,8 +650,10 @@ const api: ApiSurface = {
     // v2 两段式完成（Task 16，语义单点 lifecycle-runs）：提交验收 / 验收 / 打回 /
     // run 历史（run_no ASC）
     submit: (id, deliverable) => invoke<TaskRow>('task:submit', id, deliverable),
-    accept: (id) => invoke<TaskRow>('task:accept', id),
-    reject: (id, reason) => invoke<TaskRow>('task:reject', id, reason),
+    // P2 S6：远端提交（镜像 acceptance）验收/打回后可能附 remoteWarning（hub
+    // 通知失败人话——本地已收口不回滚，面板 toast 呈现）
+    accept: (id) => invoke<TaskRow & { remoteWarning?: string }>('task:accept', id),
+    reject: (id, reason) => invoke<TaskRow & { remoteWarning?: string }>('task:reject', id, reason),
     listRuns: (id) => invoke<TaskRunRow[]>('task:listRuns', id),
     // run 状态变化推送订阅（{ taskId, runId, status }——载荷重拉 task:listRuns /
     // task:get 即可，不携带全行）

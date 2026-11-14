@@ -37,6 +37,13 @@
 //    门槛 minor——勿硬编码）；GroupMember.protoVer? 在线成员可选携带（离线
 //    不带键，routingPrecheck nodeCaps 数据源）；team 段形状校验在 hub 侧
 //    （hub 仓 delegations.test.ts 锁死——studio 侧纯类型面，不重复运行时锁）
+// ⑨ 1.11.0 五面（task-lifecycle-v2 P2 S1 pin bump v0.7.0）：DelegationStatus
+//    +submitted 八态（v2 生命周期验收闸账本态）；TaskRecord runNo?/submittedAt?/
+//    acceptedAt? 变体锁（镜像 run 行/提交/验收时刻对账面，缺省零变化）；
+//    TASK_RPC 四新方法（intervene/accept/reject/interventions）；EVT 五新事件
+//    （intervention/interventionAnswered/submitted/accepted/rejected）；
+//    TASK_HITL_REQUIRED_MINOR=11 版本门 + TaskAnswerReq interventionId?/answer?
+//    双向结构化答复两形状（旧写授权形态零变化）
 // 版本 introspection 直读包内 package.json：单入口规则（protocol.ts）约束的是协议符号
 // import；此处是 pin 锁定断言，目的不同，不走协议面。
 import { readFileSync } from 'node:fs';
@@ -46,12 +53,17 @@ import {
   EVT,
   PROTOCOL_VERSION,
   RPC_ERROR_CODES,
+  TASK_HITL_REQUIRED_MINOR,
+  TASK_RPC,
   TEAM_DELEGATION_REQUIRED_MINOR,
   validateHubCatalog,
   validateSnapshotManifest,
+  type DelegationStatus,
   type DelegationTask,
   type GroupMember,
   type HubCatalog,
+  type InterventionRecord,
+  type TaskAnswerReq,
   type TaskRecord,
   type ViewAppendedEvent,
 } from '../../src/main/hub/protocol';
@@ -108,9 +120,9 @@ function manifestSample(resources: unknown): unknown {
   };
 }
 
-describe('hub pin v0.6.1（1.10.0 平行模式 + 单节点解散修复）', () => {
-  it('pin 生效：实装 momo-hub-protocol 版本 = 0.6.1（electron/package.json #v0.6.1）', () => {
-    expect(pkg.version).toBe('0.6.1');
+describe('hub pin v0.7.2（1.11.0 v2 HITL 生命周期底座）', () => {
+  it('pin 生效：实装 momo-hub-protocol 版本 = 0.7.2（electron/package.json #v0.7.2）', () => {
+    expect(pkg.version).toBe('0.7.2');
   });
 
   it('v0.1.5 语义目录样本过 validateHubCatalog（生产消费链同校验器）', () => {
@@ -283,9 +295,7 @@ describe('hub pin v0.6.1（1.10.0 平行模式 + 单节点解散修复）', () =
   });
 
   describe('1.10.0：DelegationTask.team?+draft? / TEAM+PEER 版本门 / GroupMember.protoVer?+绑定态（平行模式）', () => {
-    it('协议版本对齐：PROTOCOL_VERSION = 1.10.0（平行模式 + team 段 + 双版本门）', () => {
-      expect(PROTOCOL_VERSION).toBe('1.10.0');
-    });
+    // 协议版本对齐断言随 pin bump 迁移至 1.11.0 describe（每次 bump 单点所有权）
 
     it('team 在场合法（接收端 handleAssigned 多成员建会分支的消费面）', () => {
       const t: DelegationTask = {
@@ -311,6 +321,103 @@ describe('hub pin v0.6.1（1.10.0 平行模式 + 单节点解散修复）', () =
       expect(online.protoVer).toBe('1.9.0');
       const offlineLegacy: GroupMember = { nodeId: 'node-b', name: 'lab-node', online: false };
       expect('protoVer' in offlineLegacy).toBe(false);
+    });
+  });
+
+  describe('1.11.0：v2 HITL 生命周期——submitted 八态 / runNo 三时刻 / 干预族 / 双向结构化答复', () => {
+    it('协议版本对齐：PROTOCOL_VERSION = 1.11.0（v2 HITL 生命周期底座）', () => {
+      expect(PROTOCOL_VERSION).toBe('1.11.0');
+    });
+
+    it('TASK_HITL_REQUIRED_MINOR = 11（v2 版本门单源——studio 派发闸与 hub 门禁共用，勿硬编码）', () => {
+      expect(TASK_HITL_REQUIRED_MINOR).toBe(11);
+    });
+
+    it('TASK_RPC 四新方法登记（intervene / accept / reject / interventions）', () => {
+      expect(TASK_RPC.intervene).toBe('task.intervene');
+      expect(TASK_RPC.accept).toBe('task.accept');
+      expect(TASK_RPC.reject).toBe('task.reject');
+      expect(TASK_RPC.interventions).toBe('task.interventions');
+    });
+
+    it('EVT 五新事件登记（intervention / interventionAnswered / submitted / accepted / rejected）', () => {
+      expect(EVT.taskIntervention).toBe('task.intervention');
+      expect(EVT.taskInterventionAnswered).toBe('task.interventionAnswered');
+      expect(EVT.taskSubmitted).toBe('task.submitted');
+      expect(EVT.taskAccepted).toBe('task.accepted');
+      expect(EVT.taskRejected).toBe('task.rejected');
+    });
+
+    it('DelegationStatus 含 submitted（账本八态类型面——编译期锁：submitted 在联合内合法）', () => {
+      const s: DelegationStatus = 'submitted';
+      expect(s).toBe('submitted');
+    });
+
+    it('TaskRecord runNo/submittedAt/acceptedAt 在场合法（v2 对账面：镜像 run 行/提交/验收时刻）', () => {
+      const submitted: TaskRecord = {
+        taskId: 'tk-1',
+        workspaceName: 'product-dev',
+        targetNodeId: 'node-b',
+        status: 'submitted',
+        title: '重构登录模块',
+        createdAt: 1_000,
+        updatedAt: 2_000,
+        runNo: 2,
+        submittedAt: 3_000,
+      };
+      expect(submitted.runNo).toBe(2);
+      expect(submitted.submittedAt).toBe(3_000);
+      const accepted: TaskRecord = { ...submitted, status: 'done', acceptedAt: 4_000 };
+      expect(accepted.acceptedAt).toBe(4_000);
+    });
+
+    it('TaskRecord runNo/submittedAt/acceptedAt 缺省合法且不带键（1.10 投影零变化——消费方 ?? 1 兜底）', () => {
+      const r: TaskRecord = {
+        taskId: 'tk-1',
+        workspaceName: 'product-dev',
+        targetNodeId: 'node-b',
+        status: 'running',
+        title: '重构登录模块',
+        createdAt: 1_000,
+        updatedAt: 1_000,
+      };
+      expect('runNo' in r).toBe(false);
+      expect('submittedAt' in r).toBe(false);
+      expect('acceptedAt' in r).toBe(false);
+    });
+
+    it('TaskAnswerReq interventionId/answer 在场合法（双向结构化答复——intervention 行定位 + 答复体）', () => {
+      const req: TaskAnswerReq = {
+        taskId: 'tk-1',
+        decision: 'approve',
+        interventionId: 'hr-1',
+        answer: { decision: 'approve', completed: true },
+      };
+      expect(req.interventionId).toBe('hr-1');
+      expect(req.answer?.decision).toBe('approve');
+    });
+
+    it('TaskAnswerReq interventionId/answer 缺省合法且不带键（1.10 写授权代答形态零变化）', () => {
+      const req: TaskAnswerReq = { taskId: 'tk-1', decision: 'deny' };
+      expect('interventionId' in req).toBe(false);
+      expect('answer' in req).toBe(false);
+    });
+
+    it('InterventionRecord 族类型面在场合法（worker 人工请求镜像——studio 侧纯类型消费，运行时锁在 hub）', () => {
+      const rec: InterventionRecord = {
+        interventionId: 'hr-1',
+        runNo: 1,
+        kind: 'tool_gate',
+        title: '批准写入',
+        prompt: 'agent 请求写入 src/login.ts',
+        status: 'answered',
+        answer: { decision: 'approve' },
+        answeredBy: 'node-leader',
+        answeredAt: 5_000,
+        createdAt: 4_000,
+      };
+      expect(rec.status).toBe('answered');
+      expect(rec.answer?.decision).toBe('approve');
     });
   });
 });

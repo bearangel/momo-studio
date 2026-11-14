@@ -12,8 +12,12 @@
 //   - acceptance → ipc.task.accept / ipc.task.reject（主进程 answerHuman 对
 //     acceptance 人话拒——验收不走 human.answer，Task 16 契约）
 // 挂载点（MiddlePanel）：任务执行会话与普通会话都挂；只读会话（委派跟踪，
-// session.readOnly T17）也挂——跟踪会话要能操作远端请求（P1 只有本地任务
-// 请求，P2 扩展远端代答）。
+// session.readOnly T17）也挂——跟踪会话要能操作远端请求。
+//
+// P2 S6 镜像行（originNodeId 非空——远端节点落的行）：远端来源徽标 + 代答
+// 提示行（CONTRACT 2026-11-14-tracking #1–#3）；peer 镜像行（peerMirror）
+// → 中性卡无操作钮（#4/#5——发起方无代答入口，主进程 human:answer 兜底拒）。
+// 绑定视觉合同：.omo/previews/2026-11-14-task-lifecycle-p2-tracking.html。
 import { useEffect, useMemo, useState } from 'react';
 import {
   Check,
@@ -23,7 +27,10 @@ import {
   CircleHelp,
   ClipboardCheck,
   Clock,
+  CornerDownRight,
   Hand,
+  Hourglass,
+  Network,
   ShieldCheck,
   type LucideIcon,
 } from 'lucide-react';
@@ -262,6 +269,75 @@ function RemainPill({ minutes }: { minutes: number }) {
   );
 }
 
+// ── 镜像行（S6 远端来源判定 + 文案源）───────────────────────────────────────
+
+/** 镜像行判定：origin_node_id 非空（S5 发起方镜像消费落的行；渲染层判空区分本地/镜像） */
+function isRemoteRow(row: HumanRequestRow): boolean {
+  return row.originNodeId !== null;
+}
+
+/** 远端节点名（presence 名缺失 → 「远端节点」降级） */
+function remoteNodeLabel(row: HumanRequestRow): string {
+  return row.originNodeName ?? '远端节点';
+}
+
+/**
+ * 镜像行工作站段（S6 Important-1 清偿，S9）：S5 镜像落库时经组清单解析的
+ * boundWorkspaceName 存于 payload_json `remote.workstation` 段——「来自 {节点} ·
+ * {工作站}」徽标数据源。缺席/异形 → null（降级仅节点名，既有行为）。
+ */
+function remoteWorkstation(row: HumanRequestRow): string | null {
+  const parsed = parseJson(row.payloadJson);
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const ws = (parsed as { remote?: { workstation?: unknown } }).remote?.workstation;
+  return typeof ws === 'string' && ws !== '' ? ws : null;
+}
+
+/** 远端来源徽标（CONTRACT #1/#2）：accent tone + Network 11px；卡头标题后同位；
+ *  工作站段在场时「来自 {节点名} · {工作站}」，缺席降级仅节点名 */
+function RemoteOriginBadge({ row }: { row: HumanRequestRow }) {
+  const workstation = remoteWorkstation(row);
+  return (
+    <Badge tone="accent">
+      <Network size={11} strokeWidth={1.75} aria-hidden />
+      来自 {remoteNodeLabel(row)}
+      {workstation !== null ? ` · ${workstation}` : ''}
+    </Badge>
+  );
+}
+
+/** 代答提示行（CONTRACT #3，仅远端干预卡卡体首行）：CornerDownRight + 中性辅字 */
+function RemoteAnswerHint({ row }: { row: HumanRequestRow }) {
+  return (
+    <div className="flex items-center gap-1 text-[10.5px] text-tertiary">
+      <CornerDownRight size={11} strokeWidth={1.75} aria-hidden className="shrink-0" />
+      代答后 {remoteNodeLabel(row)} 原地继续
+    </div>
+  );
+}
+
+/**
+ * peer 平行组中性卡（CONTRACT #4/#5，同位替换面板槽位）：发起方对平行组镜像
+ * 干预行无代答权（UI 无入口 + 主进程 human:answer 拒绝 + hub forbidden 三层
+ * 防线）——灰调信息卡，无任何操作钮。
+ */
+function PeerNeutralCard({ row }: { row: HumanRequestRow }) {
+  return (
+    <div
+      data-testid={`human-peer-neutral-${row.id}`}
+      className="m-3 flex flex-col gap-1.5 rounded-lg border border-subtle bg-surface-1 px-3 py-2.5"
+    >
+      <div className="flex items-center gap-2">
+        <Hourglass size={16} strokeWidth={1.75} aria-hidden className="shrink-0 text-tertiary" />
+        <span className="text-xs font-medium text-secondary">执行方等待人工处理 · 无需你操作</span>
+      </div>
+      <div className="pl-[24px] text-[11px] leading-4 text-tertiary">
+        平行组不转发人工请求，请在执行节点处理
+      </div>
+    </div>
+  );
+}
+
 // ── 卡头（#2）───────────────────────────────────────────────────────────────
 
 function CardHead({ row, now }: { row: HumanRequestRow; now: number }) {
@@ -273,6 +349,7 @@ function CardHead({ row, now }: { row: HumanRequestRow; now: number }) {
     <div className="flex h-9 items-center gap-[7px] border-b border-subtle bg-surface-1 px-2.5">
       <Icon size={16} strokeWidth={1.75} aria-hidden className={meta.iconClass} />
       <span className="text-[12.5px] font-semibold text-primary">{meta.title}</span>
+      {isRemoteRow(row) && <RemoteOriginBadge row={row} />}
       <span className="ml-auto flex items-center gap-[5px] whitespace-nowrap text-[11px] text-tertiary">
         {warn && remain !== null && <RemainPill minutes={remain} />}
         {warn ? meta.label : `${meta.label} · 等待 ${elapsedMinutes(row, now)} 分钟`}
@@ -310,6 +387,7 @@ function ToolGateBody({ row, now, onError }: {
 
   return (
     <div className="flex flex-col gap-2 px-3 py-2.5">
+      {isRemoteRow(row) && <RemoteAnswerHint row={row} />}
       {/* 描述行（未决态）/ 超时策略行（预警态，预览 1B 互换） */}
       <div className="text-[11px] leading-4 text-tertiary">
         {warn
@@ -378,6 +456,7 @@ function QuestionBody({ row, onError }: {
 
   return (
     <div className="flex flex-col gap-2 px-3 py-2.5">
+      {isRemoteRow(row) && <RemoteAnswerHint row={row} />}
       <div className="text-xs leading-[1.7] text-primary">{row.prompt}</div>
       {options?.map((opt) => (
         <button
@@ -448,6 +527,7 @@ function ManualActionBody({ row, now, onError }: {
 
   return (
     <div className="flex flex-col gap-2 px-3 py-2.5">
+      {isRemoteRow(row) && <RemoteAnswerHint row={row} />}
       <div className="text-xs leading-[1.7] text-primary">
         {warn ? TIMEOUT_POLICY_HINT[row.timeoutPolicy] : row.prompt}
       </div>
@@ -509,9 +589,11 @@ function ManualActionBody({ row, now, onError }: {
   );
 }
 
-function AcceptanceBody({ row, onError }: {
+function AcceptanceBody({ row, onError, onRemoteWarning }: {
   row: HumanRequestRow;
   onError: (msg: string) => void;
+  /** S6：远端通知失败人话上抛面板级警示条（卡片随重拉消失，警示需存活） */
+  onRemoteWarning: (msg: string | null) => void;
 }) {
   const loadPending = useHumanStore((s) => s.loadPending);
   const payload = parseAcceptance(row);
@@ -520,11 +602,20 @@ function AcceptanceBody({ row, onError }: {
   const canOperate = row.taskId !== null;
 
   /** 验收 / 打回都走 task 通道（Task 16 契约：acceptance 不走 human.answer，
-   *  主进程 answerAcceptance 落 answered + human:changed 推送刷新面板） */
-  const operate = (fn: () => Promise<unknown>): void => {
+   *  主进程 answerAcceptance 落 answered + human:changed 推送刷新面板）。
+   *  S6：远端提交的验收经 hub 通知执行节点——通知失败本地已收口不回滚，
+   *  remoteWarning 人话经面板警示条呈现（卡片本身会随重拉消失） */
+  const operate = (fn: () => Promise<{ remoteWarning?: string } | void>): void => {
     setBusy(true);
     fn()
-      .then(() => loadPending(row.sessionId))
+      .then((res) => {
+        const warning =
+          res && typeof res === 'object' && typeof res.remoteWarning === 'string'
+            ? res.remoteWarning
+            : null;
+        onRemoteWarning(warning);
+        return loadPending(row.sessionId);
+      })
       .catch((err: unknown) => {
         onError(err instanceof Error ? err.message : String(err));
       })
@@ -576,7 +667,9 @@ function AcceptanceBody({ row, onError }: {
         </Button>
         <span className="flex-1" />
         <span className="flex items-center gap-1 text-[10.5px] text-tertiary">
-          打回将带理由生成新 run，任务回到 assigned
+          {isRemoteRow(row)
+            ? `打回将带理由生成新 run，经 hub 送回 ${remoteNodeLabel(row)} 重开执行`
+            : '打回将带理由生成新 run，任务回到 assigned'}
         </span>
       </div>
     </div>
@@ -585,9 +678,24 @@ function AcceptanceBody({ row, onError }: {
 
 // ── 单卡（头 + 体；超时预警态边框 warning，#8）──────────────────────────────
 
-function KindCard({ row, now }: { row: HumanRequestRow; now: number }) {
+function KindCard({ row, now, onRemoteWarning }: {
+  row: HumanRequestRow;
+  now: number;
+  onRemoteWarning: (msg: string | null) => void;
+}) {
   const [error, setError] = useState<string | null>(null);
   const onError = (msg: string): void => setError(msg);
+
+  // CONTRACT #4/#5：peer 镜像干预行 → 中性卡同位替换（无操作钮；acceptance
+  // 不替换——平行组发起方保留验收权）
+  if (row.peerMirror === true && row.kind !== 'acceptance') {
+    return (
+      <div data-testid={`human-card-${row.id}`} className="bg-canvas">
+        <CardHead row={row} now={now} />
+        <PeerNeutralCard row={row} />
+      </div>
+    );
+  }
 
   return (
     <div data-testid={`human-card-${row.id}`} className="bg-canvas">
@@ -595,7 +703,9 @@ function KindCard({ row, now }: { row: HumanRequestRow; now: number }) {
       {row.kind === 'tool_gate' && <ToolGateBody row={row} now={now} onError={onError} />}
       {row.kind === 'question' && <QuestionBody row={row} onError={onError} />}
       {row.kind === 'manual_action' && <ManualActionBody row={row} now={now} onError={onError} />}
-      {row.kind === 'acceptance' && <AcceptanceBody row={row} onError={onError} />}
+      {row.kind === 'acceptance' && (
+        <AcceptanceBody row={row} onError={onError} onRemoteWarning={onRemoteWarning} />
+      )}
       <ErrorLine error={error} />
     </div>
   );
@@ -617,7 +727,12 @@ function CollapsedRow({ row, now, onExpand }: {
       className="flex h-9 w-full items-center gap-2 border-t border-subtle bg-surface-1 px-2.5 text-xs text-secondary hover:bg-surface-2"
     >
       <Badge tone={meta.badgeTone}>{meta.label}</Badge>
-      <span className="min-w-0 flex-1 truncate text-left">{row.title}</span>
+      <span className="min-w-0 flex-1 truncate text-left">
+        {row.title}
+        {isRemoteRow(row) && (
+          <span className="text-tertiary">（来自 {remoteNodeLabel(row)}）</span>
+        )}
+      </span>
       <span className="whitespace-nowrap text-[11px] text-tertiary">
         等待 {elapsedMinutes(row, now)} 分钟
       </span>
@@ -656,6 +771,8 @@ export function HumanRequestPanel({ sessionId }: { sessionId: string }) {
   const [now, setNow] = useState(() => Date.now());
   // 展开卡 id：默认首卡（预览 1C）；答完/刷新后 expandedId 不在列表时回落首卡
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // S6 远端验收/打回通知失败人话（面板级——卡片随重拉消失，警示条跨重拉存活）
+  const [remoteWarning, setRemoteWarning] = useState<string | null>(null);
 
   // 订阅只装一次（幂等）；会话切换重拉 pending
   useEffect(() => {
@@ -678,7 +795,9 @@ export function HumanRequestPanel({ sessionId }: { sessionId: string }) {
     return found ?? pending[0] ?? null;
   }, [pending, expandedId]);
 
-  if (pending.length === 0) return null;
+  // 空态仍可能挂着远端验收警示（S6 remoteWarning——acceptance 卡随重拉消失，
+  // 警示条需存活到下一次成功操作清除）
+  if (pending.length === 0 && remoteWarning === null) return null;
   const rest = pending.filter((r) => r.id !== expanded?.id);
 
   return (
@@ -686,20 +805,32 @@ export function HumanRequestPanel({ sessionId }: { sessionId: string }) {
       data-testid="human-request-panel"
       className="border-t border-subtle bg-surface-1 px-3 pt-3"
     >
-      <div
-        className={cn(
-          'overflow-hidden rounded-lg border bg-canvas shadow-[0_4px_16px_rgba(0,0,0,0.10)]',
-          expanded !== null && isWarn(expanded, now) ? 'border-status-warning' : 'border-strong',
-        )}
-      >
-        {pending.length >= 2 && <StackHead rows={pending} now={now} />}
-        {/* key=requestId：换卡强制重挂载——同 kind 卡复用实例会让 body 内
-            useState（选中/草稿/理由/勾选/error）跨卡串值 */}
-        {expanded !== null && <KindCard key={expanded.id} row={expanded} now={now} />}
-        {rest.map((r) => (
-          <CollapsedRow key={r.id} row={r} now={now} onExpand={() => setExpandedId(r.id)} />
-        ))}
-      </div>
+      {remoteWarning !== null && (
+        <div
+          data-testid="human-remote-warning"
+          className="mb-2 flex items-start gap-1.5 rounded-md bg-status-error-tint px-2.5 py-2 text-[11px] leading-4 text-status-error"
+        >
+          {remoteWarning}
+        </div>
+      )}
+      {pending.length > 0 && (
+        <div
+          className={cn(
+            'overflow-hidden rounded-lg border bg-canvas shadow-[0_4px_16px_rgba(0,0,0,0.10)]',
+            expanded !== null && isWarn(expanded, now) ? 'border-status-warning' : 'border-strong',
+          )}
+        >
+          {pending.length >= 2 && <StackHead rows={pending} now={now} />}
+          {/* key=requestId：换卡强制重挂载——同 kind 卡复用实例会让 body 内
+              useState（选中/草稿/理由/勾选/error）跨卡串值 */}
+          {expanded !== null && (
+            <KindCard key={expanded.id} row={expanded} now={now} onRemoteWarning={setRemoteWarning} />
+          )}
+          {rest.map((r) => (
+            <CollapsedRow key={r.id} row={r} now={now} onExpand={() => setExpandedId(r.id)} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

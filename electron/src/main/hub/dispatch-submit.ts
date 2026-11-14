@@ -19,7 +19,11 @@ import { isTaskRouting, type TaskRouting } from './task-routing';
 import type { PermissionTier } from './run-policy';
 import { blockedDispatchError } from '../task/dependency-gate';
 import type { TaskRow } from '../storage/tasks/repo';
-import { PEER_DELEGATION_REQUIRED_MINOR, TEAM_DELEGATION_REQUIRED_MINOR } from './protocol';
+import {
+  PEER_DELEGATION_REQUIRED_MINOR,
+  TASK_HITL_REQUIRED_MINOR,
+  TEAM_DELEGATION_REQUIRED_MINOR,
+} from './protocol';
 import { logger } from '../logger';
 
 /**
@@ -184,16 +188,25 @@ export interface DispatchSubmitPorts {
   deriveBlockedBy(taskId: string): string[];
   /**
    * 委派成功后回写 tasks 行 delegation_id + 已解析目标 routing（D5：group
-   *  变体带上调度解析的 targetNodeId——外派卡节点徽标持久源）+ P1 降级守卫行戳
-   *  （spec §14：外派行 delegation_role='out' 且强制 auto_accept=1——提交即验收，
-   *  等价旧「完成」单方语义；P2 移除该参数及调用方传戳）
+   *  变体带上调度解析的 targetNodeId——外派卡节点徽标持久源）+ delegation_role
+   *  行戳。S8 版本门（spec §8.5）：delegation_role='out' 恒戳（判向单源）；auto_accept
+   *  仅 <1.11 象限强制（P1 降级守卫——提交即验收的旧单方语义），双端 ≥1.11
+   *  两段式象限不带键（验收模式用户可配）
    */
   updateDelegationLink(
     taskId: string,
     delegationId: string,
     routing: TaskRouting,
-    p1Stamp: { delegationRole: 'out'; autoAccept: true },
+    delegationStamp: { delegationRole: 'out'; autoAccept?: true },
   ): void;
+  /**
+   * P2 S6 跟踪会话创建（可选——生产接线 dispatch-ports；tests 注入 fake）：
+   * 委派成功后为外派行建跟踪会话（sessions kind='task_execution' 无成员 +
+   * execution_session_id 指向）。幂等在实现单源（hub/tracking-session.ts——
+   * 已有指向即复用）；异常由 submitRoutedTask 兜底吞掉（委派已成功，会话属
+   * 辅助面），不翻转 dispatched 结果。
+   */
+  ensureTrackingSession?(input: { taskId: string; targetNodeId: string | null }): Promise<unknown>;
 }
 
 /** 活跃委派口径：pending|running|interrupted（未终态且未取消——interrupted 会重连续跑，占负载） */
@@ -221,6 +234,55 @@ export function supportsTeamDelegation(protoVer: string | undefined): boolean {
 export function supportsPeerDelegation(protoVer: string | undefined): boolean {
   const minor = protoVerMinor(protoVer);
   return minor !== null && minor >= PEER_DELEGATION_REQUIRED_MINOR;
+}
+
+/**
+ * S8 版本门·发起方象限（spec 2026-11-13 §8.5 四象限）：hub 协商版本与目标
+ * worker 协议版本（group.list 成员 hello 上报）双方 minor ≥ TASK_HITL_REQUIRED_MINOR
+ * 时启用跨节点两段式（submitted→发起方验收）；任一侧 <1.11 或未知（null/
+ * undefined/异形）→ P1 降级（dispatch 强制 auto_accept + done 单方完成）。
+ * 缺省视为旧与 team/draft 门同款保守取向——不静默启用半套语义。
+ */
+export function twoPhaseDelegationActive(
+  hubProtoVer: string | null,
+  workerProtoVer: string | undefined,
+): boolean {
+  const hubMinor = protoVerMinor(hubProtoVer ?? undefined);
+  const workerMinor = protoVerMinor(workerProtoVer);
+  return (
+    hubMinor !== null && hubMinor >= TASK_HITL_REQUIRED_MINOR &&
+    workerMinor !== null && workerMinor >= TASK_HITL_REQUIRED_MINOR
+  );
+}
+
+/**
+ * S8 版本门·worker 侧象限（spec §8.5 裁定）：worker 只知 hub 版本（hello 回执），
+ * 发起方版本不可知也无需知——发起方旧则 hub 不会把 intervention 事件转发过来
+ * （S2 桥的 intervene 在 hub 侧按发起方版本降级中性），故 worker 以 hub 版本
+ * 单边判定两段式（承接行不强制 auto_accept）；hub <1.11/未知 → P1 降级原样。
+ */
+export function workerTwoPhaseActive(hubProtoVer: string | null): boolean {
+  const minor = protoVerMinor(hubProtoVer ?? undefined);
+  return minor !== null && minor >= TASK_HITL_REQUIRED_MINOR;
+}
+
+/**
+ * 组内目标节点的协议版本（group.list 成员 hello 上报——M5.3 派发闸同源数据）。
+ * S8 版本门 worker 侧判据单源；组清单不可达 / 节点缺席（已离线）→ undefined
+ * （视为未知 → P1 降级，保守）。
+ */
+export async function memberProtoVerOf(
+  groupId: string,
+  nodeId: string,
+  ports: Pick<DispatchSubmitPorts, 'listGroups'>,
+): Promise<string | undefined> {
+  try {
+    const groups = await ports.listGroups();
+    return groups.find((g) => g.groupId === groupId)?.members.find((m) => m.nodeId === nodeId)
+      ?.protoVer;
+  } catch {
+    return undefined;
+  }
 }
 
 /** 版本门人话（文案口径对齐 hub node_unsupported：含节点名与对方版本） */
@@ -348,14 +410,29 @@ export async function submitRoutedTask(
             },
     });
     // D5：已解析目标随 delegation_id 一并回写行（group 变体补 targetNodeId；
-    // node 变体本就携带——幂等同值）；P1 降级守卫（spec §14）行戳随同一端口
-    // 落库——委派成功即 out + auto_accept=1（P2 移除）
+    // node 变体本就携带——幂等同值）。S8 版本门（spec §8.5 四象限）：双端
+    // protoVer ≥1.11 → 两段式行戳（out，不设 auto_accept——submitted→发起方
+    // 验收，验收模式回到用户可配）；任一侧 <1.11/未知 → P1 降级守卫原样
+    // （out + 强制 auto_accept=1，提交即验收的旧单方语义）
     const resolvedRouting: TaskRouting =
       input.routing.mode === 'group' ? { ...input.routing, targetNodeId } : input.routing;
-    ports.updateDelegationLink(task.id, delegationId, resolvedRouting, {
-      delegationRole: 'out',
-      autoAccept: true,
-    });
+    const workerProtoVer = await memberProtoVerOf(input.routing.groupId, targetNodeId, ports);
+    const delegationStamp: { delegationRole: 'out'; autoAccept?: true } =
+      twoPhaseDelegationActive(ports.hubProtoVer(), workerProtoVer)
+        ? { delegationRole: 'out' }
+        : { delegationRole: 'out', autoAccept: true };
+    ports.updateDelegationLink(task.id, delegationId, resolvedRouting, delegationStamp);
+    // S6 跟踪会话：委派成功即建（幂等在实现单源）。会话属辅助面——创建失败
+    // 不翻转 dispatched（warn 留痕，boot 回填兜底）
+    try {
+      await ports.ensureTrackingSession?.({ taskId: task.id, targetNodeId });
+    } catch (err) {
+      logger.warn('跟踪会话创建失败（委派已成功，boot 回填兜底）', {
+        taskId: task.id,
+        targetNodeId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     return { task: { ...task, delegationId }, dispatched: true, nodeId: targetNodeId };
   } catch (err) {
     // 瞬断（node_offline / 网络抖动）：行保留待处理，不向上抛——弹窗提交不该

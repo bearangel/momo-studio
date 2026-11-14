@@ -251,13 +251,17 @@ export function __resetDelegationBatchesForTest(): void {
   disposeAllBatches();
 }
 
-/** 状态七态 → 展示元数据（label / Badge tone / 12px 图标名）——组件层消费 */
-export const DELEGATION_STATUS_META: Record<HubDelegationStatus, { label: string; tone: 'warning' | 'accent' | 'success' | 'error' | 'neutral' }> = {
+/** 状态八态 → 展示元数据（label / Badge tone——CONTRACT 2026-11-14-tracking #16
+ *  定值：running=violet、waiting=neutral、submitted=accent）——组件层消费 */
+export const DELEGATION_STATUS_META: Record<HubDelegationStatus, { label: string; tone: 'warning' | 'accent' | 'success' | 'error' | 'neutral' | 'violet' }> = {
   pending: { label: '待执行', tone: 'warning' },
-  running: { label: '执行中', tone: 'accent' },
-  // M3.1 七态：waiting=running 中等待用户确认的中间态（等待角标仍由 progress
-  // waiting 标志驱动——本条只是 task.list 对账到 waiting 时的展示兜底）
-  waiting: { label: '等待节点确认', tone: 'warning' },
+  running: { label: '执行中', tone: 'violet' },
+  // S9 八态收口：waiting 账本态中性「执行方处理中」——常态由 lf 等待角标（摘要
+  // 信号驱动，M3.1）覆盖，本条是对账滞后/kv 缺失时的兜底呈现；peer 平行组发起
+  // 方视角恒走本条（无代答权，CONTRACT #4/#5）
+  waiting: { label: '执行方处理中', tone: 'neutral' },
+  // 1.11.0 v2 生命周期待验收态（S9 收口：accent + ClipboardCheck 图标，卡片层）
+  submitted: { label: '待验收', tone: 'accent' },
   done: { label: '已完成', tone: 'success' },
   failed: { label: '失败', tone: 'error' },
   interrupted: { label: '已中断', tone: 'warning' },

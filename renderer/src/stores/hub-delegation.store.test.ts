@@ -8,7 +8,7 @@
 // 全组聚合现状）+ 组切换重拉重入护栏（旧过滤应答不覆盖新结果）+ 组名映射缓存
 // （group.list 投影 / group.changed 推送刷新 / 失败尽力而为不落 error）。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { __resetDelegationBatchesForTest, humanizeDelegationReason } from './hub-delegation.store';
+import { __resetDelegationBatchesForTest, DELEGATION_STATUS_META, humanizeDelegationReason } from './hub-delegation.store';
 import type {
   HubTaskProgressEvent,
   HubTaskRecord,
@@ -325,5 +325,23 @@ describe('failed reason 人话化', () => {
     });
     expect(humanizeDelegationReason('local_session_lost').headline).toContain('会话已丢失');
     expect(humanizeDelegationReason('执行失败:模型供应商连接失败').body).toBe('执行失败:模型供应商连接失败');
+  });
+});
+
+// ── S9 八态展示元数据定值锁（CONTRACT 2026-11-14-tracking #16）────────────────
+
+describe('DELEGATION_STATUS_META — 八态定值锁（S9）', () => {
+  it('八态全集：running=violet / waiting=neutral 执行方处理中 / submitted=accent 待验收（B2 Minor 同步）', () => {
+    expect(Object.keys(DELEGATION_STATUS_META).sort()).toEqual(
+      ['cancelled', 'done', 'failed', 'interrupted', 'pending', 'running', 'submitted', 'waiting'],
+    );
+    expect(DELEGATION_STATUS_META.running).toEqual({ label: '执行中', tone: 'violet' });
+    expect(DELEGATION_STATUS_META.waiting).toEqual({ label: '执行方处理中', tone: 'neutral' });
+    expect(DELEGATION_STATUS_META.submitted).toEqual({ label: '待验收', tone: 'accent' });
+    expect(DELEGATION_STATUS_META.pending).toEqual({ label: '待执行', tone: 'warning' });
+    expect(DELEGATION_STATUS_META.done).toEqual({ label: '已完成', tone: 'success' });
+    expect(DELEGATION_STATUS_META.failed).toEqual({ label: '失败', tone: 'error' });
+    expect(DELEGATION_STATUS_META.cancelled).toEqual({ label: '已取消', tone: 'neutral' });
+    expect(DELEGATION_STATUS_META.interrupted).toEqual({ label: '已中断', tone: 'warning' });
   });
 });

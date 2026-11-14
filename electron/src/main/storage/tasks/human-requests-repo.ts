@@ -189,6 +189,19 @@ export function getHumanRequest(id: string): HumanRequestRow | null {
   return row ? rowToCamel(row) : null;
 }
 
+/**
+ * 镜像幂等查重（UNIQUE(origin_node_id, remote_id) 的读侧单点，P2 S5）：
+ * 发起方镜像消费（task.intervention / task.submitted）写行前判定——行已存在
+ * 即迟到重放，跳过镜像与里程碑。两参数必须均非空（SQLite UNIQUE 对 NULL 不
+ * 生效，双 NULL 不幂等——调用方保证，见 S5 origin_node_id 取值路径裁定）。
+ */
+export function findRemoteMirrorRequest(originNodeId: string, remoteId: string): HumanRequestRow | null {
+  const row = getDb()
+    .prepare('SELECT * FROM human_requests WHERE origin_node_id = ? AND remote_id = ?')
+    .get(originNodeId, remoteId) as HumanRequestDbRow | undefined;
+  return row ? rowToCamel(row) : null;
+}
+
 /** 会话内 pending 请求（按 created_at ASC——面板按请求先后展示） */
 export function listPendingBySession(sessionId: string): HumanRequestRow[] {
   const rows = getDb()
@@ -255,6 +268,21 @@ export function countPendingNonAcceptance(runId: string): number {
        WHERE run_id = ? AND status = 'pending' AND kind != 'acceptance'`,
     )
     .get(runId) as { n: number };
+  return row.n;
+}
+
+/**
+ * 任务下非验收 pending 计数（P2 worker-runner settleRun done 守卫）：按 task 键
+ * 覆盖 run 绑定与 task 绑定两种落行形态（requestHumanFromAgent 的 runId 绑定
+ * 以 run.executionSessionId 匹配为前提——行缺失形态下请求只有 task_id）。
+ */
+export function countPendingNonAcceptanceByTask(taskId: string): number {
+  const row = getDb()
+    .prepare(
+      `SELECT COUNT(*) AS n FROM human_requests
+       WHERE task_id = ? AND status = 'pending' AND kind != 'acceptance'`,
+    )
+    .get(taskId) as { n: number };
   return row.n;
 }
 

@@ -163,16 +163,19 @@ function fakeStore(records: DelegationRecord[] = []): HubDelegationStore {
   };
 }
 
-// ── Part A：leader 侧七态映射矩阵 + 粘滞 + 进度摘要 ─────────────────────────
+// ── Part A：leader 侧八态映射矩阵 + 粘滞 + 进度摘要 ─────────────────────────
 
-describe('delegation-sync — leader 侧状态回写（七态映射矩阵）', () => {
-  it('A-1. 七态映射矩阵：映射表值域与看板状态枚举对齐（文档锁；M3.1 增 waiting）', () => {
+describe('delegation-sync — leader 侧状态回写（八态映射矩阵）', () => {
+  it('A-1. 八态映射矩阵：映射表值域与看板状态枚举对齐（文档锁；M3.1 增 waiting，1.11.0 增 submitted）', () => {
     expect(DELEGATION_STATUS_TO_TASK).toEqual({
       pending: 'pending',
       running: 'in_progress',
       // M3.1 七态：waiting=running 中等待用户确认的中间态——本地行维持进行中，
       // 等待角标由 progress kv waiting 标志驱动（task.list 对账不造看板新状态）
       waiting: 'in_progress',
+      // 1.11.0 v2 生命周期：submitted=run 完成待验收中间态——同形映射本地行
+      // submitted（验收闸打回/通过由 v2 验收链驱动，S9 收口）
+      submitted: 'submitted',
       done: 'completed',
       failed: 'failed',
       cancelled: 'cancelled',
@@ -730,9 +733,10 @@ describe('createDelegationProgressStore — answered 保守解析（M3.1）', ()
 
 // ── 类型 sanity：TaskStatus 值域引用（防映射表漂移到不存在状态）──────────────
 
-it('映射表值域 ∈ 看板九态', () => {
+it('映射表值域 ∈ 看板十一态（v2 生命周期 11 态全集——state-machine.ts 同源）', () => {
   const valid: ReadonlySet<TaskStatus> = new Set([
     'draft', 'pending', 'assigned', 'session_queued', 'in_progress',
+    'waiting_human', 'submitted',
     'paused', 'completed', 'failed', 'cancelled',
   ]);
   for (const s of Object.values(DELEGATION_STATUS_TO_TASK)) expect(valid.has(s)).toBe(true);

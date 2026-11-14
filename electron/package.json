@@ -1,7 +1,7 @@
 {
   "name": "momo-studio-electron",
   "private": true,
-  "version": "2.1.0-alpha.68",
+  "version": "2.1.0-alpha.69",
   "description": "Momo Studio — 个人桌面端多 agent 协作平台",
   "author": "Momo Studio",
   "license": "AGPL-3.0-only",
@@ -105,7 +105,7 @@
     "js-yaml": "^5.2.2",
     "keytar": "^7.9.0",
     "mammoth": "^1.12.3",
-    "momo-hub-protocol": "github:bearangel/momo-hub#v0.6.1",
+    "momo-hub-protocol": "github:bearangel/momo-hub#v0.7.2",
     "pdfjs-dist": "^3.11.174",
     "simple-git": "^3.36.0",
     "turndown": "7",

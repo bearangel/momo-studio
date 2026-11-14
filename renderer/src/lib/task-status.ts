@@ -49,6 +49,11 @@ export interface TaskStatusStyle {
   className: string;
 }
 
+/** 已知任务状态全集（十一态——STATUS_LABEL 键集快照）。展示侧白名单判定单源：
+ *  值域与 TaskStatus 同源派生，新增状态只改上表，消费方（RemoteViewPane 徽标
+ *  兜底等）零漂移。 */
+export const TASK_STATUS_KEYS: ReadonlySet<string> = new Set(Object.keys(STATUS_LABEL));
+
 export function taskStatusStyle(status: TaskStatusKey): TaskStatusStyle {
   const tone = STATUS_TONE[status];
   return {

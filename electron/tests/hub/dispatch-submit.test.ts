@@ -117,6 +117,7 @@ function makePorts(overrides: PortOverrides = {}) {
     ),
     deriveBlockedBy: vi.fn().mockImplementation((taskId: string) => overrides.blockedBy?.[taskId] ?? []),
     updateDelegationLink: vi.fn(),
+    ensureTrackingSession: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -705,11 +706,18 @@ describe('submitRoutedTask — M5.3 团队派发', () => {
     expect(result.nodeId).toBe('node-a'); // 无负载差异 → 首候选
   });
 
-  it('hub 闸只对团队生效：单 agent 路径在 1.8.0/无协商下零变化（不消费 hubProtoVer）', async () => {
+  it('hub 闸只对团队拦截：单 agent 路径在 1.8.0/无协商下照常派发（hubProtoVer 仅用于 S8 版本门行戳判定）', async () => {
     const ports = makePorts({ groups: protoGroup(), registry: protoRegistry(), hubProtoVer: '1.8.0' });
     const result = await submitRoutedTask(baseInput({ mode: 'node', groupId: 'g1', targetNodeId: 'node-b' }), ports);
     expect(result.dispatched).toBe(true);
-    expect(ports.hubProtoVer).not.toHaveBeenCalled();
+    // S8 版本门：行戳象限判定消费 hub 协商版本（1.8.0 <1.11 → P1 强制 auto_accept）
+    expect(ports.hubProtoVer).toHaveBeenCalled();
+    expect(ports.updateDelegationLink).toHaveBeenCalledWith(
+      'T-rem',
+      'dl-100',
+      expect.anything(),
+      { delegationRole: 'out', autoAccept: true },
+    );
   });
 });
 
@@ -874,5 +882,43 @@ describe('submitRoutedTask — 平行草稿分支', () => {
     const lfSummary = lf.groups.find((g) => g.groupId === 'g-lf')!;
     expect(lfSummary.mode).toBeUndefined();
     expect(lfSummary.members[0]!.bound).toBeUndefined();
+  });
+});
+
+// ── submitRoutedTask — S6 跟踪会话端口 ─────────────────────────────────────
+
+describe('submitRoutedTask — S6 跟踪会话端口', () => {
+  it('委派成功 → ensureTrackingSession 以 { taskId, targetNodeId } 调用（group 变体带解析目标）', async () => {
+    const ports = makePorts({ groups: standardGroup(), registry: standardRegistry() });
+    const res = await submitRoutedTask(baseInput({ mode: 'group', groupId: 'g1' }), ports);
+
+    expect(res.dispatched).toBe(true);
+    expect(ports.ensureTrackingSession).toHaveBeenCalledTimes(1);
+    expect(ports.ensureTrackingSession).toHaveBeenCalledWith({ taskId: 'T-rem', targetNodeId: 'node-a' });
+  });
+
+  it('无候选 / 委派瞬断 → 零调用（行留待处理，会话随重派补建）', async () => {
+    const noCandidate = makePorts({ groups: standardGroup(), registry: [] });
+    const r1 = await submitRoutedTask(baseInput({ mode: 'group', groupId: 'g1' }), noCandidate);
+    expect(r1.dispatched).toBe(false);
+    expect(noCandidate.ensureTrackingSession).not.toHaveBeenCalled();
+
+    const transient = makePorts({
+      groups: standardGroup(),
+      registry: standardRegistry(),
+      delegateError: new Error('node_offline'),
+    });
+    const r2 = await submitRoutedTask(baseInput({ mode: 'node', groupId: 'g1', targetNodeId: 'node-a' }), transient);
+    expect(r2.dispatched).toBe(false);
+    expect(transient.ensureTrackingSession).not.toHaveBeenCalled();
+  });
+
+  it('端口异常不翻转派发结果（委派已成功——warn 吞掉，boot 回填兜底）', async () => {
+    const ports = makePorts({ groups: standardGroup(), registry: standardRegistry() });
+    (ports.ensureTrackingSession as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('db busy'));
+    const res = await submitRoutedTask(baseInput({ mode: 'group', groupId: 'g1' }), ports);
+
+    expect(res.dispatched).toBe(true);
+    expect(res.task.delegationId).toBe('dl-100');
   });
 });

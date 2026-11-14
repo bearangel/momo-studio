@@ -290,6 +290,10 @@ function makeRunnerHarness(): {
     insertDraftTaskRow: () => null,
     findDraftRow: () => null,
     selfNodeId: () => 'node-self',
+    // P2 v2 接线端口桩（真实接线面在 worker-runner-v2-wiring.test 锁）
+    linkExecutionSession: () => undefined,
+    startLifecycleRun: () => undefined,
+    pendingHumanRequests: () => 0,
   };
 
   const runner = createDelegationRunner({ ports, store, tickMs: 500 });

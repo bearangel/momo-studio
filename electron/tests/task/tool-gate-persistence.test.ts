@@ -39,6 +39,7 @@ import {
   listPendingWriteBlocked,
   markSessionReadonly,
   setWriteDeniedBroadcaster,
+  setToolGateHumanSink,
   handleToolGateAnswer,
   recoverOrphanToolGates,
   __resetInspectStateForTest,
@@ -418,5 +419,74 @@ Caused by:
       .prepare(`SELECT id FROM human_requests WHERE session_id = ? AND kind = 'tool_gate'`)
       .all('s-rt') as Array<{ id: string }>;
     expect(rows).toHaveLength(2);
+  });
+});
+
+// ═══ 7) S7 终审 Finding #1：落行即时推 human:changed（面板实时性——inserted 推送）═══
+describe('7) tool_gate 落行 → human:changed emit 补发', () => {
+  const humanSink = vi.fn();
+  beforeEach(() => {
+    humanSink.mockClear();
+    setToolGateHumanSink(humanSink);
+  });
+  afterEach(() => {
+    setToolGateHumanSink(null);
+  });
+
+  it('childMsg 落行成功 → sink 收到落库行（生产装配 emitHumanChanged inserted 的载荷源）', () => {
+    seedSession({ wsId: 'ws11', sessionId: 's-emit', streamId: 'ss-emit' });
+    writeBlockedFromChildMsg({
+      type: 'write-blocked-report',
+      streamSessionId: 'ss-emit',
+      workspaceId: 'ws11',
+      dirs: ['/ws/ws11/out'],
+      command: 'cargo build',
+    });
+    expect(humanSink).toHaveBeenCalledTimes(1);
+    const row = humanSink.mock.calls[0]![0] as HumanRequestRow;
+    expect(row.sessionId).toBe('s-emit');
+    expect(row.kind).toBe('tool_gate');
+    expect(getHumanRequest(row.id)).not.toBeNull(); // 载荷即落库行（requestId 有效）
+  });
+
+  it('同 streamKey 第二链去重命中（不落新行）→ 不重复 emit', () => {
+    seedSession({ wsId: 'ws12', sessionId: 's-emit2', streamId: 'ss-emit2' });
+    writeBlockedFromChildMsg({
+      type: 'write-blocked-report',
+      streamSessionId: 'ss-emit2',
+      workspaceId: 'ws12',
+      dirs: ['/x'],
+      command: 'a',
+    });
+    expect(humanSink).toHaveBeenCalledTimes(1);
+    // registerToolGateRequest 同 streamKey 且行仍 pending → return null 早退（sink 不触发）
+    writeBlockedFromChildMsg({
+      type: 'write-blocked-report',
+      streamSessionId: 'ss-emit2',
+      workspaceId: 'ws12',
+      dirs: ['/x'],
+      command: 'a',
+    });
+    expect(humanSink).toHaveBeenCalledTimes(1);
+  });
+
+  it('未归属（sessionId null）/ readonly 即时拒 → 不落行零 emit', () => {
+    writeBlockedFromChildMsg({
+      type: 'write-blocked-report',
+      streamSessionId: 'ss-ghost-emit',
+      workspaceId: 'ws-x',
+      dirs: ['/x'],
+      command: 'true',
+    });
+    seedSession({ wsId: 'ws13', sessionId: 's-emit-ro', streamId: 'ss-emit-ro' });
+    markSessionReadonly('s-emit-ro', true);
+    writeBlockedFromChildMsg({
+      type: 'write-blocked-report',
+      streamSessionId: 'ss-emit-ro',
+      workspaceId: 'ws13',
+      dirs: ['/y'],
+      command: 'git push',
+    });
+    expect(humanSink).not.toHaveBeenCalled();
   });
 });

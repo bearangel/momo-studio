@@ -32,6 +32,7 @@ import type { PermissionTier, RoutingPrecheckResult, TaskCreateBatchResult, Task
 import { serializeRecurrence, type RecurrencePreset } from '../../lib/recurrence';
 import { rpcErrorMessage } from '../../lib/rpc-error';
 import { useGroupStore } from '../../stores/group.store';
+import { useHubStore } from '../../stores/hub.store';
 import { useTaskStore } from '../../stores/task.store';
 import { Dialog } from '../ui/Dialog';
 import { Button } from '../ui/Button';
@@ -97,6 +98,21 @@ type MirrorCoverage = { status: 'idle' } | { status: 'none' } | { status: 'ok'; 
  * export 供 CreateTaskDialog.test 机械锁（===9 对齐 electron pin test 防漂移）。
  */
 export const TEAM_DELEGATION_REQUIRED_MINOR = 9;
+
+/**
+ * 任务生命周期 v2 两段式门槛 minor（与 electron 侧 momo-hub-protocol
+ * TASK_HITL_REQUIRED_MINOR=11 单源对齐——双写锚定同上；export 供机械锁）。
+ */
+export const TASK_HITL_REQUIRED_MINOR = 11;
+
+/** 节点是否支持两段式提交（minor ≥ 门槛；缺省/空/异形视为旧——与主进程
+ *  dispatch-submit.ts twoPhaseDelegationActive 同口径，黄字预检与派发门不漂移） */
+function supportsTwoPhase(protoVer: string | undefined): boolean {
+  if (protoVer === undefined || protoVer === '') return false;
+  const m = /^(\d+)\.(\d+)(?:\.\d+)?$/.exec(protoVer.trim());
+  if (!m) return false;
+  return Number(m[2]) >= TASK_HITL_REQUIRED_MINOR;
+}
 
 /** 节点是否支持团队派发（minor ≥ 门槛；缺省/空/异形视为旧——与主进程
  *  dispatch-submit.ts supportsTeamDelegation 同口径，黄字预检与提交闸不漂移） */
@@ -176,6 +192,10 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
   const [precheck, setPrecheck] = useState<RoutingPrecheckResult | null>(null);
   const groups = useGroupStore((s) => s.groups);
   const loadGroups = useGroupStore((s) => s.load);
+  // B3（hub 侧预检黄字）：hub 版本可见面——hub.store 在弹窗上下文可能未 init
+  // （看板未开过则无人接线，DelegatedTaskCard 先例），弹窗开着且有外派路由时
+  // 拉起订阅+快照；关闭释放
+  const hubProtoVer = useHubStore((s) => s.status?.hubProtoVer ?? null);
 
   const routingAvailable = workspaceName !== undefined && workspaceName !== '';
   const remoteRouting = routing.mode !== 'local';
@@ -194,6 +214,11 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
       ?.bound !== true;
   const batchLines = batchText.split('\n').map((l) => l.trim()).filter((l) => l !== '');
   const batchCount = batchLines.length;
+
+  useEffect(() => {
+    if (!open || !routingAvailable) return;
+    return useHubStore.getState().init();
+  }, [open, routingAvailable]);
 
   useEffect(() => {
     if (!open) return;
@@ -537,6 +562,33 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
     return null;
   })();
 
+  // S8 版本门预检黄字（spec 2026-11-13 §8.5）：单 agent 指定节点派发、目标
+  // 协议 <1.11/未知 → 按旧语义完成（对方完成即验收，无两段式提交）——黄字
+  // 不拦提交（与团队预检同纪律；组内调度目标由提交时调度决定，无法预判不提示）
+  // S9（B3）补「任一侧」：worker 过关后查 hub 侧——hub 版本可见（hub.store
+  // hubProtoVer，本弹窗上方 effect 已接线）且 <1.11 时同样降级旧语义（干预/
+  // 提交事件不转发）。未知（null=未连接/未协商）不提示：主进程派发门才是
+  // 权威判定，预检黄字宁缺勿误。
+  const hitlPrecheckNote: ReactNode = (() => {
+    if (mode !== 'single' || !remoteRouting || peerDraft) return null;
+    if (execMode !== 'agent' || routing.mode !== 'node' || precheck === null) return null;
+    const ver = precheck.nodeCaps?.find((c) => c.nodeId === routing.targetNodeId)?.protoVer;
+    if (!supportsTwoPhase(ver)) {
+      const memberName = precheck.groups
+        .find((g) => g.groupId === routing.groupId)
+        ?.members.find((m) => m.nodeId === routing.targetNodeId)?.name;
+      return warnBar(
+        `目标节点 ${memberName ?? routing.targetNodeId} 协议 ${ver ?? '未知'} 低于 1.11——任务将按旧语义完成（对方完成即验收，无两段式提交）`,
+      );
+    }
+    if (hubProtoVer !== null && !supportsTwoPhase(hubProtoVer)) {
+      return warnBar(
+        `hub 协议 ${hubProtoVer} 低于 1.11——任务将按旧语义完成（对方完成即验收，无两段式提交）`,
+      );
+    }
+    return null;
+  })();
+
   // ── M5.3 执行方式区（单/批共用）：权限档位之下、表单尾部（预览条款 7）；
   //    批量分支同款渲染（用户 2026-10-31 裁定，覆盖原条款 8）──
   const executionModeSection = (
@@ -555,9 +607,12 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
                   />
                 </div>
                 {execMode === 'agent' ? (
-                  <p className="text-xs leading-relaxed text-tertiary">
-                    任务落到目标节点后由单个 agent 处理（默认 agent，或按 agent 指定）
-                  </p>
+                  <>
+                    <p className="text-xs leading-relaxed text-tertiary">
+                      任务落到目标节点后由单个 agent 处理（默认 agent，或按 agent 指定）
+                    </p>
+                    {hitlPrecheckNote}
+                  </>
                 ) : (
                   <>
                     <Select

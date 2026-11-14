@@ -162,6 +162,12 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
     },
     findDraftRow: (delegationId) => draftRows.get(delegationId) ?? null,
     selfNodeId: () => 'node-self',
+    // P2 v2 接线端口桩：本文件测 runner 编排逻辑（fake 边界），真实 DB 接线面
+    // 在 worker-runner-v2-wiring.test 锁——pendingHumanRequests 恒 0 = 守卫不触发，
+    // 既有终态结算断言全部保持
+    linkExecutionSession: () => undefined,
+    startLifecycleRun: () => undefined,
+    pendingHumanRequests: () => 0,
     ...overrides,
   };
 
@@ -621,6 +627,57 @@ describe('完成与失败上报', () => {
     const statuses = h.log.reports.filter((r) => r.taskId === 't1').map((r) => r.payload.status);
     expect(statuses[0]).toBe('running');
     expect(statuses[statuses.length - 1]).toBe('done');
+  });
+});
+
+// ── S2 执行态挂钩：submitted 停靠（worker 桥 report submitted 后旧终态通道让位） ──
+
+describe('S2 执行态挂钩（本地任务 submitted → 回合终态停靠）', () => {
+  function makeSubmittedHarness(): ReturnType<typeof makeHarness> {
+    return makeHarness({
+      // delegation_id → 本地任务行反查（生产端口 findDraftRow 通用形；classic/
+      // peer-draft 承接行同键）：t1 的本地任务处于待验收态
+      findDraftRow: (delegationId) =>
+        delegationId === 't1'
+          ? { id: 'T-001', status: 'submitted', executionSessionId: 'sess-1' }
+          : null,
+    });
+  }
+
+  it('本地任务 submitted 时回合完成 → 不上报 done/failed、账本保持 running（验收权威在发起方）', async () => {
+    const h = makeSubmittedHarness();
+    await admitOne(h, 't1');
+    h.fireTerminal('sess-1', { status: 'done' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.log.reports.find((r) => r.taskId === 't1' && r.payload.status === 'done')).toBeUndefined();
+    expect(h.store.get('t1')?.state).toBe('running');
+  });
+
+  it('本地任务 submitted 时回合失败 → 同样停靠（submitted→failed 会越过发起方验收）', async () => {
+    const h = makeSubmittedHarness();
+    await admitOne(h, 't1');
+    h.fireTerminal('sess-1', { status: 'failed', error: '提交后回合异常' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.log.reports.find((r) => r.taskId === 't1' && r.payload.status === 'failed')).toBeUndefined();
+    expect(h.store.get('t1')?.state).toBe('running');
+  });
+
+  it('停靠后同 taskId 再派 → active 停靠项仍在，幂等忽略不重建会话', async () => {
+    const h = makeSubmittedHarness();
+    await admitOne(h, 't1');
+    h.fireTerminal('sess-1', { status: 'done' });
+    await vi.advanceTimersByTimeAsync(0);
+    await h.runner.handleAssigned(assignedEvt('t1'));
+    expect(h.log.createdSessions).toHaveLength(1);
+  });
+
+  it('本地任务非 submitted（无关联行）→ 旧终态链零变化（回归对照）', async () => {
+    const h = makeHarness();
+    await admitOne(h, 't1');
+    h.fireTerminal('sess-1', { status: 'done' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.log.reports.find((r) => r.taskId === 't1' && r.payload.status === 'done')).toBeDefined();
+    expect(h.store.get('t1')?.state).toBe('done');
   });
 });
 

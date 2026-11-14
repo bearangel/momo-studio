@@ -14,16 +14,15 @@ import { buildAndUploadWorkspaceSnapshot } from './snapshot-upload';
 import { RPC, TASK_RPC, VIEW_RPC } from './protocol';
 import { RpcRemoteError } from './client';
 import {
+  memberProtoVerOf,
   resolveRemoteTarget,
   routingPrecheck,
   submitRoutedTask,
-  type DispatchSubmitPorts,
   type SubmitRoutedTaskInput,
 } from './dispatch-submit';
 import { retryDispatch, type RedispatchPorts } from './delegation-sync';
 import { buildDispatchSubmitPorts } from './dispatch-ports';
-import { assertBoardGroupValid, createTaskFromForm } from '../task/ipc.handlers';
-import { insertTaskWithRelations } from '../task/relations';
+import { ensureTrackingSession } from './tracking-session';
 import { getWorkspace } from '../workspace/crud';
 import { getDb } from '../storage/db';
 import { createGroupBindingStore } from './group-binding-store';
@@ -31,7 +30,6 @@ import { blockedDispatchError } from '../task/dependency-gate';
 import { deriveBlockedBy } from '../storage/tasks/dependencies-repo';
 import { updateTask, getTask } from '../storage/tasks/repo';
 import { listWorkspaces } from '../workspace/crud';
-import { listTeams } from '../agent/team';
 import { recordPublishAccountingSafe } from '../resource/hub-install';
 import { writebackPublishedVersionSafe } from './publish-writeback';
 
@@ -238,10 +236,18 @@ export function registerHubIpc(): void {
     // 1.10.0 平行组判定：组模型 mode（草稿重派分流）
     isPeerGroup: async (groupId) =>
       (await dispatchSubmitPorts.listGroups()).find((g) => g.groupId === groupId)?.mode === 'peer',
+    // S8 版本门（spec §8.5）：重派 stamp 与首派同门（hub 协商版本 × 目标节点
+    // hello 上报版本——memberProtoVerOf 与首派单源）
+    hubProtoVer: () => hubProtoVer(),
+    workerProtoVerOf: (groupId, nodeId) => memberProtoVerOf(groupId, nodeId, dispatchSubmitPorts),
     // M5.3 团队重派：与首派同一快照展开端口（listTeams 当前成员 + leader）
     getTeamSnapshot: (workspaceId, teamId) => dispatchSubmitPorts.getTeamSnapshot(workspaceId, teamId),
     // 同上：delegate rejection 被 retryDispatch 吞掉（dispatched=false 留待处理），不包
     delegate: (brief) => hubRequest(TASK_RPC.delegate, brief, undefined),
+    // S6 跟踪会话：重派成功补建（幂等/标题单源 hub/tracking-session.ts）；
+    // 组清单复用 dispatchSubmitPorts（节点名解析）
+    ensureTrackingSession: (input) =>
+      ensureTrackingSession(input, { listGroups: () => dispatchSubmitPorts.listGroups() }),
     updateTask: (taskId, patch) => {
       updateTask(taskId, patch);
     },

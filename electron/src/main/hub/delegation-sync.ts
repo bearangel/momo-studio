@@ -26,7 +26,7 @@ import type { Database } from 'better-sqlite3';
 import type { DelegationStatus } from './protocol';
 import type { DelegationRecord, HubDelegationStore } from './delegation-store';
 import type { PermissionTier, DelegationTaskBrief } from './dispatch-submit';
-import { expandTeamPayload } from './dispatch-submit';
+import { expandTeamPayload, twoPhaseDelegationActive, workerTwoPhaseActive } from './dispatch-submit';
 import type { TaskRouting } from './task-routing';
 import type { TaskRow, TaskStatus } from '../storage/tasks/repo';
 import { isTerminal } from '../storage/tasks/state-machine';
@@ -34,7 +34,7 @@ import { blockedDispatchError } from '../task/dependency-gate';
 import { logger } from '../logger';
 
 /**
- * 七态映射表（hub 委派账本态 → 本地 tasks 行状态——测试锁 + 文档单源）：
+ * 八态映射表（hub 委派账本态 → 本地 tasks 行状态——测试锁 + 文档单源）：
  *
  * | hub 委派态   | 本地 TaskStatus | 看板列 | 说明                              |
  * |--------------|-----------------|--------|-----------------------------------|
@@ -44,11 +44,17 @@ import { logger } from '../logger';
  * |              |                 |        | 的中间态——本地行维持进行中（看板 |
  * |              |                 |        | 无等待态；等待角标由 progress kv   |
  * |              |                 |        | waiting 标志驱动，不造新行状态）  |
+ * | submitted    | submitted       | 待验收 | 1.11.0 v2 生命周期：run 完成待验收 |
+ * |              |                 |        | 的中间态——同形映射本地行 submitted |
+ * |              |                 |        | （验收闸打回/通过由 v2 验收链驱动，|
+ * |              |                 |        | S9 收口；低版本 hub 不回此态）     |
  * | done         | completed       | 已完成 | 终态；completedAt + acceptedAt +  |
- * |              |                 |        | 摘要「已完成」。P1 降级守卫（spec |
- * |              |                 |        | §14）：done 即完成——不经 submitted |
- * |              |                 |        | （旧单方语义），accepted_at 同刻    |
- * |              |                 |        | 落账；P2 移除改走两段式            |
+ * |              |                 |        | 摘要「已完成」。S8 版本门（spec    |
+ * |              |                 |        | §8.5）：<1.11 象限 = P1 旧单方    |
+ * |              |                 |        | 语义权威通道；双端 ≥1.11 象限      |
+ * |              |                 |        | submitted→验收为主，done 拍降级为 |
+ * |              |                 |        | 终局对账兜底（completed 直写不改，|
+ * |              |                 |        | 到达即 warn 疑似降级回退）         |
  * | failed       | failed          | 已关闭 | 终态；errorMessage=reason 原文     |
  * | cancelled    | cancelled       | 已关闭 | 终态；task.cancel 回执驱动         |
  * | interrupted  | pending         | 待办   | 裁定：等待续传语义映射回待处理列，  |
@@ -56,18 +62,30 @@ import { logger } from '../logger';
  * |              |                 |        | 新状态；后续 running 拍合法回升）  |
  *
  * 写侧不走 transitionTaskStatus 状态机断言：外派行的状态权威是 hub 账本，
- * 本地九态转换表为本地 agent 执行管线设计（pending→in_progress 在该管线非法，
+ * 本地十一态转换表为本地 agent 执行管线设计（pending→in_progress 在该管线非法，
  * 在外派链是常态）；以「终态粘滞 + 映射表」替代转换合法性约束。
  */
 export const DELEGATION_STATUS_TO_TASK: Record<DelegationStatus, TaskStatus> = {
   pending: 'pending',
   running: 'in_progress',
   waiting: 'in_progress',
+  submitted: 'submitted',
   done: 'completed',
   failed: 'failed',
   cancelled: 'cancelled',
   interrupted: 'pending',
 };
+
+/**
+ * 八态映射的象限消费单点（P2 S8 四象限，spec §8.5）：waiting 在 twoPhase 象限
+ * 映射本地 v2 等人态 waiting_human（跨节点两段式下「等待人工」是真实任务态）；
+ * 降级象限维持 P1 的 in_progress（表值——看板无等待态，等待角标由 progress kv
+ * waiting 标志驱动）。其余七态两象限同值（表单源）。
+ */
+export function mapHubStatus(status: DelegationStatus, twoPhase: boolean): TaskStatus {
+  if (status === 'waiting') return twoPhase ? 'waiting_human' : DELEGATION_STATUS_TO_TASK.waiting;
+  return DELEGATION_STATUS_TO_TASK[status];
+}
 
 /** worker 本地账本六态 → 行状态（1.10.0 平行草稿前置两态：draft=待安排、
  *  arranged=已安排——行状态同形映射，看板「草稿/待办」列承载） */
@@ -80,8 +98,9 @@ const WORKER_STATE_TO_TASK: Record<DelegationRecord['state'], TaskStatus> = {
   cancelled: 'cancelled',
 };
 
-/** interrupted 进度摘要（等待续传语义的呈现文案——卡片进度行消费） */
-export const INTERRUPTED_SUMMARY = '目标节点连接中断，等待重连续传';
+/** interrupted 进度摘要（等待续传语义的呈现文案——卡片进度行消费；S9 对齐
+ *  CONTRACT 2026-11-14-tracking #18 定值「节点离线，恢复后自动续跑」） */
+export const INTERRUPTED_SUMMARY = '节点离线，恢复后自动续跑';
 
 /** done 终态的进度摘要兜底（协议 done 不带 reason） */
 const DONE_SUMMARY = '已完成';
@@ -205,6 +224,13 @@ export interface DelegationSyncPorts {
   findWorkspaceByName(name: string): { id: string } | null;
   /** 本机 nodeId（worker 行 routing.targetNodeId——本机视角判向） */
   selfNodeId(): string | null;
+  /**
+   * S8 版本门 worker 侧判据：当前 hub 协商协议版本（hello 回执；未连接 null）。
+   * worker 以 hub 版本单边判定（发起方版本不可知也无需知——发起方旧则 hub
+   * 不发 intervention 事件、intervene 在 hub 侧降级中性，spec §8.5 裁定）。
+   * 可选：缺席视为旧（P1 降级）——旧接线零变化。
+   */
+  hubProtoVer?(): string | null;
   now(): number;
 }
 
@@ -247,7 +273,7 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
   ): void => {
     const row = ports.findTaskByDelegation(delegationId);
     if (!row) return;
-    const next = DELEGATION_STATUS_TO_TASK[hubStatus];
+    const next = mapHubStatus(hubStatus, workerTwoPhaseActive(ports.hubProtoVer?.() ?? null));
     if (isTerminal(row.status) && row.status !== next) return;
     if (row.status === next) return;
     // T15 白名单逃生门之一（updateTask 直写 status）——P2 收口：P2 跨节点期
@@ -274,23 +300,45 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
   handleProgress(evt) {
     // 摘要与行状态同拍落（摘要先写——行不存在时摘要仍保留，重派后可续显）；
     // waiting 标志随 kind 翻转：等待拍置 true，恢复拍（无 kind）自然清除。
-    // P1 期间 waiting 拍不落任务新态（不造 waiting_human）——维持旧行为：
-    // kv waiting 标志驱动等待角标，行状态仍按 running 映射（P2 收口时随
-    // §14 降级守卫一并切两段式语义）
+    // P2 收口（P1 注释的延期项兑现）：twoPhase 象限 waiting-input 拍 → waiting
+    // 映射（本地行 waiting_human，v2 等人是真实任务态）；降级象限维持旧行为
+    // ——kv waiting 标志驱动等待角标，行状态仍按 running 映射。
     saveProgress(evt.taskId, evt.excerpt, evt.lastSeq, evt.kind);
     // 1.10.0 生命周期拍（received/arranged）只更新摘要——行保持 pending（发送方
     // 视角「已接收/已安排」由摘要行呈现），不提前翻 in_progress（spec §5.1）
     if (evt.kind === 'received' || evt.kind === 'arranged') return;
     const row = ports.findTaskByDelegation(evt.taskId);
     if (row && !isTerminal(row.status)) {
-      applyMapped(evt.taskId, 'running', { startedAt: row.startedAt ?? ports.now() });
+      const waitingBeat =
+        evt.kind === 'waiting-input' && workerTwoPhaseActive(ports.hubProtoVer?.() ?? null);
+      applyMapped(evt.taskId, waitingBeat ? 'waiting' : 'running', {
+        startedAt: row.startedAt ?? ports.now(),
+      });
     }
   },
 
     handleTerminal(status, taskId, reason) {
       if (status === 'done') {
-        // P1 降级守卫（spec §14）：外派行 done 即完成——不经 submitted（旧单方
-        // 语义），accepted_at 与 completed_at 同刻落账（验收等价旧「完成」）；P2 移除
+        // S8 版本门（spec §8.5）：双端 ≥1.11 象限的权威完成通道是 submitted→
+        // 验收（S5 镜像 + S6 路由），done 拍到达意味着 worker 旧版兜底 / S2 桥
+        // 降级 / 对账滞后——终局兜底行为不改（done 即完成：completed + accepted_at
+        // 同刻，hub 账本权威），warn 留痕疑似降级回退。象限判据 = 行戳（派发时刻
+        // 定型的版本门决定，事件时刻免查版本）：delegation_role='out' 且未强制
+        // auto_accept 即两段式派发行；P1 行（auto_accept=1）与手工委派（无 out
+        // 戳）不告警。S8 Important-1（S9 清偿）：行已终态（submitted→验收已收口 /
+        // done 重投）是滞后对账而非降级——同态零写不告警，防对账滞后/重投误报。
+        const stamped = ports.findTaskByDelegation(taskId);
+        if (
+          stamped !== null &&
+          !isTerminal(stamped.status) &&
+          stamped.delegationRole === 'out' &&
+          stamped.autoAccept !== true
+        ) {
+          logger.warn('1.11 两段式链路收到 done 拍——疑似降级回退（终局兜底照常收口）', {
+            taskId: stamped.id,
+            delegationId: taskId,
+          });
+        }
         const at = ports.now();
         applyMapped(taskId, 'done', { completedAt: at, acceptedAt: at });
         saveProgress(taskId, DONE_SUMMARY, 0);
@@ -342,15 +390,23 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
           delegationId: record.taskId,
           startedAt: ports.now(),
         });
-        // P1 降级守卫（spec §14）：承接行 delegation_role='in' + 强制 auto_accept=1
-        // （insertTask 不含 delegation_role 列——经 updateTask 补戳；P2 移除）
-        ports.updateTask(workerTaskId, { delegationRole: 'in', autoAccept: true });
+        // S8 版本门（spec §8.5 worker 侧裁定）：delegation_role='in' 恒戳（判向
+        // 单源，与象限无关）；auto_accept 仅 hub <1.11/未知象限强制（P1 降级
+        // 守卫——done 单方完成），hub ≥1.11 两段式象限不设（承接行走
+        // submitted→远端验收）
+        ports.updateTask(workerTaskId, {
+          delegationRole: 'in',
+          ...(workerTwoPhaseActive(ports.hubProtoVer?.() ?? null) ? {} : { autoAccept: true }),
+        });
       };
       const syncState = (taskId: string, state: DelegationRecord['state'], reason?: string): void => {
         const row = ports.findTaskByDelegation(taskId);
         if (!row) return;
         const next = WORKER_STATE_TO_TASK[state];
         if (isTerminal(row.status) && row.status !== next) return; // 终态粘滞
+        // 同态零写（applyMapped T12 Low-1 同款）：v2 等人（waiting_human）期间的
+        // 其他列写不回滚状态、终态时间戳不重盖章
+        if (row.status === next) return;
         // 1.10.0 降级防护（2026-11-07 双会话事故）：arranged→assigned 仅对仍处
         // draft 的行生效——executor 可能在监督器 arranged 检测前就已启动任务
         // （in_progress），此时写回 assigned 会把运行中行降级出候选池，crash 后
@@ -408,6 +464,16 @@ export interface RedispatchPorts {
   delegate(brief: DelegationTaskBrief): Promise<{ taskId: string }>;
   /** 1.10.0 平行组判定（组模型 mode==='peer'）——草稿重派分流的数据源；可选 */
   isPeerGroup?(groupId: string): Promise<boolean>;
+  /** S8 版本门：hub 协商协议版本（可选——缺席视为旧 → P1 降级戳，旧接线零变化） */
+  hubProtoVer?(): string | null;
+  /** S8 版本门：组内目标节点 hello 上报协议版本（可选——缺席视为未知 → P1 降级戳） */
+  workerProtoVerOf?(groupId: string, nodeId: string): Promise<string | undefined>;
+  /**
+   * P2 S6 跟踪会话（可选——生产接线 hub/ipc.handlers；缺省跳过）：重派成功
+   * 与首派同构补建（首派失败留待处理的行此前无会话）。幂等在实现单源
+   * （hub/tracking-session.ts）；异常由 retryDispatch 兜底吞掉。
+   */
+  ensureTrackingSession?(input: { taskId: string; targetNodeId: string | null }): Promise<unknown>;
   updateTask(id: string, patch: Partial<TaskRow>): void;
   now(): number;
 }
@@ -532,17 +598,35 @@ export async function retryDispatch(
             ...(teamPayload !== undefined ? { team: teamPayload } : {}),
           },
     });
-    // D5：重派同样回写已解析目标（group 变体换新 targetNodeId）；P1 降级守卫
-    // （spec §14）随新 delegation_id 补 out 戳 + 强制 auto_accept=1——首派失败
-    // 留待处理的行此前无戳，重派成功与 submitRoutedTask 同构落守卫
+    // D5：重派同样回写已解析目标（group 变体换新 targetNodeId）。S8 版本门
+    // （spec §8.5）：delegation_role='out' 恒戳（首派失败留待处理的行此前无
+    // 戳，重派成功与 submitRoutedTask 同构补判向戳）；auto_accept 仅 <1.11
+    // 象限强制（与首派同门——防「重派反而把两段式打回 auto_accept」的倒退）
     const resolvedRouting: TaskRouting =
       row.routing.mode === 'group' ? { ...row.routing, targetNodeId } : row.routing;
+    const workerProtoVer =
+      ports.workerProtoVerOf !== undefined
+        ? await ports.workerProtoVerOf(row.routing.groupId, targetNodeId)
+        : undefined;
     ports.updateTask(taskId, {
       delegationId,
       routing: resolvedRouting,
       delegationRole: 'out',
-      autoAccept: true,
+      ...(twoPhaseDelegationActive(ports.hubProtoVer?.() ?? null, workerProtoVer)
+        ? {}
+        : { autoAccept: true }),
     });
+    // S6 跟踪会话：重派成功与首派同构补建（幂等在实现单源）；失败不断链——
+    // 委派已成功，会话属辅助面（boot 回填兜底）
+    try {
+      await ports.ensureTrackingSession?.({ taskId, targetNodeId });
+    } catch (err) {
+      logger.warn('重派跟踪会话创建失败（委派已成功，boot 回填兜底）', {
+        taskId,
+        targetNodeId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     return { dispatched: true, nodeId: targetNodeId, delegationId };
   } catch {
     // 瞬断（node_offline / 网络抖动）：行保留待处理（RM-M21-5，与 dispatch-submit 同哲学）

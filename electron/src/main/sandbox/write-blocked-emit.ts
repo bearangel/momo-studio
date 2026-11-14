@@ -115,6 +115,32 @@ const TOOL_GATE_TITLE_CMD_MAX = 60;
 const toolGateRowByStreamKey = new Map<string, { requestId: string; at: number }>();
 
 /**
+ * tool_gate 行外发 sink（P2 S2）：registerToolGateRequest 落行成功后回调
+ * （载荷=落库行）。注册反转（setWriteDeniedBroadcaster 先例——本模块为子进程
+ * 可达，不得顶层 import lifecycle-runs 的 emitRemoteIntervene，隔离锁）；生产
+ * 装配在 hub/index ensureRemoteInterveneBridge（主进程），把行包成
+ * RemoteInterveneEvent{kind:'request_created'} 外发。未注册 no-op。
+ */
+let toolGateRowSink: ((row: HumanRequestRow) => void) | null = null;
+
+export function setToolGateRowSink(fn: ((row: HumanRequestRow) => void) | null): void {
+  toolGateRowSink = fn;
+}
+
+/**
+ * tool_gate 落行 → human:changed 推送 sink（P2 S7 终审 Finding #1：inserted
+ * 即时推——面板实时性原先靠 runChanged 兜底轮询）。沿 P1 setHumanChangedSink
+ * 容器的注入纪律（本模块为子进程可达，不得顶层 import lifecycle-runs——隔离
+ * 锁），生产装配在 registerHumanIpc（主进程）：行 → emitHumanChanged →
+ * pushToMainWindow。未注册 no-op。与 toolGateRowSink（hub 远端桥）互不影响。
+ */
+let toolGateHumanSink: ((row: HumanRequestRow) => void) | null = null;
+
+export function setToolGateHumanSink(fn: ((row: HumanRequestRow) => void) | null): void {
+  toolGateHumanSink = fn;
+}
+
+/**
  * 写授权卡持久化（Task 13 双写）：信号产生处插 kind='tool_gate' 请求行。
  * sessionId null（未归属卡）不落库——human_requests.session_id NOT NULL，等待
  * 语义由内存注册表 + renderer 卡自弃承载。DB 异常只 warn 不阻断消息主路径
@@ -122,6 +148,7 @@ const toolGateRowByStreamKey = new Map<string, { requestId: string; at: number }
  */
 export function registerToolGateRequest(signal: WriteBlockedSignal): HumanRequestRow | null {
   if (signal.sessionId === null) return null;
+  let row: HumanRequestRow | null = null;
   try {
     const key = signal.streamSessionId;
     if (key !== null) {
@@ -131,7 +158,7 @@ export function registerToolGateRequest(signal: WriteBlockedSignal): HumanReques
         if (getHumanRequest(seen.requestId)?.status === 'pending') return null;
       }
     }
-    const row = insertHumanRequest({
+    row = insertHumanRequest({
       sessionId: signal.sessionId,
       kind: 'tool_gate',
       title: `写授权：${signal.command.slice(0, TOOL_GATE_TITLE_CMD_MAX)}`,
@@ -143,7 +170,6 @@ export function registerToolGateRequest(signal: WriteBlockedSignal): HumanReques
       timeoutPolicy: 'deny_and_wrap',
     });
     if (key !== null) toolGateRowByStreamKey.set(key, { requestId: row.id, at: Date.now() });
-    return row;
   } catch (err) {
     logger.warn('tool_gate 请求落库失败（不阻断授权卡推送）', {
       sessionId: signal.sessionId,
@@ -151,6 +177,9 @@ export function registerToolGateRequest(signal: WriteBlockedSignal): HumanReques
     });
     return null;
   }
+  toolGateRowSink?.(row);
+  toolGateHumanSink?.(row);
+  return row;
 }
 
 /** 解析请求行 payload 的 toolGate 体（畸形/缺失 → null） */

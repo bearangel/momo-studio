@@ -486,10 +486,13 @@ export interface TaskApiSurface {
       artifacts?: Array<{ label: string; value: string }>;
     },
   ): Promise<TaskRow>;
-  /** 验收通过（Task 16）：run accepted + 任务 completed；非 submitted 态人话拒绝 */
-  accept(id: string): Promise<TaskRow>;
-  /** 打回（Task 16）：run rejected + 任务回 assigned 排队返工；空白理由人话拒绝 */
-  reject(id: string, reason: string): Promise<TaskRow>;
+  /** 验收通过（Task 16）：run accepted + 任务 completed；非 submitted 态人话拒绝。
+   *  P2 S6：远端提交（镜像 acceptance）验收后附 remoteWarning（hub 通知失败人话，
+   *  本地已收口不回滚） */
+  accept(id: string): Promise<TaskRow & { remoteWarning?: string }>;
+  /** 打回（Task 16）：run rejected + 任务回 assigned 排队返工；空白理由人话拒绝。
+   *  P2 S6 remoteWarning 同 accept */
+  reject(id: string, reason: string): Promise<TaskRow & { remoteWarning?: string }>;
   /** run 历史（Task 16，run_no ASC） */
   listRuns(id: string): Promise<TaskRunRow[]>;
   /**
@@ -638,6 +641,7 @@ export interface HumanRequestRow {
   runId: string | null;
   sessionId: string;
   delegationId: string | null;
+  /** 镜像行来源节点 id（S5 发起方镜像消费落的行非空——渲染层判空区分本地/镜像） */
   originNodeId: string | null;
   remoteId: string | null;
   kind: HumanRequestKind;
@@ -656,6 +660,13 @@ export interface HumanRequestRow {
   answeredAt: number | null;
   createdAt: number;
   updatedAt: number;
+  /**
+   * S6 human:list 投影附加键（仅镜像行携带）：来源节点名（presence 快照解析，
+   * 离线/未知为 null——文案降级「远端节点」）
+   */
+  originNodeName?: string | null;
+  /** S6：镜像行属平行组（peer 无代答入口——中性卡渲染；acceptance 不受影响） */
+  peerMirror?: boolean;
 }
 
 /** human:attention 单会话聚合值 */
@@ -3572,10 +3583,11 @@ export interface HubMirrorRegistryRow {
   mirroredAt: number;
 }
 
-// ── 委派 leader 侧（M2e T12，协议 delegation.ts 镜像；M3.1 七态）────────────
+// ── 委派 leader 侧（M2e T12，协议 delegation.ts 镜像；M3.1 七态 + 1.11.0 submitted = 八态）──
 
-/** 委派账本七态（协议 DelegationStatus 镜像——waiting=M3.1 running 中等待用户确认的中间态） */
-export type HubDelegationStatus = 'pending' | 'running' | 'waiting' | 'done' | 'failed' | 'interrupted' | 'cancelled';
+/** 委派账本态（协议 DelegationStatus 镜像——waiting=M3.1 running 中等待用户确认的
+ *  中间态；submitted=1.11.0 run 完成待验收中间态——v2 生命周期验收闸的 hub 侧投影） */
+export type HubDelegationStatus = 'pending' | 'running' | 'waiting' | 'submitted' | 'done' | 'failed' | 'interrupted' | 'cancelled';
 
 /** 委派账本条目（协议 TaskRecord 镜像——七字段 + M4.2 组归属字段） */
 export interface HubTaskRecord {
@@ -3589,6 +3601,13 @@ export interface HubTaskRecord {
   title: string;
   createdAt: number;
   updatedAt: number;
+  /** 执行尝试号（1.11.0 协议投影；缺省不带键——旧 hub/旧行 run_no 缺省即 1，
+   *  消费方 ?? 1 兜底；打回 +1——卡片 run #N 徽标数据源） */
+  runNo?: number;
+  /** 最近一次提交时刻（1.11.0；worker report submitted 驱动落账；未提交不带键） */
+  submittedAt?: number;
+  /** 验收通过时刻（1.11.0；发起方 task.accept 驱动落账，终态 done 伴随；未验收不带键） */
+  acceptedAt?: number;
 }
 
 export interface HubTaskListResult {

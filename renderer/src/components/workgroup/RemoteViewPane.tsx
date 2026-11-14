@@ -26,7 +26,7 @@ import {
 import { useHubViewStore, VIEW_PAGE_SIZE, type ViewTab } from '../../stores/hub-view.store';
 import { useHubStore } from '../../stores/hub.store';
 import { hubSupportsMinor } from '../../lib/hub-capability';
-import { taskStatusStyle } from '../../lib/task-status';
+import { taskStatusStyle, TASK_STATUS_KEYS } from '../../lib/task-status';
 import { MessageFrame } from '../im/MessageFrame';
 import { ToolCallChip } from '../im/ToolCallChip';
 import { Badge } from '../ui/Badge';
@@ -57,10 +57,10 @@ function formatDayTime(ts: number): string {
   return `${d.getMonth() + 1}月${d.getDate()}日 ${hhmm}`;
 }
 
-/** 任务状态徽标（task-status 语义色单源；未知状态回中性兜底） */
+/** 任务状态徽标（task-status 语义色单源——十一态白名单经 TASK_STATUS_KEYS 同源
+ *  判定（S9 前内联字面量已删）；未知状态回中性兜底） */
 function ViewTaskStatusBadge({ status }: { status: string }) {
-  const known = status in { draft: 1, pending: 1, assigned: 1, session_queued: 1, in_progress: 1, paused: 1, completed: 1, cancelled: 1, failed: 1 };
-  if (!known) return <Badge>{status}</Badge>;
+  if (!TASK_STATUS_KEYS.has(status)) return <Badge>{status}</Badge>;
   const style = taskStatusStyle(status as TaskStatus);
   return <Badge tone={style.tone}>{style.label}</Badge>;
 }

@@ -25,7 +25,8 @@ import type { AgentRuntimeOpts, ExpandedContext, SteerReplayItem } from './runti
 import { logger } from '../logger';
 import { getTask, updateTask, type TaskRow } from '../storage/tasks/repo';
 import { isTerminal } from '../storage/tasks/state-machine';
-import { submitRun, failRun, cancelActiveRun, emitRunChanged, emitHumanChanged, type TaskRunChangedEvent, type HumanChangedEvent, type LifecycleEventMessage } from '../task/lifecycle-runs';
+import { submitRun, failRun, cancelActiveRun, emitRunChanged, emitHumanChanged, emitRemoteIntervene, type TaskRunChangedEvent, type HumanChangedEvent, type DeliverableInput, type LifecycleEventMessage } from '../task/lifecycle-runs';
+import type { HumanRequestRow } from '../storage/tasks/human-requests-repo';
 import { finalizeStreamOnCrash } from './stream-relay';
 import { scheduleExtraction } from '../memory/extraction';
 import { resolveMaxToolCalls } from '../settings/crud';
@@ -217,6 +218,37 @@ function parseUsageTotalCamel(
 function dispatchLifecycleEvent(msg: unknown): boolean {
   const m = msg as Partial<LifecycleEventMessage>;
   if (m.type !== 'lifecycle-event') return false;
+  if (m.channel === 'remote-intervene') {
+    // S2 第三通道（2026-11-14）：worker 干预/提交桥事件——回放进主进程 sink
+    // （hub/index ensureRemoteInterveneBridge 装配的外发桥）。轻校验同两通道
+    const e = m.payload as {
+      kind?: unknown;
+      request?: { id?: unknown; sessionId?: unknown; kind?: unknown };
+      taskId?: unknown;
+      runNo?: unknown;
+      deliverable?: { summary?: unknown };
+    } | null | undefined;
+    if (typeof e !== 'object' || e === null) return true;
+    if (e.kind === 'request_created') {
+      const r = e.request;
+      if (
+        typeof r === 'object' && r !== null &&
+        typeof r.id === 'string' && typeof r.sessionId === 'string' &&
+        (r.kind === 'question' || r.kind === 'manual_action' || r.kind === 'tool_gate')
+      ) {
+        emitRemoteIntervene({ kind: 'request_created', request: r as HumanRequestRow });
+      }
+    } else if (e.kind === 'run_submitted') {
+      if (
+        typeof e.taskId === 'string' && typeof e.runNo === 'number' &&
+        typeof e.deliverable === 'object' && e.deliverable !== null &&
+        typeof e.deliverable.summary === 'string'
+      ) {
+        emitRemoteIntervene({ kind: 'run_submitted', taskId: e.taskId, runNo: e.runNo, deliverable: e.deliverable as DeliverableInput });
+      }
+    }
+    return true;
+  }
   if (m.channel !== 'task:runChanged' && m.channel !== 'human:changed') return true;
   const payload = m.payload;
   if (typeof payload !== 'object' || payload === null) return true;
