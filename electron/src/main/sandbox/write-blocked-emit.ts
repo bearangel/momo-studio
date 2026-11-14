@@ -128,6 +128,19 @@ export function setToolGateRowSink(fn: ((row: HumanRequestRow) => void) | null):
 }
 
 /**
+ * tool_gate 落行 → human:changed 推送 sink（P2 S7 终审 Finding #1：inserted
+ * 即时推——面板实时性原先靠 runChanged 兜底轮询）。沿 P1 setHumanChangedSink
+ * 容器的注入纪律（本模块为子进程可达，不得顶层 import lifecycle-runs——隔离
+ * 锁），生产装配在 registerHumanIpc（主进程）：行 → emitHumanChanged →
+ * pushToMainWindow。未注册 no-op。与 toolGateRowSink（hub 远端桥）互不影响。
+ */
+let toolGateHumanSink: ((row: HumanRequestRow) => void) | null = null;
+
+export function setToolGateHumanSink(fn: ((row: HumanRequestRow) => void) | null): void {
+  toolGateHumanSink = fn;
+}
+
+/**
  * 写授权卡持久化（Task 13 双写）：信号产生处插 kind='tool_gate' 请求行。
  * sessionId null（未归属卡）不落库——human_requests.session_id NOT NULL，等待
  * 语义由内存注册表 + renderer 卡自弃承载。DB 异常只 warn 不阻断消息主路径
@@ -165,6 +178,7 @@ export function registerToolGateRequest(signal: WriteBlockedSignal): HumanReques
     return null;
   }
   toolGateRowSink?.(row);
+  toolGateHumanSink?.(row);
   return row;
 }
 

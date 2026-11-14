@@ -27,7 +27,7 @@ import {
   type HumanAnswerInput,
 } from './lifecycle-runs';
 import { sweepHumanTimeouts } from './human-timeout-sweeper';
-import { recoverOrphanToolGates } from '../sandbox/write-blocked-emit';
+import { recoverOrphanToolGates, setToolGateHumanSink } from '../sandbox/write-blocked-emit';
 import {
   getHumanRequest,
   listRequests,
@@ -267,6 +267,12 @@ export function registerHumanIpc(): void {
 
   setHumanChangedSink((e) => pushToMainWindow('human:changed', e));
   setTaskRunChangedSink((e) => pushToMainWindow('task:runChanged', e));
+  // S7 终审 Finding #1：tool_gate 落行即时推 human:changed（面板实时性——此前
+  // 靠 runChanged 兜底）。write-blocked-emit 禁 import 本模块域（子进程隔离锁），
+  // 经 sink 反转注入（与 setHumanChangedSink 同款容器，装配点唯一在此）
+  setToolGateHumanSink((row) =>
+    emitHumanChanged({ sessionId: row.sessionId, requestId: row.id, kind: 'inserted' }),
+  );
 
   // 重启恢复（Task 13 §6.8）：内存注册表重启恒空 → 重启前全部授权卡置 expired
   try {
@@ -338,4 +344,5 @@ export function __teardownHumanIpcForTest(): void {
   mirrorAnswerForwarder = null;
   setHumanChangedSink(null);
   setTaskRunChangedSink(null);
+  setToolGateHumanSink(null);
 }

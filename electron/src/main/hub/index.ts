@@ -58,6 +58,7 @@ import {
   type WorkerTerminalConsumePorts,
 } from './remote-intervene-bridge';
 import { isTerminal } from '../storage/tasks/state-machine';
+import { reconcileOnReconnect } from './reconnect-reconcile';
 import { createMirrorRegistry, type MirrorRegistryRow } from './mirror-registry';
 import { ViewServer } from './view-server';
 import { createHubViewSettingsStore, type HubViewSettings } from './view-settings';
@@ -509,6 +510,11 @@ function startClient(
         // 重连恢复（T11）：中断任务对账续传 + 缓冲进度拍冲刷（fire-and-forget——
         // 状态回调不 await 恢复链，连接状态机不被对账阻塞）
         void ensureDelegationRunner(nodeId).handleOnline();
+        // S7 断线对账（spec §8.6 断连窗口补偿）：错过的代答/干预/提交事件经
+        // task.interventions + task.list 拉取幂等收敛；内部失败容忍，不阻塞重连链
+        if (client !== null) {
+          void reconcileOnReconnect({ client });
+        }
         // 查看开关重报（T13 交接——RM2-9：hub 断线清除 consent 回默认 true，
         // 重连必须重报本地设置，否则关闭态节点重连后即恢复可查看）
         void reportViewConsent();

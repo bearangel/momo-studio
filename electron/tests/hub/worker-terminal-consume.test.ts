@@ -24,7 +24,7 @@ import os from 'node:os';
 import Database from 'better-sqlite3';
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
-import { insertTask, getTask } from '../../src/main/storage/tasks/repo';
+import { insertTask, updateTask, getTask } from '../../src/main/storage/tasks/repo';
 import { insertSession } from '../../src/main/storage/sessions/repo';
 import { listByTask } from '../../src/main/storage/tasks/human-requests-repo';
 import { startRun, submitRun } from '../../src/main/task/lifecycle-runs';
@@ -266,8 +266,9 @@ describe('3) 幂等静默面', () => {
       status: 'submitted',
       executionSessionId: execSessionId,
       delegationId: DELEGATION_ID,
-      delegationRole: 'out',
     });
+    // delegation_role 不在 insertTask 列集（生产由 dispatch-submit 回执 updateTask 补戳）——同款补戳
+    updateTask(mirror.id, { delegationRole: 'out' });
     const { ports, settleDocked } = consumePorts();
 
     await handleTaskAccepted({ taskId: DELEGATION_ID, runNo: 1 }, ports);

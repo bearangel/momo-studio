@@ -483,13 +483,21 @@ const REMOTE_ORIGIN_BY = 'remote:origin';
 /**
  * hub 委派 id → 本地承接行（delegation_id 反查，delegation-sync
  * findTaskByDelegation 同键；classic 'in' 行与 peer-draft 承接行同覆盖）。
+ * S4 review Minor#1 裁定（S7 落地）：同节点自委派时 'out' 镜像行与 worker
+ * 承接行共享 delegation_id——反查必须限定 delegation_role 消除任意取行：
+ * expect='worker' 取 'in'（classic 承接）优先、次选 role NULL（peer-draft
+ * 承接行无戳）；expect='origin' 取 'out'（发起方镜像）。无匹配角色行 → null。
  */
-function findTaskByDelegationId(delegationId: string): TaskRow | null {
-  const row = getDb()
-    .prepare('SELECT id FROM tasks WHERE delegation_id = ?')
-    .get(delegationId) as { id: string } | undefined;
-  if (row === undefined) return null;
-  return getTask(row.id);
+function findTaskByDelegationId(delegationId: string, expect: 'worker' | 'origin'): TaskRow | null {
+  const rows = getDb()
+    .prepare('SELECT id, delegation_role FROM tasks WHERE delegation_id = ?')
+    .all(delegationId) as Array<{ id: string; delegation_role: string | null }>;
+  const wanted =
+    expect === 'origin'
+      ? rows.find((r) => r.delegation_role === 'out')
+      : rows.find((r) => r.delegation_role === 'in') ?? rows.find((r) => r.delegation_role === null);
+  if (wanted === undefined) return null;
+  return getTask(wanted.id);
 }
 
 /** S4 消费公共前置：载荷 taskId（hub 委派 id）→ 本机执行方的本地承接行；
@@ -501,7 +509,7 @@ function resolveWorkerTask(
   selfNodeId: string | null,
 ): { task: TaskRow; delegationId: string } | null {
   if (typeof payloadTaskId !== 'string' || payloadTaskId === '') return null;
-  const task = findTaskByDelegationId(payloadTaskId);
+  const task = findTaskByDelegationId(payloadTaskId, 'worker');
   if (task === null) return null;
   const delegationId = task.delegationId;
   if (delegationId === null) return null;
@@ -644,7 +652,7 @@ function resolveOriginTask(
   payloadTaskId: unknown,
 ): { task: TaskRow; delegationId: string } | null {
   if (typeof payloadTaskId !== 'string' || payloadTaskId === '') return null;
-  const task = findTaskByDelegationId(payloadTaskId);
+  const task = findTaskByDelegationId(payloadTaskId, 'origin');
   if (task === null) return null;
   const delegationId = task.delegationId;
   if (delegationId === null) return null;
