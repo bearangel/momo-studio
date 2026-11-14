@@ -20,6 +20,7 @@ const {
   exporterMocks,
   agentCrudMocks,
   workspaceCrudMocks,
+  tasksRepoMocks,
 } = vi.hoisted(() => {
   const ipcHandlers = new Map<string, (...args: unknown[]) => unknown>();
   const newSessionRow = {
@@ -79,6 +80,11 @@ const {
     workspaceCrudMocks: {
       listWorkspaces: vi.fn<() => unknown[]>(() => []),
     },
+    // 删除守卫是 session:delete 的 DB 边界（真实 SQL 语义由 session-delete-guard.test.ts
+    // 对真实 SQLite 锁定，此处 mock 边界）；Task 17 spec §5.4
+    tasksRepoMocks: {
+      assertSessionDeletable: vi.fn<() => void>(() => undefined),
+    },
   };
 });
 
@@ -113,6 +119,7 @@ vi.mock('../../src/main/storage/messages/event-compaction', () => compactionMock
 vi.mock('../../src/main/im/markdown-exporter', () => exporterMocks);
 vi.mock('../../src/main/agent/crud', () => agentCrudMocks);
 vi.mock('../../src/main/workspace/crud', () => workspaceCrudMocks);
+vi.mock('../../src/main/storage/tasks/repo', () => tasksRepoMocks);
 
 import { registerSessionIpcHandlers, sanitizeMessageContext } from '../../src/main/im/session.ipc.handlers';
 import { NoDefaultAgentError } from '../../src/main/im/session-ops';
@@ -168,6 +175,7 @@ beforeEach(() => {
   Object.values(exporterMocks).forEach((m) => m.mockClear());
   Object.values(agentCrudMocks).forEach((m) => m.mockClear());
   Object.values(workspaceCrudMocks).forEach((m) => m.mockClear());
+  Object.values(tasksRepoMocks).forEach((m) => m.mockClear());
   registerSessionIpcHandlers();
 });
 
@@ -253,6 +261,11 @@ describe('session:createQuick handler', () => {
       groupId: null,
       groupName: null,
       sessionType: null,
+      // 生命周期三字段（spec 2026-11-13-task-human-loop-lifecycle §5.4）：
+      // 建会返回恒中性值（新会话不可能已有活跃任务关联）
+      delegationRole: null,
+      readOnly: false,
+      taskId: null,
       members: [
         { instanceId: 'inst-default', agentName: '默认Agent', iconEmoji: '🤖', isLeader: true, lastRunning: true, vision: false },
       ],
@@ -317,6 +330,23 @@ describe('session:delete handler', () => {
     const res = await ipcHandlers.get('session:delete')!({} as never, 'sess-1');
     expect(sessionOpsMocks.deleteSessionOp).toHaveBeenCalledWith('sess-1');
     expect(res).toEqual({ ok: true });
+  });
+
+  it('删除前先过活动任务守卫（assertSessionDeletable，spec §5.4）', async () => {
+    await ipcHandlers.get('session:delete')!({} as never, 'sess-1');
+    expect(tasksRepoMocks.assertSessionDeletable).toHaveBeenCalledTimes(1);
+    expect(tasksRepoMocks.assertSessionDeletable).toHaveBeenCalledWith('sess-1');
+    expect(sessionOpsMocks.deleteSessionOp).toHaveBeenCalledWith('sess-1');
+  });
+
+  it('守卫抛错（活动任务关联）原样传播且不触达 deleteSessionOp', async () => {
+    tasksRepoMocks.assertSessionDeletable.mockImplementationOnce(() => {
+      throw new Error('任务进行中，请先取消或完结');
+    });
+    await expect(
+      ipcHandlers.get('session:delete')!({} as never, 'sess-active'),
+    ).rejects.toThrow('任务进行中，请先取消或完结');
+    expect(sessionOpsMocks.deleteSessionOp).not.toHaveBeenCalled();
   });
 
   it('deleteSessionOp 抛错原样传播', async () => {

@@ -25,6 +25,11 @@
 //   - agent runtime 启动完成（warmPool 注入就绪后）
 //   - provider 配额恢复（每分钟滚窗，外层定时器调 scanAll）
 //   - 用户点"重试队列"（IPC 显式触发 scanAll）
+// v2 写路径白名单（T15 复核 B4，Task 18 裁定）：本文件两处 transitionTaskStatus
+// 调用（tryPickup 的 in_progress / 回退 failed）在生产不可达——router-bootstrap
+// v2.0.1 起不再构造 TaskDispatcher（见头注，2.1 预留未接线），仅 tests/task/
+// dispatcher.test.ts 直测。2.1 恢复接线时须收敛：assigned→in_progress 走
+// lifecycle-runs startRun 记账单点，回退走 markTaskFailed，删除本模块直调。
 import { randomUUID } from 'node:crypto';
 import { findNextAssignedTask, transitionTaskStatus } from '../storage/tasks/repo';
 import { logger } from '../logger';

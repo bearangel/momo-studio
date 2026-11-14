@@ -23,8 +23,9 @@ vi.mock('../../src/main/memory/extraction', () => ({
 }));
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
-import { getTask, insertTask } from '../../src/main/storage/tasks/repo';
+import { getTask, insertTask, updateTask } from '../../src/main/storage/tasks/repo';
 import { insertSession } from '../../src/main/storage/sessions/repo';
+import { startRun } from '../../src/main/task/lifecycle-runs';
 import {
   ledgerInsertDispatch,
   ledgerSettleDispatch,
@@ -57,6 +58,9 @@ function setupDb(): void {
   sessionId = insertSession({ workspaceId: 'ws', title: '协作', kind: 'chat' }).id;
 }
 
+// v2 语义（Task 15）：settle/task-end 的 completed 结局 = submitRun 提交验收
+// （dispatch 行 auto_accept 提交即验收直达 completed）——种子沿用生产 spawn
+// 形态（行 + run #1），不弱化任何断言
 function seedDispatchTask(id: string): void {
   insertTask({
     id,
@@ -69,7 +73,9 @@ function seedDispatchTask(id: string): void {
     executionSessionId: sessionId,
     sourceSessionId: sessionId,
     startedAt: Date.now(),
+    autoAccept: true,
   });
+  startRun(id, { trigger: 'initial', executionSessionId: sessionId });
 }
 
 function seedUserTask(id: string, status: 'in_progress' | 'assigned' = 'in_progress'): void {
@@ -80,8 +86,11 @@ function seedUserTask(id: string, status: 'in_progress' | 'assigned' = 'in_progr
     status,
     creatorUserId: 'u-1',
     executionSessionId: sessionId,
-    startedAt: status === 'in_progress' ? Date.now() : null,
+    startedAt: status === 'assigned' ? null : Date.now(),
   });
+  if (status === 'in_progress') {
+    startRun(id, { trigger: 'initial', executionSessionId: sessionId });
+  }
 }
 
 function quotaErrorText(): string {
@@ -238,7 +247,8 @@ describe('AgentRunner task-end usage 累积（task-driven 入口）', () => {
     });
 
     const row = getTask('T-u1')!;
-    expect(row.status).toBe('completed');
+    // v2：user 任务无 auto_accept——task-end 正常收尾 = 提交验收（submitted），完成待人工 accept
+    expect(row.status).toBe('submitted');
     expect(row.actualTokens).toBe(70);
   });
 
@@ -254,7 +264,7 @@ describe('AgentRunner task-end usage 累积（task-driven 入口）', () => {
     });
 
     const row = getTask('T-u2')!;
-    expect(row.status).toBe('completed');
+    expect(row.status).toBe('submitted');
     expect(row.actualTokens).toBeNull();
   });
 
@@ -271,6 +281,7 @@ describe('AgentRunner task-end usage 累积（task-driven 入口）', () => {
     });
 
     expect(getTask('T-u3')!.actualTokens).toBe(170);
+    expect(getTask('T-u3')!.status).toBe('submitted');
   });
 
   it('失败路径（error）同样写 usage + failed 终态', async () => {

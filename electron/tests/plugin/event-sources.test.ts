@@ -57,14 +57,16 @@ describe('storage 层信号（setter 注入）', () => {
     const tk = insertTask({ workspaceId: 'ws1', title: 't', creatorUserId: '@o:home', status: 'assigned' });
     expect(seen.find((s) => s.event === 'taskCreated')?.payload).toMatchObject({ id: tk.id });
     transitionTaskStatus(tk.id, 'in_progress');
-    transitionTaskStatus(tk.id, 'completed');
+    // v2 状态机：in_progress → completed 直达边已删（完成必经验收）——
+    // 用 cancelled 边验证 taskCompleted 事件（completed/failed/cancelled 三态同发）
+    transitionTaskStatus(tk.id, 'cancelled');
     expect(seen.find((s) => s.event === 'taskStatusChanged')?.payload).toMatchObject({
       id: tk.id,
       status: 'in_progress',
     });
     expect(seen.find((s) => s.event === 'taskCompleted')?.payload).toMatchObject({
       id: tk.id,
-      status: 'completed',
+      status: 'cancelled',
     });
   });
 });

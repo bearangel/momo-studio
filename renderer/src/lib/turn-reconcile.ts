@@ -27,7 +27,8 @@ const TODO_STATUS_LABEL: Record<ReconcileTodoStatus, string> = {
 export const TURN_RECONCILE_NOTICE_PREFIX = '[系统] 回合收尾核对';
 
 /**
- * 任务回合收尾核对合成条全文（spec §3.2 逐字，双逃生门措辞）。
+ * 任务回合收尾核对合成条全文（任务生命周期 v2 Task 14：三选一措辞——
+ * submit_task / fail_task / request_human）。
  * 与 electron buildTurnReconcileNotice 双镜像：items 为空（待办全 completed 或
  * renderer 拿不到待办数据）时列表行降级为占位说明——闭合言语行为缺失单独
  * 触发是 spec §3.1 明确要求的分支。
@@ -39,14 +40,14 @@ export function buildTurnReconcileNotice(
   const list =
     items.length > 0
       ? items.map((t) => `  - ${t.subject}（${TODO_STATUS_LABEL[t.status]}）`).join('\n')
-      : '  （无未清待办——但任务尚未调用 complete_task / fail_task 关闭）';
+      : '  （无未清待办——但任务尚未调用 submit_task / fail_task / request_human 收尾）';
   return (
     `${TURN_RECONCILE_NOTICE_PREFIX}（非新任务请求）：任务 ${taskId} 仍处于 in_progress，待办存在未清项：\n` +
     `${list}\n` +
-    '请二选一：\n' +
-    '(a) 完成剩余项，调用 todowrite 如实更新，并调用 complete_task 关闭任务；\n' +
-    '(b) 确认剩余项不应/不能现在完成：调用 todowrite 如实更新状态，在终文中说明原因，\n' +
-    '    任务保持 in_progress 留待用户处理。\n' +
+    '请三选一：\n' +
+    '(a) 实现已完成：调用 todowrite 如实更新，并调用 submit_task 提交验收（你没有完成权限，只有提交权限）；\n' +
+    '(b) 技术性失败无法继续：调用 fail_task 并说明原因（需要人帮助改用 request_human）；\n' +
+    '(c) 需要人提供信息/决策/系统外操作：调用 request_human，调用后立即结束本回合等待【人工答复】。\n' +
     '严禁重复执行已完成的事项。本提醒一次性，不会再触发。'
   );
 }

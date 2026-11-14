@@ -38,6 +38,7 @@ const base: TaskRow = {
   priority: 0, scheduledAt: null, recurrenceRule: null, deadlineAt: null, queuePosition: null,
   runtimeInstanceId: null, estimatedTokens: null, actualTokens: null, toolCallsUsed: 0,
   errorMessage: null, sourceNodeId: null, createdAt: 0, updatedAt: 0, startedAt: null, completedAt: null,
+  currentRunId: null, submittedAt: null, acceptedAt: null, delegationRole: null, autoAccept: false,
   groupId: null, pinnedAt: null, archivedAt: null, routing: { mode: 'local' }, delegationId: null, origin: 'user', parentTaskId: null,
 };
 
@@ -648,5 +649,48 @@ describe('BoardCard 右键菜单视口钳制（溢出屏幕修复）', () => {
     const menu = screen.getByLabelText('任务菜单 任务A');
     expect(parseFloat(menu.style.left)).toBe(window.innerWidth - MENU_WIDTH - 8);
     expect(parseFloat(menu.style.top)).toBe(window.innerHeight - MENU_HEIGHT - 8);
+  });
+});
+
+// v2 生命周期（Task 21，预览定值清单 #6/#10）：失败卡 errorMessage 一行
+describe('BoardCard 失败 errorMessage 行（v2 生命周期）', () => {
+  it('failed + errorMessage → 失败徽标 + error 字一行（truncate + title 全文）', () => {
+    render(
+      <BoardCard
+        task={{ ...base, status: 'failed', errorMessage: 'Error: kubectl context expired: unable to connect to cluster' }}
+        selected={false}
+        onClick={() => {}}
+      />,
+    );
+    expect(screen.getByText('失败', { selector: 'span.bg-status-error-tint' })).toBeInTheDocument();
+    const line = screen.getByText(/kubectl context expired/);
+    expect(line.className).toContain('truncate');
+    expect(line.parentElement).toHaveAttribute('title', 'Error: kubectl context expired: unable to connect to cluster');
+  });
+
+  it('failed + errorMessage=null → 无错误行；errorMessage 残留但非 failed → 不显示', () => {
+    const { unmount } = render(
+      <BoardCard task={{ ...base, status: 'failed', errorMessage: null }} selected={false} onClick={() => {}} />,
+    );
+    expect(screen.queryByText(/Error:/)).not.toBeInTheDocument();
+    unmount();
+    render(
+      <BoardCard
+        task={{ ...base, status: 'in_progress', errorMessage: '旧残留错误' }}
+        selected={false}
+        onClick={() => {}}
+      />,
+    );
+    expect(screen.queryByText(/旧残留错误/)).not.toBeInTheDocument();
+  });
+
+  it('waiting_human / submitted → 状态徽标终值色（warning / accent 投影）', () => {
+    const { unmount } = render(
+      <BoardCard task={{ ...base, status: 'waiting_human' }} selected={false} onClick={() => {}} />,
+    );
+    expect(screen.getByText('等待中', { selector: 'span.bg-status-warning-tint' })).toBeInTheDocument();
+    unmount();
+    render(<BoardCard task={{ ...base, status: 'submitted' }} selected={false} onClick={() => {}} />);
+    expect(screen.getByText('待验收', { selector: 'span.bg-surface-active' })).toBeInTheDocument();
   });
 });

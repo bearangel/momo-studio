@@ -53,6 +53,24 @@ describe('task-status 统一状态映射', () => {
     expect(s.tone).toBe('warning');
   });
 
+  // v2 生命周期二态终值（Task 21，预览 2026-11-13-task-lifecycle-board.html 定值清单 #6）：
+  // waiting_human=warning（等待中·等人工系琥珀）、submitted=accent（待验收·验收系）
+  it('waiting_human：文案「等待中」+ warning tone + warning tint 类同源', () => {
+    const s = taskStatusStyle('waiting_human');
+    expect(s.label).toBe('等待中');
+    expect(s.tone).toBe('warning');
+    expect(s.className).toContain('bg-status-warning-tint');
+    expect(s.className).toContain('text-status-warning');
+  });
+
+  it('submitted：文案「待验收」+ accent tone + surface-active 类同源', () => {
+    const s = taskStatusStyle('submitted');
+    expect(s.label).toBe('待验收');
+    expect(s.tone).toBe('accent');
+    expect(s.className).toContain('bg-surface-active');
+    expect(s.className).toContain('text-accent-600');
+  });
+
   it('PENDING_WRAP_UP_STYLE：派生「待收尾」徽标复用 warning tone（spec §3.5，禁新造色）', () => {
     expect(PENDING_WRAP_UP_STYLE.label).toBe('待收尾');
     expect(PENDING_WRAP_UP_STYLE.tone).toBe('warning');

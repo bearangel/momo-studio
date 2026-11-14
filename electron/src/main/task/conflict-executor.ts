@@ -4,14 +4,14 @@
 //
 // 与 conflict-resolver.ts 的分工：
 //   - conflict-resolver.ts 是纯函数，返回 ConflictResolution（无 IO）
-//   - 本模块把 resolution 映射到实际副作用（transitionTaskStatus / startTask）
+//   - 本模块把 resolution 映射到实际副作用（pauseForTask / startTask）
 //
 // 分离的原因：纯函数好测（5 策略返回结构正确），副作用也好测（DB + Matrix mock 隔离）。
 // IPC handler（ipc.handlers.ts）把两者串起来：
 //   const resolution = resolveConflict(ctx);
 //   const result = await executeConflictResolution(resolution, ctx);
 
-import { transitionTaskStatus } from '../storage/tasks/repo';
+import { pauseForTask } from './lifecycle-runs';
 import { startTask } from './starter';
 import type { ConflictResolution } from './conflict-resolver';
 
@@ -37,7 +37,8 @@ export async function executeConflictResolution(
 ): Promise<ConflictResolution> {
   switch (resolution.action) {
     case 'preempt':
-      transitionTaskStatus(ctx.currentTaskId, 'paused');
+      // v2 收敛（§9.3 行8）：抢占暂停走 pauseForTask 服务单点（§6.6 用户权威态）
+      pauseForTask(ctx.currentTaskId);
       await startTask(ctx.newTaskId, { executionSessionId: ctx.currentRoomId });
       return resolution;
 

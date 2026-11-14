@@ -43,6 +43,14 @@ const mockApi = {
     transition: vi.fn(),
     resume: vi.fn(),
     update: vi.fn(),
+    // Task 24：TaskDetailPanel 挂载即拉 runs / 订阅 runChanged
+    listRuns: vi.fn().mockResolvedValue([]),
+    onTaskRunChanged: vi.fn().mockReturnValue(() => {}),
+  },
+  // Task 24：未决请求聚合 + human:changed 订阅
+  human: {
+    list: vi.fn().mockResolvedValue([]),
+    onChanged: vi.fn().mockReturnValue(() => {}),
   },
   agent: { listMembers: vi.fn().mockRejectedValue(new Error('no ipc in test')) },
   team: { list: vi.fn().mockRejectedValue(new Error('no ipc in test')) },
@@ -85,6 +93,11 @@ function makeTask(overrides: Partial<TaskRow> = {}): TaskRow {
     updatedAt: 1000,
     startedAt: null,
     completedAt: null,
+    currentRunId: null,
+    submittedAt: null,
+    acceptedAt: null,
+    delegationRole: null,
+    autoAccept: false,
     groupId: null,
     pinnedAt: null,
     archivedAt: null,

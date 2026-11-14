@@ -6,7 +6,7 @@
 //   - 只读结构性断言：无 sortable 痕迹（无 role="button"+aria-roledescription=
 //     "sortable" 组合、无 draggable）、卡片点击只走 onSelect 回调（开只读详情
 //     接线，组件自身零 store 副作用）、selectedId 选中高亮、右键不弹任务菜单
-//   - 空任务组：五列空态（「暂无」）
+//   - 空任务组：七列空态（「暂无」）
 //
 // mock 边界：仅 mock window.api（BoardCard→useTaskEntityNames 兜底拉取 reject 走
 // 名称回退）；group.store / task.store 真实实现。
@@ -56,6 +56,11 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'status'>): Tas
     updatedAt: 1000,
     startedAt: null,
     completedAt: null,
+    currentRunId: null,
+    submittedAt: null,
+    acceptedAt: null,
+    delegationRole: null,
+    autoAccept: false,
     groupId: 'g-z1',
     pinnedAt: null,
     archivedAt: 999,
@@ -158,9 +163,9 @@ describe('ArchivedBoardSection（只读归档泳道）', () => {
     expect(screen.queryByLabelText('任务菜单 归档任务甲')).not.toBeInTheDocument();
   });
 
-  it('空任务组：五列全渲染且均为空态「暂无」', () => {
+  it('空任务组：七列全渲染且均为空态「暂无」', () => {
     render(<ArchivedBoardSection group={G_Z} tasks={[]} selectedId={null} onSelect={vi.fn()} />);
 
-    expect(within(screen.getByLabelText('归档看板 归档组一')).getAllByText('暂无')).toHaveLength(5);
+    expect(within(screen.getByLabelText('归档看板 归档组一')).getAllByText('暂无')).toHaveLength(7);
   });
 });

@@ -11,7 +11,7 @@
 //     paused 可恢复（transition in_progress）；终态无任何操作按钮
 //   - 启动失败显示错误条（不再静默吞 unhandled rejection）
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
 // vi.hoisted：mock store 状态在 vi.mock 工厂注册前完成初始化。
 // session.store / ui.store mock 为「可调用 hook（selector）+ getState」双形态——
@@ -53,7 +53,7 @@ vi.mock('../../lib/locate-message', () => ({
 
 import { TaskDetailPanel } from './TaskDetailPanel';
 import { useTaskStore } from '../../stores/task.store';
-import type { ImMessage, SessionSummary, TaskRow } from '../../ipc/types';
+import type { HumanRequestRow, ImMessage, SessionSummary, TaskRow, TaskRunRow } from '../../ipc/types';
 import type { StreamState } from '../../stores/stream.store';
 import { useStreamStore } from '../../stores/stream.store';
 import { TURN_RECONCILE_NOTICE_PREFIX } from '../../lib/turn-reconcile';
@@ -68,6 +68,16 @@ const mockApi = {
     transition: vi.fn(),
     resume: vi.fn(),
     update: vi.fn(),
+    // Task 24：run 时间线 / 验收打回 / runChanged 订阅
+    listRuns: vi.fn(),
+    accept: vi.fn(),
+    reject: vi.fn(),
+    onTaskRunChanged: vi.fn().mockReturnValue(() => {}),
+  },
+  human: {
+    // Task 24：未决请求聚合（list 缺省 pending）+ 变更推送
+    list: vi.fn(),
+    onChanged: vi.fn().mockReturnValue(() => {}),
   },
   agent: {
     listMembers: vi.fn().mockRejectedValue(new Error('no ipc in test')),
@@ -117,6 +127,11 @@ function makeTask(overrides: Partial<TaskRow>): TaskRow {
     updatedAt: 1000,
     startedAt: null,
     completedAt: null,
+    currentRunId: null,
+    submittedAt: null,
+    acceptedAt: null,
+    delegationRole: null,
+    autoAccept: false,
     groupId: null,
     pinnedAt: null,
     archivedAt: null,
@@ -137,6 +152,12 @@ beforeEach(() => {
   mockApi.task.transition.mockReset().mockResolvedValue(makeTask({}));
   mockApi.task.resume.mockReset().mockResolvedValue(makeTask({ status: 'in_progress' }));
   mockApi.task.update.mockReset().mockResolvedValue(undefined);
+  mockApi.task.listRuns.mockReset().mockResolvedValue([]);
+  mockApi.task.accept.mockReset().mockResolvedValue(undefined);
+  mockApi.task.reject.mockReset().mockResolvedValue(undefined);
+  mockApi.task.onTaskRunChanged.mockClear();
+  mockApi.human.list.mockReset().mockResolvedValue([]);
+  mockApi.human.onChanged.mockClear();
   mockApi.session.send.mockReset().mockResolvedValue({ readOnly: false });
   mockApi.session.list.mockReset().mockRejectedValue(new Error('no ipc in test'));
   mockApi.journal.list.mockReset().mockResolvedValue([]);
@@ -202,6 +223,9 @@ function makeSessionSummary(id: string): SessionSummary {
     groupId: null,
     groupName: null,
     sessionType: null,
+    delegationRole: null,
+    readOnly: false,
+    taskId: null,
     members: [],
   };
 }
@@ -506,7 +530,7 @@ describe('TaskDetailPanel 待收尾徽标与催收尾按钮（spec §3.5/§3.6�
     fireEvent.click(await screen.findByRole('button', { name: '催收尾' }));
     await waitFor(() => expect(mockApi.session.send).toHaveBeenCalledTimes(1));
     const [, body] = mockApi.session.send.mock.calls[0]!;
-    expect(body).toContain('（无未清待办——但任务尚未调用 complete_task / fail_task 关闭）');
+    expect(body).toContain('（无未清待办——但任务尚未调用 submit_task / fail_task / request_human 收尾）');
   });
 
   it('发送失败 → toast 显示错误（不静默吞异常）', async () => {
@@ -578,5 +602,203 @@ describe('TaskDetailPanel 待收尾徽标与催收尾按钮（spec §3.5/§3.6�
       resolveGet(makeTask({ status: 'draft' }));
       expect(await screen.findByText('示例任务')).toBeInTheDocument();
     });
+  });
+});
+
+// === 任务生命周期 v2 Task 24：run 时间线 / 未决请求聚合 / 验收操作区 ===
+
+/** 构造 run 行（默认 run#1 initial running） */
+function makeRun(overrides: Partial<TaskRunRow> & { runNo: number }): TaskRunRow {
+  const now = Date.now();
+  return {
+    id: `run-${overrides.runNo}`,
+    taskId: 'task-1',
+    status: 'running',
+    executionSessionId: 'sess-exec',
+    trigger: 'initial',
+    startedAt: now - 60_000,
+    endedAt: null,
+    deliverableJson: null,
+    rejectReason: null,
+    createdAt: now - 60_000,
+    updatedAt: now - 60_000,
+    ...overrides,
+  };
+}
+
+/** 构造未决请求行（默认 question pending，2 分钟前创建） */
+function makeHumanRequest(overrides: Partial<HumanRequestRow> = {}): HumanRequestRow {
+  const now = Date.now();
+  return {
+    id: 'req-1',
+    taskId: 'task-1',
+    runId: null,
+    sessionId: 'sess-exec',
+    delegationId: null,
+    originNodeId: null,
+    remoteId: null,
+    kind: 'question',
+    status: 'pending',
+    title: '旧版 token 是否继续兼容？',
+    prompt: '旧版 token 是否继续兼容？',
+    payloadJson: null,
+    optionsJson: null,
+    assigneeNodeId: null,
+    authorityJson: null,
+    deadlineAt: null,
+    timeoutPolicy: 'keep_waiting',
+    lastRemindedAt: null,
+    answerJson: null,
+    answeredByNodeId: null,
+    answeredAt: null,
+    createdAt: now - 2 * 60_000,
+    updatedAt: now - 2 * 60_000,
+    ...overrides,
+  };
+}
+
+describe('TaskDetailPanel run 时间线（Task 24，预览 #19）', () => {
+  it('多 run 渲染：状态词 / 触发徽标 / rejected 显打回理由 / accepted 显交付摘要', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress' }));
+    mockApi.task.listRuns.mockResolvedValue([
+      makeRun({ runNo: 1, status: 'rejected', trigger: 'rework', endedAt: 2000, rejectReason: '迁移脚本缺回滚语句，补上再提交' }),
+      makeRun({ runNo: 2, status: 'running', trigger: 'initial' }),
+      makeRun({
+        runNo: 3,
+        status: 'accepted',
+        endedAt: 3000,
+        deliverableJson: JSON.stringify({
+          summary: '评估报告 1 份 · 准确率 91.2%',
+          files: ['report.md'],
+          artifacts: [],
+        }),
+      }),
+    ]);
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    expect(await screen.findByTestId('task-run-timeline')).toBeInTheDocument();
+    expect(mockApi.task.listRuns).toHaveBeenCalledWith('task-1');
+    // run #1 rejected：状态词 + rework 触发徽标 + 理由引用
+    expect(screen.getByTestId('task-run-row-1')).toHaveTextContent('run #1 被打回');
+    expect(screen.getByTestId('task-run-row-1')).toHaveTextContent('返工');
+    expect(screen.getByTestId('task-run-row-1')).toHaveTextContent('迁移脚本缺回滚语句，补上再提交');
+    // run #2 running：状态词 + 结束占位「至今」
+    expect(screen.getByTestId('task-run-row-2')).toHaveTextContent('run #2 执行中');
+    expect(screen.getByTestId('task-run-row-2')).toHaveTextContent('至今');
+    // run #3 accepted：交付摘要一行（含文件数）
+    expect(screen.getByTestId('task-run-row-3')).toHaveTextContent('交付：评估报告 1 份 · 准确率 91.2% · 1 文件');
+  });
+
+  it('无 run → 时间线整节不渲染', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'draft' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    await screen.findByText('#task-1');
+    expect(screen.queryByTestId('task-run-timeline')).not.toBeInTheDocument();
+  });
+
+  it('runChanged 推送（本任务）→ 重拉 runs / 未决请求 / 任务行', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    await screen.findByText('#task-1');
+    expect(mockApi.task.listRuns).toHaveBeenCalledTimes(1);
+    const cb = mockApi.task.onTaskRunChanged.mock.calls[0]![0] as (e: {
+      taskId: string;
+      runId: string;
+      status: string;
+    }) => void;
+    cb({ taskId: 'task-1', runId: 'run-1', status: 'waiting_human' });
+    await waitFor(() => expect(mockApi.task.listRuns).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mockApi.human.list).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mockApi.task.get).toHaveBeenCalledTimes(2));
+  });
+
+  it('runChanged 推送（他任务）→ 不刷新', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    await screen.findByText('#task-1');
+    const cb = mockApi.task.onTaskRunChanged.mock.calls[0]![0] as (e: {
+      taskId: string;
+      runId: string;
+      status: string;
+    }) => void;
+    cb({ taskId: 'task-other', runId: 'run-x', status: 'running' });
+    // 轮询间隔外无第二次拉取（get 首载 1 次 + listRuns/human 各 1 次保持不变）
+    expect(mockApi.task.listRuns).toHaveBeenCalledTimes(1);
+    expect(mockApi.human.list).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('TaskDetailPanel 未决请求聚合（Task 24，预览 #20）', () => {
+  it('pending 行渲染：计数标题 + kind 徽标 + 标题截断行 + 「到会话处理」按钮；点击跳会话', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'waiting_human' }));
+    mockApi.human.list.mockResolvedValue([
+      makeHumanRequest({ id: 'req-1', kind: 'tool_gate', title: '写授权：psql -f migrations/0042.sql' }),
+      makeHumanRequest({ id: 'req-2', kind: 'question' }),
+    ]);
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    expect(await screen.findByTestId('task-pending-requests')).toBeInTheDocument();
+    expect(mockApi.human.list).toHaveBeenCalledWith({ taskId: 'task-1' });
+    expect(screen.getByText('未决请求（2）')).toBeInTheDocument();
+    expect(screen.getByTestId('task-pending-row-req-1')).toHaveTextContent('工具门');
+    expect(screen.getByTestId('task-pending-row-req-1')).toHaveTextContent('写授权：psql -f migrations/0042.sql');
+    expect(screen.getByTestId('task-pending-row-req-2')).toHaveTextContent('提问');
+    // 跳转：selectSession + 切 im 视图
+    fireEvent.click(within(screen.getByTestId('task-pending-row-req-2')).getByRole('button', { name: '到会话处理' }));
+    await waitFor(() => expect(sessionState.selectSession).toHaveBeenCalledWith('sess-exec'));
+    expect(uiState.setActiveView).toHaveBeenCalledWith('im');
+  });
+
+  it('最早超时预警：有 deadline 的行显示剩余分钟提示', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'waiting_human' }));
+    mockApi.human.list.mockResolvedValue([
+      makeHumanRequest({ id: 'req-d', deadlineAt: Date.now() + 3 * 60_000 }),
+    ]);
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    await screen.findByTestId('task-pending-requests');
+    expect(screen.getByText(/1 项等待 · 最早 3 分钟后超时预警/)).toBeInTheDocument();
+  });
+
+  it('无未决请求 → 聚合区不渲染', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    await screen.findByText('#task-1');
+    expect(screen.queryByTestId('task-pending-requests')).not.toBeInTheDocument();
+  });
+});
+
+describe('TaskDetailPanel 验收操作区（Task 24，预览 #21）', () => {
+  it('submitted → 显示验收操作区；「验收通过」→ task.accept', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'submitted' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: '验收通过' }));
+    await waitFor(() => expect(mockApi.task.accept).toHaveBeenCalledWith('task-1'));
+  });
+
+  it('打回流：弹 RejectReasonDialog → 空理由禁用确认 → 填理由确认 → task.reject(taskId, reason)', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'submitted' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: '打回返工' }));
+    // 复用 #17 弹框：空理由禁用（弹框自身契约，此处锁集成路径）
+    const reason = screen.getByRole('textbox', { name: '打回理由' });
+    const confirm = screen.getByRole('button', { name: '确认打回' });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(reason, { target: { value: '未覆盖待支付库存锁定场景' } });
+    fireEvent.click(confirm);
+    await waitFor(() => expect(mockApi.task.reject).toHaveBeenCalledWith('task-1', '未覆盖待支付库存锁定场景'));
+    expect(screen.queryByRole('dialog', { name: '打回返工' })).not.toBeInTheDocument();
+  });
+
+  it('非 submitted（in_progress / waiting_human）→ 验收操作区不渲染', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    await screen.findByText('进行中');
+    expect(screen.queryByTestId('task-acceptance')).not.toBeInTheDocument();
+  });
+
+  it('验收失败 → 错误条可见（不静默吞）', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'submitted' }));
+    mockApi.task.accept.mockRejectedValue(new Error('任务已被并发打回'));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: '验收通过' }));
+    expect(await screen.findByText(/任务已被并发打回/)).toBeInTheDocument();
   });
 });

@@ -24,6 +24,7 @@ import {
 import { MessageEventBuffer } from '../../src/main/storage/messages/event-buffer';
 import { listEventsByMessage } from '../../src/main/storage/messages/events-repo';
 import { insertTask, transitionTaskStatus, getTask } from '../../src/main/storage/tasks/repo';
+import { startRun, submitRun, acceptTask } from '../../src/main/task/lifecycle-runs';
 import { aggregateEvents } from '../../../renderer/src/lib/stream-aggregator';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-task-driven-e2e-${Date.now()}`);
@@ -90,7 +91,7 @@ describe('task-driven runtime e2e', () => {
     expect(stream.status).toBe('done');
   });
 
-  it('场景 2：用户 @agent #T-001 → task 启动 → 完成', () => {
+  it('场景 2：用户 @agent #T-001 → task 启动 → 完成', async () => {
     // 1. INSERT task（用 repo 函数，自动填 created_at/updated_at 时间戳）
     insertTask({
       id: 'T-001',
@@ -115,6 +116,15 @@ describe('task-driven runtime e2e', () => {
       executionSessionId: '!room:home',
       startedAt: Date.now(),
     });
+    // v2：真实会话行（submitRun 验收请求 human_requests.session_id FK → sessions）
+    // + run #1（Task 15 起完成链需活动 run）
+    getDb()
+      .prepare(
+        `INSERT INTO sessions (id, workspace_id, title, title_auto, kind, settings_json, created_at, updated_at, session_type)
+         VALUES ('!room:home', 'ws1', '执行', 0, 'chat', NULL, ?, ?, NULL)`,
+      )
+      .run(Date.now(), Date.now());
+    startRun('T-001', { trigger: 'initial', executionSessionId: '!room:home' });
 
     // 4. 模拟 runtime 跑 chat loop
     const agentMsg = insertMessage({
@@ -146,8 +156,9 @@ describe('task-driven runtime e2e', () => {
     buf.flush();
     buf.destroy();
 
-    // 5. complete_task → task 状态机（in_progress → completed）
-    transitionTaskStatus('T-001', 'completed', { completedAt: Date.now() });
+    // 5. v2 完成链：submit_task 提交验收 + 验收通过（in_progress → submitted → completed）
+    await submitRun('T-001', { summary: '登录页已实现' });
+    await acceptTask('T-001');
 
     // 6. 验证 task 终态 + 流聚合（工具调用配对）
     const task = getTask('T-001');

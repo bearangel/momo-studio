@@ -14,6 +14,10 @@
 # 2026-11-12-agent-capability-management-tools）+ manage-agent 技能册——
 # defaultTools 65 → 70，defaultSkills 4 → 5。
 #
+# 2026-11-13 v2.3.0：任务生命周期 v2 两工具（request_human 人工请求 /
+# submit_task 提交验收，complete_task 改为 submit_task 废弃别名）——
+# defaultTools 70 → 72。
+#
 # 2026-11-02 内置资源极简化：本文件成为唯一内置预置。defaultSkills 已移除
 # （doc-coauthoring / humanize-writing / verification-before-done 随 20 个内置 skill
 # 一并下架），原技能承载的写作纪律已内联进 systemPrompt；后续按用户反馈逐步恢复。
@@ -22,7 +26,7 @@ kind: AgentDefinition
 metadata:
   name: Momo
   slug: general-assistant
-  version: 2.2.0
+  version: 2.3.0
   description: 系统默认的万能综合 agent：问答、写作、编码、终端、Git、网页与文件处理，一个入口全搞定。
   iconEmoji: "🐾"
 spec:
@@ -121,6 +125,10 @@ spec:
       ref: read_task_progress
     - kind: builtin
       ref: create_task
+    - kind: builtin
+      ref: request_human
+    - kind: builtin
+      ref: submit_task
     - kind: builtin
       ref: complete_task
     - kind: builtin

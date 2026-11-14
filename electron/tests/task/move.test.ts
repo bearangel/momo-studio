@@ -31,7 +31,9 @@ import {
   type TaskStatus,
 } from '../../src/main/storage/tasks/repo';
 import { createGroup, archiveGroup } from '../../src/main/storage/task-groups/repo';
+import { insertSession } from '../../src/main/storage/sessions/repo';
 import { executeMove } from '../../src/main/task/move';
+import { startRun, submitRun } from '../../src/main/task/lifecycle-runs';
 import { setTaskRelations } from '../../src/main/task/relations';
 import {
   startTaskAndKickoff,
@@ -57,13 +59,20 @@ const seed = (status: TaskStatus, extra: Partial<TaskRow> = {}) =>
 
 /**
  * 经生产合法链 seed 派生态(momo-test-rules 第 1 条:直插 status 不贴真实运行时)。
- * assigned → in_progress(+会话) → paused / completed / cancelled 按需续走。
+ * v2 状态机:assigned → in_progress(+会话) → submitted → completed 按需续走
+ * (in_progress → completed 直达边已删,completed 必经 submitted 验收)。
  */
-function seedViaChain(status: 'in_progress' | 'paused' | 'completed', extra: Partial<TaskRow> = {}): TaskRow {
+function seedViaChain(
+  status: 'in_progress' | 'submitted' | 'paused' | 'completed',
+  extra: Partial<TaskRow> = {},
+): TaskRow {
   const t = seed('assigned', { assigneeAgentId: 'i-1', ...extra });
   transitionTaskStatus(t.id, 'in_progress', { executionSessionId: 'sess-1' });
   if (status === 'paused') transitionTaskStatus(t.id, 'paused');
-  if (status === 'completed') transitionTaskStatus(t.id, 'completed', { completedAt: Date.now() });
+  if (status === 'completed') {
+    transitionTaskStatus(t.id, 'submitted', { submittedAt: Date.now() });
+    transitionTaskStatus(t.id, 'completed', { completedAt: Date.now() });
+  }
   return getTask(t.id)!;
 }
 
@@ -166,20 +175,53 @@ describe('executeMove 语义表——跨列动作映射', () => {
     expect(resumeMock).not.toHaveBeenCalled();
   });
 
-  it('in_progress→done:transition completed + completedAt', async () => {
-    const t = seedViaChain('in_progress');
+  it('in_progress→done:路由 submitRun+acceptTask(一步提交+验收,Task 10 已接线)', async () => {
+    // v2 生命周期:完成必经验收——done 不再直转 completed,改走 lifecycle-runs;
+    // 动作语义的细节锁在 lifecycle-runs-submit.test.ts / move-v2.test.ts,此处锁路由选择
+    const ses = insertSession({ workspaceId: WS, title: '执行', kind: 'chat' });
+    const t = seed('assigned', { assigneeAgentId: 'i-1', executionSessionId: ses.id });
+    startRun(t.id, { trigger: 'initial', executionSessionId: ses.id });
+    expect(getTask(t.id)?.status).toBe('in_progress');
+
     await executeMove(t.id, { column: 'done', groupId: null });
+
     const after = getTask(t.id)!;
-    expect(after.status).toBe('completed');
+    expect(after.status).toBe('completed'); // 提交+验收一步到位
     expect(after.completedAt).not.toBeNull();
   });
 
-  it('in_progress→done 且带循环规则:生成下一实例(与 agent complete_task 同语义)', async () => {
-    const t = seedViaChain('in_progress', { recurrenceRule: 'daily@09:00' });
+  it('in_progress→done 且带循环规则:验收通过后续期(children=1,落 assigned)', async () => {
+    const ses = insertSession({ workspaceId: WS, title: '执行', kind: 'chat' });
+    const t = seed('assigned', {
+      assigneeAgentId: 'i-1',
+      executionSessionId: ses.id,
+      recurrenceRule: 'daily@09:00',
+    });
+    startRun(t.id, { trigger: 'initial', executionSessionId: ses.id });
+
     await executeMove(t.id, { column: 'done', groupId: null });
+
+    expect(getTask(t.id)?.status).toBe('completed');
+    const children = listTasks({ workspaceId: WS }).filter((r) => r.recurrenceParentId === t.id);
+    expect(children).toHaveLength(1); // 验收通过才续期
+    expect(children[0]!.status).toBe('assigned'); // 续期即入队
+  });
+
+  it('submitted→done 且带循环规则:验收通过同样续期', async () => {
+    const ses = insertSession({ workspaceId: WS, title: '执行', kind: 'chat' });
+    const t = seed('assigned', {
+      assigneeAgentId: 'i-1',
+      executionSessionId: ses.id,
+      recurrenceRule: 'daily@09:00',
+    });
+    startRun(t.id, { trigger: 'initial', executionSessionId: ses.id });
+    await submitRun(t.id, { summary: '' }); // 先到待验收列
+
+    await executeMove(t.id, { column: 'done', groupId: null });
+
+    expect(getTask(t.id)?.status).toBe('completed');
     const children = listTasks({ workspaceId: WS }).filter((r) => r.recurrenceParentId === t.id);
     expect(children).toHaveLength(1);
-    // 泳道语义重构 §4.3：续期实例落 assigned（建即入队，未来时间由闸门管）
     expect(children[0]!.status).toBe('assigned');
   });
 

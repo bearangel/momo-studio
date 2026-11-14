@@ -177,10 +177,11 @@ describe('任务暂停/取消 ↔ agent 执行联动（K7-4/K7-5）', () => {
     expect(abortSpy).toHaveBeenCalledWith('sess-cex', t.id);
   });
 
-  it('K7-4: transition 到无关状态（如 assigned）不触发中断', async () => {
+  it('K7-4: transition 白名单外状态（如 assigned）→ 人话拒绝，不触发中断（v2 §9.3 行9）', async () => {
     const t = insertTask({ workspaceId: 'ws1', title: '无关联', creatorUserId: '@owner:home' });
     const handler = handlers.get('task:transition')!;
-    await handler(null, t.id, 'assigned');
+    await expect(handler(null, t.id, 'assigned')).rejects.toThrow('task:transition');
+    expect(getTask(t.id)!.status).toBe('draft'); // 拒绝零副作用
     expect(abortSpy).not.toHaveBeenCalled();
   });
 

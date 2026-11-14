@@ -37,10 +37,11 @@ const tmpRoot = path.join(
 
 const mk = (title: string) => insertTask({ workspaceId: WS, title, creatorUserId: 'owner' });
 
-/** assigned → in_progress → completed 生产合法链（momo-test-rules 第 1 条） */
+/** assigned → in_progress → submitted → completed 生产合法链（v2 完成必经验收，momo-test-rules 第 1 条） */
 function complete(id: string): void {
   transitionTaskStatus(id, 'assigned');
   transitionTaskStatus(id, 'in_progress', { executionSessionId: 's-1' });
+  transitionTaskStatus(id, 'submitted');
   transitionTaskStatus(id, 'completed', { completedAt: Date.now() });
 }
 

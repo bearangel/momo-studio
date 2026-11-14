@@ -232,20 +232,21 @@ describe('ledgerSettleDispatch 配额自动续跑调度（QUOTA_LIMITED ≠ 终�
   it('成功（completed）→ 计数清零（连续性断）', () => {
     ledgerInsertDispatch({ ...CHAIN, sessionId });
     ledgerSettleDispatch(CHAIN.taskId, 'failed', quotaErrorText(null)); // 计数 1，assigned
-    ledgerInsertDispatch({ ...CHAIN, sessionId }); // 复位 in_progress
+    ledgerInsertDispatch({ ...CHAIN, sessionId }); // 复位 in_progress + 新 run
+    // v2（Task 15）：settle completed = 提交即验收（dispatch 行 auto_accept 直达 completed）
     ledgerSettleDispatch(CHAIN.taskId, 'completed');
 
     expect(getTask(CHAIN.taskId)!.status).toBe('completed');
     expect(quotaCount(CHAIN.taskId)).toBe(0);
   });
 
-  it('needs_input → paused（既有映射）+ 计数清零', () => {
+  it('needs_input → waiting_human + question 请求（v2 映射）+ 计数清零', () => {
     ledgerInsertDispatch({ ...CHAIN, sessionId });
     ledgerSettleDispatch(CHAIN.taskId, 'failed', quotaErrorText(null));
     ledgerInsertDispatch({ ...CHAIN, sessionId });
-    ledgerSettleDispatch(CHAIN.taskId, 'needs_input');
+    ledgerSettleDispatch(CHAIN.taskId, 'needs_input', '需要素材');
 
-    expect(getTask(CHAIN.taskId)!.status).toBe('paused');
+    expect(getTask(CHAIN.taskId)!.status).toBe('waiting_human');
     expect(quotaCount(CHAIN.taskId)).toBe(0);
   });
 

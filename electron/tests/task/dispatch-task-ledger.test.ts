@@ -2,8 +2,9 @@
 //
 // D4（验收报告 2026-10-31 T22）：dispatch 子任务入 tasks 账本——registry 的单向
 // 持久化投影。spec docs/specs/2026-10-31-ledger-storage-package-design.md §3。
-// 覆盖：行形状 / followup 权威复位 / settle 三态映射（needs_input→paused）/ cancel /
-// sweepDead fail / 启动对账 / 写失败韧性（投影失败不断运行链）。
+// 覆盖：行形状 / followup 权威复位 / settle 三态映射（needs_input→waiting_human
+// + question 请求，Task 15 v2 语义）/ cancel / sweepDead fail / 启动对账 /
+// 写失败韧性（投影失败不断运行链）。
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,6 +12,7 @@ import os from 'node:os';
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { getTask, listTasks, updateTask } from '../../src/main/storage/tasks/repo';
+import { listByTask } from '../../src/main/storage/tasks/human-requests-repo';
 import {
   ledgerInsertDispatch,
   ledgerSettleDispatch,
@@ -41,6 +43,12 @@ function seedMembers(): void {
        VALUES (?, 'ws', ?, ?)`,
     ).run(inst, inst, `agent-${inst}`);
   }
+  // v2（Task 15）：settle completed → submitRun 生成验收请求（human_requests
+  // .session_id FK → sessions）——sess-d4 需为真实会话行
+  db.prepare(
+    `INSERT INTO sessions (id, workspace_id, title, title_auto, kind, settings_json, created_at, updated_at, session_type)
+     VALUES ('sess-d4', 'ws', '协作', 0, 'chat', NULL, ?, ?, NULL)`,
+  ).run(Date.now(), Date.now());
 }
 
 const CHAIN = {
@@ -84,8 +92,9 @@ describe('D4 dispatch-task-ledger（registry → tasks 单向投影）', () => {
     expect(row.title).toHaveLength(80);
   });
 
-  it('followup 链复用：终态行 updateTask 权威复位回 in_progress（禁 DELETE——迁移 555 触发器会把挂链消息 task_id 置 NULL 断链）', () => {
+  it('followup 链复用：终态行权威复位回 in_progress + 新 run（禁 DELETE——迁移 555 触发器会把挂链消息 task_id 置 NULL 断链）', () => {
     ledgerInsertDispatch(CHAIN);
+    // v2 语义（Task 15）：settle completed = 提交即验收（dispatch 行 auto_accept）
     ledgerSettleDispatch(CHAIN.taskId, 'completed');
     expect(getTask(CHAIN.taskId)!.status).toBe('completed');
     // 下一轮派发（同链 id）——行 id 稳定不动（触发器零触发）
@@ -106,22 +115,25 @@ describe('D4 dispatch-task-ledger（registry → tasks 单向投影）', () => {
     expect(row.archivedAt).toBeNull();
   });
 
-  it('settle 三态映射：completed→completed / failed→failed+errorMessage / needs_input→paused', () => {
+  it('settle 三态映射：completed→提交即验收 completed / failed→failed+errorMessage / needs_input→waiting_human+question 请求', () => {
     ledgerInsertDispatch(CHAIN);
     ledgerSettleDispatch(CHAIN.taskId, 'failed', '连接中断：terminated');
     let row = getTask(CHAIN.taskId)!;
     expect(row.status).toBe('failed');
     expect(row.errorMessage).toBeTruthy();
 
-    ledgerInsertDispatch(CHAIN); // 复位
-    ledgerSettleDispatch(CHAIN.taskId, 'needs_input');
+    ledgerInsertDispatch(CHAIN); // 复位（followup 权威重置 + 新 run）
+    ledgerSettleDispatch(CHAIN.taskId, 'needs_input', '需要补充素材');
     row = getTask(CHAIN.taskId)!;
-    expect(row.status, 'needs_input=HITL 等待人工——paused 语义准确（spec 自审修正）').toBe('paused');
+    expect(row.status, 'v2：needs_input=HITL 等人——waiting_human 投影（不再落 paused）').toBe('waiting_human');
+    const req = listByTask(CHAIN.taskId).find((r) => r.kind === 'question' && r.status === 'pending');
+    expect(req, 'body 作 prompt 的 question 人工请求').toBeDefined();
+    expect(req!.prompt).toBe('需要补充素材');
 
     ledgerInsertDispatch(CHAIN);
     ledgerSettleDispatch(CHAIN.taskId, 'completed');
     row = getTask(CHAIN.taskId)!;
-    expect(row.status).toBe('completed');
+    expect(row.status, 'dispatch 行 auto_accept——提交即验收直达 completed').toBe('completed');
   });
 
   it('cancel 投影 → cancelled', () => {

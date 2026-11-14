@@ -15,9 +15,12 @@
 //   6. 接线锁：routeUserChat 把 sourceTaskId 织入 TaskConfig.hostTaskId
 //      （taskId 通道保持 null——agent-runner 的 task-driven 生命周期语义不可触发）
 //
-// mock 收窄（momo-test-rules）：只 mock LLM provider 与 tasks repo（DB 边界）；
-// 工具链用真实 buildToolRegistry。transitionTaskStatus mock 仿真状态机语义
-// （写入即时反映到 getTask 读值），防「mock 与生产语义漂移」。
+// mock 收窄（momo-test-rules）：只 mock LLM provider 与 tasks repo（DB 边界）+
+// lifecycle-runs 服务边界（Task 14 起工具面 submit/fail/request 走该服务，落
+// runs / human_requests 表——本文件无 DB）；工具链用真实 buildToolRegistry。
+// transitionTaskStatus mock 仿真状态机语义（写入即时反映到 getTask 读值），
+// submitRun / failRun mock 同法仿真任务态投影（submitted / failed），防
+// 「mock 与生产语义漂移」。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { LLMMessage, StreamDelta } from '../../src/main/agent/llm-provider';
 import type { WorkspaceFS } from '../../src/main/files/workspace-fs';
@@ -40,6 +43,19 @@ vi.mock('../../src/main/storage/tasks/repo', async (importOriginal) => {
   };
 });
 
+vi.mock('../../src/main/task/lifecycle-runs', () => ({
+  submitRun: vi.fn(),
+  failRun: vi.fn(),
+  requestHuman: vi.fn(),
+}));
+
+// runs-repo 边界打桩（本文件无 DB）：submit_task 取 runNo 用 listRuns 末位、
+// request_human 绑定用 getActiveRun——形状最小仿真，不触库
+vi.mock('../../src/main/storage/tasks/runs-repo', () => ({
+  getActiveRun: vi.fn(() => null),
+  listRuns: vi.fn(() => [{ runNo: 1 }]),
+}));
+
 import { createLLMProvider } from '../../src/main/agent/llm-provider';
 import {
   runChatLoop,
@@ -59,6 +75,7 @@ import {
   type MemoryProvider,
 } from '../../src/main/memory';
 import { getTask, transitionTaskStatus } from '../../src/main/storage/tasks/repo';
+import { submitRun, failRun } from '../../src/main/task/lifecycle-runs';
 import {
   buildKickoffBody,
   KICKOFF_CLOSURE_MANDATE,
@@ -115,6 +132,11 @@ function mkTaskRow(id: string, status: TaskRow['status']): TaskRow {
     updatedAt: 0,
     startedAt: null,
     completedAt: null,
+    currentRunId: null,
+    submittedAt: null,
+    acceptedAt: null,
+    delegationRole: null,
+    autoAccept: false,
     groupId: null,
     pinnedAt: null,
     archivedAt: null,
@@ -239,6 +261,20 @@ beforeEach(() => {
       taskStatuses.set(id, to);
       return mkTaskRow(id, to);
     });
+  // lifecycle-runs 投影仿真（与 transitionTaskStatus 同一真相源）：
+  // submitRun → submitted / failRun → failed（生产语义：任务态投影单点落定）
+  vi.mocked(submitRun)
+    .mockReset()
+    .mockImplementation(async (taskId: string) => {
+      if (!taskStatuses.has(taskId)) throw new Error(`任务 ${taskId} 不存在`);
+      taskStatuses.set(taskId, 'submitted');
+    });
+  vi.mocked(failRun)
+    .mockReset()
+    .mockImplementation((taskId: string) => {
+      if (!taskStatuses.has(taskId)) throw new Error(`任务 ${taskId} 不存在`);
+      taskStatuses.set(taskId, 'failed');
+    });
   process.send = ((msg: unknown): boolean => {
     sentChunks.push(msg);
     return true;
@@ -282,11 +318,12 @@ describe('任务回合对账门禁（F1 扩展，spec §3.1）', () => {
       (m) => m.role === 'user' && m.content.startsWith(TURN_RECONCILE_NOTICE_PREFIX),
     );
     expect(notice).toBeDefined();
-    // spec §3.2 措辞要素：任务 id / 未清项 + 当前状态 / 双逃生门 / 防重复执行
+    // 三选一措辞要素：任务 id / 未清项 + 当前状态 / submit-fail-request 三门 / 防重复执行
     expect(notice!.content).toContain('任务 T-060 仍处于 in_progress');
     expect(notice!.content).toContain('落地实现（待处理）');
     expect(notice!.content).not.toContain('调研方案');
-    expect(notice!.content).toContain('complete_task 关闭任务');
+    expect(notice!.content).toContain('submit_task 提交验收');
+    expect(notice!.content).toContain('需要人帮助改用 request_human');
     expect(notice!.content).toContain('严禁重复执行已完成的事项');
     expect((sentChunks as SentChunk[]).find((c) => c.type === 'end')!.finishReason).toBe('stop');
   });
@@ -389,7 +426,7 @@ describe('任务回合对账门禁（F1 扩展，spec §3.1）', () => {
     expect(notice!.content).toContain('无未清待办');
   });
 
-  it('调用过 complete_task（指向宿主任务）且待办全清 → 不注入，任务行终态生效', async () => {
+  it('调用过 complete_task（指向宿主任务，v2 提交语义）且待办全清 → 不注入，任务行落 submitted', async () => {
     taskStatuses.set('T-060', 'in_progress');
     __setTodosForTest(SSI, [
       { id: 't1', subject: '调研方案', status: 'completed', source: 'user' },
@@ -404,8 +441,8 @@ describe('任务回合对账门禁（F1 扩展，spec §3.1）', () => {
 
     expect(chatStream).toHaveBeenCalledTimes(2);
     expect(countNotices(TURN_RECONCILE_NOTICE_PREFIX)).toBe(0);
-    // 真实 TaskTools 执行链打通 mock 状态机：任务行已转终态
-    expect(taskStatuses.get('T-060')).toBe('completed');
+    // 真实 TaskTools 执行链打通 mock 投影：complete_task = submit_task，任务行 submitted
+    expect(taskStatuses.get('T-060')).toBe('submitted');
   });
 
   it('complete_task 指向他任务 → 闭合不算（宿主任务仍 open，继续注入）', async () => {
@@ -428,7 +465,7 @@ describe('任务回合对账门禁（F1 扩展，spec §3.1）', () => {
     // 工具轮后第 1 次终文触发注入 → 合成条出现在第 3 次请求的 messages 里
     expect(noticeIn(capturedCalls[2]!, TURN_RECONCILE_NOTICE_PREFIX)).toContain('任务 T-060');
     expect(taskStatuses.get('T-060')).toBe('in_progress');
-    expect(taskStatuses.get('T-OTHER')).toBe('completed');
+    expect(taskStatuses.get('T-OTHER')).toBe('submitted');
   });
 });
 
@@ -509,15 +546,16 @@ describe('入场闭合契约（spec §3.3）', () => {
     const body = buildKickoffBody(mkTaskRow('T-060', 'in_progress'));
     expect(body).toContain('【任务启动】#T-060');
     expect(body).toContain(KICKOFF_CLOSURE_MANDATE);
-    // 义务段三要素：触发声明 / 两条闭合通道 / 兜底说明
+    // 义务段要素（v2 Task 15）：触发声明 / 两条闭合通道（submit_task / fail_task）/
+    // 求助通道（request_human）
     expect(KICKOFF_CLOSURE_MANDATE).toContain('本回合由任务简报触发');
-    expect(KICKOFF_CLOSURE_MANDATE).toContain('complete_task');
+    expect(KICKOFF_CLOSURE_MANDATE).toContain('submit_task');
     expect(KICKOFF_CLOSURE_MANDATE).toContain('fail_task');
     expect(KICKOFF_CLOSURE_MANDATE).toContain('关闭任务');
-    expect(KICKOFF_CLOSURE_MANDATE).toContain('说明原因');
+    expect(KICKOFF_CLOSURE_MANDATE).toContain('request_human');
   });
 
-  it('模板全文与 spec §3.2 措辞一致（双逃生门 + 一次性声明 + 前缀登记形态）', () => {
+  it('模板全文与三选一措辞一致（submit / fail / request_human + 一次性声明 + 前缀登记形态）', () => {
     const text = buildTurnReconcileNotice('T-001', [
       { subject: '甲项', status: 'in_progress' },
       { subject: '乙项', status: 'pending' },
@@ -525,8 +563,9 @@ describe('入场闭合契约（spec §3.3）', () => {
     expect(text.startsWith('[系统] 回合收尾核对（非新任务请求）：任务 T-001 仍处于 in_progress，待办存在未清项：')).toBe(true);
     expect(text).toContain('甲项（进行中）');
     expect(text).toContain('乙项（待处理）');
-    expect(text).toContain('(a) 完成剩余项，调用 todowrite 如实更新，并调用 complete_task 关闭任务；');
-    expect(text).toContain('任务保持 in_progress 留待用户处理。');
+    expect(text).toContain('(a) 实现已完成：调用 todowrite 如实更新，并调用 submit_task 提交验收（你没有完成权限，只有提交权限）；');
+    expect(text).toContain('(b) 技术性失败无法继续：调用 fail_task 并说明原因（需要人帮助改用 request_human）；');
+    expect(text).toContain('(c) 需要人提供信息/决策/系统外操作：调用 request_human，调用后立即结束本回合等待【人工答复】。');
     expect(text.endsWith('严禁重复执行已完成的事项。本提醒一次性，不会再触发。')).toBe(true);
   });
 });

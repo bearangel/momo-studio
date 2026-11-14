@@ -11,8 +11,9 @@
 //   - 删除是「删容器不删内容」：组内任务（活跃+已归档）转移到目标组（默认
 //     未分组）后删组行，单事务；三段式处置的终态（归档可逆 / 转移合并 / 删除打散）
 import { getDb } from '../db';
-import { transitionTaskStatus, listTasks } from '../tasks/repo';
+import { listTasks } from '../tasks/repo';
 import { isTerminal } from '../tasks/state-machine';
+import { markTaskCancelled } from '../../task/lifecycle-runs';
 
 export interface GroupRow {
   id: string;
@@ -149,7 +150,11 @@ export function archiveGroup(id: string): { cancelledIds: string[]; archivedCoun
     const cancelledIds: string[] = [];
     for (const r of rows) {
       if (!isTerminal(r.status)) {
-        transitionTaskStatus(r.id, 'cancelled');
+        // v2 收敛（§9.3 行10，Task 15）：级联取消走 lifecycle-runs 状态面单点
+        //（有活动 run → cancelActiveRun：run cancelled + 未决请求 superseded；
+        // 排队/草稿行直接投影 cancelled + 挂起请求联动 cancelled）——进程级
+        // abort 仍由 IPC 层凭 cancelledIds 补执行（不入 DB 事务）
+        markTaskCancelled(r.id, '分组归档级联取消');
         cancelledIds.push(r.id);
       }
     }

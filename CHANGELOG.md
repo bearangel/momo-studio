@@ -6,6 +6,19 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 任务生命周期 v2 P1（本地闭环）
+
+`2.1.0-alpha.67`。依据 spec `docs/specs/2026-11-13-task-human-loop-lifecycle-design.md` + 实施计划 `docs/plans/2026-11-13-task-lifecycle-v2-p1.md`（25 任务分派 + 逐 commit 独立评审）+ 消费面矩阵 `.omo/feature-matrices/2026-11-13-task-lifecycle-v2.md`。来源：完成语义两段式改造——agent 只能「提交」，完成必经人工验收。
+
+- **三表与回填**（4f318b04..51196227）：migration 081 三表结构——tasks 增五列（current_run_id / submitted_at / accepted_at / delegation_role / auto_accept）+ task_runs（执行尝试读写单点）+ human_requests（人工请求持久化）；082 存量回填（in_progress 补 run#1、dispatch 簿记行自动验收）；状态机 v2 新二态 waiting_human / submitted（2117da07）——in_progress→completed 直写边删除，完成必经验收（两段式：agent submitTask → 人工 accept/reject）
+- **写路径收敛**（cbe2f049..72b1af42）：任务状态写入收敛至 lifecycle-runs 服务单点（§9.3 十处逃生门收口——task-tools / move / agent-runner 等直写改走 submitRun/failRun 投影），运行时断裂窗口关闭后 electron 全量 6147/0
+- **人工请求域**（4b19683a + 7920c090 + 135ed9a1 + 72d5232a）：四类请求（tool_gate / question / manual_action / acceptance）+ 原子答复 answerHuman（stale 防竞态）+ 【人工答复】系统消息注入；超时 sweeper 五策略（deny_and_wrap / keep_waiting / escalate / fail / cancel，markExpired WHERE pending 原子守卫 + per-row catch 防毒行饿死）；写授权卡持久化为 tool_gate 人工请求（双写 + 答复驱动授权 + 孤儿回收）
+- **agent 工具面 v2**（8374724a）：新工具 request_human（人工请求发起）与 submit_task（提交交付物）；complete_task 改提交语义（提交即转 submitted 待验收，不再直宣告完成）
+- **IPC 与会话面**（f9d585dd + d376dfa2）：任务生命周期 IPC（submit/accept/reject/runs + human 命名空间 + 推送装配）；SessionSummary 生命周期字段 + 活动任务会话删除守卫
+- **看板与详情 UI**（18c74d2e + fa2bad7f + f08374ad + 9ba86ce9）：看板七列（新增等待中 / 待验收，预览合同 `.omo/previews/2026-11-13-task-lifecycle-{session,board}.html` 落地）；move 打回理由校验与验收路由；详情执行尝试时间线（run 状态圆点 / 触发徽标 / rejected 显打回理由 / accepted 显交付摘要）+ 验收 / 打回操作（返工上限：run 数达 10 拒绝再启动、超限打回任务转 failed）
+- **会话请求面板**（86e9b4de + 917f1a8d + 94afe03f）：composer 上方唯一行动入口——四类人工卡 + 验收卡（同 kind 换卡状态隔离回归锁）；注意力徽标 + 待处理分区 + 跟踪会话只读态（只读闸落 MentionInput，连带消除附件导入与拖放旁路）
+- **P1 外派降级守卫**（ff840bbe）：delegation_role 双写 + auto_accept 强制 + executor 本地过滤（外派行不经人工验收闭环，P2 authority 接管前降级保真）
+
 ## [未发布] — 启动期消息排队与占位气泡 + agent 子进程打包启动崩修复
 
 `2.1.0-alpha.66`。来源：用户 Windows 打包版实测两症状——启动后 ~40-60s 内发消息 agent 不回复；alpha.63/64 起发消息直接 `runtime 退出 code:1`（WarmPool 全灭）。

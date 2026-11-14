@@ -19,7 +19,8 @@
 //   - dispatcher.ts 是 2.1 未接线预留（per-agent 并发 + 直启子进程模型），
 //     本模块是全新会话驱动路径，互不相干
 import { getDb } from '../storage/db';
-import { getTask, transitionTaskStatus, type TaskRow } from '../storage/tasks/repo';
+import { getTask, type TaskRow } from '../storage/tasks/repo';
+import { markSessionQueued, markTaskFailed } from './lifecycle-runs';
 import { startTask } from './starter';
 import { teamExists } from '../agent/team';
 import { getSession } from '../storage/sessions/repo';
@@ -130,15 +131,9 @@ export class TaskExecutor {
     // 任务转 session_queued 排队，return false 不占全局槽。无目标会话的任务
     // startTask 新建会话，车道必空不检查
     if (task.targetSessionId && isLaneOccupied(task.targetSessionId)) {
-      try {
-        transitionTaskStatus(task.id, 'session_queued');
-      } catch (err) {
-        // 并发改态（用户同时取消等）——留给兜底扫描重评估
-        logger.warn('车道排队转换失败（并发改态）', {
-          taskId: task.id,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
+      // v2 收敛（消费面 R6/①-12）：车道排队投影走服务单点（非法边静默跳过，
+      // 并发改态留给兜底扫描重评估）
+      markSessionQueued(task.id);
       return false;
     }
     let executionSessionId: string;
@@ -186,7 +181,10 @@ function countInProgress(): number {
  * 未来时间的任务停在排队中，由 executor 30s 兜底扫描 + scheduler due-wakeup 到点捞起。
  * blocked 闸门（M3.3 spec §2.1）：存在未完成依赖（NOT EXISTS 半连接依赖边 ×
  * 依赖行状态 <> completed）的任务不进入放行——依赖完成（completed）后自然放行，
- * 与 scheduled_at 闸门正交（逐行过滤，非整池熔断）。 */
+ * 与 scheduled_at 闸门正交（逐行过滤，非整池熔断）。
+ * 外派行闸门（spec §5.1 不变量 7，P1 降级守卫 Task 18）：delegation_role='out'
+ * 的 assigned 行不本地放行——外派任务的执行/打回续跑由 hub 链路驱动，本地
+ * executor 不得重复拉起（防双执行）。 */
 function peekNextAssigned(slots: number, skip: ReadonlySet<string>): TaskRow | null {
   const skipIds = [...skip];
   // 排除子句只拼接占位符（skip 内容是内部生成的任务 id，仍走参数绑定）
@@ -196,6 +194,7 @@ function peekNextAssigned(slots: number, skip: ReadonlySet<string>): TaskRow | n
     .prepare(
       `SELECT t.id FROM tasks t
        WHERE t.status IN ('assigned', 'session_queued') ${excludeClause}
+       AND (t.delegation_role IS NULL OR t.delegation_role <> 'out')
        AND (t.scheduled_at IS NULL OR t.scheduled_at <= ?)
        AND NOT EXISTS (
          SELECT 1 FROM task_dependencies d
@@ -238,10 +237,11 @@ function validateTarget(task: TaskRow): string | null {
   return null;
 }
 
-/** 转 failed：吞错（任务可能已被并发改态），只留日志 */
+/** 转 failed：markTaskFailed 服务单点（§9.3 行5，Task 15——有活动 run →
+ *  failRun；排队行投影 failed）。吞错（任务可能已被并发改态），只留日志 */
 function failQuietly(taskId: string, reason: string): void {
   try {
-    transitionTaskStatus(taskId, 'failed', { completedAt: Date.now(), errorMessage: reason });
+    markTaskFailed(taskId, reason);
     logger.warn('executor 候选转 failed', { taskId, reason });
   } catch (err) {
     logger.warn('executor 候选转 failed 失败（并发改态）', {
@@ -257,7 +257,7 @@ function failQuietly(taskId: string, reason: string): void {
  * complete_task 0 次调用说明模型不知道闭合是义务。
  */
 export const KICKOFF_CLOSURE_MANDATE =
-  '本回合由任务简报触发；结束时必须调用 complete_task 或 fail_task 关闭任务，或在终文中说明原因。';
+  '本回合由任务简报触发；结束时必须调用 submit_task（交付）或 fail_task（失败）关闭任务；需要人帮助请用 request_human。';
 
 /** kickoff 消息体（spec §5.4；闭合义务段见 spec 2026-09-28 §3.3） */
 export function buildKickoffBody(task: TaskRow): string {

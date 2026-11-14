@@ -7,7 +7,15 @@ import type { TaskStatus, BoardColumnKey } from './types';
 
 export type { TaskStatus, BoardColumnKey };
 
-export const BOARD_COLUMN_KEYS = ['backlog', 'assigned', 'active', 'done', 'closed'] as const;
+export const BOARD_COLUMN_KEYS = [
+  'backlog',
+  'assigned',
+  'active',
+  'waiting',
+  'review',
+  'done',
+  'closed',
+] as const;
 
 // 编译期双向锁:BOARD_COLUMN_KEYS 常量值域与 types.d.ts 手写联合完全一致,
 // 任一侧增删列另一侧未同步,此处立即编译错误(防契约漂移)
@@ -33,6 +41,10 @@ export const BOARD_COLUMNS: readonly BoardColumnDef[] = [
   { key: 'backlog', label: '待办', statuses: ['draft', 'pending'], hint: '草稿' },
   { key: 'assigned', label: '排队中', statuses: ['assigned', 'session_queued'], hint: '等并发/等计划时间/等车道' },
   { key: 'active', label: '进行中', statuses: ['in_progress', 'paused'], hint: '进行中+已暂停' },
+  // v2 生命周期新增两列（spec 2026-11-13-task-lifecycle-v2 §1）：等待中（HITL 挂起，
+  // 系统驱动进出）与待验收（完成必经 submitted 验收，in_progress→completed 直达边已删）
+  { key: 'waiting', label: '等待中', statuses: ['waiting_human'], hint: '等人工（系统驱动）' },
+  { key: 'review', label: '待验收', statuses: ['submitted'], hint: '已提交待验收' },
   { key: 'done', label: '已完成', statuses: ['completed'], hint: '' },
   { key: 'closed', label: '已关闭', statuses: ['failed', 'cancelled'], hint: '失败+已取消' },
 ];
@@ -51,11 +63,13 @@ export function canDropIntoColumn(from: TaskStatus, to: BoardColumnKey): boolean
 function allowCross(from: TaskStatus, to: BoardColumnKey): boolean {
   switch (to) {
     case 'backlog': return false; // 只出不进(draft/pending 已在 backlog,跨列进来的一律禁)
-    case 'assigned': return from === 'draft' || from === 'pending';
+    case 'assigned': return from === 'draft' || from === 'pending' || from === 'submitted'; // submitted→assigned = 打回
     // paused 不在此列:paused 本属 active 列,canDropIntoColumn 同列早退恒先命中,
     // 此处列出 paused 分支永不可达(Task 5 review 死代码清理)
     case 'active': return from === 'assigned' || from === 'session_queued';
-    case 'done': return from === 'in_progress';
+    case 'waiting': return false; // 等待中只能由系统进出(HITL 答复驱动,人不可拖入)
+    case 'review': return from === 'in_progress'; // in_progress→review = 提交验收
+    case 'done': return from === 'in_progress' || from === 'submitted'; // 一步提交+验收 / 验收通过
     case 'closed': return from !== 'completed'; // completed→closed 同为关闭语义但无转换意义,禁
   }
 }

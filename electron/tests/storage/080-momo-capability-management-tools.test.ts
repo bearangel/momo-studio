@@ -17,6 +17,7 @@ import {
   migration080,
   MOMO_V22_ALL_BUILTIN_TOOL_REFS,
 } from '../../src/main/storage/migrations/080_momo_capability_management_tools';
+import { MOMO_V23_ALL_BUILTIN_TOOL_REFS } from '../../src/main/storage/migrations/083_momo_lifecycle_v2_tools';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-mig080-test-${Date.now()}-${process.pid}`);
 
@@ -112,17 +113,22 @@ describe('migration 080 Momo 能力管理工具回填（65 → 70）', () => {
   });
 
   it('用例 E：冻结名单与 ALL_BUILTIN_TOOLS 全集一致（排序后严格相等，且顺序一致）', () => {
-    expect([...MOMO_V22_ALL_BUILTIN_TOOL_REFS].sort()).toEqual([...ALL_BUILTIN_TOOLS].sort());
+    // 2026-11-13 任务生命周期 v2 两工具（request_human / submit_task）扩容已按
+    // 074→077→078→080 先例处置：追加迁移 083，本断言与冻结名单同步改指 083 的
+    // 72 项全集（080 的 70 项名单与 SQL 保持冻结不改——用例 A-D 仍锁 080 自身
+    // 行为）。下次扩容同式再追加。
+    expect([...MOMO_V23_ALL_BUILTIN_TOOL_REFS].sort()).toEqual([...ALL_BUILTIN_TOOLS].sort());
     // 冻结名单文档声称「顺序即落库顺序」——与 catalog 注册顺序（模块注册序）锁死
-    expect([...MOMO_V22_ALL_BUILTIN_TOOL_REFS]).toEqual([...ALL_BUILTIN_TOOLS]);
-    expect(MOMO_V22_ALL_BUILTIN_TOOL_REFS).toHaveLength(70);
-    expect(new Set(MOMO_V22_ALL_BUILTIN_TOOL_REFS).size).toBe(MOMO_V22_ALL_BUILTIN_TOOL_REFS.length);
+    expect([...MOMO_V23_ALL_BUILTIN_TOOL_REFS]).toEqual([...ALL_BUILTIN_TOOLS]);
+    expect(MOMO_V23_ALL_BUILTIN_TOOL_REFS).toHaveLength(72);
+    expect(new Set(MOMO_V23_ALL_BUILTIN_TOOL_REFS).size).toBe(MOMO_V23_ALL_BUILTIN_TOOL_REFS.length);
   });
 
-  it('用例 F：080 注册为最新迁移（追加在数组末尾，哨兵自 079 测试移入）', () => {
+  it('用例 F：080 注册在链中且顺延完整（末位哨兵已移交 082 测试）', () => {
     const versions = loadMigrations().map((m) => m.version);
     expect(versions).toContain(80);
-    expect(versions[versions.length - 1]).toBe(80);
+    // 任务生命周期 v2（081/082）注册后 080 不再是末位迁移——锁顺延关系而非终位（070 先例）
+    expect(versions[versions.length - 1]).toBeGreaterThan(80);
     // 版本唯一性（重复注册会让 runner 静默跳过第二条，属契约破坏）
     expect(new Set(versions).size).toBe(versions.length);
   });

@@ -62,7 +62,8 @@ export function TaskDetailDrawer({ taskId, onClose }: TaskDetailDrawerProps) {
         aria-modal="true"
         aria-label="任务详情"
         className={cn(
-          'fixed bottom-0 right-0 top-10 z-50 flex w-[380px] flex-col border-l border-subtle bg-canvas shadow-2xl transition-transform duration-200 ease-out',
+          // 底 surface-1：预览合同 #18（详情抽屉容器）定值——2026-11-13 落码对照
+          'fixed bottom-0 right-0 top-10 z-50 flex w-[380px] flex-col border-l border-subtle bg-surface-1 shadow-2xl transition-transform duration-200 ease-out',
           entered ? 'translate-x-0' : 'translate-x-full',
         )}
       >

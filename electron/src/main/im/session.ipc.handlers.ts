@@ -33,6 +33,7 @@ import {
 } from './session-service';
 import { SESSION_COMMANDS } from './commands';
 import { getSession, type SessionRow } from '../storage/sessions/repo';
+import { assertSessionDeletable } from '../storage/tasks/repo';
 import {
   listRecentMessagesBySession,
   listOlderMessages,
@@ -146,6 +147,12 @@ function toSummary(row: SessionRow): SessionSummary {
     groupId: row.groupId,
     groupName: null,
     sessionType: row.sessionType,
+    // 建会时刻无活跃任务关联（execution_session_id 刚生成的会话 id 不可能被
+    // 既有任务引用）→ 生命周期三字段恒中性；后续绑定经 session:list 重新派生
+    // （spec 2026-11-13-task-human-loop-lifecycle §5.4）
+    delegationRole: null,
+    readOnly: false,
+    taskId: null,
     members: getSessionMembersInfo(row.id),
   };
 }
@@ -220,9 +227,12 @@ export function registerSessionIpcHandlers(): void {
     return { ok: true } as const;
   });
 
-  // 解散会话。非保护会话级联清理成员；错误原样传播给 renderer
+  // 解散会话。删除前守卫（spec 2026-11-13-task-human-loop-lifecycle §5.4）：
+  // 有活跃任务（in_progress/waiting_human/submitted）关联 → 人话错误拦截；
+  // 非保护会话级联清理成员；错误原样传播给 renderer
   //（v25 过渡态：团队会话保护待 Task 7 按新会话模型重接，见 session-ops）。
   ipcMain.handle('session:delete', async (_evt, sessionId: string) => {
+    assertSessionDeletable(sessionId);
     deleteSessionOp(sessionId);
     return { ok: true } as const;
   });

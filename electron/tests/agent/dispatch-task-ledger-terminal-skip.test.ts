@@ -16,9 +16,11 @@ vi.mock('../../src/main/memory/extraction', () => ({
 }));
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
-import { getTask, insertTask, transitionTaskStatus } from '../../src/main/storage/tasks/repo';
+import { getTask, insertTask, updateTask, transitionTaskStatus } from '../../src/main/storage/tasks/repo';
 import { insertSession } from '../../src/main/storage/sessions/repo';
 import { ledgerCancelDispatch, ledgerFailDispatch, ledgerSettleDispatch } from '../../src/main/agent/dispatch-task-ledger';
+import { startRun } from '../../src/main/task/lifecycle-runs';
+import { listByTask } from '../../src/main/storage/tasks/human-requests-repo';
 import { logger } from '../../src/main/logger';
 
 const tmpRoot = path.join(
@@ -65,6 +67,17 @@ function seedDispatchTask(id: string): void {
   });
 }
 
+/**
+ * v2 生产等价链（Task 15 后 ledgerInsertDispatch 的 spawn 形态）：行 + run #1 +
+ * auto_accept——推到 completed 走 settle completed（提交即验收）。
+ */
+function seedCompletedDispatchTask(id: string): void {
+  seedDispatchTask(id);
+  startRun(id, { trigger: 'initial', executionSessionId: sessionId });
+  updateTask(id, { autoAccept: true });
+  ledgerSettleDispatch(id, 'completed', '交付');
+}
+
 beforeEach(() => {
   setupDb();
   warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
@@ -88,8 +101,7 @@ describe('ledgerSettleDispatch 非法转换预检（迟到钩子不覆盖权威�
   });
 
   it('completed 行 + 迟到 failed settle → 保持 completed + 无 warn', () => {
-    seedDispatchTask('tk-done');
-    transitionTaskStatus('tk-done', 'completed', { completedAt: Date.now() });
+    seedCompletedDispatchTask('tk-done');
 
     expect(() => ledgerSettleDispatch('tk-done', 'failed', '迟到失败')).not.toThrow();
     expect(getTask('tk-done')?.status).toBe('completed');
@@ -114,25 +126,30 @@ describe('ledgerSettleDispatch 非法转换预检（迟到钩子不覆盖权威�
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it('正常转换不受预检影响：in_progress + completed settle → 落 completed', () => {
+  it('正常转换不受预检影响：in_progress + completed settle → 提交即验收落 completed', () => {
     seedDispatchTask('tk-normal');
+    startRun('tk-normal', { trigger: 'initial', executionSessionId: sessionId });
+    updateTask('tk-normal', { autoAccept: true });
 
     expect(() => ledgerSettleDispatch('tk-normal', 'completed', 'ok')).not.toThrow();
     expect(getTask('tk-normal')?.status).toBe('completed');
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it('needs_input → paused 落态不受影响（in_progress + needs_input settle）', () => {
+  it('needs_input → requestHuman(question)：任务 waiting_human + 未决请求，不再落 paused', () => {
     seedDispatchTask('tk-input');
+    startRun('tk-input', { trigger: 'initial', executionSessionId: sessionId });
 
     expect(() => ledgerSettleDispatch('tk-input', 'needs_input', '等待输入')).not.toThrow();
-    expect(getTask('tk-input')?.status).toBe('paused');
+    expect(getTask('tk-input')?.status, 'v2：等人语义归 waiting_human（§6.6 paused=用户停止）').toBe('waiting_human');
+    const req = listByTask('tk-input').find((r) => r.kind === 'question' && r.status === 'pending');
+    expect(req, 'body 作 prompt 的 question 人工请求').toBeDefined();
+    expect(req!.prompt).toBe('等待输入');
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it('ledgerCancelDispatch：completed 行 + 迟到取消 → 保持 completed + 无 warn', () => {
-    seedDispatchTask('tk-c1');
-    transitionTaskStatus('tk-c1', 'completed', { completedAt: Date.now() });
+    seedCompletedDispatchTask('tk-c1');
 
     expect(() => ledgerCancelDispatch('tk-c1')).not.toThrow();
     expect(getTask('tk-c1')?.status).toBe('completed');

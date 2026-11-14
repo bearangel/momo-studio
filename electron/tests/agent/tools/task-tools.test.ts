@@ -20,6 +20,7 @@ import {
 } from '../../../src/main/storage/tasks/repo';
 import { insertMessage } from '../../../src/main/storage/messages/repo';
 import { insertEvent } from '../../../src/main/storage/messages/events-repo';
+import { insertSession } from '../../../src/main/storage/sessions/repo';
 import {
   readTask,
   readTaskHistory,
@@ -29,6 +30,7 @@ import {
   failTask,
   listTasks,
 } from '../../../src/main/agent/tools/task-tools';
+import { startRun } from '../../../src/main/task/lifecycle-runs';
 
 const tmpRoot = path.join(
   os.tmpdir(),
@@ -224,19 +226,26 @@ describe('create_task', () => {
   });
 });
 
-describe('complete_task', () => {
-  it('把 task 状态改为 completed', async () => {
+// 任务生命周期 v2（Task 14）：complete_task = submit_task 别名（in_progress →
+// completed 直达边已删除，完成必经验收）；submit/fail 都要求活动 run（migration 082
+// 已为存量 in_progress 回填 run #1，新链路由 starter startRun 落账）。
+describe('complete_task（v2 提交语义）', () => {
+  it('把 task 提交为 submitted 并返回 run 序号', async () => {
+    // v2 起提交会生成 acceptance 人工请求（session_id FK → sessions 表），
+    // 执行会话须是真实会话行（生产语义：execution room 本就是 sessions 行）
+    const sess = insertSession({ workspaceId: 'ws1', title: '执行间', kind: 'task_execution' }).id;
     const t = insertTask({
       workspaceId: 'ws1',
       title: 'T1',
       creatorUserId: '@owner:home',
     });
     transitionTaskStatus(t.id, 'assigned');
-    transitionTaskStatus(t.id, 'in_progress', { executionSessionId: '!room:home' });
-    await completeTask(t.id);
+    transitionTaskStatus(t.id, 'in_progress', { executionSessionId: sess });
+    startRun(t.id, { trigger: 'initial', executionSessionId: sess });
+    const out = await completeTask(t.id, { summary: '完成' });
+    expect(out).toEqual({ status: 'submitted', runNo: 1 });
     const updated = await readTask(t.id);
-    expect(updated?.status).toBe('completed');
-    expect(updated?.completedAt).not.toBeNull();
+    expect(updated?.status).toBe('submitted');
   });
 });
 
@@ -249,11 +258,11 @@ describe('fail_task', () => {
     });
     transitionTaskStatus(t.id, 'assigned');
     transitionTaskStatus(t.id, 'in_progress', { executionSessionId: '!room:home' });
+    startRun(t.id, { trigger: 'initial', executionSessionId: '!room:home' });
     await failTask(t.id, 'LLM 超时');
     const updated = await readTask(t.id);
     expect(updated?.status).toBe('failed');
     expect(updated?.errorMessage).toBe('LLM 超时');
-    expect(updated?.completedAt).not.toBeNull();
   });
 });
 

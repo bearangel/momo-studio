@@ -6,8 +6,16 @@
 // .ts，污染存在时 renderer build 必失败（Task 14 收尾发现）。列常量与该联合
 // 的双向等值由 board-columns.ts 编译期断言锁死。
 
-/** 看板五列 key（值域与 board-columns.ts 的 BOARD_COLUMN_KEYS 常量双向锁） */
-export type BoardColumnKey = 'backlog' | 'assigned' | 'active' | 'done' | 'closed';
+/** 看板七列 key（值域与 board-columns.ts 的 BOARD_COLUMN_KEYS 常量双向锁；
+ *  v2 生命周期新增 waiting/review 两列——spec 2026-11-13-task-lifecycle-v2 §1） */
+export type BoardColumnKey =
+  | 'backlog'
+  | 'assigned'
+  | 'active'
+  | 'waiting'
+  | 'review'
+  | 'done'
+  | 'closed';
 
 export interface SystemInfo {
   platform: string;
@@ -123,6 +131,8 @@ export type BuiltinSuggestionMap = Record<string, BuiltinSuggestion>;
 /**
  * 任务状态（与 electron/src/main/storage/tasks/state-machine.ts 的 TaskStatus 同步）。
  * 这里只声明当前 UI 需要的最小子集；后续 B 子系统任务可扩展字段。
+ * v2 生命周期（spec §5.1，迁移 081）新增 waiting_human（等人）/ submitted（待验收）：
+ * 完成必须经 submitted 验收，in_progress → completed 直达边已删除。
  */
 export type TaskStatus =
   | 'draft'
@@ -130,6 +140,8 @@ export type TaskStatus =
   | 'assigned'
   | 'session_queued'
   | 'in_progress'
+  | 'waiting_human'
+  | 'submitted'
   | 'paused'
   | 'completed'
   | 'failed'
@@ -263,6 +275,16 @@ export interface TaskRow {
   updatedAt: number;
   startedAt: number | null;
   completedAt: number | null;
+  /** 生命周期 v2 五列（迁移 081，spec §5.1）：当前执行尝试指针（task_runs.id），NULL=无 run */
+  currentRunId: string | null;
+  /** 生命周期 v2 五列（迁移 081，spec §5.1）：提交验收时间戳（ms），NULL=未提交 */
+  submittedAt: number | null;
+  /** 生命周期 v2 五列（迁移 081，spec §5.1）：验收完成时间戳（ms），NULL=未验收 */
+  acceptedAt: number | null;
+  /** 生命周期 v2 五列（迁移 081，spec §5.1）：委派方向（'in'=承接外派 / 'out'=外派他人），NULL=非委派行 */
+  delegationRole: 'in' | 'out' | null;
+  /** 生命周期 v2 五列（迁移 081，spec §5.1）：验收免人工自动通过 */
+  autoAccept: boolean;
   /** 看板分组（task_groups.id，G-<seq>），NULL=未分组（看板重构 spec §2） */
   groupId: string | null;
   /** 顶置时间戳（ms），NULL=未顶置；看板列内排序键（迁移 050，boardPosition 退役） */
@@ -422,6 +444,9 @@ export interface TaskApiSurface {
    * 看板重构 Task 6 → 2026-09-30 排序退役：拖拽换列/换组单一通道——renderer
    * 只发目标（column/groupId），动作裁决（start/complete/cancel/换组/no-op）
    * 全部在主进程 executeMove 单点；列内顺序由 pinned/创建时间决定（无落点锚）
+   *
+   * v2 生命周期（Task 8）：打回（submitted → assigned 列）必须携带 reason，
+   * 缺省/空白主进程人话拒绝「打回必须填写理由」
    */
   move(
     id: string,
@@ -429,6 +454,7 @@ export interface TaskApiSurface {
       column: BoardColumnKey;
       groupId: string | null;
     },
+    opts?: { reason?: string },
   ): Promise<TaskRow>;
   /**
    * 顶置开关（迁移 050）：全状态可用；pin 写当前时间（排序键，重复 pin 刷新
@@ -447,6 +473,30 @@ export interface TaskApiSurface {
    * 不在以上三态的任务抛错。
    */
   resume(id: string): Promise<TaskRow & { streamSessionId?: string }>;
+  /**
+   * v2 两段式完成（Task 16，语义单点主进程 lifecycle-runs）：提交验收——
+   * 活动 run → submitted + 生成 acceptance 人工请求；有未决非验收请求 /
+   * 已在待验收 / 已暂停时人话拒绝
+   */
+  submit(
+    id: string,
+    deliverable: {
+      summary: string;
+      files?: string[];
+      artifacts?: Array<{ label: string; value: string }>;
+    },
+  ): Promise<TaskRow>;
+  /** 验收通过（Task 16）：run accepted + 任务 completed；非 submitted 态人话拒绝 */
+  accept(id: string): Promise<TaskRow>;
+  /** 打回（Task 16）：run rejected + 任务回 assigned 排队返工；空白理由人话拒绝 */
+  reject(id: string, reason: string): Promise<TaskRow>;
+  /** run 历史（Task 16，run_no ASC） */
+  listRuns(id: string): Promise<TaskRunRow[]>;
+  /**
+   * run 状态变化推送订阅（Task 16）：载荷 { taskId, runId, status }，
+   * 变化点 = 新建 run / 每次状态转移。返回退订函数
+   */
+  onTaskRunChanged(callback: (e: { taskId: string; runId: string; status: TaskRunStatus }) => void): () => void;
   /**
    * v2.6.0 启动恢复卡数据源（spec §5.2；2026-09-30 语义修正后仅列 in_progress
    * ——排队任务由 executor boot 自愈，不进卡）供 renderer 渲染 ResumeNotice。
@@ -515,6 +565,145 @@ export interface StartAgentInput {
   member: WorkspaceAgentMember;
   workspaceId: string;
 }
+
+// ─── 任务生命周期 v2（Task 16）：run 行 / 人工请求 renderer 镜像类型 ──────────
+
+/** run 状态（与 electron/src/main/storage/tasks/state-machine.ts 的 TaskRunStatus 同步） */
+export type TaskRunStatus =
+  | 'running'
+  | 'waiting_human'
+  | 'submitted'
+  | 'accepted'
+  | 'rejected'
+  | 'failed'
+  | 'cancelled';
+
+/** run 触发方式（与 runs-repo 的 TaskRunTrigger 同步） */
+export type TaskRunTrigger = 'initial' | 'rework' | 'quota_retry' | 'manual';
+
+/**
+ * run 行（renderer 视图，与 electron 端 storage/tasks/runs-repo.ts 的 TaskRunRow
+ * 结构对齐——跨进程独立定义）。deliverableJson / rejectReason 为原始 JSON 串，
+ * 消费方自行解析。
+ */
+export interface TaskRunRow {
+  id: string;
+  taskId: string;
+  runNo: number;
+  status: TaskRunStatus;
+  executionSessionId: string | null;
+  trigger: TaskRunTrigger;
+  startedAt: number;
+  endedAt: number | null;
+  deliverableJson: string | null;
+  rejectReason: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * 人工答复载荷（与 electron 端 task/human-answer-shared.ts 的 HumanAnswerInput
+ * 同步——tool_gate / request_human / IPC 面共用）。全部字段可选：按请求 kind
+ * 取用相应字段（tool_gate → decision；question → text / selected；
+ * manual_action → completed / text）。
+ */
+export interface HumanAnswerInput {
+  decision?: 'approve' | 'deny' | 'accept' | 'reject';
+  text?: string;
+  selected?: string[];
+  completed?: boolean;
+  reason?: string;
+}
+
+/** 人工请求种类（与 human-requests-repo 的 HumanRequestKind 同步） */
+export type HumanRequestKind = 'tool_gate' | 'question' | 'manual_action' | 'acceptance';
+/** 人工请求状态（与 human-requests-repo 的 HumanRequestStatus 同步） */
+export type HumanRequestStatus = 'pending' | 'answered' | 'expired' | 'cancelled' | 'superseded';
+/** 超时策略（与 human-requests-repo 的 HumanTimeoutPolicy 同步） */
+export type HumanTimeoutPolicy =
+  | 'deny_and_wrap'
+  | 'keep_waiting'
+  | 'escalate'
+  | 'fail'
+  | 'cancel';
+
+/**
+ * 人工请求行（renderer 视图，与 electron 端 storage/tasks/human-requests-repo.ts
+ * 的 HumanRequestRow 结构对齐）。payloadJson / optionsJson / answerJson 为原始
+ * JSON 串，消费方按 kind 自行解析。
+ */
+export interface HumanRequestRow {
+  id: string;
+  taskId: string | null;
+  runId: string | null;
+  sessionId: string;
+  delegationId: string | null;
+  originNodeId: string | null;
+  remoteId: string | null;
+  kind: HumanRequestKind;
+  status: HumanRequestStatus;
+  title: string;
+  prompt: string;
+  payloadJson: string | null;
+  optionsJson: string | null;
+  assigneeNodeId: string | null;
+  authorityJson: string | null;
+  deadlineAt: number | null;
+  timeoutPolicy: HumanTimeoutPolicy;
+  lastRemindedAt: number | null;
+  answerJson: string | null;
+  answeredByNodeId: string | null;
+  answeredAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** human:attention 单会话聚合值 */
+export interface SessionAttention {
+  /** 未决人工请求数（不含验收单） */
+  waiting: number;
+  /** 有本机为验收方的已提交任务（本机任务或外派他人） */
+  submitted: boolean;
+  /** 有本机为执行方的已提交任务（承接外派 delegation_role='in'） */
+  executorSubmitted: boolean;
+  /** 有失败任务 */
+  failed: boolean;
+}
+
+/**
+ * 人工请求命名空间（任务生命周期 v2 Task 16，human.ipc.handlers.ts）——
+ * HITL 面板数据面 + human:changed 变更推送。
+ */
+export interface HumanApiSurface {
+  /**
+   * 人工请求列表：sessionId / taskId 可选过滤；status 缺省 'pending'
+   * （面板默认只看未决），'all' 全量
+   */
+  list(input: {
+    sessionId?: string;
+    taskId?: string;
+    status?: 'pending' | 'all';
+  }): Promise<HumanRequestRow[]>;
+  /**
+   * 答复人工请求：message 附言并入 answer.text；已答 / 已被顶替返回
+   * { disposition: 'stale' }。acceptance 请求不走此通道（验收用
+   * task.accept / task.reject）
+   */
+  answer(
+    requestId: string,
+    answer: HumanAnswerInput,
+    message?: string,
+  ): Promise<{ disposition: 'answered' | 'stale' }>;
+  /** 会话注意力聚合（waiting / submitted / executorSubmitted / failed）；
+   *  只返回至少有一个信号的会话 */
+  attention(workspaceId: string): Promise<Record<string, SessionAttention>>;
+  /**
+   * 人工请求变更推送订阅：kind 为变化类型（'inserted' | 'answered' |
+   * 'expired'）。返回退订函数
+   */
+  onChanged(cb: (e: { sessionId: string; requestId?: string; kind: string }) => void): () => void;
+}
+
 
 /** agent:addMember 入参（v25 spec §5：无 role/parent；同 ws 同 def 重复加入由 UNIQUE 约束报错） */
 export interface AddMemberInput {
@@ -1614,6 +1803,22 @@ export interface SessionSummary {
   groupName: string | null;
   /** 会话类型（spec 2026-10-22 §3.1）；null=泛化创建路径 */
   sessionType: 'quick' | 'collab' | null;
+  /**
+   * 生命周期 v2 三字段（spec 2026-11-13-task-human-loop-lifecycle §5.4）：
+   * 会话关联的最新非终态任务（tasks.execution_session_id 反查）的委派方向
+   * （'in'=外派执行 / 'out'=委派跟踪）；null=无活跃任务关联。
+   */
+  delegationRole: 'in' | 'out' | null;
+  /**
+   * 只读态（P1 唯一只读源）：= delegationRole === 'out'——委派跟踪会话
+   * 输入框禁用，用户操作收敛到任务详情/验收流。
+   */
+  readOnly: boolean;
+  /**
+   * 会话关联的最新非终态任务 id（T-xxx）；null=无活跃任务关联。
+   * 同会话多任务时取 created_at 最大的非终态行（任务详情跳转消费）。
+   */
+  taskId: string | null;
   members: SessionMemberInfo[];
 }
 
@@ -2919,6 +3124,8 @@ export interface ApiSurface {
   task: TaskApiSurface;
   /** 看板重构 Task 7：任务组通道面（taskGroup:*，groups.ipc.handlers.ts） */
   taskGroup: TaskGroupApiSurface;
+  /** 任务生命周期 v2（Task 16）：人工请求通道面（human:*，human.ipc.handlers.ts） */
+  human: HumanApiSurface;
   /**
    * 插件系统 P1（spec 2026-10-15）：安装 / 启停 / 卸载四通道。
    * 契约与 electron 端 plugin/ipc.handlers.ts 对齐。

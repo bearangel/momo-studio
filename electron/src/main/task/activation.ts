@@ -15,7 +15,8 @@
 //   - 并发已满 → 入队（target_session_id + assigned + notify），executor
 //     放行时注入 kickoff——彼时用户消息语境已过，kickoff 是必要驱动
 import { parseTaskMentions } from './conflict-detector';
-import { getTask, updateTask, transitionTaskStatus } from '../storage/tasks/repo';
+import { getTask, updateTask } from '../storage/tasks/repo';
+import { enqueueTask } from './lifecycle-runs';
 import { startTask } from './starter';
 import { getGlobalSettings } from '../settings/crud';
 import { getDb } from '../storage/db';
@@ -38,7 +39,8 @@ export function activateMentionedTasks(sessionId: string, body: string): void {
       if (!task || !ACTIVATABLE.has(task.status)) continue;
       // 用户显式意图覆盖：目标 = 当前会话（三列互斥 → 清空另两列）
       updateTask(refId, { targetSessionId: sessionId, assigneeAgentId: null, targetTeamId: null });
-      if (task.status !== 'assigned') transitionTaskStatus(refId, 'assigned');
+      // v2 收敛（消费面 ①-22，Task 15）：#T 激活入队投影走服务单点（draft/pending → assigned）
+      if (task.status !== 'assigned') enqueueTask(refId);
 
       const max = getGlobalSettings().maxConcurrentTasks ?? 3;
       if (countInProgress() < max) {

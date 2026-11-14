@@ -15,6 +15,7 @@ import { WarmPool } from '../../src/main/agent/warm-pool';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { getTask, insertTask } from '../../src/main/storage/tasks/repo';
 import { insertSession } from '../../src/main/storage/sessions/repo';
+import { startRun, submitRun, acceptTask } from '../../src/main/task/lifecycle-runs';
 import type { ChildProcess } from 'node:child_process';
 
 // 与 agent-runner.test.ts 同法：extraction 最小 mock，防真实提取链跨模块写测试库
@@ -59,7 +60,7 @@ function quotaErrorText(): string {
   );
 }
 
-/** 建 dispatch 簿记行（ledgerInsertDispatch 落库形态：origin=dispatch 直插 in_progress） */
+/** 建 dispatch 簿记行（v2 生产形态：行 + run #1——ledgerInsertDispatch 同款） */
 function seedDispatchTask(): void {
   insertTask({
     id: TASK_ID,
@@ -73,6 +74,7 @@ function seedDispatchTask(): void {
     sourceSessionId: sessionId,
     startedAt: Date.now(),
   });
+  startRun(TASK_ID, { trigger: 'initial', executionSessionId: sessionId });
 }
 
 function mkMockChild(): ChildProcess {
@@ -220,15 +222,16 @@ describe('AgentRunner task-end 配额自动续跑（C1 配额分支）', () => {
     expect(quotaNotices()).toHaveLength(0);
   });
 
-  it('续跑轮经工具侧完成（complete_task 先行转终态）→ 迟到 task-end 清计数不改状态', async () => {
+  it('续跑轮经工具侧完成（submit_task 先行转终态）→ 迟到 task-end 清计数不改状态', async () => {
     seedDispatchTask();
     getDb()
       .prepare(`UPDATE tasks SET routing_json = ? WHERE id = ?`)
       .run(JSON.stringify({ quotaRetryCount: 1 }), TASK_ID);
     const child = await executeOnRunner();
-    // 续跑轮 agent 调 complete_task（task-tools 路径）先行落终态
-    const { transitionTaskStatus } = await import('../../src/main/storage/tasks/repo');
-    transitionTaskStatus(TASK_ID, 'completed', { completedAt: Date.now() });
+    // 续跑轮 agent 调 submit_task + 验收通过（v2 两段式完成链）先行落终态
+    await submitRun(TASK_ID, { summary: '续跑轮交付' });
+    await acceptTask(TASK_ID);
+    expect(getTask(TASK_ID)!.status).toBe('completed');
 
     getMessageHandler(child)({ type: 'task-end', streamSessionId: 'ss-quota', taskId: TASK_ID, toolCallsUsed: 2 });
 

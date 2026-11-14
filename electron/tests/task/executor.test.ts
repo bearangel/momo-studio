@@ -322,9 +322,10 @@ describe('TaskExecutor.admitOnce blocked 闸门（M3.3）', () => {
     await mkExecutor(3, kickoff).admitOnce();
     expect(getTask(blocked.id)!.status).toBe('assigned');
 
-    // 依赖走生产合法链到 completed
+    // 依赖走生产合法链到 completed（v2：经 submitted 验收）
     transitionTaskStatus(dep.id, 'assigned');
     transitionTaskStatus(dep.id, 'in_progress', { executionSessionId: 's-dep' });
+    transitionTaskStatus(dep.id, 'submitted');
     transitionTaskStatus(dep.id, 'completed', { completedAt: Date.now() });
     await mkExecutor(3, kickoff).admitOnce();
 

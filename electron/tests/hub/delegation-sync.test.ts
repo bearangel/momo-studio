@@ -63,6 +63,11 @@ function mkRow(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title'>): TaskR
     updatedAt: 1000,
     startedAt: null,
     completedAt: null,
+    currentRunId: null,
+    submittedAt: null,
+    acceptedAt: null,
+    delegationRole: null,
+    autoAccept: false,
     groupId: null,
     pinnedAt: null,
     archivedAt: null,
@@ -496,10 +501,16 @@ describe('delegation-sync — retryDispatch', () => {
     const result = await retryDispatch('T-100', w.ports);
     expect(result).toEqual({ dispatched: true, nodeId: 'node-b', delegationId: 'hub-new-id' });
     // 复位先于派发（updates 序列锁中间态：delegationId 先清再回写新值）；
-    // 成功回写带已解析目标 routing（D5——group 变体补 targetNodeId）
+    // 成功回写带已解析目标 routing（D5——group 变体补 targetNodeId）+ P1 降级
+    // 守卫行戳（spec §14：out + 强制 auto_accept=1——Task 18）
     expect(w.updates.map((u) => u.patch)).toEqual([
       { status: 'pending', errorMessage: null, delegationId: null },
-      { delegationId: 'hub-new-id', routing: { mode: 'group', groupId: 'g1', targetNodeId: 'node-b' } },
+      {
+        delegationId: 'hub-new-id',
+        routing: { mode: 'group', groupId: 'g1', targetNodeId: 'node-b' },
+        delegationRole: 'out',
+        autoAccept: true,
+      },
     ]);
     expect(w.rows.get('T-100')!.delegationId).toBe('hub-new-id');
     expect(w.rows.get('T-100')!.routing).toEqual({ mode: 'group', groupId: 'g1', targetNodeId: 'node-b' });

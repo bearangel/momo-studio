@@ -237,6 +237,19 @@ export function MentionInput() {
   const loadSessions = useSessionStore((s) => s.loadSessions);
   // 只读态（有效成员全失效，spec §7）与聚焦信号（新建会话后聚焦，spec §6.2）
   const readOnly = useSessionStore((s) => s.activeSessionReadOnly);
+  // 委派跟踪只读态（T23）：活动会话 summary.readOnly（= delegationRole 'out'，
+  // P1 唯一只读源）——输入区整体替换为只读占位，用户操作收敛到请求面板/验收流
+  const trackingReadOnly = useSessionStore((s) =>
+    s.activeSessionId == null
+      ? false
+      : (s.sessions.find((x) => x.id === s.activeSessionId)?.readOnly ?? false),
+  );
+  // sessions 未水合守卫（T24，T23 minor#2）：冷启动 activeSessionId 已恢复而
+  // sessions 列表仍在拉取时 find 落空 → trackingReadOnly 误判 false，编辑面
+  // 闪一帧可写窗口；loading 且列表为空期间渲染「加载中」占位，水合后按真实
+  // readOnly 分支
+  const sessionsHydrating =
+    useSessionStore((s) => s.loading) && sessions.length === 0 && activeSessionId !== null;
   const inputFocusTick = useSessionStore((s) => s.inputFocusTick);
   // 工具条选择按钮触发信号（2026-11-05）：InputToolbar 五按钮 bump
   const mentionTrigger = useSessionStore((s) => s.mentionTrigger);
@@ -1058,9 +1071,25 @@ export function MentionInput() {
           );
         })()}
 
-      {/* Kimi 式单一容器（v3）：RichComposer 编辑面无边框置顶，pill 内联取代
-          chips；框内底行仅剩 📎 左下角；focus 态上移容器边框；拖入文件时
-          切换预览 ③ 卡B 悬停态（虚线强调框 + 居中提示，overlay 不挡事件） */}
+      {/* 委派跟踪只读态（T23，预览合同 #18）：输入区整体禁用占位——Lock 14px +
+          文案 13px text-disabled，min-height 42px / opacity .5 / 底透明。
+          HumanRequestPanel 独立挂载于 composer 上方（T22），不受影响 */}
+      {sessionsHydrating ? (
+        <div
+          data-testid="composer-hydrating"
+          className="flex min-h-[42px] items-center rounded-lg border border-subtle px-3 text-[13px] text-disabled opacity-50"
+        >
+          加载中…
+        </div>
+      ) : trackingReadOnly ? (
+        <div
+          data-testid="composer-readonly"
+          className="flex min-h-[42px] items-center gap-2 rounded-lg border border-subtle px-3 text-[13px] text-disabled opacity-50"
+        >
+          <Lock size={14} strokeWidth={1.75} aria-hidden />
+          只读跟踪会话 · 操作经请求面板
+        </div>
+      ) : (
       <div
         className={`relative rounded-lg border bg-surface-2 focus-within:border-focus transition-colors ${
           dragOver ? 'border-dashed border-focus' : 'border-subtle'
@@ -1079,6 +1108,9 @@ export function MentionInput() {
         onDrop={endDragVisual}
         onDragEnd={endDragVisual}
       >
+        {/* Kimi 式单一容器（v3）：RichComposer 编辑面无边框置顶，pill 内联取代
+            chips；框内底行仅剩 📎 左下角；focus 态上移容器边框；拖入文件时
+            切换预览 ③ 卡B 悬停态（虚线强调框 + 居中提示，overlay 不挡事件） */}
         {dragOver && (
           <div
             data-testid="drop-hint"
@@ -1148,6 +1180,7 @@ export function MentionInput() {
           />
         </div>
       </div>
+      )}
     </div>
   );
 }

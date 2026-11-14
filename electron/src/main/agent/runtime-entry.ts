@@ -79,7 +79,11 @@ import { McpToolError } from '../mcp/types';
 import { buildTaskReply } from './dispatch';
 // v2（P1 Task 5）：内部事件桥——dispatch/task_reply/abort_dispatch 经 child IPC
 // 直达主进程 RouterService，取代 Matrix 自定义 event 传输
-import { sendTaskReplyEvent } from './internal-event';
+import { sendTaskReplyEvent, hasChildIpcChannel } from './internal-event';
+// 任务生命周期 v2（P1 修复 2026-11-14）：agent 工具（submit_task / request_human
+// / fail_task）在本子进程内 emit 的 run/human 推送事件，经消息泵转发主进程——
+// boot 时把 lifecycle-runs 的两 sink 接到 process.send
+import { forwardLifecycleEvents } from '../task/lifecycle-runs';
 import {
   executeDispatch,
   executeDispatchBg,
@@ -253,10 +257,13 @@ const TODO_STATUS_LABEL: Record<TodoItem['status'], string> = {
 };
 
 /**
- * 任务回合收尾核对合成条全文（spec §3.2 逐字，双逃生门措辞）。
- * 覆盖 T-060 割裂面：pending 未清 / complete_task 0 次调用均在旧 F1 覆盖外。
- * items 为空（待办全 completed 但任务未闭合）时列表行降级为占位说明——
+ * 任务回合收尾核对合成条全文（任务生命周期 v2 Task 14：三选一措辞——
+ * submit_task / fail_task / request_human）。
+ * 覆盖 T-060 割裂面：pending 未清 / 闭合工具 0 次调用均在旧 F1 覆盖外。
+ * items 为空（待办全 completed 但任务未收尾）时列表行降级为占位说明——
  * 闭合言语行为缺失单独触发是 spec §3.1 明确要求的触发分支。
+ * 双镜像：renderer/src/lib/turn-reconcile.ts 同名模板逐字同步，由
+ * turn-reconcile.test.ts 文件读取 + 正则提取锁死。
  */
 export function buildTurnReconcileNotice(
   taskId: string,
@@ -265,14 +272,14 @@ export function buildTurnReconcileNotice(
   const list =
     items.length > 0
       ? items.map((t) => `  - ${t.subject}（${TODO_STATUS_LABEL[t.status]}）`).join('\n')
-      : '  （无未清待办——但任务尚未调用 complete_task / fail_task 关闭）';
+      : '  （无未清待办——但任务尚未调用 submit_task / fail_task / request_human 收尾）';
   return (
     `${TURN_RECONCILE_NOTICE_PREFIX}（非新任务请求）：任务 ${taskId} 仍处于 in_progress，待办存在未清项：\n` +
     `${list}\n` +
-    '请二选一：\n' +
-    '(a) 完成剩余项，调用 todowrite 如实更新，并调用 complete_task 关闭任务；\n' +
-    '(b) 确认剩余项不应/不能现在完成：调用 todowrite 如实更新状态，在终文中说明原因，\n' +
-    '    任务保持 in_progress 留待用户处理。\n' +
+    '请三选一：\n' +
+    '(a) 实现已完成：调用 todowrite 如实更新，并调用 submit_task 提交验收（你没有完成权限，只有提交权限）；\n' +
+    '(b) 技术性失败无法继续：调用 fail_task 并说明原因（需要人帮助改用 request_human）；\n' +
+    '(c) 需要人提供信息/决策/系统外操作：调用 request_human，调用后立即结束本回合等待【人工答复】。\n' +
     '严禁重复执行已完成的事项。本提醒一次性，不会再触发。'
   );
 }
@@ -381,6 +388,15 @@ async function main(): Promise<void> {
   const config = parseConfig(JSON.parse(process.env.AGENT_CONFIG ?? '{}'));
   traceEnabled = config.devMode;
   setDispatchTraceEnabled(config.devMode);
+
+  // 生命周期推送 sink 转发（P1 修复 2026-11-14）：先于一切可能触发工具执行的
+  // 路径（task-config 监听器在后）。哨兵门同 internal-event——宿主/测试进程
+  // （如 vitest forks worker 的 tinypool IPC）禁发，只有真实 runtime 子进程接线。
+  if (hasChildIpcChannel()) {
+    forwardLifecycleEvents((channel, payload) => {
+      process.send?.({ type: 'lifecycle-event', channel, payload });
+    });
+  }
 
   // 子进程内容通道装配（spec 2026-11-11 §5.4）：proxy 模式经 file-io 桥走主进程
   // FileIoService（E-SafeNet 密文代理读取），direct 模式本地 fs + 密文硬失败

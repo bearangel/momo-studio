@@ -168,6 +168,8 @@ describe('tasks repo', () => {
     expect(inProgress.executionSessionId).toBe('r1');
     expect(inProgress.startedAt).toBeGreaterThan(0);
 
+    // v2 状态机：完成必须经 submitted 验收（in_progress → completed 直达边已删除）
+    transitionTaskStatus(t.id, 'submitted');
     const completed = transitionTaskStatus(t.id, 'completed', {
       completedAt: Date.now(),
     });
@@ -282,6 +284,27 @@ describe('tasks repo', () => {
     transitionTaskStatus(t1.id, 'assigned');
     const next = findNextAssignedTask('@agent:home', Date.now());
     expect(next).toBeNull();
+  });
+
+  it('五列读写贯通（delegation_role / auto_accept / 三个时间与 run 指针）', () => {
+    const t = insertTask({ workspaceId: 'ws1', title: 'x', creatorUserId: '@owner:home' });
+    // 新列走 SQL DEFAULT：run 指针/时间戳为 NULL，委派角色 NULL，自动验收 false
+    expect(t.currentRunId).toBeNull();
+    expect(t.submittedAt).toBeNull();
+    expect(t.acceptedAt).toBeNull();
+    expect(t.delegationRole).toBeNull();
+    expect(t.autoAccept).toBe(false);
+    updateTask(t.id, { delegationRole: 'out', autoAccept: true, currentRunId: 'r1', submittedAt: 1, acceptedAt: 2 });
+    const after = getTask(t.id)!;
+    expect(after).toMatchObject({ delegationRole: 'out', autoAccept: true, currentRunId: 'r1', submittedAt: 1, acceptedAt: 2 });
+  });
+
+  it('updateTask 不触碰新列时保值（全字段 UPDATE 回写 current 而非 undefined）', () => {
+    const t = insertTask({ workspaceId: 'ws1', title: 'x', creatorUserId: '@owner:home' });
+    updateTask(t.id, { delegationRole: 'in', autoAccept: true });
+    updateTask(t.id, { priority: 5 }); // 无关 patch
+    expect(getTask(t.id)!.delegationRole).toBe('in');
+    expect(getTask(t.id)!.autoAccept).toBe(true);
   });
 });
 

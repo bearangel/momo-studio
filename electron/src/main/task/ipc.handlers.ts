@@ -7,9 +7,14 @@
 //   - task:list        多维过滤 + 排序查询
 //   - task:get         按 id 查单条
 //   - task:update      部分字段更新（绕过状态机；正常路径请用 task:transition）
-//   - task:transition  状态机驱动的状态转换（可带 extraPatch 副作用字段）
+//   - task:transition  白名单动作（v2 收窄：paused 暂停 / cancelled 取消；
+//                      completed/failed 人话指路 task:submit/accept/reject）
 //   - task:cancel      等价 transition(id, 'cancelled')
 //   - task:start       启动任务（execution_room 决策树 + 转 in_progress + 锁定 execution_room）
+//   - task:submit      提交验收（两段式第一段，v2 Task 16：run submitted + acceptance 请求）
+//   - task:accept      验收通过（v2 Task 16：run accepted + 任务 completed）
+//   - task:reject      打回（v2 Task 16：run rejected + 任务回 assigned；空白理由人话拒）
+//   - task:listRuns    run 历史（v2 Task 16：run_no ASC）
 //   - task:move        看板拖拽换列/换组/排序（动作裁决单点在 move.ts，Task 6）
 //   - task:archive     归档（仅终态；软删 archived_at）
 //   - task:unarchive   取消归档（清 archived_at）
@@ -33,7 +38,6 @@ import {
   getTask,
   updateTask,
   setTaskPinned,
-  transitionTaskStatus,
   type TaskRow,
   type TaskStatus,
   type TaskOrigin,
@@ -46,6 +50,15 @@ import { resolveCreateStatus } from './create-status';
 import { resolveConflict, type ConflictStrategy } from './conflict-resolver';
 import { executeConflictResolution } from './conflict-executor';
 import { startTaskAndKickoff, resumePausedTask, cancelTask, abortTaskExecution } from './lifecycle';
+import {
+  pauseForTask,
+  promoteDraftToPending,
+  submitRun,
+  acceptTask,
+  rejectTask,
+  type DeliverableInput,
+} from './lifecycle-runs';
+import { listRuns } from '../storage/tasks/runs-repo';
 /**
  * D4 只读守卫（spec §3.5）：origin='dispatch' 簿记行由会话链管理，看板写通道
  * 一律拒绝（registry 是真相源；从看板取消子任务留后续交互）。
@@ -245,8 +258,10 @@ export function registerTaskHandlers(): void {
       // minor-11 + 看板重构 Task 8 契约洞加固：task:update 是部分字段补丁通道，
       // 但 status / pinnedAt / archivedAt / groupId 四字段各有专属通道，
       // 直接写会绕过 move / pin / archive 的不变式（Task 7 review 发现通用 update
-      // 可绕过分组位与归档域校验）。状态变更强制走 task:transition / task:cancel
-      // （断言 + bump updated_at），分组走 task:move，顶置走 task:setPinned，
+      // 可绕过分组位与归档域校验）。状态走 task:transition / task:submit /
+      // task:accept / task:reject（v2 收窄：transition 仅 paused/cancelled，
+      // 完成必经验收链——renderer 误传/恶意传 status 一律忽略），
+      // 分组走 task:move，顶置走 task:setPinned，
       // 归档走 task:archive / task:unarchive，分组管理走 taskGroup 通道。
       // M3.3 追加：parentTaskId / dependsOn 走 task:setRelations（存在性 + 环检测
       // 专属校验），blocked / blockedBy 为只读派生态——五字段同样剥离。
@@ -287,7 +302,7 @@ export function registerTaskHandlers(): void {
         if (protectedKeys.length > 0) {
           logger.warn(
             `task:update 携带受保护字段已剥离（${protectedKeys.join('/')}）——` +
-              '状态请用 task:transition / task:cancel，分组请用 task:move，' +
+              '状态走 task:transition / task:submit / task:accept / task:reject，分组请用 task:move，' +
               '顶置请用 task:setPinned，归档请用 task:archive / task:unarchive，' +
               '分组管理请走 taskGroup 通道，任务关系（父任务/依赖）请用 task:setRelations，' +
               'blocked/blockedBy 为只读派生态',
@@ -311,7 +326,8 @@ export function registerTaskHandlers(): void {
             const wasDraft = t?.status === 'draft';
             updateTask(id, applied);
             if (wasDraft && routing.mode !== 'local') {
-              transitionTaskStatus(id, 'pending');
+              // v2 收敛（消费面 ①-23，Task 15）：draft→pending 提级走服务投影单点
+              promoteDraftToPending(id);
             }
             applied = {};
             notifyExecutor();
@@ -331,19 +347,33 @@ export function registerTaskHandlers(): void {
 
   ipcMain.handle(
     'task:transition',
-    async (
-      _evt,
-      id: string,
-      to: TaskStatus,
-      extraPatch?: Parameters<typeof transitionTaskStatus>[2],
-    ): Promise<TaskRow> => {
+    async (_evt, id: string, to: TaskStatus): Promise<TaskRow> => {
       assertNotDispatchRow(id);
-      const row = transitionTaskStatus(id, to, extraPatch);
-      if (to === 'paused' || to === 'cancelled') {
+      // v2 白名单收窄（§9.3 行9，Task 15）：renderer 只剩暂停/取消两个状态动作——
+      //   - completed/failed：完成必经验收链（task:submit 提交 → task:accept /
+      //     task:reject 裁决），失败属 agent/运行时语义，renderer 不可直转
+      //   - 其余状态各有专属通道：启动 task:start、恢复 task:resume、入队/
+      //     验收 task:move / task:submit
+      if (to === 'paused') {
+        pauseForTask(id);
         abortTaskExecution(id);
+        notifyExecutor();
+        return getTask(id)!;
       }
-      notifyExecutor();
-      return row;
+      if (to === 'cancelled') {
+        await cancelTask(id);
+        return getTask(id)!;
+      }
+      if (to === 'completed' || to === 'failed') {
+        throw new Error(
+          `task:transition 不再支持直转 ${to}——完成必经验收链：请用 task:submit 提交交付，` +
+            `验收走 task:accept / task:reject`,
+        );
+      }
+      throw new Error(
+        `task:transition 仅支持暂停（paused）与取消（cancelled）——启动用 task:start，` +
+          `恢复用 task:resume，入队与验收用 task:move / task:submit`,
+      );
     },
   );
 
@@ -353,14 +383,53 @@ export function registerTaskHandlers(): void {
     await cancelTask(id);
   });
 
+  // ── v2 两段式完成 IPC 面（Task 16，spec §6.5）──
+  // submit → submitted + acceptance 请求；accept / reject → 验收裁决。
+  // 语义单点全在 lifecycle-runs（task-tools agent 工具路径同源消费），
+  // handler 只做 D4 守卫 + 调度重评估 + 行回读。
+  ipcMain.handle(
+    'task:submit',
+    async (_evt, id: string, deliverable: DeliverableInput): Promise<TaskRow> => {
+      assertNotDispatchRow(id);
+      await submitRun(id, deliverable);
+      notifyExecutor();
+      return getTask(id)!;
+    },
+  );
+
+  ipcMain.handle('task:accept', async (_evt, id: string): Promise<TaskRow> => {
+    assertNotDispatchRow(id);
+    await acceptTask(id);
+    notifyExecutor();
+    return getTask(id)!;
+  });
+
+  // 空白理由由 rejectTask 人话拒（「打回必须填写理由」——与 move 打回双保险）
+  ipcMain.handle('task:reject', async (_evt, id: string, reason: string): Promise<TaskRow> => {
+    assertNotDispatchRow(id);
+    await rejectTask(id, reason);
+    // 打回回 assigned 排队——返工放行（startRun trigger='rework'）由 executor
+    // 重评估接手，与 create/update 等写通道同纪律（K3）
+    notifyExecutor();
+    return getTask(id)!;
+  });
+
+  // run 历史列表（run_no ASC——runs-repo 单点排序）
+  ipcMain.handle('task:listRuns', async (_evt, id: string) => {
+    return listRuns(id);
+  });
+
   // 看板重构 Task 6：拖拽换列走单一通道——renderer 只发目标（column/groupId），
   // 动作裁决（start/complete/cancel/换组/no-op）全部在 executeMove 单点；
-  // 成功后广播快照，远端看板镜像即时同步
-  ipcMain.handle('task:move', async (_evt, id: string, target: MoveTarget): Promise<TaskRow> => {
-    assertNotDispatchRow(id);
-    const row = await executeMove(id, target);
-    return row;
-  });
+  // v2 生命周期（Task 8）：opts.reason 随打回（submitted→assigned）透传
+  ipcMain.handle(
+    'task:move',
+    async (_evt, id: string, target: MoveTarget, opts?: { reason?: string }): Promise<TaskRow> => {
+      assertNotDispatchRow(id);
+      const row = await executeMove(id, target, opts);
+      return row;
+    },
+  );
 
   // 顶置开关（迁移 050）：全状态可 pin；语义单点在 repo.setTaskPinned
   // （重复 pin 刷新时间戳 = 重新压顶）。排序属本地看板视图域，但快照广播

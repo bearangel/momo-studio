@@ -1,10 +1,10 @@
 // renderer/src/components/task-board/BoardColumn.tsx
 //
 // 看板列（看板重构 Task 11 建立，Task 12 拖拽升级；2026-11-11 流式布局改造）：
-//   - 独立圆角卡容器：bg-surface-1 + border-subtle；列宽自适应——flex-1 五列
-//     均分可用宽度 + min-w-[184px] 下限（预览定值合同 .omo/previews/
-//     board-fluid-lane-layout.html：内容区窄于五列最小总宽 968px 时由泳道
-//     容器 overflow-x-auto 回退横向滚动）
+//   - 独立圆角卡容器：bg-surface-1 + border-subtle；列宽自适应——flex-1 沿
+//     BOARD_COLUMNS 列数均分（v2 生命周期起七列）+ min-w-[184px] 下限（预览定值
+//     合同 .omo/previews/board-fluid-lane-layout.html：内容区窄于列最小总宽时由
+//     泳道容器 overflow-x-auto 回退横向滚动）
 //   - 列头：列名 + 卡片计数 + hint 灰字（BOARD_COLUMNS 契约的 statuses 标注）；
 //     hint 窄列下省略号截断（min-w-0 + truncate，防长副标挤爆列头）
 //   - 列体：sortColumn 内部排序（顶置组 pin 时间倒序 → 未顶置创建时间倒序，
@@ -20,7 +20,7 @@
 //     * renderCard 注入（BoardCanvas 的 SortableBoardCard + SortableContext）；
 //       缺省渲染静态 BoardCard（Task 11 行为，selectedId/onSelect 走旧通道）
 import { Fragment, type ReactNode } from 'react';
-import { Ban, Pin } from 'lucide-react';
+import { Ban, Check, Pin } from 'lucide-react';
 import { useDroppable } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { canDropIntoColumn, type BoardColumnDef } from '../../ipc/board-columns';
@@ -95,6 +95,9 @@ export function BoardColumn({
           : 'border-subtle';
   // 顶置分界：排序后首个未顶置卡的位置（≤0=无顶置卡不画线；=length=全顶置不画线）
   const firstUnpinnedIdx = sorted.findIndex((t) => t.pinnedAt === null);
+  // 验收通过拖悬提示条（预览定值清单 #14）：仅 submitted 卡悬停 done 列出现——
+  // 松手即验收通过（move 直达），其余合法落点走既有 over 态列高亮（#13）
+  const acceptHintVisible = dropTargetActive && dropFromStatus === 'submitted' && column.key === 'done';
 
   return (
     <section
@@ -116,6 +119,15 @@ export function BoardColumn({
           <span className="ml-auto min-w-0 flex-1 truncate text-right text-[11px] font-normal text-tertiary">{column.hint}</span>
         )}
       </header>
+      {acceptHintVisible && (
+        <div
+          data-testid="accept-drop-hint"
+          className="mx-2 mt-2 flex h-6 shrink-0 items-center justify-center gap-1 rounded-md bg-surface-active text-[11px] font-medium text-accent-600 dark:text-accent-300"
+        >
+          <Check size={11} strokeWidth={1.75} aria-hidden />
+          松开 → 验收通过
+        </div>
+      )}
       <div className="grid min-h-0 flex-1 grid-cols-[repeat(auto-fill,minmax(168px,1fr))] content-start gap-2 overflow-y-auto p-2">
         {sorted.length === 0 ? (
           <div className="col-span-full py-6 text-center text-xs text-tertiary">暂无</div>

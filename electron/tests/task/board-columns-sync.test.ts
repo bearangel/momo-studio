@@ -11,12 +11,15 @@ import * as mirror from '../../src/main/task/board-columns';
 import * as source from '../../../renderer/src/ipc/board-columns';
 import type { TaskStatus } from '../../src/main/storage/tasks/state-machine';
 
+// v2 生命周期（迁移 081）：waiting_human / submitted 入列矩阵（11 状态 × 7 列）
 const ALL_STATUSES: TaskStatus[] = [
   'draft',
   'pending',
   'assigned',
   'session_queued',
   'in_progress',
+  'waiting_human',
+  'submitted',
   'paused',
   'completed',
   'failed',
@@ -32,7 +35,7 @@ describe('board-columns 镜像同步(electron ↔ renderer)', () => {
     expect(mirror.BOARD_COLUMNS).toEqual(source.BOARD_COLUMNS);
   });
 
-  it('columnOf 九状态归列一致', () => {
+  it('columnOf 十一状态归列一致', () => {
     for (const s of ALL_STATUSES) {
       expect(mirror.columnOf(s)).toBe(source.columnOf(s));
     }
@@ -43,7 +46,7 @@ describe('board-columns 镜像同步(electron ↔ renderer)', () => {
     expect(() => source.columnOf('bogus' as TaskStatus)).toThrow();
   });
 
-  it('canDropIntoColumn 9×5 全矩阵一致', () => {
+  it('canDropIntoColumn 11×7 全矩阵一致', () => {
     for (const from of ALL_STATUSES) {
       for (const to of source.BOARD_COLUMN_KEYS) {
         expect(mirror.canDropIntoColumn(from, to)).toBe(source.canDropIntoColumn(from, to));

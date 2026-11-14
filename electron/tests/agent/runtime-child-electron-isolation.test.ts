@@ -89,6 +89,23 @@ function electronRuntimeDeps(src: string): string[] {
  */
 const SANCTIONED = new Set(['electron-access.ts']);
 
+/**
+ * 禁入节点断言（T13 评审必办 2）：图内不得出现指定模块。
+ * 违规时输出含命中节点的报错（比零 electron 断言更指名道姓——新增禁入边
+ * 一眼定位），供两类断言复用：
+ *   - runtime-entry 全图：sandbox/ipc.handlers（顶层 import electron 的主进程
+ *     装配模块——它进子图等价于零 electron 断言爆，显式命名更可诊断）
+ *   - write-blocked-emit 子图：task/lifecycle-runs + sandbox/ipc.handlers
+ *     （T13 帷幕约束「本模块为子进程可达：不得顶层 import lifecycle-runs /
+ *     ipc.handlers」的机械化——静态 BFS 把传递依赖一并锁住）
+ */
+function expectForbiddenAbsent(graph: string[], forbidden: string[], scope: string): void {
+  const hits = forbidden.filter((needle) =>
+    graph.some((f) => f === path.join(SRC_MAIN, ...needle.split('/'))),
+  );
+  expect(hits, `${scope} 静态依赖图混入禁入模块：${hits.join('、')}`).toEqual([]);
+}
+
 describe('runtime 子进程 electron 隔离（打包回归锁）', () => {
   it('runtime-entry 静态依赖图内零 electron 运行期依赖（真实图遍历，非手列清单）', () => {
     const files = collectReachable(ENTRY);
@@ -106,6 +123,25 @@ describe('runtime 子进程 electron 隔离（打包回归锁）', () => {
       .map((x) => `${x.file}: ${x.deps.join(' | ')}`);
 
     expect(offenders).toEqual([]);
+
+    // T13 必办 2a：主进程装配模块显式禁入（ipc.handlers 顶层 import electron，
+    // 进子图即子进程 boot 崩——上面零 electron 断言已兜底，此处指名锁）
+    expectForbiddenAbsent(
+      files,
+      ['sandbox/ipc.handlers.ts', 'task/human.ipc.handlers.ts'],
+      'runtime-entry',
+    );
+  });
+
+  it('write-blocked-emit 子图禁入 lifecycle-runs / ipc.handlers（T13 答复接线约束）', () => {
+    const files = collectReachable(path.join(SRC_MAIN, 'sandbox/write-blocked-emit.ts'));
+    // 子图非空自检（防解析失效空图恒绿）
+    expect(files.length).toBeGreaterThan(10);
+    expectForbiddenAbsent(
+      files,
+      ['task/lifecycle-runs.ts', 'sandbox/ipc.handlers.ts', 'task/human.ipc.handlers.ts'],
+      'write-blocked-emit',
+    );
   });
 
   it('apply-patch-tools 在 electron 不可解析时仍可加载', async () => {
