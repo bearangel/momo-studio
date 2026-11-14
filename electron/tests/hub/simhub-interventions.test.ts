@@ -339,6 +339,16 @@ class SimHub {
     rec.taskId = taskId;
   }
 
+  /** 发起方远端验收（自有连接——task.accept 的账本效果直改；断线窗口内仍可达，
+   *  task.accepted 事件未达 worker = 阶段 1.5 的 accepted-miss 形态） */
+  applyAccept(taskId: string): void {
+    const e = this.ledger.get(taskId);
+    if (e === undefined) throw new Error(`simhub: 未知委派 ${taskId}`);
+    e.status = 'done';
+    e.acceptedAt = Date.now();
+    e.updatedAt = e.acceptedAt;
+  }
+
   addGroup(g: SimGroup): void {
     this.groups.push(g);
   }
@@ -832,6 +842,19 @@ function consumePorts(): { ports: WorkerTerminalConsumePorts; settleDocked: Retu
   };
 }
 
+/** S4 消费端口（worker 角色面——SimHub 账本 targetNodeId 投影 WORKER_NODE，
+ *  阶段 1.5 全量过滤按 worker 自证；单进程双角色约定的 worker 侧变体） */
+function workerConsumePorts(): { ports: WorkerTerminalConsumePorts; settleDocked: ReturnType<typeof vi.fn> } {
+  const settleDocked = vi.fn();
+  return {
+    ports: {
+      selfNodeId: () => WORKER_NODE,
+      settleDocked: (taskId: string, outcome: 'accepted' | 'rejected') => settleDocked(taskId, outcome),
+    },
+    settleDocked,
+  };
+}
+
 // ── 场景 1（lf 全链）─────────────────────────────────────────────────────────
 
 describe('场景 1（lf 全链）：intervene → 代答 → 提交 → 验收 → 双侧 completed', () => {
@@ -1125,7 +1148,7 @@ describe('场景 4（断线重连）：离线降级 + S7 对账收敛 + 幂等�
 
     // ⑥ 重连 → S7 对账 #1：worker 补应用代答 + 发起方镜像收敛
     sim.online = true;
-    await reconcileOnReconnect({ client: sim.client() });
+    await reconcileOnReconnect({ client: sim.client(), consumePorts: consumePorts().ports });
     const req1After = getHumanRequest(req1.id)!;
     expect(req1After.status).toBe('answered');
     expect(req1After.answeredByNodeId).toBe(`remote:${SELF_NODE}`);
@@ -1145,7 +1168,8 @@ describe('场景 4（断线重连）：离线降级 + S7 对账收敛 + 幂等�
     // 发起方错过 task.submitted 事件（断线窗口语义）→ 本地仍 pending
 
     // ⑧ S7 对账 #2：task.list submitted 补收 → 发起方镜像 + acceptance 落
-    await reconcileOnReconnect({ client: sim.client() });
+    //   （worker 角色面 ports——阶段 1.5 见 hub submitted runNo==本地 → 在途正常 no-op）
+    await reconcileOnReconnect({ client: sim.client(), consumePorts: workerConsumePorts().ports });
     expect(getTask(out.id)!.status).toBe('submitted');
     const acceptance = findRemoteMirrorRequest(WORKER_NODE, `${dl}#1`)!;
     expect(acceptance).not.toBeNull();
@@ -1162,13 +1186,15 @@ describe('场景 4（断线重连）：离线降级 + S7 对账收敛 + 幂等�
     ).n;
     const requestSnap = sim.requestMock.mock.calls.length;
     const sendResSnap = sim.sendResMock.mock.calls.length;
-    await reconcileOnReconnect({ client: sim.client() });
+    await reconcileOnReconnect({ client: sim.client(), consumePorts: workerConsumePorts().ports });
     expect(milestoneCount()).toBe(milestoneSnap);
     expect((getDb().prepare(`SELECT COUNT(*) AS n FROM human_requests`).get() as { n: number }).n).toBe(humanSnap);
     expect(
       (getDb().prepare(`SELECT COUNT(*) AS n FROM human_requests WHERE kind = 'acceptance'`).get() as { n: number }).n,
     ).toBe(acceptanceSnap);
-    expect(sim.requestMock.mock.calls.length).toBe(requestSnap + 3); // 仅对账拉取（interventions×2 + list），零业务 RPC
+    // 仅对账拉取（interventions×2 + list×2——阶段 3 submitted 补收 + 阶段 1.5
+    // worker 终态全量），零业务 RPC
+    expect(sim.requestMock.mock.calls.length).toBe(requestSnap + 4);
     expect(sim.sendResMock.mock.calls.length).toBe(sendResSnap);
 
     // ⑩ 发起方 accept → 模拟 task.accepted → worker 终态
@@ -1189,6 +1215,44 @@ describe('场景 4（断线重连）：离线降级 + S7 对账收敛 + 幂等�
     expect(rpcCalls(TASK_RPC.intervene)).toHaveLength(1); // #1 送达 ×1，#2 降级零尝试
     expect(rpcCalls(TASK_RPC.accept)).toHaveLength(1);
     expect(sim.sendResMock).toHaveBeenCalledTimes(1); // 提交仅在线一次
+  });
+
+  it('worker-miss 变体：accept 发生在断线窗口 → 重连 S7 阶段 1.5 收口 worker 终态', async () => {
+    // ① 在线链至 worker 提交（hub 账本 submitted runNo=1；发起方镜像未落——不在本变体断言面）
+    const { worker, dl } = await seedLfDispatch();
+    seedSessionLeader(workerExecSessionId);
+    startRun(worker.id, { trigger: 'initial', executionSessionId: workerExecSessionId });
+    await submitRun(worker.id, { summary: 'worker-miss 交付' });
+    await flushAsync();
+    expect(sim.sendResMock).toHaveBeenCalledTimes(1);
+    expect(getTask(worker.id)!.status).toBe('submitted');
+
+    // ② 断线：worker 错过 task.accepted 事件窗口
+    sim.online = false;
+
+    // ③ 断线窗口内发起方验收（发起方节点自有连接——账本直改代表；事件未达 worker）
+    sim.applyAccept(dl);
+    expect(getTask(worker.id)!.status).toBe('submitted'); // 回执未达，本地仍 submitted
+
+    // ④ 重连 → S7 阶段 1.5：hub done → handleTaskAccepted 复用路径收口
+    //   （worker 角色面 ports——hub 投影 targetNodeId=WORKER_NODE，按 worker 自证过滤）
+    sim.online = true;
+    const { ports, settleDocked } = workerConsumePorts();
+    await reconcileOnReconnect({ client: sim.client(), consumePorts: ports });
+    const done = getTask(worker.id)!;
+    expect(done.status).toBe('completed');
+    expect(done.acceptedAt).not.toBeNull();
+    expect(listRuns(worker.id).map((r) => r.status)).toEqual(['accepted']);
+    expect(settleDocked).toHaveBeenCalledWith(dl, 'accepted');
+    expect(milestoneRows().some((m) => m.meta['kind'] === 'accepted' && m.task_id === worker.id)).toBe(true);
+
+    // ⑤ 幂等：二次对账零重复（计数级——里程碑/run 行/settleDocked 均不变）
+    const ms = milestoneCount();
+    const runs = listRuns(worker.id).length;
+    await reconcileOnReconnect({ client: sim.client(), consumePorts: ports });
+    expect(milestoneCount()).toBe(ms);
+    expect(listRuns(worker.id)).toHaveLength(runs);
+    expect(settleDocked).toHaveBeenCalledTimes(1);
   });
 });
 

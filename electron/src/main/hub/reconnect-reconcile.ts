@@ -4,11 +4,22 @@
 // S3/S4/S5 事件消费的断连窗口补偿；onEvent 只在 online 后触发，错过的
 // interventionAnswered / intervention / submitted 无事件补偿，重连拉取兜底）。
 //
-//   ── worker 侧 ──
+//   ── worker 侧（阶段一）──
 //   task.interventions {}（缺省=本节点相关全部）→ status='answered' 的记录
 //   经 handleInterventionAnswered（S3 同一函数）应用答复——interventionId 即
 //   本地 human_requests.id（S2 桥单点生成约定），幂等由行状态守卫（已非
 //   pending 静默丢弃）。发起方角色的记录在本地无同 id 行，天然落空。
+//
+//   ── worker 侧（阶段 1.5：终态对账）──
+//   hub 不重放事件——断线期发起方 accept/reject 错过即无事件补偿：accepted-miss
+//   → worker 行永滞 submitted；rejected-miss → 跨节点死锁（hub 已 run_no+1 等
+//   resubmit，本地 run 仍占活动位且 executor 不放行）。本地 submitted 承接行 ×
+//   单次 task.list 全量账本（客户端过滤 targetNodeId，listInterruptedDelegations
+//   同款模式）按委派 id 对行：
+//   - hub done → handleTaskAccepted（S4 同一函数）补收 accepted-miss
+//   - hub running 且 runNo 超前本地活动 run → handleTaskRejected（S4 同一函数，
+//     理由降级文案——协议 TaskRecord 不携带 reason）补收 rejected-miss
+//   - hub submitted 且 runNo==本地 / hub 无该记录 → no-op（在途正常 / 账本权威 warn）
 //
 //   ── 发起方侧 ──
 //   逐本机非终态 'out' 行调 task.interventions {taskId}（投影不带委派 id——
@@ -31,20 +42,29 @@ import type { HubClient } from './client';
 import { TASK_RPC, type InterventionRecord, type TaskRecord } from './protocol';
 import { getDb } from '../storage/db';
 import { getTask } from '../storage/tasks/repo';
+import { getActiveRun } from '../storage/tasks/runs-repo';
 import { isTerminal } from '../storage/tasks/state-machine';
 import { findRemoteMirrorRequest, tryAnswer } from '../storage/tasks/human-requests-repo';
 import { emitHumanChanged } from '../task/lifecycle-runs';
 import {
   handleInterventionAnswered,
+  handleTaskAccepted,
   handleTaskInterventionMirror,
+  handleTaskRejected,
   handleTaskSubmittedMirror,
   outRowWorkerNodeId,
+  type WorkerTerminalConsumePorts,
 } from './remote-intervene-bridge';
 
 /** 对账依赖（唯一 mock 面：hub client；DB 面生产直连真实库——S3-S5 同款纪律） */
 export interface ReconnectReconcileDeps {
   client: HubClient;
+  /** S4 worker 终态消费端口（阶段 1.5 复用 handleTaskAccepted/Rejected——与 hub/index onEvent 事件面同源装配） */
+  consumePorts: WorkerTerminalConsumePorts;
 }
+
+/** 打回补收降级理由（协议 TaskRecord 不携带 reason——真实打回理由只在发起方会话里程碑） */
+const RECONCILE_REJECT_REASON = '发起方已打回（断线补收，理由见发起方会话）';
 
 /** answered 记录应用（S3 同语义；answer 缺席按空对象消费——协议保证在场，防御降级） */
 function applyAnsweredRecord(rec: InterventionRecord): void {
@@ -92,6 +112,76 @@ export async function reconcileOnReconnect(deps: ReconnectReconcileDeps): Promis
     logger.warn('重连对账：task.interventions 拉取失败（下次重连再对账）', {
       error: err instanceof Error ? err.message : String(err),
     });
+  }
+
+  // ── 阶段 1.5：worker 侧终态对账（断线期 accepted/rejected 补收）──
+  // 枚举本地 submitted 承接行（worker 视角沿 findTaskByDelegationId 同口径：
+  // 'in' 承接 + peer-draft NULL 承接形——判向兜底在 handler 内 isWorkerExecution）。
+  const submittedInRows = (() => {
+    try {
+      return getDb()
+        .prepare(
+          `SELECT id, delegation_id FROM tasks
+           WHERE status = 'submitted' AND delegation_id IS NOT NULL
+             AND (delegation_role = 'in' OR delegation_role IS NULL)`,
+        )
+        .all() as Array<{ id: string; delegation_id: string }>;
+    } catch (err) {
+      logger.warn('重连对账：worker submitted 行枚举失败（跳过终态对账，下次重连再对账）', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    }
+  })();
+  if (submittedInRows.length > 0) {
+    try {
+      const list = await deps.client.request<{ tasks: TaskRecord[] }>(TASK_RPC.list, {});
+      const me = deps.consumePorts.selfNodeId();
+      const hubByTaskId = new Map(
+        (list.tasks ?? [])
+          .filter((t) => me === null || t.targetNodeId === me)
+          .map((t) => [t.taskId, t] as const),
+      );
+      for (const row of submittedInRows) {
+        const rec = hubByTaskId.get(row.delegation_id);
+        if (rec === undefined) {
+          logger.warn('重连对账：hub 账本无此委派记录（罕见，账本权威——本地不动，下次重连再对账）', {
+            taskId: row.id,
+            delegationId: row.delegation_id,
+          });
+          continue;
+        }
+        const hubRunNo = rec.runNo ?? 1;
+        try {
+          if (rec.status === 'done') {
+            await handleTaskAccepted({ taskId: rec.taskId, runNo: hubRunNo }, deps.consumePorts);
+          } else if (rec.status === 'running') {
+            // hub 打回即 run_no+1 转回 running 待 resubmit——runNo 超前本地活动
+            // run 即打回已发生；未超前属在途正常（提交上报丢失归 S2 桥域，此处不收）
+            const active = getActiveRun(row.id);
+            const rejectedWhileAway = active === null ? hubRunNo > 1 : hubRunNo > active.runNo;
+            if (rejectedWhileAway) {
+              await handleTaskRejected(
+                { taskId: rec.taskId, runNo: hubRunNo, reason: RECONCILE_REJECT_REASON },
+                deps.consumePorts,
+              );
+            }
+          }
+          // hub submitted（在途正常）与其余中间态：no-op（终态补收只认 done / 超前 running）
+        } catch (err) {
+          logger.warn('重连对账：worker 终态补收失败（该行跳过，下次重连再对账）', {
+            taskId: row.id,
+            delegationId: row.delegation_id,
+            hubStatus: rec.status,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    } catch (err) {
+      logger.warn('重连对账：worker 终态对账 task.list 拉取失败（下次重连再对账）', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   // ── 阶段二：发起方侧——断线期 worker 干预补镜像 / answered 镜像行收敛 ──

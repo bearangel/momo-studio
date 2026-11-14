@@ -564,9 +564,10 @@ export async function handleTaskAccepted(
       return;
     }
     completeAcceptance(task.id, REMOTE_ORIGIN_BY);
+    const runNo = payloadRunNo(p.runNo);
     writeSessionMilestone(task, '验收通过（发起方已确认交付，任务完成）', {
       kind: 'accepted',
-      ...(payloadRunNo(p.runNo) !== undefined ? { runNo: payloadRunNo(p.runNo) } : {}),
+      ...(runNo !== undefined ? { runNo } : {}),
     });
     ports.settleDocked(delegationId, 'accepted');
     logger.info('远端验收通过已消费（completeAcceptance 复用路径）', {
@@ -624,10 +625,11 @@ export async function handleTaskRejected(
     }
     const reason = p.reason.trim();
     await rejectTask(task.id, reason, REMOTE_ORIGIN_BY);
+    const runNo = payloadRunNo(p.runNo);
     writeSessionMilestone(task, `任务被打回（需返工）：${reason}`, {
       kind: 'rejected',
       reason,
-      ...(payloadRunNo(p.runNo) !== undefined ? { runNo: payloadRunNo(p.runNo) } : {}),
+      ...(runNo !== undefined ? { runNo } : {}),
     });
     ports.settleDocked(delegationId, 'rejected');
     logger.info('远端打回已消费（rejectTask 复用路径，任务回 assigned 待返工）', {

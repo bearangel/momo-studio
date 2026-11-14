@@ -12,6 +12,9 @@
 //   6) findTaskByDelegationId 角色限定（S4 review Minor#1——S7 落地）：
 //      自委派双行共存（'out' 镜像 + 'in' 承接共享 delegation_id）时
 //      worker 消费取 'in'、发起方镜像取 'out'，消除任意取行
+//   7) worker 终态断线对账（阶段 1.5）：accepted-miss（hub done → completed +
+//      停靠出清）/ rejected-miss（hub running runNo 超前 → run rejected + 回
+//      assigned + 降级理由——跨节点死锁解除）/ 幂等二次对账零重复（计数级）
 //
 // mock 边界（momo-test-rules #5）：hub client fake（request 按 method/payload
 // 分发快照）/ router / push / deny 广播 / human:changed sink spy；DB 真实
@@ -42,7 +45,7 @@ import { __setElectronApisForTest } from '../../src/main/electron-access';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertTask, updateTask, getTask } from '../../src/main/storage/tasks/repo';
 import { insertSession, addSessionMember } from '../../src/main/storage/sessions/repo';
-import { getActiveRun } from '../../src/main/storage/tasks/runs-repo';
+import { getActiveRun, listRuns } from '../../src/main/storage/tasks/runs-repo';
 import { getHumanRequest, insertHumanRequest, findRemoteMirrorRequest } from '../../src/main/storage/tasks/human-requests-repo';
 import {
   requestHuman,
@@ -54,7 +57,11 @@ import {
 } from '../../src/main/task/lifecycle-runs';
 import { sendSystemKickoffMessage } from '../../src/main/task/human-answer-inject';
 import { reconcileOnReconnect } from '../../src/main/hub/reconnect-reconcile';
-import { handleTaskAccepted, handleTaskSubmittedMirror } from '../../src/main/hub/remote-intervene-bridge';
+import {
+  handleTaskAccepted,
+  handleTaskSubmittedMirror,
+  type WorkerTerminalConsumePorts,
+} from '../../src/main/hub/remote-intervene-bridge';
 import { TASK_RPC, type InterventionRecord, type TaskRecord } from '../../src/main/hub/protocol';
 import { setWriteDeniedBroadcaster } from '../../src/main/sandbox/write-blocked-emit';
 import type { HubClient } from '../../src/main/hub/client';
@@ -184,11 +191,27 @@ function rec(overrides: Partial<InterventionRecord> & Pick<InterventionRecord, '
   };
 }
 
+/** hub 委派账本行快照（协议 TaskRecord 投影形状——阶段 1.5 全量拉取响应项） */
+function hubRec(overrides: Partial<TaskRecord> & Pick<TaskRecord, 'status'>): TaskRecord {
+  return {
+    taskId: DELEGATION_ID,
+    workspaceName: 'Test',
+    targetNodeId: SELF_NODE,
+    title: '承接任务',
+    createdAt: Date.now() - 60_000,
+    updatedAt: Date.now(),
+    runNo: 1,
+    ...overrides,
+  };
+}
+
 /** fake hub client：request 按 method/payload 分发快照；fail=true 模拟对账 RPC 全挂 */
 function mkClient(snapshot: {
   all?: InterventionRecord[];
   byTask?: Record<string, InterventionRecord[]>;
   submitted?: TaskRecord[];
+  /** 阶段 1.5 全量 task.list 响应（不带 status 过滤的调用） */
+  tasks?: TaskRecord[];
   fail?: boolean;
 }): HubClient {
   return {
@@ -206,10 +229,51 @@ function mkClient(snapshot: {
         }
         return { interventions: snapshot.all ?? [] };
       }
-      if (method === TASK_RPC.list) return { tasks: snapshot.submitted ?? [] };
+      if (method === TASK_RPC.list) {
+        // 阶段 3（submitted 补收）带 status:'submitted' 过滤；阶段 1.5（worker
+        // 终态对账）全量拉取——按载荷分叉快照
+        const p = payload as { status?: string } | null;
+        return {
+          tasks: p?.status === 'submitted' ? snapshot.submitted ?? [] : snapshot.tasks ?? [],
+        };
+      }
       throw new Error(`unexpected rpc method: ${method}`);
     }),
   } as unknown as HubClient;
+}
+
+/** S4 消费端口（阶段 1.5——settleDocked spy 断言面；selfNodeId 判向本机） */
+function consumePorts(): { ports: WorkerTerminalConsumePorts; settleDocked: ReturnType<typeof vi.fn> } {
+  const settleDocked = vi.fn();
+  return {
+    ports: {
+      selfNodeId: () => SELF_NODE,
+      settleDocked: (taskId: string, outcome: 'accepted' | 'rejected') => settleDocked(taskId, outcome),
+    },
+    settleDocked,
+  };
+}
+
+/** delegation_milestone 结构化行（meta 断言载体——simhub 套件同款） */
+function milestoneRows(): Array<{ task_id: string | null; meta: Record<string, unknown> }> {
+  return (
+    getDb()
+      .prepare(`SELECT task_id, context_json FROM messages WHERE event_type = 'delegation_milestone'`)
+      .all() as Array<{ task_id: string | null; context_json: string | null }>
+  ).map((r) => ({
+    task_id: r.task_id,
+    meta: r.context_json === null ? {} : (JSON.parse(r.context_json) as Record<string, unknown>),
+  }));
+}
+
+/** 幂等计数快照（里程碑 / human_requests / run 行三维） */
+function snapshotCounts(): { milestones: number; humans: number; runs: number } {
+  const db = getDb();
+  return {
+    milestones: milestoneRows().length,
+    humans: (db.prepare(`SELECT COUNT(*) AS n FROM human_requests`).get() as { n: number }).n,
+    runs: (db.prepare(`SELECT COUNT(*) AS n FROM task_runs`).get() as { n: number }).n,
+  };
 }
 
 // ── 1) worker 断线期 answered → 补应用（S3 断言面）────────────────────────────
@@ -243,6 +307,7 @@ describe('1) worker 断线期 answered → 重连对账应用', () => {
           }),
         ],
       }),
+      consumePorts: consumePorts().ports,
     });
 
     const row = getHumanRequest(req.id)!;
@@ -284,6 +349,7 @@ describe('1) worker 断线期 answered → 重连对账应用', () => {
           }),
         ],
       }),
+      consumePorts: consumePorts().ports,
     };
     await reconcileOnReconnect(deps);
     expect(systemRows(execSessionId)).toHaveLength(1);
@@ -315,6 +381,7 @@ describe('2) 发起方断线期 pending → 补镜像 + 里程碑', () => {
           ],
         },
       }),
+      consumePorts: consumePorts().ports,
     });
 
     const mirror = findRemoteMirrorRequest(WORKER_NODE, 'iv-remote-1');
@@ -356,6 +423,7 @@ describe('2) 发起方断线期 pending → 补镜像 + 里程碑', () => {
           ],
         },
       }),
+      consumePorts: consumePorts().ports,
     });
 
     const after = getHumanRequest(mirror.id)!;
@@ -400,7 +468,7 @@ describe('3) 幂等：二次对账零重复', () => {
         ],
       },
     };
-    const deps = { client: mkClient(snapshot) };
+    const deps = { client: mkClient(snapshot), consumePorts: consumePorts().ports };
     await reconcileOnReconnect(deps);
     expect(milestoneCount()).toBe(1); // pending 补镜像落一条
     const answeredRow = getHumanRequest(mirror.id)!;
@@ -438,6 +506,7 @@ describe('4) submitted 漏事件补收', () => {
           },
         ],
       }),
+      consumePorts: consumePorts().ports,
     };
     await reconcileOnReconnect(deps);
 
@@ -475,7 +544,7 @@ describe('5) 对账 RPC 失败容忍', () => {
     });
 
     await expect(
-      reconcileOnReconnect({ client: mkClient({ fail: true }) }),
+      reconcileOnReconnect({ client: mkClient({ fail: true }), consumePorts: consumePorts().ports }),
     ).resolves.toBeUndefined();
 
     expect(getHumanRequest(req.id)!.status).toBe('pending'); // 零变更（下次重连再对账）
@@ -525,5 +594,81 @@ describe('6) 自委派双行共存：worker 消费取 in、发起方镜像取 ou
     handleTaskSubmittedMirror({ taskId: DELEGATION_ID, runNo: 1 });
     expect(getTask(origin.id)!.status).toBe('submitted');
     expect(getTask(worker.id)!.status).toBe('completed');
+  });
+});
+
+// ── 7) worker 终态断线对账（S7 阶段 1.5）──────────────────────────────────────
+
+describe('7) worker 终态断线对账（阶段 1.5）', () => {
+  it('accepted-miss：断线期发起方验收（hub done）→ 重连收口 completed + 停靠出清', async () => {
+    const { taskId } = seedWorkerTask();
+    updateTask(taskId, { delegationRole: 'in' }); // classic lf 承接形
+    await submitRun(taskId, { summary: '交付' });
+    expect(getTask(taskId)!.status).toBe('submitted');
+
+    const { ports, settleDocked } = consumePorts();
+    await reconcileOnReconnect({
+      client: mkClient({ tasks: [hubRec({ status: 'done', runNo: 1 })] }),
+      consumePorts: ports,
+    });
+
+    const t = getTask(taskId)!;
+    expect(t.status).toBe('completed');
+    expect(t.acceptedAt).not.toBeNull();
+    expect(listRuns(taskId).map((r) => r.status)).toEqual(['accepted']);
+    // 提交时生成的 acceptance 请求随收口答复（remote:origin）
+    const acceptance = getDb()
+      .prepare(`SELECT status, answered_by_node_id FROM human_requests WHERE kind = 'acceptance' AND task_id = ?`)
+      .get(taskId) as { status: string; answered_by_node_id: string | null };
+    expect(acceptance.status).toBe('answered');
+    expect(acceptance.answered_by_node_id).toBe('remote:origin');
+    expect(settleDocked).toHaveBeenCalledWith(DELEGATION_ID, 'accepted');
+    expect(milestoneRows().some((m) => m.meta['kind'] === 'accepted' && m.task_id === taskId)).toBe(true);
+  });
+
+  it('rejected-miss：hub running runNo=2 → 本地 run rejected + 任务回 assigned（死锁解除）+ 降级理由', async () => {
+    const { taskId } = seedWorkerTask(); // peer 承接形（role NULL + routing 指向本机）
+    await submitRun(taskId, { summary: '首版交付' });
+    expect(getTask(taskId)!.status).toBe('submitted');
+
+    const { ports, settleDocked } = consumePorts();
+    await reconcileOnReconnect({
+      client: mkClient({ tasks: [hubRec({ status: 'running', runNo: 2 })] }),
+      consumePorts: ports,
+    });
+
+    expect(getTask(taskId)!.status).toBe('assigned'); // 返工排队
+    const runs = listRuns(taskId);
+    expect(runs.map((r) => r.status)).toEqual(['rejected']);
+    expect(runs[0]!.rejectReason).toBe('发起方已打回（断线补收，理由见发起方会话）');
+    expect(settleDocked).toHaveBeenCalledWith(DELEGATION_ID, 'rejected');
+    const ms = milestoneRows();
+    expect(ms.some((m) => m.meta['kind'] === 'rejected' && m.task_id === taskId)).toBe(true);
+    expect(ms.find((m) => m.meta['kind'] === 'rejected')!.meta['reason']).toBe(
+      '发起方已打回（断线补收，理由见发起方会话）',
+    );
+    // 跨节点死锁解除的实证：返工通道复活，新 run 对齐 hub run_no=2
+    const rework = startRun(taskId, { trigger: 'rework' });
+    expect(rework.runNo).toBe(2);
+  });
+
+  it('幂等：二次对账零重复（计数级——里程碑/acceptance 行/run 行/settleDocked 均不变）', async () => {
+    const { taskId } = seedWorkerTask();
+    updateTask(taskId, { delegationRole: 'in' });
+    await submitRun(taskId, { summary: '交付' });
+    const { ports, settleDocked } = consumePorts();
+    const deps = {
+      client: mkClient({ tasks: [hubRec({ status: 'done' })] }),
+      consumePorts: ports,
+    };
+    await reconcileOnReconnect(deps);
+    expect(getTask(taskId)!.status).toBe('completed');
+    expect(settleDocked).toHaveBeenCalledTimes(1);
+
+    // 同快照二次对账：行已非 submitted → 枚举空，零重复写（计数级断言）
+    const counts = snapshotCounts();
+    await reconcileOnReconnect(deps);
+    expect(snapshotCounts()).toEqual(counts);
+    expect(settleDocked).toHaveBeenCalledTimes(1);
   });
 });

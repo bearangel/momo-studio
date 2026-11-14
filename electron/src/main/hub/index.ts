@@ -519,6 +519,16 @@ function startClient(
   client?.stop();
   // 新连接开始 → 上个连接的快照作废（重播不得推陈旧节点）
   presenceSeed = null;
+  // S4 worker 终态消费端口（onEvent 事件面与 S7 对账阶段 1.5 共用单源——
+  // selfNodeId / settleDocked 装配两处同源，防漂移）
+  const terminalConsumePorts = (): WorkerTerminalConsumePorts => ({
+    selfNodeId: () => configStore().read()?.nodeId ?? nodeId,
+    // 停靠项只存在于已创建的 runner（handleAssigned/handleOnline 建档）；
+    // 无 runner = 无停靠，幂等 no-op
+    settleDocked: (taskId, outcome) => {
+      delegationRunner?.settleAcceptance(taskId, outcome);
+    },
+  });
   client = createHubClient({
     url: wsUrlOf(hubUrl),
     nodeName,
@@ -533,9 +543,10 @@ function startClient(
         // 状态回调不 await 恢复链，连接状态机不被对账阻塞）
         void ensureDelegationRunner(nodeId).handleOnline();
         // S7 断线对账（spec §8.6 断连窗口补偿）：错过的代答/干预/提交事件经
-        // task.interventions + task.list 拉取幂等收敛；内部失败容忍，不阻塞重连链
+        // task.interventions + task.list 拉取幂等收敛（阶段 1.5 补收 worker 侧
+        // accepted/rejected——终结跨节点死锁窗口）；内部失败容忍，不阻塞重连链
         if (client !== null) {
-          void reconcileOnReconnect({ client });
+          void reconcileOnReconnect({ client, consumePorts: terminalConsumePorts() });
         }
         // 查看开关重报（T13 交接——RM2-9：hub 断线清除 consent 回默认 true，
         // 重连必须重报本地设置，否则关闭态节点重连后即恢复可查看）
@@ -581,16 +592,10 @@ function startClient(
         // hub 委派 id，桥内经 delegation_id 反查本地承接行）→ 复用
         // completeAcceptance / rejectTask 写路径落本地终态与返工 + 停靠出清。
         // 断连窗口（沿 S3 口径）：onEvent 只在 online 后触发——错过的验收结果无
-        // 事件补偿（自然降级：任务保持 submitted，节点所有者可本地验收/打回），
-        // 重连后由 S7 对账兜底。
-        const consumePorts: WorkerTerminalConsumePorts = {
-          selfNodeId: () => configStore().read()?.nodeId ?? nodeId,
-          // 停靠项只存在于已创建的 runner（handleAssigned/handleOnline 建档）；
-          // 无 runner = 无停靠，幂等 no-op
-          settleDocked: (taskId, outcome) => {
-            delegationRunner?.settleAcceptance(taskId, outcome);
-          },
-        };
+        // 事件补偿（降级期任务保持 submitted，节点所有者可本地验收/打回），重连后
+        // 由 S7 对账兜底（阶段 1.5 worker 终态补收：hub done→accepted /
+        // runNo 超前 running→rejected）。
+        const consumePorts = terminalConsumePorts();
         if (evt.method === EVT.taskAccepted) void handleTaskAccepted(evt.payload, consumePorts);
         else void handleTaskRejected(evt.payload, consumePorts);
         return;
