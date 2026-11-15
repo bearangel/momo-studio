@@ -777,8 +777,9 @@ function parseMirrorDeliverable(raw: unknown): {
  * S5 镜像消费端口（S6 Important-1 清偿，S9）：镜像行落库时经组清单解析执行节点
  * 绑定空间名 → payload_json `remote.workstation` 段（面板「来自 {节点} · {工作
  * 站}」徽标数据源）。组清单成员 boundWorkspaceName 仅 peer 组投影携带（lf 组
- * 缺席）→ 解析不到时降级 null（徽标仅节点名，既有行为）。可选端口：缺席（旧
- * 接线/测试直调）→ 镜像行不带 remote 段，既有断言形状零变化。
+ * 缺席）→ 解析不到时降级 null（徽标仅节点名，既有行为）。A2（F4 lf 短路）：
+ * 仅 origin='peer_draft' 行发起解析（lf 委派组清单恒无该键，免整轮 RPC 放大）。
+ * 可选端口：缺席（旧接线/测试直调）→ 镜像行不带 remote 段，既有断言形状零变化。
  */
 export interface OriginMirrorPorts {
   workstationOf?(targetNodeId: string): Promise<string | null>;
@@ -860,9 +861,11 @@ export async function handleTaskInterventionMirror(
       });
       return;
     }
-    // S9（A4）：工作站解析失败降级 null——不阻断镜像落库（remote 段缺席=面板降级）
+    // S9（A4）：工作站解析失败降级 null——不阻断镜像落库（remote 段缺席=面板降级）；
+    // A2（F4 lf 短路）：boundWorkspaceName 仅 peer 组投影——非 peer_draft 行整轮
+    // 组清单 RPC 恒空手而归，前置短路免 RPC 放大
     const workstation =
-      ports?.workstationOf !== undefined
+      ports?.workstationOf !== undefined && task.origin === 'peer_draft'
         ? await ports.workstationOf(workerNodeId).catch(() => null)
         : null;
     const row = insertHumanRequest({
@@ -997,9 +1000,10 @@ export async function handleTaskSubmittedMirror(
       return;
     }
     const deliverable = parseMirrorDeliverable(p.deliverable);
-    // S9（A4）：工作站解析失败降级 null——不阻断 acceptance 镜像落库
+    // S9（A4）：工作站解析失败降级 null——不阻断 acceptance 镜像落库；
+    // A2（F4 lf 短路）同 intervention 消费点——非 peer_draft 行免整轮组清单 RPC
     const workstation =
-      ports?.workstationOf !== undefined
+      ports?.workstationOf !== undefined && task.origin === 'peer_draft'
         ? await ports.workstationOf(workerNodeId).catch(() => null)
         : null;
     const row = insertHumanRequest({

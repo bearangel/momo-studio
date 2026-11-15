@@ -103,7 +103,8 @@ const originGroupsClient = createGroupClient((method, payload, timeoutMs) =>
 /**
  * S9（A4 工作站段）镜像行 remote 段数据源：执行节点 → 组清单成员
  * boundWorkspaceName（仅 peer 组投影携带；lf 组缺席 → null 降级仅节点名）。
- * 镜像事件低频（干预/提交），逐事件直拉不设缓存；hub 不可达 → null 不阻断镜像。
+ * 镜像事件低频（干预/提交），逐事件直拉不设缓存（对账轮内缓存见
+ * reconnect-reconcile 装配）；hub 不可达 → null 不阻断镜像。
  */
 const mirrorWorkstationOf = async (nodeId: string): Promise<string | null> => {
   try {
@@ -119,6 +120,10 @@ const mirrorWorkstationOf = async (nodeId: string): Promise<string | null> => {
     return null;
   }
 };
+
+/** 发起方镜像消费端口（onEvent 事件面与 S7 对账面共用单源——A2 对账轮内缓存
+ *  经 deps.mirrorPorts 包装本端口，装配不重复） */
+const originMirrorPorts = { workstationOf: mirrorWorkstationOf };
 
 /**
  * 镜像登记表查询面（IPC hub:mirrorRegistry 消费；RM-M21-7 四消费方同源：
@@ -546,7 +551,11 @@ function startClient(
         // task.interventions + task.list 拉取幂等收敛（阶段 1.5 补收 worker 侧
         // accepted/rejected——终结跨节点死锁窗口）；内部失败容忍，不阻塞重连链
         if (client !== null) {
-          void reconcileOnReconnect({ client, consumePorts: terminalConsumePorts() });
+          void reconcileOnReconnect({
+            client,
+            consumePorts: terminalConsumePorts(),
+            mirrorPorts: originMirrorPorts,
+          });
         }
         // 查看开关重报（T13 交接——RM2-9：hub 断线清除 consent 回默认 true，
         // 重连必须重报本地设置，否则关闭态节点重连后即恢复可查看）
@@ -607,9 +616,8 @@ function startClient(
         // （沿 S3/S4 口径）：onEvent 只在 online 后触发——错过的事件无补偿，
         // 重连后由 S7 对账兜底。
         // S9（A4）：镜像行经组清单解析工作站段（失败降级 null——桥内自吞）
-        const mirrorPorts = { workstationOf: mirrorWorkstationOf };
-        if (evt.method === EVT.taskIntervention) void handleTaskInterventionMirror(evt.payload, mirrorPorts);
-        else void handleTaskSubmittedMirror(evt.payload, mirrorPorts);
+        if (evt.method === EVT.taskIntervention) void handleTaskInterventionMirror(evt.payload, originMirrorPorts);
+        else void handleTaskSubmittedMirror(evt.payload, originMirrorPorts);
         return;
       }
       // ── leader 侧委派事件桥（M2e T12）：hub 定向→本机 leader 的账本迁移与进度拍，

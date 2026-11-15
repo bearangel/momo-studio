@@ -37,6 +37,11 @@
 // 全程失败容忍：任一 RPC 失败 logger.warn 继续，绝不向上抛（装配点
 // hub/index onStateChange(online) fire-and-forget——与 handleOnline 并列，
 // 对账故障不得阻塞重连主链）。
+//
+// A2（F4 RPC 放大收敛）：①镜像 workstation 解析结果按 nodeId 轮内缓存
+// （per-pass 作用域——不得跨轮复用，陈旧 workstation 会污染镜像行 remote 段）；
+// ②阶段 2 的 per-row task.interventions 拉取按 delegationId 分组合并单次
+// （同 delegation 多行形态免逐行重复 RPC，失败同样按 delegation 记忆跳过同行）。
 import { logger } from '../logger';
 import type { HubClient } from './client';
 import { TASK_RPC, type InterventionRecord, type TaskRecord } from './protocol';
@@ -53,6 +58,7 @@ import {
   handleTaskRejected,
   handleTaskSubmittedMirror,
   outRowWorkerNodeId,
+  type OriginMirrorPorts,
   type WorkerTerminalConsumePorts,
 } from './remote-intervene-bridge';
 
@@ -61,6 +67,9 @@ export interface ReconnectReconcileDeps {
   client: HubClient;
   /** S4 worker 终态消费端口（阶段 1.5 复用 handleTaskAccepted/Rejected——与 hub/index onEvent 事件面同源装配） */
   consumePorts: WorkerTerminalConsumePorts;
+  /** A2：发起方镜像 workstation 解析端口（hub/index 装配 mirrorWorkstationOf；
+   *  轮内经 nodeId 缓存包装。缺席（测试直调）→ 镜像行不带 remote 段，既有形状） */
+  mirrorPorts?: OriginMirrorPorts;
 }
 
 /** 打回补收降级理由（协议 TaskRecord 不携带 reason——真实打回理由只在发起方会话里程碑） */
@@ -99,6 +108,23 @@ function convergeMirrorAnswered(rec: InterventionRecord, workerNodeId: string): 
  * 三个阶段各自失败容忍（warn 继续），全函数不抛。
  */
 export async function reconcileOnReconnect(deps: ReconnectReconcileDeps): Promise<void> {
+  // A2（F4）：workstation 解析轮内缓存（per-pass Map——不跨轮，见文件头注）；
+  // 失败不缓存（桥侧 catch 降级 null，下一行同节点可重试）
+  const workstationCache = new Map<string, string | null>();
+  const resolveWorkstation = deps.mirrorPorts?.workstationOf;
+  const mirrorPorts: OriginMirrorPorts | undefined =
+    resolveWorkstation === undefined
+      ? undefined
+      : {
+          workstationOf: async (nodeId: string): Promise<string | null> => {
+            const hit = workstationCache.get(nodeId);
+            if (hit !== undefined) return hit;
+            const value = await resolveWorkstation(nodeId);
+            workstationCache.set(nodeId, value);
+            return value;
+          },
+        };
+
   // ── 阶段一：worker 侧——断线期远端代答补应用 ──
   try {
     const res = await deps.client.request<{ interventions: InterventionRecord[] }>(
@@ -200,23 +226,33 @@ export async function reconcileOnReconnect(deps: ReconnectReconcileDeps): Promis
       return [];
     }
   })();
+  // A2（F4）：同 delegation 多行合并单次拉取（null=已失败——同行直接跳过，
+  // 不重复 RPC，下次重连对账再收）
+  const interventionsByDelegation = new Map<string, InterventionRecord[] | null>();
   for (const row of outRows) {
     const task = getTask(row.id);
     if (task === null || isTerminal(task.status)) continue;
-    let records: InterventionRecord[];
-    try {
-      const res = await deps.client.request<{ interventions: InterventionRecord[] }>(
-        TASK_RPC.interventions,
-        { taskId: row.delegation_id },
-      );
-      records = res.interventions ?? [];
-    } catch (err) {
-      logger.warn('重连对账：外派干预拉取失败（该任务跳过，下次重连再对账）', {
-        taskId: row.id,
-        delegationId: row.delegation_id,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      continue;
+    let records: InterventionRecord[] | null;
+    if (interventionsByDelegation.has(row.delegation_id)) {
+      records = interventionsByDelegation.get(row.delegation_id)!;
+      if (records === null) continue;
+    } else {
+      try {
+        const res = await deps.client.request<{ interventions: InterventionRecord[] }>(
+          TASK_RPC.interventions,
+          { taskId: row.delegation_id },
+        );
+        records = res.interventions ?? [];
+        interventionsByDelegation.set(row.delegation_id, records);
+      } catch (err) {
+        logger.warn('重连对账：外派干预拉取失败（该任务跳过，下次重连再对账）', {
+          taskId: row.id,
+          delegationId: row.delegation_id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        interventionsByDelegation.set(row.delegation_id, null);
+        continue;
+      }
     }
     const workerNodeId = outRowWorkerNodeId(task);
     for (const rec of records) {
@@ -224,7 +260,9 @@ export async function reconcileOnReconnect(deps: ReconnectReconcileDeps): Promis
       // convergeMirrorAnswered 的 repo 调用抛错打断整行/整轮对账
       try {
         if (rec.status === 'pending') {
-          handleTaskInterventionMirror({ taskId: row.delegation_id, intervention: rec });
+          // A2：await 串行镜像应用——轮内 workstation 缓存命中依赖前序落定；
+          // 亦消除并发 UNIQUE 幂等窗口（消费函数 total 语义，await 不抛）
+          await handleTaskInterventionMirror({ taskId: row.delegation_id, intervention: rec }, mirrorPorts);
         } else if (rec.status === 'answered' && workerNodeId !== null) {
           convergeMirrorAnswered(rec, workerNodeId);
         }
@@ -245,7 +283,8 @@ export async function reconcileOnReconnect(deps: ReconnectReconcileDeps): Promis
       status: 'submitted',
     });
     for (const t of list.tasks ?? []) {
-      handleTaskSubmittedMirror({ taskId: t.taskId, runNo: t.runNo ?? 1 });
+      // A2：await 串行（同上——缓存命中 + UNIQUE 幂等窗口）
+      await handleTaskSubmittedMirror({ taskId: t.taskId, runNo: t.runNo ?? 1 }, mirrorPorts);
     }
   } catch (err) {
     logger.warn('重连对账：task.list submitted 拉取失败（下次重连再对账）', {

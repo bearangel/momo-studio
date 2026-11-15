@@ -20,7 +20,7 @@
 // mock 边界（momo-test-rules #5）：事件入口直调（hub/index onEvent 仅薄转发）；
 // DB 真实（worker-answer-consume.test.ts 同款 AP_USER_DATA_DIR 临时库）；
 // pushSessionMessage 无 BrowserWindow 环境静默跳过（stream-relay 自带降级）。
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -60,12 +60,14 @@ afterEach(() => {
   delete process.env.AP_USER_DATA_DIR;
 });
 
-/** 种外派行（delegation_role='out' 缺省戳；routing 缺省 node→WORKER_NODE） */
+/** 种外派行（delegation_role='out' 缺省戳；routing 缺省 node→WORKER_NODE；
+ *  origin 缺省 'user'——workstation 解析仅 peer_draft 行发起（A2 lf 短路） */
 function seedOutTask(opts?: {
   sessionId?: string | null;
   routing?: TaskRow['routing'];
   role?: 'out' | null;
   status?: TaskRow['status'];
+  origin?: TaskRow['origin'];
 }): TaskRow {
   const t = insertTask({
     workspaceId: 'ws1',
@@ -75,6 +77,7 @@ function seedOutTask(opts?: {
     executionSessionId: opts?.sessionId === undefined ? execSessionId : opts.sessionId,
     delegationId: DELEGATION_ID,
     routing: opts?.routing ?? { mode: 'node', groupId: 'g-1', targetNodeId: WORKER_NODE },
+    origin: opts?.origin,
   });
   const role = opts?.role === undefined ? 'out' : opts.role;
   if (role !== null) updateTask(t.id, { delegationRole: role });
@@ -381,10 +384,11 @@ describe('10) session-空变体：execution_session_id 缺失 → 状态收口�
 });
 
 // ── 11) S9（A4 工作站段 + A5 短 id）：payload remote 标记段与 #T 标题 ──────────
+// A2 起 workstation 解析仅 peer_draft 行发起——本组种子均带 origin='peer_draft'
 
 describe('11) S9 工作站段：镜像 payload remote 标记段', () => {
   it('端口解析成功 → intervention/acceptance payload 均带 remote.workstation', async () => {
-    seedOutTask();
+    seedOutTask({ origin: 'peer_draft' });
     await handleTaskInterventionMirror(interventionEvent(), {
       workstationOf: async () => 'dev-ws',
     });
@@ -406,7 +410,7 @@ describe('11) S9 工作站段：镜像 payload remote 标记段', () => {
   });
 
   it('解析 null（lf 组无绑定态投影）/ 端口失败 → 无 remote 段（降级仅节点名）且不阻断镜像落库', async () => {
-    seedOutTask();
+    seedOutTask({ origin: 'peer_draft' });
     await handleTaskInterventionMirror(interventionEvent(), {
       workstationOf: async () => null,
     });
@@ -425,7 +429,7 @@ describe('11) S9 工作站段：镜像 payload remote 标记段', () => {
   });
 
   it('执行方 payload 自带 remote 键 → 剥除/覆盖为发起方解析值（展示字段不留伪造面）', async () => {
-    seedOutTask();
+    seedOutTask({ origin: 'peer_draft' });
     const evt = interventionEvent() as { intervention: { payload: Record<string, unknown> } };
     evt.intervention.payload = { tool: 'bash', remote: { workstation: '伪造值' } };
     await handleTaskInterventionMirror(evt, { workstationOf: async () => '真值' });
@@ -450,5 +454,37 @@ describe('11) S9 工作站段：镜像 payload remote 标记段', () => {
     const row = listRequests({ status: 'all' })[0]!;
     expect(row.title).toBe(`#${task.id} 提交验收（run #1）`);
     expect(task.id).toMatch(/^T-\d+$/); // id 生成本就是短形态——截短不适用（报告结论）
+  });
+});
+
+// ── 12) A2（F4 lf 短路）：非 peer_draft 行零组清单调用 ─────────────────────────
+
+describe('12) A2 lf 短路：origin 非 peer_draft → workstationOf 零调用', () => {
+  it('lf 委派行（origin=dispatch）即使端口在场也不发组清单 RPC；镜像行照落、无 remote 段', async () => {
+    seedOutTask({ origin: 'dispatch' }); // lf 委派形态（dispatch-submit 外派行）
+    const workstationOf = vi.fn(async () => 'should-not-appear');
+
+    await handleTaskInterventionMirror(interventionEvent(), { workstationOf });
+    await handleTaskSubmittedMirror(submittedEvent({ deliverable: { summary: 's' } }), {
+      workstationOf,
+    });
+
+    expect(workstationOf).not.toHaveBeenCalled(); // 免整轮组清单 RPC（F4 放大收敛）
+    const rows = listRequests({ status: 'all' });
+    expect(rows).toHaveLength(2); // 镜像行照常落库（short-circuit 只省 RPC 不省镜像）
+    for (const r of rows) {
+      const payload = JSON.parse(r.payloadJson ?? '{}') as Record<string, unknown>;
+      expect(payload['remote']).toBeUndefined();
+    }
+  });
+
+  it('peer_draft 行端口在场 → 发起解析（对照组——短路条件仅 origin）', async () => {
+    seedOutTask({ origin: 'peer_draft' });
+    const workstationOf = vi.fn(async () => 'peer-ws');
+
+    await handleTaskInterventionMirror(interventionEvent(), { workstationOf });
+
+    expect(workstationOf).toHaveBeenCalledTimes(1);
+    expect(workstationOf).toHaveBeenCalledWith(WORKER_NODE);
   });
 });
