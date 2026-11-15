@@ -52,7 +52,7 @@ import { hubGetPresenceNodes, hubRequest } from '../hub/index';
 import { TASK_RPC } from '../hub/protocol';
 import type { InterventionAnswer } from '../hub/protocol';
 import { setMirrorAnswerForwarder, setPresenceNodesProvider } from '../task/human.ipc.handlers';
-import { setRemoteTerminalForwarder } from '../task/ipc.handlers';
+import { setRemoteTerminalForwarder, setSteerForwarder } from '../task/ipc.handlers';
 // 新装引导（spec 2026-10-10）：status / 方案生成 / 方案应用 / 完成标记
 import { registerOnboardingHandlers } from '../onboarding/ipc.handlers';
 import type { WorkspaceIpcOpts } from '../workspace/ipc.handlers';
@@ -160,6 +160,13 @@ export function registerIpcHandlers(opts: WorkspaceIpcOpts = {}): void {
       outcome === 'accepted' ? { taskId: delegationId } : { taskId: delegationId, reason },
       undefined,
     );
+  });
+  // P3 S3：发起方补充指令转发接线（hubRequest 错误语义单点——未连接人话 / hub
+  // 原文 / 超时；node_offline 映射在 task:steer handler，RpcRemoteError.code 经
+  // rejection 原样到达）。协议 1.12（TASK_STEER_REQUIRED_MINOR）以下 hub 由
+  // unsupported_method 人话拒——可读降级，无需本地预检
+  setSteerForwarder(async ({ delegationId, message }) => {
+    await hubRequest(TASK_RPC.steer, { taskId: delegationId, message }, undefined);
   });
   // 窗口控制（自绘 titlebar）——注册先于窗口创建，getWin 每次调用时懒查首个窗口
   registerWindowIpc(() => BrowserWindow.getAllWindows()[0] ?? null);

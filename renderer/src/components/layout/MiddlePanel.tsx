@@ -20,6 +20,8 @@ import { TaskProgressButton } from '../im/TaskProgressButton';
 import { InFlightPanel } from '../im/InFlightPanel';
 // P3 S2：委派跟踪会话头「查看远端会话」入口（delegationRole='out' 门控，组件内自判）
 import { RemoteSessionEntry } from '../hub/RemoteSessionDrawer';
+// P3 S3：跟踪会话头「补充指令」入口（与查看钮并排，CONTRACT #11；同门控 + 终态隐藏）
+import { SteerEntry } from '../hub/SteerEntry';
 import { AgentsView } from '../agent/AgentsView';
 import { SettingsView } from '../settings/SettingsView';
 import { ResourceLibraryView } from '../resource-library/ResourceLibraryView';
@@ -123,6 +125,8 @@ export function MiddlePanel() {
             {activeSessionId && <InFlightPanel sessionId={activeSessionId} />}
             {/* P3 S2：远端会话只读抽屉入口（CONTRACT #10 标题行尾；非跟踪会话自渲染 null） */}
             {activeSession && <RemoteSessionEntry session={activeSession} />}
+            {/* P3 S3：补充指令入口（CONTRACT #11 与查看钮并排；终态任务自渲染 null） */}
+            {activeSession && <SteerEntry session={activeSession} />}
           </div>
           <MessageList />
           <InputToolbar

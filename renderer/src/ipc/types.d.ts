@@ -493,6 +493,12 @@ export interface TaskApiSurface {
   /** 打回（Task 16）：run rejected + 任务回 assigned 排队返工；空白理由人话拒绝。
    *  P2 S6 remoteWarning 同 accept */
   reject(id: string, reason: string): Promise<TaskRow & { remoteWarning?: string }>;
+  /**
+   * 发起方补充指令（P3 S3）：delegation_role='out' 校验 → hub task.steer →
+   * 成功即时落跟踪会话 kind='steered' 里程碑（发起方本地写，pushSessionMessage
+   * 到达消息流）；失败人话 throw（node_offline → 「执行节点离线，稍后再试」）
+   */
+  steer(taskId: string, message: string): Promise<{ ok: true }>;
   /** run 历史（Task 16，run_no ASC） */
   listRuns(id: string): Promise<TaskRunRow[]>;
   /**

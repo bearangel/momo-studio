@@ -81,6 +81,9 @@ function assertNotDispatchRow(id: string): void {
 import { detectInterrupted, resumeTask, type InterruptedTaskInfo } from './resume';
 import { executeMove, type MoveTarget } from './move';
 import { validateTaskRoutingInput, type TaskRouting } from '../hub/task-routing';
+// P3 S3：发起方 steer 成功里程碑（发起方本地写，remote-intervene-bridge 单点——
+// delegation_milestone 写入面同模块单源；其 import 图不含本文件，无环）
+import { writeOriginSteerMilestone } from '../hub/remote-intervene-bridge';
 import { insertTaskWithRelations, setTaskRelations, type TaskRelationsInput } from './relations';
 
 /** renderer task:create 入参（不含 creatorUserId，由 main 注入） */
@@ -228,6 +231,77 @@ export function setRemoteTerminalForwarder(
 ): void {
   remoteTerminalForwarder = fn;
 }
+
+// ── 发起方补充指令（P3 S3，spec 2026-11-13 §8.2 steer 槽位）───────────────────
+//
+// delegation_role='out' 且 delegation_id 在场 → hub task.steer（协议 1.12，
+// RPC 有应答；hub 校验发起方身份与账本非终态后定向 worker task.steered——
+// worker 侧 S1 消费）。错误人话透传：node_offline 映射 CONTRACT #18 固定文案，
+// 其余 hub 原文直出（renderer client 层剥 IPC 包装）。发送成功即时落跟踪会话
+// kind='steered' 里程碑（发起方本地写——hub 对 steer 无回执事件给发起方，
+// writeOriginSteerMilestone 单点）。转发器注入与 accept/reject 同款纪律。
+
+/** 远端补充指令转发入参（hub task.steer 载荷投影：TaskSteerReq） */
+export interface RemoteSteerForwardInput {
+  delegationId: string;
+  message: string;
+}
+
+let steerForwarder: ((input: RemoteSteerForwardInput) => Promise<void>) | null = null;
+
+/** hub 域注入点（ipc/index.ts 装配；null 注销） */
+export function setSteerForwarder(
+  fn: ((input: RemoteSteerForwardInput) => Promise<void>) | null,
+): void {
+  steerForwarder = fn;
+}
+
+/** 补充指令字数上限（协议 TaskSteerReq：message trim 后 1..4000 字，按码点计） */
+const STEER_MESSAGE_MAX = 4000;
+
+/** node_offline → CONTRACT #18 固定文案（ui-Toast 底部居中呈现） */
+const STEER_NODE_OFFLINE_TEXT = '执行节点离线，稍后再试';
+
+/**
+ * 发起方补充指令（S3 路由单点，导出供测试直调）：校验（存在 / delegation_role=
+ * 'out' / delegation_id 在场 / message trim 后 1..4000 码点）→ hub task.steer →
+ * 成功落跟踪会话里程碑。错误不落里程碑（发送失败指令未送达）。
+ */
+export async function steerTaskRouted(taskId: string, rawMessage: string): Promise<{ ok: true }> {
+  const message = typeof rawMessage === 'string' ? rawMessage.trim() : '';
+  if (message === '') {
+    throw new Error(`补充指令不能为空（1-${STEER_MESSAGE_MAX} 字）`);
+  }
+  if (Array.from(message).length > STEER_MESSAGE_MAX) {
+    throw new Error(`补充指令最多 ${STEER_MESSAGE_MAX} 字`);
+  }
+  const task = getTask(taskId);
+  if (!task) throw new Error(`task ${taskId} 不存在`);
+  if (task.delegationRole !== 'out') {
+    throw new Error('仅发起方可对委派任务补充指令');
+  }
+  if (task.delegationId === null) {
+    throw new Error('任务未委派，无可送达的执行节点');
+  }
+  const forward = steerForwarder;
+  if (forward === null) {
+    logger.warn('补充指令转发未装配（hub 域未接线）', { taskId });
+    throw new Error('补充指令通道未就绪（hub 未配置）');
+  }
+  try {
+    await forward({ delegationId: task.delegationId, message });
+  } catch (err) {
+    // code 随 RpcRemoteError 保留（client.ts 同款判别）；IPC 只传 message 串——
+    // node_offline 必须在主进程映射（renderer 拿不到 code）
+    const code = err instanceof Error && 'code' in err ? String((err as { code?: unknown }).code) : undefined;
+    if (code === 'node_offline') throw new Error(STEER_NODE_OFFLINE_TEXT);
+    throw err;
+  }
+  logger.info('补充指令已送达 hub（task.steer）', { taskId, delegationId: task.delegationId });
+  writeOriginSteerMilestone(task, message);
+  return { ok: true };
+}
+
 
 /** 远端提交判定：out 行 + 当前 pending acceptance 为镜像行（提交来自远端） */
 function isRemoteSubmitted(task: TaskRow): boolean {
@@ -513,6 +587,16 @@ export function registerTaskHandlers(): void {
     async (_evt, id: string, reason: string): Promise<TaskRow & { remoteWarning?: string }> => {
       assertNotDispatchRow(id);
       return rejectTaskRouted(id, reason);
+    },
+  );
+
+  // P3 S3：发起方补充指令（steerTaskRouted 单点：out 校验 + hub task.steer +
+  // 错误人话透传 + 成功里程碑；返回 ok 恒真——失败以 throw 表达）
+  ipcMain.handle(
+    'task:steer',
+    async (_evt, input: { taskId: string; message: string }): Promise<{ ok: true }> => {
+      if (typeof input?.taskId !== 'string') throw new Error('task:steer 需要 taskId');
+      return steerTaskRouted(input.taskId, input.message);
     },
   );
 

@@ -61,7 +61,8 @@ function parseToolRow(content: string): { name: string; done: boolean; excerpt: 
   return null;
 }
 
-function shortNodeId(nodeId: string): string {
+/** 节点短 id（>8 位掐头去尾；S3 SteerEntry 头部节点名降级同源） */
+export function shortNodeId(nodeId: string): string {
   return nodeId.length > 8 ? `${nodeId.slice(0, 4)}…${nodeId.slice(-4)}` : nodeId;
 }
 

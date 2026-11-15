@@ -804,6 +804,58 @@ export function handleTaskSteered(payload: unknown, ports: TaskSteeredConsumePor
   }
 }
 
+// ── 发起方 steer 里程碑（P3 S3，spec 2026-11-13 §8.2 steer 槽位）───────────────
+
+/**
+ * 发起方侧 steer 里程碑去重账（独立于 worker 侧 steerDedupeSeen——两端语义
+ * 同构但进程角色不同，测试同进程共跑不互串）：key 形状与 S1 相同
+ * （`${delegationId}#${sha256(message) 前 16 hex}`），10s 窗口。
+ */
+const originSteerDedupeSeen = new Map<string, number>();
+
+/** 测试用：清空发起方去重账（进程内单例跨用例残留会互串） */
+export function __resetOriginSteerDedupeForTest(): void {
+  originSteerDedupeSeen.clear();
+}
+
+/** S3 与 S1 同窗口（10s）——两端对称：窗口内同文重复指令无信息增量 */
+const ORIGIN_STEER_DEDUPE_WINDOW_MS = STEER_DEDUPE_WINDOW_MS;
+
+function isDuplicateOriginSteer(delegationId: string, message: string): boolean {
+  const key = `${delegationId}#${createHash('sha256').update(message).digest('hex').slice(0, 16)}`;
+  const now = Date.now();
+  for (const [k, seenAt] of originSteerDedupeSeen) {
+    if (now - seenAt > ORIGIN_STEER_DEDUPE_WINDOW_MS) originSteerDedupeSeen.delete(k);
+  }
+  if (originSteerDedupeSeen.has(key)) return true;
+  originSteerDedupeSeen.set(key, now);
+  return false;
+}
+
+/**
+ * 发起方补充指令里程碑（task:steer 成功路径本地写，task/ipc.handlers 消费）：
+ * 跟踪会话 = 外派行 execution_session_id（S6 建会话回填）；hub 对 steer 无回执
+ * 事件给发起方，即时反馈不等事件——发送成功即落 kind='steered' 行（沿
+ * writeSessionMilestone 公用底座：sender='system' + event_type=
+ * 'delegation_milestone' + pushSessionMessage 实时推 renderer 蓝调卡）。
+ * meta.message ≤80 字摘要（与 S1 worker 侧同构，渲染面单源）；body 携全文
+ * （跟踪会话只读无 agent 消费，审计可查）。
+ * 防重：delegation_id + message hash + 10s 窗口（hub task.steer 每次调用都发
+ * 事件——指令非状态；里程碑去重与 worker 侧消费去重两端对称，双击/重试窗口
+ * 内跟踪会话只落一行）。execution_session_id 空（跟踪会话未接通）跳过 + warn，
+ * 不影响 steer 本身成功返回。
+ */
+export function writeOriginSteerMilestone(task: TaskRow, message: string): void {
+  if (isDuplicateOriginSteer(task.delegationId ?? '', message)) {
+    logger.info('发起方 steer 里程碑窗口内重复（去重跳过）', { taskId: task.id });
+    return;
+  }
+  writeSessionMilestone(task, `已下发指令：${message}`, {
+    kind: 'steered',
+    message: truncateCodePoints(message, 79),
+  });
+}
+
 // ── 发起方镜像消费（P2 S5，spec 2026-11-13 §8.3/§8.6）─────────────────────────
 
 /**
