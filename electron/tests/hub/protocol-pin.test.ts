@@ -44,6 +44,10 @@
 //    （intervention/interventionAnswered/submitted/accepted/rejected）；
 //    TASK_HITL_REQUIRED_MINOR=11 版本门 + TaskAnswerReq interventionId?/answer?
 //    双向结构化答复两形状（旧写授权形态零变化）
+// ⑩ 1.12.0 一面（task-lifecycle-v2 P3 pin bump v0.7.3）：task.steer 新方法
+//    （worker 运行中转向）登记 + TASK_STEER_REQUIRED_MINOR=12 /
+//    METHOD_REQUIRED_MINOR['task.steer']=12 双门槛锁；1.11.0 五面断言值
+//    随 pin bump 对齐 1.12.0（历史能力面注释条目保留）
 // 版本 introspection 直读包内 package.json：单入口规则（protocol.ts）约束的是协议符号
 // import；此处是 pin 锁定断言，目的不同，不走协议面。
 import { readFileSync } from 'node:fs';
@@ -51,10 +55,12 @@ import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import {
   EVT,
+  METHOD_REQUIRED_MINOR,
   PROTOCOL_VERSION,
   RPC_ERROR_CODES,
   TASK_HITL_REQUIRED_MINOR,
   TASK_RPC,
+  TASK_STEER_REQUIRED_MINOR,
   TEAM_DELEGATION_REQUIRED_MINOR,
   validateHubCatalog,
   validateSnapshotManifest,
@@ -120,9 +126,9 @@ function manifestSample(resources: unknown): unknown {
   };
 }
 
-describe('hub pin v0.7.2（1.11.0 v2 HITL 生命周期底座）', () => {
-  it('pin 生效：实装 momo-hub-protocol 版本 = 0.7.2（electron/package.json #v0.7.2）', () => {
-    expect(pkg.version).toBe('0.7.2');
+describe('hub pin v0.7.3（1.12.0 v2 HITL 底座 + steer 门槛）', () => {
+  it('pin 生效：实装 momo-hub-protocol 版本 = 0.7.3（electron/package.json #v0.7.3）', () => {
+    expect(pkg.version).toBe('0.7.3');
   });
 
   it('v0.1.5 语义目录样本过 validateHubCatalog（生产消费链同校验器）', () => {
@@ -324,13 +330,21 @@ describe('hub pin v0.7.2（1.11.0 v2 HITL 生命周期底座）', () => {
     });
   });
 
-  describe('1.11.0：v2 HITL 生命周期——submitted 八态 / runNo 三时刻 / 干预族 / 双向结构化答复', () => {
-    it('协议版本对齐：PROTOCOL_VERSION = 1.11.0（v2 HITL 生命周期底座）', () => {
-      expect(PROTOCOL_VERSION).toBe('1.11.0');
+  describe('1.12.0：v2 HITL + steer——submitted 八态 / runNo 三时刻 / 干预族 / 双向结构化答复 / task.steer', () => {
+    it('协议版本对齐：PROTOCOL_VERSION = 1.12.0（v2 HITL 底座 + steer）', () => {
+      expect(PROTOCOL_VERSION).toBe('1.12.0');
     });
 
     it('TASK_HITL_REQUIRED_MINOR = 11（v2 版本门单源——studio 派发闸与 hub 门禁共用，勿硬编码）', () => {
       expect(TASK_HITL_REQUIRED_MINOR).toBe(11);
+    });
+
+    it('TASK_STEER_REQUIRED_MINOR = 12（steer 版本门单源——studio 派发闸与 hub 门禁共用，勿硬编码）', () => {
+      expect(TASK_STEER_REQUIRED_MINOR).toBe(12);
+    });
+
+    it("METHOD_REQUIRED_MINOR['task.steer'] = 12（1.12 新方法门槛登记——低于 12 端不得调 steer）", () => {
+      expect(METHOD_REQUIRED_MINOR['task.steer']).toBe(12);
     });
 
     it('TASK_RPC 四新方法登记（intervene / accept / reject / interventions）', () => {
