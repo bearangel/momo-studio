@@ -18,6 +18,8 @@ import { RoomToolBudgetBadge } from '../im/RoomToolBudgetBadge';
 import { ExportChatButton } from '../im/ExportChatButton';
 import { TaskProgressButton } from '../im/TaskProgressButton';
 import { InFlightPanel } from '../im/InFlightPanel';
+// P3 S2：委派跟踪会话头「查看远端会话」入口（delegationRole='out' 门控，组件内自判）
+import { RemoteSessionEntry } from '../hub/RemoteSessionDrawer';
 import { AgentsView } from '../agent/AgentsView';
 import { SettingsView } from '../settings/SettingsView';
 import { ResourceLibraryView } from '../resource-library/ResourceLibraryView';
@@ -119,6 +121,8 @@ export function MiddlePanel() {
             {activeSessionId && <TaskProgressButton sessionId={activeSessionId} />}
             {/* P2-D：在途子任务面板入口（2s 轮询 + 单链取消，spec 2026-10-13 §9） */}
             {activeSessionId && <InFlightPanel sessionId={activeSessionId} />}
+            {/* P3 S2：远端会话只读抽屉入口（CONTRACT #10 标题行尾；非跟踪会话自渲染 null） */}
+            {activeSession && <RemoteSessionEntry session={activeSession} />}
           </div>
           <MessageList />
           <InputToolbar
