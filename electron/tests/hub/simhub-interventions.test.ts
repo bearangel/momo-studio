@@ -61,7 +61,8 @@ vi.mock('../../src/main/agent/stream-relay', async (importOriginal) => ({
 
 // S9 块专用：hub/ipc.handlers 顶层 import { ipcMain } from 'electron' 与
 // './index'（hubRequest 等）——electron 捕获 + hub/index 最小 mock 面
-// （ipc.test.ts 逐字同款，presence 供 projectHumanListRows 的 originNodeNameOf）
+// （ipc.test.ts 逐字同款；presence 经 setPresenceNodesProvider 注入
+// projectHumanListRows 的 originNodeNameOf——A3/F3 注入化，不走 hub/index import）
 const simhubShared = vi.hoisted(() => ({
   ipcHandlers: new Map<string, (...args: unknown[]) => unknown>(),
   presenceNodes: [{ nodeId: 'node-worker', nodeName: 'Worker 节点' }],
@@ -155,6 +156,7 @@ import { TASK_WIRE } from '../../src/main/hub/delegation-wire';
 import {
   answerHumanRouted,
   setMirrorAnswerForwarder,
+  setPresenceNodesProvider,
   projectHumanListRows,
   type MirrorAnswerForwardInput,
 } from '../../src/main/task/human.ipc.handlers';
@@ -475,6 +477,8 @@ beforeEach(() => {
     members: [{ nodeId: WORKER_NODE, name: WORKER_NODE_NAME, online: true, protoVer: sim.protoVer, bound: true }],
   });
   setHumanAnswerKickoff(sendSystemKickoffMessage);
+  // A3/F3：presence 注入（原 hub/index mock 旁路——originNodeName 数据源注入化）
+  setPresenceNodesProvider(() => simhubShared.presenceNodes);
   terminalCalls.length = 0;
   routeUserChatMock.mockReset().mockResolvedValue(undefined);
   pushSessionMessageMock.mockClear();
@@ -559,6 +563,7 @@ beforeEach(() => {
 afterEach(() => {
   setRemoteInterveneSink(null);
   setMirrorAnswerForwarder(null);
+  setPresenceNodesProvider(null);
   setRemoteTerminalForwarder(null);
   closeDb();
   fs.rmSync(tmpRoot, { recursive: true, force: true });

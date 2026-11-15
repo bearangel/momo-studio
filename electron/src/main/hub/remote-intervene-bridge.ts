@@ -782,7 +782,7 @@ function parseMirrorDeliverable(raw: unknown): {
  * 可选端口：缺席（旧接线/测试直调）→ 镜像行不带 remote 段，既有断言形状零变化。
  */
 export interface OriginMirrorPorts {
-  workstationOf?(targetNodeId: string): Promise<string | null>;
+  workstationOf?(targetNodeId: string, groupId?: string): Promise<string | null>;
 }
 
 /**
@@ -863,10 +863,13 @@ export async function handleTaskInterventionMirror(
     }
     // S9（A4）：工作站解析失败降级 null——不阻断镜像落库（remote 段缺席=面板降级）；
     // A2（F4 lf 短路）：boundWorkspaceName 仅 peer 组投影——非 peer_draft 行整轮
-    // 组清单 RPC 恒空手而归，前置短路免 RPC 放大
+    // 组清单 RPC 恒空手而归，前置短路免 RPC 放大。A3-4：带 routing.groupId 按组
+    // 精确解析（多组同名节点不盲选）
     const workstation =
       ports?.workstationOf !== undefined && task.origin === 'peer_draft'
-        ? await ports.workstationOf(workerNodeId).catch(() => null)
+        ? await ports
+            .workstationOf(workerNodeId, task.routing.mode === 'local' ? undefined : task.routing.groupId)
+            .catch(() => null)
         : null;
     const row = insertHumanRequest({
       sessionId,
@@ -1001,10 +1004,13 @@ export async function handleTaskSubmittedMirror(
     }
     const deliverable = parseMirrorDeliverable(p.deliverable);
     // S9（A4）：工作站解析失败降级 null——不阻断 acceptance 镜像落库；
-    // A2（F4 lf 短路）同 intervention 消费点——非 peer_draft 行免整轮组清单 RPC
+    // A2（F4 lf 短路）同 intervention 消费点——非 peer_draft 行免整轮组清单 RPC；
+    // A3-4：带 routing.groupId 按组精确解析
     const workstation =
       ports?.workstationOf !== undefined && task.origin === 'peer_draft'
-        ? await ports.workstationOf(workerNodeId).catch(() => null)
+        ? await ports
+            .workstationOf(workerNodeId, task.routing.mode === 'local' ? undefined : task.routing.groupId)
+            .catch(() => null)
         : null;
     const row = insertHumanRequest({
       sessionId,

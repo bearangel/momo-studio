@@ -25,7 +25,7 @@ import {
 import { EVT, type EventEnvelope, type RequestEnvelope, type ResponseEnvelope, type RpcErrorPayload } from './protocol';
 import { MIRROR_WIRE, type MirrorApplyPayload, type MirrorApplyOutcome } from './mirror-wire';
 import { applyMirrorSnapshot } from './mirror-applier';
-import { bridgeGroupChanged, createGroupClient } from './groups';
+import { bridgeGroupChanged, createGroupClient, pickWorkstationFromGroups } from './groups';
 import type { HubResponderResult } from './client';
 import { createDelegationRunner, type AssignedTaskEvent, type DelegationRunner } from './delegation-runner';
 import { sessionWaitingProduct, wireDelegationRunnerPorts } from './delegation-ports';
@@ -103,19 +103,15 @@ const originGroupsClient = createGroupClient((method, payload, timeoutMs) =>
 /**
  * S9（A4 工作站段）镜像行 remote 段数据源：执行节点 → 组清单成员
  * boundWorkspaceName（仅 peer 组投影携带；lf 组缺席 → null 降级仅节点名）。
+ * A3-4（多组盲选收敛）：groupId 在场按组精确取成员（同名节点跨组不同绑定
+ * 不串组），缺场回退全组扫描（pickWorkstationFromGroups 单源语义）。
  * 镜像事件低频（干预/提交），逐事件直拉不设缓存（对账轮内缓存见
  * reconnect-reconcile 装配）；hub 不可达 → null 不阻断镜像。
  */
-const mirrorWorkstationOf = async (nodeId: string): Promise<string | null> => {
+const mirrorWorkstationOf = async (nodeId: string, groupId?: string): Promise<string | null> => {
   try {
     const { groups } = await originGroupsClient.list();
-    for (const g of groups) {
-      const m = g.members.find((x) => x.nodeId === nodeId);
-      if (m !== undefined && typeof m.boundWorkspaceName === 'string') {
-        return m.boundWorkspaceName;
-      }
-    }
-    return null;
+    return pickWorkstationFromGroups(groups, nodeId, groupId);
   } catch {
     return null;
   }

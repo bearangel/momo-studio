@@ -18,7 +18,6 @@ import { getDb } from '../storage/db';
 import { logger } from '../logger';
 import { loadElectronApis } from '../electron-access';
 import { createHubConfigStore } from '../hub/config-store';
-import { hubGetPresenceNodes } from '../hub/index';
 import {
   answerHuman,
   emitHumanChanged,
@@ -123,9 +122,9 @@ export function aggregateAttention(workspaceId: string): Record<string, SessionA
 // 镜像行（origin_node_id 非空——S5 发起方镜像消费落的行）的答复不投本地
 // answerHuman（本地无执行、注入无落点），改转 hub task.answer（结构化
 // interventionId+answer；hub 权威校验 + first_wins 收敛）→ 对端 worker 经
-// interventionAnswered 事件统一路由。转发器由 hub 域注入（ipc/index.ts 接线
-// hubRequest——两域模块零 import，防循环）；未注入（hub 域未装配，测试/单机）
-// 时镜像行人话拒。
+// interventionAnswered 事件统一路由。转发器与 presence 快照均由 hub 域注入
+// （ipc/index.ts 装配——两域模块零 import hub/index，防循环）；未注入（hub 域
+// 未装配，测试/单机）时镜像行人话拒 / originNodeName 降级 null。
 
 /** 镜像行代答转发入参（hub task.answer 新形态载荷的发起方投影） */
 export interface MirrorAnswerForwardInput {
@@ -148,10 +147,21 @@ export function setMirrorAnswerForwarder(
   mirrorAnswerForwarder = fn;
 }
 
+/** hub 在线节点快照提供者（hub/index hubGetPresenceNodes 同形；A3/F3 注入化——
+ *  原顶层 import hub/index 违反两域零 import 纪律） */
+export type HubPresenceProvider = () => Array<{ nodeId: string; nodeName: string; at?: number }>;
+
+let presenceProvider: HubPresenceProvider | null = null;
+
+/** hub 域注入点（ipc/index.ts 装配；null 注销；未注入 → originNodeName 降级 null） */
+export function setPresenceNodesProvider(fn: HubPresenceProvider | null): void {
+  presenceProvider = fn;
+}
+
 /** hub 在线节点快照名解析（presence seed；离线/未知节点 → null） */
 function originNodeNameOf(nodeId: string): string | null {
   try {
-    return hubGetPresenceNodes().find((n) => n.nodeId === nodeId)?.nodeName ?? null;
+    return presenceProvider?.().find((n) => n.nodeId === nodeId)?.nodeName ?? null;
   } catch {
     return null;
   }
@@ -342,6 +352,7 @@ export function __teardownHumanIpcForTest(): void {
   sweepTimer = null;
   registered = false;
   mirrorAnswerForwarder = null;
+  presenceProvider = null;
   setHumanChangedSink(null);
   setTaskRunChangedSink(null);
   setToolGateHumanSink(null);

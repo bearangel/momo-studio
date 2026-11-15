@@ -109,6 +109,7 @@ function convergeMirrorAnswered(rec: InterventionRecord, workerNodeId: string): 
  */
 export async function reconcileOnReconnect(deps: ReconnectReconcileDeps): Promise<void> {
   // A2（F4）：workstation 解析轮内缓存（per-pass Map——不跨轮，见文件头注）；
+  // 键复合 nodeId+groupId（A3-4 按组精确——同节点跨组绑定不同不串组）；
   // 失败不缓存（桥侧 catch 降级 null，下一行同节点可重试）
   const workstationCache = new Map<string, string | null>();
   const resolveWorkstation = deps.mirrorPorts?.workstationOf;
@@ -116,11 +117,12 @@ export async function reconcileOnReconnect(deps: ReconnectReconcileDeps): Promis
     resolveWorkstation === undefined
       ? undefined
       : {
-          workstationOf: async (nodeId: string): Promise<string | null> => {
-            const hit = workstationCache.get(nodeId);
+          workstationOf: async (nodeId: string, groupId?: string): Promise<string | null> => {
+            const key = `${nodeId}#${groupId ?? ''}`;
+            const hit = workstationCache.get(key);
             if (hit !== undefined) return hit;
-            const value = await resolveWorkstation(nodeId);
-            workstationCache.set(nodeId, value);
+            const value = await resolveWorkstation(nodeId, groupId);
+            workstationCache.set(key, value);
             return value;
           },
         };

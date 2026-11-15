@@ -46,11 +46,12 @@ import { registerWindowIpc } from '../window-ipc';
 import { registerHubIpc } from '../hub/ipc.handlers';
 // P2 S6 跨节点路由端口装配：hub 请求面注入 task 域（镜像代答 / 远端验收通知）
 // ——hub/index 与 task/ipc.handlers 双向零 import（setMirrorAnswerForwarder 等
-// setter 注入，setSessionRouter / setRemoteInterveneSink 同款纪律）
-import { hubRequest } from '../hub/index';
+// setter 注入，setSessionRouter / setRemoteInterveneSink 同款纪律）。
+// A3/F3：presence 快照同款注入（human.ipc.handlers 原 hub/index 顶层 import 清除）
+import { hubGetPresenceNodes, hubRequest } from '../hub/index';
 import { TASK_RPC } from '../hub/protocol';
 import type { InterventionAnswer } from '../hub/protocol';
-import { setMirrorAnswerForwarder } from '../task/human.ipc.handlers';
+import { setMirrorAnswerForwarder, setPresenceNodesProvider } from '../task/human.ipc.handlers';
 import { setRemoteTerminalForwarder } from '../task/ipc.handlers';
 // 新装引导（spec 2026-10-10）：status / 方案生成 / 方案应用 / 完成标记
 import { registerOnboardingHandlers } from '../onboarding/ipc.handlers';
@@ -151,6 +152,8 @@ export function registerIpcHandlers(opts: WorkspaceIpcOpts = {}): void {
       )
     ).disposition;
   });
+  // A3/F3：presence 快照注入（originNodeName 名解析数据源——hub 域单点）
+  setPresenceNodesProvider(hubGetPresenceNodes);
   setRemoteTerminalForwarder(async ({ delegationId, outcome, reason }) => {
     await hubRequest(
       outcome === 'accepted' ? TASK_RPC.accept : TASK_RPC.reject,

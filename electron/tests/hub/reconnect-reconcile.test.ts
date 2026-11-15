@@ -656,6 +656,23 @@ describe('7) worker 终态断线对账（阶段 1.5）', () => {
     expect(rework.runNo).toBe(2);
   });
 
+  it('在途正常：hub running 且 runNo==本地活动 run → no-op（不误判打回）', async () => {
+    const { taskId } = seedWorkerTask();
+    await submitRun(taskId, { summary: '交付' });
+    expect(getTask(taskId)!.status).toBe('submitted');
+
+    const { ports, settleDocked } = consumePorts();
+    await reconcileOnReconnect({
+      client: mkClient({ tasks: [hubRec({ status: 'running', runNo: 1 })] }),
+      consumePorts: ports,
+    });
+
+    expect(getTask(taskId)!.status).toBe('submitted'); // 在途回合不动
+    expect(listRuns(taskId).map((r) => r.status)).toEqual(['submitted']);
+    expect(settleDocked).not.toHaveBeenCalled();
+    expect(milestoneRows()).toHaveLength(0);
+  });
+
   it('幂等：二次对账零重复（计数级——里程碑/acceptance 行/run 行/settleDocked 均不变）', async () => {
     const { taskId } = seedWorkerTask();
     updateTask(taskId, { delegationRole: 'in' });

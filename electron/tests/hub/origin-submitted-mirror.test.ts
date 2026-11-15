@@ -478,13 +478,13 @@ describe('12) A2 lf 短路：origin 非 peer_draft → workstationOf 零调用',
     }
   });
 
-  it('peer_draft 行端口在场 → 发起解析（对照组——短路条件仅 origin）', async () => {
+  it('peer_draft 行端口在场 → 发起解析并带 routing.groupId（A3-4 按组精确）', async () => {
     seedOutTask({ origin: 'peer_draft' });
     const workstationOf = vi.fn(async () => 'peer-ws');
 
     await handleTaskInterventionMirror(interventionEvent(), { workstationOf });
 
     expect(workstationOf).toHaveBeenCalledTimes(1);
-    expect(workstationOf).toHaveBeenCalledWith(WORKER_NODE);
+    expect(workstationOf).toHaveBeenCalledWith(WORKER_NODE, 'g-1');
   });
 });

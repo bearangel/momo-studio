@@ -5,7 +5,7 @@
 // 本模块不 import index——避免 index（事件桥消费本模块）↔ 本模块 循环引用。
 import {
   RPC, EVT,
-  type EventEnvelope, type GroupChangedEvent, type GroupMode,
+  type EventEnvelope, type GroupChangedEvent, type GroupInfo, type GroupMode,
   type GroupCreateRes, type GroupJoinRes, type GroupLeaveRes,
   type GroupListReq, type GroupListRes, type GroupTransferRes, type InviteInfo,
 } from './protocol';
@@ -44,6 +44,32 @@ export function createGroupClient(request: HubRequestFn): GroupClient {
     unbind: (groupId) => request<{ ok: boolean }>(RPC.group.unbind, { groupId }),
     setMirrorAccept: (groupId, accepts) => request<{ ok: boolean }>(RPC.group.setMirrorAccept, { groupId, accepts }),
   };
+}
+
+/**
+ * 组清单 → 执行节点绑定空间名（S9 镜像 remote 段数据源，A3-4 按组精确解析）。
+ * groupId 在场 → 只在该组内取成员（多组同名节点不同绑定不串组；组缺席 / 组内
+ * 成员无绑定 → null，不跨组回退——精确语义优先）；groupId 缺席 → 回退全组扫描
+ * 首个携带绑定串的成员（旧形态——routing 未携带组的行）。纯函数零 IO。
+ */
+export function pickWorkstationFromGroups(
+  groups: GroupInfo[],
+  nodeId: string,
+  groupId?: string,
+): string | null {
+  if (groupId !== undefined) {
+    const member = groups
+      .find((g) => g.groupId === groupId)
+      ?.members.find((m) => m.nodeId === nodeId);
+    return typeof member?.boundWorkspaceName === 'string' ? member.boundWorkspaceName : null;
+  }
+  for (const g of groups) {
+    const m = g.members.find((x) => x.nodeId === nodeId);
+    if (m !== undefined && typeof m.boundWorkspaceName === 'string') {
+      return m.boundWorkspaceName;
+    }
+  }
+  return null;
 }
 
 /**

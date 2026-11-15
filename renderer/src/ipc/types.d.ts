@@ -3589,7 +3589,9 @@ export interface HubMirrorRegistryRow {
  *  中间态；submitted=1.11.0 run 完成待验收中间态——v2 生命周期验收闸的 hub 侧投影） */
 export type HubDelegationStatus = 'pending' | 'running' | 'waiting' | 'submitted' | 'done' | 'failed' | 'interrupted' | 'cancelled';
 
-/** 委派账本条目（协议 TaskRecord 镜像——七字段 + M4.2 组归属字段） */
+/** 委派账本条目（协议 TaskRecord 镜像——11 字段：7 基础 + groupId（M4.2 组归属）
+ *  + runNo/submittedAt/acceptedAt（1.11.0 生命周期三可选）。协议另有 M3.1 代答
+ *  留痕四列（answeredBy/answerDecision/answerMessage/answeredAt）不经本契约桥） */
 export interface HubTaskRecord {
   taskId: string;
   workspaceName: string;
