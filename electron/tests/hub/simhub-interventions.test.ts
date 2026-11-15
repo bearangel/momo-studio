@@ -924,14 +924,19 @@ describe('场景 2（reject 返工）：打回 → run#2 再提交 → accept（
     await handleTaskRejected(sim.rejectedEvent('缺少回归测试'), ports);
     expect(sim.rejectedEvent('缺少回归测试')).toEqual({ taskId: dl, runNo: 2, reason: '缺少回归测试' });
     const workerAfterReject = getTask(worker.id)!;
-    expect(workerAfterReject.status).toBe('assigned'); // 返工排队
-    expect(listRuns(worker.id).map((r) => r.status)).toEqual(['rejected']);
+    // 打回重驱闭环（P3 S6）：任务 in_progress + rework run#2 自动建 + 理由注入
+    expect(workerAfterReject.status).toBe('in_progress');
+    expect(listRuns(worker.id).map((r) => [r.runNo, r.status, r.trigger])).toEqual([
+      [1, 'rejected', 'initial'],
+      [2, 'running', 'rework'],
+    ]);
     expect(listRuns(worker.id)[0]!.rejectReason).toBe('缺少回归测试');
     expect(settleDocked).toHaveBeenCalledWith(dl, 'rejected');
     expect(milestoneRows().some((m) => m.meta['kind'] === 'rejected' && m.meta['runNo'] === 2)).toBe(true);
+    expect(milestoneRows().some((m) => m.meta['kind'] === 'rework_injected' && m.task_id === worker.id)).toBe(true);
 
-    // ⑫' worker 返工：run#2 再执行再提交（report runNo=2）
-    const run2 = startRun(worker.id, { trigger: 'rework', executionSessionId: workerExecSessionId });
+    // ⑫' worker 返工：rework run#2 已自动建——直接再提交（report runNo=2）
+    const run2 = getActiveRun(worker.id)!;
     expect(run2.runNo).toBe(2);
     await submitRun(worker.id, { summary: '返工交付（含回归测试）' });
     await flushAsync();

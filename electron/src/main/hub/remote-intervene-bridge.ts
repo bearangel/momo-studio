@@ -44,6 +44,7 @@ import {
   emitHumanChanged,
   emitRunChanged,
   rejectTask,
+  startRun,
   type RemoteInterveneEvent,
 } from '../task/lifecycle-runs';
 import type { HumanAnswerInput } from '../task/human-answer-shared';
@@ -590,11 +591,14 @@ export async function handleTaskAccepted(
  * 发起方打回 → 复用 rejectTask 写路径（run rejected + reject_reason 落库 +
  * acceptance 答复 reject(reason) + 任务回 assigned；返工上限超限走其内建
  * failRun 分支）+ 里程碑 kind='rejected'（body/meta 含 reason，meta 记 runNo）+
- * 停靠出清。返工重启：任务回 assigned 后由本地 executor 正常放行（starter
- * trigger 自动 initial——本地 run 计数自治，与 hub runNo 对齐**不强制**：hub
- * runNo 仅展示对账用）；打回理由经里程碑落执行会话历史，随返工回合进 agent
- * 上下文（协议「reason 进 agent 上下文」的本地承载）。
- * 幂等与 total 语义同 handleTaskAccepted。
+ * 停靠出清 + **worker 域重驱闭环**（P3 S6 E2E 实测缺口，spec §6.5「跨节点时
+ * 由发起方经 hub 下发，worker 生成新 run」）：委派承接行无 assignee/team/
+ * session 三目标列，executor 永不放行（peekNextAssigned delegation_id 过滤，
+ * §5.1 不变量 7 的 'in' 镜像）——本消费单点建 rework run（run_no+1，幂等：已有
+ * 活动 run 则 startRun 补记账返回）+ 经 S1 steer 同款管线注入打回理由唤醒
+ * agent 返工（里程碑 kind='rework_injected'；会话空则 warn 跳过注入，run 照建
+ * ——agent 经其它路径续跑）。spec §5.1：startRun 投影 assigned→in_progress 合法边。
+ * 幂等与 total 语义同 handleTaskAccepted（重复事件由非 submitted 守卫收敛）。
  */
 export async function handleTaskRejected(
   payload: unknown,
@@ -635,7 +639,19 @@ export async function handleTaskRejected(
       ...(runNo !== undefined ? { runNo } : {}),
     });
     ports.settleDocked(delegationId, 'rejected');
-    logger.info('远端打回已消费（rejectTask 复用路径，任务回 assigned 待返工）', {
+    // worker 域重驱：rework run#N+1（rejectTask 的返工上限守卫已确保余量）+
+    // 理由注入（injectReworkIntoExecutionSession 头注释）。执行会话取承接行
+    // execution_session_id——建会回填（delegation-runner linkExecutionSession）。
+    startRun(task.id, { trigger: 'rework', executionSessionId: task.executionSessionId });
+    if (task.executionSessionId === null || task.executionSessionId === '') {
+      logger.warn('打回理由未注入（任务无关联执行会话——run 已建，agent 经其它路径续跑）', {
+        taskId: task.id,
+        delegationId,
+      });
+    } else {
+      injectReworkIntoExecutionSession(task, reason);
+    }
+    logger.info('远端打回已消费（rejectTask + rework run 自动重驱 + 理由注入）', {
       taskId: task.id,
       delegationId,
       reason,
@@ -688,12 +704,12 @@ function isDuplicateSteer(delegationId: string, message: string): boolean {
 }
 
 /**
- * 指令注入执行会话（human-answer-inject 三步同构 + injectSteer 管线路由语义）：
+ * 执行会话系统通知注入公用管线（S1 steer / S6 打回重驱同构）：
  *   1) 里程碑系统消息——writeSessionMilestone 同款（sender='system'、
- *      event_type='delegation_milestone'、meta kind='steered' 含 message 摘要
- *      ≤80 字），但 streamSessionId 与派发回合共享（human-answer-inject 的
- *      回合标识同构）；行落库后经会话历史进入 agent 上下文（sender-role 映射
- *      入 user 轮——在途流结束后的下一回合/返工回合可见）
+ *      event_type='delegation_milestone'、meta kind 由调用方定），但
+ *      streamSessionId 与派发回合共享（human-answer-inject 的回合标识同构）；
+ *      行落库后经会话历史进入 agent 上下文（sender-role 映射入 user 轮——
+ *      在途流结束后的下一回合/返工回合可见）
  *   2) pushSessionMessage 实时推 renderer
  *   3) routeUserChat **不带 systemKickoff**（= delegation-ports injectSteer 的
  *      路由语义，HITL 超时注入同款）：
@@ -710,30 +726,38 @@ function isDuplicateSteer(delegationId: string, message: string): boolean {
  *   唤醒目标：会话 leader 接待（human-answer-inject resolveWakeTarget 同源，
  *   执行会话 assignee 建会时已标 is_leader）；RouterService 未启动/无 leader →
  *   里程碑已落库推送，唤醒跳过 warn 不抛。
+ *   调用方契约：task.executionSessionId 非空（空会话由调用方前置判空）。
  */
-function injectSteerIntoExecutionSession(task: TaskRow, message: string): void {
+function injectExecutionSessionNotice(
+  task: TaskRow,
+  notice: {
+    /** 消息正文（进 agent 回合的完整文本——注入即派发体） */
+    body: string;
+    /** context_json 里程碑 kind（steered / rework_injected） */
+    kind: string;
+    /** kind 以外的结构化 meta（摘要截断由调用方负责） */
+    meta: Record<string, unknown>;
+    /** warn 日志前缀（既有 steer 文案保持不变） */
+    logLabel: string;
+  },
+): void {
   const sessionId = task.executionSessionId!;
-  const body = `【发起方指令】${message}`;
   const streamSessionId = randomUUID();
   const row = insertMessage({
     sessionId,
     sender: 'system',
     eventType: 'delegation_milestone',
-    body,
+    body: notice.body,
     taskId: task.id,
     streamSessionId,
-    contextJson: JSON.stringify({
-      kind: 'steered',
-      // 摘要 ≤80 字：truncateCodePoints 会追加省略号，预算取 79 使含 '…' 总长不超限
-      message: truncateCodePoints(message, 79),
-    }),
+    contextJson: JSON.stringify({ kind: notice.kind, ...notice.meta }),
   });
   pushSessionMessage(row);
 
   const router = getRouterService();
   const target = getSessionMembersInfo(sessionId).find((m) => m.isLeader)?.instanceId ?? null;
   if (!router || !target) {
-    logger.warn('【发起方指令】唤醒跳过（RouterService 未启动或会话无接待目标）', {
+    logger.warn(`${notice.logLabel}唤醒跳过（RouterService 未启动或会话无接待目标）`, {
       sessionId,
       taskId: task.id,
     });
@@ -743,20 +767,47 @@ function injectSteerIntoExecutionSession(task: TaskRow, message: string): void {
     .routeUserChat({
       sessionId,
       assignmentId: target,
-      body,
+      body: notice.body,
       streamSessionId,
-      // 回合宿主标记：steer 回合归该 delegation 任务语境（车道注册同步记 taskId，
+      // 回合宿主标记：注入回合归该 delegation 任务语境（车道注册同步记 taskId，
       // abort-by-lane 可锚定）；taskId 通道保持 null——ephemeral 语义不触发
       // task-driven 终态自动转换（routeUserChat 的 TaskConfig 注释同源）
       sourceTaskId: task.id,
     })
     .catch((err: unknown) => {
-      logger.warn('【发起方指令】注入派发失败', {
+      logger.warn(`${notice.logLabel}注入派发失败`, {
         sessionId,
         taskId: task.id,
         error: err instanceof Error ? err.message : String(err),
       });
     });
+}
+
+/**
+ * steer 指令注入（S1）：【发起方指令】前缀 + kind='steered'（meta 含 message
+ * 摘要 ≤80 字——truncateCodePoints 会追加省略号，预算取 79 使含 '…' 总长不超限）。
+ */
+function injectSteerIntoExecutionSession(task: TaskRow, message: string): void {
+  injectExecutionSessionNotice(task, {
+    body: `【发起方指令】${message}`,
+    kind: 'steered',
+    meta: { message: truncateCodePoints(message, 79) },
+    logLabel: '【发起方指令】',
+  });
+}
+
+/**
+ * 打回理由注入（S6 打回重驱）：复用 S1 steer 注入管线（同款里程碑 + 分流路由
+ * 语义——在途流注入当前流不撕裂、无在途回合开新返工回合）。body 尾行明示
+ * submit_task 复提契约（返工回合的行动指令）；meta reason 摘要预算 79 同 S1。
+ */
+function injectReworkIntoExecutionSession(task: TaskRow, reason: string): void {
+  injectExecutionSessionNotice(task, {
+    body: `【发起方打回】${reason}\n请按理由修订后再次调用 submit_task 提交。`,
+    kind: 'rework_injected',
+    meta: { reason: truncateCodePoints(reason, 79) },
+    logLabel: '【发起方打回】',
+  });
 }
 
 /**

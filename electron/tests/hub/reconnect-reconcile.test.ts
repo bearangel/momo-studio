@@ -630,7 +630,7 @@ describe('7) worker 终态断线对账（阶段 1.5）', () => {
     expect(milestoneRows().some((m) => m.meta['kind'] === 'accepted' && m.task_id === taskId)).toBe(true);
   });
 
-  it('rejected-miss：hub running runNo=2 → 本地 run rejected + 任务回 assigned（死锁解除）+ 降级理由', async () => {
+  it('rejected-miss：hub running runNo=2 → 本地 run rejected + rework run 自动重驱（死锁解除）+ 降级理由', async () => {
     const { taskId } = seedWorkerTask(); // peer 承接形（role NULL + routing 指向本机）
     await submitRun(taskId, { summary: '首版交付' });
     expect(getTask(taskId)!.status).toBe('submitted');
@@ -641,9 +641,14 @@ describe('7) worker 终态断线对账（阶段 1.5）', () => {
       consumePorts: ports,
     });
 
-    expect(getTask(taskId)!.status).toBe('assigned'); // 返工排队
+    // rejectTask 复用 + rework run 自动重驱（P3 S6 打回闭环——阶段 1.5 经
+    // handleTaskRejected 同函数天然继承）
+    expect(getTask(taskId)!.status).toBe('in_progress'); // 返工已重驱（非 assigned 滞留）
     const runs = listRuns(taskId);
-    expect(runs.map((r) => r.status)).toEqual(['rejected']);
+    expect(runs.map((r) => [r.runNo, r.status, r.trigger])).toEqual([
+      [1, 'rejected', 'initial'],
+      [2, 'running', 'rework'],
+    ]);
     expect(runs[0]!.rejectReason).toBe('发起方已打回（断线补收，理由见发起方会话）');
     expect(settleDocked).toHaveBeenCalledWith(DELEGATION_ID, 'rejected');
     const ms = milestoneRows();
@@ -651,9 +656,11 @@ describe('7) worker 终态断线对账（阶段 1.5）', () => {
     expect(ms.find((m) => m.meta['kind'] === 'rejected')!.meta['reason']).toBe(
       '发起方已打回（断线补收，理由见发起方会话）',
     );
-    // 跨节点死锁解除的实证：返工通道复活，新 run 对齐 hub run_no=2
-    const rework = startRun(taskId, { trigger: 'rework' });
-    expect(rework.runNo).toBe(2);
+    // 跨节点死锁解除的实证：返工通道复活由消费函数自动闭环——rework run#2 已建
+    // 且对齐 hub run_no=2（本地 run 计数自治，不依赖对齐但此处自然一致）
+    expect(getActiveRun(taskId)!.runNo).toBe(2);
+    // 打回理由注入行照落（降级文案随返工回合进 agent 上下文）
+    expect(ms.some((m) => m.meta['kind'] === 'rework_injected' && m.task_id === taskId)).toBe(true);
   });
 
   it('在途正常：hub running 且 runNo==本地活动 run → no-op（不误判打回）', async () => {
