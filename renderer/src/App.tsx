@@ -32,6 +32,7 @@ import { BrowserWaitReleasePrompt } from './components/workspace/BrowserWaitRele
 import { CenterPromptLayer } from './components/notices/CenterPromptLayer';
 import { BrowserCloseConfirmCard } from './components/notices/BrowserCloseConfirmCard';
 import { NoticeStack } from './components/notices/NoticeStack';
+import { HumanRequestToast } from './components/notices/HumanRequestToast';
 import { Toast } from './components/ui/Toast';
 import { ipc } from './ipc/client';
 
@@ -181,8 +182,11 @@ export function App() {
       <MainShell />
       {/* Tier B 告知堆叠（安全区右下）：三自管卡 + 死信 toast（NoticeStack 内部订阅）。
           三卡显隐语义不变：Sandbox / Resume 组件内部自管（不满足条件返回 null）；
-          Upgrade 沿用 upgradeExportDir 条件渲染（P5 Task 2） */}
+          Upgrade 沿用 upgradeExportDir 条件渲染（P5 Task 2）。
+          HumanRequestToast（S4）：人工请求吐司——自订阅 human.onChanged，渲染在
+          children 槽共享堆叠锚定（同位不同数据域，不混 NoticeStack kind 路由） */}
       <NoticeStack>
+        <HumanRequestToast />
         <SandboxNotice />
         <ResumeNotice />
         {upgradeExportDir && (
