@@ -40,6 +40,8 @@ import { DispatchCard } from './DispatchCard';
 import { TaskReplyCard } from './TaskReplyCard';
 import { CompactNotice } from './CompactNotice';
 import { SystemEventCard } from './SystemEventCard';
+// P3 S3：delegation_milestone kind='steered' → 蓝调卡（其余 system 行不变）
+import { SteeredMilestoneCard, parseSteeredSummary } from './SteeredMilestoneCard';
 import { MessageFrame } from './MessageFrame';
 import { AgentStreamBubble } from './AgentStreamBubble';
 import { MarkdownBody } from './MarkdownBody';
@@ -139,7 +141,11 @@ interface Props {
 //     useState 返回，路由体拆入 MessageBubbleBody（react-hooks/rules-of-hooks
 //     禁止 early return 后调 hook；拆分后 system 行连 stream store 订阅都不发生）
 export function MessageBubble({ message, isSelf, senderName }: Props) {
-  if (isSystemSender(message.sender)) return <SystemEventCard message={message} />; // spec §5.3
+  if (isSystemSender(message.sender)) {
+    // P3 S3：steered 里程碑先于通用系统卡（蓝调专属形态，CONTRACT #17）
+    if (parseSteeredSummary(message) !== null) return <SteeredMilestoneCard message={message} />;
+    return <SystemEventCard message={message} />; // spec §5.3
+  }
   return <MessageBubbleBody message={message} isSelf={isSelf} senderName={senderName} />;
 }
 

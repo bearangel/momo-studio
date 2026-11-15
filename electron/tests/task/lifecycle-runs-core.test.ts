@@ -9,8 +9,10 @@
 //      resumePaused → waiting_human（有未决非验收请求）/ in_progress（无）
 //   5) run 终结双路径：failRun（run failed + 请求 superseded + 任务 failed +
 //      errorMessage）/ cancelActiveRun（run cancelled + superseded + 任务 cancelled）
-//   6) MAX_RUNS_PER_TASK 上限：种 10 个终态 run 后 startRun → 人话 throw
+//   6) DEFAULT_MAX_RUNS_PER_TASK 上限：种 10 个终态 run 后 startRun → 人话 throw
 //   7) refreshTaskProjection 同态 no-op 不抛；偏差态重算归位
+//   8) 返工上限可配（P3 E1）：缺省 10 / 自定义生效（含 startRun 边界）/
+//      脏值（0、99、非数字、脏 JSON）回落 10
 // 隔离：沿 task-runs-repo.test.ts 形态——每 case 独立 tmp 目录 + closeDb。
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -27,7 +29,9 @@ import {
   tryAnswer,
 } from '../../src/main/storage/tasks/human-requests-repo';
 import {
-  MAX_RUNS_PER_TASK,
+  DEFAULT_MAX_RUNS_PER_TASK,
+  effectiveMaxRuns,
+  setTaskMaxRuns,
   startRun,
   enterWaitingHuman,
   resumeFromWaiting,
@@ -265,34 +269,71 @@ describe('5) run 终结：failRun / cancelActiveRun', () => {
   });
 });
 
-describe('6) MAX_RUNS_PER_TASK 上限', () => {
-  it(`种 ${MAX_RUNS_PER_TASK} 个终态 run 后 startRun → 人话 throw（含上限值）`, () => {
+describe('6) DEFAULT_MAX_RUNS_PER_TASK 上限', () => {
+  it(`种 ${DEFAULT_MAX_RUNS_PER_TASK} 个终态 run 后 startRun → 人话 throw（含上限值）`, () => {
     const taskId = seedAssignedTask();
-    for (let i = 0; i < MAX_RUNS_PER_TASK; i++) {
+    for (let i = 0; i < DEFAULT_MAX_RUNS_PER_TASK; i++) {
       const r = insertRun({ taskId, status: 'running', trigger: 'manual' });
       updateRun(r.id, { status: 'failed', endedAt: Date.now() });
     }
-    expect(listRuns(taskId)).toHaveLength(MAX_RUNS_PER_TASK);
+    expect(listRuns(taskId)).toHaveLength(DEFAULT_MAX_RUNS_PER_TASK);
 
     expect(() => startRun(taskId)).toThrow(/上限/);
-    expect(() => startRun(taskId)).toThrow(new RegExp(String(MAX_RUNS_PER_TASK)));
+    expect(() => startRun(taskId)).toThrow(new RegExp(String(DEFAULT_MAX_RUNS_PER_TASK)));
     // 上限拒绝零副作用：不插第 11 个 run、任务不转 in_progress
-    expect(listRuns(taskId)).toHaveLength(MAX_RUNS_PER_TASK);
+    expect(listRuns(taskId)).toHaveLength(DEFAULT_MAX_RUNS_PER_TASK);
     expect(getTask(taskId)!.status).toBe('assigned');
   });
 
   it('终态 run 不占活动槽但计入上限——9 个终态 + 1 个可闭合后仍受上限约束', () => {
     const taskId = seedAssignedTask();
-    for (let i = 0; i < MAX_RUNS_PER_TASK - 1; i++) {
+    for (let i = 0; i < DEFAULT_MAX_RUNS_PER_TASK - 1; i++) {
       const r = insertRun({ taskId, status: 'running', trigger: 'manual' });
       updateRun(r.id, { status: 'cancelled', endedAt: Date.now() });
     }
     // 第 10 个：正常 startRun 成功（9 个终态未达上限）
     const run10 = startRun(taskId, { trigger: 'manual' });
-    expect(run10.runNo).toBe(MAX_RUNS_PER_TASK);
+    expect(run10.runNo).toBe(DEFAULT_MAX_RUNS_PER_TASK);
     // 闭合第 10 个 → 总数仍 10 → 再 startRun 拒绝
     updateRun(run10.id, { status: 'failed', endedAt: Date.now() });
     expect(() => startRun(taskId)).toThrow(/上限/);
+  });
+});
+
+describe('8) 返工上限可配（P3 E1）', () => {
+  /** 脏数据通道：绕过 setTaskMaxRuns 直写 kv 原始值（模拟手工改库） */
+  function seedRawMaxRuns(raw: string): void {
+    getDb()
+      .prepare(
+        `INSERT OR REPLACE INTO kv_store (key, value, updated_at) VALUES (?, ?, datetime('now'))`,
+      )
+      .run('task_max_runs', raw);
+  }
+
+  it('缺省：无 kv 行 → effectiveMaxRuns() === 10', () => {
+    expect(effectiveMaxRuns()).toBe(DEFAULT_MAX_RUNS_PER_TASK);
+  });
+
+  it('自定义生效：setTaskMaxRuns(21) → effectiveMaxRuns() === 21', () => {
+    setTaskMaxRuns(21);
+    expect(effectiveMaxRuns()).toBe(21);
+  });
+
+  it('自定义生效到 startRun：上限 3 → 种 3 个终态 run 后 startRun 拒（报错含 3）', () => {
+    setTaskMaxRuns(3);
+    const taskId = seedAssignedTask();
+    for (let i = 0; i < 3; i++) {
+      const r = insertRun({ taskId, status: 'running', trigger: 'manual' });
+      updateRun(r.id, { status: 'failed', endedAt: Date.now() });
+    }
+    expect(() => startRun(taskId)).toThrow(/上限（3 次）/);
+  });
+
+  it('脏值回落：直写 0 / 99 / 非数字 / 脏 JSON → effectiveMaxRuns() 全部回落 10', () => {
+    for (const raw of ['0', '99', '"abc"', 'not-json']) {
+      seedRawMaxRuns(raw);
+      expect(effectiveMaxRuns()).toBe(DEFAULT_MAX_RUNS_PER_TASK);
+    }
   });
 });
 

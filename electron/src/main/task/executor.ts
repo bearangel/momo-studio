@@ -182,9 +182,14 @@ function countInProgress(): number {
  * blocked 闸门（M3.3 spec §2.1）：存在未完成依赖（NOT EXISTS 半连接依赖边 ×
  * 依赖行状态 <> completed）的任务不进入放行——依赖完成（completed）后自然放行，
  * 与 scheduled_at 闸门正交（逐行过滤，非整池熔断）。
- * 外派行闸门（spec §5.1 不变量 7，P1 降级守卫 Task 18）：delegation_role='out'
- * 的 assigned 行不本地放行——外派任务的执行/打回续跑由 hub 链路驱动，本地
- * executor 不得重复拉起（防双执行）。 */
+ * 委派行闸门双句（spec §5.1 不变量 7 的 'out' 原文 + 'in' 镜像）：
+ *   - delegation_id IS NULL（P3 S6 E2E 实测钉死）：delegation_id 非空的行
+ *     （'in'·peer-draft 承接 / 'out' 外派镜像）全归 delegation 域驱动——承接行
+ *     无 assignee/team/session 三目标列，本地拾起只会 validateTarget「任务无
+ *     委派目标」误转 failed；其打回重驱由 worker 域 handleTaskRejected rework
+ *     run 单点闭环。比单看 role 更本质（覆盖 peer-draft 承接行 role NULL 形）。
+ *   - delegation_role <> 'out'（P1 降级守卫 Task 18 保留）：role 已戳但
+ *     delegation_id 未挂的降级形态（判向过滤与象限无关）——belt and suspenders。 */
 function peekNextAssigned(slots: number, skip: ReadonlySet<string>): TaskRow | null {
   const skipIds = [...skip];
   // 排除子句只拼接占位符（skip 内容是内部生成的任务 id，仍走参数绑定）
@@ -194,6 +199,7 @@ function peekNextAssigned(slots: number, skip: ReadonlySet<string>): TaskRow | n
     .prepare(
       `SELECT t.id FROM tasks t
        WHERE t.status IN ('assigned', 'session_queued') ${excludeClause}
+       AND t.delegation_id IS NULL
        AND (t.delegation_role IS NULL OR t.delegation_role <> 'out')
        AND (t.scheduled_at IS NULL OR t.scheduled_at <= ?)
        AND NOT EXISTS (

@@ -182,8 +182,77 @@ export function forwardLifecycleEvents(
   setRemoteInterveneSink((e) => send('remote-intervene', e));
 }
 
-/** 单任务执行尝试上限（spec §5.2：防打回-重跑死循环） */
-export const MAX_RUNS_PER_TASK = 10;
+// ── 返工上限可配（P3 E1，spec §14）──
+//
+// 单任务执行尝试上限：缺省 DEFAULT_MAX_RUNS_PER_TASK，生效值读 kv_store
+// 'task_max_runs'（整数 1..50）。kv 读写沿 hub/delegation-settings.ts 同款
+// 纪律（脏 JSON 容错回缺省；写侧夹取合法域）；但本模块在 runtime 子进程
+// 可达图内（隔离锁，见上文 sink 纪律）——不得 import hub 域或 electron，
+// 故 kv 读写经 storage 层 getDb() 就地实现（与 delegation-store 同一 DB 路径）。
+
+/** 单任务执行尝试上限缺省（spec §5.2：防打回-重跑死循环） */
+export const DEFAULT_MAX_RUNS_PER_TASK = 10;
+
+/** 返工上限 kv 键 + 合法域（1..50 整数） */
+const TASK_MAX_RUNS_KEY = 'task_max_runs';
+const TASK_MAX_RUNS_MIN = 1;
+const TASK_MAX_RUNS_MAX = 50;
+
+/** 非法/越界读值回落缺省的一次性 warn 闸（startRun 高频路径防刷屏，每进程一次） */
+let warnedInvalidMaxRuns = false;
+
+/** 写侧归一化（delegation-settings clampConcurrent 同款）：round + 夹取 [1,50]；
+ *  非有限数回落缺省（合法域内的用户意图贴近边界，越界夹到边界而非缺省） */
+function clampTaskMaxRuns(n: number): number {
+  if (!Number.isFinite(n)) return DEFAULT_MAX_RUNS_PER_TASK;
+  return Math.min(TASK_MAX_RUNS_MAX, Math.max(TASK_MAX_RUNS_MIN, Math.round(n)));
+}
+
+/**
+ * 生效返工上限：kv 行缺失 → 缺省（静默）；行在场但非法（非数字 / 脏 JSON）
+ * 或越界（0 / 99 等）→ 回落缺省并 warn 一次。写侧 setTaskMaxRuns 保证合法域，
+ * 本兜底面向手工改库等脏数据（config-store 同款读侧纪律——脏值不猜意图）。
+ */
+export function effectiveMaxRuns(): number {
+  const row = getDb()
+    .prepare('SELECT value FROM kv_store WHERE key = ?')
+    .get(TASK_MAX_RUNS_KEY) as { value: string } | undefined;
+  if (!row) return DEFAULT_MAX_RUNS_PER_TASK;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.value);
+  } catch {
+    parsed = undefined;
+  }
+  const n =
+    typeof parsed === 'number' && Number.isFinite(parsed) ? Math.round(parsed) : NaN;
+  if (n >= TASK_MAX_RUNS_MIN && n <= TASK_MAX_RUNS_MAX) return n;
+  if (!warnedInvalidMaxRuns) {
+    warnedInvalidMaxRuns = true;
+    logger.warn(
+      `task_max_runs 配置非法（${row.value}）——合法域 ${TASK_MAX_RUNS_MIN}..${TASK_MAX_RUNS_MAX}` +
+        ` 整数，回落缺省 ${DEFAULT_MAX_RUNS_PER_TASK}`,
+    );
+  }
+  return DEFAULT_MAX_RUNS_PER_TASK;
+}
+
+/** 返工上限读面（task:getMaxRuns IPC 消费——展示的是生效值，脏数据回落缺省） */
+export function getTaskMaxRuns(): number {
+  return effectiveMaxRuns();
+}
+
+/** 返工上限写面（task:setMaxRuns IPC 消费）：归一化落 kv 并返回生效值 */
+export function setTaskMaxRuns(n: number): number {
+  const normalized = clampTaskMaxRuns(n);
+  getDb()
+    .prepare(
+      `INSERT INTO kv_store (key, value, updated_at) VALUES (?, ?, datetime('now'))
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    )
+    .run(TASK_MAX_RUNS_KEY, JSON.stringify(normalized));
+  return normalized;
+}
 
 /** 判定 better-sqlite3 唯一索引冲突（idx_task_runs_active 单活动 run 竞态信号） */
 function isUniqueConstraintError(err: unknown): boolean {
@@ -227,9 +296,10 @@ function ensureRunBookkeeping(taskId: string, runId: string, runStatus: TaskRunS
 /**
  * 启动（或幂等复用）任务的当前 run——ensure 语义（Review Focus #3）。
  *
- * 流程：已有活动 run → 补记账后返回既有行；countRuns 达 MAX_RUNS_PER_TASK →
- * 人话抛错；否则事务内三步写：insertRun(running) + updateTask({currentRunId}) +
- * 任务态投影 in_progress（非终态且合法时；starter 先 transition 的时序下同态跳过）。
+ * 流程：已有活动 run → 补记账后返回既有行；countRuns 达生效上限
+ * （effectiveMaxRuns）→ 人话抛错；否则事务内三步写：insertRun(running) +
+ * updateTask({currentRunId}) + 任务态投影 in_progress（非终态且合法时；
+ * starter 先 transition 的时序下同态跳过）。
  *
  * paused 恢复不走 startRun（resumePaused 保留 paused → in_progress 边）；
  * 终态任务不转 in_progress，但 run 记账照常（迟到结算场景）。
@@ -246,9 +316,10 @@ export function startRun(
     return existing;
   }
 
-  if (countRuns(taskId) >= MAX_RUNS_PER_TASK) {
+  const maxRuns = effectiveMaxRuns();
+  if (countRuns(taskId) >= maxRuns) {
     throw new Error(
-      `任务 ${taskId} 执行尝试已达上限（${MAX_RUNS_PER_TASK} 次），不能再次启动；` +
+      `任务 ${taskId} 执行尝试已达上限（${maxRuns} 次），不能再次启动；` +
         `如需继续请新建任务或清理历史 run`,
     );
   }
@@ -562,8 +633,8 @@ export async function acceptTask(id: string): Promise<void> {
  * 打回（spec §6.5）：reason 空白人话拒（与 move 校验双保险）；run → rejected
  * （reject_reason 落库）+ acceptance 答复 reject(reason)；任务 → assigned。
  * 打回不建新 run——回 assigned 排队，下次放行 startRun(trigger='rework')；
- * 返工上限（§5.2）：下一 run 序号将超 MAX_RUNS_PER_TASK 时任务转 failed
- * （errorMessage=返工次数超限，failRun 同链）——拒绝无限返工循环。
+ * 返工上限（§5.2）：下一 run 序号将超生效上限（effectiveMaxRuns）时任务转
+ * failed（errorMessage=返工次数超限，failRun 同链）——拒绝无限返工循环。
  * byNodeId 缺省本地验收方；worker 远端打回消费（P2 S4）传 remote 答复方。
  */
 export async function rejectTask(id: string, reason: string, byNodeId: string = LOCAL_ACCEPT_BY): Promise<void> {
@@ -577,7 +648,7 @@ export async function rejectTask(id: string, reason: string, byNodeId: string = 
         `只有已提交待验收（submitted）的 run 可执行验收操作`,
     );
   }
-  if (countRuns(id) + 1 > MAX_RUNS_PER_TASK) {
+  if (countRuns(id) + 1 > effectiveMaxRuns()) {
     // 返工上限（spec §5.2 原文）：run 数达上限后拒绝再次打回——任务转
     // failed（errorMessage=返工次数超限）走 failRun（§6.5 技术性失败表），
     // 防止无限返工循环；未决验收单随任务终态失效（不再被答复）

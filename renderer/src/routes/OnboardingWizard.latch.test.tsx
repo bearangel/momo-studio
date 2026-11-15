@@ -94,6 +94,11 @@ const mockApi = {
   agent: {
     onAgentOpConfirmRequest: vi.fn(() => () => {}),
   },
+  // 任务生命周期 v2 S4：HumanRequestToast 挂载订阅 human:changed（推送面
+  // no-op 桩——inserted 不触发，吐司不渲染，向导断言不受影响）
+  human: {
+    onChanged: vi.fn().mockReturnValue(() => {}),
+  },
   task: { listInterrupted: vi.fn().mockResolvedValue([]) },
   browser: {
     getState: vi.fn(),

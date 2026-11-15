@@ -61,7 +61,8 @@ vi.mock('../../src/main/agent/stream-relay', async (importOriginal) => ({
 
 // S9 块专用：hub/ipc.handlers 顶层 import { ipcMain } from 'electron' 与
 // './index'（hubRequest 等）——electron 捕获 + hub/index 最小 mock 面
-// （ipc.test.ts 逐字同款，presence 供 projectHumanListRows 的 originNodeNameOf）
+// （ipc.test.ts 逐字同款；presence 经 setPresenceNodesProvider 注入
+// projectHumanListRows 的 originNodeNameOf——A3/F3 注入化，不走 hub/index import）
 const simhubShared = vi.hoisted(() => ({
   ipcHandlers: new Map<string, (...args: unknown[]) => unknown>(),
   presenceNodes: [{ nodeId: 'node-worker', nodeName: 'Worker 节点' }],
@@ -155,6 +156,7 @@ import { TASK_WIRE } from '../../src/main/hub/delegation-wire';
 import {
   answerHumanRouted,
   setMirrorAnswerForwarder,
+  setPresenceNodesProvider,
   projectHumanListRows,
   type MirrorAnswerForwardInput,
 } from '../../src/main/task/human.ipc.handlers';
@@ -475,6 +477,8 @@ beforeEach(() => {
     members: [{ nodeId: WORKER_NODE, name: WORKER_NODE_NAME, online: true, protoVer: sim.protoVer, bound: true }],
   });
   setHumanAnswerKickoff(sendSystemKickoffMessage);
+  // A3/F3：presence 注入（原 hub/index mock 旁路——originNodeName 数据源注入化）
+  setPresenceNodesProvider(() => simhubShared.presenceNodes);
   terminalCalls.length = 0;
   routeUserChatMock.mockReset().mockResolvedValue(undefined);
   pushSessionMessageMock.mockClear();
@@ -559,6 +563,7 @@ beforeEach(() => {
 afterEach(() => {
   setRemoteInterveneSink(null);
   setMirrorAnswerForwarder(null);
+  setPresenceNodesProvider(null);
   setRemoteTerminalForwarder(null);
   closeDb();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
@@ -919,14 +924,19 @@ describe('场景 2（reject 返工）：打回 → run#2 再提交 → accept（
     await handleTaskRejected(sim.rejectedEvent('缺少回归测试'), ports);
     expect(sim.rejectedEvent('缺少回归测试')).toEqual({ taskId: dl, runNo: 2, reason: '缺少回归测试' });
     const workerAfterReject = getTask(worker.id)!;
-    expect(workerAfterReject.status).toBe('assigned'); // 返工排队
-    expect(listRuns(worker.id).map((r) => r.status)).toEqual(['rejected']);
+    // 打回重驱闭环（P3 S6）：任务 in_progress + rework run#2 自动建 + 理由注入
+    expect(workerAfterReject.status).toBe('in_progress');
+    expect(listRuns(worker.id).map((r) => [r.runNo, r.status, r.trigger])).toEqual([
+      [1, 'rejected', 'initial'],
+      [2, 'running', 'rework'],
+    ]);
     expect(listRuns(worker.id)[0]!.rejectReason).toBe('缺少回归测试');
     expect(settleDocked).toHaveBeenCalledWith(dl, 'rejected');
     expect(milestoneRows().some((m) => m.meta['kind'] === 'rejected' && m.meta['runNo'] === 2)).toBe(true);
+    expect(milestoneRows().some((m) => m.meta['kind'] === 'rework_injected' && m.task_id === worker.id)).toBe(true);
 
-    // ⑫' worker 返工：run#2 再执行再提交（report runNo=2）
-    const run2 = startRun(worker.id, { trigger: 'rework', executionSessionId: workerExecSessionId });
+    // ⑫' worker 返工：rework run#2 已自动建——直接再提交（report runNo=2）
+    const run2 = getActiveRun(worker.id)!;
     expect(run2.runNo).toBe(2);
     await submitRun(worker.id, { summary: '返工交付（含回归测试）' });
     await flushAsync();

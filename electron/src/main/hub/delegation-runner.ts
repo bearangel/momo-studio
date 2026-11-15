@@ -220,9 +220,10 @@ export interface DelegationRunner {
    * S4 验收消费停靠出清：hub task.accepted/rejected 消费后，清掉 settleRun 因
    * 本地 submitted 停靠的 active 项（terminal 已置、tick 惰性跳过、账本零上报）。
    * accepted：本地账本对齐 done（hub 已终局，不上报——再报 done 是对已终态账本
-   * 的重复拍）；rejected：账本保持 running，任务回 assigned 由本地 executor 放行
-   * 重跑（trigger 自动 initial——本地 run 计数自治，hub runNo 仅展示对账用），
-   * 重跑进度经监督器接管（peer-draft）/既有进度拍链自然恢复。
+   * 的重复拍）；rejected：账本保持 running，返工重驱由 handleTaskRejected 自身
+   * 闭环（rework run + 理由注入——委派承接行无三目标列，executor 永不放行，
+   * P3 S6 E2E 实测钉死；本地 run 计数自治，hub runNo 仅展示对账用），重跑进度
+   * 经监督器接管（peer-draft）/既有进度拍链自然恢复。
    * 无停靠项（classic 未接管 / 已出清 / 重启丢失）幂等 no-op；accepted 侧账本
    * 对齐仍执行（重启窗口的迟到消费也能终结监督器，防 duplicate 终态直报）。
    */

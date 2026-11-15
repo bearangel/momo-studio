@@ -588,3 +588,24 @@ describe('归档域豁免：origin=dispatch 簿记行终态可归档', () => {
     expect(getTask(live.id)!.archivedAt).toBeNull();
   });
 });
+
+// P3 E1：返工上限设置 IPC 往返——语义单点 lifecycle-runs（与 startRun /
+// rejectTask 同一读路径），此处锁 IPC 面 + kv 持久化
+describe('返工上限设置 IPC（P3 E1）', () => {
+  it('缺省：task:getMaxRuns → 10（无 kv 行）', async () => {
+    const got = (await handlers.get('task:getMaxRuns')!(undefined)) as number;
+    expect(got).toBe(10);
+  });
+
+  it('往返：task:setMaxRuns(21) → 返回 21，task:getMaxRuns 读回 21', async () => {
+    const set = (await handlers.get('task:setMaxRuns')!(undefined, 21)) as number;
+    expect(set).toBe(21);
+    const got = (await handlers.get('task:getMaxRuns')!(undefined)) as number;
+    expect(got).toBe(21);
+  });
+
+  it('写侧归一化：99 → 50，0 → 1（delegation-settings 夹取同款）', async () => {
+    expect(await handlers.get('task:setMaxRuns')!(undefined, 99)).toBe(50);
+    expect(await handlers.get('task:setMaxRuns')!(undefined, 0)).toBe(1);
+  });
+});

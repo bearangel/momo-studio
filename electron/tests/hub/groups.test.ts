@@ -5,9 +5,9 @@
 // 组矩阵与 hub 仓 groups.test.ts 语义对齐（wire 层同一契约的双端互锁）。
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createGroupClient } from '../../src/main/hub/groups';
+import { createGroupClient, pickWorkstationFromGroups } from '../../src/main/hub/groups';
 import { createHubClient, type HubClient, type WsFactory, type WebSocketLike } from '../../src/main/hub/client';
-import { EVT, PROTOCOL_VERSION, RPC, type EventEnvelope } from '../../src/main/hub/protocol';
+import { EVT, PROTOCOL_VERSION, RPC, type EventEnvelope, type GroupInfo } from '../../src/main/hub/protocol';
 
 class FakeSocket extends EventEmitter implements WebSocketLike {
   sent: string[] = [];
@@ -309,5 +309,42 @@ describe('工作组客户端（mock hub 仿真鉴权+角色）', () => {
     await p;
     online.stop();
     offline.stop();
+  });
+});
+
+// ── A3-4：组清单 → 绑定空间名解析（纯函数；镜像 remote 段数据源）──────────────
+
+describe('pickWorkstationFromGroups（A3-4 按组精确）', () => {
+  const groups: GroupInfo[] = [
+    {
+      groupId: 'g-a',
+      groupName: 'A 组',
+      leaderNodeId: 'leader-a',
+      members: [{ nodeId: 'n-1', name: 'w', online: true, boundWorkspaceName: 'ws-alpha' }],
+    },
+    {
+      groupId: 'g-b',
+      groupName: 'B 组',
+      leaderNodeId: 'leader-b',
+      members: [{ nodeId: 'n-1', name: 'w', online: true, boundWorkspaceName: 'ws-beta' }],
+    },
+  ];
+
+  it('groupId 在场 → 只取该组成员（多组同名节点不盲选首组）', () => {
+    expect(pickWorkstationFromGroups(groups, 'n-1', 'g-b')).toBe('ws-beta');
+    expect(pickWorkstationFromGroups(groups, 'n-1', 'g-a')).toBe('ws-alpha');
+  });
+
+  it('groupId 在场但组缺席 / 组内成员无绑定 → null（不跨组回退）', () => {
+    expect(pickWorkstationFromGroups(groups, 'n-1', 'g-absent')).toBeNull();
+    const noBind = [
+      { ...groups[0]!, members: [{ nodeId: 'n-1', name: 'w', online: true }] },
+    ];
+    expect(pickWorkstationFromGroups(noBind, 'n-1', 'g-a')).toBeNull();
+  });
+
+  it('groupId 缺席 → 回退全组扫描首个携带绑定串的成员（旧形态兼容）', () => {
+    expect(pickWorkstationFromGroups(groups, 'n-1')).toBe('ws-alpha');
+    expect(pickWorkstationFromGroups([], 'n-1')).toBeNull();
   });
 });

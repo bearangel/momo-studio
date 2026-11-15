@@ -141,6 +141,11 @@ const mockApi = {
     listPanels: vi.fn().mockResolvedValue([]),
     onPanelsChanged: vi.fn().mockReturnValue(() => {}),
   },
+  // 任务生命周期 v2 S4：HumanRequestToast 挂载订阅 human:changed（推送面
+  // no-op 桩——inserted 不触发，吐司不渲染，既有分支断言不受影响）
+  human: {
+    onChanged: vi.fn().mockReturnValue(() => {}),
+  },
 };
 
 // 默认 sandbox 聚合信息（linux 已可用 → SandboxNotice 返回 null）

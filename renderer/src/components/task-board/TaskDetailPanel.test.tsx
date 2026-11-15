@@ -95,6 +95,11 @@ const mockApi = {
     rollbackFileBefore: vi.fn(),
     preview: vi.fn(),
   },
+  // CONTRACT #25 副标数据源（仅 out 行消费；本地任务两口零调用）
+  hub: {
+    taskList: vi.fn().mockResolvedValue({ tasks: [] }),
+    getNodes: vi.fn().mockResolvedValue([]),
+  },
 };
 
 function makeTask(overrides: Partial<TaskRow>): TaskRow {
@@ -161,6 +166,8 @@ beforeEach(() => {
   mockApi.session.send.mockReset().mockResolvedValue({ readOnly: false });
   mockApi.session.list.mockReset().mockRejectedValue(new Error('no ipc in test'));
   mockApi.journal.list.mockReset().mockResolvedValue([]);
+  mockApi.hub.taskList.mockReset().mockResolvedValue({ tasks: [] });
+  mockApi.hub.getNodes.mockReset().mockResolvedValue([]);
   useStreamStore.setState({ streams: new Map() });
   locateMessageMock.mockClear();
   locateTaskExecutionMock.mockClear();
@@ -553,7 +560,7 @@ describe('TaskDetailPanel 待收尾徽标与催收尾按钮（spec §3.5/§3.6�
         makeTask({ status: 'in_progress', archivedAt: 1700000000000 }),
       );
       render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
-      await screen.findByText('示例任务');
+      await screen.findByText('#T-task-1 示例任务');
 
       expect(screen.getByText('已归档 · 只读')).toBeInTheDocument();
       expect(screen.getByText('归档时间')).toBeInTheDocument();
@@ -586,7 +593,7 @@ describe('TaskDetailPanel 待收尾徽标与催收尾按钮（spec §3.5/§3.6�
       // get 永不 resolve：证明首帧内容完全来自 store 命中行，而非 IPC 返回
       mockApi.task.get.mockReturnValue(new Promise(() => {}) as ReturnType<typeof mockApi.task.get>);
       render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
-      expect(screen.getByText('示例任务')).toBeInTheDocument();
+      expect(screen.getByText('#T-task-1 示例任务')).toBeInTheDocument();
       expect(screen.queryByText('加载中...')).not.toBeInTheDocument();
     });
 
@@ -600,7 +607,7 @@ describe('TaskDetailPanel 待收尾徽标与催收尾按钮（spec §3.5/§3.6�
       render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
       expect(screen.getByText('加载中...')).toBeInTheDocument();
       resolveGet(makeTask({ status: 'draft' }));
-      expect(await screen.findByText('示例任务')).toBeInTheDocument();
+      expect(await screen.findByText('#T-task-1 示例任务')).toBeInTheDocument();
     });
   });
 });
@@ -800,5 +807,71 @@ describe('TaskDetailPanel 验收操作区（Task 24，预览 #21）', () => {
     render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
     fireEvent.click(await screen.findByRole('button', { name: '验收通过' }));
     expect(await screen.findByText(/任务已被并发打回/)).toBeInTheDocument();
+  });
+});
+
+describe('TaskDetailPanel 头部形态与委派副标（S5，CONTRACT #24/#25）', () => {
+  it('主行「#T-{id} {任务名}」形态（CONTRACT #25 标题）', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    expect(await screen.findByText('#T-task-1 示例任务')).toBeInTheDocument();
+  });
+
+  it('out 行 → 副标「→ 节点名 · 工作站」（routing 目标 getNodes 解析 + 账本 workspaceName）', async () => {
+    mockApi.task.get.mockResolvedValue(
+      makeTask({
+        status: 'submitted',
+        delegationRole: 'out',
+        delegationId: 'dele-1',
+        routing: { mode: 'node', groupId: 'grp-1', targetNodeId: 'node-b' },
+      }),
+    );
+    mockApi.hub.taskList.mockResolvedValue({
+      tasks: [
+        { taskId: 'dele-1', targetNodeId: 'node-b', workspaceName: 'dev-ws', status: 'running', title: 'x', createdAt: 1, updatedAt: 2 },
+      ],
+    });
+    mockApi.hub.getNodes.mockResolvedValue([{ nodeId: 'node-b', nodeName: '节点B' }]);
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    expect(await screen.findByTestId('task-route-line')).toHaveTextContent('→ 节点B · dev-ws');
+  });
+
+  it('getNodes 失败 → 节点段降级短码（工作站段仍在，不整行丢弃）', async () => {
+    mockApi.task.get.mockResolvedValue(
+      makeTask({
+        status: 'in_progress',
+        delegationRole: 'out',
+        delegationId: 'dele-1',
+        routing: { mode: 'node', groupId: 'grp-1', targetNodeId: 'node-b-12345678' },
+      }),
+    );
+    mockApi.hub.taskList.mockResolvedValue({
+      tasks: [
+        { taskId: 'dele-1', targetNodeId: 'node-b-12345678', workspaceName: 'dev-ws', status: 'running', title: 'x', createdAt: 1, updatedAt: 2 },
+      ],
+    });
+    mockApi.hub.getNodes.mockRejectedValue(new Error('hub 离线'));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    expect(await screen.findByTestId('task-route-line')).toHaveTextContent('→ node…5678 · dev-ws');
+  });
+
+  it('本地任务（delegationRole=null）→ 副标整行不渲染，hub 两口零调用', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    await screen.findByText('#T-task-1 示例任务');
+    expect(screen.queryByTestId('task-route-line')).not.toBeInTheDocument();
+    expect(mockApi.hub.taskList).not.toHaveBeenCalled();
+    expect(mockApi.hub.getNodes).not.toHaveBeenCalled();
+  });
+
+  it('run 时间线 submitted 状态词走短版「待验收」（CONTRACT #24 长版废除）', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'submitted' }));
+    mockApi.task.listRuns.mockResolvedValue([
+      makeRun({ runNo: 1, status: 'submitted', endedAt: 2000 }),
+    ]);
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    expect(await screen.findByTestId('task-run-timeline')).toBeInTheDocument();
+    expect(screen.getByTestId('task-run-row-1')).toHaveTextContent('run #1 待验收');
+    expect(screen.getByTestId('task-run-row-1')).not.toHaveTextContent('已提交待验收');
   });
 });

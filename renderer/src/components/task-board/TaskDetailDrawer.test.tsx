@@ -115,14 +115,14 @@ describe('TaskDetailDrawer 详情抽屉', () => {
   it('渲染 taskId 对应内容(内部复用 TaskDetailPanel)', async () => {
     render(<TaskDetailDrawer taskId="task-1" onClose={() => {}} />);
     // TaskDetailPanel 异步拉取 task.get 后渲染标题
-    expect(await screen.findByText('抽屉示例任务')).toBeInTheDocument();
+    expect(await screen.findByText('#T-task-1 抽屉示例任务')).toBeInTheDocument();
     expect(mockApi.task.get).toHaveBeenCalledWith('task-1');
   });
 
   it('ESC 键 → onClose 回调', async () => {
     const onClose = vi.fn();
     render(<TaskDetailDrawer taskId="task-1" onClose={onClose} />);
-    await screen.findByText('抽屉示例任务');
+    await screen.findByText('#T-task-1 抽屉示例任务');
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
@@ -130,7 +130,7 @@ describe('TaskDetailDrawer 详情抽屉', () => {
   it('点击遮罩 → onClose 回调', async () => {
     const onClose = vi.fn();
     render(<TaskDetailDrawer taskId="task-1" onClose={onClose} />);
-    await screen.findByText('抽屉示例任务');
+    await screen.findByText('#T-task-1 抽屉示例任务');
     // 遮罩:role=dialog 之前的 fixed 全屏层(aria-hidden)
     fireEvent.click(screen.getByTestId('drawer-backdrop'));
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -139,7 +139,7 @@ describe('TaskDetailDrawer 详情抽屉', () => {
   it('面板内 X 按钮 → onClose 回调(TaskDetailPanel 既有通道透传)', async () => {
     const onClose = vi.fn();
     render(<TaskDetailDrawer taskId="task-1" onClose={onClose} />);
-    await screen.findByText('抽屉示例任务');
+    await screen.findByText('#T-task-1 抽屉示例任务');
     fireEvent.click(screen.getByRole('button', { name: '关闭' }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
@@ -157,7 +157,7 @@ describe('TaskDetailDrawer 详情抽屉', () => {
         </Dialog>
       </>,
     );
-    await screen.findByText('抽屉示例任务');
+    await screen.findByText('#T-task-1 抽屉示例任务');
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(dialogOnClose).toHaveBeenCalledTimes(1);
     expect(drawerOnClose).not.toHaveBeenCalled();

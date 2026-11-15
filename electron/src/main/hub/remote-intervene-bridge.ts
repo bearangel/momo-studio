@@ -20,7 +20,10 @@
 // 纯端口注入（momo-test-rules #5，delegation-answer.ts 同款）：DB 面生产直连
 // 真实库，装配在 hub/index ensureRemoteInterveneBridge（仅主进程执行——hub/index
 // 模块体虽为 runtime 子进程静态可达，装配调用点 initHub 只在主进程跑）。
+import { createHash, randomUUID } from 'node:crypto';
 import { logger } from '../logger';
+import { getRouterService } from '../agent/router-bootstrap';
+import { getSessionMembersInfo } from '../im/session-ops';
 import type { HubClient } from './client';
 import { TASK_RPC, TASK_HITL_REQUIRED_MINOR, type InterventionKind, type InterventionRequest } from './protocol';
 import { TASK_WIRE } from './delegation-wire';
@@ -41,6 +44,7 @@ import {
   emitHumanChanged,
   emitRunChanged,
   rejectTask,
+  startRun,
   type RemoteInterveneEvent,
 } from '../task/lifecycle-runs';
 import type { HumanAnswerInput } from '../task/human-answer-shared';
@@ -587,11 +591,14 @@ export async function handleTaskAccepted(
  * 发起方打回 → 复用 rejectTask 写路径（run rejected + reject_reason 落库 +
  * acceptance 答复 reject(reason) + 任务回 assigned；返工上限超限走其内建
  * failRun 分支）+ 里程碑 kind='rejected'（body/meta 含 reason，meta 记 runNo）+
- * 停靠出清。返工重启：任务回 assigned 后由本地 executor 正常放行（starter
- * trigger 自动 initial——本地 run 计数自治，与 hub runNo 对齐**不强制**：hub
- * runNo 仅展示对账用）；打回理由经里程碑落执行会话历史，随返工回合进 agent
- * 上下文（协议「reason 进 agent 上下文」的本地承载）。
- * 幂等与 total 语义同 handleTaskAccepted。
+ * 停靠出清 + **worker 域重驱闭环**（P3 S6 E2E 实测缺口，spec §6.5「跨节点时
+ * 由发起方经 hub 下发，worker 生成新 run」）：委派承接行无 assignee/team/
+ * session 三目标列，executor 永不放行（peekNextAssigned delegation_id 过滤，
+ * §5.1 不变量 7 的 'in' 镜像）——本消费单点建 rework run（run_no+1，幂等：已有
+ * 活动 run 则 startRun 补记账返回）+ 经 S1 steer 同款管线注入打回理由唤醒
+ * agent 返工（里程碑 kind='rework_injected'；会话空则 warn 跳过注入，run 照建
+ * ——agent 经其它路径续跑）。spec §5.1：startRun 投影 assigned→in_progress 合法边。
+ * 幂等与 total 语义同 handleTaskAccepted（重复事件由非 submitted 守卫收敛）。
  */
 export async function handleTaskRejected(
   payload: unknown,
@@ -632,7 +639,19 @@ export async function handleTaskRejected(
       ...(runNo !== undefined ? { runNo } : {}),
     });
     ports.settleDocked(delegationId, 'rejected');
-    logger.info('远端打回已消费（rejectTask 复用路径，任务回 assigned 待返工）', {
+    // worker 域重驱：rework run#N+1（rejectTask 的返工上限守卫已确保余量）+
+    // 理由注入（injectReworkIntoExecutionSession 头注释）。执行会话取承接行
+    // execution_session_id——建会回填（delegation-runner linkExecutionSession）。
+    startRun(task.id, { trigger: 'rework', executionSessionId: task.executionSessionId });
+    if (task.executionSessionId === null || task.executionSessionId === '') {
+      logger.warn('打回理由未注入（任务无关联执行会话——run 已建，agent 经其它路径续跑）', {
+        taskId: task.id,
+        delegationId,
+      });
+    } else {
+      injectReworkIntoExecutionSession(task, reason);
+    }
+    logger.info('远端打回已消费（rejectTask + rework run 自动重驱 + 理由注入）', {
       taskId: task.id,
       delegationId,
       reason,
@@ -642,6 +661,250 @@ export async function handleTaskRejected(
       error: err instanceof Error ? err.message : String(err),
     });
   }
+}
+
+// ── worker 消费远端指令（P3 S1，spec 2026-11-13 §8.2 steer 槽位 / §8.6）─────────
+
+/** S1 消费端口（hub/index onEvent 装配）：S4 WorkerTerminalConsumePorts 的
+ *  selfNodeId 结构子集——直接复用 terminalConsumePorts() 装配产物（同源防漂移） */
+export interface TaskSteeredConsumePorts {
+  /** 本机 nodeId（外派镜像行不消费——isWorkerExecution 判向） */
+  selfNodeId(): string | null;
+}
+
+/** steer 去重窗口（ms）：同 delegation 同文指令的静默窗口 */
+const STEER_DEDUPE_WINDOW_MS = 10_000;
+
+/** 去重账：key = `${delegationId}#${sha256(message) 前 16 hex}` → 首见时刻 */
+const steerDedupeSeen = new Map<string, number>();
+
+/** 测试用：清空去重账（进程内单例跨用例残留会互串） */
+export function __resetSteerDedupeForTest(): void {
+  steerDedupeSeen.clear();
+}
+
+/**
+ * 消息级去重：hub 的 task.steer 无幂等键（幂等语义测试明示「同 message 重发
+ * 每次都发事件——消费侧自行去重」），本端以 delegation_id + message hash +
+ * 10s 时间窗兜应用层重放。取舍：
+ * - 内存 Map 进程内不持久——hub 事件是定向 sendTo 非队列 at-least-once 重投，
+ *   重启清零不存在投递来源，可接受；
+ * - 窗口内同文重复指令无信息增量（发起方真意重复会在窗口外重发），静默合理；
+ * - 顺手清扫过期键（每次消费 O(n)，n=窗口内条目数，量级极小）。
+ */
+function isDuplicateSteer(delegationId: string, message: string): boolean {
+  const key = `${delegationId}#${createHash('sha256').update(message).digest('hex').slice(0, 16)}`;
+  const now = Date.now();
+  for (const [k, seenAt] of steerDedupeSeen) {
+    if (now - seenAt > STEER_DEDUPE_WINDOW_MS) steerDedupeSeen.delete(k);
+  }
+  if (steerDedupeSeen.has(key)) return true;
+  steerDedupeSeen.set(key, now);
+  return false;
+}
+
+/**
+ * 执行会话系统通知注入公用管线（S1 steer / S6 打回重驱同构）：
+ *   1) 里程碑系统消息——writeSessionMilestone 同款（sender='system'、
+ *      event_type='delegation_milestone'、meta kind 由调用方定），但
+ *      streamSessionId 与派发回合共享（human-answer-inject 的回合标识同构）；
+ *      行落库后经会话历史进入 agent 上下文（sender-role 映射入 user 轮——
+ *      在途流结束后的下一回合/返工回合可见）
+ *   2) pushSessionMessage 实时推 renderer
+ *   3) routeUserChat **不带 systemKickoff**（= delegation-ports injectSteer 的
+ *      路由语义，HITL 超时注入同款）：
+ *      - 有在途顶层流（车道命中同一接待目标）→ steer 分流即时注入当前流——
+ *        子进程 pendingSteers 在 chat loop 下一次构建 LLM 请求前消费，不打断
+ *        在途 LLM 调用、不 abort、不开并行回合（Review Focus #1 不撕裂在途流）
+ *      - 无在途回合/死通道 → 正常派发开新回合（injectSteer 的回退语义，
+ *        即「无在途回合则直接开新回合」）
+ *      ※ 经核验 RouterService 并无 kickoff 排队：routeUserChat(systemKickoff)
+ *        在回合进行中会立即 executeTask 开并行 ephemeral 回合（session-lane
+ *        registerLane 的 kickoff 分支仅 warn 退化为并行）；任务行级排队只在
+ *        TaskExecutor（session_queued，任务行专用）。故不走无条件 systemKickoff
+ *        唤醒，统一骑 steer 分流——在途/空闲两态由既有路由分支天然覆盖。
+ *   唤醒目标：会话 leader 接待（human-answer-inject resolveWakeTarget 同源，
+ *   执行会话 assignee 建会时已标 is_leader）；RouterService 未启动/无 leader →
+ *   里程碑已落库推送，唤醒跳过 warn 不抛。
+ *   调用方契约：task.executionSessionId 非空（空会话由调用方前置判空）。
+ */
+function injectExecutionSessionNotice(
+  task: TaskRow,
+  notice: {
+    /** 消息正文（进 agent 回合的完整文本——注入即派发体） */
+    body: string;
+    /** context_json 里程碑 kind（steered / rework_injected） */
+    kind: string;
+    /** kind 以外的结构化 meta（摘要截断由调用方负责） */
+    meta: Record<string, unknown>;
+    /** warn 日志前缀（既有 steer 文案保持不变） */
+    logLabel: string;
+  },
+): void {
+  const sessionId = task.executionSessionId!;
+  const streamSessionId = randomUUID();
+  const row = insertMessage({
+    sessionId,
+    sender: 'system',
+    eventType: 'delegation_milestone',
+    body: notice.body,
+    taskId: task.id,
+    streamSessionId,
+    contextJson: JSON.stringify({ kind: notice.kind, ...notice.meta }),
+  });
+  pushSessionMessage(row);
+
+  const router = getRouterService();
+  const target = getSessionMembersInfo(sessionId).find((m) => m.isLeader)?.instanceId ?? null;
+  if (!router || !target) {
+    logger.warn(`${notice.logLabel}唤醒跳过（RouterService 未启动或会话无接待目标）`, {
+      sessionId,
+      taskId: task.id,
+    });
+    return;
+  }
+  void router
+    .routeUserChat({
+      sessionId,
+      assignmentId: target,
+      body: notice.body,
+      streamSessionId,
+      // 回合宿主标记：注入回合归该 delegation 任务语境（车道注册同步记 taskId，
+      // abort-by-lane 可锚定）；taskId 通道保持 null——ephemeral 语义不触发
+      // task-driven 终态自动转换（routeUserChat 的 TaskConfig 注释同源）
+      sourceTaskId: task.id,
+    })
+    .catch((err: unknown) => {
+      logger.warn(`${notice.logLabel}注入派发失败`, {
+        sessionId,
+        taskId: task.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+}
+
+/**
+ * steer 指令注入（S1）：【发起方指令】前缀 + kind='steered'（meta 含 message
+ * 摘要 ≤80 字——truncateCodePoints 会追加省略号，预算取 79 使含 '…' 总长不超限）。
+ */
+function injectSteerIntoExecutionSession(task: TaskRow, message: string): void {
+  injectExecutionSessionNotice(task, {
+    body: `【发起方指令】${message}`,
+    kind: 'steered',
+    meta: { message: truncateCodePoints(message, 79) },
+    logLabel: '【发起方指令】',
+  });
+}
+
+/**
+ * 打回理由注入（S6 打回重驱）：复用 S1 steer 注入管线（同款里程碑 + 分流路由
+ * 语义——在途流注入当前流不撕裂、无在途回合开新返工回合）。body 尾行明示
+ * submit_task 复提契约（返工回合的行动指令）；meta reason 摘要预算 79 同 S1。
+ */
+function injectReworkIntoExecutionSession(task: TaskRow, reason: string): void {
+  injectExecutionSessionNotice(task, {
+    body: `【发起方打回】${reason}\n请按理由修订后再次调用 submit_task 提交。`,
+    kind: 'rework_injected',
+    meta: { reason: truncateCodePoints(reason, 79) },
+    logLabel: '【发起方打回】',
+  });
+}
+
+/**
+ * task.steered 事件消费（hub/index onEvent 装配；hub 定向→本机 worker）：
+ * 发起方补充指令到达 → 里程碑 kind='steered' 落执行会话 + steer 分流注入/唤醒
+ * （injectSteerIntoExecutionSession 头注释——RF#1 不撕裂在途流）。
+ * 幂等：无本机承接行 / 任务已终态 → 静默 logger.info；同文重发 → 10s 窗口
+ * 去重（hub steer 无幂等键）。execution_session_id 空 → warn 跳过（无会话可
+ * 注入）。total 语义——事件处理绝不向上抛（onEvent 无错误回传通道）。
+ */
+export function handleTaskSteered(payload: unknown, ports: TaskSteeredConsumePorts): void {
+  try {
+    if (typeof payload !== 'object' || payload === null) return;
+    const p = payload as { taskId?: unknown; message?: unknown };
+    if (typeof p.taskId !== 'string' || p.taskId === '') return;
+    if (typeof p.message !== 'string' || p.message.trim() === '') return; // hub 侧已校验 1-4000，防御性挑字段
+    const resolved = resolveWorkerTask(p.taskId, ports.selfNodeId());
+    if (resolved === null) {
+      logger.info('远端指令到达但无本机承接行（幂等收敛，丢弃）', { taskId: p.taskId });
+      return;
+    }
+    const { task, delegationId } = resolved;
+    if (isTerminal(task.status)) {
+      logger.info('远端指令到达但任务已终态（幂等收敛，丢弃）', {
+        taskId: task.id,
+        status: task.status,
+      });
+      return;
+    }
+    if (task.executionSessionId === null || task.executionSessionId === '') {
+      logger.warn('远端指令未注入（任务无关联执行会话）', { taskId: task.id, delegationId });
+      return;
+    }
+    const message = p.message.trim();
+    if (isDuplicateSteer(delegationId, message)) {
+      logger.info('远端指令窗口内重复（去重丢弃）', { taskId: task.id, delegationId });
+      return;
+    }
+    injectSteerIntoExecutionSession(task, message);
+    logger.info('远端指令已消费（里程碑 + steer 分流注入）', { taskId: task.id, delegationId });
+  } catch (err) {
+    logger.warn('远端指令消费内部异常（事件丢弃，本地行为不受影响）', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+// ── 发起方 steer 里程碑（P3 S3，spec 2026-11-13 §8.2 steer 槽位）───────────────
+
+/**
+ * 发起方侧 steer 里程碑去重账（独立于 worker 侧 steerDedupeSeen——两端语义
+ * 同构但进程角色不同，测试同进程共跑不互串）：key 形状与 S1 相同
+ * （`${delegationId}#${sha256(message) 前 16 hex}`），10s 窗口。
+ */
+const originSteerDedupeSeen = new Map<string, number>();
+
+/** 测试用：清空发起方去重账（进程内单例跨用例残留会互串） */
+export function __resetOriginSteerDedupeForTest(): void {
+  originSteerDedupeSeen.clear();
+}
+
+/** S3 与 S1 同窗口（10s）——两端对称：窗口内同文重复指令无信息增量 */
+const ORIGIN_STEER_DEDUPE_WINDOW_MS = STEER_DEDUPE_WINDOW_MS;
+
+function isDuplicateOriginSteer(delegationId: string, message: string): boolean {
+  const key = `${delegationId}#${createHash('sha256').update(message).digest('hex').slice(0, 16)}`;
+  const now = Date.now();
+  for (const [k, seenAt] of originSteerDedupeSeen) {
+    if (now - seenAt > ORIGIN_STEER_DEDUPE_WINDOW_MS) originSteerDedupeSeen.delete(k);
+  }
+  if (originSteerDedupeSeen.has(key)) return true;
+  originSteerDedupeSeen.set(key, now);
+  return false;
+}
+
+/**
+ * 发起方补充指令里程碑（task:steer 成功路径本地写，task/ipc.handlers 消费）：
+ * 跟踪会话 = 外派行 execution_session_id（S6 建会话回填）；hub 对 steer 无回执
+ * 事件给发起方，即时反馈不等事件——发送成功即落 kind='steered' 行（沿
+ * writeSessionMilestone 公用底座：sender='system' + event_type=
+ * 'delegation_milestone' + pushSessionMessage 实时推 renderer 蓝调卡）。
+ * meta.message ≤80 字摘要（与 S1 worker 侧同构，渲染面单源）；body 携全文
+ * （跟踪会话只读无 agent 消费，审计可查）。
+ * 防重：delegation_id + message hash + 10s 窗口（hub task.steer 每次调用都发
+ * 事件——指令非状态；里程碑去重与 worker 侧消费去重两端对称，双击/重试窗口
+ * 内跟踪会话只落一行）。execution_session_id 空（跟踪会话未接通）跳过 + warn，
+ * 不影响 steer 本身成功返回。
+ */
+export function writeOriginSteerMilestone(task: TaskRow, message: string): void {
+  if (isDuplicateOriginSteer(task.delegationId ?? '', message)) {
+    logger.info('发起方 steer 里程碑窗口内重复（去重跳过）', { taskId: task.id });
+    return;
+  }
+  writeSessionMilestone(task, `已下发指令：${message}`, {
+    kind: 'steered',
+    message: truncateCodePoints(message, 79),
+  });
 }
 
 // ── 发起方镜像消费（P2 S5，spec 2026-11-13 §8.3/§8.6）─────────────────────────
@@ -777,11 +1040,12 @@ function parseMirrorDeliverable(raw: unknown): {
  * S5 镜像消费端口（S6 Important-1 清偿，S9）：镜像行落库时经组清单解析执行节点
  * 绑定空间名 → payload_json `remote.workstation` 段（面板「来自 {节点} · {工作
  * 站}」徽标数据源）。组清单成员 boundWorkspaceName 仅 peer 组投影携带（lf 组
- * 缺席）→ 解析不到时降级 null（徽标仅节点名，既有行为）。可选端口：缺席（旧
- * 接线/测试直调）→ 镜像行不带 remote 段，既有断言形状零变化。
+ * 缺席）→ 解析不到时降级 null（徽标仅节点名，既有行为）。A2（F4 lf 短路）：
+ * 仅 origin='peer_draft' 行发起解析（lf 委派组清单恒无该键，免整轮 RPC 放大）。
+ * 可选端口：缺席（旧接线/测试直调）→ 镜像行不带 remote 段，既有断言形状零变化。
  */
 export interface OriginMirrorPorts {
-  workstationOf?(targetNodeId: string): Promise<string | null>;
+  workstationOf?(targetNodeId: string, groupId?: string): Promise<string | null>;
 }
 
 /**
@@ -860,10 +1124,15 @@ export async function handleTaskInterventionMirror(
       });
       return;
     }
-    // S9（A4）：工作站解析失败降级 null——不阻断镜像落库（remote 段缺席=面板降级）
+    // S9（A4）：工作站解析失败降级 null——不阻断镜像落库（remote 段缺席=面板降级）；
+    // A2（F4 lf 短路）：boundWorkspaceName 仅 peer 组投影——非 peer_draft 行整轮
+    // 组清单 RPC 恒空手而归，前置短路免 RPC 放大。A3-4：带 routing.groupId 按组
+    // 精确解析（多组同名节点不盲选）
     const workstation =
-      ports?.workstationOf !== undefined
-        ? await ports.workstationOf(workerNodeId).catch(() => null)
+      ports?.workstationOf !== undefined && task.origin === 'peer_draft'
+        ? await ports
+            .workstationOf(workerNodeId, task.routing.mode === 'local' ? undefined : task.routing.groupId)
+            .catch(() => null)
         : null;
     const row = insertHumanRequest({
       sessionId,
@@ -997,10 +1266,14 @@ export async function handleTaskSubmittedMirror(
       return;
     }
     const deliverable = parseMirrorDeliverable(p.deliverable);
-    // S9（A4）：工作站解析失败降级 null——不阻断 acceptance 镜像落库
+    // S9（A4）：工作站解析失败降级 null——不阻断 acceptance 镜像落库；
+    // A2（F4 lf 短路）同 intervention 消费点——非 peer_draft 行免整轮组清单 RPC；
+    // A3-4：带 routing.groupId 按组精确解析
     const workstation =
-      ports?.workstationOf !== undefined
-        ? await ports.workstationOf(workerNodeId).catch(() => null)
+      ports?.workstationOf !== undefined && task.origin === 'peer_draft'
+        ? await ports
+            .workstationOf(workerNodeId, task.routing.mode === 'local' ? undefined : task.routing.groupId)
+            .catch(() => null)
         : null;
     const row = insertHumanRequest({
       sessionId,

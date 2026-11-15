@@ -17,6 +17,19 @@
 - **渲染与合同（19f75ed2 + 3081d731）**：协议 pin v0.7.0 + inferHubStatus/RemoteViewPane 状态域补全；八态完整化（submitted 待验收 accent/interrupted 离线徽标/waiting lf-peer 视角分流）+ 工作站徽标（镜像落库经组清单解析 boundWorkspaceName，执行方 remote 键落库前剥除防伪造）+ hub 侧预检黄字「任一侧」
 - **SimHub 契约（b16cc814）**：四场景全链编排（lf 提交验收/reject 返工 runNo 透传/peer 拒答+验收/断线重连幂等计数）+ hub:taskList 投影透传锁——electron 全量 6308 绿 + renderer 3593 绿 + 双 typecheck
 
+## [未发布] — 任务生命周期 v2 P3（打磨期）
+
+`2.1.0-alpha.70`。依据 spec §14 P3 行 + 实施计划 `docs/plans/2026-11-15-task-lifecycle-v2-p3.md`（14 任务 SDD，hub v0.7.3〔协议 1.12.0 task.steer〕已发 tag）。
+
+- **票据清偿**（b2d72c6/084fd2f5/a2625161）：hub submitted UPDATE 自封口 + intervene payload 64KB 上限；镜像 RPC 放大收敛（lf workstation 短路 + 对账轮内缓存 + await 化防缓存 miss）；presence 注入化 + workstation 按组精确 + 「running+runNo==local no-op」断言
+- **返工上限可配**（27827d0a）：effectiveMaxRuns kv 1-50 缺省 10（隔离锁裁定：kv 落 lifecycle-runs——hub 域 import 被子进程隔离锁禁）+ 设置页任务小节
+- **task.steer 指令通道**（hub aa782e4 协议 1.12.0〔minor=12 独立门槛〕+ studio f8607861/6790ed9b）：发起方 by_node_id 单点权威 / peer 允许（任务指令非人工请求转发）/ 账本零迁移 / worker 离线拒；worker 侧骑 steer 分流注入（**RF 勘误：systemKickoff 无排队会开并行 ephemeral 回合撕裂在途流——弃用，非 kickoff 注入经源码证实**）+ 窗口去重 + 发起方入口（浮层/里程碑即时反馈/离线人话）
+- **远端会话只读抽屉**（682c5d55）：跟踪会话「查看远端会话」→ 右滑 420px 只读流（实时/断开徽标/加载更早/新入高亮）——零协议改动复用 view.*（**勘误：TaskRecord 无 sessionId——改 taskList 账本反查 + viewSessions 标题匹配**）；真机实证跟随返工 run#2
+- **请求吐司**（589bb6f0）：右下 NoticeStack 同位（会话去重/点击直达/临近超时预警/6s 消散/溢出计数）
+- **打磨**（db9bcf3f+95f26804）：待验收文案统一短版 + 详情委派副标 CONTRACT 形态
+- **E2E（双实例真机，任务 D/E/F）**：打回返工全链 PASS——**发现并修复 P0 D5「打回重驱缺线」**（616760b1：worker 域自动 rework run + 理由注入 + executor 域排除委派行；S4/F1 测试直调 startRun 掩盖生产缺线，S2 评审预警的路径不一致真值钉死）+ 复验全链（B 自动 run#2/抽屉跟随/hub done|2 三方 completed）；steer 冒烟与 peer 真机晨间补测（三层测试锁在身）
+- 全量：electron 6371 + renderer 3642 绿；hub 442 绿
+
 ## [未发布] — 审查修复批次：D1 确认卡闭环 / file-io symlink 防线 / 异步令牌守卫
 
 `2.1.0-alpha.67`。alpha.66 打包后的审查与真机冒烟跟进批（九提交），无新增功能面，全部为缺陷与防御性收口。

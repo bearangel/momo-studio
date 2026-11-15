@@ -263,3 +263,29 @@ html.dark .md-codeblock .shiki span {
 .view-fade-in {
   animation: view-fade-in 150ms ease-out;
 }
+
+/* ── 远端会话只读抽屉（P3 S2，CONTRACT #3/#7）：实时徽标呼吸点 + 流式光标 ── */
+@keyframes remote-live-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px var(--status-success-tint); }
+  50% { box-shadow: 0 0 0 4px var(--status-success-tint); }
+}
+.remote-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgb(var(--status-success));
+  box-shadow: 0 0 0 2px var(--status-success-tint);
+  animation: remote-live-pulse 2s ease-in-out infinite;
+}
+@keyframes remote-cursor-blink {
+  50% { opacity: 0; }
+}
+.remote-stream-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 13px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: rgb(var(--accent-500));
+  animation: remote-cursor-blink 1s steps(1) infinite;
+}

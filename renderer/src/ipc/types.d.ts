@@ -493,8 +493,21 @@ export interface TaskApiSurface {
   /** 打回（Task 16）：run rejected + 任务回 assigned 排队返工；空白理由人话拒绝。
    *  P2 S6 remoteWarning 同 accept */
   reject(id: string, reason: string): Promise<TaskRow & { remoteWarning?: string }>;
+  /**
+   * 发起方补充指令（P3 S3）：delegation_role='out' 校验 → hub task.steer →
+   * 成功即时落跟踪会话 kind='steered' 里程碑（发起方本地写，pushSessionMessage
+   * 到达消息流）；失败人话 throw（node_offline → 「执行节点离线，稍后再试」）
+   */
+  steer(taskId: string, message: string): Promise<{ ok: true }>;
   /** run 历史（Task 16，run_no ASC） */
   listRuns(id: string): Promise<TaskRunRow[]>;
+  /**
+   * 返工上限（P3 E1）：读生效值（同一任务最大执行尝试数，1-50 缺省 10，
+   * 脏数据回落缺省）；语义单点主进程 lifecycle-runs（startRun / rejectTask 同源）
+   */
+  getMaxRuns(): Promise<number>;
+  /** 返工上限写入：主进程夹取 1..50 落库，返回归一化生效值 */
+  setMaxRuns(maxRuns: number): Promise<number>;
   /**
    * run 状态变化推送订阅（Task 16）：载荷 { taskId, runId, status }，
    * 变化点 = 新建 run / 每次状态转移。返回退订函数
@@ -3589,7 +3602,9 @@ export interface HubMirrorRegistryRow {
  *  中间态；submitted=1.11.0 run 完成待验收中间态——v2 生命周期验收闸的 hub 侧投影） */
 export type HubDelegationStatus = 'pending' | 'running' | 'waiting' | 'submitted' | 'done' | 'failed' | 'interrupted' | 'cancelled';
 
-/** 委派账本条目（协议 TaskRecord 镜像——七字段 + M4.2 组归属字段） */
+/** 委派账本条目（协议 TaskRecord 镜像——11 字段：7 基础 + groupId（M4.2 组归属）
+ *  + runNo/submittedAt/acceptedAt（1.11.0 生命周期三可选）。协议另有 M3.1 代答
+ *  留痕四列（answeredBy/answerDecision/answerMessage/answeredAt）不经本契约桥） */
 export interface HubTaskRecord {
   taskId: string;
   workspaceName: string;

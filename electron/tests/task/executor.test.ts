@@ -202,6 +202,44 @@ describe('TaskExecutor.admitOnce', () => {
   });
 });
 
+// ── 委派行闸门（spec §5.1 不变量 7 的 'out' 原文 + 'in' 镜像，P3 S6）──────────
+// 语义：delegation_id 非空的 assigned 行（'in' 承接 / 'out' 外派镜像 / peer-draft
+// 承接 role NULL）executor 零拾起——承接行无 assignee/team/session 三目标列，
+// 拾起只会 validateTarget「任务无委派目标」误转 failed（E2E 实测 B 侧 failed
+// 缺口）；打回重驱由 worker 域 handleTaskRejected rework run 单点闭环。
+describe('TaskExecutor.admitOnce 委派行闸门（delegation_id IS NULL）', () => {
+  it('委派行（in / out / peer 承接）→ 零拾起仍 assigned、不误转 failed、不占槽', async () => {
+    seedAgentMember('inst1');
+    const tIn = insertTask({ workspaceId: 'ws1', title: 'in 承接', creatorUserId: 'o', status: 'assigned', delegationId: 'dl-in' });
+    getDb().prepare(`UPDATE tasks SET delegation_role = 'in' WHERE id = ?`).run(tIn.id);
+    const tPeer = insertTask({ workspaceId: 'ws1', title: 'peer 承接', creatorUserId: 'o', status: 'assigned', delegationId: 'dl-peer' });
+    const tOut = insertTask({ workspaceId: 'ws1', title: 'out 外派', creatorUserId: 'o', status: 'assigned', delegationId: 'dl-out' });
+    getDb().prepare(`UPDATE tasks SET delegation_role = 'out' WHERE id = ?`).run(tOut.id);
+    const kickoff = vi.fn().mockResolvedValue(undefined);
+
+    await mkExecutor(3, kickoff).admitOnce();
+
+    for (const t of [tIn, tPeer, tOut]) {
+      const row = getTask(t.id)!;
+      expect(row.status).toBe('assigned');
+      expect(row.errorMessage).toBeNull();
+    }
+    expect(kickoff).not.toHaveBeenCalled();
+  });
+
+  it('委派行不挡道：同池本地任务正常放行（闸门按行过滤）', async () => {
+    seedAgentMember('inst1');
+    insertTask({ workspaceId: 'ws1', title: '委派', creatorUserId: 'o', status: 'assigned', priority: 10, delegationId: 'dl-x' });
+    insertTask({ workspaceId: 'ws1', title: '本地', creatorUserId: 'o', assigneeAgentId: 'inst1', status: 'assigned', priority: 1 });
+    const kickoff = vi.fn().mockResolvedValue(undefined);
+
+    await mkExecutor(3, kickoff).admitOnce();
+
+    expect(getTask('T-001')!.status).toBe('assigned'); // 委派行（高优）不被拾起
+    expect(getTask('T-002')!.status).toBe('in_progress'); // 本地任务照常放行
+  });
+});
+
 describe('TaskExecutor.admitOnce scheduled_at 闸门（spec 2026-09-30 §3.2）', () => {
   it('NULL 计划时间 → 立即有放行资格', async () => {
     seedAgentMember('inst1');

@@ -44,7 +44,8 @@ export const BOARD_COLUMNS: readonly BoardColumnDef[] = [
   // v2 生命周期新增两列（spec 2026-11-13-task-lifecycle-v2 §1）：等待中（HITL 挂起，
   // 系统驱动进出）与待验收（完成必经 submitted 验收，in_progress→completed 直达边已删）
   { key: 'waiting', label: '等待中', statuses: ['waiting_human'], hint: '等人工（系统驱动）' },
-  { key: 'review', label: '待验收', statuses: ['submitted'], hint: '已提交待验收' },
+  // review 单态列与 label 同词（CONTRACT #24：长版「已提交待验收」全量废除）→ hint 恒空
+  { key: 'review', label: '待验收', statuses: ['submitted'], hint: '' },
   { key: 'done', label: '已完成', statuses: ['completed'], hint: '' },
   { key: 'closed', label: '已关闭', statuses: ['failed', 'cancelled'], hint: '失败+已取消' },
 ];

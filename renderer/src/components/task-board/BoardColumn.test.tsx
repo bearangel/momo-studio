@@ -289,7 +289,9 @@ describe('BoardColumn v2 生命周期七列（Task 21）', () => {
     unmount();
     render(<BoardColumn column={review} tasks={[mkTask({ id: 'S1', title: '验收卡', status: 'submitted' })]} />);
     const reviewRegion = screen.getByRole('region', { name: '待验收' });
-    expect(reviewRegion).toHaveTextContent('已提交待验收');
+    // CONTRACT #24：长版「已提交待验收」全量废除——review 单态列与 label 同词，hint 恒空
+    expect(reviewRegion).toHaveTextContent('1');
+    expect(reviewRegion).not.toHaveTextContent('已提交待验收');
   });
 
   it('waiting_human / submitted 卡渲染对应状态徽标（task-status 终值投影）', () => {

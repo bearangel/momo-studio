@@ -15,6 +15,8 @@
 //   7) worker 终态断线对账（阶段 1.5）：accepted-miss（hub done → completed +
 //      停靠出清）/ rejected-miss（hub running runNo 超前 → run rejected + 回
 //      assigned + 降级理由——跨节点死锁解除）/ 幂等二次对账零重复（计数级）
+//   8) A2（F4 RPC 放大收敛）：workstation 解析按 nodeId 轮内缓存（不跨轮——
+//      第二轮重查计数递增）；阶段 2 task.interventions 同 delegation 多行合并单次
 //
 // mock 边界（momo-test-rules #5）：hub client fake（request 按 method/payload
 // 分发快照）/ router / push / deny 广播 / human:changed sink spy；DB 真实
@@ -43,7 +45,7 @@ const mockSend = vi.fn();
 import { __setElectronApisForTest } from '../../src/main/electron-access';
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
-import { insertTask, updateTask, getTask } from '../../src/main/storage/tasks/repo';
+import { insertTask, updateTask, getTask, type TaskRow } from '../../src/main/storage/tasks/repo';
 import { insertSession, addSessionMember } from '../../src/main/storage/sessions/repo';
 import { getActiveRun, listRuns } from '../../src/main/storage/tasks/runs-repo';
 import { getHumanRequest, insertHumanRequest, findRemoteMirrorRequest } from '../../src/main/storage/tasks/human-requests-repo';
@@ -136,8 +138,9 @@ function seedWorkerTask(): { taskId: string; runId: string } {
 }
 
 /** 种发起方外派行（'out' + 跟踪会话 + routing 回写执行节点——镜像行 origin 锚）。
- *  delegation_role 不在 insertTask 列集（生产由 dispatch-submit 回执 updateTask 补戳）——同款补戳。 */
-function seedOriginTask(): string {
+ *  delegation_role 不在 insertTask 列集（生产由 dispatch-submit 回执 updateTask 补戳）——同款补戳。
+ *  origin 缺省 'user'；workstation 解析仅 peer_draft 行发起（A2 lf 短路）。 */
+function seedOriginTask(opts?: { origin?: TaskRow['origin'] }): string {
   const t = insertTask({
     workspaceId: 'ws1',
     title: '外派任务',
@@ -146,6 +149,7 @@ function seedOriginTask(): string {
     executionSessionId: originSessionId,
     delegationId: DELEGATION_ID,
     routing: { mode: 'node', groupId: 'g-1', targetNodeId: WORKER_NODE },
+    origin: opts?.origin,
   });
   updateTask(t.id, { delegationRole: 'out' });
   return t.id;
@@ -626,7 +630,7 @@ describe('7) worker 终态断线对账（阶段 1.5）', () => {
     expect(milestoneRows().some((m) => m.meta['kind'] === 'accepted' && m.task_id === taskId)).toBe(true);
   });
 
-  it('rejected-miss：hub running runNo=2 → 本地 run rejected + 任务回 assigned（死锁解除）+ 降级理由', async () => {
+  it('rejected-miss：hub running runNo=2 → 本地 run rejected + rework run 自动重驱（死锁解除）+ 降级理由', async () => {
     const { taskId } = seedWorkerTask(); // peer 承接形（role NULL + routing 指向本机）
     await submitRun(taskId, { summary: '首版交付' });
     expect(getTask(taskId)!.status).toBe('submitted');
@@ -637,9 +641,14 @@ describe('7) worker 终态断线对账（阶段 1.5）', () => {
       consumePorts: ports,
     });
 
-    expect(getTask(taskId)!.status).toBe('assigned'); // 返工排队
+    // rejectTask 复用 + rework run 自动重驱（P3 S6 打回闭环——阶段 1.5 经
+    // handleTaskRejected 同函数天然继承）
+    expect(getTask(taskId)!.status).toBe('in_progress'); // 返工已重驱（非 assigned 滞留）
     const runs = listRuns(taskId);
-    expect(runs.map((r) => r.status)).toEqual(['rejected']);
+    expect(runs.map((r) => [r.runNo, r.status, r.trigger])).toEqual([
+      [1, 'rejected', 'initial'],
+      [2, 'running', 'rework'],
+    ]);
     expect(runs[0]!.rejectReason).toBe('发起方已打回（断线补收，理由见发起方会话）');
     expect(settleDocked).toHaveBeenCalledWith(DELEGATION_ID, 'rejected');
     const ms = milestoneRows();
@@ -647,9 +656,28 @@ describe('7) worker 终态断线对账（阶段 1.5）', () => {
     expect(ms.find((m) => m.meta['kind'] === 'rejected')!.meta['reason']).toBe(
       '发起方已打回（断线补收，理由见发起方会话）',
     );
-    // 跨节点死锁解除的实证：返工通道复活，新 run 对齐 hub run_no=2
-    const rework = startRun(taskId, { trigger: 'rework' });
-    expect(rework.runNo).toBe(2);
+    // 跨节点死锁解除的实证：返工通道复活由消费函数自动闭环——rework run#2 已建
+    // 且对齐 hub run_no=2（本地 run 计数自治，不依赖对齐但此处自然一致）
+    expect(getActiveRun(taskId)!.runNo).toBe(2);
+    // 打回理由注入行照落（降级文案随返工回合进 agent 上下文）
+    expect(ms.some((m) => m.meta['kind'] === 'rework_injected' && m.task_id === taskId)).toBe(true);
+  });
+
+  it('在途正常：hub running 且 runNo==本地活动 run → no-op（不误判打回）', async () => {
+    const { taskId } = seedWorkerTask();
+    await submitRun(taskId, { summary: '交付' });
+    expect(getTask(taskId)!.status).toBe('submitted');
+
+    const { ports, settleDocked } = consumePorts();
+    await reconcileOnReconnect({
+      client: mkClient({ tasks: [hubRec({ status: 'running', runNo: 1 })] }),
+      consumePorts: ports,
+    });
+
+    expect(getTask(taskId)!.status).toBe('submitted'); // 在途回合不动
+    expect(listRuns(taskId).map((r) => r.status)).toEqual(['submitted']);
+    expect(settleDocked).not.toHaveBeenCalled();
+    expect(milestoneRows()).toHaveLength(0);
   });
 
   it('幂等：二次对账零重复（计数级——里程碑/acceptance 行/run 行/settleDocked 均不变）', async () => {
@@ -670,5 +698,77 @@ describe('7) worker 终态断线对账（阶段 1.5）', () => {
     await reconcileOnReconnect(deps);
     expect(snapshotCounts()).toEqual(counts);
     expect(settleDocked).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── 8) A2 对账轮内缓存（F4 RPC 放大收敛）──────────────────────────────────────
+
+describe('8) A2 对账轮内缓存：workstation 按 nodeId 轮内合并、不跨轮', () => {
+  it('轮内同 nodeId 两条 pending 干预 → workstationOf 单次；第二轮新干预重查（计数递增）', async () => {
+    seedOriginTask({ origin: 'peer_draft' });
+    const snapshot = {
+      byTask: {
+        [DELEGATION_ID]: [
+          rec({ interventionId: 'iv-ws-1', kind: 'question', status: 'pending' }),
+          rec({ interventionId: 'iv-ws-2', kind: 'question', status: 'pending' }),
+        ],
+      },
+    };
+    const workstationOf = vi.fn(async () => 'peer-ws');
+    const deps = {
+      client: mkClient(snapshot),
+      consumePorts: consumePorts().ports,
+      mirrorPorts: { workstationOf },
+    };
+
+    await reconcileOnReconnect(deps);
+
+    // 轮内缓存：两条镜像行共享一次组清单解析
+    expect(workstationOf).toHaveBeenCalledTimes(1);
+    for (const iv of ['iv-ws-1', 'iv-ws-2']) {
+      const mirror = findRemoteMirrorRequest(WORKER_NODE, iv);
+      expect(mirror).not.toBeNull();
+      expect(JSON.parse(mirror!.payloadJson!)).toEqual({ remote: { workstation: 'peer-ws' } });
+    }
+
+    // 第二轮：快照新增一条 pending（新镜像行触发解析）——缓存不跨轮，重查
+    snapshot.byTask[DELEGATION_ID]!.push(
+      rec({ interventionId: 'iv-ws-3', kind: 'question', status: 'pending' }),
+    );
+    await reconcileOnReconnect(deps);
+    expect(workstationOf).toHaveBeenCalledTimes(2);
+    expect(findRemoteMirrorRequest(WORKER_NODE, 'iv-ws-3')).not.toBeNull();
+  });
+
+  it('阶段 2 同 delegation 双外派行 → task.interventions 按 delegation 合并单次拉取', async () => {
+    seedOriginTask({ origin: 'peer_draft' });
+    const second = insertTask({
+      workspaceId: 'ws1',
+      title: '外派任务重复行',
+      creatorUserId: '@owner:home',
+      status: 'pending',
+      executionSessionId: originSessionId,
+      delegationId: DELEGATION_ID,
+      routing: { mode: 'node', groupId: 'g-1', targetNodeId: WORKER_NODE },
+    });
+    updateTask(second.id, { delegationRole: 'out' });
+
+    const client = mkClient({
+      byTask: {
+        [DELEGATION_ID]: [
+          rec({ interventionId: 'iv-merge-1', kind: 'question', status: 'pending' }),
+        ],
+      },
+    });
+    await reconcileOnReconnect({ client, consumePorts: consumePorts().ports });
+
+    const requestMock = client.request as unknown as ReturnType<typeof vi.fn>;
+    const perDelegationCalls = requestMock.mock.calls.filter(
+      ([method, payload]) =>
+        method === TASK_RPC.interventions &&
+        typeof (payload as { taskId?: unknown } | null)?.taskId === 'string',
+    );
+    expect(perDelegationCalls).toHaveLength(1); // 双行共享单次 RPC（delegationId 分组合并）
+    expect(findRemoteMirrorRequest(WORKER_NODE, 'iv-merge-1')).not.toBeNull();
   });
 });

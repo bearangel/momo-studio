@@ -25,7 +25,7 @@ import {
 import { EVT, type EventEnvelope, type RequestEnvelope, type ResponseEnvelope, type RpcErrorPayload } from './protocol';
 import { MIRROR_WIRE, type MirrorApplyPayload, type MirrorApplyOutcome } from './mirror-wire';
 import { applyMirrorSnapshot } from './mirror-applier';
-import { bridgeGroupChanged, createGroupClient } from './groups';
+import { bridgeGroupChanged, createGroupClient, pickWorkstationFromGroups } from './groups';
 import type { HubResponderResult } from './client';
 import { createDelegationRunner, type AssignedTaskEvent, type DelegationRunner } from './delegation-runner';
 import { sessionWaitingProduct, wireDelegationRunnerPorts } from './delegation-ports';
@@ -54,6 +54,7 @@ import {
   handleTaskAccepted,
   handleTaskInterventionMirror,
   handleTaskRejected,
+  handleTaskSteered,
   handleTaskSubmittedMirror,
   type WorkerTerminalConsumePorts,
 } from './remote-intervene-bridge';
@@ -103,22 +104,23 @@ const originGroupsClient = createGroupClient((method, payload, timeoutMs) =>
 /**
  * S9（A4 工作站段）镜像行 remote 段数据源：执行节点 → 组清单成员
  * boundWorkspaceName（仅 peer 组投影携带；lf 组缺席 → null 降级仅节点名）。
- * 镜像事件低频（干预/提交），逐事件直拉不设缓存；hub 不可达 → null 不阻断镜像。
+ * A3-4（多组盲选收敛）：groupId 在场按组精确取成员（同名节点跨组不同绑定
+ * 不串组），缺场回退全组扫描（pickWorkstationFromGroups 单源语义）。
+ * 镜像事件低频（干预/提交），逐事件直拉不设缓存（对账轮内缓存见
+ * reconnect-reconcile 装配）；hub 不可达 → null 不阻断镜像。
  */
-const mirrorWorkstationOf = async (nodeId: string): Promise<string | null> => {
+const mirrorWorkstationOf = async (nodeId: string, groupId?: string): Promise<string | null> => {
   try {
     const { groups } = await originGroupsClient.list();
-    for (const g of groups) {
-      const m = g.members.find((x) => x.nodeId === nodeId);
-      if (m !== undefined && typeof m.boundWorkspaceName === 'string') {
-        return m.boundWorkspaceName;
-      }
-    }
-    return null;
+    return pickWorkstationFromGroups(groups, nodeId, groupId);
   } catch {
     return null;
   }
 };
+
+/** 发起方镜像消费端口（onEvent 事件面与 S7 对账面共用单源——A2 对账轮内缓存
+ *  经 deps.mirrorPorts 包装本端口，装配不重复） */
+const originMirrorPorts = { workstationOf: mirrorWorkstationOf };
 
 /**
  * 镜像登记表查询面（IPC hub:mirrorRegistry 消费；RM-M21-7 四消费方同源：
@@ -546,7 +548,11 @@ function startClient(
         // task.interventions + task.list 拉取幂等收敛（阶段 1.5 补收 worker 侧
         // accepted/rejected——终结跨节点死锁窗口）；内部失败容忍，不阻塞重连链
         if (client !== null) {
-          void reconcileOnReconnect({ client, consumePorts: terminalConsumePorts() });
+          void reconcileOnReconnect({
+            client,
+            consumePorts: terminalConsumePorts(),
+            mirrorPorts: originMirrorPorts,
+          });
         }
         // 查看开关重报（T13 交接——RM2-9：hub 断线清除 consent 回默认 true，
         // 重连必须重报本地设置，否则关闭态节点重连后即恢复可查看）
@@ -600,6 +606,16 @@ function startClient(
         else void handleTaskRejected(evt.payload, consumePorts);
         return;
       }
+      if (evt.method === EVT.taskSteered) {
+        // worker 侧远端指令消费（P3 S1）：hub 定向→本机 worker（payload.taskId =
+        // hub 委派 id，桥内经 delegation_id 反查本地承接行）→ 里程碑 kind='steered'
+        // 落执行会话 + steer 分流注入（有在途流注入当前流不撕裂、无在途回合开新
+        // 回合——Review Focus #1，语义详见 injectSteerIntoExecutionSession 头注释）。
+        // steer 无幂等键，桥内 10s 窗口消息级去重。断连窗口（沿 S3/S4 口径）：
+        // 错过的指令无补偿——指令时效性强，hub 侧 worker 离线本就拒发。
+        handleTaskSteered(evt.payload, terminalConsumePorts());
+        return;
+      }
       if (evt.method === EVT.taskIntervention || evt.method === EVT.taskSubmitted) {
         // 发起方镜像消费（P2 S5）：hub 定向→本机发起方（lf 组；peer 组不转发
         // intervention，submitted 走账本对账）→ 镜像 human_requests 行 + run 懒建
@@ -607,9 +623,8 @@ function startClient(
         // （沿 S3/S4 口径）：onEvent 只在 online 后触发——错过的事件无补偿，
         // 重连后由 S7 对账兜底。
         // S9（A4）：镜像行经组清单解析工作站段（失败降级 null——桥内自吞）
-        const mirrorPorts = { workstationOf: mirrorWorkstationOf };
-        if (evt.method === EVT.taskIntervention) void handleTaskInterventionMirror(evt.payload, mirrorPorts);
-        else void handleTaskSubmittedMirror(evt.payload, mirrorPorts);
+        if (evt.method === EVT.taskIntervention) void handleTaskInterventionMirror(evt.payload, originMirrorPorts);
+        else void handleTaskSubmittedMirror(evt.payload, originMirrorPorts);
         return;
       }
       // ── leader 侧委派事件桥（M2e T12）：hub 定向→本机 leader 的账本迁移与进度拍，
