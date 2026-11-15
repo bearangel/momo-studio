@@ -15,6 +15,8 @@
 //   - task:accept      验收通过（v2 Task 16：run accepted + 任务 completed）
 //   - task:reject      打回（v2 Task 16：run rejected + 任务回 assigned；空白理由人话拒）
 //   - task:listRuns    run 历史（v2 Task 16：run_no ASC）
+//   - task:getMaxRuns  返工上限读（P3 E1：生效值，脏数据回落缺省 10）
+//   - task:setMaxRuns  返工上限写（P3 E1：夹取 1..50 落 kv，返回生效值）
 //   - task:move        看板拖拽换列/换组/排序（动作裁决单点在 move.ts，Task 6）
 //   - task:archive     归档（仅终态；软删 archived_at）
 //   - task:unarchive   取消归档（清 archived_at）
@@ -56,6 +58,8 @@ import {
   submitRun,
   acceptTask,
   rejectTask,
+  getTaskMaxRuns,
+  setTaskMaxRuns,
   type DeliverableInput,
 } from './lifecycle-runs';
 import { listRuns } from '../storage/tasks/runs-repo';
@@ -516,6 +520,11 @@ export function registerTaskHandlers(): void {
   ipcMain.handle('task:listRuns', async (_evt, id: string) => {
     return listRuns(id);
   });
+
+  // 返工上限可配（P3 E1）：读=生效值（脏数据回落缺省）；写=归一化夹取 1..50
+  // 后落 kv 并返回生效值。语义单点 lifecycle-runs（startRun / rejectTask 同源）
+  ipcMain.handle('task:getMaxRuns', () => getTaskMaxRuns());
+  ipcMain.handle('task:setMaxRuns', (_evt, input: number) => setTaskMaxRuns(input));
 
   // 看板重构 Task 6：拖拽换列走单一通道——renderer 只发目标（column/groupId），
   // 动作裁决（start/complete/cancel/换组/no-op）全部在 executeMove 单点；

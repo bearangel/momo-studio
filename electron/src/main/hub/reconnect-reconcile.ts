@@ -110,7 +110,7 @@ function convergeMirrorAnswered(rec: InterventionRecord, workerNodeId: string): 
 export async function reconcileOnReconnect(deps: ReconnectReconcileDeps): Promise<void> {
   // A2（F4）：workstation 解析轮内缓存（per-pass Map——不跨轮，见文件头注）；
   // 键复合 nodeId+groupId（A3-4 按组精确——同节点跨组绑定不同不串组）；
-  // 失败不缓存（桥侧 catch 降级 null，下一行同节点可重试）
+  // 失败亦缓存 null（桥侧 catch 降级 null——同轮不重试，下轮重连重查）
   const workstationCache = new Map<string, string | null>();
   const resolveWorkstation = deps.mirrorPorts?.workstationOf;
   const mirrorPorts: OriginMirrorPorts | undefined =

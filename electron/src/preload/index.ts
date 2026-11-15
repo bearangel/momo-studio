@@ -655,6 +655,10 @@ const api: ApiSurface = {
     accept: (id) => invoke<TaskRow & { remoteWarning?: string }>('task:accept', id),
     reject: (id, reason) => invoke<TaskRow & { remoteWarning?: string }>('task:reject', id, reason),
     listRuns: (id) => invoke<TaskRunRow[]>('task:listRuns', id),
+    // 返工上限可配（P3 E1）：读生效值（脏数据回落缺省 10）；写夹取 1..50 后
+    // 返回归一化生效值（语义单点主进程 lifecycle-runs）
+    getMaxRuns: () => invoke<number>('task:getMaxRuns'),
+    setMaxRuns: (maxRuns) => invoke<number>('task:setMaxRuns', maxRuns),
     // run 状态变化推送订阅（{ taskId, runId, status }——载荷重拉 task:listRuns /
     // task:get 即可，不携带全行）
     onTaskRunChanged: (callback: (e: { taskId: string; runId: string; status: TaskRunRow['status'] }) => void) => {

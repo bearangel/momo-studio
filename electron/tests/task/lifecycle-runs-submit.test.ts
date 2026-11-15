@@ -30,7 +30,7 @@ import {
   listByTask,
 } from '../../src/main/storage/tasks/human-requests-repo';
 import {
-  MAX_RUNS_PER_TASK,
+  DEFAULT_MAX_RUNS_PER_TASK,
   startRun,
   cancelActiveRun,
   submitRun,
@@ -325,9 +325,9 @@ describe('6) auto_accept 自动验收', () => {
 });
 
 describe('7) 返工上限', () => {
-  it(`reject 到第 ${MAX_RUNS_PER_TASK} 个 run 后再 reject → 任务转 failed（errorMessage=返工次数超限，spec §5.2）`, async () => {
+  it(`reject 到第 ${DEFAULT_MAX_RUNS_PER_TASK} 个 run 后再 reject → 任务转 failed（errorMessage=返工次数超限，spec §5.2）`, async () => {
     const taskId = seedAssignedTask();
-    for (let cycle = 1; cycle < MAX_RUNS_PER_TASK; cycle++) {
+    for (let cycle = 1; cycle < DEFAULT_MAX_RUNS_PER_TASK; cycle++) {
       startRun(taskId, { trigger: cycle === 1 ? 'initial' : 'rework' });
       await submitRun(taskId, { summary: `第 ${cycle} 轮交付` });
       await rejectTask(taskId, `第 ${cycle} 轮打回`);
@@ -335,7 +335,7 @@ describe('7) 返工上限', () => {
     // 第 10 轮：启动+提交仍可（打回尚未发生，上限只拦「打回重建」）
     startRun(taskId, { trigger: 'rework' });
     await submitRun(taskId, { summary: '最后一轮' });
-    expect(listRuns(taskId)).toHaveLength(MAX_RUNS_PER_TASK);
+    expect(listRuns(taskId)).toHaveLength(DEFAULT_MAX_RUNS_PER_TASK);
 
     await expect(rejectTask(taskId, '还要打回')).resolves.toBeUndefined();
 
@@ -344,7 +344,7 @@ describe('7) 返工上限', () => {
     expect(task.status).toBe('failed');
     expect(task.errorMessage).toBe('返工次数超限');
     expect(getActiveRun(taskId)).toBeNull(); // run failed 终结
-    expect(listRuns(taskId)).toHaveLength(MAX_RUNS_PER_TASK); // 不建新 run
+    expect(listRuns(taskId)).toHaveLength(DEFAULT_MAX_RUNS_PER_TASK); // 不建新 run
   });
 });
 

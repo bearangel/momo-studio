@@ -5,16 +5,20 @@
 //   - 修改输入后点击保存，调用 ipc.settings.updateGlobal({ maxToolCalls })
 //   - 加载阶段显示"加载中..."
 //   - v2.5：journalQuotaMb 回显 + 修改保存携带（未配置时不随 patch 下发）
+//   - P3 E1：任务小节返工上限（getMaxRuns 回显 / 失焦保存回显归一化 / 清空回退）
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ConversationSettings } from './ConversationSettings';
 
 const getGlobalMock = vi.fn();
 const updateGlobalMock = vi.fn();
+const getMaxRunsMock = vi.fn();
+const setMaxRunsMock = vi.fn();
 
-// 桩 window.api（仅注入 settings 命名空间）
+// 桩 window.api（注入 settings + task 命名空间）
 const mockApi = {
   settings: { getGlobal: getGlobalMock, updateGlobal: updateGlobalMock },
+  task: { getMaxRuns: getMaxRunsMock, setMaxRuns: setMaxRunsMock },
 };
 (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
@@ -22,6 +26,8 @@ describe('ConversationSettings', () => {
   beforeEach(() => {
     getGlobalMock.mockReset();
     updateGlobalMock.mockReset();
+    getMaxRunsMock.mockReset().mockResolvedValue(10);
+    setMaxRunsMock.mockReset();
   });
 
   it('挂载时显示"加载中..."', () => {
@@ -132,5 +138,58 @@ describe('ConversationSettings', () => {
     const input = screen.getByDisplayValue('5');
     fireEvent.change(input, { target: { value: '1e3' } });
     expect((input as HTMLInputElement).value).toBe('13');
+  });
+});
+
+// P3 E1：任务小节（返工上限）——独立于上方表单的失焦保存流
+describe('ConversationSettings 任务小节：返工上限（P3 E1）', () => {
+  beforeEach(() => {
+    getGlobalMock.mockReset();
+    updateGlobalMock.mockReset();
+    getMaxRunsMock.mockReset().mockResolvedValue(10);
+    setMaxRunsMock.mockReset();
+  });
+
+  it('挂载后回显 getMaxRuns 生效值', async () => {
+    getGlobalMock.mockResolvedValue({ maxToolCalls: 5 });
+    getMaxRunsMock.mockResolvedValue(21);
+    render(<ConversationSettings />);
+    await waitFor(() => {
+      expect((screen.getByLabelText('返工上限') as HTMLInputElement).value).toBe('21');
+    });
+    expect(getMaxRunsMock).toHaveBeenCalled();
+  });
+
+  it('键入 99 失焦 → setMaxRuns(99)，回显主进程归一化值 50', async () => {
+    getGlobalMock.mockResolvedValue({ maxToolCalls: 5 });
+    getMaxRunsMock.mockResolvedValue(10);
+    setMaxRunsMock.mockResolvedValue(50);
+    render(<ConversationSettings />);
+    const input = (await screen.findByLabelText('返工上限')) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe('10'));
+
+    fireEvent.change(input, { target: { value: '99' } });
+    fireEvent.blur(input);
+    await waitFor(() => {
+      expect(setMaxRunsMock).toHaveBeenCalledWith(99);
+    });
+    await waitFor(() => {
+      expect((screen.getByLabelText('返工上限') as HTMLInputElement).value).toBe('50');
+    });
+  });
+
+  it('清空失焦 → 不落库，回退当前生效值', async () => {
+    getGlobalMock.mockResolvedValue({ maxToolCalls: 5 });
+    getMaxRunsMock.mockResolvedValue(21);
+    render(<ConversationSettings />);
+    const input = (await screen.findByLabelText('返工上限')) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe('21'));
+
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.blur(input);
+    await waitFor(() => {
+      expect((screen.getByLabelText('返工上限') as HTMLInputElement).value).toBe('21');
+    });
+    expect(setMaxRunsMock).not.toHaveBeenCalled();
   });
 });

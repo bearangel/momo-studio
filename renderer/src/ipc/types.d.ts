@@ -496,6 +496,13 @@ export interface TaskApiSurface {
   /** run 历史（Task 16，run_no ASC） */
   listRuns(id: string): Promise<TaskRunRow[]>;
   /**
+   * 返工上限（P3 E1）：读生效值（同一任务最大执行尝试数，1-50 缺省 10，
+   * 脏数据回落缺省）；语义单点主进程 lifecycle-runs（startRun / rejectTask 同源）
+   */
+  getMaxRuns(): Promise<number>;
+  /** 返工上限写入：主进程夹取 1..50 落库，返回归一化生效值 */
+  setMaxRuns(maxRuns: number): Promise<number>;
+  /**
    * run 状态变化推送订阅（Task 16）：载荷 { taskId, runId, status }，
    * 变化点 = 新建 run / 每次状态转移。返回退订函数
    */
