@@ -302,7 +302,6 @@ export async function steerTaskRouted(taskId: string, rawMessage: string): Promi
   return { ok: true };
 }
 
-
 /** 远端提交判定：out 行 + 当前 pending acceptance 为镜像行（提交来自远端） */
 function isRemoteSubmitted(task: TaskRow): boolean {
   if (task.delegationRole !== 'out' || task.delegationId === null) return false;

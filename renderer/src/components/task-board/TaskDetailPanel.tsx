@@ -59,6 +59,7 @@ import { locateMessage, locateTaskExecution } from '../../lib/locate-message';
 import { Badge, type BadgeTone } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { showToast } from '../ui/Toast';
+import { shortNodeId } from '../hub/RemoteSessionDrawer';
 import { EditTaskDialog } from './EditTaskDialog';
 import { RejectReasonDialog } from './RejectReasonDialog';
 import { TaskChangesView } from './TaskChangesView';
@@ -88,7 +89,8 @@ function formatTime(ms: number | null): string {
 const RUN_STATUS_LABEL: Record<TaskRunStatus, string> = {
   running: '执行中',
   waiting_human: '等待人工',
-  submitted: '已提交待验收',
+  // CONTRACT #24：submitted 长版「已提交待验收」全量废除——run 时间线同样走短版
+  submitted: '待验收',
   accepted: '验收通过',
   rejected: '被打回',
   failed: '失败',
@@ -172,6 +174,10 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
   const [pendingRequests, setPendingRequests] = useState<HumanRequestRow[]>([]);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [acceptBusy, setAcceptBusy] = useState(false);
+  // CONTRACT #25 副标数据（仅 out 行）：节点显示名（getNodes 解析；null=未解析/
+  // 无目标——渲染侧短码兜底）+ 执行方工作站名（hub 账本反查）
+  const [routeNodeName, setRouteNodeName] = useState<string | null>(null);
+  const [routeWorkspaceName, setRouteWorkspaceName] = useState<string | null>(null);
   const refreshTask = (): void => {
     void ipc.task
       .get(taskId)
@@ -247,6 +253,57 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskId]);
 
+  // ── 委派方向副标数据（CONTRACT #25：out 行「→ 节点 · 工作站」）───────────────
+  // 节点段：routing.targetNodeId（node 必带 / group D5 派发回执回写，持久权威）
+  // → getNodes 升显示名，失败降级短码（SteerEntry/RemoteSessionDrawer 同款）；
+  //   routing 缺目标时用 hub 账本行（delegationId 反查）targetNodeId 兜底。
+  // 工作站段：仅账本行携带（workspaceName）——账本拉取失败则段缺席省略。
+  // 依赖全走原始值（taskId/role/delegationId/routing 两键）——轮询整行换引用不重拉
+  const routeTargetKey =
+    task?.routing.mode !== 'local' ? task?.routing.targetNodeId ?? null : null;
+  const routeGroupIdKey = task?.routing.mode !== 'local' ? task?.routing.groupId ?? null : null;
+  useEffect(() => {
+    setRouteNodeName(null);
+    setRouteWorkspaceName(null);
+    if (task?.delegationRole !== 'out') return;
+    let cancelled = false;
+    void (async () => {
+      let target = routeTargetKey;
+      let workspaceName: string | null = null;
+      const delegationId = task?.delegationId ?? null;
+      if (delegationId !== null) {
+        try {
+          const { tasks } = await ipc.hub.taskList(
+            routeGroupIdKey !== null ? { groupId: routeGroupIdKey } : undefined,
+          );
+          const record = tasks.find((t) => t.taskId === delegationId);
+          if (record && !cancelled) {
+            workspaceName = record.workspaceName;
+            if (target === null) target = record.targetNodeId;
+          }
+        } catch {
+          // 账本拉取失败降级：工作站段缺席，节点段沿 routing/短码兜底
+        }
+      }
+      if (cancelled) return;
+      setRouteWorkspaceName(workspaceName);
+      if (target === null) return;
+      try {
+        const nodes = await ipc.hub.getNodes();
+        if (!cancelled) {
+          setRouteNodeName(nodes.find((n) => n.nodeId === target)?.nodeName ?? shortNodeId(target));
+        }
+      } catch {
+        // 展示面降级：节点短码（RemoteSessionDrawer 同款纪律）
+        setRouteNodeName(shortNodeId(target));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskId, task?.delegationRole, task?.delegationId, routeTargetKey, routeGroupIdKey]);
+
   const names = useTaskEntityNames(task?.workspaceId ?? null);
   // 派生「待收尾」（spec §3.5）：徽标与催收尾按钮共用谓词
   const pendingWrapUp = usePendingWrapUp(task);
@@ -257,6 +314,12 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
 
   const status = taskStatusStyle(task.status);
   const priorityLabel = PRIORITY_LABEL[task.priority] ?? String(task.priority);
+  // 副标段（CONTRACT #25）：节点（解析名优先，routing 短码兜底）· 工作站；
+  // 段缺席省略分隔点，两段全缺（含 out 无目标且账本未回）整行不渲染
+  const routeSegments = [
+    routeNodeName ?? (routeTargetKey !== null ? shortNodeId(routeTargetKey) : null),
+    routeWorkspaceName,
+  ].filter((s): s is string => s !== null);
   // 只读模式：归档任务详情一律只读（archivedAt 单源派生，不依赖调用方传参——
   // 任何入口打开归档任务都自动只读）；隐藏全部任务操作按钮与编辑入口
   const readOnly = task.archivedAt !== null;
@@ -381,7 +444,14 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
       </div>
       <div className="flex-1 p-4 text-sm space-y-3">
         <div>
-          <div className="text-base font-medium text-primary">{task.title}</div>
+          {/* CONTRACT #25 头部形态：主行「#T-{id} {任务名}」13.5px/600；副标行
+              11px tertiary「→ 节点 · 工作站」仅 out 行渲染（本地任务整行不渲染） */}
+          <div className="text-[13.5px] font-semibold text-primary">#T-{task.id} {task.title}</div>
+          {task.delegationRole === 'out' && routeSegments.length > 0 && (
+            <div data-testid="task-route-line" className="mt-0.5 text-[11px] text-tertiary">
+              → {routeSegments.join(' · ')}
+            </div>
+          )}
         </div>
         {task.description && (
           <div className="whitespace-pre-wrap text-secondary">{task.description}</div>
