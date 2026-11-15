@@ -20,7 +20,10 @@
 // 纯端口注入（momo-test-rules #5，delegation-answer.ts 同款）：DB 面生产直连
 // 真实库，装配在 hub/index ensureRemoteInterveneBridge（仅主进程执行——hub/index
 // 模块体虽为 runtime 子进程静态可达，装配调用点 initHub 只在主进程跑）。
+import { createHash, randomUUID } from 'node:crypto';
 import { logger } from '../logger';
+import { getRouterService } from '../agent/router-bootstrap';
+import { getSessionMembersInfo } from '../im/session-ops';
 import type { HubClient } from './client';
 import { TASK_RPC, TASK_HITL_REQUIRED_MINOR, type InterventionKind, type InterventionRequest } from './protocol';
 import { TASK_WIRE } from './delegation-wire';
@@ -639,6 +642,163 @@ export async function handleTaskRejected(
     });
   } catch (err) {
     logger.warn('远端打回消费内部异常（事件丢弃，S7 对账兜底）', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+// ── worker 消费远端指令（P3 S1，spec 2026-11-13 §8.2 steer 槽位 / §8.6）─────────
+
+/** S1 消费端口（hub/index onEvent 装配）：S4 WorkerTerminalConsumePorts 的
+ *  selfNodeId 结构子集——直接复用 terminalConsumePorts() 装配产物（同源防漂移） */
+export interface TaskSteeredConsumePorts {
+  /** 本机 nodeId（外派镜像行不消费——isWorkerExecution 判向） */
+  selfNodeId(): string | null;
+}
+
+/** steer 去重窗口（ms）：同 delegation 同文指令的静默窗口 */
+const STEER_DEDUPE_WINDOW_MS = 10_000;
+
+/** 去重账：key = `${delegationId}#${sha256(message) 前 16 hex}` → 首见时刻 */
+const steerDedupeSeen = new Map<string, number>();
+
+/** 测试用：清空去重账（进程内单例跨用例残留会互串） */
+export function __resetSteerDedupeForTest(): void {
+  steerDedupeSeen.clear();
+}
+
+/**
+ * 消息级去重：hub 的 task.steer 无幂等键（幂等语义测试明示「同 message 重发
+ * 每次都发事件——消费侧自行去重」），本端以 delegation_id + message hash +
+ * 10s 时间窗兜应用层重放。取舍：
+ * - 内存 Map 进程内不持久——hub 事件是定向 sendTo 非队列 at-least-once 重投，
+ *   重启清零不存在投递来源，可接受；
+ * - 窗口内同文重复指令无信息增量（发起方真意重复会在窗口外重发），静默合理；
+ * - 顺手清扫过期键（每次消费 O(n)，n=窗口内条目数，量级极小）。
+ */
+function isDuplicateSteer(delegationId: string, message: string): boolean {
+  const key = `${delegationId}#${createHash('sha256').update(message).digest('hex').slice(0, 16)}`;
+  const now = Date.now();
+  for (const [k, seenAt] of steerDedupeSeen) {
+    if (now - seenAt > STEER_DEDUPE_WINDOW_MS) steerDedupeSeen.delete(k);
+  }
+  if (steerDedupeSeen.has(key)) return true;
+  steerDedupeSeen.set(key, now);
+  return false;
+}
+
+/**
+ * 指令注入执行会话（human-answer-inject 三步同构 + injectSteer 管线路由语义）：
+ *   1) 里程碑系统消息——writeSessionMilestone 同款（sender='system'、
+ *      event_type='delegation_milestone'、meta kind='steered' 含 message 摘要
+ *      ≤80 字），但 streamSessionId 与派发回合共享（human-answer-inject 的
+ *      回合标识同构）；行落库后经会话历史进入 agent 上下文（sender-role 映射
+ *      入 user 轮——在途流结束后的下一回合/返工回合可见）
+ *   2) pushSessionMessage 实时推 renderer
+ *   3) routeUserChat **不带 systemKickoff**（= delegation-ports injectSteer 的
+ *      路由语义，HITL 超时注入同款）：
+ *      - 有在途顶层流（车道命中同一接待目标）→ steer 分流即时注入当前流——
+ *        子进程 pendingSteers 在 chat loop 下一次构建 LLM 请求前消费，不打断
+ *        在途 LLM 调用、不 abort、不开并行回合（Review Focus #1 不撕裂在途流）
+ *      - 无在途回合/死通道 → 正常派发开新回合（injectSteer 的回退语义，
+ *        即「无在途回合则直接开新回合」）
+ *      ※ 经核验 RouterService 并无 kickoff 排队：routeUserChat(systemKickoff)
+ *        在回合进行中会立即 executeTask 开并行 ephemeral 回合（session-lane
+ *        registerLane 的 kickoff 分支仅 warn 退化为并行）；任务行级排队只在
+ *        TaskExecutor（session_queued，任务行专用）。故不走无条件 systemKickoff
+ *        唤醒，统一骑 steer 分流——在途/空闲两态由既有路由分支天然覆盖。
+ *   唤醒目标：会话 leader 接待（human-answer-inject resolveWakeTarget 同源，
+ *   执行会话 assignee 建会时已标 is_leader）；RouterService 未启动/无 leader →
+ *   里程碑已落库推送，唤醒跳过 warn 不抛。
+ */
+function injectSteerIntoExecutionSession(task: TaskRow, message: string): void {
+  const sessionId = task.executionSessionId!;
+  const body = `【发起方指令】${message}`;
+  const streamSessionId = randomUUID();
+  const row = insertMessage({
+    sessionId,
+    sender: 'system',
+    eventType: 'delegation_milestone',
+    body,
+    taskId: task.id,
+    streamSessionId,
+    contextJson: JSON.stringify({
+      kind: 'steered',
+      // 摘要 ≤80 字：truncateCodePoints 会追加省略号，预算取 79 使含 '…' 总长不超限
+      message: truncateCodePoints(message, 79),
+    }),
+  });
+  pushSessionMessage(row);
+
+  const router = getRouterService();
+  const target = getSessionMembersInfo(sessionId).find((m) => m.isLeader)?.instanceId ?? null;
+  if (!router || !target) {
+    logger.warn('【发起方指令】唤醒跳过（RouterService 未启动或会话无接待目标）', {
+      sessionId,
+      taskId: task.id,
+    });
+    return;
+  }
+  void router
+    .routeUserChat({
+      sessionId,
+      assignmentId: target,
+      body,
+      streamSessionId,
+      // 回合宿主标记：steer 回合归该 delegation 任务语境（车道注册同步记 taskId，
+      // abort-by-lane 可锚定）；taskId 通道保持 null——ephemeral 语义不触发
+      // task-driven 终态自动转换（routeUserChat 的 TaskConfig 注释同源）
+      sourceTaskId: task.id,
+    })
+    .catch((err: unknown) => {
+      logger.warn('【发起方指令】注入派发失败', {
+        sessionId,
+        taskId: task.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+}
+
+/**
+ * task.steered 事件消费（hub/index onEvent 装配；hub 定向→本机 worker）：
+ * 发起方补充指令到达 → 里程碑 kind='steered' 落执行会话 + steer 分流注入/唤醒
+ * （injectSteerIntoExecutionSession 头注释——RF#1 不撕裂在途流）。
+ * 幂等：无本机承接行 / 任务已终态 → 静默 logger.info；同文重发 → 10s 窗口
+ * 去重（hub steer 无幂等键）。execution_session_id 空 → warn 跳过（无会话可
+ * 注入）。total 语义——事件处理绝不向上抛（onEvent 无错误回传通道）。
+ */
+export function handleTaskSteered(payload: unknown, ports: TaskSteeredConsumePorts): void {
+  try {
+    if (typeof payload !== 'object' || payload === null) return;
+    const p = payload as { taskId?: unknown; message?: unknown };
+    if (typeof p.taskId !== 'string' || p.taskId === '') return;
+    if (typeof p.message !== 'string' || p.message.trim() === '') return; // hub 侧已校验 1-4000，防御性挑字段
+    const resolved = resolveWorkerTask(p.taskId, ports.selfNodeId());
+    if (resolved === null) {
+      logger.info('远端指令到达但无本机承接行（幂等收敛，丢弃）', { taskId: p.taskId });
+      return;
+    }
+    const { task, delegationId } = resolved;
+    if (isTerminal(task.status)) {
+      logger.info('远端指令到达但任务已终态（幂等收敛，丢弃）', {
+        taskId: task.id,
+        status: task.status,
+      });
+      return;
+    }
+    if (task.executionSessionId === null || task.executionSessionId === '') {
+      logger.warn('远端指令未注入（任务无关联执行会话）', { taskId: task.id, delegationId });
+      return;
+    }
+    const message = p.message.trim();
+    if (isDuplicateSteer(delegationId, message)) {
+      logger.info('远端指令窗口内重复（去重丢弃）', { taskId: task.id, delegationId });
+      return;
+    }
+    injectSteerIntoExecutionSession(task, message);
+    logger.info('远端指令已消费（里程碑 + steer 分流注入）', { taskId: task.id, delegationId });
+  } catch (err) {
+    logger.warn('远端指令消费内部异常（事件丢弃，本地行为不受影响）', {
       error: err instanceof Error ? err.message : String(err),
     });
   }

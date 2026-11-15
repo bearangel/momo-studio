@@ -54,6 +54,7 @@ import {
   handleTaskAccepted,
   handleTaskInterventionMirror,
   handleTaskRejected,
+  handleTaskSteered,
   handleTaskSubmittedMirror,
   type WorkerTerminalConsumePorts,
 } from './remote-intervene-bridge';
@@ -603,6 +604,16 @@ function startClient(
         const consumePorts = terminalConsumePorts();
         if (evt.method === EVT.taskAccepted) void handleTaskAccepted(evt.payload, consumePorts);
         else void handleTaskRejected(evt.payload, consumePorts);
+        return;
+      }
+      if (evt.method === EVT.taskSteered) {
+        // worker 侧远端指令消费（P3 S1）：hub 定向→本机 worker（payload.taskId =
+        // hub 委派 id，桥内经 delegation_id 反查本地承接行）→ 里程碑 kind='steered'
+        // 落执行会话 + steer 分流注入（有在途流注入当前流不撕裂、无在途回合开新
+        // 回合——Review Focus #1，语义详见 injectSteerIntoExecutionSession 头注释）。
+        // steer 无幂等键，桥内 10s 窗口消息级去重。断连窗口（沿 S3/S4 口径）：
+        // 错过的指令无补偿——指令时效性强，hub 侧 worker 离线本就拒发。
+        handleTaskSteered(evt.payload, terminalConsumePorts());
         return;
       }
       if (evt.method === EVT.taskIntervention || evt.method === EVT.taskSubmitted) {
