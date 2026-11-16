@@ -6,6 +6,20 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 审查打磨批 + D7 死锁修复（hub 0.7.4 安全收口配套）
+
+`2.1.0-alpha.71`。来源：alpha.70 打包后的全面审查（MINOR 项清偿）与跨节点真机复现 D7 死锁。hub 侧同步 0.7.4（ws 信封 1MB 上限 / intervene options≤32 / payload+options 合并 64KB 预算），协议仍为 1.12.0，studio 协议 pin 保持 v0.7.3 不变。
+
+- **D7 全链死锁修复**（dfe5946a）：D5 期的 `delegation_id IS NULL` 派发闸门把 peer 草稿承接行（`role NULL` + `delegation_id` 空 + 已指派三目标）一并排除——1.10.0 `superviseDrafts` 依赖 executor 快路径「安排即启动」推进 `in_progress` 才能接管上报，闸门误杀后承接行 `assigned` 无人驱动、hub 账本停滞（真机 T-009 死锁 2 分钟+）。判向闸门改 NULL 安全复合条件（排除 `out` 恒置 + 排除 `in` 且真值 `delegation_id`），保住 peer 承接行与 P1 4c 裁定的 `in` 降级形态；SimHub peer 场景直调 `startRun` 掩盖缺线（与 D5 同型）改由 executor 真实路径 4 用例回归锁封堵
+- **startRun 竞态 emit 实际态**（ffdfecfb）：竞态兜底路径原硬编码 `'running'`——raced 返回 `waiting_human`/`submitted` 时推错瞬态；改按实际 `run.status` 推送
+- **打回上限分支收口**（ffdfecfb）：`handleTaskRejected` 返工上限分支 early-return——`rejectTask` 内部 `failRun` 终结后不再起 rework run（原 `startRun` 抛错被外层吞，日志误报「事件丢弃」，里程碑出清已落账、终态一致仅日志误导）
+- **多未决等人体保持**（ffdfecfb）：`resumeFromWaiting` 增 `countPendingNonAcceptance` 守卫——一回合双问答其一时任保持 `waiting_human`、答复注入与 kickoff 照常，末答清零后恢复（§5.1-3 对 `resumePaused` 语义不变）
+- **镜像写收敛**（ffdfecfb）：桥内提交镜像直写 `updateTask` 收敛到 `authoritativeReset` 原语（T15 白名单豁免单点承载；delegation-sync 渡 ports 直写系隔离锁裁定形态不动）
+- **lint 清零**（ffdfecfb）：unused-vars 全清（excel / task-tools / bridge / session.ipc / hub-install / human-answer-inject / preload / CreateTaskDialog.test），`pnpm lint` 双 workspace 0 error
+- **文档回填**（7c8adee4）：spec §16 十条验收标准逐条回填证据；§8.1 账本转换表补 legacy 边注（与 `DELEGATION_TRANSITIONS` 实际边集差异显式化）；上限可配 1-50 同步；AGENTS.md 补任务生命周期 v2 架构要点与关键文档
+- **hub 0.7.4**（153b399）：ws 信封 1MB 上限 + `intervene` options≤32 + payload/options 合并 64KB 预算（拒绝路径 0 字节放大攻击面）
+- **测试**：electron 6376 + renderer 3642 绿（D7 后基线 6371 +1 D7 +1 双问 +3 计数）；双 typecheck 0 error
+
 ## [未发布] — 任务生命周期 v2 P2（跨节点 · hub 1.11）
 
 `2.1.0-alpha.69`。依据 spec `docs/specs/2026-11-13-task-human-loop-lifecycle-design.md` §7.3/§8 + 实施计划 `docs/plans/2026-11-14-task-lifecycle-v2-p2.md`（21 任务双仓 SDD，hub 仓 v0.7.0 已发 tag）。P1 本地闭环的跨节点半场：主从组发起方代答、外派两段式提交/验收/打回、平行组零转发、断线对账。
