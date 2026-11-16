@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
-import { insertTask, getTask, listTasks, transitionTaskStatus } from '../../src/main/storage/tasks/repo';
+import { insertTask, getTask, listTasks, transitionTaskStatus, updateTask } from '../../src/main/storage/tasks/repo';
 import { setTaskRelations } from '../../src/main/task/relations';
 import { insertSession } from '../../src/main/storage/sessions/repo';
 import { TaskExecutor } from '../../src/main/task/executor';
@@ -207,35 +207,39 @@ describe('TaskExecutor.admitOnce', () => {
 // 承接 role NULL）executor 零拾起——承接行无 assignee/team/session 三目标列，
 // 拾起只会 validateTarget「任务无委派目标」误转 failed（E2E 实测 B 侧 failed
 // 缺口）；打回重驱由 worker 域 handleTaskRejected rework run 单点闭环。
-describe('TaskExecutor.admitOnce 委派行闸门（delegation_id IS NULL）', () => {
-  it('委派行（in / out / peer 承接）→ 零拾起仍 assigned、不误转 failed、不占槽', async () => {
+describe('TaskExecutor.admitOnce 委派行闸门（delegation_role 判向，D7 修订）', () => {
+  it("委派行（in / out）→ 零拾起仍 assigned、不误转 failed、不占槽；peer 承接行豁免放行", async () => {
     seedAgentMember('inst1');
     const tIn = insertTask({ workspaceId: 'ws1', title: 'in 承接', creatorUserId: 'o', status: 'assigned', delegationId: 'dl-in' });
     getDb().prepare(`UPDATE tasks SET delegation_role = 'in' WHERE id = ?`).run(tIn.id);
-    const tPeer = insertTask({ workspaceId: 'ws1', title: 'peer 承接', creatorUserId: 'o', status: 'assigned', delegationId: 'dl-peer' });
+    const tPeer = insertTask({ workspaceId: 'ws1', title: 'peer 承接', creatorUserId: 'o', assigneeAgentId: 'inst1', status: 'assigned', delegationId: 'dl-peer' });
     const tOut = insertTask({ workspaceId: 'ws1', title: 'out 外派', creatorUserId: 'o', status: 'assigned', delegationId: 'dl-out' });
     getDb().prepare(`UPDATE tasks SET delegation_role = 'out' WHERE id = ?`).run(tOut.id);
     const kickoff = vi.fn().mockResolvedValue(undefined);
 
     await mkExecutor(3, kickoff).admitOnce();
 
-    for (const t of [tIn, tPeer, tOut]) {
+    // in/out 行：delegation 域驱动，本地零拾起、不误转 failed
+    for (const t of [tIn, tOut]) {
       const row = getTask(t.id)!;
       expect(row.status).toBe('assigned');
       expect(row.errorMessage).toBeNull();
     }
-    expect(kickoff).not.toHaveBeenCalled();
+    // peer 承接行（role NULL + delegation_id 挂 + 已指派）→ D7 豁免：本地放行启动
+    expect(getTask(tPeer.id)!.status).toBe('in_progress');
+    expect(kickoff).toHaveBeenCalledTimes(1);
   });
 
-  it('委派行不挡道：同池本地任务正常放行（闸门按行过滤）', async () => {
+  it("'in' 高优委派行不挡道：同池本地任务正常放行（闸门按行过滤）", async () => {
     seedAgentMember('inst1');
     insertTask({ workspaceId: 'ws1', title: '委派', creatorUserId: 'o', status: 'assigned', priority: 10, delegationId: 'dl-x' });
+    getDb().prepare(`UPDATE tasks SET delegation_role = 'in' WHERE id = 'T-001'`).run();
     insertTask({ workspaceId: 'ws1', title: '本地', creatorUserId: 'o', assigneeAgentId: 'inst1', status: 'assigned', priority: 1 });
     const kickoff = vi.fn().mockResolvedValue(undefined);
 
     await mkExecutor(3, kickoff).admitOnce();
 
-    expect(getTask('T-001')!.status).toBe('assigned'); // 委派行（高优）不被拾起
+    expect(getTask('T-001')!.status).toBe('assigned'); // 'in' 行（高优）不被拾起
     expect(getTask('T-002')!.status).toBe('in_progress'); // 本地任务照常放行
   });
 });
@@ -394,5 +398,77 @@ describe('TaskExecutor.admitOnce blocked 闸门（M3.3）', () => {
     const kickoff = vi.fn(async () => {});
     await mkExecutor(3, kickoff).admitOnce();
     expect(getTask(blocked.id)!.status).toBe('assigned'); // failed 依赖不解锁
+  });
+});
+
+// ── D7 委派行判向闸门（2026-11-16 E2E 实测钉死：peer 承接行曾被 delegation_id
+// IS NULL 闸门误杀 → superviseDrafts 等 in_progress 永不到来 → peer 全链死锁）──
+// 语义：判向单源 = delegation_role——'in'/'out' 排除（delegation 域驱动），
+// role NULL 即本地驱动资格（peer 承接行挂 delegation_id 但已指派三目标之一）。
+describe('TaskExecutor.admitOnce 委派行判向闸门（D7）', () => {
+  it('peer 承接行（role NULL + delegation_id 挂 + 已指派 agent）→ 正常放行启动', async () => {
+    seedAgentMember('inst1');
+    insertTask({
+      workspaceId: 'ws1',
+      title: 'peer 承接',
+      creatorUserId: '@o',
+      assigneeAgentId: 'inst1',
+      status: 'assigned',
+      delegationId: 'peer-draft-hub-1',
+    });
+    const kickoff = vi.fn(async () => {});
+    await mkExecutor(3, kickoff).admitOnce();
+    expect(getTask('T-001')!.status).toBe('in_progress'); // 承接行被拾起（监督器接管前提）
+    expect(kickoff).toHaveBeenCalledTimes(1);
+  });
+
+  it("'in' 行（hub 委派执行行）→ 不拾起（delegation-runner 域驱动，D5 语义保持）", async () => {
+    seedAgentMember('inst1');
+    insertTask({
+      workspaceId: 'ws1',
+      title: 'in 行',
+      creatorUserId: '@o',
+      assigneeAgentId: 'inst1',
+      status: 'assigned',
+      delegationId: 'hub-delg-1',
+    });
+    updateTask('T-001', { delegationRole: 'in' });
+    const kickoff = vi.fn(async () => {});
+    await mkExecutor(3, kickoff).admitOnce();
+    expect(getTask('T-001')!.status).toBe('assigned'); // 本地 executor 不驱动
+    expect(kickoff).not.toHaveBeenCalled();
+  });
+
+  it("'in' 降级形态（role=in 但 delegation_id 未挂）→ 放行（P1 4c 裁定：out 专属过滤）", async () => {
+    seedAgentMember('inst1');
+    insertTask({
+      workspaceId: 'ws1',
+      title: 'in 降级形态',
+      creatorUserId: '@o',
+      assigneeAgentId: 'inst1',
+      status: 'assigned',
+    });
+    updateTask('T-001', { delegationRole: 'in' });
+    const kickoff = vi.fn(async () => {});
+    await mkExecutor(3, kickoff).admitOnce();
+    expect(getTask('T-001')!.status).toBe('in_progress');
+    expect(kickoff).toHaveBeenCalledTimes(1);
+  });
+
+  it("'out' 行（本机外派镜像）→ 不拾起（spec §5.1 不变量 7 原文语义保持）", async () => {
+    seedAgentMember('inst1');
+    insertTask({
+      workspaceId: 'ws1',
+      title: 'out 行',
+      creatorUserId: '@o',
+      assigneeAgentId: 'inst1',
+      status: 'assigned',
+      delegationId: 'hub-delg-2',
+    });
+    updateTask('T-001', { delegationRole: 'out' });
+    const kickoff = vi.fn(async () => {});
+    await mkExecutor(3, kickoff).admitOnce();
+    expect(getTask('T-001')!.status).toBe('assigned');
+    expect(kickoff).not.toHaveBeenCalled();
   });
 });
