@@ -28,9 +28,7 @@ import {
 import {
   sendUserMessage,
   handleSessionCommand,
-  listPendingDispatchStates,
-  type PendingDispatchState,
-} from './session-service';
+  listPendingDispatchStates } from './session-service';
 import { SESSION_COMMANDS } from './commands';
 import { getSession, type SessionRow } from '../storage/sessions/repo';
 import { assertSessionDeletable } from '../storage/tasks/repo';

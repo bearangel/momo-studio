@@ -23,7 +23,7 @@ import fs from 'node:fs';
 import { getDb } from '../storage/db';
 import { loadElectronApis } from '../electron-access';
 import { logger } from '../logger';
-import { registerMcpDefinition, listRegistered, deleteRegistered, isAllowedRemoteUrl } from '../mcp/host-manager';
+import { listRegistered, deleteRegistered, isAllowedRemoteUrl } from '../mcp/host-manager';
 import { removeMcpRefsFromAgents } from '../agent/crud';
 import type { McpConfigSchema } from '../mcp/types';
 import { buildResourceId, type ResourceItem, type ResourceType } from './types';

@@ -1147,9 +1147,11 @@ describe('场景 4（断线重连）：离线降级 + S7 对账收敛 + 幂等�
     expect(degraded.meta['reason']).toBe('hub 离线');
     expect(milestoneCount()).toBe(2);
 
-    // ④ worker 自答（节点所有者本地面板处理 #2）
+    // ④ worker 自答（节点所有者本地面板处理 #2）——#11 语义（2026-11-16）：
+    // req1 仍未决，任务/run 保持 waiting_human（不变量 §5.1-3）；注入唤醒照常
     expect(answerHuman(req2.id, { completed: true }, 'local')).toEqual({ disposition: 'answered' });
-    expect(getTask(worker.id)!.status).toBe('in_progress');
+    expect(getTask(worker.id)!.status).toBe('waiting_human');
+    expect(getActiveRun(worker.id)!.status).toBe('waiting_human');
     expect(routeUserChatMock).toHaveBeenCalledTimes(1); // 本地自答注入唤醒
 
     // ⑤ 发起方远端代答 #1（发起方节点自有连接——SimHub 直调代表；worker 错过回执）

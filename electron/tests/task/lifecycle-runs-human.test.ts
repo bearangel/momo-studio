@@ -410,3 +410,36 @@ describe('8) tool_gate 分派', () => {
     setToolGateHandler(null); // 还原模块态，防泄漏
   });
 });
+
+// ── 多未决请求下等人体保持（2026-11-16 审查 #11：resumeFromWaiting 补 count 守卫，
+//    对齐 resumePaused——不变量 §5.1-3「存在未决请求 ⟺ waiting_human」）─────────
+describe('2b) 一回合双问：答其一保持等人体，答其二才恢复', () => {
+  it('答复 Q1 → 任务/run 仍 waiting_human（Q2 未决）+ 注入照常；答复 Q2 → running/in_progress', () => {
+    const taskId = seedAssignedTask();
+    const run = startRun(taskId, { trigger: 'initial' });
+    seedSessionLeader(hitlSessionId);
+    const q1 = requestHuman({
+      sessionId: hitlSessionId, kind: 'question', title: '问一', prompt: '名字用 A？',
+      taskId, runId: run.id,
+    });
+    const q2 = requestHuman({
+      sessionId: hitlSessionId, kind: 'question', title: '问二', prompt: '格式用 md？',
+      taskId, runId: run.id,
+    });
+    expect(getTask(taskId)!.status).toBe('waiting_human');
+
+    const d1 = answerHuman(q1.id, { text: '用 A' }, 'user:local');
+    expect(d1).toEqual({ disposition: 'answered' });
+    // Q2 仍未决——等人体保持（修复前：这里会 prematurely 回 in_progress）
+    expect(getTask(taskId)!.status).toBe('waiting_human');
+    expect(getActiveRun(taskId)!.status).toBe('waiting_human');
+    // 答复注入不受影响（kickoff 唤醒照常）
+    expect(pushSessionMessageMock).toHaveBeenCalledTimes(1);
+
+    const d2 = answerHuman(q2.id, { text: '用 md' }, 'user:local');
+    expect(d2).toEqual({ disposition: 'answered' });
+    expect(getTask(taskId)!.status).toBe('in_progress');
+    expect(getActiveRun(taskId)!.status).toBe('running');
+    expect(pushSessionMessageMock).toHaveBeenCalledTimes(2);
+  });
+});

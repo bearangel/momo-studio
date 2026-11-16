@@ -46,7 +46,6 @@ import type {
   TaskCreateBatchResult,
   TaskRunRow,
   HumanRequestRow,
-  HumanAnswerInput,
   UploadedSkill,
   PluginSummary,
   PluginDetail,

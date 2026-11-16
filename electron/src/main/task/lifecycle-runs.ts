@@ -347,7 +347,8 @@ export function startRun(
     ensureRunBookkeeping(taskId, run.id, run.status);
     return run;
   })();
-  emitRunChanged(taskId, run.id, 'running');
+  // 竞态兜底路径 run 可能非 running（waiting_human/submitted）——按实际态推送
+  emitRunChanged(taskId, run.id, run.status);
   return run;
 }
 
@@ -381,6 +382,10 @@ export function enterWaitingHuman(taskId: string): void {
  */
 export function resumeFromWaiting(taskId: string): void {
   const active = requireActiveRun(taskId);
+  // 多未决请求（一回合双问）：仍有未决非验收请求时保持等人体（不变量 §5.1-3，
+  // 与 resumePaused 的 count 守卫对齐）；该答复仍经 kickoff 注入——下一答复清零
+  // 未决数后由此恢复
+  if (countPendingNonAcceptance(active.id) > 0) return;
   updateRun(active.id, { status: 'running' });
   emitRunChanged(taskId, active.id, 'running');
 

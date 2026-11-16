@@ -10,7 +10,7 @@
 
 import ExcelJS from 'exceljs';
 import AdmZip from 'adm-zip';
-import { parseRange, asString, asStringArray } from './format';
+import { parseRange } from './format';
 import { extractChartSummaries } from './xlsx-zip';
 import type { ChartSummary } from './xlsx-zip';
 

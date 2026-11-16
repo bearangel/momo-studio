@@ -67,9 +67,7 @@ import { hasPendingUserTodos } from './todo-tools';
 import { SIDEEFFECT_UNLINKED_WARNING } from './shared/mandate-warning';
 import {
   requestCreateRouted,
-  requestListWorkgroups,
-  type TaskCreateRoutedInput,
-} from './task-ipc-bridge';
+  requestListWorkgroups } from './task-ipc-bridge';
 
 /**
  * read_task 的返回结构（task 上下文摘要）。

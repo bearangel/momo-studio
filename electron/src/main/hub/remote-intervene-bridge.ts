@@ -34,12 +34,13 @@ import {
   findRemoteMirrorRequest,
   type HumanRequestRow,
 } from '../storage/tasks/human-requests-repo';
-import { getTask, updateTask, type TaskRow } from '../storage/tasks/repo';
+import { getTask, type TaskRow } from '../storage/tasks/repo';
 import { getActiveRun, insertRun, type TaskRunRow } from '../storage/tasks/runs-repo';
 import { isTerminal } from '../storage/tasks/state-machine';
 import {
   ACCEPTANCE_DEADLINE_MS,
   answerHuman,
+  authoritativeReset,
   completeAcceptance,
   emitHumanChanged,
   emitRunChanged,
@@ -639,6 +640,17 @@ export async function handleTaskRejected(
       ...(runNo !== undefined ? { runNo } : {}),
     });
     ports.settleDocked(delegationId, 'rejected');
+    // 返工上限分支：rejectTask 内部已把任务 failRun 终结（「返工次数超限」）——
+    // 无 rework 余量，直接收口（不起 run 不注入，防 startRun 抛错误标「事件丢弃」）
+    const afterReject = getTask(task.id);
+    if (afterReject?.status === 'failed') {
+      logger.info('远端打回已消费（返工次数超限——任务转 failed，无 rework run）', {
+        taskId: task.id,
+        delegationId,
+        reason,
+      });
+      return;
+    }
     // worker 域重驱：rework run#N+1（rejectTask 的返工上限守卫已确保余量）+
     // 理由注入（injectReworkIntoExecutionSession 头注释）。执行会话取承接行
     // execution_session_id——建会回填（delegation-runner linkExecutionSession）。
@@ -1248,7 +1260,8 @@ export async function handleTaskSubmittedMirror(
       }
       runId = existing.id;
     }
-    updateTask(task.id, { status: 'submitted', submittedAt: Date.now(), currentRunId: runId });
+    // hub 账本权威覆写（T15 白名单豁免）——经 authoritativeReset 原语单点承载
+    authoritativeReset(task.id, { status: 'submitted', submittedAt: Date.now(), currentRunId: runId });
 
     if (workerNodeId === null) {
       logger.warn('提交镜像跳过：外派行路由缺执行节点（origin_node_id 不可空——双 NULL 不幂等；状态已收口）', {

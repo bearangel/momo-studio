@@ -23,7 +23,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CreateTaskDialog, parseTaskLine, TASK_HITL_REQUIRED_MINOR, TEAM_DELEGATION_REQUIRED_MINOR } from './CreateTaskDialog';
 import { useGroupStore } from '../../stores/group.store';
-import { useHubStore } from '../../stores/hub.store';
 import { useTaskStore } from '../../stores/task.store';
 import type { GroupRow, HubStatus, RoutingPrecheckResult, Team, Workspace, WorkspaceAgentMember } from '../../ipc/types';
 
