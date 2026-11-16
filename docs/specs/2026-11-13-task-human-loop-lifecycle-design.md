@@ -465,13 +465,13 @@ sweeper 每 60s 扫描 `deadline_at`：
 pending | running | waiting | submitted | done | failed | interrupted | cancelled
 ```
 
-转换：
+转换（功能视角目标边集；实现保留 1.10 混版本降级所需的 legacy 边——`pending→failed|interrupted`〔离线钩子〕、`running|waiting→done`〔1.10 worker 单方完成直落〕、`submitted→failed`〔提交后失败上报〕，见 §8.5 降级语义与 hub `DELEGATION_TRANSITIONS`）：
 
 ```
-pending     → running | cancelled
-running     → waiting | submitted | failed | interrupted | cancelled
-waiting     → running | submitted | failed | interrupted | cancelled
-submitted   → done | running（打回，新 run） | cancelled
+pending     → running | failed | interrupted | cancelled   （failed/interrupted 为离线钩子 legacy 边）
+running     → waiting | submitted | done | failed | interrupted | cancelled   （done 为 1.10 降级 legacy 边）
+waiting     → running | submitted | done | failed | interrupted | cancelled   （done 为 1.10 降级 legacy 边）
+submitted   → done | running（打回，新 run） | failed | cancelled   （failed 为提交后失败上报边）
 interrupted → running（重连） | failed | cancelled
 done / failed / cancelled → ∅
 ```
@@ -682,7 +682,7 @@ type TaskAnswerRes = { disposition: 'granted' | 'denied' | 'answered' | 'stale' 
 
 - 新增边全量：`in_progress→waiting_human→in_progress`、`in_progress→submitted→completed/assigned`、`paused→waiting_human`。
 - `in_progress→completed` 非法（回归锁改红）。
-- 单活动 run 唯一索引；`run_no` 递增；返工上限 10。
+- 单活动 run 唯一索引；`run_no` 递增；返工上限可配（kv `task_max_runs`，1-50，缺省 10——P3 E1）。
 - 提交时有未决请求 → 拒绝。
 - `origin='dispatch'` 自动验收。
 
@@ -751,20 +751,20 @@ P1 期间外派任务保持旧行为（单方完成）以免半套语义：`dele
 | 跨节点半开（一端升级） | 版本门 + 派发预检 + 降级旧行为 |
 | 答复注入的提示注入风险 | 只接受授权节点答复；system 消息带固定前缀；内容长度上限 |
 | 验收造成的流程停滞 | 默认手动但支持自动验收开关；超时提醒；`keep_waiting` 不误判失败 |
-| 返工死循环 | run 上限 10，超限 failed |
+| 返工死循环 | run 上限可配（1-50，缺省 10——P3 E1），超限 failed |
 | 跟踪会话消息膨胀 | 只写里程碑，不镜像对话；详情抽屉不落库 |
 
 ---
 
 ## 16. 验收标准
 
-1. 本地任务：agent 提问 → 任务「等待中」→ 会话面板答复 → 同一 run 继续；不会出现 completed/failed 误标。
-2. 回合内工具门：答复后原地继续，不新开回合；超时自动拒绝并收尾。
-3. agent 只能提交；任务在发起方验收前保持 `submitted`，不会提前 `completed`。
-4. 打回带理由生成新 run；run 时间线可审计；超 10 次返工转 failed。
-5. 会话列表出现「等待中 / 待验收 / 失败」徽标与「待处理」分区；点击进入会话即可处理，无独立收件箱页面。
-6. 外派任务在发起方生成只读跟踪会话，里程碑与请求面板可用；输入框禁用。
-7. 主从组发起人可代答远端请求，执行节点本地也可答，先答生效；平行组发起方不能答人工请求，但可验收。
-8. worker 离线时发起方仍可答复/验收；重连后幂等对账，无重复执行、无丢失答复。
-9. 双方 minor < 11 时降级旧行为并提示，不出现半套语义。
-10. 081/082 幂等；存量数据不丢；双 workspace typecheck、单测、hub 套件全绿。
+1. ✅（P2 E2E 任务 C + 2026-11-16 补测 peer T-009 本地等待/自答续跑实测；SimHub 场景 1）
+2. ✅（write-blocked-emit 原地重试 + sweeper deny_and_wrap 五策略；tests/task/human-timeout-sweeper.test.ts）
+3. ✅（2026-11-16 补测边界②实测：已提交态重提交被拒「请等待验收或打回」；submitRun 守卫）
+4. ✅（P3 E2E 场景 1 打回全链：run#2 trigger=rework + 理由注入 + done|2 三方终态；hub reject run_no+1）
+5. ✅（RoomList 徽标 + 待处理分区，2026-11-16 补测中「待验收 #T-011」「失败 #T-007」实测可见）
+6. ✅（跟踪会话 + steer 里程碑「已下发指令」实测渲染；只读闸双防线 + composer 禁用）
+7. ✅（P2 E2E 代答 v1 + hub first_wins 原子竞态用例；2026-11-16 补测 peer：A 侧零请求行、A 验收通过收口）
+8. ✅（代答不要求 worker 在线；reconnect-reconcile 阶段 1.5 rejected-miss 补收 + 774 行测试）
+9. ✅（p1-degradation-guard 四象限矩阵 677 行 + hub F2 submitted × origin<1.11 自动验收降级〔v0.7.2〕）
+10. ✅（NOT EXISTS 幂等回填；2026-11-16 审查实测：typecheck 0 / electron 6371 / renderer 3642 / hub 444）

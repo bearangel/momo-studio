@@ -25,7 +25,8 @@ v2.0.0 设计取舍一句话：「单进程 Electron + 内置 SessionService + �
 - **task-driven runtime**：AgentRunner + WarmPool（K=2 预热）+ MessageEventBuffer（50ms/30 条批落盘）；废弃 v1 双轨 runtime-manager
 - **v25 agent 域（去编排）**：`workspace_agent_members` 成员制（无 role/parent，同 ws 同 def 唯一）取代 `agent_assignments`；agent 定义全局化（`workspace_id` 列已 DROP）；多 agent 协作走「团队」（`teams`/`team_members`，leader+成员），dispatch 注入按会话快照判定（成员>1 且 is_leader，`buildDispatchSnapshot` 在 spawn 时定型）；会话双类型（快速/协作），`workspaces.default_agent_instance_id` 支撑快速会话；依据 `docs/specs/2026-08-31-agent-team-session-redesign.md`
 - **dispatch + stream 事件链**：RouterService 切输入源（Matrix event → SessionService 进程内事件）；dispatch / task_reply 走内部事件桥，子 agent 结果可靠回传
-- **P2P/LSP 已移除（2026-10-20）**：P2P 联网子系统（Ed25519/mDNS/TCP/资源分享/任务镜像）与 LSP 子系统整体删除（spec `docs/specs/2026-10-20-remove-p2p-lsp-design.md`）；后续联网走 momo-hub（未立项）、LSP 需求以插件形式回归
+- **P2P/LSP 已移除（2026-10-20）**：P2P 联网子系统（Ed25519/mDNS/TCP/资源分享/任务镜像）与 LSP 子系统整体删除（spec `docs/specs/2026-10-20-remove-p2p-lsp-design.md`）；后续联网走 momo-hub（**已立项**：独立仓 `momo-hub` v0.7.4+，协议 1.12.0——跨节点任务委派/人工介入/两段式验收/steer 指令通道；studio 经 `electron/package.json` pin `github:bearangel/momo-hub#vX.Y.Z`）、LSP 需求以插件形式回归
+- **任务生命周期 v2（2026-11-13 起，三期已交付）**：spec `docs/specs/2026-11-13-task-human-loop-lifecycle-design.md`——`task_runs`（单活动 run 部分唯一索引）与 `human_requests`（tool_gate/question/manual_action/acceptance 四类，超时五策略 sweeper）两表 + 任务状态机十一态（`waiting_human`/`submitted` 新态，`in_progress→completed` 已删——**两段式验收**：agent 只能 submit，accept/reject 归发起方，打回带理由生成 rework run）；跨节点协议 1.11/1.12（版本门四象限降级）；`lifecycle-runs.ts` 是任务/run/human_requests 的**唯一写者**（十处逃生门收敛 + write-path-consolidation 回归锁）；写路径改动须走该服务，禁止直写 `updateTask({status})`（delegation-sync/桥的 hub 权威镜像豁免在案）
 - **marketplace + skill**：资源库 source（builtin / marketplace / custom / smithery）；内置 agent YAML 落 `electron/resources/agents/*.yaml`（coder / pm-agent / requirement-analyst）；marketplace 目录 `resources/marketplace/catalog.json`
 
 ## 关键命令
@@ -137,6 +138,7 @@ docs/       — 设计文档(specs) + 实施计划(plans) + 开发指南(dev)
 
 ## 关键文档
 
+- `docs/specs/2026-11-13-task-human-loop-lifecycle-design.md` — 任务生命周期 v2 现行设计（状态机十一态/两段式验收/跨节点协议 1.11-1.12），任务/run/人工请求域实现以此为准
 - `docs/specs/2026-08-31-agent-team-session-redesign.md` — v25 agent/会话域现行设计（去编排 + 团队 + 双会话），agent 域实现以此为准
 - `docs/specs/2026-08-23-v2.0.0-platform-refactor-design.md` — v2.0.0 现行架构设计（18 节），所有 2.x 实现的依据
 - `docs/specs/2026-07-28-agent-platform-design.md` — v1.x 早期设计（14 节），**已 superseded**；v2.0.0 起仅作历史参考
