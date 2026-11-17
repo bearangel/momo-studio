@@ -13,6 +13,7 @@ import { getSecret, setSecret, deleteSecret } from '../storage/keychain';
 import { resolvePluginsDir, resolvePluginDataDir } from '../paths';
 import { getPlugin, isPluginEnabled } from './registry';
 import { buildPluginOAuthApi, type PluginOAuthApi } from './oauth-ctx';
+import { buildPluginHumanGateApi, type PluginHumanGate } from './human-gate';
 import { getDb } from '../storage/db';
 import type { PluginRecord } from './types';
 
@@ -25,6 +26,9 @@ export interface PluginServiceCtx {
   secrets: PluginSecretsApi;
   /** OAuth 连接只读面（spec §12.3）：列表只有元数据；token 信任级别等价 secrets */
   oauth: PluginOAuthApi;
+  /** db-pro 先行（spec 2026-11-17 §7-1）：人工请求门——插件不直接 import 内部
+   *  模块，主进程能力经 ctx 注入（execSandboxed 同款先例）。注入体见 human-gate.ts */
+  humanGate?: PluginHumanGate;
   logger: {
     warn(msg: string, meta?: unknown): void;
     info(msg: string, meta?: unknown): void;
@@ -144,6 +148,7 @@ async function doStartPluginService(
         delete: async (key) => deleteSecret(guard(key)),
       },
       oauth: buildPluginOAuthApi(),
+      humanGate: buildPluginHumanGateApi(),
       logger: {
         warn: (msg, meta) => logger.warn(`[plugin:${rec.id}] ${msg}`, meta),
         info: (msg, meta) => logger.info(`[plugin:${rec.id}] ${msg}`, meta),
