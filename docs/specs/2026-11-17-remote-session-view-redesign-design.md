@@ -136,7 +136,7 @@ interface ViewFrame {
 - 复用 `MentionInput` 形态；发送按钮「发送指令」。
 - 发送链路 = 既有 `ipc.hub.taskSteer`（协议 1.12 方法，零新增）。
 - **态机门控**：任务 `running / waiting_human / submitted` 可发送；终态禁用 + 占位「任务已结束」；`pending`（未开始）发送 → 人话提示；worker 离线 → 人话错误（沿协议既有文案「执行节点离线，稍后再试」）。
-- 发送后**乐观渲染** user 气泡 +「送达 {节点名}」徽标（沿 SteerEntry 语义）；worker 消费注入后回流的 steer 帧（§4.2）按 kind + 内容匹配消解 pending 乐观气泡，**不双显**；worker 侧 steer 帧内容 = 发送原文（`payload.body` 透传），匹配键 = (kind, content)，pending 队列按序消解。〔origin 字段裁定裁剪：穿透需改 runtime 子进程 steer 链，单用户平台收益不抵侵入面——多发起方场景出现时再引入〕
+- 发送后**乐观渲染** user 气泡 +「送达 {节点名}」徽标（沿 SteerEntry 语义）；worker 消费注入后回流的 steer 帧（§4.2）按 kind + 内容匹配消解 pending 乐观气泡，**不双显**；worker 侧 steer 帧内容 = 发送原文（`payload.body` 透传），匹配键 = (kind, content)，pending 队列按序消解。〔origin 字段裁定裁剪：穿透需改 runtime 子进程 steer 链，单用户平台收益不抵侵入面——多发起方场景出现时再引入〕〔E2E 实录补充：远端注入回执走「里程碑 notice」（直接 insertMessage、无事件行——事件读取器的 view 协议不可见，wire1 时代即如此，非本设计回归）；故远端场景下乐观气泡驻留=指令发送记录（无回流帧即无双显），消解仅由本地 runtime 分流的 steer 事件帧触发〕
 - 本地零落库（只读红线 §8.4 纪律，纯视图态）。
 
 ## 8. 错误处理

@@ -176,11 +176,12 @@ function aggregate(rows: FrameEventRow[]): TailAggregate {
         continue;
       }
       default: {
-        // owner 消息的 body 承载事件（无 text_delta 的直落消息——任务书原文路径）
-        if (r.sender === 'owner' && typeof p?.body === 'string') {
+        // body 承载的直落行：owner=任务书原文（user 帧）；system=里程碑行
+        // （【发起方指令】/【打回理由】等——legacy 投影可见，wire2 对齐不丢行）
+        if (typeof p?.body === 'string' && (r.sender === 'owner' || r.sender === 'system')) {
           const agg = texts.get(r.messageId) ?? {
             frameId: r.messageId, firstRowid: r.seq, lastRowid: r.seq, at: r.at,
-            owner: true, deltas: [], finalized: null, terminal: true,
+            owner: r.sender === 'owner', deltas: [], finalized: null, terminal: true,
           };
           agg.finalized = p.body;
           agg.lastRowid = Math.max(agg.lastRowid, r.seq);

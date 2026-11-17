@@ -15,8 +15,9 @@ type FrameShape = RemoteSessionTarget extends never ? never : import('../ipc/typ
 const appendedCallbacks: Array<(payload: HubViewAppendedEvent) => void> = [];
 const stateCallbacks: Array<(evt: { state: string }) => void> = [];
 
+const runChangedCallbacks: Array<(e: { taskId: string; runId: string; status: string }) => void> = [];
 const api = {
-  task: { get: vi.fn(), steer: vi.fn() },
+  task: { get: vi.fn(), steer: vi.fn(), onTaskRunChanged: vi.fn((cb: (e: { taskId: string; runId: string; status: string }) => void) => { runChangedCallbacks.push(cb); return () => { const i = runChangedCallbacks.indexOf(cb); if (i >= 0) runChangedCallbacks.splice(i, 1); }; }) },
   hub: {
     taskList: vi.fn(),
     viewSessions: vi.fn(),
@@ -204,6 +205,15 @@ describe('终审修复', () => {
     });
   });
 
+  it('回流的【发起方指令】里程碑帧（system 行投影）也消解 pending（E2E 实录：远端注入走里程碑非 steer 事件）', async () => {
+    await useRemoteSessionStore.getState().open(task);
+    api.task.steer.mockResolvedValue({ ok: true });
+    await useRemoteSessionStore.getState().sendSteer('追加标记行');
+    expect(useRemoteSessionStore.getState().pendingSteers).toHaveLength(1);
+    emitAppended({ sessionId: 'sx', events: [], frames: [frame(40, { kind: 'text', content: '【发起方指令】追加标记行' })] });
+    expect(useRemoteSessionStore.getState().pendingSteers).toHaveLength(0);
+  });
+
   it('legacy 降级下 steer 回流行（user 行 content=正文）也消解 pending（Important#7）', async () => {
     stubHappyPath({ echoWire: false });
     api.hub.viewMessages.mockResolvedValue({ messages: [], hasMore: false });
@@ -213,5 +223,22 @@ describe('终审修复', () => {
     expect(useRemoteSessionStore.getState().pendingSteers).toHaveLength(1);
     emitAppended({ sessionId: 'sx', events: [{ seq: 9, at: 1, role: 'user', content: '旧模式指令' }] });
     expect(useRemoteSessionStore.getState().pendingSteers).toHaveLength(0);
+    // assistant 行的【发起方指令】前缀形态同样消解（system 里程碑的 legacy 投影）
+    await useRemoteSessionStore.getState().sendSteer('前缀形态');
+    emitAppended({ sessionId: 'sx', events: [{ seq: 10, at: 1, role: 'assistant', content: '【发起方指令】前缀形态' }] });
+    expect(useRemoteSessionStore.getState().pendingSteers).toHaveLength(0);
+  });
+});
+
+
+describe('任务态实时性（E2E 实录：完成后 composer 须禁用）', () => {
+  it('onTaskRunChanged 推送本任务 → store.task 刷新（终态门控不再用陈旧快照）', async () => {
+    runChangedCallbacks.length = 0;
+    await useRemoteSessionStore.getState().open(task);
+    api.task.get.mockResolvedValue({ ...task, status: 'completed' });
+    for (const cb of [...runChangedCallbacks]) cb({ taskId: task.id, runId: 'r1', status: 'completed' });
+    await vi.waitFor(() => {
+      expect(useRemoteSessionStore.getState().task?.status).toBe('completed');
+    });
   });
 });

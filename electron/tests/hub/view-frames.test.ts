@@ -180,6 +180,13 @@ describe('健壮性', () => {
     expect(aggregateFrames(rows)).toEqual([]);
   });
 
+  it('system 里程碑行（body 承载）→ assistant 文本帧（legacy 可见性对齐——wire2 不丢行）', () => {
+    const rows = [row({ eventType: 'message', sender: 'system', payload: { body: '【发起方指令】写完后追加标记' } })];
+    expect(aggregateFrames(rows)).toEqual([
+      { frameId: 'm1', seq: 1, at: rows[0]!.at, role: 'assistant', kind: 'text', content: '【发起方指令】写完后追加标记' },
+    ]);
+  });
+
   it('corrupt final（payload=null）→ 行跳过：不建帧、不误判终态（终审 minor #10）', () => {
     const rows = [
       row({ eventType: 'text_delta', payload: { delta: '流' } }),

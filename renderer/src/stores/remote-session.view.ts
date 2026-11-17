@@ -63,6 +63,14 @@ function knownLastSeq(frames: HubViewFrame[], legacy: HubViewMessage[]): number 
   return Math.max(f, l);
 }
 
+/** steer 回流匹配（E2E 实录修正）：远端注入实际走「里程碑 notice」（system 行，
+ *  投影为 assistant text 帧 / legacy assistant 行，content 带【发起方指令】前缀）；
+ *  本地 runtime 分流才产生 steer 事件帧（content=原文）。两形态都认。 */
+function steerEchoMatches(pendingText: string, echo: { kind?: string; role?: string; content?: string }): boolean {
+  if (typeof echo.content !== 'string') return false;
+  return echo.content === pendingText || echo.content === `【发起方指令】${pendingText}`;
+}
+
 /** 帧批 upsert（同 frameId 整帧替换；按 seq 升序输出） */
 function upsertFrames(prev: HubViewFrame[], incoming: HubViewFrame[]): HubViewFrame[] {
   if (incoming.length === 0) return prev;
@@ -77,10 +85,24 @@ export const useRemoteSessionStore = create<RemoteSessionState>((set, get) => {
     disposeAppended = null;
     disposeState?.();
     disposeState = null;
+    disposeRunChanged?.();
+    disposeRunChanged = null;
   };
+
+  let disposeRunChanged: (() => void) | null = null;
 
   const wireListeners = (): void => {
     if (disposeAppended !== null) return;
+    // 任务态实时性（E2E 实录）：open() 时的 task 是快照——run 推送匹配本任务时
+    // 刷新行，composer 终态门控（任务已结束）不依赖陈旧状态
+    disposeRunChanged = ipc.task.onTaskRunChanged((e) => {
+      const cur = get().task;
+      if (!cur || cur.id !== e.taskId) return;
+      void ipc.task
+        .get(cur.id)
+        .then((fresh) => { set({ task: fresh }); })
+        .catch(() => { /* 刷新失败保旧态 */ });
+    });
     disposeAppended = ipc.hub.onViewAppended((evt) => {
       const t = get().target;
       if (!t || t.sessionId !== evt.sessionId) return;
@@ -89,8 +111,8 @@ export const useRemoteSessionStore = create<RemoteSessionState>((set, get) => {
         // steer 帧回流 → 消解同文最旧 sent pending（spec §7.3 去重键 kind+content）
         const pending = [...get().pendingSteers];
         for (const f of evt.frames) {
-          if (f.kind !== 'steer') continue;
-          const i = pending.findIndex((p) => p.state !== 'failed' && p.text === f.content);
+          if (f.kind !== 'steer' && f.kind !== 'text') continue;
+          const i = pending.findIndex((p) => p.state !== 'failed' && steerEchoMatches(p.text, f));
           if (i >= 0) pending.splice(i, 1);
         }
         set({ frames, pendingSteers: pending, live: true, liveError: null });
@@ -103,8 +125,8 @@ export const useRemoteSessionStore = create<RemoteSessionState>((set, get) => {
         // payload.body 落成 user 行——content 匹配最旧非 failed pending，防双显
         const pending = [...get().pendingSteers];
         for (const e of fresh) {
-          if (e.role !== 'user') continue;
-          const i = pending.findIndex((p) => p.state !== 'failed' && p.text === e.content);
+          if (e.role !== 'user' && e.role !== 'assistant') continue;
+          const i = pending.findIndex((p) => p.state !== 'failed' && steerEchoMatches(p.text, e));
           if (i >= 0) pending.splice(i, 1);
         }
         if (fresh.length === 0 && pending.length === get().pendingSteers.length) return;
