@@ -14,6 +14,7 @@ import { cn } from '../../lib/cn';
 import { useRemoteSessionStore } from '../../stores/remote-session.view';
 import { useUiStore } from '../../stores/ui.store';
 import { ToolCallChip } from '../im/ToolCallChip';
+import { RemoteSteerComposer } from './RemoteSteerComposer';
 import type { HubViewFrame, HubViewMessage } from '../../ipc/types';
 
 const TOOL_START_RE = /^调用工具 (\S+)$/;
@@ -270,8 +271,8 @@ export function RemoteSessionView(): React.JSX.Element {
         )}
       </div>
 
-      {/* composer 槽位：RemoteSteerComposer（Task 7 挂载） */}
-      <div id="remote-steer-composer-slot" />
+      {/* composer=steer（spec §7.3）：输入即补充指令 */}
+      <RemoteSteerComposer />
     </div>
   );
 }

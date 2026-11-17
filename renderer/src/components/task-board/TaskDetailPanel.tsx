@@ -29,7 +29,7 @@
 //       · 验收操作区（#21）：任务 submitted 态显示——通过 task.accept / 打回
 //         复用 RejectReasonDialog（#17 空理由禁用）→ task.reject；非 submitted 不显示
 import { useEffect, useState } from 'react';
-import {
+import { Eye,
   Bot,
   Calendar,
   Clock,
@@ -59,7 +59,7 @@ import { locateMessage, locateTaskExecution } from '../../lib/locate-message';
 import { Badge, type BadgeTone } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { showToast } from '../ui/Toast';
-import { shortNodeId } from '../hub/RemoteSessionDrawer';
+import { shortNodeId } from '../../stores/remote-session.view';
 import { EditTaskDialog } from './EditTaskDialog';
 import { RejectReasonDialog } from './RejectReasonDialog';
 import { TaskChangesView } from './TaskChangesView';
@@ -448,8 +448,19 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
               11px tertiary「→ 节点 · 工作站」仅 out 行渲染（本地任务整行不渲染） */}
           <div className="text-[13.5px] font-semibold text-primary">#T-{task.id} {task.title}</div>
           {task.delegationRole === 'out' && routeSegments.length > 0 && (
-            <div data-testid="task-route-line" className="mt-0.5 text-[11px] text-tertiary">
-              → {routeSegments.join(' · ')}
+            <div data-testid="task-route-line" className="mt-0.5 flex items-center gap-2 text-[11px] text-tertiary">
+              <span>→ {routeSegments.join(' · ')}</span>
+              {task.delegationId != null && (
+                <button
+                  type="button"
+                  data-testid="enter-remote-session"
+                  onClick={() => useUiStore.getState().openRemoteSession(task)}
+                  className="inline-flex h-5 cursor-pointer items-center gap-1 rounded-md border border-subtle bg-surface-1 px-2 text-[11px] font-medium text-primary hover:bg-surface-3"
+                >
+                  <Eye size={12} strokeWidth={1.75} aria-hidden />
+                  进入会话
+                </button>
+              )}
             </div>
           )}
         </div>
