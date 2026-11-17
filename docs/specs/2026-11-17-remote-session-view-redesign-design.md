@@ -1,7 +1,7 @@
 # 远端会话查看重构设计（全宽一等会话）
 
 - 日期：2026-11-17
-- 状态：已评审（brainstorming 六项拍板齐备），待实施
+- 状态：已实现（分支 feat/remote-session-view，8 任务 TDD 交付；单测/集成全绿——E2E 验收见 .omo/qa-reports/2026-11-17-remote-session-view-e2e/）
 - 范围：studio 双 workspace + momo-hub 协议仓（minor bump）
 - 上游依据：`docs/specs/2026-11-13-task-human-loop-lifecycle-design.md`（steer §8.2 / view 只读红线 §8.4）、`docs/specs/2026-08-23-v2.0.0-platform-refactor-design.md`
 
