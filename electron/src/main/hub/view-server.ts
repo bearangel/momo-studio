@@ -210,8 +210,17 @@ export class ViewServer {
           ? p.fromSeq
           : 0;
         const limit = boundedInt(p.limit, 50, MESSAGES_LIMIT_MAX);
-        if (p.wire === 2) {
-          return { ok: true, payload: this.assembleFramePage(sessionId, fromSeq, limit) };
+        // wire:2 帧页——已知旧 hub（<1.13）降级 legacy 投影（终审 Important#4：订阅
+        // 协商不成立时渲染面恒 legacy，帧页会把历史变「空白」）；client 未知（离线
+        // 测试态）不拦——帧页响应本身对旧 hub 无害，协商成立与否由订阅回显裁定
+        const hubClient = this.opts.clientGetter();
+        const wireCapable = p.wire === 2
+          && (hubClient === null || protocolSupports(hubClient.hubProtoVer() ?? '', VIEW_FRAME_REQUIRED_MINOR));
+        if (wireCapable) {
+          const afterSeq = typeof p.afterSeq === 'number' && Number.isInteger(p.afterSeq) && p.afterSeq >= 0
+            ? p.afterSeq
+            : null;
+          return { ok: true, payload: this.assembleFramePage(sessionId, fromSeq, limit, afterSeq) };
         }
         return { ok: true, payload: this.assembleMessages(sessionId, fromSeq, limit) };
       }
@@ -388,11 +397,17 @@ export class ViewServer {
    *  委派执行会话常态远低于此；超限截断只影响回放深度不影响 tail 实时性）。 */
   private static readonly FRAME_ROWS_CAP = 2000;
 
-  /** view.messages 帧页组装（wire:2）：会话行全量聚合 → 帧级尾窗分页。
-   *  fromSeq=0 取最新 limit 帧；fromSeq>0 取 seq < fromSeq 中最新 limit 帧（loadEarlier）。 */
-  private assembleFramePage(sessionId: string, fromSeq: number, limit: number): { frames: ViewFrame[]; hasMore: boolean } {
+  /** view.messages 帧页组装（wire:2）：会话行全量聚合 → 帧级分页。
+   *  fromSeq=0 取最新 limit 帧；fromSeq>0 取 seq < fromSeq 中最新 limit 帧（loadEarlier）；
+   *  afterSeq>0 取 seq > afterSeq 升序前 limit 帧（断线补拉——1.13.1，优先于 fromSeq 判定）。 */
+  private assembleFramePage(sessionId: string, fromSeq: number, limit: number, afterSeq: number | null = null): { frames: ViewFrame[]; hasMore: boolean } {
     const rows = sessionEvents(sessionId, 0, '>=', ViewServer.FRAME_ROWS_CAP).map(toFrameEventRow);
     const all = aggregateFrames(rows);
+    if (afterSeq !== null && afterSeq > 0) {
+      const ahead = all.filter((f) => f.seq > afterSeq);
+      const frames = ahead.length > limit ? ahead.slice(0, limit) : ahead;
+      return { frames, hasMore: ahead.length > frames.length };
+    }
     const candidates = fromSeq > 0 ? all.filter((f) => f.seq < fromSeq) : all;
     const frames = candidates.length > limit ? candidates.slice(candidates.length - limit) : candidates;
     return { frames, hasMore: candidates.length > frames.length };
@@ -409,7 +424,9 @@ export class ViewServer {
   }
 
   /** 订阅登记：游标锚定当前最大事件 rowid（订阅后新事件才上行）。幂等重订不降级——
-   *  已帧形态订阅后 legacy 重订保持帧形态（tail 分流一致性优先于请求序）。 */
+   *  已帧形态订阅后 legacy 重订保持帧形态（tail 分流一致性优先于请求序）。
+   *  帧形态订阅同时种子 openStarts（终审 C3c）：全量聚合一次找出「订阅锚点之前
+   *  已开始、尚未终态」的帧——否则首个 tick 只读到锚点后的增量，流式帧快照缺前缀。 */
   private subscribe(sessionId: string, wire?: 2): void {
     const existing = this.watchers.get(sessionId);
     if (existing) {
@@ -422,9 +439,14 @@ export class ViewServer {
          JOIN messages m ON m.id = e.message_id WHERE m.session_id = ?`,
       )
       .get(sessionId) as { max_seq: number };
-    this.watchers.set(sessionId, { sessionId, cursor: anchor.max_seq, ...(wire === 2 ? { wire } : {}), openStarts: new Map() });
+    let openStarts = new Map<string, number>();
+    if (wire === 2 && anchor.max_seq > 0) {
+      const rows = sessionEvents(sessionId, 0, '>=', ViewServer.FRAME_ROWS_CAP).map(toFrameEventRow);
+      openStarts = new Map(aggregateTail(rows).openStarts);
+    }
+    this.watchers.set(sessionId, { sessionId, cursor: anchor.max_seq, ...(wire === 2 ? { wire } : {}), openStarts });
     this.ensureTimer();
-    logger.info('查看尾部订阅已登记', { sessionId, cursor: anchor.max_seq, wire });
+    logger.info('查看尾部订阅已登记', { sessionId, cursor: anchor.max_seq, wire, openSeeds: openStarts.size });
   }
 
   private unsubscribe(sessionId: string): void {

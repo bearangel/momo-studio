@@ -48,6 +48,9 @@
 //    （worker 运行中转向）登记 + TASK_STEER_REQUIRED_MINOR=12 /
 //    METHOD_REQUIRED_MINOR['task.steer']=12 双门槛锁；1.11.0 五面断言值
 //    随 pin bump 对齐 1.12.0（历史能力面注释条目保留）
+// ⑪ 1.13.0 面（远端会话帧投影 pin bump v0.7.5）：ViewFrame 类型族 +
+//    ViewSessionSummary.delegationId? + ViewSubscribeReq/Res wire?:2 +
+//    VIEW_FRAME_REQUIRED_MINOR=13 常量（帧投影载荷能力门，不入方法门槛）
 // 版本 introspection 直读包内 package.json：单入口规则（protocol.ts）约束的是协议符号
 // import；此处是 pin 锁定断言，目的不同，不走协议面。
 import { readFileSync } from 'node:fs';
@@ -126,9 +129,9 @@ function manifestSample(resources: unknown): unknown {
   };
 }
 
-describe('hub pin v0.7.3（1.12.0 v2 HITL 底座 + steer 门槛）', () => {
-  it('pin 生效：实装 momo-hub-protocol 版本 = 0.7.3（electron/package.json #v0.7.3）', () => {
-    expect(pkg.version).toBe('0.7.3');
+describe('hub pin v0.7.5（1.13.0 帧投影底座）', () => {
+  it('pin 生效：实装 momo-hub-protocol 版本 = 0.7.5（electron/package.json #v0.7.5）', () => {
+    expect(pkg.version).toBe('0.7.5');
   });
 
   it('v0.1.5 语义目录样本过 validateHubCatalog（生产消费链同校验器）', () => {
@@ -331,8 +334,8 @@ describe('hub pin v0.7.3（1.12.0 v2 HITL 底座 + steer 门槛）', () => {
   });
 
   describe('1.12.0：v2 HITL + steer——submitted 八态 / runNo 三时刻 / 干预族 / 双向结构化答复 / task.steer', () => {
-    it('协议版本对齐：PROTOCOL_VERSION = 1.12.0（v2 HITL 底座 + steer）', () => {
-      expect(PROTOCOL_VERSION).toBe('1.12.0');
+    it('协议版本对齐：PROTOCOL_VERSION = 1.13.0（帧投影底座）', () => {
+      expect(PROTOCOL_VERSION).toBe('1.13.0');
     });
 
     it('TASK_HITL_REQUIRED_MINOR = 11（v2 版本门单源——studio 派发闸与 hub 门禁共用，勿硬编码）', () => {

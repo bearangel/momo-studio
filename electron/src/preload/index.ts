@@ -841,7 +841,7 @@ const api: ApiSurface = {
     viewWorkspace: (input: { targetNodeId: string; workspaceName: string; groupId?: string }) => invoke<HubViewOverview>('hub:viewWorkspace', input),
     viewSessions: (input: { targetNodeId: string; workspaceName: string; beforeSeq?: number; limit: number; groupId?: string }) =>
       invoke<{ sessions: HubViewSessionSummary[] }>('hub:viewSessions', input),
-    viewMessages: (input: { targetNodeId: string; sessionId: string; workspaceName?: string; fromSeq: number; limit: number; groupId?: string; wire?: 2 }) =>
+    viewMessages: (input: { targetNodeId: string; sessionId: string; workspaceName?: string; fromSeq: number; limit: number; groupId?: string; wire?: 2; afterSeq?: number }) =>
       invoke<HubViewFramePage | HubViewMessagePage>('hub:viewMessages', input),
     viewTasks: (input: { targetNodeId: string; workspaceName: string; groupId?: string }) =>
       invoke<{ tasks: HubViewLocalTask[] }>('hub:viewTasks', input),

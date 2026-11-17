@@ -3950,6 +3950,8 @@ export interface HubApiSurface {
     limit: number;
     groupId?: string;
     wire?: 2;
+    /** 帧形态断线补拉方向（协议 1.13.1）：取 seq > afterSeq 升序前 limit 帧 */
+    afterSeq?: number;
   }): Promise<HubViewFramePage | HubViewMessagePage>;
   /** 远程查看：目标工作空间本地 #T 任务列表 */
   viewTasks(input: { targetNodeId: string; workspaceName: string; groupId?: string }): Promise<{ tasks: HubViewLocalTask[] }>;

@@ -6,10 +6,11 @@
 // 4. 加载更早按钮 → store.loadEarlier
 // 5. 会话头：节点名 · run 号 · 实时/已断开徽标
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { RemoteSessionView } from './RemoteSessionView';
 import { useRemoteSessionStore } from '../../stores/remote-session.view';
+import { useUiStore } from '../../stores/ui.store';
 import type { HubViewFrame, HubViewMessage } from '../../ipc/types';
 
 const frame = (over: Partial<HubViewFrame> & Pick<HubViewFrame, 'frameId' | 'seq'>): HubViewFrame => ({
@@ -129,5 +130,37 @@ describe('分页与会话头', () => {
     useRemoteSessionStore.setState({ live: false, hubOnline: false });
     rerender(<RemoteSessionView />);
     expect(screen.getByText(/已断开/)).toBeInTheDocument();
+  });
+});
+
+// ── 终审 C1/C6：入口接线与切换关闭 ───────────────────────────────────────────
+
+describe('入口接线与切换关闭（终审修复）', () => {
+  it('挂载即触发 open(task)（ui.remoteSessionView.task → store.open）', async () => {
+    const task = { id: 'T-1' } as never;
+    useUiStore.setState({ remoteSessionView: { task }, activeView: 'im' });
+    render(<RemoteSessionView />);
+    await waitFor(() => expect(openMock).toHaveBeenCalledWith(task));
+  });
+
+  it('同任务重挂载不重复 open；换任务才重新 open', async () => {
+    const t1 = { id: 'T-1' } as never;
+    const t2 = { id: 'T-2' } as never;
+    useUiStore.setState({ remoteSessionView: { task: t1 }, activeView: 'im' });
+    const { rerender } = render(<RemoteSessionView />);
+    await waitFor(() => expect(openMock).toHaveBeenCalledTimes(1));
+    rerender(<RemoteSessionView />);
+    expect(openMock).toHaveBeenCalledTimes(1);
+    useUiStore.setState({ remoteSessionView: { task: t2 } });
+    rerender(<RemoteSessionView />);
+    await waitFor(() => expect(openMock).toHaveBeenCalledWith(t2));
+  });
+
+  it('remoteSessionView 置空（切视图/切会话收口）→ store.close + 清 ui 态', async () => {
+    useUiStore.setState({ remoteSessionView: { task: { id: 'T-1' } as never }, activeView: 'im' });
+    render(<RemoteSessionView />);
+    await waitFor(() => expect(openMock).toHaveBeenCalled());
+    useUiStore.getState().closeRemoteSession();
+    await waitFor(() => expect(closeMock).toHaveBeenCalled());
   });
 });

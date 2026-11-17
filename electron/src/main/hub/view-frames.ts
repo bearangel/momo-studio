@@ -89,7 +89,6 @@ function aggregate(rows: FrameEventRow[]): TailAggregate {
   const unpairedStack: string[] = [];
   /** steer 帧（独立于消息帧：frameId = messageId:steer:rowid） */
   const steers: ViewFrame[] = [];
-  const steerFirst = new Map<string, number>();
 
   for (const r of rows) {
     const p = r.payload;
@@ -105,7 +104,6 @@ function aggregate(rows: FrameEventRow[]): TailAggregate {
         steers.push({
           frameId, seq: r.seq, at: r.at, role: 'user', kind: 'steer', content: clamp(body),
         });
-        steerFirst.set(frameId, r.seq);
         continue;
       }
       case 'tool_call_start': {
@@ -224,9 +222,10 @@ function aggregate(rows: FrameEventRow[]): TailAggregate {
       role: 'assistant', kind: 'tool', tool,
     });
   }
+  // steer 帧单行自终态：不入 openStarts（终审 C2——入列会永久锚定 tick 重读窗口，
+  // 窗口一旦超 TAIL_BATCH_MAX 即冻结实时流）
   for (const f of steers) {
     frames.push(f);
-    openStarts.set(f.frameId, steerFirst.get(f.frameId)!);
   }
   frames.sort((a, b) => a.seq - b.seq);
   return { frames, openStarts };

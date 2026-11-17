@@ -181,8 +181,37 @@ describe('断线重连', () => {
     await vi.waitFor(() => {
       expect(api.hub.viewUnsubscribe).toHaveBeenCalled();
       expect(api.hub.viewSubscribe).toHaveBeenCalledTimes(2);
-      expect(api.hub.viewMessages).toHaveBeenLastCalledWith(expect.objectContaining({ fromSeq: 26, wire: 2 }));
+      expect(api.hub.viewMessages).toHaveBeenLastCalledWith(expect.objectContaining({ afterSeq: 25, wire: 2 }));
     });
     expect(useRemoteSessionStore.getState().live).toBe(true);
+  });
+});
+
+// ── 终审修复：C3a 初页方向 / C3b 补拉方向 / Important#7 legacy steer 消解 ────
+
+describe('终审修复', () => {
+  it('open() 初页 fromSeq=0（帧页尾窗语义——含订阅前的流式帧，C3a）', async () => {
+    await useRemoteSessionStore.getState().open(task);
+    expect(api.hub.viewMessages).toHaveBeenCalledWith(expect.objectContaining({ fromSeq: 0, wire: 2 }));
+  });
+
+  it('重连补拉带 afterSeq=已知尾（向前追方向，C3b）', async () => {
+    await useRemoteSessionStore.getState().open(task);
+    emitState('offline');
+    emitState('online');
+    await vi.waitFor(() => {
+      expect(api.hub.viewMessages).toHaveBeenLastCalledWith(expect.objectContaining({ afterSeq: 25, wire: 2 }));
+    });
+  });
+
+  it('legacy 降级下 steer 回流行（user 行 content=正文）也消解 pending（Important#7）', async () => {
+    stubHappyPath({ echoWire: false });
+    api.hub.viewMessages.mockResolvedValue({ messages: [], hasMore: false });
+    await useRemoteSessionStore.getState().open(task);
+    api.task.steer.mockResolvedValue({ ok: true });
+    await useRemoteSessionStore.getState().sendSteer('旧模式指令');
+    expect(useRemoteSessionStore.getState().pendingSteers).toHaveLength(1);
+    emitAppended({ sessionId: 'sx', events: [{ seq: 9, at: 1, role: 'user', content: '旧模式指令' }] });
+    expect(useRemoteSessionStore.getState().pendingSteers).toHaveLength(0);
   });
 });

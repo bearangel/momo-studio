@@ -761,6 +761,55 @@ describe('wire v2 协商与帧投影', () => {
     expect(p2.hasMore).toBe(false);
   });
 
+  it('wire2 订阅即种子 openStarts：订阅前已开始的流式帧首拍即全文快照（终审 C3c）', async () => {
+    const { sessionId, msgId } = await seedSessionWithFrames();
+    // 订阅前消息已流式输出两段
+    insertEvent(msgId, 'text_delta', { delta: '前半' });
+    insertEvent(msgId, 'text_delta', { delta: '段' });
+    const { client, calls } = fakeClient();
+    const server = viewServerOf(client);
+    const r = await server.handleViewRequest(req(VIEW_RPC.subscribe, { sessionId, wire: 2 }));
+    expect(r.ok && r.payload).toEqual({ ok: true, wire: 2 });
+    // 订阅后新增量到达——首拍快照必须含订阅锚之前的全文（非仅新 delta）
+    insertEvent(msgId, 'text_delta', { delta: '+新' });
+    await new Promise((res) => setTimeout(res, 45));
+    const first = calls.find((c) => 'frames' in c.payload) as unknown as { payload: { frames: Array<{ content?: string; streaming?: boolean }> } };
+    expect(first).toBeDefined();
+    expect(first.payload.frames[0]).toMatchObject({ content: '前半段+新', streaming: true });
+  });
+
+  it('viewMessages wire:2 afterSeq → seq 升序帧页（断线补拉方向，终审 C3b）', async () => {
+    const { sessionId } = await seedSessionWithFrames();
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const m = insertMessage(sessionId, 'agent');
+      insertEvent(m, 'text_delta', { delta: `m${i}` });
+      insertEvent(m, 'final', { body: `m${i}`, status: 'done' });
+      ids.push(m);
+    }
+    const server = viewServerOf(null);
+    const page = await server.handleViewRequest(req(VIEW_RPC.messages, { sessionId, fromSeq: 0, limit: 50, afterSeq: 2, wire: 2 }));
+    expect(page.ok).toBe(true);
+    if (!page.ok) return;
+    // afterSeq=2：仅返回 seq>2 的帧（升序），第一条是第二条消息（其首事件 rowid=3）
+    const p = page.payload as { frames: Array<{ frameId: string; seq: number }>; hasMore: boolean };
+    expect(p.frames.map((f) => f.frameId)).toEqual(ids.slice(1));
+    expect(p.frames.every((f) => f.seq > 2)).toBe(true);
+    expect(p.hasMore).toBe(false);
+  });
+
+  it('hub <1.13 时 viewMessages wire:2 不回帧页——按 legacy 投影降级（终审 Important#4）', async () => {
+    const { sessionId, msgId } = await seedSessionWithFrames();
+    insertEvent(msgId, 'text_delta', { delta: 'x' });
+    insertEvent(msgId, 'final', { body: 'x', status: 'done' });
+    const server = viewServerOf(fakeClient({ protoVer: '1.12.0' }).client);
+    const r = await server.handleViewRequest(req(VIEW_RPC.messages, { sessionId, fromSeq: 0, limit: 50, wire: 2 }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect('frames' in (r.payload as Record<string, unknown>)).toBe(false);
+    expect('messages' in (r.payload as Record<string, unknown>)).toBe(true);
+  });
+
   it('viewSessions 回带 delegationId（tasks.execution_session_id 联表）；非委派会话不带键', async () => {
     const wsId = await seedWorkspace('del-ws');
     const s1 = insertSession({ workspaceId: wsId, title: '委派会话' });

@@ -135,7 +135,11 @@ const initial = loadPersisted();
 
 export const useUiStore = create<UiState>((set) => ({
   activeView: 'im',
-  setActiveView: (view) => set({ activeView: view }),
+  // spec 2026-11-17 §7.1「切换视图即关闭」：离开 im 收口远端会话视图态
+  //（store.close 退订由 RemoteSessionView 收口 effect 驱动）
+  setActiveView: (view) => set((s) => (view !== 'im' && s.remoteSessionView !== null
+    ? { activeView: view, remoteSessionView: null }
+    : { activeView: view })),
   pendingCollabDraft: null,
   setPendingCollabDraft: (draft) => set({ pendingCollabDraft: draft }),
   remoteSessionView: null,

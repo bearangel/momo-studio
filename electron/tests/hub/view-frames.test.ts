@@ -186,6 +186,18 @@ describe('健壮性', () => {
 });
 
 describe('aggregateTail 伴生输出', () => {
+  it('steer 帧不入 openStarts（单行自终态——入列即窗口永久锚定+每拍重发，终审 C2）', () => {
+    const rows = [
+      row({ eventType: 'text_delta', messageId: 'mA', payload: { delta: '流' } }),
+      row({ eventType: 'steer', payload: { body: '指令' } }),
+      row({ eventType: 'text_delta', messageId: 'mA', payload: { delta: '中' } }),
+    ];
+    const { frames, openStarts } = aggregateTail(rows);
+    expect(openStarts.has('m1:steer:2')).toBe(false);
+    expect([...openStarts.keys()]).toEqual(['mA']);
+    expect(frames.filter((f) => f.kind === 'steer')).toHaveLength(1);
+  });
+
   it('openStarts：未终态 text 帧与在途 tool 帧 → 帧首 rowid；终态帧不入', () => {
     const rows = [
       row({ eventType: 'text_delta', messageId: 'mA', payload: { delta: '流' } }),

@@ -13,6 +13,7 @@ import { Bot, ChevronUp, CircleCheck, Eye, Monitor, Wrench } from 'lucide-react'
 import { cn } from '../../lib/cn';
 import { useRemoteSessionStore } from '../../stores/remote-session.view';
 import { useUiStore } from '../../stores/ui.store';
+import { useHubViewStore } from '../../stores/hub-view.store';
 import { ToolCallChip } from '../im/ToolCallChip';
 import { RemoteSteerComposer } from './RemoteSteerComposer';
 import type { HubViewFrame, HubViewMessage } from '../../ipc/types';
@@ -114,8 +115,48 @@ function LegacyRow({ m }: { m: HubViewMessage }): React.JSX.Element {
 
 export function RemoteSessionView(): React.JSX.Element {
   const st = useRemoteSessionStore();
+  const remoteSessionView = useUiStore((s) => s.remoteSessionView);
   const closeRemoteSession = useUiStore((s) => s.closeRemoteSession);
   const online = st.live && st.hubOnline;
+
+  // 入口接线（终审 C1）：ui.remoteSessionView.task → store.open——换任务才重新
+  // 定位（同任务重挂载幂等）；close 由「收口 effect」统一驱动
+  const entryTask = remoteSessionView?.task ?? null;
+  const entryTaskId = entryTask?.id ?? null;
+  useEffect(() => {
+    if (entryTaskId === null) return;
+    const s = useRemoteSessionStore.getState();
+    if (s.task?.id === entryTaskId && s.phase !== 'resolving') return;
+    void useRemoteSessionStore.getState().open(entryTask!);
+  }, [entryTaskId, entryTask]);
+
+  // 单飞收口（终审 Important#5）：同节点同会话的「节点查看回放面板」与本视图共享
+  // hub 订阅键 (leader,target,session)——后订阅者会覆盖前者的 wire 形态，两开必有一
+  // 面静默断流。进入本视图时若回放面板正开着同一会话则关闭它（回放可随时重开）。
+  const resolvedTarget = st.target;
+  useEffect(() => {
+    const hv = useHubViewStore.getState();
+    if (hv.replay !== null && hv.targetNodeId !== null && resolvedTarget !== null) {
+      if (resolvedTarget.targetNodeId === hv.targetNodeId && resolvedTarget.sessionId === hv.replay.sessionId) {
+        hv.close();
+      }
+    }
+  }, [resolvedTarget]);
+
+  // 收口（终审 C6，spec §7.1「切换本地会话/视图即关闭」）：remoteSessionView 置空
+  // （closeRemoteSession 被 setActiveView 离开 im / 切会话路径调用）→ store.close
+  // 退订清理。组件卸载同样收口（防退订泄漏）。
+  useEffect(() => {
+    if (remoteSessionView === null) {
+      useRemoteSessionStore.getState().close();
+    }
+  }, [remoteSessionView]);
+  useEffect(() => {
+    return () => {
+      useRemoteSessionStore.getState().close();
+      useUiStore.setState({ remoteSessionView: null });
+    };
+  }, []);
 
   // Esc 退出（capture——不与宿主视图双触发；抽屉同款）
   useEffect(() => {

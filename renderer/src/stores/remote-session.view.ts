@@ -99,8 +99,16 @@ export const useRemoteSessionStore = create<RemoteSessionState>((set, get) => {
       if (evt.events.length > 0) {
         const known = new Set(get().legacy.map((m) => m.seq));
         const fresh = evt.events.filter((e) => !known.has(e.seq));
-        if (fresh.length === 0) return;
-        set({ legacy: [...get().legacy, ...fresh], live: true, liveError: null });
+        // legacy steer 回流行消解（终审 Important#7）：旧投影把 steer 事件按
+        // payload.body 落成 user 行——content 匹配最旧非 failed pending，防双显
+        const pending = [...get().pendingSteers];
+        for (const e of fresh) {
+          if (e.role !== 'user') continue;
+          const i = pending.findIndex((p) => p.state !== 'failed' && p.text === e.content);
+          if (i >= 0) pending.splice(i, 1);
+        }
+        if (fresh.length === 0 && pending.length === get().pendingSteers.length) return;
+        set({ legacy: [...get().legacy, ...fresh], pendingSteers: pending, live: true, liveError: null });
       }
     });
     let prevOnline = true;
@@ -123,11 +131,11 @@ export const useRemoteSessionStore = create<RemoteSessionState>((set, get) => {
             return;
           }
           set({ live: true, liveError: null });
-          const from = knownLastSeq(get().frames, get().legacy) + 1;
+          const after = knownLastSeq(get().frames, get().legacy);
           try {
             const raw = await ipc.hub.viewMessages({
               targetNodeId: t.targetNodeId, sessionId: t.sessionId, workspaceName: t.workspaceName,
-              fromSeq: from, limit: VIEW_PAGE_SIZE, ...seg, wire: 2,
+              fromSeq: 0, limit: VIEW_PAGE_SIZE, ...seg, wire: 2, afterSeq: after,
             });
             if ('frames' in raw && raw.frames.length > 0) {
               set((s) => ({ frames: upsertFrames(s.frames, raw.frames) }));
@@ -193,9 +201,11 @@ export const useRemoteSessionStore = create<RemoteSessionState>((set, get) => {
           if (!session) { set({ phase: 'miss' }); return; }
 
           // ③ 尾窗帧页（wire:2 声明；旧 worker 回旧形态自动降级）
+          // fromSeq=0（终审 C3a）：帧页语义=最新 limit 帧尾窗——fromSeq>0 是
+          // loadEarlier 方向，会把含流式尾帧在内的最新帧排除在初页外
           const raw = await ipc.hub.viewMessages({
             targetNodeId: record.targetNodeId, sessionId: session.sessionId, workspaceName: record.workspaceName,
-            fromSeq: Math.max(1, session.lastSeq - VIEW_PAGE_SIZE + 1), limit: VIEW_PAGE_SIZE, ...seg, wire: 2,
+            fromSeq: 0, limit: VIEW_PAGE_SIZE, ...seg, wire: 2,
           });
 
           let nodeName: string | null = null;
