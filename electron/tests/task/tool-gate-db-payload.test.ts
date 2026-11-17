@@ -7,8 +7,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { __setElectronApisForTest } from '../../src/main/electron-access';
-import { handleToolGateAnswer } from '../../src/main/sandbox/write-blocked-emit';
-import { insertHumanRequest } from '../../src/main/storage/tasks/human-requests-repo';
+import { handleToolGateAnswer, recoverOrphanToolGates } from '../../src/main/sandbox/write-blocked-emit';
+import { insertHumanRequest, getHumanRequest } from '../../src/main/storage/tasks/human-requests-repo';
 import { getGrantedDirs, __clearWriteGrantsForTest } from '../../src/main/sandbox/write-grant';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { logger } from '../../src/main/logger';
@@ -83,5 +83,26 @@ describe('handleToolGateAnswer db 载荷旁路', () => {
     });
     handleToolGateAnswer(row.id, { decision: 'approve' });
     expect(getGrantedDirs('sess-fs', null)).toContain('/tmp/x');
+  });
+
+  it('孤儿回收豁免 db 载荷行（插件轮询消费，不属沙箱注册表生命周期）', () => {
+    seedSession('sess-orp');
+    const dbRow = insertHumanRequest({
+      sessionId: 'sess-orp',
+      kind: 'tool_gate',
+      title: '数据库写请求（DML）',
+      payloadJson: JSON.stringify({ db: { connection: 'c', sql: 'UPDATE t SET a=1', opClass: 'DML' } }),
+    });
+    const sandboxRow = insertHumanRequest({
+      sessionId: 'sess-orp',
+      kind: 'tool_gate',
+      title: '写入请求',
+      payloadJson: JSON.stringify({ toolGate: { command: 'x', dirs: ['/tmp/y'] } }),
+    });
+    recoverOrphanToolGates(); // 无内存注册表存活——沙箱形态应 expired，db 形态必须保留
+    const dbAfter = getHumanRequest(dbRow.id);
+    const sandboxAfter = getHumanRequest(sandboxRow.id);
+    expect(dbAfter?.status).toBe('pending');
+    expect(sandboxAfter?.status).toBe('expired');
   });
 });

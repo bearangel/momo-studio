@@ -276,6 +276,9 @@ export function recoverOrphanToolGates(): { expired: number } {
   let expired = 0;
   for (const req of listPendingByKind('tool_gate')) {
     if (liveSessions.has(req.sessionId)) continue;
+    // db-pro 载荷行豁免（spec 2026-11-17 §7-3）：消费方是插件 service 轮询，
+    // 不经沙箱内存注册表生命周期——误扫会让 pending 写批准静默失效（验收 P0 实证）
+    if (isDbGatePayload(req.payloadJson)) continue;
     if (markExpired(req.id) > 0) expired += 1;
   }
   return { expired };
