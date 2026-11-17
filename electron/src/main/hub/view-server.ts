@@ -40,13 +40,17 @@ import {
   VIEW_FILES_ENTRIES_MAX,
   VIEW_FILES_PATH_MAX,
   VIEW_FILES_READ_MAX,
+  VIEW_FRAME_REQUIRED_MINOR,
+  protocolSupports,
   type RequestEnvelope,
   type RpcErrorPayload,
+  type ViewFrame,
   type ViewMessage,
   type ViewOverview,
   type ViewSessionSummary,
 } from './protocol';
 import { VIEW_WIRE } from './view-wire';
+import { aggregateFrames, aggregateTail, type FrameEventRow } from './view-frames';
 import type { HubViewSettings } from './view-settings';
 import type { HubClient, HubResponderResult } from './client';
 
@@ -76,6 +80,12 @@ interface TailWatch {
   sessionId: string;
   /** 上行成功才推进的单调游标（断线/consent 关窗期不推进——恢复后无缺口） */
   cursor: number;
+  /** 帧形态订阅（wire v2）：仅订阅声明 wire:2 且 hub ≥1.13 时置位 */
+  wire?: 2;
+  /** 未终态帧 frameId → 帧首 rowid（tick 重读下限——游标可越过未终态帧，
+   *  每拍从 min(cursor+1, 最小帧首) 重读并整帧重发，终态后自然停发；
+   *  观察语义等价「游标只推过已终态帧」〔spec §4.1〕） */
+  openStarts: Map<string, number>;
 }
 
 function err(code: RpcErrorPayload['code'], message: string): HubResponderResult {
@@ -109,6 +119,7 @@ function projectEventContent(eventType: string, payload: Record<string, unknown>
 interface EventRow {
   seq: number;
   at: number;
+  message_id: string;
   sender: string;
   event_type: string;
   payload_json: string;
@@ -118,12 +129,21 @@ interface EventRow {
 function sessionEvents(sessionId: string, afterSeq: number, direction: '>' | '>=', limit: number): EventRow[] {
   return getDb()
     .prepare(
-      `SELECT e.rowid AS seq, e.created_at AS at, m.sender AS sender, e.event_type AS event_type, e.payload_json AS payload_json
+      `SELECT e.rowid AS seq, e.created_at AS at, e.message_id AS message_id, m.sender AS sender, e.event_type AS event_type, e.payload_json AS payload_json
        FROM message_events e JOIN messages m ON m.id = e.message_id
        WHERE m.session_id = ? AND e.rowid ${direction} ?
        ORDER BY e.rowid ASC LIMIT ?`,
     )
     .all(sessionId, afterSeq, limit) as EventRow[];
+}
+
+/** DB 行 → 聚合输入行（payload 解包；损坏载荷置 null 由聚合层跳过）。 */
+function toFrameEventRow(r: EventRow): FrameEventRow {
+  try {
+    return { seq: r.seq, at: r.at, messageId: r.message_id, sender: r.sender, eventType: r.event_type, payload: JSON.parse(r.payload_json) as Record<string, unknown> };
+  } catch {
+    return { seq: r.seq, at: r.at, messageId: r.message_id, sender: r.sender, eventType: r.event_type, payload: null };
+  }
 }
 
 function toViewMessage(r: EventRow): ViewMessage {
@@ -190,6 +210,9 @@ export class ViewServer {
           ? p.fromSeq
           : 0;
         const limit = boundedInt(p.limit, 50, MESSAGES_LIMIT_MAX);
+        if (p.wire === 2) {
+          return { ok: true, payload: this.assembleFramePage(sessionId, fromSeq, limit) };
+        }
         return { ok: true, payload: this.assembleMessages(sessionId, fromSeq, limit) };
       }
       case VIEW_RPC.tasks: {
@@ -205,8 +228,14 @@ export class ViewServer {
           | { id: string }
           | undefined;
         if (!exists) return err('not_found', `会话不存在: ${sessionId}`);
-        this.subscribe(sessionId);
-        return { ok: true, payload: { ok: true } };
+        // wire v2 协商：请求声明 + hub ≥1.13 双成立才回显（旧 hub 会把帧形态 tail
+        // 整包拒——hubProtoVer 门防 tail 永久失败重试；离线/未知版本保守降级）
+        const client = this.opts.clientGetter();
+        const wireOk = p.wire === 2
+          && client !== null
+          && protocolSupports(client.hubProtoVer() ?? '', VIEW_FRAME_REQUIRED_MINOR);
+        this.subscribe(sessionId, wireOk ? 2 : undefined);
+        return { ok: true, payload: wireOk ? { ok: true, wire: 2 } : { ok: true } };
       }
       case VIEW_RPC.unsubscribe: {
         const sessionId = typeof p.sessionId === 'string' ? p.sessionId : '';
@@ -303,10 +332,12 @@ export class ViewServer {
     };
   }
 
-  /** view.sessions 组装：lastSeq = 会话事件最大 rowid（≈消息数）；lastSeq 降序分页。 */
+  /** view.sessions 组装：lastSeq = 会话事件最大 rowid（≈消息数）；lastSeq 降序分页。
+   *  delegationId（1.13.0）：tasks.execution_session_id 反查联表——发起方定位链精确匹配。 */
   private assembleSessions(workspaceId: string, beforeSeq: number | null, limit: number): ViewSessionSummary[] {
     const sessions = listSessionsByWorkspace(workspaceId);
     const lastSeqBySession = new Map<string, number>();
+    const delegationBySession = new Map<string, string>();
     if (sessions.length > 0) {
       const placeholders = sessions.map(() => '?').join(',');
       const rows = getDb()
@@ -317,6 +348,14 @@ export class ViewServer {
         )
         .all(...sessions.map((s) => s.id)) as Array<{ sid: string; last_seq: number }>;
       for (const r of rows) lastSeqBySession.set(r.sid, r.last_seq);
+      const delRows = getDb()
+        .prepare(
+          `SELECT execution_session_id AS esid, MAX(delegation_id) AS did FROM tasks
+           WHERE delegation_id IS NOT NULL AND execution_session_id IN (${placeholders})
+           GROUP BY execution_session_id`,
+        )
+        .all(...sessions.map((s) => s.id)) as Array<{ esid: string; did: string }>;
+      for (const r of delRows) delegationBySession.set(r.esid, r.did);
     }
     return sessions
       .map((s) => ({
@@ -324,6 +363,7 @@ export class ViewServer {
         title: s.title,
         lastSeq: lastSeqBySession.get(s.id) ?? 0,
         updatedAt: s.lastMessageAt ?? s.createdAt,
+        ...(delegationBySession.has(s.id) ? { delegationId: delegationBySession.get(s.id)! } : {}),
       }))
       .filter((s) => (beforeSeq === null ? true : s.lastSeq < beforeSeq))
       .sort((a, b) => b.lastSeq - a.lastSeq)
@@ -344,6 +384,20 @@ export class ViewServer {
     return { messages: rows.map(toViewMessage), hasMore: earlier !== undefined };
   }
 
+  /** 帧页行预算（wire v2）：帧完整性需整帧事件，会话全量行读取上限（DoS 下界——
+   *  委派执行会话常态远低于此；超限截断只影响回放深度不影响 tail 实时性）。 */
+  private static readonly FRAME_ROWS_CAP = 2000;
+
+  /** view.messages 帧页组装（wire:2）：会话行全量聚合 → 帧级尾窗分页。
+   *  fromSeq=0 取最新 limit 帧；fromSeq>0 取 seq < fromSeq 中最新 limit 帧（loadEarlier）。 */
+  private assembleFramePage(sessionId: string, fromSeq: number, limit: number): { frames: ViewFrame[]; hasMore: boolean } {
+    const rows = sessionEvents(sessionId, 0, '>=', ViewServer.FRAME_ROWS_CAP).map(toFrameEventRow);
+    const all = aggregateFrames(rows);
+    const candidates = fromSeq > 0 ? all.filter((f) => f.seq < fromSeq) : all;
+    const frames = candidates.length > limit ? candidates.slice(candidates.length - limit) : candidates;
+    return { frames, hasMore: candidates.length > frames.length };
+  }
+
   /** view.tasks 组装：目标节点本地 #T 任务（最新在前）。 */
   private assembleTasks(workspaceId: string): Array<{ taskId: string; title: string; status: string; updatedAt: number }> {
     return listTasks({ workspaceId, orderBy: 'created_at_desc', limit: TASKS_LIMIT }).map((t) => ({
@@ -354,18 +408,23 @@ export class ViewServer {
     }));
   }
 
-  /** 订阅登记：游标锚定当前最大事件 rowid（订阅后新事件才上行）。 */
-  private subscribe(sessionId: string): void {
-    if (this.watchers.has(sessionId)) return; // 幂等（hub 侧登记同键去重）
+  /** 订阅登记：游标锚定当前最大事件 rowid（订阅后新事件才上行）。幂等重订不降级——
+   *  已帧形态订阅后 legacy 重订保持帧形态（tail 分流一致性优先于请求序）。 */
+  private subscribe(sessionId: string, wire?: 2): void {
+    const existing = this.watchers.get(sessionId);
+    if (existing) {
+      if (wire === 2) existing.wire = 2;
+      return;
+    }
     const anchor = getDb()
       .prepare(
         `SELECT COALESCE(MAX(e.rowid), 0) AS max_seq FROM message_events e
          JOIN messages m ON m.id = e.message_id WHERE m.session_id = ?`,
       )
       .get(sessionId) as { max_seq: number };
-    this.watchers.set(sessionId, { sessionId, cursor: anchor.max_seq });
+    this.watchers.set(sessionId, { sessionId, cursor: anchor.max_seq, ...(wire === 2 ? { wire } : {}), openStarts: new Map() });
     this.ensureTimer();
-    logger.info('查看尾部订阅已登记', { sessionId, cursor: anchor.max_seq });
+    logger.info('查看尾部订阅已登记', { sessionId, cursor: anchor.max_seq, wire });
   }
 
   private unsubscribe(sessionId: string): void {
@@ -388,6 +447,10 @@ export class ViewServer {
     const allowed = this.opts.settings().allowGroupView;
     const client = this.opts.clientGetter();
     for (const w of [...this.watchers.values()]) {
+      if (w.wire === 2) {
+        this.tickFrames(w, client, allowed);
+        continue;
+      }
       const rows = sessionEvents(w.sessionId, w.cursor, '>', TAIL_BATCH_MAX);
       if (rows.length === 0) continue;
       if (!allowed) continue; // 关窗：不读游标推进——重开后首批补投关窗期事件
@@ -405,6 +468,34 @@ export class ViewServer {
           });
         });
     }
+  }
+
+  /** 帧形态 tick：从 min(cursor+1, 未终态帧首) 重读整帧 → 聚合上行 → 游标推到末行。 */
+  private tickFrames(w: TailWatch, client: HubClient | null, allowed: boolean): void {
+    const readFrom = Math.min(w.cursor + 1, ...(w.openStarts.size > 0 ? [...w.openStarts.values()] : [Infinity]));
+    const rows = sessionEvents(w.sessionId, readFrom - 1, '>', TAIL_BATCH_MAX);
+    if (rows.length === 0) return;
+    if (!allowed) return;
+    if (!client || client.state() !== 'online') return;
+    const agg = aggregateTail(rows.map(toFrameEventRow));
+    // 全部行被裁剪（如纯 thinking 批）——无帧可发但仍可安全推游标
+    if (agg.frames.length === 0) {
+      w.cursor = rows[rows.length - 1]!.seq;
+      w.openStarts = new Map();
+      return;
+    }
+    void client
+      .request(VIEW_WIRE.tail, { sessionId: w.sessionId, frames: agg.frames })
+      .then(() => {
+        w.cursor = rows[rows.length - 1]!.seq;
+        w.openStarts = new Map(agg.openStarts);
+      })
+      .catch((err) => {
+        logger.warn('查看尾部帧上行失败（游标不推进，下轮重试）', {
+          sessionId: w.sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
   }
 
   destroy(): void {
