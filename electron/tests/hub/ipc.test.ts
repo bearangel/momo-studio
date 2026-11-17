@@ -364,6 +364,14 @@ describe('hub IPC 远程查看通道（M2e T14）', () => {
     expect(manager.hubRequest).toHaveBeenCalledTimes(6);
   });
 
+  it('wire v2（1.13.0）：viewMessages/viewSubscribe 的 wire 字段原样透传（帧协商声明直达 worker）', async () => {
+    registerHubIpc();
+    await handlers.get('hub:viewMessages')!(null, { targetNodeId: 'n2', sessionId: 's', fromSeq: 0, limit: 50, wire: 2 });
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('view.messages', { targetNodeId: 'n2', sessionId: 's', fromSeq: 0, limit: 50, wire: 2 });
+    await handlers.get('hub:viewSubscribe')!(null, { targetNodeId: 'n2', sessionId: 's', wire: 2 });
+    expect(manager.hubRequest).toHaveBeenLastCalledWith('view.subscribe', { targetNodeId: 'n2', sessionId: 's', wire: 2 });
+  });
+
   it('view M3.2 两通道：viewWorkspaces/viewFiles 方法名与载荷逐项映射（groupId 可选段原样透传——hub 定向转发）', async () => {
     registerHubIpc();
     await handlers.get('hub:viewWorkspaces')!(null, { targetNodeId: 'n2' });

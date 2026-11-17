@@ -88,7 +88,7 @@ import type {
   HubViewSettings,
   HubViewOverview,
   HubViewSessionSummary,
-  HubViewMessagePage,
+  HubViewMessagePage, HubViewFramePage,
   HubViewLocalTask,
   HubViewAppendedEvent,
   HubViewWorkspaceSummary,
@@ -841,11 +841,11 @@ const api: ApiSurface = {
     viewWorkspace: (input: { targetNodeId: string; workspaceName: string; groupId?: string }) => invoke<HubViewOverview>('hub:viewWorkspace', input),
     viewSessions: (input: { targetNodeId: string; workspaceName: string; beforeSeq?: number; limit: number; groupId?: string }) =>
       invoke<{ sessions: HubViewSessionSummary[] }>('hub:viewSessions', input),
-    viewMessages: (input: { targetNodeId: string; sessionId: string; workspaceName?: string; fromSeq: number; limit: number; groupId?: string }) =>
-      invoke<HubViewMessagePage>('hub:viewMessages', input),
+    viewMessages: (input: { targetNodeId: string; sessionId: string; workspaceName?: string; fromSeq: number; limit: number; groupId?: string; wire?: 2 }) =>
+      invoke<HubViewFramePage | HubViewMessagePage>('hub:viewMessages', input),
     viewTasks: (input: { targetNodeId: string; workspaceName: string; groupId?: string }) =>
       invoke<{ tasks: HubViewLocalTask[] }>('hub:viewTasks', input),
-    viewSubscribe: (input: { targetNodeId: string; sessionId: string; groupId?: string }) => invoke<{ ok: boolean }>('hub:viewSubscribe', input),
+    viewSubscribe: (input: { targetNodeId: string; sessionId: string; groupId?: string; wire?: 2 }) => invoke<{ ok: boolean; wire?: 2 }>('hub:viewSubscribe', input),
     viewUnsubscribe: (input: { targetNodeId: string; sessionId: string; groupId?: string }) => invoke<{ ok: boolean }>('hub:viewUnsubscribe', input),
     // M3.2 远端可见性：远端空间清单 + 只读文件树（载荷原样透传主进程）
     viewWorkspaces: (input: { targetNodeId: string; groupId?: string }) =>

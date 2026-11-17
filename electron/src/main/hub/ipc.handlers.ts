@@ -190,11 +190,11 @@ export function registerHubIpc(): void {
     targetNodeId: string; workspaceName: string; beforeSeq?: number; limit: number; groupId?: string;
   }) => coded(() => hubRequest(VIEW_RPC.sessions, input)));
   ipcMain.handle('hub:viewMessages', (_evt, input: {
-    targetNodeId: string; sessionId: string; workspaceName?: string; fromSeq: number; limit: number; groupId?: string;
+    targetNodeId: string; sessionId: string; workspaceName?: string; fromSeq: number; limit: number; groupId?: string; wire?: 2;
   }) => coded(() => hubRequest(VIEW_RPC.messages, input)));
   ipcMain.handle('hub:viewTasks', (_evt, input: { targetNodeId: string; workspaceName: string; groupId?: string }) =>
     coded(() => hubRequest(VIEW_RPC.tasks, input)));
-  ipcMain.handle('hub:viewSubscribe', (_evt, input: { targetNodeId: string; sessionId: string; groupId?: string }) =>
+  ipcMain.handle('hub:viewSubscribe', (_evt, input: { targetNodeId: string; sessionId: string; groupId?: string; wire?: 2 }) =>
     coded(() => hubRequest(VIEW_RPC.subscribe, input)));
   ipcMain.handle('hub:viewUnsubscribe', (_evt, input: { targetNodeId: string; sessionId: string; groupId?: string }) =>
     coded(() => hubRequest(VIEW_RPC.unsubscribe, input)));
