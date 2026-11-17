@@ -164,3 +164,21 @@ describe('入口接线与切换关闭（终审修复）', () => {
     await waitFor(() => expect(closeMock).toHaveBeenCalled());
   });
 });
+
+// ── 终审修复补丁：StrictMode 双挂载不死 ─────────────────────────────────────
+
+describe('StrictMode 双挂载', () => {
+  it('卸载→重挂载（同 ui 态）→ 视图仍工作：卸载清理不得清 remoteSessionView', async () => {
+    const task = { id: 'T-9' } as never;
+    useUiStore.setState({ remoteSessionView: { task }, activeView: 'im' });
+    const { unmount } = render(<RemoteSessionView />);
+    await waitFor(() => expect(openMock).toHaveBeenCalledWith(task));
+    unmount();
+    // StrictMode 第二次挂载：ui 态未变（remoteSessionView 仍在）
+    expect(useUiStore.getState().remoteSessionView).not.toBeNull();
+    render(<RemoteSessionView />);
+    await waitFor(() => {
+      expect(screen.getByTestId('remote-session-view')).toBeInTheDocument();
+    });
+  });
+});

@@ -495,7 +495,10 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
   const canAnswer = waiting && !isWorkerView && delegationId != null && hubSupportsMinor(hubProtoVer, 3);
   // 2026-11-12 看板治理（C-1）：终态零可用动作时菜单不弹——对齐 BoardCard 对
   // dispatch 行「无菜单项不弹」的纪律，消灭空白菜单
-  const menuHasItems = canCancel || canAnswer || canRetry || canRedispatch;
+  // 「进入会话」不设状态门（终态历史回看入口——E2E 实录：done 态右键菜单
+  // 因 canCancel/canRedispatch 全 false 而不开，回看入口不可达）
+  const canEnterRemoteSession = task.delegationRole === 'out' && task.delegationId != null;
+  const menuHasItems = canCancel || canAnswer || canRetry || canRedispatch || canEnterRemoteSession;
 
   const handleCancel = async (): Promise<void> => {
     if (delegationId != null) {
@@ -706,7 +709,7 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
             className="fixed z-50 min-w-[120px] rounded border border-subtle bg-surface-1 py-1 text-sm text-secondary shadow-lg"
             style={{ left: menuLeft, top: menuTop }}
           >
-            {task.delegationRole === 'out' && task.delegationId != null && (
+            {canEnterRemoteSession && (
               <li>
                 <button
                   type="button"

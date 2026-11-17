@@ -152,9 +152,10 @@ export function RemoteSessionView(): React.JSX.Element {
     }
   }, [remoteSessionView]);
   useEffect(() => {
+    // 仅退订清理——不置空 ui.remoteSessionView（StrictMode 双挂载下卸载清理会
+    // 抹掉仍在场的入口态，二次挂载即自杀；ui 态收口由 setActiveView/显式关闭路径负责）
     return () => {
       useRemoteSessionStore.getState().close();
-      useUiStore.setState({ remoteSessionView: null });
     };
   }, []);
 
