@@ -49,9 +49,12 @@ function isCjkCodePoint(code: number): boolean {
  *   - 单次扫描按 codepoint 计数（避免 surrogate pair 重复计算造成低估）
  *   - 两部分分别求 ceil 后求和（不等价于「总字符 ceil」——保护不同
  *     CJK 比例下的精度）
+ *   - 省略字段容忍（2026-11-17 db-pro 验收 P0）：零参工具的 arguments、
+ *     插件 def 缺席的 inputSchema 等经 JSON.stringify 后为 undefined——
+ *     模型侧省略是合法输出，估算层计 0 不抛
  */
-export function estimateTokens(text: string): number {
-  if (text.length === 0) return 0;
+export function estimateTokens(text: string | undefined | null): number {
+  if (!text || text.length === 0) return 0;
 
   let cjkCount = 0;
   let nonCjkCount = 0;
