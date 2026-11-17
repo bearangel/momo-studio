@@ -20,6 +20,8 @@ import { TaskProgressButton } from '../im/TaskProgressButton';
 import { InFlightPanel } from '../im/InFlightPanel';
 // P3 S2：委派跟踪会话头「查看远端会话」入口（delegationRole='out' 门控，组件内自判）
 import { RemoteSessionEntry } from '../hub/RemoteSessionDrawer';
+import { RemoteSessionView } from '../hub/RemoteSessionView';
+import { useRemoteSessionStore } from '../../stores/remote-session.view';
 // P3 S3：跟踪会话头「补充指令」入口（与查看钮并排，CONTRACT #11；同门控 + 终态隐藏）
 import { SteerEntry } from '../hub/SteerEntry';
 import { AgentsView } from '../agent/AgentsView';
@@ -104,6 +106,14 @@ export function MiddlePanel() {
         <CodeEditor />
       </div>
     );
+  }
+
+  // 远端执行会话（spec 2026-11-17 §7.1）：任务驱动临时进入——优先于本地 im 列
+  // 渲染（不落会话列表；Esc / 返回按钮经组件内 closeRemoteSession 收口）
+  const remoteSessionView = useUiStore((s) => s.remoteSessionView);
+  if (activeView === 'im' && remoteSessionView !== null) {
+    void useRemoteSessionStore.getState().open === undefined; // 触发点在入口（openRemoteSession 调用侧）
+    return <RemoteSessionView />;
   }
 
   // im 视图：会话列表在 ViewSidebar，主区 = 消息流 + 工具条 + 输入框 + 成员浮层（按需）

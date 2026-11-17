@@ -16,7 +16,9 @@ import { useStreamStore } from '../../stores/stream.store';
 
 interface Props {
   toolName: string;
-  args: Record<string, unknown>;
+  args?: Record<string, unknown>;
+  /** 预串化参数摘要（远端帧投影用——wire 已截 200 字符；在场时绕过 describeToolCall） */
+  argsExcerpt?: string;
   result?: string;
   success: boolean;
   durationMs?: number;
@@ -55,6 +57,7 @@ function flatten(text: string): string {
 export function ToolCallChip({
   toolName,
   args,
+  argsExcerpt,
   result,
   success,
   durationMs,
@@ -95,7 +98,9 @@ export function ToolCallChip({
         ? 'bg-status-success-tint text-status-success'
         : 'bg-status-error-tint text-status-error';
   const StatusIcon = isExecuting ? Loader2 : neutral ? Wrench : denied ? TriangleAlert : success ? CircleCheck : CircleX;
-  const { summary, extraArgs } = describeToolCall(toolName, args);
+  const { summary, extraArgs } = argsExcerpt !== undefined
+    ? { summary: argsExcerpt, extraArgs: [] as string[] }
+    : describeToolCall(toolName, args ?? {});
 
   const resultLines = result !== undefined ? result.split('\n') : [];
   const folded = !resultExpanded && resultLines.length > RESULT_FOLD_LINES;
