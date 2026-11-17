@@ -184,6 +184,7 @@ describe('estimateTokens / estimateConversation - 省略字段容忍', () => {
   });
   it('toolCall 无 arguments / def 无 inputSchema 不抛（计 0）', () => {
     const total = estimateConversation({
+      system: '',
       messages: [
         {
           role: 'assistant',
