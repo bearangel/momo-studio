@@ -6,6 +6,7 @@ import {
   insertHumanRequest,
   getHumanRequest,
 } from '../storage/tasks/human-requests-repo';
+import { emitHumanChanged } from '../task/lifecycle-runs';
 
 /** 插件面的人工请求行投影（避免整行 repo 类型跨域泄漏；payloadJson 供两段式取回执行参数） */
 export interface HumanRequestRowLike {
@@ -43,6 +44,9 @@ export function buildPluginHumanGateApi(): PluginHumanGate {
         prompt: input.prompt ?? '',
         payloadJson: input.payloadJson ?? null,
       });
+      // 面板可见性锚：与存量 tool_gate 链同纪律——落行即广播 inserted，
+      // 否则面板（listPendingBySession 挂载/事件驱动）不知道有新卡（验收 P0 实证）
+      emitHumanChanged({ sessionId: input.sessionId, requestId: row.id, kind: 'inserted' });
       return row.id;
     },
     status: async (id): Promise<HumanRequestRowLike | null> => {

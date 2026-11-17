@@ -9,8 +9,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { __setElectronApisForTest } from '../../src/main/electron-access';
 import { buildPluginHumanGateApi } from '../../src/main/plugin/human-gate';
+import { emitHumanChanged } from '../../src/main/task/lifecycle-runs';
 import { listPendingBySession } from '../../src/main/storage/tasks/human-requests-repo';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
+
+vi.mock('../../src/main/task/lifecycle-runs', () => ({
+  emitHumanChanged: vi.fn(),
+}));
 
 const mockSend = vi.fn();
 
@@ -65,6 +70,8 @@ describe('buildPluginHumanGateApi', () => {
     expect(row?.taskId).toBeNull();
     expect(row?.timeoutPolicy).toBe('keep_waiting');
     expect(row?.payloadJson).toBe(payloadJson);
+    // 面板可见性锚：落行必须广播 human:changed(inserted)——漏推送 = 卡在库里面板不知（验收 P0 实证）
+    expect(emitHumanChanged).toHaveBeenCalledWith({ sessionId: 'sess-1', requestId: id, kind: 'inserted' });
   });
 
   it('status 返回投影（含 payloadJson）；未知 id → null', async () => {
