@@ -64,7 +64,7 @@ function FrameBubble({ frame, streamingTail }: { frame: HubViewFrame; streamingT
       <div className="ml-auto w-fit max-w-[86%] rounded-[10px] bg-accent-500 px-[11px] py-[7px] text-[13px] leading-[1.6] text-inverse">
         <span className="whitespace-pre-wrap break-words">{frame.content}</span>
         {frame.kind === 'steer' && (
-          <span className="mt-[3px] block text-right text-[10px] text-white/72">指令</span>
+          <span className="mt-[3px] block text-right text-[10px] text-inverse opacity-70">指令</span>
         )}
       </div>
     );
@@ -102,7 +102,7 @@ function LegacyRow({ m }: { m: HubViewMessage }): React.JSX.Element {
     return (
       <div className="ml-auto w-fit max-w-[86%] rounded-[10px] bg-accent-500 px-[11px] py-[7px] text-[12.5px] leading-[1.6] text-inverse">
         <span className="whitespace-pre-wrap break-words">{m.content}</span>
-        <span className="mt-[3px] block text-right text-[10px] text-white/72">{formatHHmm(m.at)}</span>
+        <span className="mt-[3px] block text-right text-[10px] text-inverse opacity-70">{formatHHmm(m.at)}</span>
       </div>
     );
   }
@@ -290,7 +290,7 @@ export function RemoteSessionView(): React.JSX.Element {
               <div key={p.id} className="ml-auto w-fit max-w-[86%]">
                 <div className="rounded-[10px] bg-accent-500 px-[11px] py-[7px] text-[13px] leading-[1.6] text-inverse">
                   <span className="whitespace-pre-wrap break-words">{p.text}</span>
-                  <span className="mt-[3px] block text-right text-[10px] text-white/72">
+                  <span className="mt-[3px] block text-right text-[10px] text-inverse opacity-70">
                     {p.state === 'sending' ? '发送中…' : p.state === 'failed' ? `发送失败：${p.error ?? ''}` : `送达 ${st.target?.nodeName ?? '执行节点'}`}
                   </span>
                 </div>

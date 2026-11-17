@@ -180,6 +180,28 @@ describe('健壮性', () => {
     expect(aggregateFrames(rows)).toEqual([]);
   });
 
+  it('corrupt final（payload=null）→ 行跳过：不建帧、不误判终态（终审 minor #10）', () => {
+    const rows = [
+      row({ eventType: 'text_delta', payload: { delta: '流' } }),
+      { ...row({ eventType: 'final' }), payload: null },
+    ];
+    const frames = aggregateFrames(rows);
+    // 流式帧保持 streaming（corrupt final 不定稿）且内容不丢
+    expect(frames).toEqual([
+      { frameId: 'm1', seq: 1, at: rows[0]!.at, role: 'assistant', kind: 'text', content: '流', streaming: true },
+    ]);
+  });
+
+  it('空正文终态帧不推（final 无 body 且无 delta——tool-only 回合零空气泡）', () => {
+    const rows = [
+      row({ eventType: 'tool_call_start', payload: { callId: 'c1', toolName: 'bash' } }),
+      row({ eventType: 'tool_call_result', payload: { callId: 'c1', result: 'ok', success: true } }),
+      row({ eventType: 'final', payload: { status: 'done' } }),
+    ];
+    const frames = aggregateFrames(rows);
+    expect(frames.map((f) => f.kind)).toEqual(['tool']);
+  });
+
   it('空行集 → 空帧集', () => {
     expect(aggregateFrames([])).toEqual([]);
   });

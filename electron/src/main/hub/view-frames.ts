@@ -155,6 +155,7 @@ function aggregate(rows: FrameEventRow[]): TailAggregate {
         continue;
       }
       case 'final': {
+        if (p === null) continue; // corrupt final：不定稿不建帧（误判终态=空气泡+假收敛）
         const agg = texts.get(r.messageId) ?? {
           frameId: r.messageId, firstRowid: r.seq, lastRowid: r.seq, at: r.at,
           owner: r.sender === 'owner', deltas: [], finalized: null, terminal: false,
@@ -196,7 +197,7 @@ function aggregate(rows: FrameEventRow[]): TailAggregate {
   const openStarts = new Map<string, number>();
   for (const agg of texts.values()) {
     const content = agg.finalized ?? agg.deltas.join('');
-    if (content === '' && !agg.terminal) continue; // 空且未终态——尚无可见内容，不占帧
+    if (content === '') continue; // 空正文不占帧（未终态=尚无内容；终态=tool-only 回合零气泡）
     const streaming = !agg.owner && !agg.terminal;
     const frame: ViewFrame = {
       frameId: agg.frameId, seq: agg.lastRowid, at: agg.at,

@@ -75,8 +75,6 @@ interface ViewFrame {
   streaming?: boolean;
   /** kind='tool'：结构化工具载荷（chip 渲染输入） */
   tool?: { name: string; argsExcerpt?: string; result?: string; success?: boolean; truncated?: boolean };
-  /** kind='steer'：origin=发起方节点标记（leader 去重依据，§8.4） */
-  origin?: string;
 }
 ```
 
@@ -95,7 +93,7 @@ interface ViewFrame {
 | `tool_call_start` | 开工具帧（name + argsExcerpt） |
 | `tool_call_result` | 回填同 callId 工具帧（result / success / truncated——结果超长截断，沿 TOOL_RESULT_WIRE_BUDGET 量级） |
 | owner 消息（messages 行） | user 帧（任务书首消息等） |
-| `steer` 事件（payload.body） | **steer 帧**（role=user，origin=标记；leader 据此去重，§8.4） |
+| `steer` 事件（payload.body） | **steer 帧**（role=user，kind 即去重标记；leader 按 kind+content 消解，§8.4） |
 | 其余（todo_update / dispatch / segment_boundary / status_change…） | 丢弃（notice 类暂不设——最小面起步，需要再议） |
 
 ### 4.3 查询与分页
@@ -138,7 +136,7 @@ interface ViewFrame {
 - 复用 `MentionInput` 形态；发送按钮「发送指令」。
 - 发送链路 = 既有 `ipc.hub.taskSteer`（协议 1.12 方法，零新增）。
 - **态机门控**：任务 `running / waiting_human / submitted` 可发送；终态禁用 + 占位「任务已结束」；`pending`（未开始）发送 → 人话提示；worker 离线 → 人话错误（沿协议既有文案「执行节点离线，稍后再试」）。
-- 发送后**乐观渲染** user 气泡 +「送达 {节点名}」徽标（沿 SteerEntry 语义）；worker 消费注入后回流的 steer 帧（§4.2）按 `origin` + 内容匹配消解 pending 乐观气泡，**不双显**；worker 侧 steer 帧内容 = 发送原文（`payload.body` 透传），匹配键 = (origin, content)，pending 队列按序消解。
+- 发送后**乐观渲染** user 气泡 +「送达 {节点名}」徽标（沿 SteerEntry 语义）；worker 消费注入后回流的 steer 帧（§4.2）按 kind + 内容匹配消解 pending 乐观气泡，**不双显**；worker 侧 steer 帧内容 = 发送原文（`payload.body` 透传），匹配键 = (kind, content)，pending 队列按序消解。〔origin 字段裁定裁剪：穿透需改 runtime 子进程 steer 链，单用户平台收益不抵侵入面——多发起方场景出现时再引入〕
 - 本地零落库（只读红线 §8.4 纪律，纯视图态）。
 
 ## 8. 错误处理
@@ -168,5 +166,5 @@ interface ViewFrame {
 ## 11. 风险与开放问题
 
 - **R1** hub view 载荷若非纯透传（§6 前提核实项）→ hub 仓追加最小放行改动，属既定路径非分叉。
-- **R2** steer 帧去重键 (origin, content)：同文重复指令按 pending 队列顺序消解；跨 run 同文 steer 极端场景可能误配对——概率与影响（一条乐观气泡提前消解）均可接受，不为此引入序号协议。
+- **R2** steer 帧去重键 (kind, content)（origin 已裁剪，见 §7.3 裁定注）：同文重复指令按 pending 队列顺序消解；他节点同文 steer 或跨 run 同文极端场景可能误配对——概率与影响（一条乐观气泡提前消解）均可接受，不为此引入序号协议或 origin 穿透。
 - **R3** 帧页 hasMore 语义在超长单帧会话下的翻页粒度变粗（一帧=一消息）——与本地会话体验一致，非回退。
