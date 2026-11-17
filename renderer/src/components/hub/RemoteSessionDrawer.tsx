@@ -102,9 +102,10 @@ async function resolveTarget(task: TaskRow): Promise<
   }
   if (!session) return { kind: 'miss' };
 
+  // 本抽屉恒 legacy 请求（无 wire 字段）——union 返回按收窄取 messages 页
   let page: { messages: HubViewMessage[]; hasMore: boolean };
   try {
-    page = await ipc.hub.viewMessages({
+    const res = await ipc.hub.viewMessages({
       targetNodeId: record.targetNodeId,
       sessionId: session.sessionId,
       workspaceName: record.workspaceName,
@@ -113,6 +114,8 @@ async function resolveTarget(task: TaskRow): Promise<
       limit: VIEW_PAGE_SIZE,
       ...viewSeg,
     });
+    // 恒 legacy 请求——frames 分支不可达，收窄仅为过 union 类型
+    page = 'frames' in res ? { messages: [], hasMore: res.hasMore } : res;
   } catch (err) {
     return { kind: 'error', message: humanizeViewError(err) };
   }
@@ -258,7 +261,7 @@ export function RemoteSessionDrawer({ task, onClose }: RemoteSessionDrawerProps)
           const knownLast =
             messagesRef.current.length > 0 ? messagesRef.current[messagesRef.current.length - 1]!.seq : 0;
           try {
-            const page = await ipc.hub.viewMessages({
+            const raw = await ipc.hub.viewMessages({
               targetNodeId: t.targetNodeId,
               sessionId: t.sessionId,
               workspaceName: t.workspaceName,
@@ -266,6 +269,7 @@ export function RemoteSessionDrawer({ task, onClose }: RemoteSessionDrawerProps)
               limit: VIEW_PAGE_SIZE,
               ...seg,
             });
+            const page = 'frames' in raw ? { messages: [] as HubViewMessage[], hasMore: raw.hasMore } : raw;
             const known = new Set(messagesRef.current.map((m) => m.seq));
             const fresh = page.messages.filter((m) => !known.has(m.seq));
             if (fresh.length > 0) setMessages([...messagesRef.current, ...fresh]);
@@ -320,7 +324,8 @@ export function RemoteSessionDrawer({ task, onClose }: RemoteSessionDrawerProps)
         limit: VIEW_PAGE_SIZE,
         ...seg,
       })
-      .then((page) => {
+      .then((raw) => {
+        const page = 'frames' in raw ? { messages: [] as HubViewMessage[], hasMore: raw.hasMore } : raw;
         setMessages((prev) => {
           const known = new Set(prev.map((m) => m.seq));
           const fresh = page.messages.filter((m) => !known.has(m.seq));

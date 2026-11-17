@@ -3767,6 +3767,8 @@ export interface HubViewSessionSummary {
   title: string;
   lastSeq: number;
   updatedAt: number;
+  /** 委派关联（协议 1.13.0 镜像）：执行方 sessions→tasks 联表回带；非委派会话不带键 */
+  delegationId?: string;
 }
 
 /** 远程查看——消息条目（协议 ViewMessage 镜像：seq 全序单调，富形态序列化进 content） */
@@ -3780,6 +3782,37 @@ export interface HubViewMessage {
 /** 远程查看——消息回放页（协议 ViewMessagePage 镜像） */
 export interface HubViewMessagePage {
   messages: HubViewMessage[];
+  hasMore: boolean;
+}
+
+/** 远程查看——工具帧载荷（协议 1.13.0 ViewToolFrame 镜像）：一调用一帧 */
+export interface HubViewToolFrame {
+  name: string;
+  argsExcerpt?: string;
+  result?: string;
+  success?: boolean;
+  truncated?: boolean;
+}
+
+/**
+ * 远程查看——聚合帧（协议 1.13.0 ViewFrame 镜像）：worker 端按消息聚合的投影，
+ * frameId 帧稳定身份（同 id 重发=整帧替换）；seq 帧末事件 rowid；streaming 仅
+ * text 帧（未终态每拍重发快照，终态后游标推进）。
+ */
+export interface HubViewFrame {
+  frameId: string;
+  seq: number;
+  at: number;
+  role: 'user' | 'assistant';
+  kind: 'text' | 'tool' | 'user' | 'steer';
+  content?: string;
+  streaming?: boolean;
+  tool?: HubViewToolFrame;
+}
+
+/** 远程查看——帧回放页（协议 1.13.0 ViewFramePage 镜像；wire:2 协商成立时的响应形态） */
+export interface HubViewFramePage {
+  frames: HubViewFrame[];
   hasMore: boolean;
 }
 
@@ -3821,6 +3854,9 @@ export interface HubViewAppendedEvent {
   /** 组锚定（M4.2，协议 1.6.0 镜像）：显式 groupId 订阅的透传记录（主进程桥挑字段
    *  转发）；旧 hub / 隐式订阅不带键——查看面板单开不按它分叉，类型面透传 */
   groupId?: string;
+  /** 帧形态增量（协议 1.13.0 镜像）：wire:2 订阅者收到时 events 为空数组、增量在
+   *  此字段；legacy 增量恒不带键（hub 已转码进 events）。 */
+  frames?: HubViewFrame[];
 }
 
 /** hub 命名空间通道面（spec 2026-10-23：4 invoke + 2 推送；M1 T13 增发布 1 invoke + 1 推送；M2b T4 增工作组 6 invoke + 1 推送；M2c T8b 增镜像 2 invoke + 2 推送） */
@@ -3901,7 +3937,11 @@ export interface HubApiSurface {
     limit: number;
     groupId?: string;
   }): Promise<{ sessions: HubViewSessionSummary[] }>;
-  /** 远程查看：会话消息回放页（seq 升序；workspaceName 为可选作用域校验附加键） */
+  /**
+   * 远程查看：会话消息回放页（seq 升序；workspaceName 为可选作用域校验附加键）。
+   * wire: 2（协议 1.13.0）＝请求帧形态投影——响应为 HubViewFramePage（'frames' in 收窄）；
+   * 缺省 legacy 文本投影（HubViewMessagePage）。
+   */
   viewMessages(input: {
     targetNodeId: string;
     sessionId: string;
@@ -3909,11 +3949,16 @@ export interface HubApiSurface {
     fromSeq: number;
     limit: number;
     groupId?: string;
-  }): Promise<HubViewMessagePage>;
+    wire?: 2;
+  }): Promise<HubViewFramePage | HubViewMessagePage>;
   /** 远程查看：目标工作空间本地 #T 任务列表 */
   viewTasks(input: { targetNodeId: string; workspaceName: string; groupId?: string }): Promise<{ tasks: HubViewLocalTask[] }>;
   /** 远程查看：订阅会话尾部增量（进入回放视图自动调；断开/离开自动 unsubscribe） */
-  viewSubscribe(input: { targetNodeId: string; sessionId: string; groupId?: string }): Promise<{ ok: boolean }>;
+  /**
+   * 远程查看：尾部订阅。wire: 2（协议 1.13.0）＝声明帧形态投影，响应回显 wire:2
+   * 表示目标节点帧投影已生效；无回显＝旧节点，消费方降级 legacy 渲染。
+   */
+  viewSubscribe(input: { targetNodeId: string; sessionId: string; groupId?: string; wire?: 2 }): Promise<{ ok: boolean; wire?: 2 }>;
   /** 远程查看：注销尾部订阅（幂等清理——hub 侧 consent 关闭不阻断退订） */
   viewUnsubscribe(input: { targetNodeId: string; sessionId: string; groupId?: string }): Promise<{ ok: boolean }>;
   /** 远程查看（M3.2）：目标节点空间清单（白名单三字段投影；picker 远端数据源） */
