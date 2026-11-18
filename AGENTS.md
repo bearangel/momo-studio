@@ -60,6 +60,11 @@ npx pnpm@9.0.0 dev
 
 # 构建（已固化 NODE_OPTIONS=4096 防 Vite Monaco OOM；Windows 本地构建不支持——打包走 CI）
 npx pnpm@9.0.0 build
+
+# Windows 安装包标准化构建（构建 + 打包 + 对产物做 4 道门禁，详见脚本头注释）
+# G1 asar 内协议包版本 = electron/package.json 的 pin；G2 协议 PROTOCOL_VERSION 与仓库实装一致
+# G3 runtime 子进程 eager 依赖图零 electron 运行期依赖；G4 打包 runtime-entry 可加载
+cd electron && node scripts/package-win.mjs          # 加 --no-build 复用既有 dist
 ```
 
 ## 单元测试文件存放规范

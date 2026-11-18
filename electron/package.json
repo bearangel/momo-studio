@@ -18,7 +18,8 @@
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
     "dist": "pnpm build && pnpm --filter ../renderer build && electron-builder",
-    "pack": "pnpm build && pnpm --filter ../renderer build && electron-builder --dir"
+    "pack": "pnpm build && pnpm --filter ../renderer build && electron-builder --dir",
+    "package:win": "node scripts/package-win.mjs"
   },
   "build": {
     "appId": "io.momo-studio.desktop",
