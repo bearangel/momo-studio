@@ -80,6 +80,8 @@ canDecide(task) =
 
 `decidable=false` 的验收卡渲染**只读信息卡**：无按钮、无输入框、无确认（见 §4.2）。
 
+请求行仍照常落库、不删除：`human:attention` 的 `submitted` 聚合（执行方「等待远端裁决」的侧栏提示）与审计链依赖它；只读卡的「等待发起方裁决」正是它的呈现面。
+
 ### DEC-4 IPC 守卫
 
 `electron/src/main/task/ipc.handlers.ts`：
@@ -195,13 +197,16 @@ worker 侧注入复用既有管线 `injectExecutionSessionNotice`（`remote-inte
 
 ### DEC-16 跨节点顺序
 
-A 侧 `task:continue` IPC：**远端先行，本地后落**。
+A 侧 `task:continue` IPC（`electron/src/main/task/ipc.handlers.ts` 新增 `continueTaskRouted`）：**远端先行，本地后落**。
 
-1. 调 hub `task.continue`；成功后再本地 `acceptAndContinue`。
-2. 远端失败 → 人话 toast，卡片保持待裁决（可重试），本地零写入。
-3. 远端成功、本地写失败（罕见）：下一轮 `task.submitted` 镜像会 `authoritativeReset` 回正，可自愈；日志 warn。
+1. 本地非委派任务（`delegationRole !== 'out'`）→ 直接 `acceptAndContinue`，无远端步骤。
+2. 委派任务 → 先调 hub `task.continue`；成功后本地 `acceptAndContinue`。
+3. 远端失败 → 人话 toast，卡片保持待裁决（可重试），本地零写入。
+4. 远端成功、本地写失败（罕见）：下一轮 `task.submitted` 镜像会 `authoritativeReset` 回正，可自愈；日志 warn。
 
 > 与 `accept`/`reject` 的「本地先行」有意不同：继续的本质是把活交给对方，本地先落会得到「A 已进入 N+1 轮、B 从未收到要求」的静默挂起，比「A 仍待裁决」难恢复得多。
+
+IPC 面：`electron/src/preload/index.ts` + `renderer/src/ipc/types.d.ts` 增 `task.continue(taskId: string, requirement: string): Promise<TaskRow & { remoteWarning?: string }>`（与 `task.accept` 同形返回，便于卡片复用 `remoteWarning` 呈现）。
 
 ---
 
@@ -227,7 +232,7 @@ interface TaskContinuedEvent { taskId: string; runNo: number; requirement: strin
 1. `resolveWorkerTask` → 无承接行 / 终态 / 非 `submitted` → 静默幂等收敛。
 2. `acceptAndContinue(task.id, requirement, REMOTE_ORIGIN_BY)`。
 3. `injectExecutionSessionNotice` 注入要求（DEC-15）。
-4. `settleDocked(delegationId, 'continued')`（新增停靠态，或归入既有 'running' 语义——实施时以最小改动为准）。
+4. 停靠项出清：`settleDocked` 联合类型扩为 `'accepted' | 'rejected' | 'continued'`；`'continued'` 分支只 `unwatch` + 出清停靠项，**不**把本地委派账本置 `done`（现状 `'accepted'` 会置 done——继续场景要置 `running`）。新 run 的回合终态到达后由 `localTaskAwaitingAcceptance` 重新停靠，链路自洽。
 
 ### 7.3 报告载荷增结构化交付物（DEC-19）
 
@@ -306,7 +311,7 @@ studio 侧 `remote-intervene-bridge.ts`：
 | P3 续作 run | DEC-12~16（状态机 + 写路径 + IPC + 本地单机闭环） | 是（单机任务可继续） |
 | P4 协议与保真 | §7 全部 + §8（hub 1.14 + deliverable 通道 + pin 升级） | 是（跨节点继续 + 内容一致） |
 
-> P2 若先于 P3 上线，「继续」按钮须隐藏（不可用打回冒充）；实施时按 P1→P2→P3→P4 顺序单分支推进，避免中间态。
+> 四阶段在**同一分支**顺序推进（P1→P2→P3→P4），每阶段全绿再进下一阶段；「继续」按钮在 P3 完成前不渲染（不用打回冒充继续），避免中间态给出错误承诺。
 
 ---
 
