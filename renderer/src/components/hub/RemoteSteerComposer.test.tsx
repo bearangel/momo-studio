@@ -48,13 +48,17 @@ describe('门控', () => {
     expect(screen.getByRole('button', { name: /发送指令/ })).not.toBeDisabled();
   });
 
-  it('submitted（待裁决）→ 禁用 + 占位提示（DEC-10）', () => {
+  it('submitted（待裁决）→ 整个 composer 不渲染（决策由验收卡独占）', () => {
     useRemoteSessionStore.setState({ task: makeTask('submitted') } as Partial<ReturnType<typeof useRemoteSessionStore.getState>>);
-    render(<RemoteSteerComposer />);
-    const input = screen.getByTestId('remote-steer-input') as HTMLTextAreaElement;
-    expect(input.disabled).toBe(true);
-    expect(input.placeholder).toBe('等待你的裁决——裁决后可继续补充指令');
-    expect(screen.getByRole('button', { name: /发送指令/ })).toBeDisabled();
+    const { container } = render(<RemoteSteerComposer />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('执行方（delegationRole=in）→ 不渲染（本机无 steer 权）', () => {
+    const task = { ...makeTask('in_progress'), delegationRole: 'in' as const };
+    useRemoteSessionStore.setState({ task } as Partial<ReturnType<typeof useRemoteSessionStore.getState>>);
+    const { container } = render(<RemoteSteerComposer />);
+    expect(container).toBeEmptyDOMElement();
   });
 
   it.each(['completed', 'failed', 'cancelled'] as const)('%s → 禁用 + 占位「任务已结束」', (status) => {

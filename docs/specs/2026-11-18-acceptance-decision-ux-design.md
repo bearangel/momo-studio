@@ -157,7 +157,7 @@ canDecide(task) =
 
 ### 5.1 输入框分工（DEC-10 ~ DEC-11）
 
-- **DEC-10 待裁决期禁用补充指令**：`RemoteSteerComposer` 在 `task.status === 'submitted'` 时禁用，placeholder 改「等待你的裁决——裁决后可继续补充指令」；`task === null` 时保持现状。
+- **DEC-10 待裁决期不渲染补充指令**（2026-11-18 修订）：`RemoteSteerComposer` 在 `task.status === 'submitted'` 时**整块不渲染**（裁决归验收卡独占，禁用态死输入框只会误导）；执行方（`delegationRole === 'in'`）同样不渲染（本机无 steer 权）。`task === null` 时保持现状。
 - **DEC-11 主进程守卫**：`steerTaskRouted`（`electron/src/main/task/ipc.handlers.ts`）在 `task.status === 'submitted'` 时人话拒绝：`任务待验收，请先裁决（继续 / 完成 / 驳回）后再补充指令`。防僵尸回合，两端一致。
 
 ---

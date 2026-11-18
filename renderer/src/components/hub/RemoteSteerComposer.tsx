@@ -14,7 +14,7 @@ import { useRemoteSessionStore } from '../../stores/remote-session.view';
 /** steer 上限（码点）——沿 SteerEntry 常量（hub 侧 1..4000 同界） */
 const STEER_MAX_CODEPOINTS = 4000;
 
-export function RemoteSteerComposer(): React.JSX.Element {
+export function RemoteSteerComposer(): React.JSX.Element | null {
   const task = useRemoteSessionStore((s) => s.task);
   const sendSteer = useRemoteSessionStore((s) => s.sendSteer);
   const [text, setText] = useState('');
@@ -22,7 +22,10 @@ export function RemoteSteerComposer(): React.JSX.Element {
 
   const terminal = task !== null && isTerminalStatus(task.status);
   const awaitingDecision = task !== null && task.status === 'submitted';
-  const disabled = terminal || awaitingDecision;
+  /** 不可 steer 的两态直接不渲染（spec 2026-11-18 DEC-10 修订）：
+   *  待裁决期决策归验收卡，执行方本机无 steer 权——留死输入框只会误导。 */
+  const hidden = awaitingDecision || (task !== null && task.delegationRole === 'in');
+  const disabled = terminal;
   const codepoints = Array.from(text).length;
   const overLimit = codepoints > STEER_MAX_CODEPOINTS;
   const canSend = !disabled && !sending && text.trim() !== '' && !overLimit;
@@ -35,6 +38,8 @@ export function RemoteSteerComposer(): React.JSX.Element {
       setSending(false);
     });
   };
+
+  if (hidden) return null;
 
   return (
     <div className="shrink-0 border-t border-subtle bg-surface-1 px-4 py-2.5" data-testid="remote-steer-composer">
@@ -50,13 +55,7 @@ export function RemoteSteerComposer(): React.JSX.Element {
           }}
           disabled={disabled}
           rows={2}
-          placeholder={
-            terminal
-              ? '任务已结束'
-              : awaitingDecision
-                ? '等待你的裁决——裁决后可继续补充指令'
-                : '补充指令…（Enter 发送 · Shift+Enter 换行）'
-          }
+          placeholder={terminal ? '任务已结束' : '补充指令…（Enter 发送 · Shift+Enter 换行）'}
           className="w-full resize-none rounded-[10px] bg-transparent px-3 py-2 pr-16 text-[13px] leading-[1.6] text-primary placeholder:text-tertiary focus:outline-none disabled:cursor-not-allowed"
           data-testid="remote-steer-input"
         />
