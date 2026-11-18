@@ -294,3 +294,34 @@ describe('config 属性 type=path（2026-11-05 归档：目录类配置）', () 
     expect(() => normalizeConfigSchema({ type: 'object', properties: { x: { type: 'directory' } } })).toThrow(/type 须为/);
   });
 });
+
+// E1 验收暴露的鲁棒性缺口（2026-11-17 db-pro E2E）：warm 单键 reject 全组静默蒸发
+// （boot 链 fire-and-forget 吞错）——间歇性敏感值丢失且零证据。契约：
+// 单键失败不拖垮其他键、失败键留痕（可观测）且不进缓存、成功键照常可用。
+describe('warmPluginConfigCache - 单键失败隔离（E1 加固）', () => {
+  it('单敏感键 getSecret reject → 其他键照常入缓存，失败键不进且不抛', async () => {
+    const schema = normalizeConfigSchema({
+      type: 'object',
+      properties: {
+        goodToken: { type: 'string', sensitive: true },
+        badToken: { type: 'string', sensitive: true },
+        plain: { type: 'string' },
+      },
+    });
+    setKeychainImpl({
+      setSecret: async () => undefined,
+      getSecret: async (k) => {
+        if (k.includes('badToken')) throw new Error('keychain 瞬态失败（-25308）');
+        return 'vault-value';
+      },
+      deleteSecret: async () => undefined,
+    });
+    await expect(warmPluginConfigCache('e1-plugin', schema)).resolves.toBeUndefined();
+    const view = getPluginConfigView('e1-plugin', schema);
+    expect(view.sensitiveConfigured.goodToken).toBe(true);
+    expect(view.sensitiveConfigured.badToken).toBe(false);
+    const merged = await resolvePluginConfig('e1-plugin', schema);
+    expect(merged.goodToken).toBe('vault-value');
+    expect(merged.badToken).toBeUndefined();
+  });
+});
