@@ -50,9 +50,10 @@ import { registerHubIpc } from '../hub/ipc.handlers';
 // A3/F3：presence 快照同款注入（human.ipc.handlers 原 hub/index 顶层 import 清除）
 import { hubGetPresenceNodes, hubRequest } from '../hub/index';
 import { TASK_RPC } from '../hub/protocol';
+import { TASK_CONTINUE_WIRE } from '../hub/delegation-wire';
 import type { InterventionAnswer } from '../hub/protocol';
 import { setMirrorAnswerForwarder, setPresenceNodesProvider } from '../task/human.ipc.handlers';
-import { setRemoteTerminalForwarder, setSteerForwarder } from '../task/ipc.handlers';
+import { setRemoteTerminalForwarder, setSteerForwarder, setContinueForwarder } from '../task/ipc.handlers';
 // 新装引导（spec 2026-10-10）：status / 方案生成 / 方案应用 / 完成标记
 import { registerOnboardingHandlers } from '../onboarding/ipc.handlers';
 import type { WorkspaceIpcOpts } from '../workspace/ipc.handlers';
@@ -167,6 +168,11 @@ export function registerIpcHandlers(opts: WorkspaceIpcOpts = {}): void {
   // unsupported_method 人话拒——可读降级，无需本地预检
   setSteerForwarder(async ({ delegationId, message }) => {
     await hubRequest(TASK_RPC.steer, { taskId: delegationId, message }, undefined);
+  });
+  // 1.14.0 验收继续转发（DEC-16 远端先行）：hub 错误码经 RpcRemoteError.code
+  // 原样到达，humanizeContinueError 在 handler 映射人话
+  setContinueForwarder(async ({ delegationId, requirement }) => {
+    await hubRequest(TASK_CONTINUE_WIRE, { taskId: delegationId, requirement }, undefined);
   });
   // 窗口控制（自绘 titlebar）——注册先于窗口创建，getWin 每次调用时懒查首个窗口
   registerWindowIpc(() => BrowserWindow.getAllWindows()[0] ?? null);

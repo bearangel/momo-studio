@@ -498,6 +498,12 @@ export interface TaskApiSurface {
    * 成功即时落跟踪会话 kind='steered' 里程碑（发起方本地写，pushSessionMessage
    * 到达消息流）；失败人话 throw（node_offline → 「执行节点离线，稍后再试」）
    */
+  /**
+   * 验收继续（spec 2026-11-18 DEC-16）：当前 run 验收通过 + 同一任务立即开
+   * run#N+1，requirement 随事件送达执行方（1..4000 字，空白人话拒）。
+   * 委派任务为「远端先行」——远端失败本地零写入、卡片保持待裁决。
+   */
+  continue(id: string, requirement: string): Promise<TaskRow & { remoteWarning?: string }>;
   steer(taskId: string, message: string): Promise<{ ok: true }>;
   /** run 历史（Task 16，run_no ASC） */
   listRuns(id: string): Promise<TaskRunRow[]>;

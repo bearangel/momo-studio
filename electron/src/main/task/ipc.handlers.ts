@@ -58,6 +58,7 @@ import {
   submitRun,
   acceptTask,
   rejectTask,
+  acceptAndContinue,
   getTaskMaxRuns,
   setTaskMaxRuns,
   type DeliverableInput,
@@ -254,6 +255,57 @@ export function setSteerForwarder(
   fn: ((input: RemoteSteerForwardInput) => Promise<void>) | null,
 ): void {
   steerForwarder = fn;
+}
+
+/** 继续通道转发载荷（= hub TaskContinueReq：taskId 为委派 id） */
+export interface ContinueForwardInput {
+  delegationId: string;
+  requirement: string;
+}
+
+let continueForwarder: ((input: ContinueForwardInput) => Promise<void>) | null = null;
+
+/** 继续转发装配点（hub 域 ipc/index.ts 接线） */
+export function setContinueForwarder(fn: ((input: ContinueForwardInput) => Promise<void>) | null): void {
+  continueForwarder = fn;
+}
+
+/** hub 错误码 → 人话（peer_version_unsupported 是 1.14 版本门的唯一新增码） */
+function humanizeContinueError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  if (message.includes('peer_version_unsupported')) {
+    return '执行节点版本不支持继续，可改用完成或驳回';
+  }
+  if (message.includes('node_offline')) return '执行节点离线，稍后再试';
+  return message;
+}
+
+/**
+ * 验收「继续」路由单点（spec 2026-11-18 DEC-16）：本地任务直接续作；
+ * 委派任务「远端先行、本地后落」——远端失败本地零写入，卡片保持待裁决。
+ */
+export async function continueTaskRouted(
+  id: string,
+  requirement: string,
+): Promise<TaskRow & { remoteWarning?: string }> {
+  const before = getTask(id);
+  if (!before) throw new Error(`task ${id} 不存在`);
+  if (before.delegationRole !== 'out') {
+    acceptAndContinue(id, requirement);
+    notifyExecutor();
+    return { ...getTask(id)! };
+  }
+  if (before.delegationId === null) throw new Error('任务未委派，无可送达的执行节点');
+  const forward = continueForwarder;
+  if (forward === null) throw new Error('继续通道未就绪（hub 未配置）');
+  try {
+    await forward({ delegationId: before.delegationId, requirement: requirement.trim() });
+  } catch (err) {
+    throw new Error(humanizeContinueError(err));
+  }
+  acceptAndContinue(id, requirement);
+  notifyExecutor();
+  return { ...getTask(id)! };
 }
 
 /** 补充指令字数上限（协议 TaskSteerReq：message trim 后 1..4000 字，按码点计） */
@@ -606,6 +658,16 @@ export function registerTaskHandlers(): void {
     async (_evt, input: { taskId: string; message: string }): Promise<{ ok: true }> => {
       if (typeof input?.taskId !== 'string') throw new Error('task:steer 需要 taskId');
       return steerTaskRouted(input.taskId, input.message);
+    },
+  );
+
+  // 1.14.0 验收继续（spec 2026-11-18 DEC-16）：本地直写；委派远端先行
+  ipcMain.handle(
+    'task:continue',
+    async (_evt, id: string, requirement: string): Promise<TaskRow & { remoteWarning?: string }> => {
+      if (typeof id !== 'string') throw new Error('task:continue 需要 taskId');
+      if (typeof requirement !== 'string') throw new Error('task:continue 需要 requirement 字符串');
+      return continueTaskRouted(id, requirement);
     },
   );
 

@@ -656,6 +656,9 @@ const api: ApiSurface = {
     // P3 S3：发起方补充指令（out 校验 + hub task.steer + 成功里程碑主进程落；
     // 失败 throw 人话——node_offline 主进程已映射「执行节点离线，稍后再试」）
     steer: (taskId, message) => invoke<{ ok: true }>('task:steer', { taskId, message }),
+    // 1.14.0 验收继续（spec 2026-11-18 DEC-16）：继续要求必填；远端失败人话 throw
+    continue: (id, requirement) =>
+      invoke<TaskRow & { remoteWarning?: string }>('task:continue', id, requirement),
     listRuns: (id) => invoke<TaskRunRow[]>('task:listRuns', id),
     // 返工上限可配（P3 E1）：读生效值（脏数据回落缺省 10）；写夹取 1..50 后
     // 返回归一化生效值（语义单点主进程 lifecycle-runs）

@@ -23,6 +23,10 @@ export const TASK_WIRE = {
  */
 export const TASK_ANSWER_WIRE = 'task.answer' as const;
 
+/** task.continue wire 名（协议 1.14.0，spec 2026-11-18 §7.1）：studio 本地单源——
+ *  在 pin 升级前避免对协议包常量形成跨任务依赖；升级后本常量仍与协议逐字一致。 */
+export const TASK_CONTINUE_WIRE = 'task.continue' as const;
+
 /**
  * task.answer 转发载荷（M3.1）——与 hub v0.1.7 协议包 TaskAnswerReq 形状对齐。
  * message 仅审计与 leader 侧展示（≤512，hub 校验），不注入子进程——approve 走
