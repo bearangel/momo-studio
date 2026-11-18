@@ -904,3 +904,50 @@ describe('retryDispatch — peer 草稿重派', () => {
     expect(w.updates.some((u) => u.patch.origin === 'peer_draft')).toBe(false);
   });
 });
+
+
+// ── 镜像写 emit 注入（spec §12 面板直连 composer 终态实时性——跨节点完成
+//    走镜像直写无 task:runChanged，发起方面板陈旧；write-blocked 域禁 import
+//    故经端口注入） ────────────────────────────────────────────────────────────
+
+describe('delegation-sync — 镜像状态写发射 emitTaskRunChanged（端口注入）', () => {
+  function world(row: TaskRow): { w: ReturnType<typeof makeWorld>; emits: Array<{ taskId: string; status: string }> } {
+    const w = makeWorld();
+    w.rows.set(row.id, row);
+    const emits: Array<{ taskId: string; status: string }> = [];
+    (w.ports as unknown as Record<string, unknown>).emitTaskRunChanged = (taskId: string, status: string) => {
+      emits.push({ taskId, status });
+    };
+    return { w, emits };
+  }
+
+  it('终态镜像写（done→completed）→ emit (row.id, completed)', () => {
+    const { w, emits } = world(delegatedRow({ status: 'in_progress' }));
+    createDelegationSync(w.ports).handleTerminal('done', 'hub-task-1');
+    expect(w.rows.get('T-100')!.status).toBe('completed');
+    expect(emits).toEqual([{ taskId: 'T-100', status: 'completed' }]);
+  });
+
+  it('progress 拍 running 翻态 → emit；同态零写不 emit', () => {
+    const { w, emits } = world(delegatedRow({ status: 'pending' }));
+    const sync = createDelegationSync(w.ports);
+    sync.handleProgress({ taskId: 'hub-task-1', lastSeq: 1, excerpt: '起步' });
+    expect(emits).toEqual([{ taskId: 'T-100', status: 'in_progress' }]);
+    emits.length = 0;
+    sync.handleProgress({ taskId: 'hub-task-1', lastSeq: 2, excerpt: '同态拍' });
+    expect(emits).toEqual([]);
+  });
+
+  it('行不存在 → 不 emit 不炸', () => {
+    const { w, emits } = world(delegatedRow({ status: 'in_progress' }));
+    createDelegationSync(w.ports).handleTerminal('done', 'ghost-delegation');
+    expect(emits).toEqual([]);
+  });
+
+  it('端口缺席（旧接线）→ 行为零变化', () => {
+    const w = makeWorld();
+    w.rows.set('T-100', delegatedRow({ status: 'in_progress' }));
+    expect(() => createDelegationSync(w.ports).handleTerminal('done', 'hub-task-1')).not.toThrow();
+    expect(w.rows.get('T-100')!.status).toBe('completed');
+  });
+});

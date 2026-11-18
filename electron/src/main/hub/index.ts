@@ -46,7 +46,7 @@ import {
 import { listWorkspaces } from '../workspace/crud';
 import { insertTask, updateTask, getTask, listTasks } from '../storage/tasks/repo';
 import { getActiveRun } from '../storage/tasks/runs-repo';
-import { acceptTask, setRemoteInterveneSink } from '../task/lifecycle-runs';
+import { acceptTask, emitRunChanged, setRemoteInterveneSink } from '../task/lifecycle-runs';
 import { setToolGateRowSink } from '../sandbox/write-blocked-emit';
 import {
   createRemoteInterveneHandler,
@@ -186,6 +186,18 @@ function ensureDelegationSync(): DelegationSync {
     },
     updateTask: (id, patch) => {
       updateTask(id, patch);
+    },
+    // 镜像翻态发射（spec §12 面板直连 composer 终态实时性）：write-blocked 域
+    // 禁 import emit 族——经端口薄包装注入；runId 取行现值（回调侧只消费
+    // taskId）——行态→run 态就近映射只为满足发射面类型
+    emitTaskRunChanged: (taskId, status) => {
+      const row = getTask(taskId);
+      const runStatus =
+        status === 'completed' ? 'accepted' :
+        status === 'in_progress' ? 'running' :
+        status === 'waiting_human' ? 'waiting_human' :
+        status === 'submitted' ? 'submitted' : 'failed';
+      emitRunChanged(taskId, row?.currentRunId ?? '', runStatus);
     },
     saveProgress: (delegationId, entry) => {
       createDelegationProgressStore(getDb()).save(delegationId, entry);

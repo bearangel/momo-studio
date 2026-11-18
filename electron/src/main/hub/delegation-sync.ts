@@ -232,6 +232,13 @@ export interface DelegationSyncPorts {
    */
   hubProtoVer?(): string | null;
   now(): number;
+  /**
+   * 镜像状态写发射（可选注入，spec 2026-11-18 §12 面板直连）：applyMapped 实际
+   * 翻态后回调 (taskId, 新态)——write-blocked 域禁 import emit 族，经端口注入
+   * （生产接线传 lifecycle emitRunChanged 薄包装；runId 由接线侧从行取）。
+   * 缺席 = 旧接线零变化。
+   */
+  emitTaskRunChanged?(taskId: string, status: TaskStatus): void;
 }
 
 export interface DelegationSync {
@@ -279,6 +286,7 @@ export function createDelegationSync(ports: DelegationSyncPorts): DelegationSync
     // T15 白名单逃生门之一（updateTask 直写 status）——P2 收口：P2 跨节点期
     // 外派行状态写入归位 lifecycle-runs 服务（submitted 两段式 + 投影单点）
     ports.updateTask(row.id, { status: next, ...extra });
+    ports.emitTaskRunChanged?.(row.id, next);
   };
 
   const saveProgress = (
