@@ -39,6 +39,7 @@ import { getActiveRun, insertRun, type TaskRunRow } from '../storage/tasks/runs-
 import { isTerminal } from '../storage/tasks/state-machine';
 import {
   ACCEPTANCE_DEADLINE_MS,
+  acceptAndContinue,
   answerHuman,
   authoritativeReset,
   completeAcceptance,
@@ -483,7 +484,7 @@ export interface WorkerTerminalConsumePorts {
   /** 本机 nodeId（外派镜像行不消费——isWorkerExecution 判向） */
   selfNodeId(): string | null;
   /** 验收消费后的停靠出清（delegation-runner settleAcceptance；未装配/无停靠项幂等） */
-  settleDocked(taskId: string, outcome: 'accepted' | 'rejected'): void;
+  settleDocked(taskId: string, outcome: 'accepted' | 'rejected' | 'continued'): void;
 }
 
 /**
@@ -828,6 +829,60 @@ function injectReworkIntoExecutionSession(task: TaskRow, reason: string): void {
     meta: { reason: truncateCodePoints(reason, 79) },
     logLabel: '【发起方打回】',
   });
+}
+
+/** 继续要求注入（spec 2026-11-18 DEC-15）：复用 steer 注入管线，尾行明示复提契约 */
+function injectContinuedIntoExecutionSession(task: TaskRow, requirement: string): void {
+  injectExecutionSessionNotice(task, {
+    body: `【发起方要求继续】${requirement}\n完成后请再次调用 submit_task 提交。`,
+    kind: 'continued',
+    meta: { requirement: truncateCodePoints(requirement, 79) },
+    logLabel: '【发起方要求继续】',
+  });
+}
+
+/**
+ * task.continued 事件消费（hub/index onEvent 装配；spec 2026-11-18 §7.2）：
+ * run#(runNo-1) 已验收通过 → acceptAndContinue（run accepted + 新 run + 答复）
+ * + 里程碑 kind='continued' + 注入要求 + 停靠出清（continued 变体）。
+ * 幂等：无承接行 / 终态 / 非 submitted → 静默；total 语义不向上抛。
+ */
+export function handleTaskContinued(payload: unknown, ports: WorkerTerminalConsumePorts): void {
+  try {
+    if (typeof payload !== 'object' || payload === null) return;
+    const p = payload as { taskId?: unknown; runNo?: unknown; requirement?: unknown };
+    if (typeof p.requirement !== 'string' || p.requirement.trim() === '') return;
+    const resolved = resolveWorkerTask(p.taskId, ports.selfNodeId());
+    if (resolved === null) {
+      logger.info('继续指令到达但无本机承接行（幂等收敛，丢弃）', {
+        taskId: typeof p.taskId === 'string' ? p.taskId : undefined,
+      });
+      return;
+    }
+    const { task, delegationId } = resolved;
+    if (task.status !== 'submitted') {
+      logger.info('继续指令到达但任务非 submitted（乱序/迟到，丢弃）', {
+        taskId: task.id,
+        status: task.status,
+      });
+      return;
+    }
+    const requirement = p.requirement.trim();
+    acceptAndContinue(task.id, requirement, REMOTE_ORIGIN_BY);
+    const runNo = payloadRunNo(p.runNo);
+    writeSessionMilestone(
+      task,
+      `已要求继续（第 ${runNo !== undefined ? runNo - 1 : '?'} 轮通过）：${truncateCodePoints(requirement, 60)}`,
+      { kind: 'continued', ...(runNo !== undefined ? { runNo } : {}) },
+    );
+    injectContinuedIntoExecutionSession(getTask(task.id) ?? task, requirement);
+    ports.settleDocked(delegationId, 'continued');
+    logger.info('远端继续已消费（acceptAndContinue + 注入）', { taskId: task.id, delegationId });
+  } catch (err) {
+    logger.warn('远端继续消费内部异常（事件丢弃，S7 对账兜底）', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**

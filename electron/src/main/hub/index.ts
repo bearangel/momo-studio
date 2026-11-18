@@ -29,7 +29,7 @@ import { bridgeGroupChanged, createGroupClient, pickWorkstationFromGroups } from
 import type { HubResponderResult } from './client';
 import { createDelegationRunner, type AssignedTaskEvent, type DelegationRunner } from './delegation-runner';
 import { sessionWaitingProduct, wireDelegationRunnerPorts } from './delegation-ports';
-import { TASK_ANSWER_WIRE } from './delegation-wire';
+import { TASK_ANSWER_WIRE, EVT_CONTINUED } from './delegation-wire';
 import { handleTaskAnswerRequest, type TaskAnswerPorts } from './delegation-answer';
 import { grantWriteDirs } from '../sandbox/write-grant';
 import { clearPendingOnDeny, clearPendingOnGrant, listPendingWriteBlocked } from '../sandbox/write-blocked-emit';
@@ -55,6 +55,7 @@ import {
   handleTaskInterventionMirror,
   handleTaskRejected,
   handleTaskSteered,
+  handleTaskContinued,
   handleTaskSubmittedMirror,
   type WorkerTerminalConsumePorts,
 } from './remote-intervene-bridge';
@@ -626,6 +627,12 @@ function startClient(
         // steer 无幂等键，桥内 10s 窗口消息级去重。断连窗口（沿 S3/S4 口径）：
         // 错过的指令无补偿——指令时效性强，hub 侧 worker 离线本就拒发。
         handleTaskSteered(evt.payload, terminalConsumePorts());
+        return;
+      }
+      if (evt.method === EVT_CONTINUED) {
+        // worker 侧验收继续消费（1.14.0，spec 2026-11-18 §7.2）：账本已回 running
+        // （hub 单源），本地 acceptAndContinue + 注入要求 + 停靠出清。
+        handleTaskContinued(evt.payload, terminalConsumePorts());
         return;
       }
       if (evt.method === EVT.taskIntervention || evt.method === EVT.taskSubmitted) {

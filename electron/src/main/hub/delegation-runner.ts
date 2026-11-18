@@ -227,7 +227,7 @@ export interface DelegationRunner {
    * 无停靠项（classic 未接管 / 已出清 / 重启丢失）幂等 no-op；accepted 侧账本
    * 对齐仍执行（重启窗口的迟到消费也能终结监督器，防 duplicate 终态直报）。
    */
-  settleAcceptance(taskId: string, outcome: 'accepted' | 'rejected'): void;
+  settleAcceptance(taskId: string, outcome: 'accepted' | 'rejected' | 'continued'): void;
   destroy(): void;
 }
 
@@ -888,6 +888,10 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
         // hub 账本已 done（本事件的来源即终局）——本地账本对齐 + 零上报；
         // 无停靠项时仍对齐（重启窗口迟到消费终结监督器，防 duplicate done 直报）
         store.updateState(taskId, 'done');
+      } else if (outcome === 'continued') {
+        // 验收继续（1.14.0）：任务未结束——本地委派账本回 running，等本轮回合
+        // 终态重新停靠
+        store.updateState(taskId, 'running');
       }
       logger.info('验收结果已消费，停靠项出清', { taskId, outcome, hadDocked: run !== undefined });
     },
