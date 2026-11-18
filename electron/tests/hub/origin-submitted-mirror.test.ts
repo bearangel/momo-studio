@@ -246,6 +246,7 @@ describe('4) acceptance 行生成 + deliverable 逐字段映射', () => {
     const row = listRequests({ status: 'all' })[0]!;
     expect(JSON.parse(row.payloadJson!)).toEqual({
       acceptance: { runNo: 1, summary: '', files: [], artifacts: [] },
+      remote: { truncated: true },
     });
   });
 });
@@ -425,6 +426,7 @@ describe('11) S9 工作站段：镜像 payload remote 标记段', () => {
     const acc = listRequests({ status: 'all' })[1]!;
     expect(JSON.parse(acc.payloadJson!)).toEqual({
       acceptance: { runNo: 1, summary: '', files: [], artifacts: [] },
+      remote: { truncated: true }, // 无 deliverable 键 = 旧通道截断（1.14 标注）
     });
   });
 
@@ -448,12 +450,12 @@ describe('11) S9 工作站段：镜像 payload remote 标记段', () => {
     });
   });
 
-  it('A5 短 id：acceptance 标题 #T 引用形态（tasks.id 即短 T-<seq>，无需截短）', async () => {
-    const task = seedOutTask();
+  it('标题统一「第 N 轮交付」+ prompt 携任务标题（两侧同形）', async () => {
+    seedOutTask();
     await handleTaskSubmittedMirror(submittedEvent());
     const row = listRequests({ status: 'all' })[0]!;
-    expect(row.title).toBe(`#${task.id} 提交验收（run #1）`);
-    expect(task.id).toMatch(/^T-\d+$/); // id 生成本就是短形态——截短不适用（报告结论）
+    expect(row.title).toBe('第 1 轮交付');
+    expect(row.prompt).toBe('外派任务');
   });
 });
 

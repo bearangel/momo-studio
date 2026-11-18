@@ -1131,11 +1131,15 @@ export interface OriginMirrorPorts {
 function withRemoteSegment(
   base: Record<string, unknown> | undefined,
   workstation: string | null,
+  truncated: boolean,
 ): Record<string, unknown> | undefined {
-  if (base === undefined && workstation === null) return undefined;
+  if (base === undefined && workstation === null && !truncated) return undefined;
   const rest = { ...(base ?? {}) };
   delete rest.remote;
-  return { ...rest, ...(workstation !== null ? { remote: { workstation } } : {}) };
+  const remote: Record<string, unknown> = {};
+  if (workstation !== null) remote.workstation = workstation;
+  if (truncated) remote.truncated = true;
+  return { ...rest, ...(Object.keys(remote).length > 0 ? { remote } : {}) };
 }
 
 /**
@@ -1357,7 +1361,8 @@ export async function handleTaskSubmittedMirror(
       runId,
       kind: 'acceptance',
       // S9（A5 短 id 统一）：#T-{id} 引用形态（tasks.id 本身即短 T-<seq> 形）
-      title: `#${task.id} 提交验收（run #${runNo}）`,
+      title: `第 ${runNo} 轮交付`,
+      prompt: task.title,
       payloadJson: JSON.stringify(
         withRemoteSegment(
           {
@@ -1369,6 +1374,7 @@ export async function handleTaskSubmittedMirror(
             },
           },
           workstation,
+          p.deliverable === undefined,
         ),
       ),
       deadlineAt: Date.now() + ACCEPTANCE_DEADLINE_MS,

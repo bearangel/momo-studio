@@ -810,6 +810,7 @@ async function lfThroughSubmitted(): Promise<{
     status: 'submitted',
     runNo: 1,
     reason: JSON.stringify({ summary: '交付完成', files: ['a.ts'], artifacts: [] }),
+    deliverable: { summary: '交付完成', files: ['a.ts'], artifacts: [] },
   });
   expect(getTask(worker.id)!.status).toBe('submitted');
 
@@ -945,6 +946,7 @@ describe('场景 2（reject 返工）：打回 → run#2 再提交 → accept（
       status: 'submitted',
       runNo: 2,
       reason: JSON.stringify({ summary: '返工交付（含回归测试）', files: [], artifacts: [] }),
+      deliverable: { summary: '返工交付（含回归测试）', files: [], artifacts: [] },
     });
 
     // ⑬' 模拟 hub 定向 task.submitted（runNo=2 透传 → 镜像幂等键 `dl#2`）

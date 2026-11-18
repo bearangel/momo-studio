@@ -135,7 +135,8 @@ describe('1) submitRun 提交全链', () => {
     expect(req.timeoutPolicy).toBe('keep_waiting');
     expect(req.deadlineAt!).toBeGreaterThan(before + 23 * 3600_000);
     expect(req.deadlineAt!).toBeLessThan(before + 25 * 3600_000);
-    expect(req.title).toContain(taskId); // 标题含任务号
+    expect(req.title).toBe('第 1 轮交付'); // 1.14：两侧同形，不用节点各自任务号
+    expect(req.prompt).toBe('T'); // 任务标题（卡片「任务：」行）
     expect(req.taskId).toBe(taskId);
     expect(req.runId).toBe(run.id);
     expect(req.sessionId).toBe(execSessionId);

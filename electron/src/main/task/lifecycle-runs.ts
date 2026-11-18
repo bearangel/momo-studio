@@ -549,7 +549,8 @@ export async function submitRun(id: string, opts: DeliverableInput): Promise<voi
       taskId: id,
       runId: active.id,
       kind: 'acceptance',
-      title: `${id} 提交验收（run #${active.runNo}）`,
+      title: `第 ${active.runNo} 轮交付`,
+      prompt: task.title,
       payloadJson: JSON.stringify({
         acceptance: { runNo: active.runNo, summary: opts.summary, files, artifacts },
       }),
