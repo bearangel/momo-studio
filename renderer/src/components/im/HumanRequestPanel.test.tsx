@@ -404,6 +404,21 @@ describe('HumanRequestPanel — acceptance 卡（三动作裁决）', () => {
     expect(screen.getByRole('button', { name: '满屏查看' })).toBeInTheDocument();
   });
 
+  it('满屏态下完成裁决 → 满屏自动复位（防留空面板）', async () => {
+    const spy = vi.fn();
+    listMock.mockResolvedValueOnce([row()]).mockResolvedValue([]);
+    await mountPanel('sess-1', { onAcceptanceFullscreenChange: spy });
+
+    fireEvent.click(screen.getByRole('button', { name: '满屏查看' }));
+    expect(spy).toHaveBeenLastCalledWith(true);
+
+    fireEvent.click(screen.getByRole('button', { name: '完成' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '确认完成' }));
+    });
+    expect(spy).toHaveBeenLastCalledWith(false);
+  });
+
   it('镜像行 remote.truncated → 交付内容截断警示', async () => {
     const payload = { ...(JSON.parse(ACCEPTANCE_JSON) as Record<string, unknown>), remote: { truncated: true } };
     listMock.mockResolvedValue([
