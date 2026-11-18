@@ -7,7 +7,7 @@
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
 import { humanizeViewError, VIEW_PAGE_SIZE } from './hub-view.store';
-import type { HubViewFrame, HubViewMessage, TaskRow } from '../ipc/types';
+import type { HubViewFrame, HubViewMessage, ImMessage, TaskRow } from '../ipc/types';
 
 export interface RemoteSessionTarget {
   targetNodeId: string;
@@ -38,6 +38,8 @@ interface RemoteSessionState {
   wire2: boolean;
   frames: HubViewFrame[];
   legacy: HubViewMessage[];
+  /** 本地跟踪会话镜像里程碑行（spec §12.2 穿插渲染 + 降级回落数据源） */
+  mirrorRows: ImMessage[];
   hasMore: boolean;
   loadingEarlier: boolean;
   live: boolean;
@@ -80,6 +82,15 @@ function upsertFrames(prev: HubViewFrame[], incoming: HubViewFrame[]): HubViewFr
 }
 
 export const useRemoteSessionStore = create<RemoteSessionState>((set, get) => {
+  const refetchMirror = (): void => {
+    const t = get().task;
+    if (t === null || t.executionSessionId === null || t.executionSessionId === '') return;
+    void ipc.im
+      .getMessages(t.executionSessionId)
+      .then((r) => { set({ mirrorRows: r.messages }); })
+      .catch(() => { /* 镜像行是增强面——拉取失败保旧值 */ });
+  };
+
   const teardownListeners = (): void => {
     disposeAppended?.();
     disposeAppended = null;
@@ -100,7 +111,7 @@ export const useRemoteSessionStore = create<RemoteSessionState>((set, get) => {
       if (!cur || cur.id !== e.taskId) return;
       void ipc.task
         .get(cur.id)
-        .then((fresh) => { set({ task: fresh }); })
+        .then((fresh) => { set({ task: fresh }); refetchMirror(); })
         .catch(() => { /* 刷新失败保旧态 */ });
     });
     disposeAppended = ipc.hub.onViewAppended((evt) => {
@@ -183,6 +194,7 @@ export const useRemoteSessionStore = create<RemoteSessionState>((set, get) => {
     wire2: false,
     frames: [],
     legacy: [],
+    mirrorRows: [],
     hasMore: false,
     loadingEarlier: false,
     live: false,
@@ -202,7 +214,7 @@ export const useRemoteSessionStore = create<RemoteSessionState>((set, get) => {
       teardownListeners();
       set({
         phase: 'resolving', errorText: null, task, target: null, wire2: false,
-        frames: [], legacy: [], hasMore: false, loadingEarlier: false,
+        frames: [], legacy: [], mirrorRows: [], hasMore: false, loadingEarlier: false,
         live: false, liveError: null, pendingSteers: [],
       });
       const routingGroupId = task.routing.mode !== 'local' ? task.routing.groupId : null;
@@ -249,6 +261,7 @@ export const useRemoteSessionStore = create<RemoteSessionState>((set, get) => {
           } else {
             set({ phase: 'ready', target, legacy: raw.messages, hasMore: raw.hasMore });
           }
+          refetchMirror();
 
           // ④ 订阅协商：回显 wire:2 → 帧路径；否则 legacy 降级（§6）
           try {
@@ -280,7 +293,7 @@ export const useRemoteSessionStore = create<RemoteSessionState>((set, get) => {
       teardownListeners();
       set({
         phase: 'resolving', errorText: null, task: null, target: null, wire2: false,
-        frames: [], legacy: [], hasMore: false, loadingEarlier: false,
+        frames: [], legacy: [], mirrorRows: [], hasMore: false, loadingEarlier: false,
         live: false, liveError: null, pendingSteers: [],
       });
     },

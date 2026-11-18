@@ -17,6 +17,7 @@ const stateCallbacks: Array<(evt: { state: string }) => void> = [];
 
 const runChangedCallbacks: Array<(e: { taskId: string; runId: string; status: string }) => void> = [];
 const api = {
+  im: { getMessages: vi.fn().mockResolvedValue({ messages: [] }) },
   task: { get: vi.fn(), steer: vi.fn(), onTaskRunChanged: vi.fn((cb: (e: { taskId: string; runId: string; status: string }) => void) => { runChangedCallbacks.push(cb); return () => { const i = runChangedCallbacks.indexOf(cb); if (i >= 0) runChangedCallbacks.splice(i, 1); }; }) },
   hub: {
     taskList: vi.fn(),
@@ -240,5 +241,22 @@ describe('任务态实时性（E2E 实录：完成后 composer 须禁用）', ()
     await vi.waitFor(() => {
       expect(useRemoteSessionStore.getState().task?.status).toBe('completed');
     });
+  });
+});
+
+
+// ── spec §12.2：本地镜像里程碑行（拉取 + 随 run 推送刷新） ───────────────────
+
+describe('镜像行（mirrorRows）', () => {
+  it('open() 拉取跟踪会话本地镜像行；onTaskRunChanged 推送后刷新', async () => {
+    api.im.getMessages.mockResolvedValue({ messages: [
+      { id: 'm1', sessionId: 'sx', sender: 'system', body: '已提交待验收', eventType: 'delegation_milestone', streamSessionId: null, parentStreamSessionId: null, segmentOf: null, segmentIndex: null, status: 'done', source: 'hub', workspaceId: 'ws1', taskId: 'T-9', createdAt: 1700000000000, updatedAt: 0 },
+    ] });
+    await useRemoteSessionStore.getState().open({ ...task, executionSessionId: 'sx' });
+    expect(useRemoteSessionStore.getState().mirrorRows.map((m) => m.body)).toEqual(['已提交待验收']);
+    api.im.getMessages.mockClear();
+    api.task.get.mockResolvedValue({ ...task, executionSessionId: 'sx', status: 'completed' });
+    for (const cb of [...runChangedCallbacks]) cb({ taskId: task.id, runId: 'r1', status: 'completed' });
+    await vi.waitFor(() => expect(api.im.getMessages).toHaveBeenCalled());
   });
 });
