@@ -283,6 +283,10 @@ export async function steerTaskRouted(taskId: string, rawMessage: string): Promi
   if (task.delegationId === null) {
     throw new Error('任务未委派，无可送达的执行节点');
   }
+  if (task.status === 'submitted') {
+    // spec 2026-11-18 DEC-11：待裁决期 steer 会在执行方开出与验收单不一致的僵尸回合
+    throw new Error('任务待验收，请先裁决（继续 / 完成 / 驳回）后再补充指令');
+  }
   const forward = steerForwarder;
   if (forward === null) {
     logger.warn('补充指令转发未装配（hub 域未接线）', { taskId });

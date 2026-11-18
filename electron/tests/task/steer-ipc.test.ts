@@ -153,6 +153,15 @@ describe('task:steer IPC 契约与校验', () => {
     expect(forwarderMock).not.toHaveBeenCalled();
   });
 
+  it('任务 submitted（待裁决）→ 人话拒且 forwarder 不被调（DEC-11）', async () => {
+    const taskId = seedOutTask();
+    getDb().prepare(`UPDATE tasks SET status = 'submitted' WHERE id = ?`).run(taskId);
+    await expect(steerTaskRouted(taskId, '先别动')).rejects.toThrow(
+      '任务待验收，请先裁决（继续 / 完成 / 驳回）后再补充指令',
+    );
+    expect(forwarderMock).not.toHaveBeenCalled();
+  });
+
   it('message 空 / 纯空白 / 超 4000 码点 → 人话拒（码点计非 UTF-16 单元）', async () => {
     const taskId = seedOutTask();
     await expect(steerTaskRouted(taskId, '')).rejects.toThrow('补充指令不能为空');
