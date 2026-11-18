@@ -380,3 +380,24 @@ describe('ctx.secrets（插件自管 secrets keytar 代理）', () => {
     await stopPluginService('secrets-demo');
   });
 });
+
+// 重载语义修复（2026-11-18 db-pro 实证）：只删入口缓存 → 改动的依赖文件沿用旧
+// 缓存（新入口 + 旧依赖混血——`sanitizeTimeoutMs is not a function`）。契约：
+// 插件根内全部模块缓存清除，根外一概不动。
+import { purgePluginRequireCache } from '../../src/main/plugin/service-manager';
+describe('purgePluginRequireCache', () => {
+  const fakeCache = (keys: string[]): { cache: Record<string, unknown> } => ({ cache: Object.fromEntries(keys.map((k) => [k, {}])) });
+  it('清插件根内全部缓存键（含依赖），根外不动', () => {
+    const root = '/plugins/db-pro';
+    const req = fakeCache([`${root}/service/index.js`, `${root}/service/config-connections.js`, `${root}/engine/engine.js`, '/electron/dist/main/agent/runtime.js', '/other/plugin/index.js']);
+    purgePluginRequireCache(req as unknown as NodeRequire, root);
+    expect(Object.keys(req.cache).sort()).toEqual(['/electron/dist/main/agent/runtime.js', '/other/plugin/index.js']);
+  });
+  it('root 无尾分隔符也命中；空缓存容忍', () => {
+    const root = '/plugins/db-pro/';
+    const req = fakeCache(['/plugins/db-pro/service/index.js']);
+    purgePluginRequireCache(req as unknown as NodeRequire, root);
+    expect(Object.keys(req.cache)).toHaveLength(0);
+    expect(() => purgePluginRequireCache({ cache: {} } as unknown as NodeRequire, root)).not.toThrow();
+  });
+});
