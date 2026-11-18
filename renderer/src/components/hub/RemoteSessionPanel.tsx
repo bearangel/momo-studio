@@ -300,7 +300,7 @@ export function RemoteSessionPanel({ sessionId, workspaceId, footerSlot }: {
 
       {/* 附属动作区（验收/人工请求——紧贴 composer 之上，随内容自适应但有高度上限） */}
       {footerSlot !== undefined && (
-        <div className="flex max-h-[40vh] shrink-0 flex-col overflow-hidden">{footerSlot}</div>
+        <div className="flex max-h-[40vh] shrink-0 flex-col overflow-hidden pb-3">{footerSlot}</div>
       )}
       {/* composer=steer（spec §12.4） */}
       <RemoteSteerComposer />
