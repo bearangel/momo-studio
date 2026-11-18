@@ -349,6 +349,17 @@ describe('HumanRequestPanel — acceptance 卡（三动作裁决）', () => {
     expect(screen.queryByLabelText('驳回理由')).not.toBeInTheDocument();
   });
 
+  it('长交付：交付内容独立滚动、动作行在滚动区之外（方案 B 吸底）', async () => {
+    listMock.mockResolvedValue([row({ payloadJson: ACCEPTANCE_JSON })]);
+    await mountPanel();
+
+    const scroll = screen.getByTestId('acceptance-scroll');
+    expect(scroll.className).toContain('overflow-y-auto');
+    const continueBtn = screen.getByRole('button', { name: '继续' });
+    expect(scroll.contains(continueBtn)).toBe(false);
+    expect(screen.getByTestId('acceptance-footer').contains(continueBtn)).toBe(true);
+  });
+
   it('镜像行 remote.truncated → 交付内容截断警示', async () => {
     const payload = { ...(JSON.parse(ACCEPTANCE_JSON) as Record<string, unknown>), remote: { truncated: true } };
     listMock.mockResolvedValue([

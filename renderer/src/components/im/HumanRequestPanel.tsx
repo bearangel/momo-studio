@@ -722,9 +722,11 @@ function AcceptanceBody({ row, onError, onRemoteWarning }: {
 
   if (row.taskId === null || row.canDecide === false) {
     return (
-      <div className="flex flex-col gap-2 px-3 py-2.5">
-        <DeliverableBlock payload={payload} fallback={row.prompt} truncated={truncated} />
-        <p className="text-[10.5px] text-tertiary">
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-1.5 pb-2">
+          <DeliverableBlock payload={payload} fallback={row.prompt} truncated={truncated} />
+        </div>
+        <p className="shrink-0 border-t border-subtle px-3 py-2 text-[10.5px] text-tertiary">
           {row.originNodeName !== null && row.originNodeName !== undefined
             ? `等待发起方在 ${row.originNodeName} 上裁决，结果会显示在这里`
             : '等待发起方裁决，结果会显示在这里'}
@@ -736,8 +738,20 @@ function AcceptanceBody({ row, onError, onRemoteWarning }: {
   const expandLabel = action === 'continue' ? '下一步要求' : '驳回理由';
 
   return (
-    <div className="flex flex-col gap-2 px-3 py-2.5">
-      <DeliverableBlock payload={payload} fallback={row.prompt} truncated={truncated} />
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <div
+          data-testid="acceptance-scroll"
+          className="min-h-0 flex-1 overflow-y-auto px-3 pt-1.5 pb-3"
+        >
+          <DeliverableBlock payload={payload} fallback={row.prompt} truncated={truncated} />
+        </div>
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-canvas to-transparent"
+        />
+      </div>
+      <div data-testid="acceptance-footer" className="shrink-0 border-t border-subtle px-3 pt-2">
       <div className="flex flex-wrap items-center gap-[7px]">
         <Button
           variant="primary"
@@ -772,7 +786,7 @@ function AcceptanceBody({ row, onError, onRemoteWarning }: {
           驳回
         </Button>
       </div>
-      <p className="text-[10.5px] text-tertiary">
+      <p className="pt-1.5 text-[10.5px] text-tertiary">
         继续 = 认可本轮，按你的要求让它再跑一轮（任务继续）· 完成 = 结束任务（不可撤销）· 驳回 = 退回重做
       </p>
       {action !== null && (
@@ -818,6 +832,7 @@ function AcceptanceBody({ row, onError, onRemoteWarning }: {
           onClose={() => setConfirmFinish(false)}
         />
       )}
+      </div>
     </div>
   );
 }
@@ -843,8 +858,12 @@ function KindCard({ row, now, onRemoteWarning }: {
     );
   }
 
+  const rootClass =
+    row.kind === 'acceptance'
+      ? 'flex min-h-0 flex-1 flex-col overflow-hidden bg-canvas'
+      : 'bg-canvas';
   return (
-    <div data-testid={`human-card-${row.id}`} className="bg-canvas">
+    <div data-testid={`human-card-${row.id}`} className={rootClass}>
       <CardHead row={row} now={now} />
       {row.kind === 'tool_gate' && <ToolGateBody row={row} now={now} onError={onError} />}
       {row.kind === 'question' && <QuestionBody row={row} onError={onError} />}
@@ -945,11 +964,17 @@ export function HumanRequestPanel({ sessionId }: { sessionId: string }) {
   // 警示条需存活到下一次成功操作清除）
   if (pending.length === 0 && remoteWarning === null) return null;
   const rest = pending.filter((r) => r.id !== expanded?.id);
+  // 验收卡方案 B（2026-11-18）：只有验收卡吃满槽高并在内部滚动 + 吸底动作区
+  // （其余 kind 保持自然高度，堆叠时可整体滚动）
+  const acceptanceExpanded = expanded?.kind === 'acceptance';
 
   return (
     <div
       data-testid="human-request-panel"
-      className="border-t border-subtle bg-surface-1 px-3 pt-3"
+      className={cn(
+        'border-t border-subtle bg-surface-1 px-3 pt-3',
+        acceptanceExpanded && 'flex min-h-0 flex-1 flex-col',
+      )}
     >
       {remoteWarning !== null && (
         <div
@@ -963,6 +988,7 @@ export function HumanRequestPanel({ sessionId }: { sessionId: string }) {
         <div
           className={cn(
             'overflow-hidden rounded-lg border bg-canvas shadow-[0_4px_16px_rgba(0,0,0,0.10)]',
+            acceptanceExpanded && 'flex min-h-0 flex-1 flex-col',
             expanded !== null && isWarn(expanded, now) ? 'border-status-warning' : 'border-strong',
           )}
         >

@@ -127,6 +127,15 @@ canDecide(task) =
 - **DEC-22 长交付说明折叠**：交付说明默认最多 12 行，超出显示「展开全文 / 收起」（本地 state，不持久化）——卡片容器本身在 `footerSlot` 的 40vh 限高内滚动，折叠避免长散文把动作按钮挤出视野。
 - 只读卡（§4.2）与可裁决卡共用同一交付内容渲染组件，避免两侧再次分叉。
 
+### 4.1.2 长交付布局（DEC-23，2026-11-18 预览 B 案获批）
+
+长交付不得把动作行推出视野。布局合同（预览：`.omo/previews/2026-11-18-acceptance-card-layout.html` B 案）：
+
+- 卡片吃满 `footerSlot` 高度（槽 `flex max-h-[40vh] flex-col overflow-hidden`；验收展开时面板根与卡容器 `flex min-h-0 flex-1 flex-col`）。
+- 卡内分两段：**可滚动交付区**（`overflow-y-auto`，`data-testid="acceptance-scroll"`，底部 6 单位渐隐遮罩 `from-canvas`）+ **吸底动作区**（`border-t`，`data-testid="acceptance-footer"`，含按钮行 / 后果说明 / 展开中的输入区 / 完成确认框）。
+- 动作按钮**不得**位于滚动区内（回归锁：`acceptance-scroll` 不含按钮，`acceptance-footer` 含按钮）。
+- 其余 kind 卡不受影响（自然高度，多卡堆叠时整槽滚动）。
+
 ### 4.2 执行方（只读）
 
 ```
