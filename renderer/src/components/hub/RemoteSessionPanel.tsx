@@ -6,7 +6,7 @@
 // 镜像里程碑，按时间戳、同毫秒镜像先行）+ RemoteSteerComposer。
 // 生命周期由挂载驱动：mount → resolveTrackingTask → store.open；unmount → close。
 // 降级矩阵：miss 占位重试 / 旧 worker legacy 行穿插镜像 / 断开保留已到帧。
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Bot, ChevronUp, CircleCheck, Eye, Milestone, Monitor, Wrench } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { resolveTrackingTask } from '../../lib/resolve-tracking-task';
@@ -138,18 +138,30 @@ export function RemoteSessionPanel({ sessionId, workspaceId }: { sessionId: stri
   const st = useRemoteSessionStore();
   const online = st.live && st.hubOnline;
 
+  // 任务解析失败态（终审 Important 2）：孤儿跟踪会话 / 任务行已删 / list 瞬断
+  // ——不得永久「定位执行会话…」，miss 样占位 + 重试
+  const [resolveMiss, setResolveMiss] = useState(false);
+
+  const resolveAndOpen = (): void => {
+    setResolveMiss(false);
+    void (async () => {
+      const task = await resolveTrackingTask({ id: sessionId, kind: 'task_execution', taskId: null, workspaceId });
+      if (task === null) {
+        setResolveMiss(true);
+        return;
+      }
+      void useRemoteSessionStore.getState().open(task);
+    })();
+  };
+
   // 生命周期挂会话选中（spec §12.1）：mount 解析任务开订；unmount 退订
   //（StrictMode 双挂载安全：close 后 remount 重新 open）
   useEffect(() => {
-    void (async () => {
-      const task = await resolveTrackingTask({ id: sessionId, kind: 'task_execution', taskId: null, workspaceId });
-      if (task !== null) {
-        void useRemoteSessionStore.getState().open(task);
-      }
-    })();
+    resolveAndOpen();
     return () => {
       useRemoteSessionStore.getState().close();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- resolveAndOpen 为本组件闭包，依赖即 [sessionId, workspaceId]
   }, [sessionId, workspaceId]);
 
   const timeline = mergeTimeline(st.frames, st.mirrorRows, st.wire2 ? [] : st.legacy);
@@ -187,7 +199,19 @@ export function RemoteSessionPanel({ sessionId, workspaceId }: { sessionId: stri
         )}
         data-testid="remote-session-flow"
       >
-        {st.phase === 'resolving' && (
+        {resolveMiss && (
+          <div className="flex flex-col items-center gap-3 py-6 text-xs text-tertiary">
+            <p>未找到关联的委派任务（任务可能已删除或尚未派发完成）</p>
+            <button
+              type="button"
+              className="cursor-pointer rounded-md border border-subtle bg-surface-1 px-3 py-1 text-[11.5px] text-secondary hover:bg-surface-2"
+              onClick={resolveAndOpen}
+            >
+              重试
+            </button>
+          </div>
+        )}
+        {!resolveMiss && st.phase === 'resolving' && (
           <p className="flex items-center justify-center gap-2 py-6 text-xs text-tertiary">
             <span className="h-3.5 w-3.5 animate-spin rounded-full border-[1.5px] border-status-violet border-t-transparent" aria-hidden />
             定位执行会话…
@@ -201,10 +225,7 @@ export function RemoteSessionPanel({ sessionId, workspaceId }: { sessionId: stri
               className="cursor-pointer rounded-md border border-subtle bg-surface-1 px-3 py-1 text-[11.5px] text-secondary hover:bg-surface-2"
               onClick={() => {
                 useRemoteSessionStore.getState().close();
-                void (async () => {
-                  const task = await resolveTrackingTask({ id: sessionId, kind: 'task_execution', taskId: null, workspaceId });
-                  if (task !== null) void useRemoteSessionStore.getState().open(task);
-                })();
+                resolveAndOpen();
               }}
             >
               重试

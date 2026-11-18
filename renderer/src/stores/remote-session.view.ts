@@ -57,6 +57,9 @@ interface RemoteSessionState {
 /** 帧去重键索引（frameId → 帧序号位置由渲染时排序保证，此处只存 Map） */
 let disposeAppended: (() => void) | null = null;
 let disposeState: (() => void) | null = null;
+/** open 世代计数（终审 Important 1 竞态守卫）：close 与每次 open 起点各 bump，
+ *  在途续体于每个 await 后校验——过期即弃，防 unmount-close 后续体翻 ready 泄订 */
+let openEpoch = 0;
 
 /** 已知尾 seq（帧路径取最大帧 seq；legacy 取末行 seq）——补拉 fromSeq 锚点 */
 function knownLastSeq(frames: HubViewFrame[], legacy: HubViewMessage[]): number {
@@ -203,6 +206,7 @@ export const useRemoteSessionStore = create<RemoteSessionState>((set, get) => {
     pendingSteers: [],
 
     open(task) {
+      const my = ++openEpoch;
       // 关上一个（退订 + 清监听）再定位新任务
       const prev = get().target;
       if (prev) {
@@ -222,6 +226,7 @@ export const useRemoteSessionStore = create<RemoteSessionState>((set, get) => {
         try {
           // ① 账本行反查（delegationId → targetNodeId / workspaceName）
           const { tasks } = await ipc.hub.taskList(routingGroupId !== null ? { groupId: routingGroupId } : undefined);
+          if (my !== openEpoch) return; // 过期续体弃（close/新 open 已接管）
           const record = tasks.find((t) => t.taskId === task.delegationId);
           if (!record) { set({ phase: 'miss' }); return; }
           const groupId = record.groupId ?? routingGroupId;
@@ -229,6 +234,7 @@ export const useRemoteSessionStore = create<RemoteSessionState>((set, get) => {
 
           // ② 会话定位：delegationId 精确匹配优先（§5）；全缺 → 标题兜底（存量）
           const res = await ipc.hub.viewSessions({ targetNodeId: record.targetNodeId, workspaceName: record.workspaceName, limit: VIEW_PAGE_SIZE, ...seg });
+          if (my !== openEpoch) return;
           const byDelegation = res.sessions.filter((s) => s.delegationId === task.delegationId);
           const pool = byDelegation.length > 0 ? byDelegation : res.sessions.filter((s) => s.title === task.title);
           const session = pool.sort((a, b) => b.lastSeq - a.lastSeq)[0];
@@ -241,6 +247,7 @@ export const useRemoteSessionStore = create<RemoteSessionState>((set, get) => {
             targetNodeId: record.targetNodeId, sessionId: session.sessionId, workspaceName: record.workspaceName,
             fromSeq: 0, limit: VIEW_PAGE_SIZE, ...seg, wire: 2,
           });
+          if (my !== openEpoch) return;
 
           let nodeName: string | null = null;
           try {
@@ -266,6 +273,7 @@ export const useRemoteSessionStore = create<RemoteSessionState>((set, get) => {
           // ④ 订阅协商：回显 wire:2 → 帧路径；否则 legacy 降级（§6）
           try {
             const sub = await ipc.hub.viewSubscribe({ targetNodeId: target.targetNodeId, sessionId: target.sessionId, ...seg, wire: 2 });
+            if (my !== openEpoch) return;
             const wire2 = sub.wire === 2;
             set({ wire2, live: true, liveError: null });
             if (!wire2 && 'frames' in raw) {
@@ -283,6 +291,7 @@ export const useRemoteSessionStore = create<RemoteSessionState>((set, get) => {
     },
 
     close() {
+      openEpoch += 1; // 在途 open 续体全部过期
       const t = get().target;
       if (t) {
         const seg = t.groupId !== null ? { groupId: t.groupId } : {};

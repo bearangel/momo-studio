@@ -260,3 +260,37 @@ describe('镜像行（mirrorRows）', () => {
     await vi.waitFor(() => expect(api.session.getMessages).toHaveBeenCalled());
   });
 });
+
+
+// ── 终审 Important 1：unmount close() 与首次 open() 异步续体竞态（epoch 守卫） ──
+
+describe('open/close 竞态（epoch 守卫）', () => {
+  it('open() 在途时 close() → 续体不得翻 ready / 订阅 / 挂监听（防泄订）', async () => {
+    let releaseTaskList: (v: unknown) => void = () => {};
+    api.hub.taskList.mockImplementation(() => new Promise((res) => { releaseTaskList = res as (v: unknown) => void; }));
+    const p1 = useRemoteSessionStore.getState().open(task);
+    useRemoteSessionStore.getState().close();
+    releaseTaskList({ tasks: [{ taskId: 'dl-9', targetNodeId: 'node-b', workspaceName: 'ws-b', groupId: 'g-1', runNo: 1 }] });
+    await p1;
+    const s1 = useRemoteSessionStore.getState();
+    expect(s1.phase).toBe('resolving');
+    expect(s1.target).toBeNull();
+    expect(api.hub.viewSessions).not.toHaveBeenCalled();
+    expect(api.hub.viewSubscribe).not.toHaveBeenCalled();
+    expect(api.hub.onViewAppended).not.toHaveBeenCalled();
+  });
+
+  it('A→B 快速切换：open(A) 续体晚于 open(B) 完成 → 不得覆盖 B 的 ready 态', async () => {
+    let releaseA: (v: unknown) => void = () => {};
+    api.hub.taskList.mockImplementationOnce(() => new Promise((res) => { releaseA = res as (v: unknown) => void; }));
+    const taskA = { ...task, id: 'T-A', delegationId: 'dl-A' };
+    const pA = useRemoteSessionStore.getState().open(taskA);
+    const pB = useRemoteSessionStore.getState().open(task);
+    await pB;
+    releaseA({ tasks: [{ taskId: 'dl-A', targetNodeId: 'node-b', workspaceName: 'ws-b', groupId: 'g-1', runNo: 1 }] });
+    await pA;
+    const s1 = useRemoteSessionStore.getState();
+    expect(s1.task?.id).toBe(task.id);
+    expect(s1.target?.sessionId).toBe('sx');
+  });
+});

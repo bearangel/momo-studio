@@ -3,7 +3,7 @@
 // 2. 降级矩阵四态：miss 占位 / 旧 worker 简版 + 镜像穿插 / 断开徽标保留已到帧
 // 3. composer 在场 + 加载更早
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { RemoteSessionPanel } from './RemoteSessionPanel';
 import { useRemoteSessionStore } from '../../stores/remote-session.view';
@@ -141,5 +141,21 @@ describe('面板附属件', () => {
     expect(txt).toContain('节点B');
     expect(txt).toContain('run #1');
     expect(txt).toContain('实时');
+  });
+});
+
+
+// ── 终审 Important 2：任务解析失败（孤儿跟踪会话）不得永久 spinner ────────────
+
+describe('resolve-null 死端（终审 Important 2）', () => {
+  it('resolveTrackingTask 返回 null → miss 样占位 + 重试钮（非永久定位中）', async () => {
+    (globalThis as unknown as { window: { api: unknown } }).window.api = {
+      task: { get: vi.fn().mockResolvedValue(null), list: vi.fn().mockResolvedValue([]) },
+    };
+    render(<RemoteSessionPanel sessionId="orphan" workspaceId="ws1" />);
+    await waitFor(() => {
+      expect(screen.getByText(/未找到关联的委派任务/)).toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /重试/ })).toBeInTheDocument();
   });
 });
