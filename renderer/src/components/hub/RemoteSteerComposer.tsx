@@ -21,9 +21,11 @@ export function RemoteSteerComposer(): React.JSX.Element {
   const [sending, setSending] = useState(false);
 
   const terminal = task !== null && isTerminalStatus(task.status);
+  const awaitingDecision = task !== null && task.status === 'submitted';
+  const disabled = terminal || awaitingDecision;
   const codepoints = Array.from(text).length;
   const overLimit = codepoints > STEER_MAX_CODEPOINTS;
-  const canSend = !terminal && !sending && text.trim() !== '' && !overLimit;
+  const canSend = !disabled && !sending && text.trim() !== '' && !overLimit;
 
   const submit = (): void => {
     if (!canSend || task === null) return;
@@ -46,9 +48,15 @@ export function RemoteSteerComposer(): React.JSX.Element {
               submit();
             }
           }}
-          disabled={terminal}
+          disabled={disabled}
           rows={2}
-          placeholder={terminal ? '任务已结束' : '补充指令…（Enter 发送 · Shift+Enter 换行）'}
+          placeholder={
+            terminal
+              ? '任务已结束'
+              : awaitingDecision
+                ? '等待你的裁决——裁决后可继续补充指令'
+                : '补充指令…（Enter 发送 · Shift+Enter 换行）'
+          }
           className="w-full resize-none rounded-[10px] bg-transparent px-3 py-2 pr-16 text-[13px] leading-[1.6] text-primary placeholder:text-tertiary focus:outline-none disabled:cursor-not-allowed"
           data-testid="remote-steer-input"
         />
