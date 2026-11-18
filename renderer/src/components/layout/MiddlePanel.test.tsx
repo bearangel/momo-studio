@@ -16,14 +16,14 @@ import type { Workspace } from '../../ipc/types';
 
 vi.mock('../editor/CodeEditor', () => ({ CodeEditor: () => <div data-testid="code-editor-stub" /> }));
 vi.mock('../im/MessageList', () => ({ MessageList: () => <div /> }));
-vi.mock('../im/MentionInput', () => ({ MentionInput: () => <div /> }));
+vi.mock('../im/MentionInput', () => ({ MentionInput: () => <div data-testid="mention-input-stub" /> }));
 vi.mock('../im/MembersPanel', () => ({ MembersPanel: () => <div /> }));
 vi.mock('../im/InputToolbar', () => ({ InputToolbar: () => <div /> }));
 vi.mock('../im/RoomToolBudgetBadge', () => ({ RoomToolBudgetBadge: () => <div /> }));
 vi.mock('../im/ExportChatButton', () => ({ ExportChatButton: () => <div /> }));
 vi.mock('../im/TaskProgressButton', () => ({ TaskProgressButton: () => <div /> }));
 vi.mock('../im/InFlightPanel', () => ({ InFlightPanel: () => <div /> }));
-vi.mock('../im/HumanRequestPanel', () => ({ HumanRequestPanel: () => <div /> }));
+vi.mock('../im/HumanRequestPanel', () => ({ HumanRequestPanel: () => <div data-testid="human-request-stub" /> }));
 vi.mock('../agent/AgentsView', () => ({ AgentsView: () => <div data-testid="agents-stub" /> }));
 vi.mock('../settings/SettingsView', () => ({
   SettingsView: () => <div data-testid="settings-view-stub" />,
@@ -37,7 +37,11 @@ vi.mock('../workgroup/WorkgroupView', () => ({
 }));
 vi.mock('../workspace/BrowserSidebar', () => ({ BrowserSidebar: () => <div /> }));
 vi.mock('../plugins/PanelPageView', () => ({ PanelPageView: () => <div /> }));
-vi.mock('../hub/RemoteSessionPanel', () => ({ RemoteSessionPanel: ({ sessionId }: { sessionId: string }) => <div data-testid="remote-session-panel-stub" data-session={sessionId} /> }));
+vi.mock('../hub/RemoteSessionPanel', () => ({
+  RemoteSessionPanel: ({ sessionId, footerSlot }: { sessionId: string; footerSlot?: React.ReactNode }) => (
+    <div data-testid="remote-session-panel-stub" data-session={sessionId}>{footerSlot}</div>
+  ),
+}));
 
 import { MiddlePanel } from './MiddlePanel';
 
@@ -180,21 +184,24 @@ const chatSession = {
 } as never;
 
 describe('MiddlePanel 跟踪会话直连（spec §12.1）', () => {
-  it('选中 task_execution 会话 → 渲染 RemoteSessionPanel（不渲染输入框）', () => {
+  it('选中 task_execution 会话 → 面板在场；聊天输入框不渲染；验收卡在面板内（footerSlot）', () => {
     seedImWorkspace();
     useSessionStore.setState({ sessions: [trackSession, chatSession], activeSessionId: 'sess-track' });
     render(ui());
-    expect(screen.getByTestId('remote-session-panel-stub')).toBeInTheDocument();
-    expect(screen.getByTestId('remote-session-panel-stub').dataset.session).toBe('sess-track');
+    const panel = screen.getByTestId('remote-session-panel-stub');
+    expect(panel.dataset.session).toBe('sess-track');
+    expect(screen.queryByTestId('mention-input-stub')).not.toBeInTheDocument();
+    expect(panel.contains(screen.getByTestId('human-request-stub'))).toBe(true);
     expect(document.querySelector('textarea')).toBeNull();
   });
 
-  it('普通会话 → 原样渲染（无面板、输入框在场）', () => {
+  it('普通会话 → 原样渲染（无面板；聊天输入框与验收卡照常、验收卡不在面板内）', () => {
     seedImWorkspace();
     useSessionStore.setState({ sessions: [trackSession, chatSession], activeSessionId: 'sess-chat' });
-    const { container } = render(ui());
+    render(ui());
     expect(screen.queryByTestId('remote-session-panel-stub')).not.toBeInTheDocument();
-    void container;
+    expect(screen.getByTestId('mention-input-stub')).toBeInTheDocument();
+    expect(screen.getByTestId('human-request-stub')).toBeInTheDocument();
   });
 
   it('StrictMode 双挂载：卸载重挂同会话 → 面板仍在（close 后可重开）', () => {

@@ -159,3 +159,17 @@ describe('resolve-null 死端（终审 Important 2）', () => {
     expect(screen.getByRole('button', { name: /重试/ })).toBeInTheDocument();
   });
 });
+
+
+// ── spec §7.2 气泡复用：远端正文走 MarkdownBody（与本地会话渲染一致） ────────
+
+describe('Markdown 渲染（复用本地气泡入口）', () => {
+  it('assistant 正文帧的 Markdown 语法被渲染（** 不进 DOM，strong 元素在场）', () => {
+    seedReady({ frames: [frame({ frameId: 'f1', seq: 1, content: '**粗体要点**\n\n## 小标题' })] });
+    render(<RemoteSessionPanel sessionId="sx" workspaceId="ws1" />);
+    const panel = screen.getByTestId('remote-session-panel');
+    expect(panel.querySelector('strong')?.textContent).toBe('粗体要点');
+    expect(panel.querySelector('h2')?.textContent).toContain('小标题');
+    expect(panel.textContent).not.toContain('**粗体要点**');
+  });
+});

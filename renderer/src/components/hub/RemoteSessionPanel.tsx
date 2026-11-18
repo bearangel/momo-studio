@@ -12,6 +12,7 @@ import { cn } from '../../lib/cn';
 import { resolveTrackingTask } from '../../lib/resolve-tracking-task';
 import { useRemoteSessionStore } from '../../stores/remote-session.view';
 import { ToolCallChip } from '../im/ToolCallChip';
+import { MarkdownBody } from '../im/MarkdownBody';
 import { RemoteSteerComposer } from './RemoteSteerComposer';
 import type { HubViewFrame, HubViewMessage, ImMessage } from '../../ipc/types';
 
@@ -73,7 +74,8 @@ function FrameBubble({ frame, streamingTail }: { frame: HubViewFrame; streamingT
         {streamingTail && <span className="text-[10px] text-tertiary">生成中…</span>}
       </div>
       <div className="rounded-[10px] border border-subtle bg-surface-2 px-[11px] py-[7px] text-[13px] leading-[1.7] text-primary">
-        <span className="whitespace-pre-wrap break-words">{frame.content}</span>
+        {/* 正文走统一 Markdown 入口（spec §7.2 与本地气泡同构） */}
+        <MarkdownBody>{frame.content ?? ''}</MarkdownBody>
         {streamingTail && <span className="remote-stream-cursor" aria-hidden />}
       </div>
     </div>
@@ -134,7 +136,12 @@ function mergeTimeline(frames: HubViewFrame[], mirrorRows: ImMessage[], legacy: 
   return entries.sort((a, b) => a.t - b.t || (a.kind === 'mirror' ? -1 : 1));
 }
 
-export function RemoteSessionPanel({ sessionId, workspaceId }: { sessionId: string; workspaceId: string }): React.JSX.Element {
+export function RemoteSessionPanel({ sessionId, workspaceId, footerSlot }: {
+  sessionId: string;
+  workspaceId: string;
+  /** 面板附属动作区（人工请求/验收卡——spec §12.3 布局：流域 → 动作区 → 指令输入框） */
+  footerSlot?: React.ReactNode;
+}): React.JSX.Element {
   const st = useRemoteSessionStore();
   const online = st.live && st.hubOnline;
 
@@ -167,7 +174,7 @@ export function RemoteSessionPanel({ sessionId, workspaceId }: { sessionId: stri
   const timeline = mergeTimeline(st.frames, st.mirrorRows, st.wire2 ? [] : st.legacy);
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col bg-canvas" data-testid="remote-session-panel">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-canvas" data-testid="remote-session-panel">
       {/* 状态条（壳外标题由会话面板负责——此处只承载远端态徽标） */}
       <div className="flex items-center gap-2 border-b border-subtle bg-surface-1 px-4 py-1.5">
         {online ? (
@@ -291,6 +298,8 @@ export function RemoteSessionPanel({ sessionId, workspaceId }: { sessionId: stri
         )}
       </div>
 
+      {/* 附属动作区（验收/人工请求——紧贴 composer 之上，随内容自适应但有高度上限） */}
+      {footerSlot !== undefined && <div className="max-h-[40vh] shrink-0 overflow-y-auto">{footerSlot}</div>}
       {/* composer=steer（spec §12.4） */}
       <RemoteSteerComposer />
     </div>

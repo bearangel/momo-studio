@@ -122,7 +122,11 @@ export function MiddlePanel() {
             {activeSessionId && <InFlightPanel sessionId={activeSessionId} />}
           </div>
           {activeSession?.kind === 'task_execution' ? (
-            <RemoteSessionPanel sessionId={activeSession.id} workspaceId={activeSession.workspaceId} />
+            <RemoteSessionPanel
+              sessionId={activeSession.id}
+              workspaceId={activeSession.workspaceId}
+              footerSlot={activeSessionId ? <HumanRequestPanel sessionId={activeSessionId} /> : null}
+            />
           ) : (
             <>
               <MessageList />
@@ -134,10 +138,11 @@ export function MiddlePanel() {
             </>
           )}
           {/* 会话请求面板（任务生命周期 v2 T22）：composer 上方唯一人工行动入口，
-              未决时出现；任务执行会话 / 普通会话 / 只读跟踪会话（session.readOnly
-              T17——操作收敛到请求面板）都挂，P2 扩展远端请求代答 */}
-          {activeSessionId && <HumanRequestPanel sessionId={activeSessionId} />}
-          <MentionInput />
+              未决时出现；普通会话在此挂载；任务执行会话经 RemoteSessionPanel 的
+              footerSlot 承载（流域 → 动作区 → 指令输入框，spec §12.3） */}
+          {activeSession?.kind !== 'task_execution' && activeSessionId && <HumanRequestPanel sessionId={activeSessionId} />}
+          {/* 聊天输入框仅普通会话（跟踪会话的输入面 = 面板内 steer composer） */}
+          {activeSession?.kind !== 'task_execution' && <MentionInput />}
           {showMembers && activeSessionId && (
             <>
               {/* 透明 backdrop：点击关闭浮层（仅覆盖 chat 列，不影响 RoomList） */}
