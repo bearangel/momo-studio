@@ -195,3 +195,12 @@ interface ViewFrame {
    的本地 InputToolbar。
 5. **改动面**：纯 renderer（MiddlePanel 路由/面板拆壳重组/store 生命周期/入口跳转/删按钮
    组件）；协议/主进程/hub 零改动。§4-§6/§8-§11（帧模型/定位链/协商/错误处理）不变。
+
+**交付回执（2026-11-18）**：分支 feat/remote-session-panel（7 commits）全量交付。真机复验
+（A/B 双实例 + 真实 LLM）：点跟踪会话零额外点击直达面板（956 字整段散文 / 工具 chip /
+零 thinking 噪音）✓；活任务流式 + composer 发指令 → worker 消费 → 文件落标
+（PANEL-FINAL-MARK）✓；镜像里程碑穿插 ✓；resolve 链终态禁用 ✓。复验期修两处超计划缺陷：
+①跨节点完成零 task:runChanged（delegation-sync 镜像直写在 write-blocked 域）→ 端口注入
+emitTaskRunChanged（4 用例锁）；②跟踪会话创建未广播 session:listChanged（侧栏不刷新）→
+ensureTrackingSession 接 K10 通道（1 用例锁）。推送链「面板开着目睹翻转」以单测双锁 +
+部署验证收口（LLM 完成速度与 UI 导航摩擦挤压剧场式窗口）。
