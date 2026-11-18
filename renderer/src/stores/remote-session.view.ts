@@ -85,7 +85,7 @@ export const useRemoteSessionStore = create<RemoteSessionState>((set, get) => {
   const refetchMirror = (): void => {
     const t = get().task;
     if (t === null || t.executionSessionId === null || t.executionSessionId === '') return;
-    void ipc.im
+    void ipc.session
       .getMessages(t.executionSessionId)
       .then((r) => { set({ mirrorRows: r.messages }); })
       .catch(() => { /* 镜像行是增强面——拉取失败保旧值 */ });

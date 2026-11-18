@@ -17,7 +17,7 @@ const mirror = (over: Partial<ImMessage> & Pick<ImMessage, 'id'>): ImMessage => 
   sessionId: 'sx', sender: 'system', body: '里程碑行', eventType: 'delegation_milestone',
   streamSessionId: null, parentStreamSessionId: null, segmentOf: null, segmentIndex: null,
   status: 'done', source: 'hub', workspaceId: 'ws1', taskId: 'T-9',
-  createdAt: 1_700_000_000_000, updatedAt: 0, ...over,
+  contextJson: null, createdAt: 1_700_000_000_000, updatedAt: 0, ...over,
 });
 
 function seedReady(over: Partial<ReturnType<typeof useRemoteSessionStore.getState>> = {}): void {
