@@ -120,8 +120,9 @@ describe('task state machine（存量边保留）', () => {
     it('paused → completed（必须先 in_progress 再 submitted 验收）', () => {
       expect(canTransition('paused', 'completed')).toBe(false);
     });
-    it('submitted → in_progress（验收打回走 assigned 重启，不可直回执行）', () => {
-      expect(canTransition('submitted', 'in_progress')).toBe(false);
+    it('submitted → in_progress 已放行（2026-11-18 继续边）；打回仍走 assigned 重启', () => {
+      expect(canTransition('submitted', 'in_progress')).toBe(true);
+      expect(canTransition('submitted', 'assigned')).toBe(true);
     });
     it('waiting_human → completed（等人不是验收，须先回 in_progress 再 submitted）', () => {
       expect(canTransition('waiting_human', 'completed')).toBe(false);
@@ -207,5 +208,22 @@ describe('run 状态机全边（spec §5.2）', () => {
   it('ACTIVE_TASK_RUN_STATUSES 只含活跃三态（Task 6/9 消费契约）', async () => {
     const { ACTIVE_TASK_RUN_STATUSES } = await import('../../src/main/storage/tasks/state-machine');
     expect(ACTIVE_TASK_RUN_STATUSES).toEqual(['running', 'waiting_human', 'submitted']);
+  });
+});
+
+// 验收「继续」新边（spec 2026-11-18 DEC-12）：submitted → in_progress 仅供
+// lifecycle-runs.acceptAndContinue 单点使用；completed 入口唯一性不变。
+describe('1.14 继续（accept-and-continue）合法边', () => {
+  it('submitted → in_progress 合法；completed 仍只能从 submitted 进入', () => {
+    expect(canTransition('submitted', 'in_progress')).toBe(true);
+    expect(canTransition('in_progress', 'completed')).toBe(false);
+    expect(canTransition('submitted', 'completed')).toBe(true);
+    expect(canTransition('completed', 'in_progress')).toBe(false);
+  });
+
+  it('submitted 的其他出边不受影响（assigned/cancelled/failed）', () => {
+    for (const to of ['assigned', 'cancelled', 'failed'] as const) {
+      expect(canTransition('submitted', to), to).toBe(true);
+    }
   });
 });

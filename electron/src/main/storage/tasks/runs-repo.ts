@@ -20,7 +20,7 @@ import {
 export type { TaskRunStatus } from './state-machine';
 
 /** run 触发方式：initial 首跑 / rework 打回重跑 / quota_retry 配额重试 / manual 手动 */
-export type TaskRunTrigger = 'initial' | 'rework' | 'quota_retry' | 'manual';
+export type TaskRunTrigger = 'initial' | 'rework' | 'quota_retry' | 'manual' | 'continue';
 
 export interface TaskRunRow {
   id: string;

@@ -65,7 +65,9 @@ const LEGAL_TRANSITIONS: Record<TaskStatus, ReadonlySet<TaskStatus>> = {
   session_queued: new Set(['in_progress', 'failed', 'cancelled']),
   in_progress: new Set(['waiting_human', 'submitted', 'paused', 'failed', 'cancelled']),
   waiting_human: new Set(['in_progress', 'paused', 'failed', 'cancelled']),
-  submitted: new Set(['completed', 'assigned', 'cancelled', 'failed']),
+  // submitted → in_progress：验收「继续」专用边（spec 2026-11-18 DEC-12）——
+  // 只有 lifecycle-runs.acceptAndContinue 单点可使用；completed 仍只能由 submitted 进入。
+  submitted: new Set(['completed', 'assigned', 'in_progress', 'cancelled', 'failed']),
   paused: new Set(['in_progress', 'waiting_human', 'cancelled']),
   completed: new Set(),
   failed: new Set(),
