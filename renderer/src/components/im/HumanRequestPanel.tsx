@@ -30,6 +30,8 @@ import {
   CornerDownRight,
   Hand,
   Hourglass,
+  Maximize2,
+  Minimize2,
   Network,
   ShieldCheck,
   type LucideIcon,
@@ -355,7 +357,11 @@ function PeerNeutralCard({ row }: { row: HumanRequestRow }) {
 
 // ── 卡头（#2）───────────────────────────────────────────────────────────────
 
-function CardHead({ row, now }: { row: HumanRequestRow; now: number }) {
+function CardHead({ row, now, extraAction }: {
+  row: HumanRequestRow;
+  now: number;
+  extraAction?: React.ReactNode;
+}) {
   const meta = KIND_META[row.kind];
   const warn = isWarn(row, now);
   const remain = remainingMinutes(row, now);
@@ -369,6 +375,7 @@ function CardHead({ row, now }: { row: HumanRequestRow; now: number }) {
         {warn && remain !== null && <RemainPill minutes={remain} />}
         {warn ? meta.label : `${meta.label} · 等待 ${elapsedMinutes(row, now)} 分钟`}
       </span>
+      {extraAction}
     </div>
   );
 }
@@ -622,15 +629,18 @@ function isTruncatedMirror(row: HumanRequestRow): boolean {
   return (parsed as { remote?: { truncated?: unknown } }).remote?.truncated === true;
 }
 
-function DeliverableBlock({ payload, fallback, truncated }: {
+function DeliverableBlock({ payload, fallback, truncated, fullscreen = false }: {
   payload: AcceptancePayload | null;
   fallback: string;
   truncated: boolean;
+  /** 满屏态：不做行数折叠（用户已显式要求看全文） */
+  fullscreen?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const body = payload?.summary ?? fallback;
   const long =
-    body.split('\n').length > SUMMARY_COLLAPSE_LINES || body.length > SUMMARY_COLLAPSE_CHARS;
+    !fullscreen &&
+    (body.split('\n').length > SUMMARY_COLLAPSE_LINES || body.length > SUMMARY_COLLAPSE_CHARS);
   return (
     <div className="flex flex-col gap-2">
       <div className="text-[11px] font-medium text-tertiary">交付说明</div>
@@ -687,11 +697,12 @@ function DeliverableBlock({ payload, fallback, truncated }: {
 
 type AcceptanceAction = 'continue' | 'reject';
 
-function AcceptanceBody({ row, onError, onRemoteWarning }: {
+function AcceptanceBody({ row, onError, onRemoteWarning, fullscreen = false }: {
   row: HumanRequestRow;
   onError: (msg: string) => void;
   /** S6：远端通知失败人话上抛面板级警示条（卡片随重拉消失，警示需存活） */
   onRemoteWarning: (msg: string | null) => void;
+  fullscreen?: boolean;
 }) {
   const loadPending = useHumanStore((s) => s.loadPending);
   const payload = parseAcceptance(row);
@@ -724,7 +735,7 @@ function AcceptanceBody({ row, onError, onRemoteWarning }: {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-1.5 pb-2">
-          <DeliverableBlock payload={payload} fallback={row.prompt} truncated={truncated} />
+          <DeliverableBlock payload={payload} fallback={row.prompt} truncated={truncated} fullscreen={fullscreen} />
         </div>
         <p className="shrink-0 border-t border-subtle px-3 py-2 text-[10.5px] text-tertiary">
           {row.originNodeName !== null && row.originNodeName !== undefined
@@ -744,7 +755,7 @@ function AcceptanceBody({ row, onError, onRemoteWarning }: {
           data-testid="acceptance-scroll"
           className="min-h-0 flex-1 overflow-y-auto px-3 pt-1.5 pb-3"
         >
-          <DeliverableBlock payload={payload} fallback={row.prompt} truncated={truncated} />
+          <DeliverableBlock payload={payload} fallback={row.prompt} truncated={truncated} fullscreen={fullscreen} />
         </div>
         <div
           aria-hidden
@@ -839,10 +850,12 @@ function AcceptanceBody({ row, onError, onRemoteWarning }: {
 
 // ── 单卡（头 + 体；超时预警态边框 warning，#8）──────────────────────────────
 
-function KindCard({ row, now, onRemoteWarning }: {
+function KindCard({ row, now, onRemoteWarning, fullscreen = false, onToggleFullscreen }: {
   row: HumanRequestRow;
   now: number;
   onRemoteWarning: (msg: string | null) => void;
+  fullscreen?: boolean;
+  onToggleFullscreen?: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const onError = (msg: string): void => setError(msg);
@@ -864,12 +877,37 @@ function KindCard({ row, now, onRemoteWarning }: {
       : 'bg-canvas';
   return (
     <div data-testid={`human-card-${row.id}`} className={rootClass}>
-      <CardHead row={row} now={now} />
+      <CardHead
+        row={row}
+        now={now}
+        extraAction={
+          row.kind === 'acceptance' && onToggleFullscreen !== undefined ? (
+            <button
+              type="button"
+              aria-label={fullscreen ? '还原' : '满屏查看'}
+              title={fullscreen ? '还原（Esc）' : '满屏查看交付内容'}
+              onClick={onToggleFullscreen}
+              className="ml-[2px] flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-tertiary hover:bg-surface-3 hover:text-primary"
+            >
+              {fullscreen ? (
+                <Minimize2 size={16} strokeWidth={1.75} aria-hidden />
+              ) : (
+                <Maximize2 size={16} strokeWidth={1.75} aria-hidden />
+              )}
+            </button>
+          ) : undefined
+        }
+      />
       {row.kind === 'tool_gate' && <ToolGateBody row={row} now={now} onError={onError} />}
       {row.kind === 'question' && <QuestionBody row={row} onError={onError} />}
       {row.kind === 'manual_action' && <ManualActionBody row={row} now={now} onError={onError} />}
       {row.kind === 'acceptance' && (
-        <AcceptanceBody row={row} onError={onError} onRemoteWarning={onRemoteWarning} />
+        <AcceptanceBody
+          row={row}
+          onError={onError}
+          onRemoteWarning={onRemoteWarning}
+          fullscreen={fullscreen}
+        />
       )}
       <ErrorLine error={error} />
     </div>
@@ -929,7 +967,11 @@ function StackHead({ rows, now }: { rows: HumanRequestRow[]; now: number }) {
 
 // ── 面板主体 ────────────────────────────────────────────────────────────────
 
-export function HumanRequestPanel({ sessionId }: { sessionId: string }) {
+export function HumanRequestPanel({ sessionId, onAcceptanceFullscreenChange }: {
+  sessionId: string;
+  /** 验收卡满屏态上抛（面板据此把流域让位给卡片——方案 V1） */
+  onAcceptanceFullscreenChange?: (expanded: boolean) => void;
+}) {
   const rows = useHumanStore((s) => s.pendingBySession.get(sessionId));
   const loadPending = useHumanStore((s) => s.loadPending);
   const initSubscriptions = useHumanStore((s) => s.initSubscriptions);
@@ -938,6 +980,8 @@ export function HumanRequestPanel({ sessionId }: { sessionId: string }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   // S6 远端验收/打回通知失败人话（面板级——卡片随重拉消失，警示条跨重拉存活）
   const [remoteWarning, setRemoteWarning] = useState<string | null>(null);
+  // 验收卡满屏（V1：覆盖流域，标题行保留）；不持久化，换卡即还原
+  const [fullscreen, setFullscreen] = useState(false);
 
   // 订阅只装一次（幂等）；会话切换重拉 pending
   useEffect(() => {
@@ -959,6 +1003,21 @@ export function HumanRequestPanel({ sessionId }: { sessionId: string }) {
     const found = pending.find((r) => r.id === expandedId);
     return found ?? pending[0] ?? null;
   }, [pending, expandedId]);
+
+  useEffect(() => {
+    onAcceptanceFullscreenChange?.(fullscreen);
+  }, [fullscreen, onAcceptanceFullscreenChange]);
+  useEffect(() => {
+    setFullscreen(false);
+  }, [expanded?.id]);
+  useEffect(() => {
+    if (!fullscreen) return undefined;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setFullscreen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [fullscreen]);
 
   // 空态仍可能挂着远端验收警示（S6 remoteWarning——acceptance 卡随重拉消失，
   // 警示条需存活到下一次成功操作清除）
@@ -996,7 +1055,14 @@ export function HumanRequestPanel({ sessionId }: { sessionId: string }) {
           {/* key=requestId：换卡强制重挂载——同 kind 卡复用实例会让 body 内
               useState（选中/草稿/理由/勾选/error）跨卡串值 */}
           {expanded !== null && (
-            <KindCard key={expanded.id} row={expanded} now={now} onRemoteWarning={setRemoteWarning} />
+            <KindCard
+              key={expanded.id}
+              row={expanded}
+              now={now}
+              onRemoteWarning={setRemoteWarning}
+              fullscreen={fullscreen}
+              onToggleFullscreen={() => setFullscreen((v) => !v)}
+            />
           )}
           {rest.map((r) => (
             <CollapsedRow key={r.id} row={r} now={now} onExpand={() => setExpandedId(r.id)} />

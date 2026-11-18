@@ -136,11 +136,13 @@ function mergeTimeline(frames: HubViewFrame[], mirrorRows: ImMessage[], legacy: 
   return entries.sort((a, b) => a.t - b.t || (a.kind === 'mirror' ? -1 : 1));
 }
 
-export function RemoteSessionPanel({ sessionId, workspaceId, footerSlot }: {
+export function RemoteSessionPanel({ sessionId, workspaceId, footerSlot, footerExpanded = false }: {
   sessionId: string;
   workspaceId: string;
   /** 面板附属动作区（人工请求/验收卡——spec §12.3 布局：流域 → 动作区 → 指令输入框） */
   footerSlot?: React.ReactNode;
+  /** 验收卡满屏（方案 V1）：流域让位、动作区吃满剩余高度 */
+  footerExpanded?: boolean;
 }): React.JSX.Element {
   const st = useRemoteSessionStore();
   const online = st.live && st.hubOnline;
@@ -180,6 +182,7 @@ export function RemoteSessionPanel({ sessionId, workspaceId, footerSlot }: {
         className={cn(
           'flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-4 py-3',
           st.phase === 'ready' && !online && 'opacity-60',
+          footerExpanded && 'hidden',
         )}
         data-testid="remote-session-flow"
       >
@@ -277,7 +280,14 @@ export function RemoteSessionPanel({ sessionId, workspaceId, footerSlot }: {
 
       {/* 附属动作区（验收/人工请求——紧贴 composer 之上，随内容自适应但有高度上限） */}
       {footerSlot !== undefined && (
-        <div className="flex max-h-[40vh] shrink-0 flex-col overflow-hidden pb-3">{footerSlot}</div>
+        <div
+          className={cn(
+            'flex flex-col overflow-hidden pb-3',
+            footerExpanded ? 'min-h-0 flex-1' : 'max-h-[40vh] shrink-0',
+          )}
+        >
+          {footerSlot}
+        </div>
       )}
       {/* composer=steer（spec §12.4） */}
       <RemoteSteerComposer />

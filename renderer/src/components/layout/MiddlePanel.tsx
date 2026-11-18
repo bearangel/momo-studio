@@ -40,6 +40,8 @@ export function MiddlePanel() {
   const [showMembers, setShowMembers] = useState(false);
   // 0-ws 兜底引导的新建对话框开关（T2：Dialog 形态取代嵌入表单）
   const [wsDialogOpen, setWsDialogOpen] = useState(false);
+  // 验收卡满屏（V1）：切会话即还原
+  const [acceptanceFullscreen, setAcceptanceFullscreen] = useState(false);
 
   // 切换会话时关闭成员浮层，避免新会话显示旧成员
   useEffect(() => {
@@ -130,7 +132,15 @@ export function MiddlePanel() {
             <RemoteSessionPanel
               sessionId={activeSession.id}
               workspaceId={activeSession.workspaceId}
-              footerSlot={activeSessionId ? <HumanRequestPanel sessionId={activeSessionId} /> : null}
+              footerExpanded={acceptanceFullscreen}
+              footerSlot={
+                activeSessionId ? (
+                  <HumanRequestPanel
+                    sessionId={activeSessionId}
+                    onAcceptanceFullscreenChange={setAcceptanceFullscreen}
+                  />
+                ) : null
+              }
             />
           ) : (
             <>

@@ -99,8 +99,11 @@ const ACCEPTANCE_JSON = JSON.stringify({
 });
 
 /** 挂载并冲刷首轮 loadPending promise */
-async function mountPanel(sessionId = 'sess-1'): Promise<void> {
-  render(<HumanRequestPanel sessionId={sessionId} />);
+async function mountPanel(
+  sessionId = 'sess-1',
+  props: { onAcceptanceFullscreenChange?: (v: boolean) => void } = {},
+): Promise<void> {
+  render(<HumanRequestPanel sessionId={sessionId} {...props} />);
   await act(async () => {});
 }
 
@@ -358,6 +361,34 @@ describe('HumanRequestPanel — acceptance 卡（三动作裁决）', () => {
     const continueBtn = screen.getByRole('button', { name: '继续' });
     expect(scroll.contains(continueBtn)).toBe(false);
     expect(screen.getByTestId('acceptance-footer').contains(continueBtn)).toBe(true);
+  });
+
+  it('满屏态：交付说明不再折叠（无「展开全文」/无行数截断）', async () => {
+    const longPayload = JSON.stringify({
+      acceptance: { runNo: 1, summary: '长交付说明'.repeat(220), files: [], artifacts: [] },
+    });
+    listMock.mockResolvedValue([row({ payloadJson: longPayload })]);
+    await mountPanel('sess-1');
+    expect(screen.getByRole('button', { name: '展开全文' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '满屏查看' }));
+    expect(screen.queryByRole('button', { name: '展开全文' })).not.toBeInTheDocument();
+  });
+
+  it('满屏按钮：点开 → 回调 true + 变「还原」；Esc 退出回调 false', async () => {
+    const spy = vi.fn();
+    listMock.mockResolvedValue([row()]);
+    await mountPanel('sess-1', { onAcceptanceFullscreenChange: spy });
+
+    fireEvent.click(screen.getByRole('button', { name: '满屏查看' }));
+    expect(spy).toHaveBeenLastCalledWith(true);
+    expect(screen.getByRole('button', { name: '还原' })).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'Escape' });
+    });
+    expect(spy).toHaveBeenLastCalledWith(false);
+    expect(screen.getByRole('button', { name: '满屏查看' })).toBeInTheDocument();
   });
 
   it('镜像行 remote.truncated → 交付内容截断警示', async () => {
