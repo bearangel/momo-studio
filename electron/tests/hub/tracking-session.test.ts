@@ -246,3 +246,20 @@ describe('6) retryDispatch × ensureTrackingSession 端口', () => {
     });
   });
 });
+
+
+// ── 新建跟踪会话广播 listChanged（spec §12.1：派发后侧栏即时可见） ──────────
+
+describe('新建跟踪会话 → broadcastSessionListChanged（K10 通道接线）', () => {
+  it('新建路径广播一次；幂等复用路径不广播', async () => {
+    const calls: number[] = [];
+    const spy = vi.spyOn(await import('../../src/main/im/session-service'), 'broadcastSessionListChanged').mockImplementation(() => { calls.push(Date.now()); });
+    const task = seedOutTask();
+    const sid = await ensureTrackingSession({ taskId: task.id, targetNodeId: WORKER_NODE }, makePorts());
+    expect(sid).toBeTruthy();
+    expect(calls).toHaveLength(1);
+    await ensureTrackingSession({ taskId: task.id, targetNodeId: WORKER_NODE }, makePorts());
+    expect(calls).toHaveLength(1);
+    spy.mockRestore();
+  });
+});

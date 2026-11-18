@@ -16,6 +16,7 @@
 // （组清单取目标节点名）经 TrackingSessionPorts 注入——tests/hub 注入 fake。
 import { logger } from '../logger';
 import { getTask, updateTask, findActiveOutboundWithoutSession } from '../storage/tasks/repo';
+import { broadcastSessionListChanged } from '../im/session-service';
 import { createSession } from '../im/session-ops';
 import { outRowWorkerNodeId } from './remote-intervene-bridge';
 import type { TaskRow } from '../storage/tasks/repo';
@@ -63,6 +64,9 @@ export async function ensureTrackingSession(
     kind: 'task_execution',
   });
   updateTask(task.id, { executionSessionId: session.id });
+  // K10 通道接线（spec §12.1）：停留 IM 视图的侧栏即时见到新跟踪会话——
+  // 不广播则用户须切走再切回（面板直连的入口可见性依赖此推送）
+  broadcastSessionListChanged();
   logger.info('跟踪会话已创建', { taskId: task.id, sessionId: session.id, targetNodeId: input.targetNodeId });
   return session.id;
 }
