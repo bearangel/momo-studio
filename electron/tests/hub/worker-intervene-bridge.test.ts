@@ -437,6 +437,11 @@ describe('run_submitted → task.report submitted', () => {
         files: ['a.ts'],
         artifacts: [{ label: '测试', value: '通过' }],
       }),
+      deliverable: {
+        summary: '交付完成',
+        files: ['a.ts'],
+        artifacts: [{ label: '测试', value: '通过' }],
+      },
     });
   });
 
@@ -496,7 +501,7 @@ describe('run_submitted → task.report submitted', () => {
     expect(client.sendRes).toHaveBeenCalledTimes(1); // 不变
   });
 
-  it('超长 deliverable → reason 截断至 ≤512（hub REASON_MAX 整包拒防线）', async () => {
+  it('超长 deliverable → reason 截断至 ≤512 且保留 files/artifacts（1.14 结构化通道兜底）', async () => {
     const client = mkFakeClient();
     wireBridge(client);
 
@@ -506,8 +511,15 @@ describe('run_submitted → task.report submitted', () => {
     await flushAsync();
 
     expect(client.sendRes).toHaveBeenCalledTimes(1);
-    const payload = vi.mocked(client.sendRes).mock.calls[0]![2] as { reason: string };
+    const payload = vi.mocked(client.sendRes).mock.calls[0]![2] as {
+      reason: string;
+      deliverable: { summary: string };
+    };
     expect(payload.reason.length).toBeLessThanOrEqual(512);
-    expect(payload.reason).toBe(JSON.stringify({ summary: '长'.repeat(400) + '…' }));
+    const parsed = JSON.parse(payload.reason) as { summary: string; files: unknown[]; artifacts: unknown[] };
+    expect(parsed.summary.length).toBeLessThan(800);
+    expect(parsed.files).toEqual([]);
+    expect(parsed.artifacts).toEqual([]);
+    expect(payload.deliverable.summary).toBe('长'.repeat(800));
   });
 });

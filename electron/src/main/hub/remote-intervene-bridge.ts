@@ -53,10 +53,8 @@ import { truncateCodePoints } from '../util/redact';
 import { insertMessage } from '../storage/messages/repo';
 import { pushSessionMessage } from '../agent/stream-relay';
 
-/** hub delegations.ts REASON_MAX 镜像（reason 超限整包拒——deliverable 通道上限） */
+/** hub delegations.ts REASON_MAX 镜像（旧 hub 的 reason 通道上限） */
 const REASON_MAX = 512;
-/** 超长 deliverable 降级截断的 summary 预算（JSON 转义膨胀留裕量） */
-const SUMMARY_FALLBACK_CODEPOINTS = 400;
 
 /**
  * 里程碑落执行会话公用底座（S2 降级 / S4 验收消费同 event_type）：messages 行
@@ -183,30 +181,34 @@ function parseInterventionOptions(
   }
 }
 
+const FILES_MAX = 20;
+const ARTIFACTS_MAX = 10;
+
 /**
- * deliverable → report.reason（H7 通道约定：hub JSON.parse 成纯对象则作
- * deliverable 透传；REASON_MAX=512 超限整包拒）。全量 JSON 放得下用全量；
- * 放不下降级为仅 summary 的截断形态（保 JSON 有效性——数字等非对象解析结果
- * 会让 hub 丢弃 deliverable 键，截断循环按 JSON 实长收敛）。
+ * deliverable → report.reason（旧 hub <1.14 降级通道，spec 2026-11-18 §7.3）：
+ * 1.14 hub 优先消费 deliverable 字段，本函数只服务旧 hub——因此必须在 512
+ * 字符内尽量保住结构化信息：先保 files/artifacts（各截条数），再用剩余预算截
+ * summary；实在放不下才退化为 summary-only。
  */
 export function buildDeliverableReason(deliverable: {
   summary: string;
   files?: string[];
   artifacts?: Array<{ label: string; value: string }>;
 }): string {
-  const full = JSON.stringify({
-    summary: deliverable.summary,
-    files: deliverable.files ?? [],
-    artifacts: deliverable.artifacts ?? [],
-  });
+  const files = (deliverable.files ?? []).slice(0, FILES_MAX);
+  const artifacts = (deliverable.artifacts ?? []).slice(0, ARTIFACTS_MAX).map((a) => ({
+    label: truncateCodePoints(a.label, 40),
+    value: truncateCodePoints(a.value, 80),
+  }));
+  const full = JSON.stringify({ summary: deliverable.summary, files, artifacts });
   if (full.length <= REASON_MAX) return full;
-  let take = SUMMARY_FALLBACK_CODEPOINTS;
-  let out = JSON.stringify({ summary: truncateCodePoints(deliverable.summary, take) });
-  while (out.length > REASON_MAX && take > 0) {
+  let take = 160;
+  while (take > 0) {
+    const candidate = JSON.stringify({ summary: truncateCodePoints(deliverable.summary, take), files, artifacts });
+    if (candidate.length <= REASON_MAX) return candidate;
     take = Math.floor(take / 2);
-    out = JSON.stringify({ summary: truncateCodePoints(deliverable.summary, take) });
   }
-  return out;
+  return JSON.stringify({ summary: truncateCodePoints(deliverable.summary, 80) });
 }
 
 /**
@@ -351,6 +353,12 @@ export function createRemoteInterveneHandler(
       status: 'submitted',
       runNo: e.runNo,
       reason: buildDeliverableReason(e.deliverable),
+      // 1.14 hub 优先消费；旧 hub 剥除未知字段（零破坏）
+      deliverable: {
+        summary: e.deliverable.summary,
+        files: e.deliverable.files ?? [],
+        artifacts: e.deliverable.artifacts ?? [],
+      },
     });
     if (!sent) {
       degradeSubmit(e.taskId, task.delegationId, 'sendRes 失败（连接半关）');

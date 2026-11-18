@@ -68,6 +68,9 @@ export interface TaskReportPayload {
   /** 执行尝试号（1.11.0，仅 submitted 上报携带）：打回后新 run 提交时必带；
    *  缺省沿用 hub 账本行 run_no（1.10 上报形态零变化）。 */
   runNo?: number;
+  /** 结构化交付物（1.14.0，仅 submitted 上报携带）：hub 优先透传；reason 仍带
+   *  摘要串作旧 hub（<1.14）降级通道。 */
+  deliverable?: Record<string, unknown>;
 }
 
 /** 进度拍：委派会话 message_events 尾部摘要（excerpt 为截断文本）。
