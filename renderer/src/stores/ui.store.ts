@@ -1,6 +1,5 @@
 // renderer/src/stores/ui.store.ts
 import { create } from 'zustand';
-import type { TaskRow } from '../ipc/types';
 
 // 工作空间维度 v1.1：'plugin' = 插件主区页面态（具体面板由 plugin-panels.store.activeKey 决定）
 // M2.1 T2：'workgroups' = 工作组一等视图（节点级能力，不依赖工作空间）

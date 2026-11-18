@@ -13,7 +13,6 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { useUiStore } from '../../stores/ui.store';
-import { useSessionStore } from '../../stores/session.store';
 import {
   DelegatedTaskCard,
   DelegationBoardProvider,

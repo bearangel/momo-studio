@@ -12,7 +12,6 @@ import type { ReactElement } from 'react';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useUiStore } from '../../stores/ui.store';
 import { useSessionStore } from '../../stores/session.store';
-import { useRemoteSessionStore } from '../../stores/remote-session.view';
 import type { Workspace } from '../../ipc/types';
 
 vi.mock('../editor/CodeEditor', () => ({ CodeEditor: () => <div data-testid="code-editor-stub" /> }));

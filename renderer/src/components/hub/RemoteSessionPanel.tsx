@@ -9,7 +9,6 @@
 import { useEffect } from 'react';
 import { Bot, ChevronUp, CircleCheck, Eye, Milestone, Monitor, Wrench } from 'lucide-react';
 import { cn } from '../../lib/cn';
-import { ipc } from '../../ipc/client';
 import { resolveTrackingTask } from '../../lib/resolve-tracking-task';
 import { useRemoteSessionStore } from '../../stores/remote-session.view';
 import { ToolCallChip } from '../im/ToolCallChip';
