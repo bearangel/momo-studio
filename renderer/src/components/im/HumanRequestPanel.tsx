@@ -34,6 +34,8 @@ import {
   ShieldCheck,
   type LucideIcon,
 } from 'lucide-react';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
+import { MarkdownBody } from './MarkdownBody';
 import type {
   HumanAnswerInput,
   HumanRequestKind,
@@ -609,6 +611,82 @@ function ManualActionBody({ row, now, onError }: {
   );
 }
 
+/** 长交付说明折叠阈值（行数/字数启发式，jsdom 可测；spec DEC-22） */
+const SUMMARY_COLLAPSE_LINES = 12;
+const SUMMARY_COLLAPSE_CHARS = 600;
+
+/** 镜像交付物截断标记（旧执行节点/旧 hub 上报缺 deliverable 时由镜像消费写入） */
+function isTruncatedMirror(row: HumanRequestRow): boolean {
+  const parsed = parseJson(row.payloadJson);
+  if (typeof parsed !== 'object' || parsed === null) return false;
+  return (parsed as { remote?: { truncated?: unknown } }).remote?.truncated === true;
+}
+
+function DeliverableBlock({ payload, fallback, truncated }: {
+  payload: AcceptancePayload | null;
+  fallback: string;
+  truncated: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const body = payload?.summary ?? fallback;
+  const long =
+    body.split('\n').length > SUMMARY_COLLAPSE_LINES || body.length > SUMMARY_COLLAPSE_CHARS;
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="text-[11px] font-medium text-tertiary">交付说明</div>
+      <div
+        className={cn(
+          'text-[11.5px] leading-[1.7] text-primary',
+          long && !expanded && 'max-h-[14rem] overflow-hidden',
+        )}
+      >
+        <MarkdownBody>{body}</MarkdownBody>
+      </div>
+      {long && (
+        <button
+          type="button"
+          className="self-start text-[11px] text-accent-600 hover:underline dark:text-accent-300"
+          onClick={() => setExpanded((v) => !v)}
+        >
+          {expanded ? '收起' : '展开全文'}
+        </button>
+      )}
+      {payload !== null && payload.files.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <div className="text-[11px] font-medium text-tertiary">文件</div>
+          <Chips items={payload.files} />
+        </div>
+      )}
+      {payload !== null && payload.artifacts.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <div className="text-[11px] font-medium text-tertiary">产物</div>
+          {payload.artifacts.map((a) => (
+            <div key={a.label} className="flex items-start gap-1.5 text-[11.5px] text-secondary">
+              <CircleCheck
+                size={12}
+                strokeWidth={1.75}
+                aria-hidden
+                className="mt-0.5 shrink-0 text-status-success"
+              />
+              <span className="whitespace-pre-wrap break-words">
+                {a.label}
+                {a.value !== '' ? `：${a.value}` : ''}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {truncated && (
+        <p className="text-[10.5px] text-status-warning" role="alert">
+          交付内容经旧版通道截断，完整内容请在执行节点查看
+        </p>
+      )}
+    </div>
+  );
+}
+
+type AcceptanceAction = 'continue' | 'reject';
+
 function AcceptanceBody({ row, onError, onRemoteWarning }: {
   row: HumanRequestRow;
   onError: (msg: string) => void;
@@ -617,14 +695,14 @@ function AcceptanceBody({ row, onError, onRemoteWarning }: {
 }) {
   const loadPending = useHumanStore((s) => s.loadPending);
   const payload = parseAcceptance(row);
-  const [reason, setReason] = useState('');
+  const truncated = isTruncatedMirror(row);
+  const [action, setAction] = useState<AcceptanceAction | null>(null);
+  const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
-  const canOperate = row.taskId !== null;
+  const [confirmFinish, setConfirmFinish] = useState(false);
 
-  /** 验收 / 打回都走 task 通道（Task 16 契约：acceptance 不走 human.answer，
-   *  主进程 answerAcceptance 落 answered + human:changed 推送刷新面板）。
-   *  S6：远端提交的验收经 hub 通知执行节点——通知失败本地已收口不回滚，
-   *  remoteWarning 人话经面板警示条呈现（卡片本身会随重拉消失） */
+  /** 三个动作都走 task 通道（acceptance 不走 human.answer）：答复落库后
+   *  human:changed 推送刷新面板；remoteWarning 经面板警示条存活呈现 */
   const operate = (fn: () => Promise<{ remoteWarning?: string } | void>): void => {
     setBusy(true);
     fn()
@@ -634,64 +712,112 @@ function AcceptanceBody({ row, onError, onRemoteWarning }: {
             ? res.remoteWarning
             : null;
         onRemoteWarning(warning);
+        setAction(null);
+        setText('');
         return loadPending(row.sessionId);
       })
-      .catch((err: unknown) => {
-        onError(err instanceof Error ? err.message : String(err));
-      })
+      .catch((err: unknown) => onError(err instanceof Error ? err.message : String(err)))
       .finally(() => setBusy(false));
   };
 
+  if (row.taskId === null || row.canDecide === false) {
+    return (
+      <div className="flex flex-col gap-2 px-3 py-2.5">
+        <DeliverableBlock payload={payload} fallback={row.prompt} truncated={truncated} />
+        <p className="text-[10.5px] text-tertiary">
+          {row.originNodeName !== null && row.originNodeName !== undefined
+            ? `等待发起方在 ${row.originNodeName} 上裁决，结果会显示在这里`
+            : '等待发起方裁决，结果会显示在这里'}
+        </p>
+      </div>
+    );
+  }
+
+  const expandLabel = action === 'continue' ? '下一步要求' : '驳回理由';
+
   return (
     <div className="flex flex-col gap-2 px-3 py-2.5">
-      <div className="text-[11px] leading-[1.7] text-primary">
-        交付说明：{payload?.summary ?? row.prompt}
-      </div>
-      {payload !== null && <Chips items={payload.files} />}
-      {payload?.artifacts.map((a) => (
-        <div key={a.label} className="flex items-center gap-1.5 text-[11.5px] text-secondary">
-          <CircleCheck size={12} strokeWidth={1.75} aria-hidden className="text-status-success" />
-          <span className="truncate">
-            {a.label}
-            {a.value !== '' ? `：${a.value}` : ''}
-          </span>
-        </div>
-      ))}
-      <input
-        aria-label="打回理由"
-        value={reason}
-        onChange={(e) => setReason(e.target.value)}
-        placeholder="打回理由（打回时必填，空理由禁用确认）…"
-        className="h-[30px] w-full rounded-md border border-subtle bg-surface-2 px-[9px] text-xs text-primary placeholder:text-tertiary focus:border-focus focus:outline-none"
-      />
+      <DeliverableBlock payload={payload} fallback={row.prompt} truncated={truncated} />
       <div className="flex flex-wrap items-center gap-[7px]">
         <Button
           variant="primary"
           size="sm"
           className={BTN_SM}
-          disabled={!canOperate || busy}
-          title={canOperate ? undefined : '请求未关联任务，无法验收'}
-          onClick={() => operate(() => ipc.task.accept(row.taskId!))}
+          disabled={busy}
+          onClick={() => {
+            setAction('continue');
+            setText('');
+          }}
         >
-          验收通过
+          继续
+        </Button>
+        <Button
+          size="sm"
+          className={cn(BTN_SM, 'border border-strong bg-surface-1 text-primary hover:bg-surface-3')}
+          disabled={busy}
+          onClick={() => setConfirmFinish(true)}
+        >
+          完成
         </Button>
         <Button
           variant="danger-outline"
           size="sm"
           className={BTN_SM}
-          disabled={!canOperate || busy || reason.trim() === ''}
-          title={canOperate ? undefined : '请求未关联任务，无法打回'}
-          onClick={() => operate(() => ipc.task.reject(row.taskId!, reason.trim()))}
+          disabled={busy}
+          onClick={() => {
+            setAction('reject');
+            setText('');
+          }}
         >
-          打回返工
+          驳回
         </Button>
-        <span className="flex-1" />
-        <span className="flex items-center gap-1 text-[10.5px] text-tertiary">
-          {isRemoteRow(row)
-            ? `打回将带理由生成新 run，经 hub 送回 ${remoteNodeLabel(row)} 重开执行`
-            : '打回将带理由生成新 run，任务回到 assigned'}
-        </span>
       </div>
+      <p className="text-[10.5px] text-tertiary">
+        继续 = 认可本轮，按你的要求让它再跑一轮（任务继续）· 完成 = 结束任务（不可撤销）· 驳回 = 退回重做
+      </p>
+      {action !== null && (
+        <div className="flex flex-col gap-1.5">
+          <textarea
+            aria-label={expandLabel}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={2}
+            placeholder={
+              action === 'continue' ? '写清下一步要它做什么（必填）…' : '写清退回原因（必填）…'
+            }
+            className="w-full resize-none rounded-md border border-subtle bg-surface-2 px-[9px] py-[7px] text-xs leading-[1.6] text-primary placeholder:text-tertiary focus:border-focus focus:outline-none"
+          />
+          <div className="flex items-center gap-[7px]">
+            <Button
+              variant="primary"
+              size="sm"
+              className={BTN_SM}
+              disabled={busy || text.trim() === ''}
+              onClick={() =>
+                operate(
+                  action === 'continue'
+                    ? () => ipc.task.continue(row.taskId!, text.trim())
+                    : () => ipc.task.reject(row.taskId!, text.trim()),
+                )
+              }
+            >
+              {action === 'continue' ? '发送要求并继续' : '确认驳回'}
+            </Button>
+            <Button variant="ghost" size="sm" className={BTN_SM} onClick={() => setAction(null)}>
+              取消
+            </Button>
+          </div>
+        </div>
+      )}
+      {confirmFinish && (
+        <ConfirmDialog
+          title="验收完成"
+          message={`将结束任务${row.prompt !== '' ? `「${row.prompt}」` : ''}，完成后不可撤销。`}
+          confirmLabel="确认完成"
+          onConfirm={() => operate(() => ipc.task.accept(row.taskId!))}
+          onClose={() => setConfirmFinish(false)}
+        />
+      )}
     </div>
   );
 }

@@ -24,6 +24,7 @@ const attentionMock = vi.fn();
 const humanOnChangedMock = vi.fn().mockReturnValue(() => {});
 const acceptMock = vi.fn();
 const rejectMock = vi.fn();
+const continueMock = vi.fn();
 const runChangedMock = vi.fn().mockReturnValue(() => {});
 
 const mockApi = {
@@ -36,6 +37,7 @@ const mockApi = {
   task: {
     accept: acceptMock,
     reject: rejectMock,
+    continue: continueMock,
     onTaskRunChanged: runChangedMock,
   },
 };
@@ -68,6 +70,7 @@ function makeRow(overrides: Partial<HumanRequestRow> = {}): HumanRequestRow {
     answeredAt: null,
     createdAt: now - 2 * 60_000,
     updatedAt: now - 2 * 60_000,
+    canDecide: true,
     ...overrides,
   };
 }
@@ -117,6 +120,7 @@ beforeEach(() => {
   humanOnChangedMock.mockClear();
   acceptMock.mockReset().mockResolvedValue({});
   rejectMock.mockReset().mockResolvedValue({});
+  continueMock.mockReset().mockResolvedValue({});
   runChangedMock.mockClear();
 });
 
@@ -276,47 +280,83 @@ describe('HumanRequestPanel — manual_action 卡', () => {
   });
 });
 
-describe('HumanRequestPanel — acceptance 卡（走 task 通道，非 human.answer）', () => {
-  const row = (): HumanRequestRow =>
-    makeRow({
-      id: 'req-acc',
-      taskId: 'T-0100',
-      kind: 'acceptance',
-      payloadJson: ACCEPTANCE_JSON,
-    });
+describe('HumanRequestPanel — acceptance 卡（三动作裁决）', () => {
+  const row = (over: Partial<HumanRequestRow> = {}): HumanRequestRow =>
+    makeRow({ id: 'req-acc', taskId: 'T-0100', kind: 'acceptance', payloadJson: ACCEPTANCE_JSON, ...over });
 
-  it('渲染交付摘要 / 文件 chips / 产物行；验收通过 → task.accept 且不触 human.answer', async () => {
-    listMock.mockResolvedValueOnce([row()]).mockResolvedValue([]);
+  it('交付说明走 Markdown：字面量 ** 不再出现；文件/产物分段呈现', async () => {
+    listMock.mockResolvedValue([
+      row({ payloadJson: ACCEPTANCE_JSON.replace('回调重试改为幂等键 + 指数退避', '**幂等键** + 指数退避') }),
+    ]);
     await mountPanel();
-
-    expect(screen.getByText('交付说明：回调重试改为幂等键 + 指数退避')).toBeInTheDocument();
+    expect(screen.queryByText(/\*\*幂等键\*\*/)).not.toBeInTheDocument();
+    expect(screen.getByText('幂等键')).toBeInTheDocument();
     expect(screen.getByText('src/payment/retry.ts')).toBeInTheDocument();
     expect(screen.getByText('测试结果：12 项通过 · 0 失败')).toBeInTheDocument();
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: '验收通过' }));
-    });
-    expect(acceptMock).toHaveBeenCalledWith('T-0100');
-    expect(answerMock).not.toHaveBeenCalled();
-    // 验收后重拉（operate → loadPending），卡片消失
-    expect(screen.queryByRole('button', { name: '验收通过' })).not.toBeInTheDocument();
   });
 
-  it('打回理由必填：空禁用；填理由 → task.reject(taskId, reason)', async () => {
+  it('继续：展开必填要求，空禁用；填后调 task.continue', async () => {
     listMock.mockResolvedValueOnce([row()]).mockResolvedValue([]);
     await mountPanel();
 
-    const rejectBtn = screen.getByRole('button', { name: '打回返工' }) as HTMLButtonElement;
-    expect(rejectBtn.disabled).toBe(true);
-    fireEvent.click(rejectBtn);
-    expect(rejectMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '继续' }));
+    const confirm = screen.getByRole('button', { name: '发送要求并继续' });
+    expect(confirm).toBeDisabled();
 
-    fireEvent.change(screen.getByLabelText('打回理由'), { target: { value: '边界场景缺失' } });
+    fireEvent.change(screen.getByLabelText('下一步要求'), { target: { value: '按主题一写正文' } });
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: '打回返工' }));
+      fireEvent.click(confirm);
+    });
+    expect(continueMock).toHaveBeenCalledWith('T-0100', '按主题一写正文');
+  });
+
+  it('完成：二次确认后才调 task.accept', async () => {
+    listMock.mockResolvedValueOnce([row()]).mockResolvedValue([]);
+    await mountPanel();
+
+    fireEvent.click(screen.getByRole('button', { name: '完成' }));
+    expect(acceptMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '确认完成' }));
+    });
+    expect(acceptMock).toHaveBeenCalledWith('T-0100');
+  });
+
+  it('驳回：展开理由必填；填后调 task.reject 且不触 human.answer', async () => {
+    listMock.mockResolvedValueOnce([row()]).mockResolvedValue([]);
+    await mountPanel();
+
+    fireEvent.click(screen.getByRole('button', { name: '驳回' }));
+    const confirm = screen.getByRole('button', { name: '确认驳回' });
+    expect(confirm).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('驳回理由'), { target: { value: '边界场景缺失' } });
+    await act(async () => {
+      fireEvent.click(confirm);
     });
     expect(rejectMock).toHaveBeenCalledWith('T-0100', '边界场景缺失');
     expect(answerMock).not.toHaveBeenCalled();
+  });
+
+  it('执行方（canDecide=false）→ 只读卡：等待发起方裁决、零按钮零输入', async () => {
+    listMock.mockResolvedValue([row({ canDecide: false, originNodeId: 'node-a' })]);
+    await mountPanel();
+
+    expect(screen.getByText(/等待发起方裁决/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '继续' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '完成' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('驳回理由')).not.toBeInTheDocument();
+  });
+
+  it('镜像行 remote.truncated → 交付内容截断警示', async () => {
+    const payload = { ...(JSON.parse(ACCEPTANCE_JSON) as Record<string, unknown>), remote: { truncated: true } };
+    listMock.mockResolvedValue([
+      row({ id: 'req-trunc', originNodeId: 'node-b', payloadJson: JSON.stringify(payload) }),
+    ]);
+    await mountPanel();
+
+    expect(screen.getByText(/交付内容经旧版通道截断/)).toBeInTheDocument();
   });
 });
 
@@ -524,7 +564,7 @@ describe('HumanRequestPanel — S6 镜像行（远端来源 / 代答提示 / pee
     await mountPanel();
 
     expect(screen.getByText('来自 研发工作站 · dev-ws')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '验收通过' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '完成' })).toBeInTheDocument();
   });
 
   it('remote 段畸形（workstation 非串/空串）→ 降级仅节点名（既有行为）', async () => {
@@ -553,7 +593,7 @@ describe('HumanRequestPanel — S6 镜像行（远端来源 / 代答提示 / pee
     await mountPanel();
 
     expect(screen.queryByTestId('human-peer-neutral-req-acc-peer')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '验收通过' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '完成' })).toBeInTheDocument();
   });
 
   it('镜像 acceptance：why 注走 hub 送回变体 + remoteWarning 人话呈现（CONTRACT #12）', async () => {
@@ -566,12 +606,10 @@ describe('HumanRequestPanel — S6 镜像行（远端来源 / 代答提示 / pee
     await mountPanel();
 
     expect(screen.getByText('来自 研发工作站')).toBeInTheDocument();
-    expect(
-      screen.getByText('打回将带理由生成新 run，经 hub 送回 研发工作站 重开执行'),
-    ).toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole('button', { name: '完成' }));
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: '验收通过' }));
+      fireEvent.click(screen.getByRole('button', { name: '确认完成' }));
     });
     expect(acceptMock).toHaveBeenCalledWith('T-101');
     expect(
