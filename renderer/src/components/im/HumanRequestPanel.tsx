@@ -751,7 +751,7 @@ function AcceptanceBody({ row, onError, onRemoteWarning }: {
           className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-canvas to-transparent"
         />
       </div>
-      <div data-testid="acceptance-footer" className="shrink-0 border-t border-subtle px-3 pt-2">
+      <div data-testid="acceptance-footer" className="shrink-0 border-t border-subtle px-3 pt-2 pb-2.5">
       <div className="flex flex-wrap items-center gap-[7px]">
         <Button
           variant="primary"
