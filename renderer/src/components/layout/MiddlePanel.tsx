@@ -19,6 +19,7 @@ import { ExportChatButton } from '../im/ExportChatButton';
 import { TaskProgressButton } from '../im/TaskProgressButton';
 import { InFlightPanel } from '../im/InFlightPanel';
 import { RemoteSessionPanel } from '../hub/RemoteSessionPanel';
+import { RemoteSessionStatusInline } from '../hub/RemoteSessionStatusInline';
 import { AgentsView } from '../agent/AgentsView';
 import { SettingsView } from '../settings/SettingsView';
 import { ResourceLibraryView } from '../resource-library/ResourceLibraryView';
@@ -112,9 +113,13 @@ export function MiddlePanel() {
           {/* 会话头部：会话名 + 工具上限徽标（收起时首位停靠恢复按钮） */}
           <div className="flex items-center gap-2 px-4 py-2 border-b border-subtle bg-surface-1">
             <SidebarRestoreButton />
-            <span className="text-sm text-primary truncate flex-1">
+            <span className="min-w-0 max-w-[46%] truncate text-sm text-primary">
               {activeSession ? activeSession.title : '未选择房间'}
             </span>
+            {activeSession?.kind === 'task_execution' && activeSessionId && (
+              <RemoteSessionStatusInline sessionId={activeSessionId} />
+            )}
+            <span className="flex-1" />
             {activeSessionId && <RoomToolBudgetBadge sessionId={activeSessionId} />}
             {activeSessionId && <ExportChatButton sessionId={activeSessionId} />}
             {activeSessionId && <TaskProgressButton sessionId={activeSessionId} />}

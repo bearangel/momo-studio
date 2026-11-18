@@ -106,16 +106,14 @@ describe('降级矩阵（spec §12.3）', () => {
     const txt = screen.getByTestId('remote-session-panel').textContent!;
     expect(txt).toContain('旧投影正文行');
     expect(txt).toContain('验收里程碑');
-    expect(txt).toContain('简版回放');
     expect(txt.indexOf('验收里程碑')).toBeLessThan(txt.indexOf('旧投影正文行'));
   });
 
-  it('断开 → 徽标在场 + 已到帧保留', () => {
+  it('断开 → 已到帧保留（徽标迁至标题行内联，见 RemoteSessionStatusInline）', () => {
     seedReady({ live: false, hubOnline: false, frames: [frame({ frameId: 'f1', seq: 1, content: '断前帧' })] });
     render(<RemoteSessionPanel sessionId="sx" workspaceId="ws1" />);
-    const txt = screen.getByTestId('remote-session-panel').textContent!;
-    expect(txt).toContain('已断开');
-    expect(txt).toContain('断前帧');
+    expect(screen.getByTestId('remote-session-panel').textContent).toContain('断前帧');
+    expect(screen.queryByTestId('remote-session-status-inline')).not.toBeInTheDocument();
   });
 
   it('error 态 → 人话错误行', () => {
@@ -134,13 +132,10 @@ describe('面板附属件', () => {
     expect(loadEarlier).toHaveBeenCalled();
   });
 
-  it('头部状态条：节点名 + run 号 + 实时徽标', () => {
+  it('面板内不再有独立状态条（状态迁至会话标题行）', () => {
     seedReady();
     render(<RemoteSessionPanel sessionId="sx" workspaceId="ws1" />);
-    const txt = screen.getByTestId('remote-session-panel').textContent!;
-    expect(txt).toContain('节点B');
-    expect(txt).toContain('run #1');
-    expect(txt).toContain('实时');
+    expect(screen.getByTestId('remote-session-panel').textContent).not.toContain('run #1');
   });
 });
 

@@ -7,7 +7,7 @@
 // 生命周期由挂载驱动：mount → resolveTrackingTask → store.open；unmount → close。
 // 降级矩阵：miss 占位重试 / 旧 worker legacy 行穿插镜像 / 断开保留已到帧。
 import { useEffect, useState } from 'react';
-import { Bot, ChevronUp, CircleCheck, Eye, Milestone, Monitor, Wrench } from 'lucide-react';
+import { Bot, ChevronUp, CircleCheck, Milestone, Wrench } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { resolveTrackingTask } from '../../lib/resolve-tracking-task';
 import { useRemoteSessionStore } from '../../stores/remote-session.view';
@@ -175,29 +175,6 @@ export function RemoteSessionPanel({ sessionId, workspaceId, footerSlot }: {
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-canvas" data-testid="remote-session-panel">
-      {/* 状态条（壳外标题由会话面板负责——此处只承载远端态徽标） */}
-      <div className="flex items-center gap-2 border-b border-subtle bg-surface-1 px-4 py-1.5">
-        {online ? (
-          <span className="inline-flex h-5 shrink-0 items-center gap-[5px] whitespace-nowrap rounded-full bg-status-success-tint px-2 text-[11px] font-medium text-status-success">
-            <span className="remote-live-dot" aria-hidden />实时
-          </span>
-        ) : (
-          <span className="inline-flex h-5 shrink-0 items-center gap-[5px] whitespace-nowrap rounded-full bg-surface-3 px-2 text-[11px] font-medium text-tertiary">
-            <span className="h-[6px] w-[6px] rounded-full bg-text-disabled" aria-hidden />
-            已断开 · 重连后恢复
-          </span>
-        )}
-        <Monitor size={12} strokeWidth={1.75} className="shrink-0 text-tertiary" aria-hidden />
-        <span className={cn('truncate text-[11px]', online ? 'text-secondary' : 'text-tertiary')}>
-          {st.target !== null ? `${st.target.nodeName} · run #${st.target.runNo} · ${st.target.workspaceName}` : '…'}
-        </span>
-        {!st.wire2 && st.phase === 'ready' && (
-          <span className="ml-auto inline-flex shrink-0 items-center gap-1 rounded bg-surface-3 px-1.5 py-[1px] text-[10px] text-tertiary">
-            <Eye size={10} strokeWidth={1.75} aria-hidden />简版回放
-          </span>
-        )}
-      </div>
-
       {/* 流域：穿插时间线 */}
       <div
         className={cn(
