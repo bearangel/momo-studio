@@ -19,6 +19,7 @@ import { ExportChatButton } from '../im/ExportChatButton';
 import { TaskProgressButton } from '../im/TaskProgressButton';
 import { InFlightPanel } from '../im/InFlightPanel';
 import { RemoteSessionView } from '../hub/RemoteSessionView';
+import { RemoteSessionEntryButton } from '../hub/RemoteSessionEntryButton';
 import { AgentsView } from '../agent/AgentsView';
 import { SettingsView } from '../settings/SettingsView';
 import { ResourceLibraryView } from '../resource-library/ResourceLibraryView';
@@ -122,6 +123,7 @@ export function MiddlePanel() {
             <span className="text-sm text-primary truncate flex-1">
               {activeSession ? activeSession.title : '未选择房间'}
             </span>
+            {activeSession && <RemoteSessionEntryButton session={activeSession} />}
             {activeSessionId && <RoomToolBudgetBadge sessionId={activeSessionId} />}
             {activeSessionId && <ExportChatButton sessionId={activeSessionId} />}
             {activeSessionId && <TaskProgressButton sessionId={activeSessionId} />}
