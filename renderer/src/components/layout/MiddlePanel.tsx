@@ -18,8 +18,7 @@ import { RoomToolBudgetBadge } from '../im/RoomToolBudgetBadge';
 import { ExportChatButton } from '../im/ExportChatButton';
 import { TaskProgressButton } from '../im/TaskProgressButton';
 import { InFlightPanel } from '../im/InFlightPanel';
-import { RemoteSessionView } from '../hub/RemoteSessionView';
-import { RemoteSessionEntryButton } from '../hub/RemoteSessionEntryButton';
+import { RemoteSessionPanel } from '../hub/RemoteSessionPanel';
 import { AgentsView } from '../agent/AgentsView';
 import { SettingsView } from '../settings/SettingsView';
 import { ResourceLibraryView } from '../resource-library/ResourceLibraryView';
@@ -34,7 +33,6 @@ import { PanelPageView } from '../plugins/PanelPageView';
 
 export function MiddlePanel() {
   const activeView = useUiStore((s) => s.activeView);
-  const remoteSessionView = useUiStore((s) => s.remoteSessionView);
   const workspace = useWorkspaceStore((s) => s.getActive());
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const sessions = useSessionStore((s) => s.sessions);
@@ -105,12 +103,6 @@ export function MiddlePanel() {
     );
   }
 
-  // 远端执行会话（spec 2026-11-17 §7.1）：任务驱动临时进入——优先于本地 im 列
-  // 渲染（不落会话列表；Esc / 返回按钮经组件内 closeRemoteSession 收口）
-  if (activeView === 'im' && remoteSessionView !== null) {
-    return <RemoteSessionView />;
-  }
-
   // im 视图：会话列表在 ViewSidebar，主区 = 消息流 + 工具条 + 输入框 + 成员浮层（按需）
   if (activeView === 'im') {
     const activeSession = sessions.find((s) => s.id === activeSessionId);
@@ -123,19 +115,24 @@ export function MiddlePanel() {
             <span className="text-sm text-primary truncate flex-1">
               {activeSession ? activeSession.title : '未选择房间'}
             </span>
-            {activeSession && <RemoteSessionEntryButton session={activeSession} />}
             {activeSessionId && <RoomToolBudgetBadge sessionId={activeSessionId} />}
             {activeSessionId && <ExportChatButton sessionId={activeSessionId} />}
             {activeSessionId && <TaskProgressButton sessionId={activeSessionId} />}
             {/* P2-D：在途子任务面板入口（2s 轮询 + 单链取消，spec 2026-10-13 §9） */}
             {activeSessionId && <InFlightPanel sessionId={activeSessionId} />}
           </div>
-          <MessageList />
-          <InputToolbar
-            showMembers={showMembers}
-            onToggleMembers={() => setShowMembers((v) => !v)}
-            disabled={!activeSessionId}
-          />
+          {activeSession?.kind === 'task_execution' ? (
+            <RemoteSessionPanel sessionId={activeSession.id} workspaceId={activeSession.workspaceId} />
+          ) : (
+            <>
+              <MessageList />
+              <InputToolbar
+                showMembers={showMembers}
+                onToggleMembers={() => setShowMembers((v) => !v)}
+                disabled={!activeSessionId}
+              />
+            </>
+          )}
           {/* 会话请求面板（任务生命周期 v2 T22）：composer 上方唯一人工行动入口，
               未决时出现；任务执行会话 / 普通会话 / 只读跟踪会话（session.readOnly
               T17——操作收敛到请求面板）都挂，P2 扩展远端请求代答 */}

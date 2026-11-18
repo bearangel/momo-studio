@@ -11,6 +11,8 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useUiStore } from '../../stores/ui.store';
+import { useSessionStore } from '../../stores/session.store';
+import { useRemoteSessionStore } from '../../stores/remote-session.view';
 import type { Workspace } from '../../ipc/types';
 
 vi.mock('../editor/CodeEditor', () => ({ CodeEditor: () => <div data-testid="code-editor-stub" /> }));
@@ -22,6 +24,7 @@ vi.mock('../im/RoomToolBudgetBadge', () => ({ RoomToolBudgetBadge: () => <div />
 vi.mock('../im/ExportChatButton', () => ({ ExportChatButton: () => <div /> }));
 vi.mock('../im/TaskProgressButton', () => ({ TaskProgressButton: () => <div /> }));
 vi.mock('../im/InFlightPanel', () => ({ InFlightPanel: () => <div /> }));
+vi.mock('../im/HumanRequestPanel', () => ({ HumanRequestPanel: () => <div /> }));
 vi.mock('../agent/AgentsView', () => ({ AgentsView: () => <div data-testid="agents-stub" /> }));
 vi.mock('../settings/SettingsView', () => ({
   SettingsView: () => <div data-testid="settings-view-stub" />,
@@ -35,6 +38,7 @@ vi.mock('../workgroup/WorkgroupView', () => ({
 }));
 vi.mock('../workspace/BrowserSidebar', () => ({ BrowserSidebar: () => <div /> }));
 vi.mock('../plugins/PanelPageView', () => ({ PanelPageView: () => <div /> }));
+vi.mock('../hub/RemoteSessionPanel', () => ({ RemoteSessionPanel: ({ sessionId }: { sessionId: string }) => <div data-testid="remote-session-panel-stub" data-session={sessionId} /> }));
 
 import { MiddlePanel } from './MiddlePanel';
 
@@ -154,5 +158,53 @@ describe('MiddlePanel settings 视图独立于工作空间（M2.2 P2-8）', () =
     render(ui());
     expect(screen.getByText('创建或选择一个工作空间开始')).toBeInTheDocument();
     expect(screen.queryByTestId('settings-view-stub')).not.toBeInTheDocument();
+  });
+});
+
+
+// ── spec §12.1：跟踪会话直连 RemoteSessionPanel ─────────────────────────────
+
+function seedImWorkspace(): void {
+  const ws = mkWs('w1');
+  useWorkspaceStore.setState({ workspaces: [ws], activeWorkspaceId: 'w1' });
+  useUiStore.setState({ activeView: 'im', remoteSessionView: undefined } as never);
+}
+
+const trackSession = {
+  id: 'sess-track', workspaceId: 'w1', title: '#T-009 · → node-b', kind: 'task_execution',
+  createdAt: 0, updatedAt: 0, lastMessageAt: null, delegationRole: 'out', taskId: 'T-009',
+} as never;
+
+const chatSession = {
+  id: 'sess-chat', workspaceId: 'w1', title: '普通会话', kind: 'chat',
+  createdAt: 0, updatedAt: 0, lastMessageAt: null, delegationRole: null, taskId: null,
+} as never;
+
+describe('MiddlePanel 跟踪会话直连（spec §12.1）', () => {
+  it('选中 task_execution 会话 → 渲染 RemoteSessionPanel（不渲染输入框）', () => {
+    seedImWorkspace();
+    useSessionStore.setState({ sessions: [trackSession, chatSession], activeSessionId: 'sess-track' });
+    render(ui());
+    expect(screen.getByTestId('remote-session-panel-stub')).toBeInTheDocument();
+    expect(screen.getByTestId('remote-session-panel-stub').dataset.session).toBe('sess-track');
+    expect(document.querySelector('textarea')).toBeNull();
+  });
+
+  it('普通会话 → 原样渲染（无面板、输入框在场）', () => {
+    seedImWorkspace();
+    useSessionStore.setState({ sessions: [trackSession, chatSession], activeSessionId: 'sess-chat' });
+    const { container } = render(ui());
+    expect(screen.queryByTestId('remote-session-panel-stub')).not.toBeInTheDocument();
+    void container;
+  });
+
+  it('StrictMode 双挂载：卸载重挂同会话 → 面板仍在（close 后可重开）', () => {
+    seedImWorkspace();
+    useSessionStore.setState({ sessions: [trackSession], activeSessionId: 'sess-track' });
+    const { unmount } = render(ui());
+    expect(screen.getByTestId('remote-session-panel-stub')).toBeInTheDocument();
+    unmount();
+    render(ui());
+    expect(screen.getByTestId('remote-session-panel-stub')).toBeInTheDocument();
   });
 });
