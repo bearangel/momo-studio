@@ -772,12 +772,15 @@ function startClient(
       // M4.2（1.6.0）：可选 groupId 透传——显式组订阅的锚定记录随推送带出（旧 hub
       // 不发此键 → 载荷零变化；renderer 面板单开不按它分叉，类型面透传消费）
       if (evt.method === EVT.viewAppended) {
-        const p = evt.payload as { sessionId?: unknown; events?: unknown; groupId?: unknown };
+        const p = evt.payload as { sessionId?: unknown; events?: unknown; groupId?: unknown; frames?: unknown };
         if (typeof p.sessionId === 'string' && Array.isArray(p.events)) {
           broadcast('hub:viewAppended', {
             sessionId: p.sessionId,
             events: p.events,
             ...(typeof p.groupId === 'string' ? { groupId: p.groupId } : {}),
+            // 帧形态（1.13.0）：wire:2 订阅者增量在 frames（events 恒空数组）；
+            // 非数组不透传（挑字段纪律）
+            ...(Array.isArray(p.frames) ? { frames: p.frames } : {}),
           });
         }
       }

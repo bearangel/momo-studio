@@ -760,6 +760,38 @@ describe('hub manager 查看同意上报链（M2e T14/T15）', () => {
 
   // M4.2（协议 1.6.0）：显式组订阅的 tail 推送带 groupId——桥挑字段透传
   // （订阅链验证 spec §2.3：view.tail 推送 groupId 消费面）；缺省不带键。
+  // 1.13.0 帧形态：events 空数组 + frames 携增量——桥挑字段透传（legacy 订阅者形态零变化）
+  it('view.appended 帧形态（events:[] + frames）→ 桥透传 frames；frames 非数组 → 不透传该键', async () => {
+    await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
+    m.sent.length = 0;
+    m.clients[0]!.opts.onEvent({
+      v: 1, kind: 'evt', method: 'view.appended',
+      payload: {
+        sessionId: 'sess-1',
+        events: [],
+        frames: [{ frameId: 'f1', seq: 3, at: 1, role: 'assistant', kind: 'text', content: '帧' }],
+      },
+    });
+    expect(m.sent).toEqual([
+      {
+        channel: 'hub:viewAppended',
+        payload: {
+          sessionId: 'sess-1',
+          events: [],
+          frames: [{ frameId: 'f1', seq: 3, at: 1, role: 'assistant', kind: 'text', content: '帧' }],
+        },
+      },
+    ]);
+    m.sent.length = 0;
+    m.clients[0]!.opts.onEvent({
+      v: 1, kind: 'evt', method: 'view.appended',
+      payload: { sessionId: 'sess-1', events: [], frames: '异形' },
+    });
+    expect(m.sent).toEqual([
+      { channel: 'hub:viewAppended', payload: { sessionId: 'sess-1', events: [] } },
+    ]);
+  });
+
   it('view.appended 带 groupId（1.6.0 组锚定）→ 桥透传；缺省 → 载荷零变化（1.5 形状锁）', async () => {
     await manager.hubEnroll({ hubUrl: 'https://h:8787', enrollmentToken: 't', nodeName: 'n' });
     m.sent.length = 0;

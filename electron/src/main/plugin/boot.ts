@@ -24,7 +24,15 @@ export async function reactivatePluginsOnBoot(): Promise<void> {
       const manifest = JSON.parse(rec.manifestJson) as { config?: unknown };
       if (manifest.config) {
         const schema = normalizeConfigSchema(manifest.config);
-        void warmPluginConfigCache(rec.id, schema).catch(() => undefined);
+        // E1 加固：warm 内部已逐键容错（单键失败 warn 留痕），此处 reject 仅剩
+        // schema 级异常——不静默吞，留日志证据（原 .catch(()=>undefined) 是间歇性
+        // 敏感值丢失零证据的帮凶）
+        void warmPluginConfigCache(rec.id, schema).catch((err) => {
+          logger.warn('boot：插件敏感缓存预热失败', {
+            pluginId: rec.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
         spillEntries.push({ pluginId: rec.id, schema });
       }
     } catch {

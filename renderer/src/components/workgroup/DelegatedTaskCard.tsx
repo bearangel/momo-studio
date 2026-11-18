@@ -27,7 +27,8 @@
 // 外派卡不接拖拽（useSortable 零注册）：行状态由 hub 账本驱动，本地 move 会
 // 与远端真相打架——列间迁移只能经委派事件回写。
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Ban, Bot, CalendarCheck, Check, CircleCheck, CircleHelp, CircleSlash, CircleX, ClipboardCheck, Inbox, Lock, RefreshCw, RotateCcw, Users, WifiOff, X, Zap } from 'lucide-react';
+import { Ban, Bot, Eye, CalendarCheck, Check, CircleCheck, CircleHelp, CircleSlash, CircleX, ClipboardCheck, Inbox, Lock, RefreshCw, RotateCcw, Users, WifiOff, X, Zap } from 'lucide-react';
+import { useUiStore } from '../../stores/ui.store';
 import { ipc } from '../../ipc/client';
 import { useHubStore } from '../../stores/hub.store';
 import { cacheDelegationGroupNames, useHubDelegationStore } from '../../stores/hub-delegation.store';
@@ -494,7 +495,10 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
   const canAnswer = waiting && !isWorkerView && delegationId != null && hubSupportsMinor(hubProtoVer, 3);
   // 2026-11-12 看板治理（C-1）：终态零可用动作时菜单不弹——对齐 BoardCard 对
   // dispatch 行「无菜单项不弹」的纪律，消灭空白菜单
-  const menuHasItems = canCancel || canAnswer || canRetry || canRedispatch;
+  // 「进入会话」不设状态门（终态历史回看入口——E2E 实录：done 态右键菜单
+  // 因 canCancel/canRedispatch 全 false 而不开，回看入口不可达）
+  const canEnterRemoteSession = task.delegationRole === 'out' && task.delegationId != null;
+  const menuHasItems = canCancel || canAnswer || canRetry || canRedispatch || canEnterRemoteSession;
 
   const handleCancel = async (): Promise<void> => {
     if (delegationId != null) {
@@ -705,6 +709,22 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
             className="fixed z-50 min-w-[120px] rounded border border-subtle bg-surface-1 py-1 text-sm text-secondary shadow-lg"
             style={{ left: menuLeft, top: menuTop }}
           >
+            {canEnterRemoteSession && (
+              <li>
+                <button
+                  type="button"
+                  data-testid="enter-remote-session"
+                  onClick={() => {
+                    setMenu(null);
+                    useUiStore.getState().openRemoteSession(task);
+                  }}
+                  className="flex w-full items-center gap-1.5 px-3 py-1 text-left hover:bg-surface-3"
+                >
+                  <Eye size={12} strokeWidth={1.75} aria-hidden />
+                  进入会话
+                </button>
+              </li>
+            )}
             {canCancel && (
               <li>
                 {cancelConfirm.armed ? (

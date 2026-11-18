@@ -6,6 +6,18 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — db-pro 数据库插件（宿主扩展面）
+
+`2.1.0-alpha.72`。特性合入：db-pro 插件（独立仓 `../momo-plugin` @ feat/db-pro）+ 宿主四处配套。设计依据 `docs/specs/2026-11-17-db-pro-plugin-design.md`，实施计划 `docs/plans/2026-11-17-db-pro-plugin.md`（19 任务），验收报告 `.omo/qa-reports/2026-11-17-db-pro-e2e/report.md`。
+
+- **插件侧**（momo-plugin @ feat/db-pro，单测 83 + 四库 docker 集成 24 用例）：agent 工具 `plugin:db-pro/*` 11 个（list_connections / list_schemas / list_tables / list_views / describe_table / list_columns / get_ddl / query / explain_query / write / write_status）；引擎子进程 `node --openssl-legacy-provider`（Spike #0 定论 L2——Electron 内嵌 Node 无 legacy provider，含 NODE_OPTIONS 变体实测）；四驱动全纯 JS（mysql2 / pg / oracledb thin 12c+ / dmdb）；只读 SQL 校验器（首词白名单+禁多语句+拒锁，35 用例穷举）；写两段式状态机（human-gate + write-log.jsonl 幂等，重启恢复）；达梦特化（lastExecInfo.explain 解析 / BigInt 对象包装 valueOf 解包 / CLOB fetchAsString / connectString 须 dm:// URL——集成实测仲裁三项）
+- **宿主 humanGate ctx 注入**（fb95bc04/aca242bc）：`PluginServiceCtx.humanGate`（create 落 kind=tool_gate 行 keep_waiting + human:changed(inserted) 广播；status 投影含 payloadJson）——沿 execSandboxed 注入先例，db-pro 先行消费者
+- **宿主 tool_gate db 载荷贯通**（b6f64809/faf20ce3）：答复路由旁路 db 形态（无 dirs 可授，消费方为插件 service 轮询）；孤儿回收豁免 db 行（不属沙箱内存注册表生命周期——误扫致 pending 写批准静默失效）
+- **宿主面板 db 卡渲染**（a2de8050）：ToolGateBody db 分支（`{opClass} 写请求 · 连接 {name}` + SQL 命令块 + 仅 允许本次/拒绝 两键——数据写不可逆，无会话级豁免）
+- **宿主估算层加固**（d426a49b）：estimateTokens 容忍 undefined（零参工具 arguments / def inputSchema 合法缺席——此前首个零参工具即崩 runChatLoop）
+- **E2E 真机验收**（glm-5.3-flash 驱动，21+ 工具调用）：mysql+达梦只读链路 ✓、DDL/DML 两段式批准真库落数 ✓（`[[1,"e2e"]]`）、拒绝路径数据不动 ✓、kill -9 引擎 1s 退避重启恢复 ✓；验收期发现并 TDD 修复 4 个 P0（inputSchema 契约 / sessionId=roomId / inserted 广播 / 孤儿回收）
+- 已知项：Oracle 集成分支待镜像拉取完成补跑（container-registry 断流，E2 在案）；隔离跑未签名二进制下 sensitive 配置 keychain 重启回读不稳（E1 在案，打包签名版复测）
+
 ## [未发布] — 审查打磨批 + D7 死锁修复（hub 0.7.4 安全收口配套）
 
 `2.1.0-alpha.71`。来源：alpha.70 打包后的全面审查（MINOR 项清偿）与跨节点真机复现 D7 死锁。hub 侧同步 0.7.4（ws 信封 1MB 上限 / intervene options≤32 / payload+options 合并 64KB 预算），协议仍为 1.12.0，studio 协议 pin 保持 v0.7.3 不变。

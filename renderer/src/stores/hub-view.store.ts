@@ -371,7 +371,7 @@ export const useHubViewStore = create<HubViewState>((set, get) => {
       const fromSeq = Math.max(1, session.lastSeq - VIEW_PAGE_SIZE + 1);
       set({ loading: true });
       try {
-        const page = await ipc.hub.viewMessages({
+        const raw = await ipc.hub.viewMessages({
           targetNodeId: st.targetNodeId,
           sessionId: session.sessionId,
           workspaceName: st.workspaceName,
@@ -379,6 +379,7 @@ export const useHubViewStore = create<HubViewState>((set, get) => {
           limit: VIEW_PAGE_SIZE,
           ...groupSeg(),
         });
+        const page = 'frames' in raw ? { messages: [] as HubViewMessage[], hasMore: raw.hasMore } : raw;
         set({
           loading: false,
           replay: {
@@ -417,7 +418,7 @@ export const useHubViewStore = create<HubViewState>((set, get) => {
       const fromSeq = Math.max(0, firstSeq - VIEW_PAGE_SIZE);
       set({ replay: { ...st.replay, loadingEarlier: true } });
       try {
-        const page = await ipc.hub.viewMessages({
+        const raw = await ipc.hub.viewMessages({
           targetNodeId: st.targetNodeId,
           sessionId: st.replay.sessionId,
           workspaceName: st.workspaceName,
@@ -425,6 +426,7 @@ export const useHubViewStore = create<HubViewState>((set, get) => {
           limit: VIEW_PAGE_SIZE,
           ...groupSeg(),
         });
+        const page = 'frames' in raw ? { messages: [] as HubViewMessage[], hasMore: raw.hasMore } : raw;
         const known = new Set(st.replay.messages.map((m) => m.seq));
         const fresh = page.messages.filter((m) => !known.has(m.seq));
         set({
@@ -471,7 +473,7 @@ export const useHubViewStore = create<HubViewState>((set, get) => {
         return;
       }
       try {
-        const page = await ipc.hub.viewMessages({
+        const raw = await ipc.hub.viewMessages({
           targetNodeId,
           sessionId,
           workspaceName,
@@ -479,6 +481,7 @@ export const useHubViewStore = create<HubViewState>((set, get) => {
           limit: VIEW_PAGE_SIZE,
           ...groupSeg(),
         });
+        const page = 'frames' in raw ? { messages: [] as HubViewMessage[], hasMore: raw.hasMore } : raw;
         const cur = get().replay;
         if (!cur || cur.sessionId !== sessionId) {
           set({ loading: false });

@@ -13,6 +13,7 @@ import { getSecret, setSecret, deleteSecret } from '../storage/keychain';
 import { resolvePluginsDir, resolvePluginDataDir } from '../paths';
 import { getPlugin, isPluginEnabled } from './registry';
 import { buildPluginOAuthApi, type PluginOAuthApi } from './oauth-ctx';
+import { buildPluginHumanGateApi, type PluginHumanGate } from './human-gate';
 import { getDb } from '../storage/db';
 import type { PluginRecord } from './types';
 
@@ -25,6 +26,9 @@ export interface PluginServiceCtx {
   secrets: PluginSecretsApi;
   /** OAuth 连接只读面（spec §12.3）：列表只有元数据；token 信任级别等价 secrets */
   oauth: PluginOAuthApi;
+  /** db-pro 先行（spec 2026-11-17 §7-1）：人工请求门——插件不直接 import 内部
+   *  模块，主进程能力经 ctx 注入（execSandboxed 同款先例）。注入体见 human-gate.ts */
+  humanGate?: PluginHumanGate;
   logger: {
     warn(msg: string, meta?: unknown): void;
     info(msg: string, meta?: unknown): void;
@@ -82,8 +86,30 @@ function workspaceDirOf(workspaceId: string): string | null {
 /** 启动插件 service（manifest 有 components.service 才动作）。加载或 start() 任一
  * 失败 warn 返回 false（实例不落 running——不半活，spec §5.3）。
  * 工作空间维度 v1.1：multi 插件按 workspaceId 多实例；无 wsId 不动作（lazy 兜底） */
-export function startPluginService(rec: PluginRecord, workspaceId?: string): Promise<boolean> {
-  const multi = pluginUsesWorkspaceScope(rec);
+/**
+ * 插件根内全部模块缓存清除（重载语义修复 2026-11-18）：此前只删入口文件缓存，
+ * 改动的依赖文件（如 service/config-connections.js）沿用旧缓存——新入口引用
+ * 新导出 + 旧依赖模块 = 混血模块（db-pro 实证：`sanitizeTimeoutMs is not a
+ * function`）。根外模块（宿主 dist / 其他插件）一概不动。
+ */
+export function purgePluginRequireCache(nodeRequire: NodeRequire, root: string): void {
+  // 缓存键走 resolve 后的真实路径（macOS /var → /private/var 符号链接偏差实测）——
+  // 前缀按原路径与 realpath 双形态匹配
+  let realRoot = root;
+  try {
+    realRoot = fs.realpathSync(root);
+  } catch {
+    realRoot = root; // 根不存在（测试桩）按原样
+  }
+  const prefixes = [root, realRoot].map((r) => (r.endsWith(path.sep) ? r : `${r}${path.sep}`));
+  for (const key of Object.keys(nodeRequire.cache)) {
+    if (key === root || key === realRoot || prefixes.some((p) => key.startsWith(p))) {
+      delete nodeRequire.cache[key];
+    }
+  }
+}
+
+export function startPluginService(rec: PluginRecord, workspaceId?: string): Promise<boolean> {  const multi = pluginUsesWorkspaceScope(rec);
   if (multi && !workspaceId) return Promise.resolve(false);
   const key = serviceKey(rec.id, workspaceId, multi);
   if (running.has(key)) return Promise.resolve(true);
@@ -119,7 +145,7 @@ async function doStartPluginService(
   }
   try {
     const nodeRequire = createRequire(path.join(root, '.plugin-require.js'));
-    delete nodeRequire.cache[nodeRequire.resolve(entry)];
+    purgePluginRequireCache(nodeRequire, root);
     const mod = nodeRequire(entry) as { createService?: (ctx: PluginServiceCtx) => unknown };
     if (typeof mod.createService !== 'function') {
       throw new Error('模块未导出 createService 函数');
@@ -144,6 +170,7 @@ async function doStartPluginService(
         delete: async (key) => deleteSecret(guard(key)),
       },
       oauth: buildPluginOAuthApi(),
+      humanGate: buildPluginHumanGateApi(),
       logger: {
         warn: (msg, meta) => logger.warn(`[plugin:${rec.id}] ${msg}`, meta),
         info: (msg, meta) => logger.info(`[plugin:${rec.id}] ${msg}`, meta),

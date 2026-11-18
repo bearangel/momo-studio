@@ -605,3 +605,46 @@ describe('HumanRequestPanel — S6 镜像行（远端来源 / 代答提示 / pee
     expect(collapsed).toHaveTextContent('（来自 研发工作站）');
   });
 });
+
+// db-pro db 载荷渲染（spec 2026-11-17 §7-2）
+describe('HumanRequestPanel — tool_gate db 载荷卡', () => {
+  const DB_GATE_JSON = JSON.stringify({
+    db: { connection: 'conn1', sql: 'UPDATE orders SET status = 1 WHERE id = 42', opClass: 'DML' },
+  });
+  const dbRow = (): HumanRequestRow =>
+    makeRow({
+      id: 'req-db',
+      kind: 'tool_gate',
+      title: '数据库写请求（DML）',
+      payloadJson: DB_GATE_JSON,
+    });
+
+  it('渲染连接名与 SQL 命令块，无「允许本会话」按钮（数据写不可逆，spec §5.2②）', async () => {
+    listMock.mockResolvedValueOnce([dbRow()]).mockResolvedValue([dbRow()]);
+    await mountPanel();
+
+    expect(screen.getByText('DML 写请求 · 连接 conn1')).toBeInTheDocument();
+    expect(screen.getByText('$ UPDATE orders SET status = 1 WHERE id = 42')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '允许本会话' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '允许本次' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '拒绝' })).toBeInTheDocument();
+  });
+
+  it('批准 → answer({decision:"approve"})，无 scope 注记', async () => {
+    listMock.mockResolvedValueOnce([dbRow()]).mockResolvedValue([]);
+    await mountPanel();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '允许本次' }));
+    });
+    expect(answerMock).toHaveBeenCalledWith('req-db', { decision: 'approve' }, undefined);
+  });
+
+  it('拒绝 → deny', async () => {
+    listMock.mockResolvedValueOnce([dbRow()]).mockResolvedValue([]);
+    await mountPanel();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '拒绝' }));
+    });
+    expect(answerMock).toHaveBeenCalledWith('req-db', { decision: 'deny' }, undefined);
+  });
+});

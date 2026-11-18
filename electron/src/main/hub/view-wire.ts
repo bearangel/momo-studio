@@ -4,7 +4,7 @@
 // ViewTailPayload @ v0.1.2（tag，commit 70ec124）——值逐字一致，hub 侧有测试锁。
 // pin v0.1.2 dist 已含上述导出；本模块保留镜像（M2f T17 裁定，同 mirror-wire.ts
 // 先例：切换 import 影响多文件收益低）。
-import type { ViewMessage } from './protocol';
+import type { ViewFrame, ViewMessage } from './protocol';
 
 /** 查看链路私有方法名（信封 method 字段值）——与 hub VIEW_WIRE 对齐。 */
 export const VIEW_WIRE = {
@@ -30,4 +30,11 @@ export interface ViewConsentPayload {
 export interface ViewTailPayload {
   sessionId: string;
   events: ViewMessage[];
+}
+
+/** view.tail 帧形态载荷（协议 1.13.0）：wire:2 订阅生效后 worker 上行的聚合帧批
+ *  ——与 events 形态互斥；hub 校验后按订阅者 wire 分流（legacy 订阅者收转码行）。 */
+export interface ViewTailFramesPayload {
+  sessionId: string;
+  frames: ViewFrame[];
 }

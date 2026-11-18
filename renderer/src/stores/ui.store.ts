@@ -1,5 +1,6 @@
 // renderer/src/stores/ui.store.ts
 import { create } from 'zustand';
+import type { TaskRow } from '../ipc/types';
 
 // 工作空间维度 v1.1：'plugin' = 插件主区页面态（具体面板由 plugin-panels.store.activeKey 决定）
 // M2.1 T2：'workgroups' = 工作组一等视图（节点级能力，不依赖工作空间）
@@ -42,10 +43,15 @@ interface UiState {
   setActiveView: (view: ViewKey) => void;
   pendingCollabDraft: PendingCollabDraft | null;
   setPendingCollabDraft: (draft: PendingCollabDraft | null) => void;
+  /** 远端执行会话视图态（spec 2026-11-17 §7.1）：任务驱动临时打开——不落会话
+   *  列表，切视图/本地会话即关；数据面在 remote-session.view store。 */
+  remoteSessionView: { task: TaskRow } | null;
+  openRemoteSession: (task: TaskRow) => void;
+  closeRemoteSession: () => void;
   /** 各视图独立收起状态（v2.2 优化：三视图互不影响，随 ui.sidebar.v1 持久化） */
   sidebarCollapsed: Record<SidebarViewKey, boolean>;
   toggleSidebar: (view: SidebarViewKey) => void;
-  /** 各视图独立宽度（px）；提交时钳制到 [MIN, MAX] */
+  /** 各视图独立宽度（px）：提交时钳制到 [MIN, MAX] */
   sidebarWidths: Record<SidebarViewKey, number>;
   setSidebarWidth: (view: SidebarViewKey, width: number) => void;
 }
@@ -129,9 +135,16 @@ const initial = loadPersisted();
 
 export const useUiStore = create<UiState>((set) => ({
   activeView: 'im',
-  setActiveView: (view) => set({ activeView: view }),
+  // spec 2026-11-17 §7.1「切换视图即关闭」：离开 im 收口远端会话视图态
+  //（store.close 退订由 RemoteSessionView 收口 effect 驱动）
+  setActiveView: (view) => set((s) => (view !== 'im' && s.remoteSessionView !== null
+    ? { activeView: view, remoteSessionView: null }
+    : { activeView: view })),
   pendingCollabDraft: null,
   setPendingCollabDraft: (draft) => set({ pendingCollabDraft: draft }),
+  remoteSessionView: null,
+  openRemoteSession: (task) => set({ remoteSessionView: { task }, activeView: 'im' }),
+  closeRemoteSession: () => set({ remoteSessionView: null }),
   sidebarCollapsed: initial.sidebarCollapsed,
   toggleSidebar: (view) =>
     set((s) => {

@@ -18,10 +18,7 @@ import { RoomToolBudgetBadge } from '../im/RoomToolBudgetBadge';
 import { ExportChatButton } from '../im/ExportChatButton';
 import { TaskProgressButton } from '../im/TaskProgressButton';
 import { InFlightPanel } from '../im/InFlightPanel';
-// P3 S2：委派跟踪会话头「查看远端会话」入口（delegationRole='out' 门控，组件内自判）
-import { RemoteSessionEntry } from '../hub/RemoteSessionDrawer';
-// P3 S3：跟踪会话头「补充指令」入口（与查看钮并排，CONTRACT #11；同门控 + 终态隐藏）
-import { SteerEntry } from '../hub/SteerEntry';
+import { RemoteSessionView } from '../hub/RemoteSessionView';
 import { AgentsView } from '../agent/AgentsView';
 import { SettingsView } from '../settings/SettingsView';
 import { ResourceLibraryView } from '../resource-library/ResourceLibraryView';
@@ -36,6 +33,7 @@ import { PanelPageView } from '../plugins/PanelPageView';
 
 export function MiddlePanel() {
   const activeView = useUiStore((s) => s.activeView);
+  const remoteSessionView = useUiStore((s) => s.remoteSessionView);
   const workspace = useWorkspaceStore((s) => s.getActive());
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const sessions = useSessionStore((s) => s.sessions);
@@ -106,6 +104,12 @@ export function MiddlePanel() {
     );
   }
 
+  // 远端执行会话（spec 2026-11-17 §7.1）：任务驱动临时进入——优先于本地 im 列
+  // 渲染（不落会话列表；Esc / 返回按钮经组件内 closeRemoteSession 收口）
+  if (activeView === 'im' && remoteSessionView !== null) {
+    return <RemoteSessionView />;
+  }
+
   // im 视图：会话列表在 ViewSidebar，主区 = 消息流 + 工具条 + 输入框 + 成员浮层（按需）
   if (activeView === 'im') {
     const activeSession = sessions.find((s) => s.id === activeSessionId);
@@ -123,10 +127,6 @@ export function MiddlePanel() {
             {activeSessionId && <TaskProgressButton sessionId={activeSessionId} />}
             {/* P2-D：在途子任务面板入口（2s 轮询 + 单链取消，spec 2026-10-13 §9） */}
             {activeSessionId && <InFlightPanel sessionId={activeSessionId} />}
-            {/* P3 S2：远端会话只读抽屉入口（CONTRACT #10 标题行尾；非跟踪会话自渲染 null） */}
-            {activeSession && <RemoteSessionEntry session={activeSession} />}
-            {/* P3 S3：补充指令入口（CONTRACT #11 与查看钮并排；终态任务自渲染 null） */}
-            {activeSession && <SteerEntry session={activeSession} />}
           </div>
           <MessageList />
           <InputToolbar

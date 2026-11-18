@@ -1356,3 +1356,26 @@ describe('DelegatedTaskCard — S9 权限矩阵（peer 平行组 vs lf 主从组
     expect(screen.getByText(/打开会话批准\/拒绝/)).toBeInTheDocument();
   });
 });
+
+
+// ── E2E 实录：入口可入性（终态外派右键菜单） ────────────────────────────────
+
+describe('DelegatedTaskCard — 进入会话入口', () => {
+  const cardOf = (): HTMLElement => {
+    const el = document.querySelector('button[aria-pressed]');
+    if (!(el instanceof HTMLElement)) throw new Error('卡片按钮未渲染');
+    return el;
+  };
+
+  it('终态（completed）外派任务右键菜单含「进入会话」（历史回看不因终态消失）', () => {
+    renderCard(mkTask({ id: 'T-900', title: '入口卡-终态', status: 'completed', delegationRole: 'out', routing: { mode: 'node', groupId: 'g1', targetNodeId: 'n1' } }));
+    fireEvent.contextMenu(cardOf());
+    expect(screen.getByTestId('enter-remote-session')).toBeInTheDocument();
+  });
+
+  it('非外派（delegationId=null 且 pending）右键无「进入会话」', () => {
+    renderCard(mkTask({ id: 'T-901', title: '入口卡-本地', status: 'pending', delegationId: null, delegationRole: null }));
+    fireEvent.contextMenu(cardOf());
+    expect(screen.queryByTestId('enter-remote-session')).not.toBeInTheDocument();
+  });
+});

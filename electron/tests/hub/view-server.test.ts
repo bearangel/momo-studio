@@ -95,11 +95,12 @@ function insertEvent(messageId: string, eventType: string, payload: Record<strin
 interface TailCall { method: string; payload: { sessionId: string; events: Array<{ seq: number; content: string }> } }
 
 /** client 桩：记录 request 调用；failNext 让下一次 tail 上行 reject（游标不推进路径）。 */
-function fakeClient(opts: { online?: boolean; failNext?: boolean } = {}): { client: HubClient; calls: TailCall[] } {
+function fakeClient(opts: { online?: boolean; failNext?: boolean; protoVer?: string } = {}): { client: HubClient; calls: TailCall[] } {
   const calls: TailCall[] = [];
-  const state = { online: opts.online ?? true, failNext: opts.failNext ?? false };
+  const state = { online: opts.online ?? true, failNext: opts.failNext ?? false, protoVer: opts.protoVer ?? '1.13.0' };
   const client = {
     state: () => (state.online ? 'online' : 'disconnected'),
+    hubProtoVer: () => state.protoVer,
     request: vi.fn(async (method: string, payload: unknown) => {
       if (state.failNext) {
         state.failNext = false;
@@ -634,5 +635,198 @@ describe('只读红线（静态源码断言）', () => {
       writeSql.test(line) && (/\.prepare\(/.test(line) || /\.run\(/.test(line) || /\.exec\(/.test(line)),
     );
     expect(offending, `写路径 SQL 泄漏:\n${offending.join('\n')}`).toEqual([]);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// wire v2 协商与帧投影（1.13.0，spec 2026-11-17 §4/§6）
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('wire v2 协商与帧投影', () => {
+  async function seedSessionWithFrames(): Promise<{ wsName: string; sessionId: string; msgId: string }> {
+    const wsId = await seedWorkspace('frame-ws');
+    const session = insertSession({ workspaceId: wsId, title: '帧会话' });
+    const msgId = insertMessage(session.id, 'agent');
+    return { wsName: 'frame-ws', sessionId: session.id, msgId };
+  }
+
+  it('subscribe wire:2 + hub 1.13 → res 回显 wire:2；tail 上行帧形态；未终态帧跨拍重发、终态后不再出现', async () => {
+    const { sessionId, msgId } = await seedSessionWithFrames();
+    const { client, calls } = fakeClient();
+    const server = viewServerOf(client);
+
+    const r = await server.handleViewRequest(req(VIEW_RPC.subscribe, { sessionId, wire: 2 }));
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.payload).toEqual({ ok: true, wire: 2 });
+
+    // 第一拍：一个未终态 text 帧
+    insertEvent(msgId, 'text_delta', { delta: '生成' });
+    await new Promise((res) => setTimeout(res, 45));
+    const first = calls.find((c) => 'frames' in c.payload) as unknown as { payload: { frames: Array<{ frameId: string; content: string; streaming?: boolean }> } };
+    expect(first).toBeDefined();
+    expect(first.payload.frames).toEqual([
+      { frameId: msgId, seq: expect.any(Number), at: expect.any(Number), role: 'assistant', kind: 'text', content: '生成', streaming: true },
+    ]);
+
+    // 第二拍：帧内容增长（重发同 frameId 整帧替换）
+    insertEvent(msgId, 'text_delta', { delta: '中…' });
+    await new Promise((res) => setTimeout(res, 45));
+    const frameCalls = calls.filter((c) => 'frames' in c.payload) as unknown as Array<{ payload: { frames: Array<{ frameId: string; content: string; streaming?: boolean }> } }>;
+    const second = frameCalls[frameCalls.length - 1]!;
+    expect(second.payload.frames[0]).toMatchObject({ frameId: msgId, content: '生成中…', streaming: true });
+
+    // 终态拍：final 定稿 + streaming 收敛；此后无新事件 → 无更多上行
+    insertEvent(msgId, 'final', { body: '生成中…（完）', status: 'done' });
+    await new Promise((res) => setTimeout(res, 45));
+    const last = calls.filter((c) => 'frames' in c.payload).pop() as unknown as { payload: { frames: Array<{ frameId: string; content: string; streaming?: boolean }> } };
+    expect(last.payload.frames[0]).toMatchObject({ frameId: msgId, content: '生成中…（完）' });
+    expect(last.payload.frames[0]!.streaming).toBeUndefined();
+    const callsBefore = calls.length;
+    await new Promise((res) => setTimeout(res, 45));
+    expect(calls.length).toBe(callsBefore); // 游标已推进，静止期零上行
+  });
+
+  it('hub <1.13 时 wire:2 订阅不回显、tail 恒旧 events 形态（旧 hub 不认帧——防 tail 被整包拒）', async () => {
+    const { sessionId, msgId } = await seedSessionWithFrames();
+    const { client, calls } = fakeClient({ protoVer: '1.12.0' });
+    const server = viewServerOf(client);
+
+    const r = await server.handleViewRequest(req(VIEW_RPC.subscribe, { sessionId, wire: 2 }));
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.payload).toEqual({ ok: true }); // 无 wire 键
+
+    insertEvent(msgId, 'text_delta', { delta: 'x' });
+    insertEvent(msgId, 'final', { body: 'x', status: 'done' });
+    await new Promise((res) => setTimeout(res, 45));
+    expect(calls.length).toBeGreaterThan(0);
+    for (const c of calls) {
+      expect('frames' in c.payload).toBe(false);
+      expect('events' in c.payload).toBe(true);
+    }
+  });
+
+  it('无 wire 字段订阅 → 行为与现状逐字节一致（回归锁：res 无 wire 键 + events 形态）', async () => {
+    const { sessionId, msgId } = await seedSessionWithFrames();
+    const { client, calls } = fakeClient();
+    const server = viewServerOf(client);
+
+    const r = await server.handleViewRequest(req(VIEW_RPC.subscribe, { sessionId }));
+    expect(r.ok && r.payload).toEqual({ ok: true });
+    insertEvent(msgId, 'text_delta', { delta: 'hi' });
+    await new Promise((res) => setTimeout(res, 45));
+    const tail = calls[0]!;
+    expect('frames' in tail.payload).toBe(false);
+    expect(tail.payload.events[0]).toMatchObject({ role: 'assistant', content: 'hi' });
+  });
+
+  it('viewMessages wire:2 → 帧页（fromSeq=0 取尾窗帧 + hasMore）', async () => {
+    const { sessionId } = await seedSessionWithFrames();
+    // 三条消息：两条终态 + 一条未终态
+    for (let i = 0; i < 2; i++) {
+      const m = insertMessage(sessionId, 'agent');
+      insertEvent(m, 'text_delta', { delta: `文${i}` });
+      insertEvent(m, 'final', { body: `文${i}定稿`, status: 'done' });
+    }
+    const m3 = insertMessage(sessionId, 'agent');
+    insertEvent(m3, 'text_delta', { delta: '流' });
+
+    const server = viewServerOf(null);
+    const page = await server.handleViewRequest(req(VIEW_RPC.messages, { sessionId, fromSeq: 0, limit: 2, wire: 2 }));
+    expect(page.ok).toBe(true);
+    if (!page.ok) return;
+    const p = page.payload as { frames: Array<{ frameId: string; kind: string; streaming?: boolean }>; hasMore: boolean };
+    expect(p.frames).toHaveLength(2);
+    expect(p.hasMore).toBe(true);
+    expect(p.frames[1]!.frameId).toBe(m3);
+    expect(p.frames[1]!.streaming).toBe(true);
+    expect(p.frames[0]!.kind).toBe('text');
+  });
+
+  it('viewMessages wire:2 loadEarlier（fromSeq=首帧 seq）→ 更早帧页', async () => {
+    const { sessionId } = await seedSessionWithFrames();
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const m = insertMessage(sessionId, 'agent');
+      insertEvent(m, 'text_delta', { delta: `m${i}` });
+      insertEvent(m, 'final', { body: `m${i}`, status: 'done' });
+      ids.push(m);
+    }
+    const server = viewServerOf(null);
+    const r1 = await server.handleViewRequest(req(VIEW_RPC.messages, { sessionId, fromSeq: 0, limit: 2, wire: 2 }));
+    const p1 = (r1.ok ? r1.payload : { frames: [] }) as { frames: Array<{ frameId: string; seq: number }> };
+    const firstSeq = p1.frames[0]!.seq;
+    const r2 = await server.handleViewRequest(req(VIEW_RPC.messages, { sessionId, fromSeq: firstSeq, limit: 2, wire: 2 }));
+    const p2 = (r2.ok ? r2.payload : { frames: [] }) as { frames: Array<{ frameId: string }>; hasMore: boolean };
+    expect(p2.frames.map((f) => f.frameId)).toEqual(ids.slice(0, 1));
+    expect(p2.hasMore).toBe(false);
+  });
+
+  it('wire2 订阅即种子 openStarts：订阅前已开始的流式帧首拍即全文快照（终审 C3c）', async () => {
+    const { sessionId, msgId } = await seedSessionWithFrames();
+    // 订阅前消息已流式输出两段
+    insertEvent(msgId, 'text_delta', { delta: '前半' });
+    insertEvent(msgId, 'text_delta', { delta: '段' });
+    const { client, calls } = fakeClient();
+    const server = viewServerOf(client);
+    const r = await server.handleViewRequest(req(VIEW_RPC.subscribe, { sessionId, wire: 2 }));
+    expect(r.ok && r.payload).toEqual({ ok: true, wire: 2 });
+    // 订阅后新增量到达——首拍快照必须含订阅锚之前的全文（非仅新 delta）
+    insertEvent(msgId, 'text_delta', { delta: '+新' });
+    await new Promise((res) => setTimeout(res, 45));
+    const first = calls.find((c) => 'frames' in c.payload) as unknown as { payload: { frames: Array<{ content?: string; streaming?: boolean }> } };
+    expect(first).toBeDefined();
+    expect(first.payload.frames[0]).toMatchObject({ content: '前半段+新', streaming: true });
+  });
+
+  it('viewMessages wire:2 afterSeq → seq 升序帧页（断线补拉方向，终审 C3b）', async () => {
+    const { sessionId } = await seedSessionWithFrames();
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const m = insertMessage(sessionId, 'agent');
+      insertEvent(m, 'text_delta', { delta: `m${i}` });
+      insertEvent(m, 'final', { body: `m${i}`, status: 'done' });
+      ids.push(m);
+    }
+    const server = viewServerOf(null);
+    const page = await server.handleViewRequest(req(VIEW_RPC.messages, { sessionId, fromSeq: 0, limit: 50, afterSeq: 2, wire: 2 }));
+    expect(page.ok).toBe(true);
+    if (!page.ok) return;
+    // afterSeq=2：仅返回 seq>2 的帧（升序），第一条是第二条消息（其首事件 rowid=3）
+    const p = page.payload as { frames: Array<{ frameId: string; seq: number }>; hasMore: boolean };
+    expect(p.frames.map((f) => f.frameId)).toEqual(ids.slice(1));
+    expect(p.frames.every((f) => f.seq > 2)).toBe(true);
+    expect(p.hasMore).toBe(false);
+  });
+
+  it('hub <1.13 时 viewMessages wire:2 不回帧页——按 legacy 投影降级（终审 Important#4）', async () => {
+    const { sessionId, msgId } = await seedSessionWithFrames();
+    insertEvent(msgId, 'text_delta', { delta: 'x' });
+    insertEvent(msgId, 'final', { body: 'x', status: 'done' });
+    const server = viewServerOf(fakeClient({ protoVer: '1.12.0' }).client);
+    const r = await server.handleViewRequest(req(VIEW_RPC.messages, { sessionId, fromSeq: 0, limit: 50, wire: 2 }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect('frames' in (r.payload as Record<string, unknown>)).toBe(false);
+    expect('messages' in (r.payload as Record<string, unknown>)).toBe(true);
+  });
+
+  it('viewSessions 回带 delegationId（tasks.execution_session_id 联表）；非委派会话不带键', async () => {
+    const wsId = await seedWorkspace('del-ws');
+    const s1 = insertSession({ workspaceId: wsId, title: '委派会话' });
+    const s2 = insertSession({ workspaceId: wsId, title: '普通会话' });
+    insertEvent(insertMessage(s1.id, 'agent'), 'text_delta', { delta: 'x' });
+    const task = insertTask({ workspaceId: wsId, title: '外派任务', creatorUserId: 'owner', status: 'in_progress' });
+    getDb().prepare('UPDATE tasks SET delegation_id = ?, delegation_role = ?, execution_session_id = ? WHERE id = ?')
+      .run('del-123', 'in', s1.id, task.id);
+
+    const server = viewServerOf(null);
+    const r = await server.handleViewRequest(req(VIEW_RPC.sessions, { workspaceName: 'del-ws', limit: 10 }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const sessions = (r.payload as { sessions: Array<{ sessionId: string; delegationId?: string }> }).sessions;
+    const linked = sessions.find((x) => x.sessionId === s1.id);
+    const plain = sessions.find((x) => x.sessionId === s2.id);
+    expect(linked?.delegationId).toBe('del-123');
+    expect('delegationId' in (plain ?? {})).toBe(false);
   });
 });

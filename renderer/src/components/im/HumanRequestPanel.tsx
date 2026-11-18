@@ -134,6 +134,19 @@ function parseToolGate(row: HumanRequestRow): ToolGatePayload | null {
   };
 }
 
+/** db-pro 载荷（spec 2026-11-17 §7-2）：{db:{connection,sql,opClass}} */
+function parseDbGate(row: HumanRequestRow): { connection: string; sql: string; opClass: string } | null {
+  const parsed = parseJson(row.payloadJson);
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const d = (parsed as { db?: unknown }).db;
+  if (typeof d !== 'object' || d === null) return null;
+  const g = d as { connection?: unknown; sql?: unknown; opClass?: unknown };
+  if (typeof g.connection !== 'string' || typeof g.sql !== 'string' || typeof g.opClass !== 'string') {
+    return null;
+  }
+  return { connection: g.connection, sql: g.sql, opClass: g.opClass };
+}
+
 interface QuestionOption {
   id: string;
   label: string;
@@ -377,6 +390,7 @@ function ToolGateBody({ row, now, onError }: {
 }) {
   const answer = useHumanStore((s) => s.answer);
   const gate = parseToolGate(row);
+  const db = parseDbGate(row);
   const warn = isWarn(row, now);
 
   const submit = (input: HumanAnswerInput): void => {
@@ -392,12 +406,15 @@ function ToolGateBody({ row, now, onError }: {
       <div className="text-[11px] leading-4 text-tertiary">
         {warn
           ? TIMEOUT_POLICY_HINT[row.timeoutPolicy]
-          : gate !== null
-            ? `${gate.toolName} 工具请求写入 ${gate.dirs.length} 个目录。`
-            : row.prompt}
+          : db !== null
+            ? `${db.opClass} 写请求 · 连接 ${db.connection}`
+            : gate !== null
+              ? `${gate.toolName} 工具请求写入 ${gate.dirs.length} 个目录。`
+              : row.prompt}
       </div>
-      {gate !== null && <CmdBlock command={`$ ${gate.command}`} />}
-      {gate !== null && <Chips items={gate.dirs} />}
+      {db !== null && <CmdBlock command={`$ ${db.sql}`} />}
+      {db === null && gate !== null && <CmdBlock command={`$ ${gate.command}`} />}
+      {db === null && gate !== null && <Chips items={gate.dirs} />}
       {!warn && <div className="h-px bg-border-subtle" />}
       <div className="flex flex-wrap items-center gap-[7px]">
         <Button
@@ -408,18 +425,21 @@ function ToolGateBody({ row, now, onError }: {
         >
           允许本次
         </Button>
-        <Button
-          size="sm"
-          className={cn(BTN_SM, 'border border-strong bg-surface-1 text-primary hover:bg-surface-3')}
-          onClick={() =>
-            // scope 约定（plan T22 brief）：approve 决策恒 approve，会话级授权
-            // 用 text='scope:session' 注记区分（主进程 handleToolGateAnswer 当前
-            // 对 approve 统一 grantWriteDirs('session')，注记供 P2 精细化消费）
-            submit({ decision: 'approve', text: 'scope:session' })
-          }
-        >
-          允许本会话
-        </Button>
+        {/* db 写不可逆（spec §5.2②）：无「允许本会话」——每次写都须人工批准 */}
+        {db === null && (
+          <Button
+            size="sm"
+            className={cn(BTN_SM, 'border border-strong bg-surface-1 text-primary hover:bg-surface-3')}
+            onClick={() =>
+              // scope 约定（plan T22 brief）：approve 决策恒 approve，会话级授权
+              // 用 text='scope:session' 注记区分（主进程 handleToolGateAnswer 当前
+              // 对 approve 统一 grantWriteDirs('session')，注记供 P2 精细化消费）
+              submit({ decision: 'approve', text: 'scope:session' })
+            }
+          >
+            允许本会话
+          </Button>
+        )}
         <Button
           variant="danger-outline"
           size="sm"

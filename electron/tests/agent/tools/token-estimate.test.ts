@@ -174,3 +174,26 @@ describe('COMPACTION_* 常量（spec §3）', () => {
     expect(COMPACTION_MIN_TRIGGER).toBe(4_000);
   });
 });
+
+// db-pro 验收发现的加固（2026-11-17）：零参工具的 arguments/inputSchema 可被
+// 模型或插件 def 合法省略——估算层不得崩（reading 'length' P0）。
+describe('estimateTokens / estimateConversation - 省略字段容忍', () => {
+  it('estimateTokens(undefined|null) → 0 不抛', () => {
+    expect(estimateTokens(undefined as unknown as string)).toBe(0);
+    expect(estimateTokens(null as unknown as string)).toBe(0);
+  });
+  it('toolCall 无 arguments / def 无 inputSchema 不抛（计 0）', () => {
+    const total = estimateConversation({
+      system: '',
+      messages: [
+        {
+          role: 'assistant',
+          content: 'ok',
+          toolCalls: [{ id: 'c1', type: 'function', name: 'list_connections' }] as never,
+        },
+      ],
+      tools: [{ name: 'list_connections', description: '列出连接' }] as never,
+    });
+    expect(total).toBeGreaterThan(0);
+  });
+});

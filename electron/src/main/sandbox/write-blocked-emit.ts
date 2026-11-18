@@ -201,6 +201,17 @@ function parseToolGatePayload(row: HumanRequestRow): { command: string; dirs: st
   }
 }
 
+/** db-pro 载荷判定（spec 2026-11-17 §7-3）：payloadJson 解析为对象且含 db 键 */
+function isDbGatePayload(payloadJson: string | null): boolean {
+  if (!payloadJson) return false;
+  try {
+    const parsed = JSON.parse(payloadJson) as { db?: unknown };
+    return typeof parsed.db === 'object' && parsed.db !== null;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * tool_gate 答复处理（Task 13：sandbox IPC 装配处经 setToolGateHandler 注册进
  * lifecycle-runs 的 answerHuman 分派）。approve → grantWriteDirs('session') +
@@ -213,6 +224,12 @@ export function handleToolGateAnswer(requestId: string, answer: ToolGateAnswerLi
   const row = getHumanRequest(requestId);
   if (!row || row.kind !== 'tool_gate') {
     logger.warn('tool_gate 答复回调收到不存在或非 tool_gate 请求', { requestId });
+    return;
+  }
+  // db-pro（spec 2026-11-17 §7-3）：db 形态载荷（{db:{connection,sql,opClass}}）
+  // 无 dirs 可授——approve/deny 语义由插件 service 轮询 status 消费，沙箱授予链路旁路。
+  if (isDbGatePayload(row.payloadJson)) {
+    logger.info('tool_gate db 载荷——沙箱授予链路旁路（插件 service 轮询消费）', { requestId });
     return;
   }
   const gate = parseToolGatePayload(row);
@@ -259,6 +276,9 @@ export function recoverOrphanToolGates(): { expired: number } {
   let expired = 0;
   for (const req of listPendingByKind('tool_gate')) {
     if (liveSessions.has(req.sessionId)) continue;
+    // db-pro 载荷行豁免（spec 2026-11-17 §7-3）：消费方是插件 service 轮询，
+    // 不经沙箱内存注册表生命周期——误扫会让 pending 写批准静默失效（验收 P0 实证）
+    if (isDbGatePayload(req.payloadJson)) continue;
     if (markExpired(req.id) > 0) expired += 1;
   }
   return { expired };

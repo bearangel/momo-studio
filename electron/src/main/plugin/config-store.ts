@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { resolvePluginDataDir, resolvePluginsDir } from '../paths';
 import { getSecret, setSecret, deleteSecret } from '../storage/keychain';
+import { logger } from '../logger';
 
 /** 属性级 Schema（v1 子集，多收拒绝） */
 export interface ConfigPropertyDecl {
@@ -190,7 +191,10 @@ export function findGlobalLayerWorkspaceSpills(
 /** 敏感值主进程内存缓存（激活边界预热 / 写入时更新） */
 const sensitiveCache = new Map<string, Record<string, string>>();
 
-/** 预热敏感缓存（boot/安装/重载/启停时调用；已带值直接注入——测试/迁移用） */
+/** 预热敏感缓存（boot/安装/重载/启停时调用；已带值直接注入——测试/迁移用）。
+ *  E1 加固（2026-11-17 db-pro 验收）：单键 getSecret reject 不拖垮整组（此前
+ *  单键瞬态失败 → 整层静默蒸发 + boot 链吞错零证据——间歇性敏感值丢失根因面），
+ *  失败键 warn 留痕并跳过（下次 warm/保存自然重试）。 */
 export async function warmPluginConfigCache(
   pluginId: string,
   schema: NormalizedConfigSchema,
@@ -202,8 +206,16 @@ export async function warmPluginConfigCache(
   if (sensitiveKeys.length === 0) return;
   const layer: Record<string, string> = {};
   for (const key of sensitiveKeys) {
-    const v = preloaded ? preloaded[key] : await getSecret(sensitiveRef(pluginId, key));
-    if (v !== null && v !== undefined) layer[key] = v;
+    try {
+      const v = preloaded ? preloaded[key] : await getSecret(sensitiveRef(pluginId, key));
+      if (v !== null && v !== undefined) layer[key] = v;
+    } catch (err) {
+      logger.warn('插件敏感配置预热单键失败（跳过，下次 warm/保存重试）', {
+        pluginId,
+        key,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
   sensitiveCache.set(pluginId, layer);
 }
