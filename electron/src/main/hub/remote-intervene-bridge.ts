@@ -1221,7 +1221,7 @@ export async function handleTaskInterventionMirror(
       title: intervention.title,
       prompt: intervention.prompt,
       payloadJson: (() => {
-        const composed = withRemoteSegment(intervention.payload, workstation);
+        const composed = withRemoteSegment(intervention.payload, workstation, false);
         return composed !== undefined ? JSON.stringify(composed) : null;
       })(),
       optionsJson:
