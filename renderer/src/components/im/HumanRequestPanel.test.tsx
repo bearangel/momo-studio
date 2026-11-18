@@ -285,7 +285,20 @@ describe('HumanRequestPanel — manual_action 卡', () => {
 
 describe('HumanRequestPanel — acceptance 卡（三动作裁决）', () => {
   const row = (over: Partial<HumanRequestRow> = {}): HumanRequestRow =>
-    makeRow({ id: 'req-acc', taskId: 'T-0100', kind: 'acceptance', payloadJson: ACCEPTANCE_JSON, ...over });
+    makeRow({
+      id: 'req-acc',
+      taskId: 'T-0100',
+      kind: 'acceptance',
+      title: '第 1 轮交付',
+      payloadJson: ACCEPTANCE_JSON,
+      ...over,
+    });
+
+  it('卡头显示轮次（提交验收 · 第 1 轮交付），跨节点不再靠任务号区分', async () => {
+    listMock.mockResolvedValue([row()]);
+    await mountPanel();
+    expect(screen.getByText(/提交验收 · 第 1 轮交付/)).toBeInTheDocument();
+  });
 
   it('交付说明走 Markdown：字面量 ** 不再出现；文件/产物分段呈现', async () => {
     listMock.mockResolvedValue([

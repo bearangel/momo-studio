@@ -30,6 +30,7 @@ import { insertTask, getTask, updateTask, type TaskRow } from '../../src/main/st
 import { insertSession } from '../../src/main/storage/sessions/repo';
 import { getActiveRun, listRuns } from '../../src/main/storage/tasks/runs-repo';
 import { listRequests } from '../../src/main/storage/tasks/human-requests-repo';
+import { acceptAndContinue, startRun, submitRun } from '../../src/main/task/lifecycle-runs';
 import {
   handleTaskInterventionMirror,
   handleTaskSubmittedMirror,
@@ -448,6 +449,22 @@ describe('11) S9 工作站段：镜像 payload remote 标记段', () => {
     expect(JSON.parse(listRequests({ status: 'all' })[1]!.payloadJson!)).toEqual({
       tool: 'bash',
     });
+  });
+
+  it('继续后的第 2 轮提交（活动 run#2 running）→ 本地 run 会计入 submitted（不悬在 running）', async () => {
+    const task = seedOutTask({ status: 'assigned' });
+    // 先造 run#1 submitted + 继续 → run#2 running（acceptAndContinue 真实链）
+    startRun(task.id, { trigger: 'initial', executionSessionId: null });
+    await submitRun(task.id, { summary: '第 1 轮' });
+    acceptAndContinue(task.id, '继续写正文');
+    expect(listRuns(task.id).map((r) => r.status)).toEqual(['accepted', 'running']);
+
+    await handleTaskSubmittedMirror(submittedEvent({ runNo: 2, deliverable: { summary: '第 2 轮' } }));
+
+    const after = listRuns(task.id);
+    expect(after[1]!.status).toBe('submitted');
+    expect(JSON.parse(after[1]!.deliverableJson!)).toMatchObject({ summary: '第 2 轮' });
+    expect(getTask(task.id)!.status).toBe('submitted');
   });
 
   it('标题统一「第 N 轮交付」+ prompt 携任务标题（两侧同形）', async () => {

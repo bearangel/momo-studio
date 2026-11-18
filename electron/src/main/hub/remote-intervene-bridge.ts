@@ -35,7 +35,7 @@ import {
   type HumanRequestRow,
 } from '../storage/tasks/human-requests-repo';
 import { getTask, type TaskRow } from '../storage/tasks/repo';
-import { getActiveRun, insertRun, type TaskRunRow } from '../storage/tasks/runs-repo';
+import { getActiveRun, insertRun, updateRun, type TaskRunRow } from '../storage/tasks/runs-repo';
 import { isTerminal } from '../storage/tasks/state-machine';
 import {
   ACCEPTANCE_DEADLINE_MS,
@@ -1291,6 +1291,7 @@ export async function handleTaskSubmittedMirror(
       return;
     }
     const runNo = p.runNo;
+    const deliverable = parseMirrorDeliverable(p.deliverable);
     const workerNodeId = outRowWorkerNodeId(task);
     const mirrorRemoteId = `${delegationId}#${runNo}`;
     if (workerNodeId !== null && findRemoteMirrorRequest(workerNodeId, mirrorRemoteId) !== null) {
@@ -1324,6 +1325,15 @@ export async function handleTaskSubmittedMirror(
           activeRunNo: existing.runNo,
           eventRunNo: runNo,
         });
+      } else if (existing.status === 'running') {
+        // 验收继续（1.14.0）：发起方本地已建 run#N running，远端提交到达需把
+        // 同一行收敛为 submitted——否则本地 run 账目悬在 running，accept/reject
+        // 的「run 必须 submitted」前置会误拒
+        updateRun(existing.id, {
+          status: 'submitted',
+          deliverableJson: JSON.stringify(deliverable),
+        });
+        emitRunChanged(task.id, existing.id, 'submitted');
       }
       runId = existing.id;
     }
@@ -1345,7 +1355,6 @@ export async function handleTaskSubmittedMirror(
       });
       return;
     }
-    const deliverable = parseMirrorDeliverable(p.deliverable);
     // S9（A4）：工作站解析失败降级 null——不阻断 acceptance 镜像落库；
     // A2（F4 lf 短路）同 intervention 消费点——非 peer_draft 行免整轮组清单 RPC；
     // A3-4：带 routing.groupId 按组精确解析

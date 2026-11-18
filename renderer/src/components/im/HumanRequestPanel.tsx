@@ -369,7 +369,10 @@ function CardHead({ row, now, extraAction }: {
   return (
     <div className="flex h-9 items-center gap-[7px] border-b border-subtle bg-surface-1 px-2.5">
       <Icon size={16} strokeWidth={1.75} aria-hidden className={meta.iconClass} />
-      <span className="text-[12.5px] font-semibold text-primary">{meta.title}</span>
+      <span className="text-[12.5px] font-semibold text-primary">
+        {meta.title}
+        {row.kind === 'acceptance' && row.title !== '' ? ` · ${row.title}` : ''}
+      </span>
       {isRemoteRow(row) && <RemoteOriginBadge row={row} />}
       <span className="ml-auto flex items-center gap-[5px] whitespace-nowrap text-[11px] text-tertiary">
         {warn && remain !== null && <RemainPill minutes={remain} />}

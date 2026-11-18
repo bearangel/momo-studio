@@ -132,6 +132,21 @@ describe('面板附属件', () => {
     expect(loadEarlier).toHaveBeenCalled();
   });
 
+  it('footerExpanded（验收卡满屏 V1）→ 流域让位、动作槽吃满剩余高度', () => {
+    seedReady();
+    render(
+      <RemoteSessionPanel
+        sessionId="sx"
+        workspaceId="ws1"
+        footerExpanded
+        footerSlot={<div>验收卡占位</div>}
+      />,
+    );
+    expect(screen.getByTestId('remote-session-flow').className).toContain('hidden');
+    const slot = screen.getByText('验收卡占位').parentElement!;
+    expect(slot.className).toContain('flex-1');
+  });
+
   it('面板内不再有独立状态条（状态迁至会话标题行）', () => {
     seedReady();
     render(<RemoteSessionPanel sessionId="sx" workspaceId="ws1" />);

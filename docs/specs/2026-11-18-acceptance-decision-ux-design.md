@@ -348,3 +348,26 @@ studio 侧 `remote-intervene-bridge.ts`：
 - **仅改文案（两动作）**：被否——用户核心诉求「认可本轮 + 继续」无法表达。
 - **提高 reason 上限代替结构化字段**：被否——污染 reason 语义、放大 ws 帧、仍需截断策略。
 - **风险**：`submitted → in_progress` 新边是状态机首次允许「验收后回到进行中」，须以单点写者 + 回归锁把守；协议 1.14 要求两端同步升级，版本门与错误码已覆盖未升级场景。
+
+---
+
+## 13. 交付回执（2026-11-18 真机 A/B 验收）
+
+拓扑：A=node-a-e2e（发起方，9222 CDP）、B=node-b-e2e（执行方）、hub 0.7.7（协议 1.14.0，本地 dist 启动）。
+
+| # | 验收项 | 结果 | 证据 |
+|---|---|---|---|
+| 1 | B 侧验收卡只读（零按钮零输入） | ✅ 单测 | `HumanRequestPanel.test` canDecide=false 用例 |
+| 2 | A 侧交付完整（summary/files/artifacts） | ✅ 真机 | 第 2 轮卡显示正文摘要 + `春雷落处.md`；镜像 payload 612B（含 remote 段） |
+| 3 | 「继续」全链（A→hub→B） | ✅ 真机 | A：run1 accepted / run2 running / answerJson 含 requirement；hub：`running` run_no=2；B：run2 running + 里程碑「【发起方要求继续】…」 |
+| 4 | B 状态回 in_progress、旧验收单消失 | ✅ 真机 | B task in_progress；B acceptance 行 answered |
+| 5 | B 再提交 → A 收「第 2 轮交付」 | ✅ 真机 | A 卡头「提交验收 · 第 2 轮交付」；镜像行 pending |
+| 6 | 「完成」二次确认 → 双端 completed | ✅ 真机 | A completed（runs accepted×2）、B completed、hub `done` run_no=2 accepted_at 落列 |
+| 7 | 「驳回」跨节点链 | ⚪ 单测覆盖 | 展开必填 + task.reject + IPC 守卫 + hub 既有 reject 链（真机未跑，避免污染已完成任务） |
+| 8 | 待裁决期无补充指令框 | ✅ 真机 | `composer:false`（面板级）；执行方恒不渲染 |
+| 9 | 版本门降级人话 | ✅ 真机 | 1.13.1 节点调继续 → 「执行节点版本不支持继续，可改用完成或驳回」，A 侧零写入（run 仍 submitted） |
+| 10 | 库层契约 | ✅ 真机 | `task_runs.trigger='continue'`、`human_requests.answer_json` 含 requirement |
+
+**实施中修复的额外缺陷**：①镜像消费对「继续后 run#N 已 running」的本地行不收敛为 submitted，导致 A 侧 accept/reject 前置校验误拒——已在 `handleTaskSubmittedMirror` 补 run 收敛（回归锁 `origin-submitted-mirror` 新增用例）；②验收卡头此前只显示「提交验收」，轮次不可见——补「· 第 N 轮交付」。
+
+**已知遗留（后续票）**：①修复前产生的历史 pending 行（run 仍 running）不会自愈，需 S7 对账或重新提交；②hub 重启后面板订阅失败不自动重试，需重挂载会话（本次观测到一次）；③`momo-hub-protocol` pin 仍 `v0.7.6`——待 hub `v0.7.7` 推送后升级（本地验证用 `link:` 临时接入，未入库）。
