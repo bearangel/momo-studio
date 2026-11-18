@@ -48,13 +48,13 @@ describe('acceptAndContinue', () => {
 
     const runs = listRuns(id);
     expect(runs).toHaveLength(2);
-    expect(runs[0].status).toBe('accepted');
-    expect(runs[0].endedAt).not.toBeNull();
-    expect(runs[1].runNo).toBe(2);
-    expect(runs[1].trigger).toBe('continue');
-    expect(runs[1].status).toBe('running');
+    expect(runs[0]!.status).toBe('accepted');
+    expect(runs[0]!.endedAt).not.toBeNull();
+    expect(runs[1]!.runNo).toBe(2);
+    expect(runs[1]!.trigger).toBe('continue');
+    expect(runs[1]!.status).toBe('running');
     expect(getTask(id)!.status).toBe('in_progress');
-    expect(getActiveRun(id)!.id).toBe(runs[1].id);
+    expect(getActiveRun(id)!.id).toBe(runs[1]!.id);
     const acceptance = listByTask(id).filter((r) => r.kind === 'acceptance').pop()!;
     expect(acceptance.status).toBe('answered');
     expect(JSON.parse(acceptance.answerJson!)).toEqual({ decision: 'accept', requirement: '按主题一写正文' });

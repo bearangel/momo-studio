@@ -314,6 +314,9 @@ function isRemoteSubmitted(task: TaskRow): boolean {
 /** 验收通过（S6 路由单点，导出供测试直调）：先本地后远端 + remoteWarning 透传 */
 export async function acceptTaskRouted(id: string): Promise<TaskRow & { remoteWarning?: string }> {
   const before = getTask(id);
+  if (before !== null && before.delegationRole === 'in') {
+    throw new Error('验收裁决权归发起方（本机为执行方）');
+  }
   const remote = before !== null && isRemoteSubmitted(before);
   await acceptTask(id);
   notifyExecutor();
@@ -326,6 +329,9 @@ export async function rejectTaskRouted(
   reason: string,
 ): Promise<TaskRow & { remoteWarning?: string }> {
   const before = getTask(id);
+  if (before !== null && before.delegationRole === 'in') {
+    throw new Error('验收裁决权归发起方（本机为执行方）');
+  }
   const remote = before !== null && isRemoteSubmitted(before);
   await rejectTask(id, reason);
   // 打回回 assigned 排队——返工放行（startRun trigger='rework'）由 executor

@@ -680,6 +680,9 @@ export interface HumanRequestRow {
   originNodeName?: string | null;
   /** S6：镜像行属平行组（peer 无代答入口——中性卡渲染；acceptance 不受影响） */
   peerMirror?: boolean;
+  /** human:list 投影响应键（spec 2026-11-18 DEC-2）：本端是否可裁决；
+   *  仅 acceptance 行在执行方（delegation_role='in'）为 false，其余恒缺省 true。 */
+  canDecide?: boolean;
 }
 
 /** human:attention 单会话聚合值 */

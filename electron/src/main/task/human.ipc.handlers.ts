@@ -173,7 +173,17 @@ export type HumanRequestWireRow = HumanRequestRow & {
   originNodeName?: string | null;
   /** 镜像行属平行组（peer 判定见 projectHumanListRows 头注） */
   peerMirror?: boolean;
+  /** 本端是否可裁决（spec 2026-11-18 DEC-2）：仅 acceptance 行有 false 值
+   *  （任务 delegation_role='in' = 执行方，等待发起方）；其他 kind 恒 true。 */
+  canDecide?: boolean;
 };
+
+/** 验收裁决权判定（spec 2026-11-18 DEC-1）：执行方（role='in'）无裁决权 */
+function canDecideRow(row: HumanRequestRow): boolean {
+  if (row.kind !== 'acceptance' || row.taskId === null) return true;
+  const task = getTask(row.taskId);
+  return task?.delegationRole !== 'in';
+}
 
 /**
  * human:list 投影（S6 renderer 数据面）：镜像行附 `originNodeName`（远端来源
@@ -184,12 +194,16 @@ export type HumanRequestWireRow = HumanRequestRow & {
  */
 export function projectHumanListRows(rows: HumanRequestRow[]): HumanRequestWireRow[] {
   return rows.map((row) => {
-    if (row.originNodeId === null || row.remoteId === null) return row;
+    const canDecide = canDecideRow(row);
+    if (row.originNodeId === null || row.remoteId === null) {
+      return canDecide ? row : { ...row, canDecide: false };
+    }
     const task = row.taskId !== null ? getTask(row.taskId) : null;
     return {
       ...row,
       originNodeName: originNodeNameOf(row.originNodeId),
       ...(task?.origin === 'peer_draft' ? { peerMirror: true } : {}),
+      ...(canDecide ? {} : { canDecide: false }),
     };
   });
 }
