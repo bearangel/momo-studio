@@ -589,7 +589,7 @@ function findPendingAcceptance(taskId: string, runId: string): HumanRequestRow |
 function answerAcceptance(
   taskId: string,
   runId: string,
-  answer: { decision: 'accept' } | { decision: 'reject'; reason: string },
+  answer: { decision: 'accept'; requirement?: string } | { decision: 'reject'; reason: string },
   byNodeId: string,
 ): void {
   const req = findPendingAcceptance(taskId, runId);
@@ -667,6 +667,54 @@ export async function rejectTask(id: string, reason: string, byNodeId: string = 
     projectTaskStatus(id, 'assigned');
   })();
   emitRunChanged(id, active.id, 'rejected');
+}
+
+/** 继续要求长度上限（协议 TaskContinueReq 1..4000 同界，spec 2026-11-18 DEC-14） */
+const CONTINUE_REQUIREMENT_MAX = 4000;
+
+/**
+ * 验收「继续」（spec 2026-11-18 DEC-14）：run#N → accepted + 验收单答复
+ * accept(requirement) + 任务回 in_progress + 新 run#N+1（trigger='continue'）。
+ * 单活动 run 不变量由部分唯一索引兜底；本函数是 `submitted → in_progress`
+ * 边的唯一使用者（状态机注释同源）。本地任务与 worker 远端消费共用。
+ */
+export function acceptAndContinue(
+  taskId: string,
+  requirement: string,
+  byNodeId: string = LOCAL_ACCEPT_BY,
+): void {
+  const text = requirement.trim();
+  const codepoints = Array.from(text).length;
+  if (codepoints < 1 || codepoints > CONTINUE_REQUIREMENT_MAX) {
+    throw new Error(`继续要求需 1-${CONTINUE_REQUIREMENT_MAX} 字`);
+  }
+  const task = getTask(taskId);
+  if (!task) throw new Error(`任务 ${taskId} 不存在`);
+  if (task.status === 'paused') throw new Error(`任务 ${taskId} 已暂停，先恢复或取消`);
+  const active = requireActiveRun(taskId);
+  if (active.status !== 'submitted') {
+    throw new Error(
+      `任务 ${taskId} 当前 run（run #${active.runNo}）状态为 ${active.status}，` +
+        `只有已提交待验收（submitted）的 run 可执行继续操作`,
+    );
+  }
+  const now = Date.now();
+  const nextRunId = getDb().transaction((): string => {
+    updateRun(active.id, { status: 'accepted', endedAt: now });
+    answerAcceptance(taskId, active.id, { decision: 'accept', requirement: text }, byNodeId);
+    projectTaskStatus(taskId, 'in_progress');
+    const next = insertRun({
+      taskId,
+      runNo: active.runNo + 1,
+      status: 'running',
+      trigger: 'continue',
+      executionSessionId: task.executionSessionId,
+    });
+    ensureRunBookkeeping(taskId, next.id, 'running');
+    return next.id;
+  })();
+  emitRunChanged(taskId, active.id, 'accepted');
+  emitRunChanged(taskId, nextRunId, 'running');
 }
 
 // ── HITL 请求 / 答复链（Task 11，spec §6）──
