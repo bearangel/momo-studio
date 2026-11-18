@@ -12,6 +12,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import type { ReactElement } from 'react';
+import { useUiStore } from '../../stores/ui.store';
+import { useSessionStore } from '../../stores/session.store';
 import {
   DelegatedTaskCard,
   DelegationBoardProvider,
@@ -1360,7 +1362,7 @@ describe('DelegatedTaskCard — S9 权限矩阵（peer 平行组 vs lf 主从组
 
 // ── E2E 实录：入口可入性（终态外派右键菜单） ────────────────────────────────
 
-describe('DelegatedTaskCard — 进入会话入口', () => {
+describe('DelegatedTaskCard — 进入会话入口（spec §12.1 收敛为选中跟踪会话）', () => {
   const cardOf = (): HTMLElement => {
     const el = document.querySelector('button[aria-pressed]');
     if (!(el instanceof HTMLElement)) throw new Error('卡片按钮未渲染');
@@ -1377,5 +1379,35 @@ describe('DelegatedTaskCard — 进入会话入口', () => {
     renderCard(mkTask({ id: 'T-901', title: '入口卡-本地', status: 'pending', delegationId: null, delegationRole: null }));
     fireEvent.contextMenu(cardOf());
     expect(screen.queryByTestId('enter-remote-session')).not.toBeInTheDocument();
+  });
+});
+
+
+describe('进入会话 → 选中跟踪会话（spec §12.1）', () => {
+  it('executionSessionId 在场 → setActiveView(im) + selectSession(跟踪会话)', async () => {
+    const uiSet = vi.fn();
+    const sel = vi.fn();
+    vi.stubGlobal('__noop', null);
+    const uiMod = await import('../../stores/ui.store');
+    const sessMod = await import('../../stores/session.store');
+    const uiSpy = vi.spyOn(uiMod.useUiStore.getState(), 'setActiveView').mockImplementation(uiSet as never);
+    const sessSpy = vi.spyOn(sessMod.useSessionStore.getState(), 'selectSession').mockImplementation(sel as never);
+    renderCard(mkTask({ id: 'T-910', title: '直连卡', status: 'in_progress', delegationRole: 'out', delegationId: 'dl-910', executionSessionId: 'sess-track-910', routing: { mode: 'node', groupId: 'g1', targetNodeId: 'n1' } }));
+    fireEvent.contextMenu(document.querySelector('button[aria-pressed]')!);
+    fireEvent.click(screen.getByTestId('enter-remote-session'));
+    expect(uiSet).toHaveBeenCalledWith('im');
+    expect(sel).toHaveBeenCalledWith('sess-track-910');
+    uiSpy.mockRestore();
+    sessSpy.mockRestore();
+  });
+
+  it('未派发（executionSessionId=null）→ 人话 toast，不切换', async () => {
+    const { showToast } = await import('../ui/Toast');
+    const uiSpy = vi.spyOn(useUiStore.getState(), 'setActiveView');
+    renderCard(mkTask({ id: 'T-911', title: '未派发卡', status: 'pending', delegationRole: 'out', delegationId: null, executionSessionId: null }));
+    fireEvent.contextMenu(document.querySelector('button[aria-pressed]')!);
+    expect(screen.queryByTestId('enter-remote-session')).not.toBeInTheDocument();
+    expect(uiSpy).not.toHaveBeenCalled();
+    void showToast;
   });
 });

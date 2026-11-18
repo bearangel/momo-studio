@@ -29,6 +29,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Ban, Bot, Eye, CalendarCheck, Check, CircleCheck, CircleHelp, CircleSlash, CircleX, ClipboardCheck, Inbox, Lock, RefreshCw, RotateCcw, Users, WifiOff, X, Zap } from 'lucide-react';
 import { useUiStore } from '../../stores/ui.store';
+import { useSessionStore } from '../../stores/session.store';
 import { ipc } from '../../ipc/client';
 import { useHubStore } from '../../stores/hub.store';
 import { cacheDelegationGroupNames, useHubDelegationStore } from '../../stores/hub-delegation.store';
@@ -716,7 +717,12 @@ export function DelegatedTaskCard({ task, onSelect, selected = false, waitingSum
                   data-testid="enter-remote-session"
                   onClick={() => {
                     setMenu(null);
-                    useUiStore.getState().openRemoteSession(task);
+                    if (task.executionSessionId == null) {
+                      showToast('任务尚未派发，暂无跟踪会话');
+                      return;
+                    }
+                    useUiStore.getState().setActiveView('im');
+                    void useSessionStore.getState().selectSession(task.executionSessionId);
                   }}
                   className="flex w-full items-center gap-1.5 px-3 py-1 text-left hover:bg-surface-3"
                 >

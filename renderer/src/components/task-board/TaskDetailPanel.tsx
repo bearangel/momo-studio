@@ -454,7 +454,14 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
                 <button
                   type="button"
                   data-testid="enter-remote-session"
-                  onClick={() => useUiStore.getState().openRemoteSession(task)}
+                  onClick={() => {
+                    if (task.executionSessionId == null) {
+                      showToast('任务尚未派发，暂无跟踪会话');
+                      return;
+                    }
+                    useUiStore.getState().setActiveView('im');
+                    void useSessionStore.getState().selectSession(task.executionSessionId);
+                  }}
                   className="inline-flex h-5 cursor-pointer items-center gap-1 rounded-md border border-subtle bg-surface-1 px-2 text-[11px] font-medium text-primary hover:bg-surface-3"
                 >
                   <Eye size={12} strokeWidth={1.75} aria-hidden />
