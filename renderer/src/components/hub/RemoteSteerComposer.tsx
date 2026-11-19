@@ -5,20 +5,34 @@
 // RemoteSessionView 帧尾（store.pendingSteers）。门控：终态禁用 + 占位
 // 「任务已结束」；未开始/离线的发送失败由 store 落 failed 人话（hub 既有文案）。
 // 形态对齐 MentionInput 视觉语言（textarea + 右下发送钮）；退役 SteerEntry（CONTRACT #11-16）。
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CornerDownLeft } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { isTerminalStatus } from '../../lib/board';
 import { useRemoteSessionStore } from '../../stores/remote-session.view';
+import { loadSteerDraft, saveSteerDraft } from '../im/composer-drafts';
 
 /** steer 上限（码点）——沿 SteerEntry 常量（hub 侧 1..4000 同界） */
 const STEER_MAX_CODEPOINTS = 4000;
 
-export function RemoteSteerComposer(): React.JSX.Element | null {
+export function RemoteSteerComposer({ sessionId }: { sessionId: string }): React.JSX.Element | null {
   const task = useRemoteSessionStore((s) => s.task);
   const sendSteer = useRemoteSessionStore((s) => s.sendSteer);
-  const [text, setText] = useState('');
+  // 草稿存模块级仓（composer-drafts）：面板切换卸载（MiddlePanel 条件渲染）
+  // 后重挂载原样恢复（2026-11-19 与会话框同源修复）；useState 初始值即恢复值
+  const [text, setText] = useState(() => loadSteerDraft(sessionId));
   const [sending, setSending] = useState(false);
+  // 切会话（sessionId prop 变化，不卸载）：换仓恢复目标会话草稿
+  const prevSessionRef = useRef(sessionId);
+  useEffect(() => {
+    if (prevSessionRef.current === sessionId) return;
+    prevSessionRef.current = sessionId;
+    setText(loadSteerDraft(sessionId));
+  }, [sessionId]);
+  // 写穿：text 变化即落仓（空串删除条目），卸载/重挂载零额外保存逻辑
+  useEffect(() => {
+    saveSteerDraft(sessionId, text);
+  }, [sessionId, text]);
 
   const terminal = task !== null && isTerminalStatus(task.status);
   const awaitingDecision = task !== null && task.status === 'submitted';

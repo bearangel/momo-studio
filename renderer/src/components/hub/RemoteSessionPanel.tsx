@@ -289,8 +289,8 @@ export function RemoteSessionPanel({ sessionId, workspaceId, footerSlot, footerE
           {footerSlot}
         </div>
       )}
-      {/* composer=steer（spec §12.4） */}
-      <RemoteSteerComposer />
+      {/* composer=steer（spec §12.4；sessionId 传入 = 草稿仓键） */}
+      <RemoteSteerComposer sessionId={sessionId} />
     </div>
   );
 }
