@@ -138,7 +138,14 @@ export class TaskExecutor {
     }
     let executionSessionId: string;
     try {
-      const result = await startTask(task.id, task.targetSessionId ? { executionSessionId: task.targetSessionId } : undefined);
+      // 会话选择（2026-11-19 D9）：用户显式指定的会话最优先；其次复用任务行已有
+      // 执行会话（循环续期实例继承上一轮会话——同一循环一条时间线；返工/续传
+      // 同理同会话）；两者皆空才新建（starter 内建）
+      const reuseSessionId = task.targetSessionId ?? task.executionSessionId ?? null;
+      const result = await startTask(
+        task.id,
+        reuseSessionId !== null ? { executionSessionId: reuseSessionId } : undefined,
+      );
       executionSessionId = result.executionSessionId;
       // K10：新建执行会话 → 通知 renderer 刷新列表（复用会话路径无需通知）
       if (result.createdNewRoom) this.deps?.onSessionListChanged?.();
@@ -268,8 +275,9 @@ function failQuietly(taskId: string, reason: string): void {
  * 导出供委派简报契约测试直接断言。预防优于出口补救——T-060 的
  * complete_task 0 次调用说明模型不知道闭合是义务。
  */
-export const KICKOFF_CLOSURE_MANDATE =
-  '本回合由任务简报触发；结束时必须调用 submit_task（交付）或 fail_task（失败）关闭任务；需要人帮助请用 request_human。';
+/** 闭合义务段——实体在 kickoff-text（委派侧 run-policy 共用同一文案，纯常量模块） */
+export { KICKOFF_CLOSURE_MANDATE } from './kickoff-text';
+import { KICKOFF_CLOSURE_MANDATE } from './kickoff-text';
 
 /** kickoff 消息体（spec §5.4；闭合义务段见 spec 2026-09-28 §3.3） */
 export function buildKickoffBody(task: TaskRow): string {

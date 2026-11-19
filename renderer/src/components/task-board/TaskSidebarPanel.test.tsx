@@ -49,6 +49,7 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title' | 'stat
     pinnedAt: null,
     archivedAt: null,
     routing: { mode: 'local' }, delegationId: null, origin: 'user', parentTaskId: null,
+    recurrenceChainRoot: null,
     priority: 5,
     ...partial,
   };
@@ -86,6 +87,7 @@ const ARCHIVED_TASKS = [
 const mockApi = {
   task: {
     list: vi.fn(),
+    listRecurrenceGroups: vi.fn().mockResolvedValue([]),
   },
   taskGroup: {
     list: vi.fn(),

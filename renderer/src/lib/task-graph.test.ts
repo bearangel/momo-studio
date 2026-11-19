@@ -49,6 +49,7 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title' | 'stat
     delegationId: null,
     origin: 'user',
     parentTaskId: null,
+    recurrenceChainRoot: null,
     ...partial,
   };
 }

@@ -102,6 +102,9 @@ export async function startTask(
     let executionSessionId: string;
     let createdNewRoom = false;
     if (o.executionSessionId) {
+      // 显式复用会话（D9 循环续期继承 / #T 就地激活 / 用户指定）：原语义直用
+      //（activation 等调用方的会话必在其上下文存在；曾试加 getSession 校验回退
+      // 新建——会把无会话测试路径与「显式 opts 优先」打破，2026-11-19 实测回归）
       executionSessionId = o.executionSessionId;
     } else if (o.createNewRoom) {
       executionSessionId = createNewTaskRoom(task);

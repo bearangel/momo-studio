@@ -119,10 +119,9 @@ describe('migration 083 Momo 任务生命周期 v2 工具回填（70 → 72）',
     expect(new Set(MOMO_V23_ALL_BUILTIN_TOOL_REFS).size).toBe(MOMO_V23_ALL_BUILTIN_TOOL_REFS.length);
   });
 
-  it('用例 F：083 注册为最新迁移（末位哨兵自 082 测试移入，070→080→082 先例）', () => {
+  it('用例 F：083 注册在迁移链中（末位哨兵随 084 落地移交其测试，070→080→082 先例）', () => {
     const versions = loadMigrations().map((m) => m.version);
     expect(versions).toContain(83);
-    expect(versions[versions.length - 1]).toBe(83);
     // 版本唯一性（重复注册会让 runner 静默跳过第二条，属契约破坏）
     expect(new Set(versions).size).toBe(versions.length);
   });

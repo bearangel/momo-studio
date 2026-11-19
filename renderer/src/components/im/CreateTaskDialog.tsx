@@ -171,6 +171,10 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
   const [targetTeamId, setTargetTeamId] = useState('');
   const [targetSessionId, setTargetSessionId] = useState('');
   const [recurrenceKind, setRecurrenceKind] = useState<RecurrenceKind>('once');
+  // D8 验收策略（2026-11-19）：循环缺省自动验收（巡检零打扰），单次缺省人工；
+  // 用户显式改过后不再随循环规则联动覆盖
+  const [acceptancePolicy, setAcceptancePolicy] = useState<'auto' | 'manual'>('manual');
+  const [policyTouched, setPolicyTouched] = useState(false);
   const [everyN, setEveryN] = useState('30');
   const [everyUnit, setEveryUnit] = useState<'m' | 'h' | 'd'>('m');
   const [recTime, setRecTime] = useState('09:00');
@@ -383,6 +387,8 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
       recurrenceRule,
       scheduledAt: scheduledAt ? new Date(scheduledAt).getTime() : null,
       groupId: groupId === '' ? undefined : groupId,
+      // D8：显式选择（含推断缺省的联动值）随任务落库
+      autoAccept: acceptancePolicy === 'auto',
     });
     onCreated(created.id);
     onClose();
@@ -847,7 +853,12 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
                 <Select
                   label="循环规则"
                   value={recurrenceKind}
-                  onChange={(e) => setRecurrenceKind(e.target.value as RecurrenceKind)}
+                  onChange={(e) => {
+                    const next = e.target.value as RecurrenceKind;
+                    setRecurrenceKind(next);
+                    // 未显式选过验收方式 → 跟随推断单源（循环→自动验收）
+                    if (!policyTouched) setAcceptancePolicy(next === 'once' ? 'manual' : 'auto');
+                  }}
                 >
                   <option value="once">单次</option>
                   <option value="every">固定间隔</option>
@@ -896,6 +907,35 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, worksp
                   value={scheduledAt}
                   onChange={(e) => setScheduledAt(e.target.value)}
                 />
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs text-secondary">验收方式</span>
+                  <label className="flex items-start gap-2 rounded-md border border-subtle px-2.5 py-2 text-xs">
+                    <input
+                      type="radio"
+                      name="acceptance-policy"
+                      className="mt-0.5"
+                      checked={acceptancePolicy === 'auto'}
+                      onChange={() => { setAcceptancePolicy('auto'); setPolicyTouched(true); }}
+                    />
+                    <span>
+                      <span className="text-primary">自动验收（循环 / 巡检任务推荐）</span>
+                      <span className="block text-tertiary">执行完成即结束，不打扰；失败时才提醒，结果留在会话时间线。</span>
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-2 rounded-md border border-subtle px-2.5 py-2 text-xs">
+                    <input
+                      type="radio"
+                      name="acceptance-policy"
+                      className="mt-0.5"
+                      checked={acceptancePolicy === 'manual'}
+                      onChange={() => { setAcceptancePolicy('manual'); setPolicyTouched(true); }}
+                    />
+                    <span>
+                      <span className="text-primary">人工验收（交付型任务）</span>
+                      <span className="block text-tertiary">执行方提交后进入「待验收」，由你在看板或会话裁决。</span>
+                    </span>
+                  </label>
+                </div>
               </>
             )}
           </>

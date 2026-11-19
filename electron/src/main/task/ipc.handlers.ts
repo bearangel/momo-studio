@@ -37,6 +37,7 @@ import { ipcMain } from 'electron';
 import { logger } from '../logger';
 import {
   listTasks,
+  listRecurrenceArchiveGroups,
   getTask,
   updateTask,
   setTaskPinned,
@@ -45,10 +46,16 @@ import {
   type TaskOrigin,
 } from '../storage/tasks/repo';
 import { isTerminal } from '../storage/tasks/state-machine';
+import { isLocalExecution } from './is-local-execution';
+import { agentRunners } from '../agent/runtime-registry';
+import { getLane } from '../agent/session-lane';
+import { createHubConfigStore } from '../hub/config-store';
+import { getDb } from '../storage/db';
 import { getGroup } from '../storage/task-groups/repo';
 import { notifyExecutor } from './executor';
 import { hasDelegationTarget, type StartTaskOpts } from './starter';
 import { resolveCreateStatus } from './create-status';
+import { inferAutoAccept } from './acceptance-policy';
 import { resolveConflict, type ConflictStrategy } from './conflict-resolver';
 import { executeConflictResolution } from './conflict-executor';
 import { startTaskAndKickoff, resumePausedTask, cancelTask, abortTaskExecution } from './lifecycle';
@@ -104,6 +111,8 @@ export interface CreateInput {
   recurrenceRule?: string | null;
   scheduledAt?: number | null;
   deadlineAt?: number | null;
+  /** 验收策略（2026-11-19 D8）：缺省按推断单源（循环→自动验收） */
+  autoAccept?: boolean;
   /** 看板分组（UX 修复）：落组 id，落库前三重校验（存在/同 ws/未归档） */
   groupId?: string;
   /** M2.1 T6：执行路由三选；异形人话拒绝（不静默降级本机），undefined 落列 NULL=local */
@@ -187,6 +196,8 @@ export function createTaskFromForm(input: CreateInput): TaskRow {
       title: input.title,
       creatorUserId: 'owner',
       status,
+      // D8 验收策略：显式值优先，缺省按推断单源（循环 → 自动验收）
+      autoAccept: input.autoAccept ?? inferAutoAccept(input.recurrenceRule),
       description: input.description,
       priority: input.priority,
       sourceSessionId: input.sourceSessionId,
@@ -332,6 +343,27 @@ export async function steerTaskRouted(taskId: string, rawMessage: string): Promi
   }
   const task = getTask(taskId);
   if (!task) throw new Error(`task ${taskId} 不存在`);
+  // 本机执行分支（2026-11-19 任务会话形态分流）：执行节点==本节点（mode local /
+  // group·node 调度落本机）→ 直接注入本机执行回合（AgentRunner.steer → 子进程
+  // pendingSteers drain 统一落库），不经 hub、不要求 delegationRole out。
+  if (isLocalExecution(task, createHubConfigStore(getDb()).read()?.nodeId ?? null)) {
+    if (task.status === 'submitted') {
+      // DEC-11 同语义：待裁决期 steer 会开出与验收单不一致的僵尸回合
+      throw new Error('任务待验收，请先裁决（继续 / 完成 / 驳回）后再补充指令');
+    }
+    const lane =
+      task.executionSessionId !== null && task.executionSessionId !== ''
+        ? getLane(task.executionSessionId)
+        : null;
+    const runner = lane !== null ? agentRunners.get(lane.assignmentId) : undefined;
+    const steered =
+      lane !== null && runner !== undefined && runner.steer(lane.streamSessionId, message) === true;
+    if (!steered) {
+      throw new Error('任务当前无执行回合（排队中或已结束），无法补充指令');
+    }
+    logger.info('本机补充指令已注入执行回合', { taskId });
+    return { ok: true };
+  }
   if (task.delegationRole !== 'out') {
     throw new Error('仅发起方可对委派任务补充指令');
   }
@@ -489,6 +521,13 @@ export function registerTaskHandlers(): void {
   ipcMain.handle('task:list', async (_evt, opts: ListOpts): Promise<TaskRow[]> => {
     return listTasks(opts);
   });
+
+  // 归档区循环链聚合（2026-11-19 归档聚合）：次数/最近完成 SQL 直出——
+  // 不受平铺 task:list limit 截断影响
+  ipcMain.handle(
+    'task:listRecurrenceGroups',
+    async (_evt, workspaceId: string) => listRecurrenceArchiveGroups(workspaceId),
+  );
 
   ipcMain.handle('task:get', async (_evt, id: string): Promise<TaskRow | null> => {
     return getTask(id);

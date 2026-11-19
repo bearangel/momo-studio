@@ -67,6 +67,10 @@ export function EditTaskDialog({ open, onClose, onSaved, task, workspaceId }: Ed
   const [scheduledAt, setScheduledAt] = useState(toDatetimeLocal(task.scheduledAt));
   const preset = parseRecurrence(task.recurrenceRule);
   const [recurrenceKind, setRecurrenceKind] = useState<RecurrenceKind>(preset.kind);
+  // D8 验收策略（2026-11-19）：编辑任务可切换验收方式；初值 = 任务现值
+  const [acceptancePolicy, setAcceptancePolicy] = useState<'auto' | 'manual'>(
+    task.autoAccept ? 'auto' : 'manual',
+  );
   const [everyN, setEveryN] = useState(String(preset.everyN ?? 30));
   const [everyUnit, setEveryUnit] = useState<'m' | 'h' | 'd'>(preset.everyUnit ?? 'm');
   const [recTime, setRecTime] = useState(preset.time ?? '09:00');
@@ -164,6 +168,8 @@ export function EditTaskDialog({ open, onClose, onSaved, task, workspaceId }: Ed
         targetSessionId: peerNodeSelected ? null : targetKind === 'session' ? targetSessionId : null,
         recurrenceRule: serializeRecurrence(rulePreset),
         scheduledAt: scheduledAt ? new Date(scheduledAt).getTime() : null,
+        // D8：验收策略可编辑（影响下次及续期实例）
+        autoAccept: acceptancePolicy === 'auto',
       });
       // 外派路由：保存后立即派发（与新建任务的提交即派发同节奏；失败行留
       // 待派发卡重试——重派入口语义不变）
@@ -307,6 +313,36 @@ export function EditTaskDialog({ open, onClose, onSaved, task, workspaceId }: Ed
           value={scheduledAt}
           onChange={(e) => setScheduledAt(e.target.value)}
         />
+        {/* D8 验收策略（2026-11-19）：任务级属性——巡检/循环选自动（零打扰），交付型选人工 */}
+        <div className="flex flex-col gap-1.5">
+          <span className="text-xs text-secondary">验收方式</span>
+          <label className="flex items-start gap-2 rounded-md border border-subtle px-2.5 py-2 text-xs">
+            <input
+              type="radio"
+              name="edit-acceptance-policy"
+              className="mt-0.5"
+              checked={acceptancePolicy === 'auto'}
+              onChange={() => setAcceptancePolicy('auto')}
+            />
+            <span>
+              <span className="text-primary">自动验收</span>
+              <span className="block text-tertiary">执行完成即结束，失败才提醒（循环 / 巡检推荐）。</span>
+            </span>
+          </label>
+          <label className="flex items-start gap-2 rounded-md border border-subtle px-2.5 py-2 text-xs">
+            <input
+              type="radio"
+              name="edit-acceptance-policy"
+              className="mt-0.5"
+              checked={acceptancePolicy === 'manual'}
+              onChange={() => setAcceptancePolicy('manual')}
+            />
+            <span>
+              <span className="text-primary">人工验收</span>
+              <span className="block text-tertiary">提交后待裁决（交付型任务）。</span>
+            </span>
+          </label>
+        </div>
         {error && <div className="text-xs text-status-error">{error}</div>}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose} disabled={submitting}>

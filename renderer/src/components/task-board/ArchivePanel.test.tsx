@@ -70,6 +70,7 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title' | 'stat
     archivedAt: T0,
     routing: { mode: 'local' },
     delegationId: null, origin: 'user', parentTaskId: null,
+    recurrenceChainRoot: null,
     ...partial,
   };
 }
@@ -100,6 +101,7 @@ const mockApi = {
   task: {
     list: vi.fn(),
     unarchive: vi.fn(),
+    listRecurrenceGroups: vi.fn(),
   },
   taskGroup: {
     list: vi.fn(),
@@ -118,6 +120,7 @@ describe('ArchivePanel', () => {
     (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
     mockApi.task.list.mockReset().mockResolvedValue([T_IN_G1_A, T_IN_G1_B, T_NO_GROUP]);
     mockApi.taskGroup.list.mockReset().mockResolvedValue(GROUPS_ALL);
+    mockApi.task.listRecurrenceGroups.mockReset().mockResolvedValue([]);
     mockApi.taskGroup.unarchive
       .mockReset()
       .mockResolvedValue(mkGroup({ ...GROUPS_ALL[0]!, archivedAt: null }));
@@ -290,5 +293,94 @@ describe('ArchivePanel', () => {
     });
     expect(screen.getByText(/恢复失败/)).toBeInTheDocument();
     expect(screen.getByText(/归档任务甲/)).toBeInTheDocument();
+  });
+});
+
+
+// ── 循环链聚合（2026-11-19 归档聚合）：循环实例不再平铺堆积，聚合一行可展开 ──
+describe('ArchivePanel 循环链聚合', () => {
+  const DAILY_ROOT = mkTask({ id: 'T-1000aa', title: '日报', status: 'completed', recurrenceRule: 'daily@09:00', completedAt: T0, archivedAt: T0 });
+  const DAILY_MID = mkTask({
+    id: 'T-1001bb', title: '日报', status: 'completed',
+    recurrenceParentId: 'T-1000aa', recurrenceChainRoot: 'T-1000aa',
+    completedAt: T0 + 86_400_000, archivedAt: T0 + 86_400_000,
+  });
+  const DAILY_LAST = mkTask({
+    id: 'T-1002cc', title: '日报', status: 'completed',
+    recurrenceParentId: 'T-1001bb', recurrenceChainRoot: 'T-1000aa',
+    completedAt: T0 + 2 * 86_400_000, archivedAt: T0 + 2 * 86_400_000,
+  });
+  const REC_GROUP = {
+    chainRoot: 'T-1000aa',
+    title: '日报',
+    instanceCount: 3,
+    latestCompletedAt: T0 + 2 * 86_400_000,
+  };
+
+  beforeEach(() => {
+    (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
+    mockApi.task.list.mockReset().mockResolvedValue([DAILY_ROOT, DAILY_MID, DAILY_LAST, T_NO_GROUP]);
+    mockApi.taskGroup.list.mockReset().mockResolvedValue(GROUPS_ALL);
+    mockApi.task.listRecurrenceGroups.mockReset().mockResolvedValue([REC_GROUP]);
+    mockApi.task.unarchive.mockReset().mockImplementation(async (id: string) =>
+      mkTask({ ...DAILY_LAST, id, archivedAt: null }),
+    );
+    useTaskStore.setState({ tasks: [], selectedTaskId: null, loading: false, error: null });
+    useGroupStore.setState({ groups: [], loading: false, error: null, currentWorkspaceId: null });
+  });
+
+  it('聚合一行（循环 N 次 + 最近完成）+ 平铺区只剩非循环归档行', async () => {
+    renderPanel();
+
+    const groupRow = await screen.findByText('日报');
+    expect(groupRow).toBeInTheDocument();
+    expect(screen.getByText('循环 3 次')).toBeInTheDocument();
+    // 平铺区：三实例不单独成行（唯一「日报」文本在聚合行）；丙（非循环）平铺
+    expect(screen.getByText(/归档任务丙/)).toBeInTheDocument();
+    expect(screen.queryAllByText('日报')).toHaveLength(1);
+    // 默认收起：实例行不可见
+    expect(screen.queryByText(/#T-1002cc/)).not.toBeInTheDocument();
+  });
+
+  it('展开 → 实例行按归档时间倒序出现（勾选/恢复复用平铺交互面）；恢复后聚合次数重拉收敛', async () => {
+    renderPanel();
+    await screen.findByText('循环 3 次');
+
+    fireEvent.click(screen.getByRole('button', { name: '展开 日报' }));
+    // #短id 在行内拆为多个 text node（'#' 静态 + id 表达式）——按行容器 textContent 定位
+    const memberRows = await waitFor(() => {
+      const rows = [...document.querySelectorAll('[data-archive-row]')].filter((r) =>
+        r.textContent?.includes('T-100'),
+      );
+      expect(rows).toHaveLength(3); // 三实例行（丙 T-0003cc 为平铺非循环行不在此列）
+      return rows;
+    });
+    // 归档时间倒序：最新实例在前
+    expect(memberRows[0]!.textContent).toContain('T-1002');
+    expect(memberRows[2]!.textContent).toContain('T-1000');
+
+    // 恢复最新实例：行消失 + 聚合重拉（次数 3 → 2）
+    mockApi.task.listRecurrenceGroups.mockResolvedValue([{ ...REC_GROUP, instanceCount: 2 }]);
+    const restoreBtn = within(memberRows[0] as HTMLElement).getByRole('button', { name: '恢复' });
+    fireEvent.click(restoreBtn);
+    await waitFor(() => {
+      expect(mockApi.task.listRecurrenceGroups).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(screen.getByText('循环 2 次')).toBeInTheDocument();
+    });
+  });
+
+  it('搜索命中聚合标题；搜索词不匹配时聚合行隐藏', async () => {
+    renderPanel();
+    await screen.findByText('循环 3 次');
+
+    fireEvent.change(screen.getByLabelText('搜索归档任务'), { target: { value: '日报' } });
+    expect(screen.getByText('循环 3 次')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('搜索归档任务'), { target: { value: '不存在的词' } });
+    await waitFor(() => {
+      expect(screen.queryByText('循环 3 次')).not.toBeInTheDocument();
+    });
   });
 });

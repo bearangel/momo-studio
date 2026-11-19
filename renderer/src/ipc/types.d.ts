@@ -259,6 +259,11 @@ export interface TaskRow {
   targetTeamId: string | null;
   targetSessionId: string | null;
   recurrenceParentId: string | null;
+  /**
+   * 循环链根（2026-11-19 归档聚合）：恒等于链上第一个实例的 id；
+   * NULL = 非循环或链头（聚合时按 id 自身参与）。与 electron 侧 TaskRow 镜像。
+   */
+  recurrenceChainRoot: string | null;
   priority: number;
   scheduledAt: number | null;
   recurrenceRule: string | null;
@@ -376,6 +381,11 @@ export interface TaskCreateInput {
   recurrenceRule?: string | null;
   scheduledAt?: number | null;
   deadlineAt?: number | null;
+  /**
+   * 验收策略（2026-11-19 D8）：true = 自动验收（完成即结束，巡检/循环适用）；
+   * 缺省按推断单源（循环 → true，一次性 → false）。续期实例继承。
+   */
+  autoAccept?: boolean;
   /** 看板分组（UX 修复）：落组 id，缺省不分组；主进程三重校验（存在/同 ws/未归档） */
   groupId?: string;
   /** M2.1：执行路由三选；缺省不传 = 本机（落列 NULL）；异形主进程人话拒绝 */
@@ -507,6 +517,8 @@ export interface TaskApiSurface {
   steer(taskId: string, message: string): Promise<{ ok: true }>;
   /** run 历史（Task 16，run_no ASC） */
   listRuns(id: string): Promise<TaskRunRow[]>;
+  /** 归档区循环链聚合（2026-11-19）：按链根 GROUP BY，次数/最近完成 SQL 直出 */
+  listRecurrenceGroups(workspaceId: string): Promise<RecurrenceArchiveGroup[]>;
   /**
    * 返工上限（P3 E1）：读生效值（同一任务最大执行尝试数，1-50 缺省 10，
    * 脏数据回落缺省）；语义单点主进程 lifecycle-runs（startRun / rejectTask 同源）
@@ -608,6 +620,17 @@ export type TaskRunTrigger = 'initial' | 'rework' | 'quota_retry' | 'manual';
  * 结构对齐——跨进程独立定义）。deliverableJson / rejectReason 为原始 JSON 串，
  * 消费方自行解析。
  */
+/**
+ * 归档区循环链聚合行（2026-11-19 归档聚合）：与 electron 侧
+ * storage/tasks/repo.ts RecurrenceArchiveGroup 镜像。
+ */
+export interface RecurrenceArchiveGroup {
+  chainRoot: string;
+  title: string;
+  instanceCount: number;
+  latestCompletedAt: number | null;
+}
+
 export interface TaskRunRow {
   id: string;
   taskId: string;

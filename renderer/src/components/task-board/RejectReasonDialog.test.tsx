@@ -20,6 +20,7 @@ const task: TaskRow = {
   currentRunId: 'run-1', submittedAt: 1000, acceptedAt: null, delegationRole: null, autoAccept: false,
   groupId: null, pinnedAt: null, archivedAt: null, routing: { mode: 'local' }, delegationId: null,
   origin: 'user', parentTaskId: null,
+    recurrenceChainRoot: null,
 };
 
 function setup() {

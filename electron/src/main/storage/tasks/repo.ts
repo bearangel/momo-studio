@@ -49,6 +49,11 @@ export interface TaskRow {
   targetSessionId: string | null;
   /** 循环实例链：本行由哪次运行完成后续期生成（自复制实例模型，spec §7） */
   recurrenceParentId: string | null;
+  /**
+   * 循环链根（2026-11-19 归档聚合）：spawn 时继承（前任 root ?? 前任 id），
+   * 恒等于链上第一个实例的 id；NULL = 非循环或链头（链头按 id 自身参与聚合）。
+   */
+  recurrenceChainRoot: string | null;
   priority: number;
   scheduledAt: number | null;
   recurrenceRule: string | null;
@@ -156,6 +161,7 @@ type SqlRow = {
   routing_json: string | null;
   delegation_id: string | null;
   parent_task_id: string | null;
+  recurrence_chain_root: string | null;
 };
 
 function rowToCamel(r: SqlRow): TaskRow {
@@ -200,6 +206,7 @@ function rowToCamel(r: SqlRow): TaskRow {
     routingJson: r.routing_json,
     delegationId: r.delegation_id,
     parentTaskId: r.parent_task_id,
+    recurrenceChainRoot: r.recurrence_chain_root,
   };
 }
 
@@ -270,8 +277,8 @@ export function insertTask(
       queue_position, runtime_instance_id, estimated_tokens, actual_tokens, tool_calls_used, error_message,
       created_at, updated_at, started_at, completed_at,
       group_id, pinned_at, archived_at, routing_json, delegation_id, parent_task_id, origin,
-      auto_accept
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      auto_accept, recurrence_chain_root
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.workspaceId,
@@ -308,6 +315,7 @@ export function insertTask(
     input.parentTaskId ?? null,
     input.origin ?? 'user',
     input.autoAccept === true ? 1 : 0,
+    input.recurrenceChainRoot ?? null,
   );
   emitPluginEvent('taskCreated', { id, workspaceId: input.workspaceId, title: input.title, status });
   return getTask(id)!;
@@ -552,6 +560,53 @@ export function listTasks(opts: {
     const blockedBy = blockedMap.get(r.id) ?? [];
     return { ...r, blocked: blockedBy.length > 0, blockedBy };
   });
+}
+
+/**
+ * 归档区循环链聚合（2026-11-19 归档聚合 spec）：按链根 GROUP BY 已归档的
+ * 循环实例——根行（recurrence_chain_root NULL）按自身 id 归组；只返回
+ * 真实存在链的组（至少一行带链根），孤立归档任务（手动归档的一次性任务）
+ * 不进聚合、走归档面板平铺行。次数/最近完成 SQL 直出（不受平铺 list 的
+ * limit 截断影响）；标题取组内最新实例（循环中途改名以最新为准）。
+ */
+export interface RecurrenceArchiveGroup {
+  chainRoot: string;
+  title: string;
+  instanceCount: number;
+  latestCompletedAt: number | null;
+}
+
+export function listRecurrenceArchiveGroups(workspaceId: string): RecurrenceArchiveGroup[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT COALESCE(t.recurrence_chain_root, t.id) AS chain_root,
+              (SELECT t2.title FROM tasks t2
+                WHERE COALESCE(t2.recurrence_chain_root, t2.id) = COALESCE(t.recurrence_chain_root, t.id)
+                  AND t2.archived_at IS NOT NULL
+                ORDER BY t2.created_at DESC, t2.rowid DESC LIMIT 1) AS title,
+              COUNT(*) AS instance_count,
+              MAX(t.completed_at) AS latest_completed_at
+       FROM tasks t
+       WHERE t.workspace_id = ? AND t.archived_at IS NOT NULL
+         AND COALESCE(t.recurrence_chain_root, t.id) IN (
+           SELECT recurrence_chain_root FROM tasks
+           WHERE workspace_id = ? AND recurrence_chain_root IS NOT NULL AND archived_at IS NOT NULL
+         )
+       GROUP BY chain_root
+       ORDER BY latest_completed_at DESC`,
+    )
+    .all(workspaceId, workspaceId) as Array<{
+      chain_root: string;
+      title: string;
+      instance_count: number;
+      latest_completed_at: number | null;
+    }>;
+  return rows.map((r) => ({
+    chainRoot: r.chain_root,
+    title: r.title,
+    instanceCount: r.instance_count,
+    latestCompletedAt: r.latest_completed_at,
+  }));
 }
 
 /**

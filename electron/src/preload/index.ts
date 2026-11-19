@@ -45,6 +45,7 @@ import type {
   TaskRow,
   TaskCreateBatchResult,
   TaskRunRow,
+  RecurrenceArchiveGroup,
   HumanRequestRow,
   UploadedSkill,
   PluginSummary,
@@ -660,6 +661,9 @@ const api: ApiSurface = {
     continue: (id, requirement) =>
       invoke<TaskRow & { remoteWarning?: string }>('task:continue', id, requirement),
     listRuns: (id) => invoke<TaskRunRow[]>('task:listRuns', id),
+    // 归档区循环链聚合（2026-11-19）：chainRoot/title/instanceCount/latestCompletedAt
+    listRecurrenceGroups: (workspaceId) =>
+      invoke<RecurrenceArchiveGroup[]>('task:listRecurrenceGroups', workspaceId),
     // 返工上限可配（P3 E1）：读生效值（脏数据回落缺省 10）；写夹取 1..50 后
     // 返回归一化生效值（语义单点主进程 lifecycle-runs）
     getMaxRuns: () => invoke<number>('task:getMaxRuns'),

@@ -56,6 +56,7 @@ import { migration078 } from './078_momo_list_models_tool';
 import { migration079 } from './079_oauth_module';
 import { migration080 } from './080_momo_capability_management_tools';
 import * as migration081 from './081_task_lifecycle_v2';
+import * as migration084 from './084_recurrence_chain_root';
 import * as migration082 from './082_task_lifecycle_backfill';
 import { migration083 } from './083_momo_lifecycle_v2_tools';
 
@@ -1258,6 +1259,12 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 083_momo_lifecycle_v2_tools.ts。
     version: migration083.version,
     sql: migration083.sql,
+  },
+  {
+    // 循环任务链根（2026-11-19 归档聚合）：tasks.recurrence_chain_root +
+    // 存量链 WITH RECURSIVE 回填。SQL 住在独立模块 084_recurrence_chain_root.ts。
+    version: migration084.version,
+    sql: migration084.up,
   },
 ];
 

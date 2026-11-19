@@ -40,6 +40,7 @@ const base: TaskRow = {
   errorMessage: null, sourceNodeId: null, createdAt: 0, updatedAt: 0, startedAt: null, completedAt: null,
   currentRunId: null, submittedAt: null, acceptedAt: null, delegationRole: null, autoAccept: false,
   groupId: null, pinnedAt: null, archivedAt: null, routing: { mode: 'local' }, delegationId: null, origin: 'user', parentTaskId: null,
+    recurrenceChainRoot: null,
 };
 
 beforeEach(() => {

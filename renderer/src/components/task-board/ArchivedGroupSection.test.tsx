@@ -71,6 +71,7 @@ function mkTask(
     pinnedAt: null,
     archivedAt: null,
     routing: { mode: 'local' }, delegationId: null, origin: 'user', parentTaskId: null,
+    recurrenceChainRoot: null,
     ...partial,
   };
 }

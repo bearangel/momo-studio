@@ -91,6 +91,7 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'status' | 'gro
     pinnedAt: null,
     archivedAt: null,
     routing: { mode: 'local' }, delegationId: null, origin: 'user', parentTaskId: null,
+    recurrenceChainRoot: null,
     ...partial,
   };
 }

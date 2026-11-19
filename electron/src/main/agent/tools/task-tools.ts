@@ -30,6 +30,7 @@
 //     text_delta 流式增量），而 getTaskContext 过滤掉了 noise 事件。
 //   - 顶层导出独立函数（便于测试 / 复用），同时导出 TaskTools 类
 //     实现 ToolModule 接口（注册到 tools/index.ts）。
+import { parseAcceptancePolicy } from '../../task/acceptance-policy';
 import { getMemoryProvider } from '../../memory';
 import {
   getTask,
@@ -172,6 +173,12 @@ export interface CreateTaskInput {
   targetSessionId?: string | null;
   /** v29：循环规则 */
   recurrenceRule?: string | null;
+  /**
+   * 验收策略（2026-11-19 D8）：'auto' = 自动验收（完成即结束，巡检/循环适用，
+   * 失败才提醒）；'manual' = 人工验收（两段式）。缺省按推断单源：带循环规则 →
+   * auto，否则 manual（与 UI 表单同一推断——acceptance-policy.ts）
+   */
+  acceptancePolicy?: 'auto' | 'manual';
   /** 计划开始时间（ms epoch）；设置时任务落 pending 交 scheduler 接管 */
   scheduledAt?: number | null;
   /** 看板分组 ID（task_groups.id，G-<seq>）；设置时校验组存在 / 同 ws / 未归档（Task 8） */
@@ -267,6 +274,8 @@ export async function createTask(
       targetTeamId: input.targetTeamId,
       targetSessionId: input.targetSessionId,
       recurrenceRule: input.recurrenceRule,
+      // D8：工具面验收策略（字符串枚举对 LLM 友好）→ auto_accept 布尔
+      autoAccept: parseAcceptancePolicy(input.acceptancePolicy, input.recurrenceRule),
       scheduledAt: input.scheduledAt,
       groupId: input.groupId,
     },
@@ -806,6 +815,12 @@ export class TaskTools implements ToolModule {
               type: 'string',
               description: '循环规则（如 "daily@09:00"）；设置后由 recurrence 续期生成下一实例',
             },
+            acceptancePolicy: {
+              type: 'string',
+              enum: ['auto', 'manual'],
+              description:
+                '验收方式（2026-11-19）：auto = 自动验收（完成即结束、失败才提醒——巡检/循环任务用，如「每小时检查邮件」）；manual = 人工验收（提交后等用户裁决——交付型任务用）。缺省：带 recurrenceRule → auto，否则 manual',
+            },
             scheduledAt: {
               type: 'number',
               description: '计划开始时间（毫秒 epoch；设置后任务直接落 pending 由调度器接管）',
@@ -1083,6 +1098,11 @@ export class TaskTools implements ToolModule {
             args.recurrenceRule,
             'recurrenceRule',
           ),
+          // D8 验收策略：仅收两枚举值，其余视为未传（走推断缺省）
+          acceptancePolicy:
+            args.acceptancePolicy === 'auto' || args.acceptancePolicy === 'manual'
+              ? args.acceptancePolicy
+              : undefined,
           scheduledAt: typeof args.scheduledAt === 'number' ? args.scheduledAt : undefined,
           // 分组入参照 assigneeAgentId 的 '' → undefined 归一先例（防空串误判有组）
           groupId: parseStringArgOptional(args.groupId, 'groupId') || undefined,
