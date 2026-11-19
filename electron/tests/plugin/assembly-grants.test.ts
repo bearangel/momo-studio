@@ -94,3 +94,55 @@ describe('filterPluginToolRefsByGrant（白名单 − 黑名单）', () => {
     expect(filterPluginToolRefsByGrant(refs, ['plugin:p3/*'], ['plugin:p3/*'])).toEqual([]);
   });
 });
+
+// 2026-11-19 口径分裂修复（用户实证 db-pro 场景）：授权/校验域用 getDefs 工具名
+// （plugin:db-pro/query），装配过滤旧实现用模块文件 basename（plugin:db-pro/index）
+// ——单文件多工具插件的精确授权永远匹配不上，模块整体被剔除。修复：装配匹配键
+// 改为模块的工具名集合（moduleToolNames），文件名仅作坏模块回退。
+describe('filterPluginToolRefsByGrant 工具名粒度（2026-11-19 修复）', () => {
+  /** 单文件多工具 ref：tools/index.js 声明 query/write 两工具（文件名与工具名无关） */
+  function multiToolRef(id: string, root: string): { refs: PluginToolRef[]; indexJs: string } {
+    fs.mkdirSync(path.join(root, 'tools'), { recursive: true });
+    const indexJs = path.join(root, 'tools', 'index.js');
+    fs.writeFileSync(indexJs, 'module.exports.createTools = () => ({});');
+    return {
+      refs: [{
+        pluginId: id,
+        rootDir: root,
+        modulePaths: [indexJs],
+        dataDir: path.join(tmpRoot, 'data', id),
+        config: {},
+      }],
+      indexJs,
+    };
+  }
+
+  it('精确授权按工具名命中模块；文件名不再是匹配键', () => {
+    const root = path.join(pluginsRoot, 'multi-1');
+    const { refs, indexJs } = multiToolRef('m1', root);
+    const map = new Map([[indexJs, { pluginId: 'm1', names: ['query', 'write'] }]]);
+    // 旧实现：basename 'index' 拼全名 plugin:m1/index ≠ plugin:m1/query → 模块被剔除（bug 现场）
+    const hit = filterPluginToolRefsByGrant(refs, ['plugin:m1/query'], [], map);
+    expect(hit).toHaveLength(1);
+    expect(hit[0]!.modulePaths).toEqual([indexJs]);
+    // 授权集若真用文件名（历史数据），map 在场时不认
+    expect(filterPluginToolRefsByGrant(refs, ['plugin:m1/index'], [], map)).toEqual([]);
+  });
+
+  it('模块内任一工具过授权即准入（逐工具剔除下沉子进程 grantedPluginTools 过滤）', () => {
+    const root = path.join(pluginsRoot, 'multi-2');
+    const { refs, indexJs } = multiToolRef('m2', root);
+    const map = new Map([[indexJs, { pluginId: 'm2', names: ['query', 'write'] }]]);
+    const partial = filterPluginToolRefsByGrant(refs, ['plugin:m2/*'], ['plugin:m2/write'], map);
+    expect(partial).toHaveLength(1);
+    expect(filterPluginToolRefsByGrant(refs, ['plugin:m2/*'], ['plugin:m2/query', 'plugin:m2/write'], map)).toEqual([]);
+  });
+
+  it('moduleToolNames 缺项（坏模块实例化失败）→ 回退 basename 旧语义', () => {
+    const root = path.join(pluginsRoot, 'multi-3');
+    const { refs } = multiToolRef('m3', root);
+    // 不传 map：单文件一工具的既有插件（email 形态）行为不变
+    const legacy = filterPluginToolRefsByGrant(refs, ['plugin:m3/index'], []);
+    expect(legacy).toHaveLength(1);
+  });
+});

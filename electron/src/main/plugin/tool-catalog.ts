@@ -41,28 +41,61 @@ export function listAssembledToolDefs(workspaceId: string): PluginToolInfo[] {
   const out: PluginToolInfo[] = [];
   for (const ref of buildPluginToolRefs(workspaceId)) {
     for (const modulePath of ref.modulePaths) {
-      try {
-        const nodeRequire = createRequire(path.join(ref.rootDir, '.plugin-require.js'));
-        const mod = nodeRequire(modulePath) as {
-          createTools?: (ctx: PluginToolCtx) => { getDefs?: () => Array<{ name?: unknown; description?: unknown }> };
-        };
-        if (typeof mod.createTools !== 'function') continue;
-        const instance = mod.createTools(STUB_CTX);
-        if (typeof instance?.getDefs !== 'function') continue;
-        for (const d of instance.getDefs()) {
-          if (typeof d?.name !== 'string' || typeof d?.description !== 'string') continue;
-          out.push({
-            pluginId: ref.pluginId,
-            pluginName: nameByPlugin.get(ref.pluginId) ?? ref.pluginId,
-            toolName: d.name,
-            fullName: `plugin:${ref.pluginId}/${d.name}`,
-            description: d.description,
-          });
-        }
-      } catch {
-        // 单模块坏（语法错/抛错）跳过——目录是 UI 数据源，不因插件缺陷挂死配置页
+      for (const d of instantiateModuleDefs(ref, modulePath) ?? []) {
+        out.push({
+          pluginId: ref.pluginId,
+          pluginName: nameByPlugin.get(ref.pluginId) ?? ref.pluginId,
+          toolName: d.name,
+          fullName: `plugin:${ref.pluginId}/${d.name}`,
+          description: d.description,
+        });
       }
     }
   }
   return out;
+}
+
+/** 模块实例化产物：getDefs 形状合法的 {name, description} 列表；坏模块 null（跳过不炸） */
+function instantiateModuleDefs(
+  ref: { rootDir: string },
+  modulePath: string,
+): Array<{ name: string; description: string }> | null {
+  try {
+    const nodeRequire = createRequire(path.join(ref.rootDir, '.plugin-require.js'));
+    const mod = nodeRequire(modulePath) as {
+      createTools?: (ctx: PluginToolCtx) => { getDefs?: () => Array<{ name?: unknown; description?: unknown }> };
+    };
+    if (typeof mod.createTools !== 'function') return null;
+    const instance = mod.createTools(STUB_CTX);
+    if (typeof instance?.getDefs !== 'function') return null;
+    const out: Array<{ name: string; description: string }> = [];
+    for (const d of instance.getDefs()) {
+      if (typeof d?.name !== 'string' || typeof d?.description !== 'string') continue;
+      out.push({ name: d.name, description: d.description });
+    }
+    return out;
+  } catch {
+    // 单模块坏（语法错/抛错）跳过——目录是 UI 数据源，不因插件缺陷挂死配置页
+    return null;
+  }
+}
+
+/**
+ * 模块 → 工具短名集合（2026-11-19 口径分裂修复）：装配授权过滤的匹配键。
+ * 与 listAssembledToolDefs 同一实例化通道（单一真相源——两侧的「模块声明了
+ * 哪些工具」永不漂移）。map 缺项 = 模块实例化失败（坏模块），消费方回退
+ * basename 旧语义。
+ */
+export function collectModuleToolNames(
+  workspaceId: string,
+): Map<string, { pluginId: string; names: string[] }> {
+  const map = new Map<string, { pluginId: string; names: string[] }>();
+  for (const ref of buildPluginToolRefs(workspaceId)) {
+    for (const modulePath of ref.modulePaths) {
+      const defs = instantiateModuleDefs(ref, modulePath);
+      if (defs === null || defs.length === 0) continue;
+      map.set(modulePath, { pluginId: ref.pluginId, names: defs.map((d) => d.name) });
+    }
+  }
+  return map;
 }

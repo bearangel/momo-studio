@@ -170,28 +170,42 @@ export function filterDisabledPluginMcps(names: string[], workspaceId: string): 
 }
 
 
-/** 工具全名匹配：精确名或 plugin:<id>/* 组模式（与 deniedTools 同款语义） */
-export function toolRefMatches(fullName: string, patterns: string[]): boolean {
-  for (const p of patterns) {
-    if (p === fullName) return true;
-    if (p.endsWith('/*') && fullName.startsWith(p.slice(0, -1))) return true;
-  }
-  return false;
-}
+/** 工具全名匹配：精确名或 plugin:<id>/* 组模式（与 deniedTools 同款语义）。
+ *  实体迁至 agent/tools/shared/plugin-ref（子进程 loader 共消费——两侧匹配
+ *  语义单一真相源）；此处 re-export 保既有 importer 不动。 */
+export { toolRefMatches } from '../agent/tools/shared/plugin-ref';
+import { toolRefMatches } from '../agent/tools/shared/plugin-ref';
 
-/** 白名单过滤（spec 2026-10-21 §6）：授权集（组/精确）内且不被黑名单剔除的模块
- *  才进装配快照——「可见性 = 装配面」的授权化落地；modulePaths 全滤空的 ref 丢弃 */
+/**
+ * 白名单过滤（spec 2026-10-21 §6）：授权集（组/精确）内且不被黑名单剔除的
+ * 模块才进装配快照——「可见性 = 装配面」的授权化落地；modulePaths 全滤空
+ * 的 ref 丢弃。
+ *
+ * 2026-11-19 口径分裂修复：匹配键从模块文件 basename 改为模块声明的工具名
+ * （moduleToolNames，modulePath → getDefs 短名集合）。用户实证 db-pro
+ * （单文件 tools/index.js 导出 11 工具）：授权/校验/UI 域全部用工具名
+ * （plugin:db-pro/query），旧实现用文件名（plugin:db-pro/index）匹配——
+ * 精确授权永不命中，模块整体被剔除。模块准入 = 任一工具名过授权且不撞
+ * 黑名单；map 缺项（模块实例化失败的坏模块）回退 basename 旧语义。
+ * 逐工具剔除由子进程 loader 按 grantedPluginTools 完成（单文件多工具防粒度放大）。
+ */
 export function filterPluginToolRefsByGrant(
   refs: PluginToolRef[],
   grants: string[],
   denied: string[],
+  moduleToolNames?: Map<string, { pluginId: string; names: string[] }>,
 ): PluginToolRef[] {
   const out: PluginToolRef[] = [];
   for (const ref of refs) {
     const modulePaths = ref.modulePaths.filter((mp) => {
-      const short = path.basename(mp, '.js');
-      const fullName = `plugin:${ref.pluginId}/${short}`;
-      return toolRefMatches(fullName, grants) && !toolRefMatches(fullName, denied);
+      const entry = moduleToolNames?.get(mp);
+      // map 缺项（坏模块）回退 basename 旧语义；条目 pluginId 与 ref 不一致时以 ref 为准
+      const pluginId = entry?.pluginId ?? ref.pluginId;
+      const shortNames = entry?.names ?? [path.basename(mp, '.js')];
+      return shortNames.some((short) => {
+        const fullName = `plugin:${pluginId}/${short}`;
+        return toolRefMatches(fullName, grants) && !toolRefMatches(fullName, denied);
+      });
     });
     if (modulePaths.length === 0) continue;
     out.push({ ...ref, modulePaths });
