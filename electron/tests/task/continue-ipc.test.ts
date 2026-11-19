@@ -81,6 +81,15 @@ describe('task:continue', () => {
     expect(listRuns(id)).toHaveLength(1);
   });
 
+  it('本机协议版本过低（hub 1.14 拒 1.13 调用）→ 人话提示升级', async () => {
+    const id = await submittedTask('out');
+    forwarderMock.mockRejectedValueOnce(
+      new Error('hub=1.14.0 节点=1.13.1：方法 task.continue 需要协议 1.14 及以上，请升级节点'),
+    );
+    await expect(continueTaskRouted(id, '继续')).rejects.toThrow('当前客户端协议版本过低（需 1.14）');
+    expect(getTask(id)!.status).toBe('submitted');
+  });
+
   it('IPC 通道注册 + 空白要求人话拒', async () => {
     const handler = handlers.get('task:continue')!;
     expect(handler).toBeTruthy();

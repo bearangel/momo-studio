@@ -276,6 +276,9 @@ function humanizeContinueError(err: unknown): string {
   if (message.includes('peer_version_unsupported')) {
     return '执行节点版本不支持继续，可改用完成或驳回';
   }
+  if (message.includes('需要协议 1.14')) {
+    return '当前客户端协议版本过低（需 1.14），请升级后重试';
+  }
   if (message.includes('node_offline')) return '执行节点离线，稍后再试';
   return message;
 }
