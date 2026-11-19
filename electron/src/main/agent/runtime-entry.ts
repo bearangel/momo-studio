@@ -553,6 +553,8 @@ ${skillIndex}`
     }),
     config.pluginTools ?? [],
     (msg, meta) => process.stderr.write(`${msg} ${JSON.stringify(meta ?? {})}\n`),
+    // 2026-11-19 粒度收口：授权集随装配下发——单文件多工具模块逐工具过滤 defs/handles
+    { grantedPluginTools: config.grantedPluginTools },
   ).modules;
 
   const tools: LLMToolDef[] = [

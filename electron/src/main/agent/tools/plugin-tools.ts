@@ -9,6 +9,7 @@ import type { ToolCatalogEntry } from './catalog-entry';
 import type { ToolModule, ToolContext } from './types';
 import type { PluginToolRef } from '../runtime-config';
 import { requestPluginCallService } from '../plugin-hook-bridge';
+import { toolRefMatches } from './shared/plugin-ref';
 
 export interface PluginToolCtx {
   getConfig(): Record<string, unknown>;
@@ -32,6 +33,16 @@ export interface PluginToolLoadResult {
   failures: Array<{ pluginId: string; modulePath: string; error: string }>;
 }
 
+/**
+ * 逐工具授权过滤（2026-11-19 粒度收口）：grantedPluginTools = AGENT_CONFIG
+ * 定型的授权集全名（精确名 / plugin:<id>/* 组模式）。单文件多工具模块整体
+ * 装配后，未授权工具必须在此过滤 defs 并收口 handles——assertToolAllowed 对
+ * plugin: 前缀豁免白名单（可见性=装配面），粒度防线只能在 loader。
+ */
+export interface PluginToolGrantFilter {
+  grantedPluginTools?: string[];
+}
+
 /** 合法插件工具短名：小写字母数字下划线连字符（不得自带命名空间） */
 const SHORT_NAME_RE = /^[a-z][a-z0-9_-]*$/;
 
@@ -40,6 +51,7 @@ const BUILTIN_NAMES = new Set(ALL_BUILTIN_TOOLS);
 export function loadPluginToolModules(
   refs: PluginToolRef[],
   log: (msg: string, meta?: unknown) => void,
+  grantFilter?: PluginToolGrantFilter,
 ): PluginToolLoadResult {
   const modules: PluginToolModule[] = [];
   const failures: PluginToolLoadResult['failures'] = [];
@@ -78,20 +90,29 @@ export function loadPluginToolModules(
         ) {
           throw new Error('getDefs 含非法名（自带命名空间前缀或与内置工具重名）');
         }
-        const namespaced = shortDefs.map((d) => ({
+        // 逐工具授权过滤（2026-11-19）：未过授权集的工具不进 defs/handles
+        // （单文件多工具模块防粒度放大；组模式匹配全部等价全量）
+        const grants = grantFilter?.grantedPluginTools;
+        const allowedDefs =
+          grants === undefined
+            ? shortDefs
+            : shortDefs.filter((d) => toolRefMatches(`plugin:${ref.pluginId}/${d.name}`, grants));
+        const namespaced = allowedDefs.map((d) => ({
           ...d,
           name: `plugin:${ref.pluginId}/${d.name}`,
         }));
+        const allowedFull = new Set(namespaced.map((d) => d.name));
         modules.push({
           pluginId: ref.pluginId,
           pluginSource: 'plugin',
           getDefs: () => namespaced,
           getCatalog: () => catalogFor(ref.pluginId, inner, namespaced),
           // 前缀门禁（审查 C1）：只认本插件命名空间名——短名 / 他插件名 /
-          // loadSkill·dispatch·mcp 等虚拟名不路由进来（贪心 inner.handles 也不放行）
+          // loadSkill·dispatch·mcp 等虚拟名不路由进来（贪心 inner.handles 也不放行）。
+          // 授权集在场时叠加 allowedFull 收口（粒度防线——permission 层对
+          // plugin: 豁免白名单，幻觉调用未授权名必须在此拒绝）
           handles: (name) =>
-            name.startsWith(`plugin:${ref.pluginId}/`) &&
-            inner.handles(stripPrefix(ref.pluginId, name)),
+            allowedFull.has(name) && inner.handles(stripPrefix(ref.pluginId, name)),
           execute: async (name, args, ctx: ToolContext) =>
             inner.execute(stripPrefix(ref.pluginId, name), args, ctx),
         });
@@ -156,7 +177,8 @@ export function assembleToolModules(
   baseModules: ToolModule[],
   refs: PluginToolRef[],
   log: (msg: string, meta?: unknown) => void,
+  grantFilter?: PluginToolGrantFilter,
 ): AssembledToolModules {
-  const { modules: pluginModules, failures } = loadPluginToolModules(refs, log);
+  const { modules: pluginModules, failures } = loadPluginToolModules(refs, log, grantFilter);
   return { modules: [...baseModules, ...pluginModules], failures };
 }

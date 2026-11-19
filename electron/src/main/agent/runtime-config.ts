@@ -72,6 +72,13 @@ export interface AgentRuntimeOpts {
   pluginTools?: PluginToolRef[];
   /** 插件系统 P3（spec §5.2）：workspace 有 hooks 订阅可能——false 时子进程跳过 preToolUse 往返 */
   pluginHooks?: boolean;
+  /**
+   * 插件工具授权集全名（2026-11-19 粒度收口）：buildSpawnOpts 定型（merged.tools ∪
+   * 成员插件勾选）。子进程 loader 据此对单文件多工具模块逐工具过滤 defs 并收口
+   * handles——防「授权 query 可执行 write」的粒度放大。缺省 = 不过滤（旧
+   * AGENT_CONFIG / 测试兼容；组模式 plugin:<id>/* 匹配全部等价全量）。
+   */
+  grantedPluginTools?: string[];
   // === M3 工具权限白名单 ===
   /** 允许的工具名列表；空/缺省 = 不启用白名单（全部放行） */
   allowedTools?: string[];
@@ -165,6 +172,8 @@ export interface RuntimeConfig {
   pluginTools?: PluginToolRef[];
   /** 插件系统 P3：hooks 存在标志（缺省 false——子进程零往返） */
   pluginHooks?: boolean;
+  /** 插件工具授权集全名（缺省 undefined = 不过滤；语义见 AgentRuntimeOpts 同名字段） */
+  grantedPluginTools?: string[];
   // === M3 工具权限白名单 ===
   /** 允许的工具名列表；空数组表示不启用白名单（全部放行，仅 deniedTools 生效） */
   allowedTools: string[];
@@ -434,6 +443,7 @@ export function parseConfig(raw: unknown): RuntimeConfig {
     mcpNames,
     pluginTools,
     pluginHooks,
+    grantedPluginTools,
     allowedTools,
     deniedTools,
     isLeader,
@@ -476,6 +486,10 @@ export function parseConfig(raw: unknown): RuntimeConfig {
           Array.isArray((p as PluginToolRef).modulePaths),
       ) as PluginToolRef[])
     : [];
+  // 2026-11-19：grantedPluginTools 缺省/坏形状按「不过滤」处理（旧配置兼容）
+  const resolvedGrantedPluginTools = Array.isArray(grantedPluginTools)
+    ? grantedPluginTools.filter((n): n is string => typeof n === 'string')
+    : undefined;
   // M3 工具权限：缺省/不合法时按"不限制"处理（空 allowedTools = 全放行，空 deniedTools = 无禁用）
   const resolvedAllowedTools = Array.isArray(allowedTools)
     ? allowedTools.filter((n): n is string => typeof n === 'string')
@@ -503,6 +517,10 @@ export function parseConfig(raw: unknown): RuntimeConfig {
     mcpNames: resolvedMcpNames,
     pluginTools: resolvedPluginTools,
     pluginHooks: pluginHooks === true ? true : undefined,
+    grantedPluginTools:
+      resolvedGrantedPluginTools !== undefined && resolvedGrantedPluginTools.length > 0
+        ? resolvedGrantedPluginTools
+        : undefined,
     allowedTools: resolvedAllowedTools,
     deniedTools: resolvedDeniedTools,
     // v25：isLeader 缺省/类型不符时按「非 leader」处理（旧配置无旧兼容负担）
