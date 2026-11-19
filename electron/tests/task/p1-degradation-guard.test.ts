@@ -361,6 +361,7 @@ function mkRow(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title'>): TaskR
     pinnedAt: null,
     archivedAt: null,
     routing: { mode: 'local' },
+    recurrenceChainRoot: null,
     delegationId: null,
     parentTaskId: null,
     ...partial,

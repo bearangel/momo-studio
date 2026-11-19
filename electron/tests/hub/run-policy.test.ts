@@ -15,6 +15,7 @@ import {
   planRunPolicy,
   type PermissionTier,
 } from '../../src/main/hub/run-policy';
+import { KICKOFF_CLOSURE_MANDATE } from '../../src/main/task/kickoff-text';
 
 describe('run-policy — 三档→运行时预配映射矩阵', () => {
   it('1. readonly：清会话级写授权（零授权面）+ 任务书前置只读约束段', () => {
@@ -54,17 +55,29 @@ describe('run-policy — 只读约束段文案', () => {
 describe('run-policy — composeTurnBody 前置语义', () => {
   const PROMPT = '请排查登录超时问题，输出修复说明。';
 
-  it('6. readonly：约束段在前、任务书在后（前缀不吞并任务书）', () => {
+  it('6. readonly：约束段在前、任务简报+闭合段在后（前缀不吞并任务书）', () => {
     const body = composeTurnBody('readonly', PROMPT);
     expect(body.startsWith(READONLY_PROMPT_PREFIX)).toBe(true);
-    expect(body.endsWith(PROMPT)).toBe(true);
-    // 两段之间有分隔（前缀段独立成段）
-    expect(body).toBe(`${READONLY_PROMPT_PREFIX}\n\n${PROMPT}`);
+    // 2026-11-19：任务简报 + 闭合义务段（委派执行方必须知道结束要 submit_task）
+    expect(body.endsWith(KICKOFF_CLOSURE_MANDATE)).toBe(true);
+    expect(body).toBe(`${READONLY_PROMPT_PREFIX}\n\n【任务启动】${PROMPT}\n\n${KICKOFF_CLOSURE_MANDATE}`);
   });
 
-  it('7. sandbox / confirm：任务书原文直返（零前缀注入）', () => {
-    expect(composeTurnBody('sandbox', PROMPT)).toBe(PROMPT);
-    expect(composeTurnBody('confirm', PROMPT)).toBe(PROMPT);
+  it('7. sandbox / confirm：任务简报 + 闭合义务段（零档位前缀）', () => {
+    for (const tier of ['sandbox', 'confirm'] as const) {
+      const body = composeTurnBody(tier, PROMPT);
+      expect(body.startsWith('【任务启动】')).toBe(true);
+      expect(body).toContain(PROMPT);
+      expect(body.endsWith(KICKOFF_CLOSURE_MANDATE)).toBe(true);
+      expect(body).not.toContain(READONLY_PROMPT_PREFIX);
+    }
+  });
+
+  it('7b. 闭合义务段含 submit_task / fail_task / request_human（LLM 可执行面）', () => {
+    const body = composeTurnBody('confirm', PROMPT);
+    expect(body).toContain('submit_task');
+    expect(body).toContain('fail_task');
+    expect(body).toContain('request_human');
   });
 });
 

@@ -127,7 +127,7 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
     });
 
     // 回归断言：v1.5 此处为 undefined（bug），修复后必须等于 def 默认工具列表
-    expect(opts.allowedTools).toEqual(['read_file', 'bash']);
+    expect(opts.allowedTools).toEqual(['read_file', 'bash', 'submit_task', 'fail_task', 'request_human', 'complete_task']); // 2026-11-19 D3-A：闭合工具恒注入
 
     // v2（Task 10）：opts 携带本地身份 + 团队会话 ID，不再有 Matrix 凭据字段
     expect(opts.agentAssignmentId).toBe('inst1');
@@ -165,7 +165,7 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
     });
 
     // 回归断言：Layer 1 ∪ Layer 2 后的工具全集（顺序：def 先，alloc 后）
-    expect(opts.allowedTools).toEqual(['read_file', 'bash']);
+    expect(opts.allowedTools).toEqual(['read_file', 'bash', 'submit_task', 'fail_task', 'request_human', 'complete_task']); // 2026-11-19 D3-A：闭合工具恒注入
   });
 
   it('Layer 3 deltas 生效：removed bash 不在 allowedTools 中', async () => {
@@ -202,7 +202,7 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
     });
 
     // 回归断言：bash 被 Layer 3 delta remove，最终 allowedTools 只剩 read_file
-    expect(opts.allowedTools).toEqual(['read_file']);
+    expect(opts.allowedTools).toEqual(['read_file', 'submit_task', 'fail_task', 'request_human', 'complete_task']);
   });
 });
 

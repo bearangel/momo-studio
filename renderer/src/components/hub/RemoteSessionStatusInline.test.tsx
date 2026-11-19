@@ -18,6 +18,7 @@ function task(executionSessionId: string | null): TaskRow {
     groupId: null, pinnedAt: null, archivedAt: null,
     routing: { mode: 'node', groupId: 'g', targetNodeId: 'node-b' },
     delegationId: 'dl', origin: 'user', parentTaskId: null,
+    recurrenceChainRoot: null,
   };
 }
 

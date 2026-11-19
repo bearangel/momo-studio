@@ -50,6 +50,10 @@ interface CallLog {
 /** T11 sessionWaiting 端口返回形状（与生产端口契约一致） */
 type WaitingState = { waiting: boolean; summary: string } | null;
 
+/** D3-C 兜底提交调用记录（2026-11-19：回合 done 但承接行未提交时；makeHarness 外置供断言） */
+const autoSubmits: Array<{ taskId: string; summary: string }> = [];
+let autoSubmitResult = true;
+
 function makeHarness(overrides?: Partial<DelegationRunPorts>): {
   runner: ReturnType<typeof createDelegationRunner>;
   log: CallLog;
@@ -168,6 +172,11 @@ function makeHarness(overrides?: Partial<DelegationRunPorts>): {
     linkExecutionSession: () => undefined,
     startLifecycleRun: () => undefined,
     pendingHumanRequests: () => 0,
+    // D3-C 兜底提交端口（2026-11-19）：记录调用供回归锁
+    autoSubmitWorkerTask: (taskId: string, summary: string) => {
+      autoSubmits.push({ taskId, summary });
+      return autoSubmitResult;
+    },
     ...overrides,
   };
 
@@ -223,7 +232,12 @@ async function admitOne(h: ReturnType<typeof makeHarness>, taskId: string): Prom
   return `sess-${h.log.createdSessions.length}`;
 }
 
-beforeEach(() => vi.useFakeTimers());
+beforeEach(() => {
+  vi.useFakeTimers();
+  // D3-C 外置记录复位（防用例间串扰）
+  autoSubmits.length = 0;
+  autoSubmitResult = true;
+});
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -488,8 +502,12 @@ describe('委派会话与首拍上报', () => {
     expect(first.payload.sessionId).toBe('sess-1');
     expect(first.payload.progress?.excerpt).toContain('请排查并修复登录超时问题');
     expect(first.payload.progress!.excerpt.length).toBeGreaterThan(0);
-    // 首条 user 消息=任务书 prompt（startTurn body）
-    expect(h.log.startedTurns).toEqual([{ sessionId: 'sess-1', body: '请排查并修复登录超时问题。' }]);
+    // 首条 user 消息=任务简报 + 闭合义务段（2026-11-19：委派执行方必须知道
+    // 结束要 submit_task——只发 prompt 原文会让 agent 当聊天答完即终）
+    expect(h.log.startedTurns).toHaveLength(1);
+    expect(h.log.startedTurns[0]!.body).toContain('【任务启动】请排查并修复登录超时问题。');
+    expect(h.log.startedTurns[0]!.body).toContain('submit_task');
+    expect(h.log.startedTurns[0]!.body).toContain('fail_task');
   });
 
   it('同 taskId 重复 assigned → 幂等忽略（不重建会话不再上报）', async () => {
@@ -922,7 +940,9 @@ describe('权限档位预配（T10）', () => {
     // 任务书前置只读约束段（任务书原文在后，不被吞并）
     expect(h.log.startedTurns).toHaveLength(1);
     expect(h.log.startedTurns[0]!.body.startsWith(READONLY_PROMPT_PREFIX)).toBe(true);
-    expect(h.log.startedTurns[0]!.body.endsWith(prompt)).toBe(true);
+    expect(h.log.startedTurns[0]!.body).toContain(`【任务启动】${prompt}`);
+    // 闭合义务段恒在末尾（约束段在前、简报其后、闭合段收尾）
+    expect(h.log.startedTurns[0]!.body).toContain('submit_task');
   });
 
   it('sandbox 档：applyRunPolicy(sessionId,"sandbox") + 任务书原文直返（零前缀）', async () => {
@@ -936,7 +956,8 @@ describe('权限档位预配（T10）', () => {
     }));
 
     expect(h.log.appliedPolicies).toEqual([{ sessionId: 'sess-1', tier: 'sandbox' }]);
-    expect(h.log.startedTurns[0]!.body).toBe(prompt);
+    // 2026-11-19：无档位前缀，但任务简报 + 闭合义务段必带
+    expect(h.log.startedTurns[0]!.body).toBe(`【任务启动】${prompt}\n\n本回合由任务简报触发；结束时必须调用 submit_task（交付）或 fail_task（失败）关闭任务；需要人帮助请用 request_human。`);
   });
 
   it('协议未知容忍：permissionTier 缺省 → confirm（hub 1.2.0 剥离字段，现状默认）', async () => {
@@ -1193,6 +1214,8 @@ describe('降级拍不重置等待时钟（P2-1）', () => {
 // waiting-input kind 剥除不透传，前向预留）。
 describe('readonly 即时拒（M2.2 P2-1）', () => {
   beforeEach(() => {
+    autoSubmits.length = 0;
+    autoSubmitResult = true;
     __resetInspectStateForTest();
   });
 
@@ -1435,5 +1458,35 @@ describe('平行草稿快路径（安排即启动竞态）', () => {
     expect(running[0]!.payload.sessionId).toBe('sess-fast-1');
     // record 态仍推进离开 draft（防下拍重复评估）
     expect(h.store.get('t-f1')?.state).toBe('running');
+  });
+});
+
+
+// ── D3-C 兜底提交（2026-11-19）：回合 done 但承接行未提交 → 自动 submitRun ──
+// T-034 实证：镜像 agent 工具集缺 submit_task → 从不提交 → 直接上报 done →
+// 发起方兜底 completed，两段式验收永不发生。锁：done 路径必先过兜底提交端口。
+describe('兜底提交（T-034 实证回归）', () => {
+  it('回合正常结束 → autoSubmitWorkerTask 以回合摘要被调（摘要含任务书摘录）', async () => {
+    const h = makeHarness();
+    h.setWorkspace('ws-a', 'ws-id-1');
+    h.setAgent(undefined, 'inst-default');
+    await h.runner.handleAssigned(assignedEvt('t1', {
+      task: { title: '写作选题', prompt: '请提供主题选择。' },
+    }));
+    expect(autoSubmits).toHaveLength(0);
+    h.fireTerminal('sess-1', { status: 'done' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(autoSubmits).toHaveLength(1);
+    expect(autoSubmits[0]!.taskId).toBe('t1');
+    expect(autoSubmits[0]!.summary).toContain('请提供主题选择');
+  });
+
+  it('回合失败 / 等待人工 → 不兜底（failed 直报 / awaitingHuman 保持既有语义）', async () => {
+    const h = makeHarness();
+    await admitOne(h, 't1');
+    h.fireTerminal('sess-1', { status: 'failed', error: '连接失败' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(autoSubmits).toHaveLength(0);
+    expect(h.log.reports.some((r) => r.payload.status === 'failed')).toBe(true);
   });
 });

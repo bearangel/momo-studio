@@ -45,13 +45,13 @@ function def(name: string): LLMToolDef {
 
 describe('unionDynamicToolNames（纯函数）', () => {
   const builtin = new Set(['read_file', 'bash']);
-  const all = [def('read_file'), def('bash'), def('loadSkill'), def('task_complete')];
+  const all = [def('read_file'), def('bash'), def('loadSkill'), def('reply_segment')];
 
   it('只并入非 builtin 工具名——bash 不被并入', () => {
     const out = unionDynamicToolNames(['read_file'], all, builtin);
     expect(out).toContain('read_file');
     expect(out).toContain('loadSkill');
-    expect(out).toContain('task_complete');
+    expect(out).toContain('reply_segment');
     expect(out).not.toContain('bash');
   });
 
@@ -94,13 +94,13 @@ describe('buildRuntimeContext 集成（真实链路回归锁）', () => {
     };
   }
 
-  it('allowedTools=[read_file] 的 agent：task_complete 放行、bash 拒绝', async () => {
+  it('allowedTools=[read_file] 的 agent：reply_segment 放行、bash 拒绝', async () => {
     const config = parseConfig(JSON.parse(JSON.stringify(buildOpts())));
     await buildRuntimeContext(config);
     // 修复点：内置 bash 不被自动并入（修复前此断言失败——白名单被扩成全集）
     expect(config.allowedTools).not.toContain('bash');
     // Tier 0 loop 工具仍被并入（平台机制恒放行）
-    expect(config.allowedTools).toContain('task_complete');
+    expect(config.allowedTools).toContain('reply_segment');
     expect(config.allowedTools).toContain('compact');
     // 所配即所得：read_file 放行
     expect(() =>
@@ -123,7 +123,7 @@ describe('buildRuntimeContext 集成（真实链路回归锁）', () => {
       // 所配工具可见
       expect(names).toContain('read_file');
       // Tier 0 平台机制可见（并集先于过滤——顺序契约）
-      expect(names).toContain('task_complete');
+      expect(names).toContain('reply_segment');
       expect(names).toContain('compact');
       // 未配置的内置工具从展示面剔除（修复前此断言失败——ctx.tools 是全模块全集）
       expect(names).not.toContain('bash');

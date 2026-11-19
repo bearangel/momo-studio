@@ -73,7 +73,7 @@ function mkRow(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title'>): TaskR
     archivedAt: null,
     routing: { mode: 'local' },
     delegationId: null,
-    parentTaskId: null,
+    parentTaskId: null, recurrenceChainRoot: null,
     ...partial,
   };
 }

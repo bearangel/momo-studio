@@ -471,7 +471,7 @@ describe('11) S9 工作站段：镜像 payload remote 标记段', () => {
     seedOutTask();
     await handleTaskSubmittedMirror(submittedEvent());
     const row = listRequests({ status: 'all' })[0]!;
-    expect(row.title).toBe('第 1 轮交付');
+    expect(row.title).toBe('交付验收'); // 首轮无轮次前缀（2026-11-19）
     expect(row.prompt).toBe('外派任务');
   });
 });

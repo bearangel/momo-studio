@@ -17,7 +17,10 @@ const stateCallbacks: Array<(evt: { state: string }) => void> = [];
 
 const runChangedCallbacks: Array<(e: { taskId: string; runId: string; status: string }) => void> = [];
 const api = {
-  session: { getMessages: vi.fn().mockResolvedValue({ messages: [] }) },
+  session: {
+    getMessages: vi.fn().mockResolvedValue({ messages: [] }),
+    onMessage: vi.fn((_cb: (m: { sessionId: string }) => void) => () => undefined),
+  },
   task: { get: vi.fn(), steer: vi.fn(), onTaskRunChanged: vi.fn((cb: (e: { taskId: string; runId: string; status: string }) => void) => { runChangedCallbacks.push(cb); return () => { const i = runChangedCallbacks.indexOf(cb); if (i >= 0) runChangedCallbacks.splice(i, 1); }; }) },
   hub: {
     taskList: vi.fn(),
@@ -48,6 +51,7 @@ const task: TaskRow = {
   groupId: null, pinnedAt: null, archivedAt: null,
   routing: { mode: 'node', groupId: 'g-1', targetNodeId: 'node-b' },
   delegationId: 'dl-9', origin: 'user', parentTaskId: null,
+    recurrenceChainRoot: null,
 };
 
 const frame = (seq: number, over: Partial<FrameShape> = {}): FrameShape => ({
@@ -292,5 +296,68 @@ describe('open/close 竞态（epoch 守卫）', () => {
     const s1 = useRemoteSessionStore.getState();
     expect(s1.task?.id).toBe(task.id);
     expect(s1.target?.sessionId).toBe('sx');
+  });
+});
+
+
+// ── 本机任务执行会话（2026-11-19 hub 离线实测回归） ──────────────────────────
+// 用户实证：创建本机循环任务 → 打开执行会话 → 面板报「hub 未连接」——根因：
+// task_execution 会话统一走本面板，open() 无条件拉 hub 账本反查（routing
+// local 也拉）。锁：local 任务零 hub 往返、镜像行直读本地库、实时刷新走
+// session:message 推送。
+describe('本机任务执行会话（2026-11-19）', () => {
+  const localTask: TaskRow = {
+    ...task,
+    id: 'T-10',
+    title: 'ls 循环测试',
+    delegationRole: null,
+    delegationId: null,
+    routing: { mode: 'local' },
+    executionSessionId: 'sess-local',
+  };
+
+  it('routing local → 零 hub 调用，直接 ready + 本地镜像行', async () => {
+    api.session.getMessages.mockResolvedValueOnce({
+      messages: [
+        { id: 'm1', sessionId: 'sess-local', sender: 'agent-x', senderName: 'agent-x', body: 'ls 结果', createdAt: 5, status: 'completed', streamSessionId: null, parentStreamSessionId: null, kind: 'normal', meta: null },
+      ],
+    });
+    await useRemoteSessionStore.getState().open(localTask);
+    const s = useRemoteSessionStore.getState();
+    expect(s.phase).toBe('ready');
+    expect(s.target).toBeNull();
+    expect(s.live).toBe(true);
+    expect(api.hub.taskList).not.toHaveBeenCalled();
+    expect(api.hub.viewSessions).not.toHaveBeenCalled();
+    expect(api.session.getMessages).toHaveBeenCalledWith('sess-local');
+    // refetchMirror 是 fire-and-forget——镜像落地异步
+    await vi.waitFor(() => {
+      expect(useRemoteSessionStore.getState().mirrorRows).toHaveLength(1);
+    });
+  });
+
+  it('本机新消息推送（session:message）→ 镜像刷新（执行过程实时可见）', async () => {
+    const onMsgCbs: Array<(m: { sessionId: string }) => void> = [];
+    api.session.onMessage.mockImplementationOnce((cb: (m: { sessionId: string }) => void) => {
+      onMsgCbs.push(cb);
+      return () => undefined;
+    });
+    await useRemoteSessionStore.getState().open(localTask);
+    expect(api.session.onMessage).toHaveBeenCalled();
+
+    api.session.getMessages.mockResolvedValueOnce({ messages: [
+      { id: 'm1', sessionId: 'sess-local', sender: 'a', senderName: 'a', body: 'x', createdAt: 5, status: 'completed', streamSessionId: null, parentStreamSessionId: null, kind: 'normal', meta: null },
+      { id: 'm2', sessionId: 'sess-local', sender: 'a', senderName: 'a', body: 'y', createdAt: 6, status: 'completed', streamSessionId: null, parentStreamSessionId: null, kind: 'normal', meta: null },
+    ] });
+    for (const cb of [...onMsgCbs]) cb({ sessionId: 'sess-local' });
+    await vi.waitFor(() => {
+      expect(useRemoteSessionStore.getState().mirrorRows).toHaveLength(2);
+    });
+  });
+
+  it('close：本机模式不发 viewUnsubscribe（无远端订阅）', async () => {
+    await useRemoteSessionStore.getState().open(localTask);
+    useRemoteSessionStore.getState().close();
+    expect(api.hub.viewUnsubscribe).not.toHaveBeenCalled();
   });
 });

@@ -970,10 +970,16 @@ function StackHead({ rows, now }: { rows: HumanRequestRow[]; now: number }) {
 
 // ── 面板主体 ────────────────────────────────────────────────────────────────
 
-export function HumanRequestPanel({ sessionId, onAcceptanceFullscreenChange }: {
+export function HumanRequestPanel({ sessionId, onAcceptanceFullscreenChange, excludeKinds }: {
   sessionId: string;
   /** 验收卡满屏态上抛（面板据此把流域让位给卡片——方案 V1） */
   onAcceptanceFullscreenChange?: (expanded: boolean) => void;
+  /**
+   * 不在此会话面板呈现的 kind（2026-11-19）：本机任务执行会话排除 acceptance
+   * ——本地执行无跨节点交付审查语义，裁决归看板任务详情（TaskDetailPanel #21）；
+   * tool_gate/question/manual_action 等执行交互不受影响。
+   */
+  excludeKinds?: readonly HumanRequestKind[];
 }) {
   const rows = useHumanStore((s) => s.pendingBySession.get(sessionId));
   const loadPending = useHumanStore((s) => s.loadPending);
@@ -1001,7 +1007,10 @@ export function HumanRequestPanel({ sessionId, onAcceptanceFullscreenChange }: {
   }, []);
 
   // rows 未到位（会话未跟踪）→ 空数组；useMemo 稳定引用，防 expanded 重算抖动
-  const pending = useMemo(() => rows ?? [], [rows]);
+  const pending = useMemo(
+    () => (rows ?? []).filter((r) => !(excludeKinds?.includes(r.kind) ?? false)),
+    [rows, excludeKinds],
+  );
   const expanded = useMemo(() => {
     const found = pending.find((r) => r.id === expandedId);
     return found ?? pending[0] ?? null;

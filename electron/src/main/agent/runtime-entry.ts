@@ -1734,7 +1734,10 @@ export async function runChatLoop(
       // v1.5.6：task_complete 主动分段——LLM 调此工具时持久化当前累积 text 为一条
       // Matrix 消息，然后重置 accumulatedText 继续下一段。chat loop 不退出。
       // 防止 LLM 单次回复超 PDU 64KB 触发 4 级截断丢 thinking/tool_calls/dispatches。
-      if (tc.name === 'task_complete') {
+      // D5 更名（2026-11-19）：reply_segment（原名 task_complete——名字误导 LLM
+      // 当「完成任务」用，实测 T-034 副因之一）；旧名保留兼容别名（存量
+      // 会话记忆/旧模型提示里仍可能引用）
+      if (tc.name === 'reply_segment' || tc.name === 'task_complete') {
         const summary = typeof tc.arguments.summary === 'string' ? tc.arguments.summary : '';
         const nextStep = typeof tc.arguments.nextStep === 'string' ? tc.arguments.nextStep : '';
         segmentCount++;
@@ -1773,14 +1776,14 @@ export async function runChatLoop(
           type: 'tool_call',
           streamSessionId,
           callId: tc.id,
-          toolName: 'task_complete',
+          toolName: tc.name,
           args: tc.arguments,
         });
         sendStreamChunk({
           type: 'tool_result',
           streamSessionId,
           callId: tc.id,
-          toolName: 'task_complete',
+          toolName: tc.name,
           result: `第 ${segmentCount}/${MAX_TASK_SEGMENTS} 段已持久化。${nextStep ? `继续：${nextStep}` : '请继续输出当前回复的下一段'}`,
           success: true,
         });

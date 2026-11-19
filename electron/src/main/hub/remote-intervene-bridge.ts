@@ -1370,7 +1370,8 @@ export async function handleTaskSubmittedMirror(
       runId,
       kind: 'acceptance',
       // S9（A5 短 id 统一）：#T-{id} 引用形态（tasks.id 本身即短 T-<seq> 形）
-      title: `第 ${runNo} 轮交付`,
+      // 首轮不带轮次前缀（与 lifecycle-runs 本地链同款——轮次语义仅多轮成立）
+      title: runNo > 1 ? `第 ${runNo} 轮交付` : '交付验收',
       prompt: task.title,
       payloadJson: JSON.stringify(
         withRemoteSegment(

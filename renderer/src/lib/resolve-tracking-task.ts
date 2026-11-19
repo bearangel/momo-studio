@@ -22,7 +22,9 @@ export async function resolveTrackingTask(session: {
     }
   }
   try {
-    const tasks = await ipc.task.list({ workspaceId: session.workspaceId });
+    // archived:'all'（2026-11-19）：循环实例验收后自动归档，其执行会话仍须可
+    // 解析（归档≠会话历史失效）——默认 exclude 会让历史实例会话全部 miss
+    const tasks = await ipc.task.list({ workspaceId: session.workspaceId, archived: 'all' });
     return tasks.find((t) => t.executionSessionId === session.id) ?? null;
   } catch {
     return null;

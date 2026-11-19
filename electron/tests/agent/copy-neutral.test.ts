@@ -54,8 +54,8 @@ describe('文案中性化回归锁（spec §5.6 任务 2 + 压缩改造 §6.3）
     expect(hint).not.toContain('继续工作');
   });
 
-  it('task_complete 的 nextStep 声明非新任务授权', () => {
-    const tc = getBuiltinLoopToolDefs().find((t) => t.name === 'task_complete')!;
+  it('reply_segment（原 task_complete，D5 更名 2026-11-19）的 nextStep 声明非新任务授权', () => {
+    const tc = getBuiltinLoopToolDefs().find((t) => t.name === 'reply_segment')!;
     expect(JSON.stringify(tc.inputSchema)).toContain('不是新任务授权');
     expect(JSON.stringify(tc.inputSchema)).not.toContain('继续工作');
   });

@@ -35,6 +35,7 @@ function mkTask(overrides: Partial<TaskRow> = {}): TaskRow {
     toolCallsUsed: 0,
     errorMessage: null,
     routing: { mode: 'local' },
+    recurrenceChainRoot: null,
     delegationId: null,
     parentTaskId: null,
     createdAt: 1,

@@ -11,13 +11,28 @@ import { cn } from '../../lib/cn';
 import { isTerminalStatus } from '../../lib/board';
 import { useRemoteSessionStore } from '../../stores/remote-session.view';
 import { loadSteerDraft, saveSteerDraft } from '../im/composer-drafts';
+import type { TaskRow } from '../../ipc/types';
 
 /** steer 上限（码点）——沿 SteerEntry 常量（hub 侧 1..4000 同界） */
 const STEER_MAX_CODEPOINTS = 4000;
 
-export function RemoteSteerComposer({ sessionId }: { sessionId: string }): React.JSX.Element | null {
-  const task = useRemoteSessionStore((s) => s.task);
-  const sendSteer = useRemoteSessionStore((s) => s.sendSteer);
+export function RemoteSteerComposer({
+  sessionId,
+  /** 受控模式（2026-11-19 本机任务会话）：任务与发送直连（task:get + task:steer
+   *  本机分支），不经 remote-session store——本机形态无帧流/订阅，乐观气泡省略
+   *  （steer 消息由子进程 drain 落库 → MessageList 推送可见）。 */
+  task: controlledTask,
+  send: controlledSend,
+}: {
+  sessionId: string;
+  task?: TaskRow | null;
+  send?: (text: string) => Promise<unknown>;
+}): React.JSX.Element | null {
+  const controlled = controlledSend !== undefined;
+  const storeTask = useRemoteSessionStore((s) => s.task);
+  const storeSendSteer = useRemoteSessionStore((s) => s.sendSteer);
+  const task = controlled ? (controlledTask ?? null) : storeTask;
+  const sendSteer = controlled ? controlledSend : storeSendSteer;
   // 草稿存模块级仓（composer-drafts）：面板切换卸载（MiddlePanel 条件渲染）
   // 后重挂载原样恢复（2026-11-19 与会话框同源修复）；useState 初始值即恢复值
   const [text, setText] = useState(() => loadSteerDraft(sessionId));
@@ -37,15 +52,18 @@ export function RemoteSteerComposer({ sessionId }: { sessionId: string }): React
   const terminal = task !== null && isTerminalStatus(task.status);
   const awaitingDecision = task !== null && task.status === 'submitted';
   /** 不可 steer 的两态直接不渲染（spec 2026-11-18 DEC-10 修订）：
-   *  待裁决期决策归验收卡，执行方本机无 steer 权——留死输入框只会误导。 */
-  const hidden = awaitingDecision || (task !== null && task.delegationRole === 'in');
+   *  待裁决期决策归验收卡，执行方本机无 steer 权——留死输入框只会误导。
+   *  受控模式（本机任务会话）in 行不藏：执行在本机，操作者补充指令合法
+   *  （2026-11-19 本机 steer 分支语义）。 */
+  const hidden = awaitingDecision || (!controlled && task !== null && task.delegationRole === 'in');
   const disabled = terminal;
   const codepoints = Array.from(text).length;
   const overLimit = codepoints > STEER_MAX_CODEPOINTS;
   const canSend = !disabled && !sending && text.trim() !== '' && !overLimit;
 
   const submit = (): void => {
-    if (!canSend || task === null) return;
+    // 受控模式无 store 任务行也可发（门控由受控 task 终态承担）
+    if (!canSend || (!controlled && task === null)) return;
     setSending(true);
     void sendSteer(text.trim()).finally(() => {
       setText('');

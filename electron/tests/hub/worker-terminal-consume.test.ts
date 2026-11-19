@@ -531,6 +531,7 @@ describe('5) 停靠出清：accepted 消费后 docked 项出清 + 账本对齐 +
       linkExecutionSession: () => undefined,
       startLifecycleRun: () => undefined,
       pendingHumanRequests: () => 0,
+    autoSubmitWorkerTask: () => false,
     };
     const runner = createDelegationRunner({ ports, store, tickMs: 500 });
     return {

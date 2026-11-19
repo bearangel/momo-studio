@@ -411,7 +411,18 @@ export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentR
   // 实际能用全部 24 个工具，与 def.defaultTools 配置完全无关（严重安全 bug）。
   const allocation = readAllocationLayer(workspaceId);
   const deltas = readAssignmentDeltas(instanceId);
-  const merged = mergeCapabilities(def, allocation, deltas);
+  let merged = mergeCapabilities(def, allocation, deltas);
+  // D3-A 闭合工具恒注入（2026-11-19）：submit_task / fail_task / request_human
+  //（含 complete_task 废弃别名）是任务生命周期的平台语义——agent 定义 / 镜像
+  // 快照缺这几个工具时（实测 T-034：镜像 Momo 工具集缺失），执行中的任务
+  // 无法提交 → 委派链上报 done → 发起方兜底 completed，两段式验收永不发生。
+  // 注入进 allowedTools 域（ALL_BUILTIN_TOOLS 已含；无任务时调用由工具侧人话拒绝）
+  merged = {
+    ...merged,
+    tools: [
+      ...new Set([...merged.tools, 'submit_task', 'fail_task', 'request_human', 'complete_task']),
+    ],
+  };
   // spec 2026-11-03 §6.3：失效 ref 过滤（插件工具全名 + 内置全集为已知域）。
   // 必须先于 return 计算——allowedTools 是权限白名单，未知名永远匹配不上，
   // 留着只会让「引用了已下线工具」静默失效；过滤 + warn 让存量 agent 可自查。
@@ -468,7 +479,7 @@ export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentR
     ],
     // 组⑤启停：禁用的 MCP 不进 agent 工具面；再滤禁用插件的贡献名（P2）
     mcpNames: filterDisabledPluginMcps(filterEnabledMcps(merged.mcps), workspaceId),
-    // 插件工具装配快照（spec §6 白名单 + 2026-11-04 def 声明纳入）：授权集 =
+  // 插件工具装配快照（spec §6 白名单 + 2026-11-04 def 声明纳入）：授权集 =
     // merged.tools（def 声明 ∪ ws allocation ± 成员 tools deltas，与 MCP/Skill
     // 「定义声明是合法授权通道」语义对齐）∪ 成员插件勾选，再剔黑名单
     // （deniedTools 终态——黑名单优先保守语义）；spawn 时定型。

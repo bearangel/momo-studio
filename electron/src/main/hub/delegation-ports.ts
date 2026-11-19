@@ -14,6 +14,7 @@ import { getSession } from '../storage/sessions/repo';
 import { insertTask, updateTask } from '../storage/tasks/repo';
 import { countPendingNonAcceptanceByTask } from '../storage/tasks/human-requests-repo';
 import { startRun } from '../task/lifecycle-runs';
+import { submitRun } from '../task/lifecycle-runs';
 import { clearSessionGrants, grantWriteDirs } from '../sandbox/write-grant';
 import { listPendingWriteBlocked } from '../sandbox/write-blocked-emit';
 import { createGroupBindingStore } from './group-binding-store';
@@ -298,6 +299,33 @@ export function pendingHumanRequestsProduct(delegationId: string): number {
   return countPendingNonAcceptanceByTask(row.id);
 }
 
+/**
+ * 兜底提交（2026-11-19 D3-C）：回合正常结束但承接行仍 in_progress（执行 agent
+ * 没调 submit_task——工具缺失/模型遗忘）时，以回合摘要自动提交，再走停靠等
+ * 发起方验收。此前直接上报 done → 发起方兜底 completed，两段式永不发生
+ * （实测 T-034）。返回 false = 无可提交（无承接行 / 非执行态）。
+ */
+export function autoSubmitWorkerTaskProduct(
+  delegationId: string,
+  summary: string,
+): boolean {
+  const row = findTaskByDelegationId(delegationId, 'worker');
+  if (row === null) return false;
+  if (row.status !== 'in_progress' && row.status !== 'waiting_human') return false;
+  try {
+    submitRun(row.id, { summary });
+    return true;
+  } catch (err) {
+    // 迟到/竞态（已 submitted/已终态）——落 warn 不阻断既有终态链
+    logger.warn('兜底提交失败（状态以先落者为准）', {
+      delegationId,
+      taskId: row.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
+}
+
 export function wireDelegationRunnerPorts(opts: WireDelegationPortsOpts): DelegationRunPorts {
   const { clientGetter, selfNodeId, settings } = opts;
   return {
@@ -322,11 +350,14 @@ export function wireDelegationRunnerPorts(opts: WireDelegationPortsOpts): Delega
           leaderInstanceId: leader.instanceId,
         }, { kind: 'task_execution' }).id;
       } else {
-        // MC1：普通 collab 会话（单 agent 目标 is_leader=1）+ 标题=任务书摘要
+        // MC1：单 agent 目标（is_leader=1）+ 标题=任务书摘要。kind 必须显式
+        // task_execution（2026-11-19 实机：此前漏传 → 建 chat 会话，执行 agent
+        // 无任务上下文/零工具调用，回合结束直接上报 done——发起方兜底 completed，
+        // 两段式验收永不发生。团队分支 241950b2 起已正确传 kind，单 agent 分支同齐）
         sessionId = createCollabSession(input.workspaceId, input.title, {
           type: 'agent',
           instanceId: input.memberInstanceId!,
-        }).id;
+        }, { kind: 'task_execution' }).id;
       }
       // 不可删：与 executor K10 同口径——外派建会不广播则 IM 视图看不到新会话（用户实测报障）
       broadcastSessionListChanged();
@@ -424,5 +455,6 @@ export function wireDelegationRunnerPorts(opts: WireDelegationPortsOpts): Delega
     linkExecutionSession: linkExecutionSessionProduct,
     startLifecycleRun: startLifecycleRunProduct,
     pendingHumanRequests: pendingHumanRequestsProduct,
+    autoSubmitWorkerTask: autoSubmitWorkerTaskProduct,
   };
 }

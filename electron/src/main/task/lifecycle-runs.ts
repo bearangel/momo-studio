@@ -549,7 +549,9 @@ export async function submitRun(id: string, opts: DeliverableInput): Promise<voi
       taskId: id,
       runId: active.id,
       kind: 'acceptance',
-      title: `第 ${active.runNo} 轮交付`,
+      // 首轮不带轮次前缀（2026-11-19 用户反馈：单轮任务出现「第 1 轮交付」
+      // 措辞困惑——轮次语义只在「继续」续作多轮后才有意义）
+      title: active.runNo > 1 ? `第 ${active.runNo} 轮交付` : '交付验收',
       prompt: task.title,
       payloadJson: JSON.stringify({
         acceptance: { runNo: active.runNo, summary: opts.summary, files, artifacts },

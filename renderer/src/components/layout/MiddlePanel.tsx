@@ -20,6 +20,12 @@ import { TaskProgressButton } from '../im/TaskProgressButton';
 import { InFlightPanel } from '../im/InFlightPanel';
 import { RemoteSessionPanel } from '../hub/RemoteSessionPanel';
 import { RemoteSessionStatusInline } from '../hub/RemoteSessionStatusInline';
+import { isLocalExecution } from '../../lib/is-local-execution';
+import { useHubStore } from '../../stores/hub.store';
+import { useHumanStore } from '../../stores/human.store';
+import { useTaskStore } from '../../stores/task.store';
+import { ipc } from '../../ipc/client';
+import type { TaskRow } from '../../ipc/types';
 import { AgentsView } from '../agent/AgentsView';
 import { SettingsView } from '../settings/SettingsView';
 import { ResourceLibraryView } from '../resource-library/ResourceLibraryView';
@@ -32,6 +38,42 @@ import { SidebarRestoreButton } from './SidebarRestoreButton';
 import { BrowserSidebar } from '../workspace/BrowserSidebar';
 import { PanelPageView } from '../plugins/PanelPageView';
 
+/**
+ * 本机执行待验收轻提示（D1-C / D4-B，2026-11-19）：本机 manual 任务提交后
+ * 会话不弹跨节点验收卡（excludeKinds 排除），但「待验收」必须有可发现入口——
+ * 一条系统级 notice，点击直达看板任务详情（验收通过 / 打回）。auto 任务
+ * （巡检）提交即收口，不产生 pending acceptance，自然不显示。
+ */
+function LocalAcceptanceNotice({ sessionId, taskId }: { sessionId: string; taskId: string }): React.JSX.Element | null {
+  const rows = useHumanStore((s) => s.pendingBySession.get(sessionId));
+  const pendingAcceptance = (rows ?? []).some((r) => r.kind === 'acceptance' && r.status === 'pending');
+  if (!pendingAcceptance) return null;
+  return (
+    <div
+      className="shrink-0 border-t border-subtle bg-surface-1 px-4 py-2"
+      data-testid="local-acceptance-notice"
+    >
+      <div className="flex items-center gap-2 rounded-[10px] border border-subtle border-l-2 border-l-status-warning bg-surface-1 px-3 py-2 text-xs text-secondary">
+        <span className="text-primary">已提交验收</span>
+        <span>交付等待裁决（本机任务不在会话内裁决）</span>
+        <button
+          type="button"
+          className="ml-auto shrink-0 rounded-md border border-subtle px-2.5 py-1 text-xs text-accent-300 hover:bg-surface-3"
+          onClick={() => {
+            useUiStore.getState().setActiveView('tasks');
+            useTaskStore.getState().setSelectedTaskId(taskId);
+          }}
+        >
+          前往看板裁决 →
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** 本机任务执行会话的人工请求排除面（2026-11-19）：验收卡不出现——裁决归看板 */
+const LOCAL_TASK_EXCLUDED_KINDS = ['acceptance'] as const;
+
 export function MiddlePanel() {
   const activeView = useUiStore((s) => s.activeView);
   const workspace = useWorkspaceStore((s) => s.getActive());
@@ -42,6 +84,45 @@ export function MiddlePanel() {
   const [wsDialogOpen, setWsDialogOpen] = useState(false);
   // 验收卡满屏（V1）：切会话即还原
   const [acceptanceFullscreen, setAcceptanceFullscreen] = useState(false);
+  // 2026-11-19 任务会话形态分流：执行节点==本节点 → 本地形态（MessageList +
+  // 验收卡 + 补充指令框）；目标为其它节点 → RemoteSessionPanel（跨节点跟踪）。
+  // 判定键 = 委派目标 vs 本节点 id（hub status 快照；快照未拉取时兜底拉一次）
+  const hubStatus = useHubStore((s) => s.status);
+  const activeSessionKind = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeSessionId)?.kind ?? null);
+  // 任务行按 executionSessionId 精确直查（archived:'all'）——不依赖 task.store
+  // 看板数据源（含来源过滤/归档排除；循环实例验收即归档，看板 store 里没有，
+  // 2026-11-19 实测：依赖它会让归档实例会话全部误走远端面板）
+  const [executionTask, setExecutionTask] = useState<TaskRow | null>(null);
+  useEffect(() => {
+    // 不以会话 kind 为前提（2026-11-19 实机）：任务可绑「指定会话」执行，会话
+    // kind 是 chat——以 kind 设闸会让这类执行会话查不到任务、验收卡漏排除。
+    // 每次切会话一次轻量反查（无关联任务返回空数组）。
+    if (!activeSessionId) {
+      setExecutionTask(null);
+      return;
+    }
+    let cancelled = false;
+    void ipc.task
+      .list({ executionSessionId: activeSessionId, archived: 'all' })
+      .then((rows) => {
+        if (!cancelled) setExecutionTask(rows[0] ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setExecutionTask(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSessionId]);
+  const localExecution = executionTask !== null && isLocalExecution(executionTask, hubStatus?.nodeId ?? null);
+  useEffect(() => {
+    if (activeSessionKind !== 'task_execution' || hubStatus !== null) return;
+    // hub 面板未挂载过（status 快照缺）时的兜底拉取——判定需要本节点 id
+    void ipc.hub
+      .getStatus()
+      .then((st) => useHubStore.setState({ status: st }))
+      .catch(() => undefined);
+  }, [activeSessionKind, hubStatus]);
 
   // 切换会话时关闭成员浮层，避免新会话显示旧成员
   useEffect(() => {
@@ -118,7 +199,7 @@ export function MiddlePanel() {
             <span className="min-w-0 max-w-[46%] truncate text-sm text-primary">
               {activeSession ? activeSession.title : '未选择房间'}
             </span>
-            {activeSession?.kind === 'task_execution' && activeSessionId && (
+            {activeSession?.kind === 'task_execution' && !localExecution && activeSessionId && (
               <RemoteSessionStatusInline sessionId={activeSessionId} />
             )}
             <span className="flex-1" />
@@ -128,7 +209,10 @@ export function MiddlePanel() {
             {/* P2-D：在途子任务面板入口（2s 轮询 + 单链取消，spec 2026-10-13 §9） */}
             {activeSessionId && <InFlightPanel sessionId={activeSessionId} />}
           </div>
-          {activeSession?.kind === 'task_execution' ? (
+          {localExecution && executionTask !== null && activeSessionId ? (
+            <LocalAcceptanceNotice sessionId={activeSessionId} taskId={executionTask.id} />
+          ) : null}
+          {activeSession?.kind === 'task_execution' && !localExecution ? (
             <RemoteSessionPanel
               sessionId={activeSession.id}
               workspaceId={activeSession.workspaceId}
@@ -155,9 +239,21 @@ export function MiddlePanel() {
           {/* 会话请求面板（任务生命周期 v2 T22）：composer 上方唯一人工行动入口，
               未决时出现；普通会话在此挂载；任务执行会话经 RemoteSessionPanel 的
               footerSlot 承载（流域 → 动作区 → 指令输入框，spec §12.3） */}
-          {activeSession?.kind !== 'task_execution' && activeSessionId && <HumanRequestPanel sessionId={activeSessionId} />}
-          {/* 聊天输入框仅普通会话（跟踪会话的输入面 = 面板内 steer composer） */}
-          {activeSession?.kind !== 'task_execution' && <MentionInput />}
+          {activeSessionId && !(activeSession?.kind === 'task_execution' && !localExecution) && (
+            <HumanRequestPanel
+              sessionId={activeSessionId}
+              // 本机执行会话（2026-11-19）：验收卡不出现——本地执行无跨节点交付
+              // 审查语义，裁决在看板任务详情（TaskDetailPanel #21 accept/reject）；
+              // 判定键 = 关联任务本机执行（而非 activeSession.kind——「指定会话」
+              // 模式的任务跑在你手工建的 chat 会话里，kind 是 chat）；执行中的
+              // tool_gate/question/manual_action 照常保留（执行交互）
+              excludeKinds={localExecution ? LOCAL_TASK_EXCLUDED_KINDS : undefined}
+            />
+          )}
+          {/* 输入面：普通会话与本机任务会话同构（消息即与执行 agent 对话——执行中
+              车道被占时 RouterService 自动走 steer 注入）；远端跟踪会话的输入面
+              是面板内 steer composer */}
+          {!(activeSession?.kind === 'task_execution' && !localExecution) && <MentionInput />}
           {showMembers && activeSessionId && (
             <>
               {/* 透明 backdrop：点击关闭浮层（仅覆盖 chat 列，不影响 RoomList） */}

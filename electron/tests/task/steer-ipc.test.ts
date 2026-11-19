@@ -51,6 +51,9 @@ import {
   steerTaskRouted,
   type RemoteSteerForwardInput,
 } from '../../src/main/task/ipc.handlers';
+import { registerLane, __clearLaneForTest } from '../../src/main/agent/session-lane';
+import { agentRunners } from '../../src/main/agent/runtime-registry';
+import type { AgentRunner } from '../../src/main/agent/agent-runner';
 import { __resetOriginSteerDedupeForTest } from '../../src/main/hub/remote-intervene-bridge';
 
 const DELEGATION_ID = 'dl-steer-origin-1';
@@ -95,6 +98,9 @@ function seedOutTask(opts: { executionSessionId?: string; delegationId?: string 
     status: 'in_progress',
     executionSessionId: opts.executionSessionId ?? trackingSessionId,
     delegationId: opts.delegationId ?? DELEGATION_ID,
+    // 远端 routing（2026-11-19 本机分支落地后必须显式——缺省 {mode:'local'} 兜底
+    // 会让委派行误入本机注入分支）
+    routing: { mode: 'node', groupId: 'g-1', targetNodeId: 'node-remote' },
   });
   getDb().prepare(`UPDATE tasks SET delegation_role = 'out' WHERE id = ?`).run(t.id);
   return t.id;
@@ -134,19 +140,19 @@ describe('task:steer IPC 契约与校验', () => {
     expect(forwarderMock).not.toHaveBeenCalled();
   });
 
-  it("delegation_role='in' → 仅发起方可补充指令（forwarder 不调）", async () => {
+  it("delegation_role='in'（未在执行）→ 人话拒（2026-11-19 语义演变：in 行执行节点在本机，本机分支先行——未开执行回合即拒）", async () => {
     const t = insertTask({
       workspaceId: 'ws1', title: '承接', creatorUserId: '@owner:home', status: 'in_progress',
       delegationId: DELEGATION_ID,
     });
     getDb().prepare(`UPDATE tasks SET delegation_role = 'in' WHERE id = ?`).run(t.id);
-    await expect(steerTaskRouted(t.id, 'x')).rejects.toThrow('仅发起方可对委派任务补充指令');
+    await expect(steerTaskRouted(t.id, 'x')).rejects.toThrow('任务当前无执行回合');
     expect(forwarderMock).not.toHaveBeenCalled();
   });
 
-  it('本地行（无 delegation_role / delegation_id）→ 人话拒', async () => {
+  it('本地行（routing local 未在执行）→ 本机分支人话拒（原「仅发起方」语义随本机分支落地演变）', async () => {
     const t = insertTask({ workspaceId: 'ws1', title: '本地', creatorUserId: '@owner:home' });
-    await expect(steerTaskRouted(t.id, 'x')).rejects.toThrow('仅发起方可对委派任务补充指令');
+    await expect(steerTaskRouted(t.id, 'x')).rejects.toThrow('任务当前无执行回合');
     const out = seedOutTask({ delegationId: DELEGATION_ID });
     getDb().prepare(`UPDATE tasks SET delegation_id = NULL WHERE id = ?`).run(out);
     await expect(steerTaskRouted(out, 'x')).rejects.toThrow('任务未委派，无可送达的执行节点');
@@ -251,5 +257,78 @@ describe('成功里程碑（跟踪会话本地写）', () => {
     const taskId = seedOutTask({ executionSessionId: '' });
     await expect(steerTaskRouted(taskId, 'x')).resolves.toEqual({ ok: true });
     expect(pushSessionMessageMock).not.toHaveBeenCalled();
+  });
+});
+
+
+// ── 本机 steer（2026-11-19 任务会话形态分流配套） ────────────────────────────
+// 执行节点==本节点（mode local / group·node 落本机）→ 直接注入本机执行回合
+// （AgentRunner.steer → 子进程 pendingSteers drain，落库由子进程统一），
+// 不经 hub、不需 delegationRole out。
+describe('steerTaskRouted 本机分支', () => {
+  const steerCalls: Array<{ streamSessionId: string; body: string }> = [];
+
+  function seedLocalTask(opts: { status: string; routing?: Record<string, unknown> }): string {
+    const t = insertTask({
+      workspaceId: 'ws1', title: '本机任务', creatorUserId: 'owner',
+      status: opts.status as never,
+      executionSessionId: 'sess-exec-local',
+      ...(opts.routing ? { routing: opts.routing as never } : {}),
+    });
+    return t.id;
+  }
+
+  function armRunner(streamSessionId: string): void {
+    steerCalls.length = 0;
+    const runner = {
+      steer: (sid: string, body: string): boolean => {
+        steerCalls.push({ streamSessionId: sid, body });
+        return true;
+      },
+    } as unknown as AgentRunner;
+    agentRunners.set('inst-exec', runner);
+    registerLane('sess-exec-local', { taskId: null, streamSessionId, assignmentId: 'inst-exec' });
+  }
+
+  beforeEach(() => {
+    __clearLaneForTest();
+    agentRunners.delete('inst-exec');
+  });
+
+  it('mode local + 活跃执行回合 → 本机注入（不经 hub，forwarder 不调）', async () => {
+    const id = seedLocalTask({ status: 'in_progress' });
+    armRunner('stream-1');
+    const r = await steerTaskRouted(id, '先 ls -la 再总结');
+    expect(r).toEqual({ ok: true });
+    expect(steerCalls).toEqual([{ streamSessionId: 'stream-1', body: '先 ls -la 再总结' }]);
+    expect(forwarderMock).not.toHaveBeenCalled();
+  });
+
+  it('mode local + submitted（待裁决）→ 拒（DEC-11 同语义）', async () => {
+    const id = seedLocalTask({ status: 'submitted' });
+    armRunner('stream-1');
+    await expect(steerTaskRouted(id, 'x')).rejects.toThrow(/待验收.*裁决/s);
+    expect(steerCalls).toHaveLength(0);
+  });
+
+  it('mode local + 无执行回合（排队中/已结束）→ 人话拒', async () => {
+    const id = seedLocalTask({ status: 'in_progress' });
+    // 不 armRunner——车道空
+    await expect(steerTaskRouted(id, 'x')).rejects.toThrow(/无执行回合/s);
+  });
+
+  it('group 调度落本机（targetNodeId==self）→ 同样本机注入', async () => {
+    getDb()
+      .prepare(`INSERT INTO kv_store (key, value, updated_at) VALUES ('hub_config', ?, datetime('now'))`)
+      .run(JSON.stringify({ hubUrl: 'http://x', nodeName: '本机', nodeId: 'node-self' }));
+    const id = seedLocalTask({
+      status: 'in_progress',
+      routing: { mode: 'group', groupId: 'g', targetNodeId: 'node-self' },
+    });
+    armRunner('stream-2');
+    const r = await steerTaskRouted(id, '补充');
+    expect(r).toEqual({ ok: true });
+    expect(steerCalls).toHaveLength(1);
+    expect(forwarderMock).not.toHaveBeenCalled();
   });
 });

@@ -7,11 +7,15 @@
 //      0 空间可达工作组，D1 主壳化的前置契约）
 // 重型视图组件打桩（本文件聚焦分支分发，子组件行为由各自测试覆盖）。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useUiStore } from '../../stores/ui.store';
 import { useSessionStore } from '../../stores/session.store';
+import { useHubStore } from '../../stores/hub.store';
+import { useHumanStore } from '../../stores/human.store';
+import { useTaskStore } from '../../stores/task.store';
+import type { SessionSummary, TaskRow } from '../../ipc/types';
 import type { Workspace } from '../../ipc/types';
 
 vi.mock('../editor/CodeEditor', () => ({ CodeEditor: () => <div data-testid="code-editor-stub" /> }));
@@ -23,7 +27,11 @@ vi.mock('../im/RoomToolBudgetBadge', () => ({ RoomToolBudgetBadge: () => <div />
 vi.mock('../im/ExportChatButton', () => ({ ExportChatButton: () => <div /> }));
 vi.mock('../im/TaskProgressButton', () => ({ TaskProgressButton: () => <div /> }));
 vi.mock('../im/InFlightPanel', () => ({ InFlightPanel: () => <div /> }));
-vi.mock('../im/HumanRequestPanel', () => ({ HumanRequestPanel: () => <div data-testid="human-request-stub" /> }));
+vi.mock('../im/HumanRequestPanel', () => ({
+  HumanRequestPanel: ({ excludeKinds }: { excludeKinds?: readonly string[] }) => (
+    <div data-testid="human-request-stub" data-exclude={(excludeKinds ?? []).join(',')} />
+  ),
+}));
 vi.mock('../agent/AgentsView', () => ({ AgentsView: () => <div data-testid="agents-stub" /> }));
 vi.mock('../settings/SettingsView', () => ({
   SettingsView: () => <div data-testid="settings-view-stub" />,
@@ -40,6 +48,11 @@ vi.mock('../plugins/PanelPageView', () => ({ PanelPageView: () => <div /> }));
 vi.mock('../hub/RemoteSessionPanel', () => ({
   RemoteSessionPanel: ({ sessionId, footerSlot }: { sessionId: string; footerSlot?: React.ReactNode }) => (
     <div data-testid="remote-session-panel-stub" data-session={sessionId}>{footerSlot}</div>
+  ),
+}));
+vi.mock('../hub/RemoteSteerComposer', () => ({
+  RemoteSteerComposer: ({ sessionId }: { sessionId: string }) => (
+    <div data-testid="local-steer-stub" data-session={sessionId} />
   ),
 }));
 
@@ -74,6 +87,11 @@ const mockApi = {
     getWorkspaceDirSettings: vi.fn().mockResolvedValue({
       rootDir: null, defaultRootDir: '/data/workspaces', effectiveRootDir: '/data/workspaces',
     }),
+    getStatus: vi.fn().mockResolvedValue(null),
+  },
+  task: {
+    steer: vi.fn().mockResolvedValue({ ok: true }),
+    list: vi.fn().mockResolvedValue([]),
   },
 };
 
@@ -212,5 +230,121 @@ describe('MiddlePanel 跟踪会话直连（spec §12.1）', () => {
     unmount();
     render(ui());
     expect(screen.getByTestId('remote-session-panel-stub')).toBeInTheDocument();
+  });
+});
+
+
+// ── 任务会话形态分流（2026-11-19）：执行节点==本节点 → 本地形态 ──────────────
+describe('MiddlePanel 任务会话形态分流（2026-11-19）', () => {
+  function mkSession(id: string): SessionSummary {
+    return {
+      id, workspaceId: 'ws-1', title: `任务 ${id}`, kind: 'task_execution',
+      createdAt: 1, updatedAt: 1, lastSeq: 0, pinnedAt: null, isLeaderView: false,
+    } as unknown as SessionSummary;
+  }
+  function mkExecTask(id: string, sessionId: string, routing: TaskRow['routing']): TaskRow {
+    return {
+      id, workspaceId: 'ws-1', title: `任务 ${id}`, description: '', status: 'in_progress',
+      sourceSessionId: null, sourceMessageId: null, creatorUserId: 'u', executionSessionId: sessionId,
+      assigneeAgentId: null, targetTeamId: null, targetSessionId: null, recurrenceParentId: null,
+      recurrenceChainRoot: null, priority: 0, scheduledAt: null, recurrenceRule: null, deadlineAt: null,
+      queuePosition: null, runtimeInstanceId: null, estimatedTokens: null, actualTokens: null,
+      toolCallsUsed: 0, errorMessage: null, sourceNodeId: null, createdAt: 1, updatedAt: 1,
+      startedAt: null, completedAt: null, currentRunId: null, submittedAt: null, acceptedAt: null,
+      delegationRole: null, autoAccept: false, groupId: null, pinnedAt: null, archivedAt: null,
+      routing, delegationId: null, origin: 'user', parentTaskId: null,
+    };
+  }
+
+  function setupTaskSession(task: TaskRow): void {
+    useWorkspaceStore.setState({ workspaces: [mkWs('ws-1')], activeWorkspaceId: 'ws-1', closedIds: [] });
+    useSessionStore.setState({ sessions: [mkSession(task.executionSessionId!)], activeSessionId: task.executionSessionId! });
+    // 分流数据源 2026-11-19 改为按 executionSessionId 精确直查（archived:'all'——
+    // 循环实例验收即归档，看板 store 不含归档行，不能作依赖）
+    mockApi.task.list.mockReset().mockResolvedValue([task]);
+    useHubStore.setState({ status: null });
+  }
+
+  it('本机任务（routing local）→ 形态①原样：MessageList + 工具条 + 完整输入框，不渲染远端面板', async () => {
+    setupTaskSession(mkExecTask('T-901', 'sess-local-1', { mode: 'local' }));
+    render(ui());
+    // 形态判定落地：MentionInput（完整输入框）在 = 与普通会话同构
+    await waitFor(() => {
+      expect(screen.getByTestId('mention-input-stub')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('remote-session-panel-stub')).not.toBeInTheDocument();
+    // 2026-11-19：本机会话不再渲染 steer 简框（输入面=完整输入框）
+    expect(screen.queryByTestId('local-steer-stub')).not.toBeInTheDocument();
+    // 本机执行 → 验收卡排除（裁决归看板）
+    expect(screen.getByTestId('human-request-stub').getAttribute('data-exclude')).toBe('acceptance');
+    // 分流判定需要本节点 id → hub status 兜底拉取被触发；任务行按会话精确直查（含归档）
+    expect(mockApi.hub.getStatus).toHaveBeenCalled();
+    expect(mockApi.task.list).toHaveBeenCalledWith(
+      expect.objectContaining({ executionSessionId: 'sess-local-1', archived: 'all' }),
+    );
+  });
+
+  it('远端任务（node 目标 ≠ 本节点）→ RemoteSessionPanel + 面板内 steer（输入框不渲染）', async () => {
+    mockApi.hub.getStatus.mockResolvedValueOnce({ configured: true, state: 'online', hubUrl: 'http://x', nodeName: '本机', nodeId: 'node-self', lastError: null, lastErrorCode: null });
+    setupTaskSession(mkExecTask('T-902', 'sess-remote-1', { mode: 'node', groupId: 'g', targetNodeId: 'node-b' }));
+    render(ui());
+    await waitFor(() => {
+      expect(screen.getByTestId('remote-session-panel-stub')).toBeInTheDocument();
+    });
+    // 远端跟踪会话：输入面是面板内 steer composer，完整输入框不挂；
+    // footerSlot 的验收卡不排除（发起方在会话里裁决）
+    expect(screen.queryByTestId('mention-input-stub')).not.toBeInTheDocument();
+    const footerPanel = screen.getByTestId('human-request-stub');
+    expect(footerPanel.getAttribute('data-exclude')).toBe('');
+  });
+
+  it('指定会话模式（执行会话 kind=chat）+ 本机任务 → 验收卡仍排除（判定看任务不看会话 kind）', async () => {
+    const task = mkExecTask('T-904', 'sess-chat-1', { mode: 'local' });
+    useWorkspaceStore.setState({ workspaces: [mkWs('ws-1')], activeWorkspaceId: 'ws-1', closedIds: [] });
+    useSessionStore.setState({
+      sessions: [{ ...mkSession('sess-chat-1'), kind: 'chat' } as unknown as SessionSummary],
+      activeSessionId: 'sess-chat-1',
+    });
+    mockApi.task.list.mockReset().mockResolvedValue([task]);
+    useHubStore.setState({ status: null });
+    render(ui());
+    await waitFor(() => {
+      expect(mockApi.task.list).toHaveBeenCalled();
+    });
+    // 本机执行的 acceptance 被排除（面板挂载但 excludeKinds 生效——判定看任务不看会话 kind）
+    expect(screen.getByTestId('human-request-stub').getAttribute('data-exclude')).toBe('acceptance');
+    // 输入面仍是完整输入框
+    expect(screen.getByTestId('mention-input-stub')).toBeInTheDocument();
+  });
+
+  it('本机任务待验收 → 轻提示入口显示，点击直达看板选中任务（D1-C/D4-B）', async () => {
+    const task = mkExecTask('T-905', 'sess-acc-1', { mode: 'local' });
+    useWorkspaceStore.setState({ workspaces: [mkWs('ws-1')], activeWorkspaceId: 'ws-1', closedIds: [] });
+    useSessionStore.setState({
+      sessions: [{ ...mkSession('sess-acc-1') } as unknown as SessionSummary],
+      activeSessionId: 'sess-acc-1',
+    });
+    mockApi.task.list.mockReset().mockResolvedValue([task]);
+    useHubStore.setState({ status: null });
+    useHumanStore.setState({
+      pendingBySession: new Map([
+        ['sess-acc-1', [{ id: 'r1', kind: 'acceptance', status: 'pending' } as never]],
+      ]),
+    });
+    render(ui());
+    const notice = await screen.findByTestId('local-acceptance-notice');
+    fireEvent.click(within(notice).getByRole('button', { name: /前往看板裁决/ }));
+    expect(useUiStore.getState().activeView).toBe('tasks');
+    expect(useTaskStore.getState().selectedTaskId).toBe('T-905');
+  });
+
+  it('调度落本机（group targetNodeId == 本节点）→ 形态①原样', async () => {
+    mockApi.hub.getStatus.mockResolvedValueOnce({ configured: true, state: 'online', hubUrl: 'http://x', nodeName: '本机', nodeId: 'node-self', lastError: null, lastErrorCode: null });
+    setupTaskSession(mkExecTask('T-903', 'sess-self-1', { mode: 'group', groupId: 'g', targetNodeId: 'node-self' }));
+    render(ui());
+    await waitFor(() => {
+      expect(screen.getByTestId('mention-input-stub')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('remote-session-panel-stub')).not.toBeInTheDocument();
   });
 });

@@ -94,6 +94,18 @@ export const useRemoteSessionStore = create<RemoteSessionState>((set, get) => {
       .catch(() => { /* 镜像行是增强面——拉取失败保旧值 */ });
   };
 
+  let disposeLocalMessage: (() => void) | null = null;
+
+  /** 本机任务实时镜像（local 模式）：本会话新消息/终态推送 → 重拉镜像行 */
+  const wireLocalMessageListener = (): void => {
+    disposeLocalMessage?.();
+    disposeLocalMessage = ipc.session.onMessage((msg) => {
+      const cur = get().task;
+      if (!cur || cur.executionSessionId !== msg.sessionId) return;
+      refetchMirror();
+    });
+  };
+
   const teardownListeners = (): void => {
     disposeAppended?.();
     disposeAppended = null;
@@ -101,6 +113,8 @@ export const useRemoteSessionStore = create<RemoteSessionState>((set, get) => {
     disposeState = null;
     disposeRunChanged?.();
     disposeRunChanged = null;
+    disposeLocalMessage?.();
+    disposeLocalMessage = null;
   };
 
   let disposeRunChanged: (() => void) | null = null;
@@ -222,6 +236,19 @@ export const useRemoteSessionStore = create<RemoteSessionState>((set, get) => {
         live: false, liveError: null, pendingSteers: [],
       });
       const routingGroupId = task.routing.mode !== 'local' ? task.routing.groupId : null;
+      // 本机任务执行会话（2026-11-19 hub 离线实测回归）：消息/事件全在本地库
+      //（mirrorRows 路径）——零 hub 往返（hub 离线不再报「hub 未连接」）；不订
+      // 远端帧流，实时性走 session:message 推送刷新镜像 + 既有 run 推送
+      if (task.routing.mode === 'local') {
+        set({
+          phase: 'ready', target: null, frames: [], legacy: [], hasMore: false,
+          live: true, liveError: null,
+        });
+        refetchMirror();
+        wireListeners(); // run 推送（任务态/验收卡实时性）——onViewAppended 在 target null 下守卫 no-op
+        wireLocalMessageListener();
+        return Promise.resolve();
+      }
       return (async () => {
         try {
           // ① 账本行反查（delegationId → targetNodeId / workspaceName）

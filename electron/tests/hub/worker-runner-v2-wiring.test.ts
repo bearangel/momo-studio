@@ -165,6 +165,7 @@ function makeRunnerHarness(hubProto: string | null): {
     linkExecutionSession: linkExecutionSessionProduct,
     startLifecycleRun: startLifecycleRunProduct,
     pendingHumanRequests: pendingHumanRequestsProduct,
+    autoSubmitWorkerTask: () => false,
   };
   const runner = createDelegationRunner({ ports, store: wrappedStore, tickMs: 500 });
   return {

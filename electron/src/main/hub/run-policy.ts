@@ -27,6 +27,7 @@
 // permissionTier 在 hub 侧被剥离（2026-10-26 验证）——本端按可选字段容错消费
 // （normalizeTier 缺省/非法收敛 confirm），未来 hub 升级透传后直接生效零改动。
 
+import { KICKOFF_CLOSURE_MANDATE } from '../task/kickoff-text';
 /** HITL 权限档位（plan 契约区；dispatch-submit / delegation-runner / renderer 三端消费） */
 export type PermissionTier = 'readonly' | 'sandbox' | 'confirm';
 
@@ -71,9 +72,18 @@ export function planRunPolicy(tier: PermissionTier): RunPolicyPlan {
 }
 
 /** 回合 body 组装：readonly 档前置只读约束段（约束段独立成段、任务书原文在后） */
+/**
+ * 委派回合消息体 = [档位前缀] + 任务简报 + 闭合义务段。
+ *
+ * 2026-11-19 实机回归：此前只发 prompt 原文——委派执行方 agent 不知「这是任务、
+ * 结束须关闭」，当作普通聊天答完即终（零工具调用 → runner 直接上报 done →
+ * 发起方兜底 completed，两段式验收永不发生）。本地任务 kickoff 一直带闭合
+ * 义务段（buildKickoffBody），委派侧复用同一文案常量（语义单源）。
+ */
 export function composeTurnBody(tier: PermissionTier, prompt: string): string {
   const { promptPrefix } = planRunPolicy(tier);
-  return promptPrefix === null ? prompt : `${promptPrefix}\n\n${prompt}`;
+  const brief = `【任务启动】${prompt}\n\n${KICKOFF_CLOSURE_MANDATE}`;
+  return promptPrefix === null ? brief : `${promptPrefix}\n\n${brief}`;
 }
 
 /** 协议未知容忍（异形载荷不抛）：合法档位透传，缺省/非法收敛 confirm */

@@ -153,6 +153,12 @@ export interface DelegationRunPorts {
   linkExecutionSession(taskId: string, sessionId: string): void;
   startLifecycleRun(taskId: string, sessionId: string): void;
   pendingHumanRequests(taskId: string): number;
+  /**
+   * 兜底提交（2026-11-19 D3-C）：回合 done 但承接行未提交时自动 submitRun——
+   * 治「执行 agent 没调 submit_task → 上报 done → 发起方兜底 completed」
+   * （实测 T-034：镜像 agent 工具集缺闭合工具）。返回是否实际提交。
+   */
+  autoSubmitWorkerTask(taskId: string, summary: string): boolean;
 }
 
 interface ActiveRun {
@@ -317,6 +323,16 @@ export function createDelegationRunner(opts: DelegationRunnerOpts): DelegationRu
     }
     run.terminal = terminal;
     run.unwatch();
+    // D3-C 兜底提交（2026-11-19）：回合 done 但承接行仍执行态（agent 未调
+    // submit_task——工具缺失/模型遗忘）→ 以回合摘要自动提交，两段式照常发生
+    //（发起方收 submitted → 验收卡）；auto_accept 承接行由 submitRun 内部
+    // 自动收口（completed），随后落既有 done 上报链（P1 单方语义保持）
+    if (terminal.status === 'done' && !run.awaitingHuman) {
+      ports.autoSubmitWorkerTask(
+        taskId,
+        `执行方完成（自动提交）：${run.promptExcerpt}`,
+      );
+    }
     // S2 执行态挂钩：本地任务已提交待验收（submitted）——回合终态不作委派终态。
     // worker 桥已把 hub 账本推到 submitted，此处再报 done/failed 会越过发起方
     // 验收直接终决（hub canTransition 对 submitted→done|failed|running 均放行）；

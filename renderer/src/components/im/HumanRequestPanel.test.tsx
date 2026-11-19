@@ -756,3 +756,31 @@ describe('HumanRequestPanel — tool_gate db 载荷卡', () => {
     expect(answerMock).toHaveBeenCalledWith('req-db', { decision: 'deny' }, undefined);
   });
 });
+
+
+// 2026-11-19 本机任务执行会话：excludeKinds 排除验收卡（裁决归看板 TaskDetailPanel），
+// 执行交互类（tool_gate/question/manual_action）照常呈现。
+describe('excludeKinds（本机任务会话排除验收卡）', () => {
+  it("excludeKinds=['acceptance'] → 验收卡不出现、question 照常", async () => {
+    listMock.mockResolvedValue([
+      makeRow({ id: 'r-acc', kind: 'acceptance', title: '交付验收' }),
+      makeRow({ id: 'r-q', kind: 'question', title: '需要确认口径' }),
+    ]);
+    render(<HumanRequestPanel sessionId="sess-x" excludeKinds={['acceptance']} />);
+    await act(async () => {}); // fake timers 下冲刷 store 重拉链
+    // question 卡在（question 卡头恒为 KIND_META 文案「需要你确认」，title 仅 acceptance 显示）
+    expect(screen.getByTestId('human-request-panel')).toBeInTheDocument();
+    expect(screen.getAllByText(/需要你确认/).length).toBeGreaterThan(0);
+    // 验收卡面（标题 + 决策按钮）不出现
+    expect(screen.queryByText(/交付验收/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '验收通过' })).not.toBeInTheDocument();
+  });
+
+  it('仅剩被排除的卡 → 面板整体不渲染（等同空态）', async () => {
+    listMock.mockResolvedValue([makeRow({ id: 'r-acc2', kind: 'acceptance', title: '交付验收' })]);
+    const { container } = render(<HumanRequestPanel sessionId="sess-y" excludeKinds={['acceptance']} />);
+    await act(async () => {});
+    expect(listMock).toHaveBeenCalled();
+    expect(container.firstChild).toBeNull();
+  });
+});

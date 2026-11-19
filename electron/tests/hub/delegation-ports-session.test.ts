@@ -130,6 +130,20 @@ describe('resolveAgentInstanceByNameProduct（M5.3 按名解析）', () => {
   });
 });
 
+describe('createDelegatedSession 单 agent 委派会话 kind（2026-11-19 实机回归）', () => {
+  it('单 agent 委派 → 建 task_execution 会话（此前漏传 kind → chat，执行 agent 无任务上下文、两段式验收永不发生）', async () => {
+    const wsId = await seedWorkspace('ws-kind', ['Solo']);
+    const solo = resolveAgentInstanceByNameProduct(wsId, 'Solo')!;
+    const sid = ports().createDelegatedSession({
+      workspaceId: wsId,
+      title: '帮我写作选题',
+      memberInstanceId: solo,
+    });
+    const row = getDb().prepare('SELECT kind FROM sessions WHERE id = ?').get(sid) as { kind: string };
+    expect(row.kind).toBe('task_execution');
+  });
+});
+
 describe('createDelegatedSession 会话列表广播（外派会话实时可见）', () => {
   beforeEach(() => {
     vi.mocked(broadcastSessionListChanged).mockClear();
@@ -194,7 +208,7 @@ describe('createDelegatedSession 多成员版（M5.3 团队外派建会）', () 
     ]);
   });
 
-  it('members 缺省（单 agent 路径）→ kind=chat 单成员 is_leader=1——回归锁', async () => {
+  it('members 缺省（单 agent 路径）→ kind=task_execution 单成员 is_leader=1（2026-11-19 语义变更：与团队分支对齐——chat 形态下执行 agent 无任务上下文，两段式验收永不发生）', async () => {
     const wsId = await seedWorkspace('ws-a', ['Coder']);
     const coder = resolveAgentInstanceByNameProduct(wsId, 'Coder')!;
 
@@ -204,7 +218,7 @@ describe('createDelegatedSession 多成员版（M5.3 团队外派建会）', () 
       memberInstanceId: coder,
     });
 
-    expect(sessionKind(sessionId)).toBe('chat');
+    expect(sessionKind(sessionId)).toBe('task_execution');
     expect(sessionMembers(sessionId)).toEqual([{ instance_id: coder, is_leader: 1 }]);
   });
 });

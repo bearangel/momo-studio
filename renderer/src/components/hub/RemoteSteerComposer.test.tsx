@@ -26,6 +26,7 @@ function makeTask(status: TaskRow['status']): TaskRow {
     groupId: null, pinnedAt: null, archivedAt: null,
     routing: { mode: 'node', groupId: 'g', targetNodeId: 'n' },
     delegationId: 'dl', origin: 'user', parentTaskId: null,
+    recurrenceChainRoot: null,
   };
 }
 

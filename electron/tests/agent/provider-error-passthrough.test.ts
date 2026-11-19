@@ -294,6 +294,7 @@ function makeRunnerHarness(): {
     linkExecutionSession: () => undefined,
     startLifecycleRun: () => undefined,
     pendingHumanRequests: () => 0,
+    autoSubmitWorkerTask: () => false,
   };
 
   const runner = createDelegationRunner({ ports, store, tickMs: 500 });
