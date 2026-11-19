@@ -170,6 +170,45 @@ export interface RuntimeContext {
 let traceEnabled = false;
 
 /** 错误带栈前 3 帧（工具/压缩错误可观测性——D-P5-2 排障依据，审查 I1） */
+/** 回合中断统一错误（name='AbortError' 是批次边界中断退出的识别约定） */
+function abortErr(): Error {
+  const e = new Error('用户停止');
+  e.name = 'AbortError';
+  return e;
+}
+
+/**
+ * 在途工具执行的 abort race（spec 2026-11-19 abort-tool-inflight §3.1）：
+ * signal 触发即以 AbortError reject——不依赖工具自身监听 signal。
+ * 用户实证：grep 不监听 signal，abort 广播后在途执行照跑 5 分钟（回合不死、
+ * 13 次 abortTurn 完成而 UI 悬转）。race 只是快速返回：原工具 Promise 无法
+ * 强杀，其残留执行随回合退出 / 主进程 5s 强杀保底回收。
+ * race 先于 abort 完成/失败时移除监听，防 listener 泄漏。
+ */
+function raceToolWithAbort<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(abortErr());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => {
+      cleanup();
+      reject(abortErr());
+    };
+    const cleanup = (): void => {
+      signal.removeEventListener('abort', onAbort);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    p.then(
+      (v) => {
+        cleanup();
+        resolve(v);
+      },
+      (e) => {
+        cleanup();
+        reject(e);
+      },
+    );
+  });
+}
+
 function errWithTrace(err: unknown): string {
   if (err instanceof Error) {
     const frames = String(err.stack ?? '')
@@ -1134,6 +1173,26 @@ export async function runChatLoop(
   // v1.5.1：把 signal 暴露给 ctx，doExecuteTool 调 executeDispatch 时透传，
   // 使 PM 在 await dispatch 期间也能响应中断
   ctx.abortSignal = abortController.signal;
+  // 2026-11-19 abort-tool-inflight §3.3：本回合「已发 start、未发 result」的
+  // 工具调用账本——中断退出时逐个补合成 tool_result chip（success=false）。
+  // 用户实证：中断退出不回填 result → message_events 悬空 start → UI 聚合器
+  // 永远等不到配对 result（悬转）。合成 chip 只进账本/UI，不 push 进 LLM
+  // messages——「中断-重试」死循环防线（v1.5.2 语义）保持不变。
+  const pendingToolResults = new Map<string, { toolName: string; isDispatch: boolean }>();
+  const flushPendingToolResults = (): void => {
+    for (const [callId, info] of pendingToolResults) {
+      sendStreamChunk({
+        type: 'tool_result',
+        streamSessionId,
+        callId,
+        toolName: info.toolName,
+        result: '用户停止（回合中断）',
+        success: false,
+        ...(info.isDispatch ? ({ subStatus: 'failed' } as const) : {}),
+      });
+    }
+    pendingToolResults.clear();
+  };
   // v1.5.3：转发外部 abort signal（如 handleDispatch 监听 team_room 的 abort_dispatch event）
   if (externalAbortSignal) {
     if (externalAbortSignal.aborted) abortController.abort();
@@ -1252,8 +1311,15 @@ export async function runChatLoop(
       subAgentName,
       subAgentAvatar: '🤖',
     });
-    return executeTool(tc, ctx, config, subBudget, dispatchInfo, subStreamSessionId, streamSessionId, roomId)
+    pendingToolResults.set(tc.id, { toolName: tc.name, isDispatch: true });
+    // 2026-11-19 abort-tool-inflight：race 兜底——dispatch 成员的子任务链可能
+    // 卡在任何环节（sub agent 工具不监听 signal 同款病理），signal 触发即 reject
+    return raceToolWithAbort(
+      executeTool(tc, ctx, config, subBudget, dispatchInfo, subStreamSessionId, streamSessionId, roomId),
+      abortController.signal,
+    )
       .then((result) => {
+        pendingToolResults.delete(tc.id);
         sendStreamChunk({
           type: 'tool_result',
           streamSessionId,
@@ -1267,6 +1333,7 @@ export async function runChatLoop(
       })
       .catch((err: unknown) => {
         if ((err as Error).name === 'AbortError' || abortController.signal.aborted) throw err;
+        pendingToolResults.delete(tc.id);
         const errMsg = errWithTrace(err); // I1：工具失败带栈（LLM 侧可见真因）
         const result = `工具执行失败: ${errMsg}`;
         // dispatch 超时（executeDispatch 渐进式计时器 reject）→ 'timeout'；其它 → 'failed'
@@ -1448,6 +1515,7 @@ export async function runChatLoop(
     } catch (err) {
       if ((err as Error).name === 'AbortError' || abortController.signal.aborted) {
         process.off('message', abortListener);
+        flushPendingToolResults();
         sendEndChunk({ type: 'end', streamSessionId, finishReason: 'interrupted' });
         if (stats) {
           stats.toolCallsUsed = toolCallCount;
@@ -1848,6 +1916,7 @@ export async function runChatLoop(
         // （与原串行 catch 分支语义一致，防「中断-重试」死循环）
         if (abortController.signal.aborted || settled.some((r) => r.status === 'rejected')) {
           process.off('message', abortListener);
+          flushPendingToolResults();
           const finalText = buildFinalText('(中断)');
           sendEndChunk({ type: 'end', streamSessionId, finishReason: 'interrupted' });
           if (stats) {
@@ -1894,11 +1963,18 @@ export async function runChatLoop(
           toolName: tc.name,
           args: tc.arguments,
         });
+        pendingToolResults.set(tc.id, { toolName: tc.name, isDispatch: false });
       }
 
       let result: string;
       try {
-        result = await executeTool(tc, ctx, config, undefined, undefined, undefined, streamSessionId, roomId);
+        // 2026-11-19 abort-tool-inflight：race 兜底——不依赖工具自身监听
+        // signal（grep 等未接 signal 的工具在 abort 后照跑到自然返回）
+        result = await raceToolWithAbort(
+          executeTool(tc, ctx, config, undefined, undefined, undefined, streamSessionId, roomId),
+          abortController.signal,
+        );
+        pendingToolResults.delete(tc.id);
         sendStreamChunk({
           type: 'tool_result',
           streamSessionId,
@@ -1912,6 +1988,7 @@ export async function runChatLoop(
         // （否则 LLM 看到失败结果后重试，形成「中断-重试-中断」死循环）
         if ((err as Error).name === 'AbortError' || abortController.signal.aborted) {
           process.off('message', abortListener);
+          flushPendingToolResults();
           const finalText = buildFinalText('(中断)');
           sendEndChunk({ type: 'end', streamSessionId, finishReason: 'interrupted' });
           if (stats) {
@@ -1921,6 +1998,7 @@ export async function runChatLoop(
           return finalText;
         }
 
+        pendingToolResults.delete(tc.id);
         // P2 修复：McpToolError 文本即服务端语义文案（含错误码），原样回填——
         // 加「工具执行失败:」前缀会破坏模型对错误码/重试提示的解析
         result = toolFailureText(err);

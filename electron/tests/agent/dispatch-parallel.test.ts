@@ -449,9 +449,14 @@ describe('dispatch 同轮并发执行（spec 2026-08-25）', () => {
     const result = await runChatLoop(parallelSessId, '并行查', makeMainConfig(), makeContext());
 
     expect(result).toBe('(中断)');
-    // 中断不回填任何 tool result（防「中断-重试」死循环，spec §6.1）
-    expect(idxOfChunk('tool_result', 'cA')).toBe(-1);
-    expect(idxOfChunk('tool_result', 'cB')).toBe(-1);
+    // 2026-11-19 abort-tool-inflight 契约变更：中断退出补合成 tool_result chip
+    //（success=false「用户停止」——悬空 start 是 UI 悬转现场）；LLM 侧仍不回填
+    //（chatStream 只被调用 1 轮 = 无第二轮请求，「中断-重试」死循环防线不变）
+    const resA = streamChunks().find((c) => c.type === 'tool_result' && (c as { callId?: string }).callId === 'cA') as { success: boolean; result: string };
+    expect(resA.success).toBe(false);
+    expect(resA.result).toContain('用户停止');
+    expect(idxOfChunk('tool_result', 'cB')).toBeGreaterThanOrEqual(0);
+    expect(chatStreamCalls()).toHaveLength(1);
     const endChunk = streamChunks().find((c) => c.type === 'end') as { finishReason: string };
     expect(endChunk.finishReason).toBe('interrupted');
   });

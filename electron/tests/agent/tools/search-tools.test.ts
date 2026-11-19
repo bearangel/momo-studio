@@ -404,6 +404,17 @@ describe('SearchTools 预算与忽略集（2026-11-19）', () => {
     await expect(tools.execute('grep', { pattern: 'x' }, ctx)).rejects.toThrow(/候选文件过多：3 个.*include/s);
   });
 
+  it('回合中断（abortSignal 已触发）→ 立即抛 AbortError（批次边界识别约定）', async () => {
+    await fs.promises.writeFile(path.join(tmpDir, 'a.ts'), 'x\n');
+    const controller = new AbortController();
+    controller.abort();
+    const abortedCtx = { ...ctx, abortSignal: controller.signal } as typeof ctx;
+    const tools = new SearchTools();
+    await expect(tools.execute('grep', { pattern: 'x' }, abortedCtx)).rejects.toThrow('用户停止');
+    const err = await tools.execute('glob', { pattern: '**/*.ts' }, abortedCtx).catch((e: unknown) => e as Error);
+    expect((err as { name?: string }).name).toBe('AbortError');
+  });
+
   it('时间预算耗尽 → 立即抛错（可执行指引），绝不无限扫描', async () => {
     await fs.promises.writeFile(path.join(tmpDir, 'a.ts'), 'x\n');
     __setSearchBudgetForTest({ timeBudgetMs: 0 });

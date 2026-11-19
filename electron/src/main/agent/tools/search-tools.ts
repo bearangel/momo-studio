@@ -271,7 +271,17 @@ async function statSearchRoot(absPath: string, rawPath: string): Promise<fs.Stat
   }
 }
 
+/** 回合中断错误（name 是批次边界中断退出的识别约定）——abort race 的协作侧检查点 */
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    const e = new Error('用户停止');
+    e.name = 'AbortError';
+    throw e;
+  }
+}
+
 async function executeGrep(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+  throwIfAborted(ctx.abortSignal);
   const pattern = parseStringArg(args.pattern, 'pattern');
   const includeGlob = typeof args.include === 'string' ? args.include : '**/*';
   const startDir = typeof args.path === 'string' ? args.path : '.';
@@ -338,6 +348,7 @@ async function executeGrep(args: Record<string, unknown>, ctx: ToolContext): Pro
   // 改为批量经通道，stat/沙箱仍逐文件前置——大文件不进批，省通道流量）
   const readableRels: string[] = [];
   for (const relPath of filtered) {
+    throwIfAborted(ctx.abortSignal);
     const absFile = path.join(absStart, relPath);
     // 每个候选文件再过一遍沙箱：fastGlob 不做 symlink follow 检查，WorkspaceFS 把关。
     ctx.wsFs.assertInWorkspace(absFile);
@@ -366,6 +377,8 @@ async function executeGrep(args: Record<string, unknown>, ctx: ToolContext): Pro
       timeBudgetHit = true;
       break;
     }
+    // 中断检查点（与时间预算同位）：大目录扫描期用户停止 → 立即抛 AbortError
+    throwIfAborted(ctx.abortSignal);
     const batchRels = readableRels.slice(i, i + GREP_READ_BATCH);
     scannedBatches++;
     const buffers = await readBatchWithCipherSkip(
@@ -393,6 +406,7 @@ async function executeGrep(args: Record<string, unknown>, ctx: ToolContext): Pro
 }
 
 async function executeGlob(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+  throwIfAborted(ctx.abortSignal);
   const pattern = parseStringArg(args.pattern, 'pattern');
   const startDir = typeof args.path === 'string' ? args.path : '.';
 
@@ -411,6 +425,7 @@ async function executeGlob(args: Record<string, unknown>, ctx: ToolContext): Pro
     'glob 遍历',
   );
 
+  throwIfAborted(ctx.abortSignal);
   const ig = await loadGitignore(ctx.workspaceDir, ctx.wsFs);
   const filtered = ig ? files.filter((p) => !ig.ignores(p)) : files;
 
