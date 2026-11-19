@@ -144,6 +144,12 @@ export interface RichComposerProps {
   ariaLabel: string;
   /** beforeCaret：光标前文本（pill 折叠单空格、剥 ZWSP——供触发检测）；allText：全文同规则 */
   onInputText(beforeCaret: string, allText: string): void;
+  /**
+   * 全量 segments 变更上抛（2026-11-19 草稿仓）：输入/pill 插删/重建/清空等
+   * 一切内容变更后发出。上层（MentionInput）以此维护写穿镜像——组件卸载后
+   * rootRef 已置 null，getSegments 读不到 DOM，存稿只能来自镜像。
+   */
+  onSegmentsChange?(segs: ComposerSegment[]): void;
   onEnter(): void;
   onEscape(): void;
   /**
@@ -172,7 +178,7 @@ export interface RichComposerProps {
 
 export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
     function RichComposer(
-      { disabled, placeholder, ariaLabel, onInputText, onEnter, onEscape, onPasteImage, onDropFiles, onNavigate },
+      { disabled, placeholder, ariaLabel, onInputText, onSegmentsChange, onEnter, onEscape, onPasteImage, onDropFiles, onNavigate },
       ref,
     ) {
     const rootRef = useRef<HTMLDivElement>(null);
@@ -264,6 +270,12 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
     const emitInput = (): void => {
       const { before, all } = caretContext();
       onInputText(before, all);
+      onSegmentsChange?.(getSegments());
+    };
+
+    /** 全量 segments 变更上抛（写穿镜像用——上层卸载存稿时 rootRef 已死，读不到 DOM） */
+    const emitSegments = (): void => {
+      onSegmentsChange?.(getSegments());
     };
 
     const getSegments = (): ComposerSegment[] => {
@@ -313,10 +325,12 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
         if (seg.type === 'text') root.append(document.createTextNode(seg.text));
         else appendPillNode(root, seg);
       }
+      emitSegments();
     };
 
     const clear = (): void => {
       if (rootRef.current) rootRef.current.textContent = '';
+      emitSegments();
     };
 
     /**
@@ -340,6 +354,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
       if (c === null) {
         const zwsp = appendPillNode(root, pill);
         setCaretEndOf(zwsp);
+        emitSegments();
         return;
       }
       // 删除光标前 replaceLen 个触发字符
@@ -383,6 +398,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
         root.append(span, zwsp);
       }
       setCaretEndOf(zwsp);
+      emitSegments();
     };
 
     /** 末尾追加文字：末可见字符非空白且非开头时补一个空格防粘连 + 光标到末尾 + 触发 onInputText */
