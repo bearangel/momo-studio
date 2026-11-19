@@ -130,9 +130,20 @@ function manifestSample(resources: unknown): unknown {
   };
 }
 
-describe('hub pin v0.7.6（1.13.1 帧投影底座）', () => {
-  it('pin 生效：实装 momo-hub-protocol 版本 = 0.7.6（electron/package.json #v0.7.6）', () => {
-    expect(pkg.version).toBe('0.7.6');
+describe('hub pin v0.7.7（1.14.0 验收继续底座）', () => {
+  it('1.14.0 面：task.continue 方法 + task.continued 事件 + 门槛常量 + deliverable 可选字段', async () => {
+    const proto = await import('../../src/main/hub/protocol');
+    expect(proto.TASK_RPC.continue).toBe('task.continue');
+    expect(proto.EVT.taskContinued).toBe('task.continued');
+    expect(proto.TASK_CONTINUE_REQUIRED_MINOR).toBe(14);
+    expect(proto.METHOD_REQUIRED_MINOR[proto.TASK_RPC.continue]).toBe(14);
+    expect(proto.RPC_ERROR_CODES).toContain('peer_version_unsupported');
+    const payload: proto.TaskReportPayload = { status: 'submitted', runNo: 2, deliverable: { summary: 'x' } };
+    expect(payload.deliverable).toEqual({ summary: 'x' });
+  });
+
+  it('pin 生效：实装 momo-hub-protocol 版本 = 0.7.7（electron/package.json #v0.7.7）', () => {
+    expect(pkg.version).toBe('0.7.7');
   });
 
   it('v0.1.5 语义目录样本过 validateHubCatalog（生产消费链同校验器）', () => {
@@ -335,8 +346,8 @@ describe('hub pin v0.7.6（1.13.1 帧投影底座）', () => {
   });
 
   describe('1.12.0：v2 HITL + steer——submitted 八态 / runNo 三时刻 / 干预族 / 双向结构化答复 / task.steer', () => {
-    it('协议版本对齐：PROTOCOL_VERSION = 1.13.1（帧投影底座）', () => {
-      expect(PROTOCOL_VERSION).toBe('1.13.1');
+    it('协议版本对齐：PROTOCOL_VERSION = 1.14.0（验收继续底座）', () => {
+      expect(PROTOCOL_VERSION).toBe('1.14.0');
     });
 
     it('TASK_HITL_REQUIRED_MINOR = 11（v2 版本门单源——studio 派发闸与 hub 门禁共用，勿硬编码）', () => {
