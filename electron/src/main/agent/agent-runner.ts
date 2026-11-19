@@ -27,7 +27,7 @@ import { getTask, updateTask, type TaskRow } from '../storage/tasks/repo';
 import { isTerminal } from '../storage/tasks/state-machine';
 import { submitRun, failRun, cancelActiveRun, emitRunChanged, emitHumanChanged, emitRemoteIntervene, type TaskRunChangedEvent, type HumanChangedEvent, type DeliverableInput, type LifecycleEventMessage } from '../task/lifecycle-runs';
 import type { HumanRequestRow } from '../storage/tasks/human-requests-repo';
-import { finalizeStreamOnCrash } from './stream-relay';
+import { finalizeStreamOnCrash, handleStreamChunk } from './stream-relay';
 import { scheduleExtraction } from '../memory/extraction';
 import { resolveMaxToolCalls } from '../settings/crud';
 import { notifyExecutor } from '../task/executor';
@@ -172,6 +172,9 @@ export interface AgentRunnerOpts {
 }
 
 /** 活跃 task 记录——keyed by streamSessionId */
+/** abort 后等待子进程自终局的预算；超时主进程强杀（spec 2026-11-19 abort-tool-inflight §3.2） */
+const ABORT_FORCE_KILL_MS = 5_000;
+
 interface ActiveTask {
   streamSessionId: string;
   /** 执行会话 ID（任务完成触发记忆提取用；与 TaskConfig.executionSessionId 同源） */
@@ -935,11 +938,25 @@ export class AgentRunner {
    * 中断指定 task 的 stream。
    * 通过 IPC 发 abort 消息，子进程的 abortListener 据此触发 AbortController.abort()。
    * 找不到活跃 task 时 no-op（可能已结束或从未启动）。
+   *
+   * 2026-11-19 abort-tool-inflight §3.2：5s 保底强杀——race 快速路径失效
+   * （子进程僵死 / 事件循环卡死 / 工具不可中断且 race 后续收尾受阻）时由
+   * 主进程给出确定性终局：合成 end(interrupted) chunk 走完整落库路径
+   * （messages → aborted 终态 + final 事件 + UI 推送），再 finalizeActiveTask
+   * （kill 子进程 + 任务终态 + 进程组收割）。到期自查活跃表（幂等）——
+   * 期间正常收尾则 no-op。
    */
   abortStream(streamSessionId: string): void {
     const active = this.activeTasks.get(streamSessionId);
     if (!active) return;
     this.safeSend(active.runtime.child, { type: 'abort', streamSessionId }, 'abort');
+    const killTimer = setTimeout(() => {
+      if (!this.activeTasks.has(streamSessionId)) return;
+      logger.warn('abort 5s 未终局，强制回收 runner', { streamSessionId });
+      handleStreamChunk({ type: 'end', streamSessionId, finishReason: 'interrupted' });
+      this.finalizeActiveTask(streamSessionId, { error: '用户停止（5s 未终局，强制回收 runner）' });
+    }, ABORT_FORCE_KILL_MS);
+    killTimer.unref?.();
   }
 
   /**
