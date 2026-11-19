@@ -138,7 +138,11 @@ describe('hub pin v0.7.7（1.14.0 验收继续底座）', () => {
     expect(proto.TASK_CONTINUE_REQUIRED_MINOR).toBe(14);
     expect(proto.METHOD_REQUIRED_MINOR[proto.TASK_RPC.continue]).toBe(14);
     expect(proto.RPC_ERROR_CODES).toContain('peer_version_unsupported');
-    const payload: proto.TaskReportPayload = { status: 'submitted', runNo: 2, deliverable: { summary: 'x' } };
+    const payload: import('../../src/main/hub/protocol').TaskReportPayload = {
+      status: 'submitted',
+      runNo: 2,
+      deliverable: { summary: 'x' },
+    };
     expect(payload.deliverable).toEqual({ summary: 'x' });
   });
 
