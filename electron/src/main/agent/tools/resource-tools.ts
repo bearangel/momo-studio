@@ -71,10 +71,10 @@ export class ResourceTools implements ToolModule {
       {
         name: 'resource_list',
         description:
-          '列出当前工作空间的资源清单（agent 定义 / 工作空间成员 / 已装 skill / 已配 MCP / 已有团队）。创建任何资源前先调用盘点，防重复创建。可选 type 过滤：agents / members / skills / mcps / teams。',
+          '列出当前工作空间的资源清单（agent 定义 / 工作空间成员 / 已装 skill / 已配 MCP / 已有团队 / 插件工具）。创建任何资源前先调用盘点，防重复创建。可选 type 过滤：agents / members / skills / mcps / teams / pluginTools（插件工具全名 plugin:<id>/<tool>——授权 ref 即用此形态）。',
         inputSchema: {
           type: 'object',
-          properties: { type: { type: 'string', enum: ['agents', 'members', 'skills', 'mcps', 'teams'] } },
+          properties: { type: { type: 'string', enum: ['agents', 'members', 'skills', 'mcps', 'teams', 'pluginTools'] } },
         },
       },
       {

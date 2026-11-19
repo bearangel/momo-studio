@@ -12,6 +12,7 @@ import { applyCapabilityDelta, hasCapabilityAdditions, type CapabilityDeltaInput
 import { isAgentRunning } from './runtime-status';
 import { buildDispatchSnapshot } from './spawn-helpers';
 import { toolRefMatches } from '../plugin/assembly';
+import { listAssembledToolDefs } from '../plugin/tool-catalog';
 import type { AgentDefinition, WorkspaceAgentMember, McpRef, SkillRef } from './types';
 import { getProvider, listProviders, listProviderModels } from './provider-crud';
 import { getGlobalSettings } from '../settings/crud';
@@ -258,6 +259,8 @@ export interface ResourceListResult {
   skills?: Array<{ slug: string; name: string; source: string }>;
   mcps?: Array<{ name: string; transport: RegisteredMcp['transport']; enabled: boolean }>;
   teams?: Array<{ id: string; name: string; leaderInstanceId: string; memberInstanceIds: string[] }>;
+  /** 插件工具清单（2026-11-19）：fullName 即 update_agent_capabilities 的授权 ref */
+  pluginTools?: Array<{ pluginId: string; pluginName: string; toolName: string; fullName: string }>;
 }
 
 /** create_agent 返回（addToWorkspace=true 时附带成员 instanceId） */
@@ -385,6 +388,14 @@ function opList(typeFilter: unknown, workspaceId: string): ResourceListResult {
     result.teams = listTeams(workspaceId).map((tm) => ({
       id: tm.id, name: tm.name, leaderInstanceId: tm.leaderInstanceId,
       memberInstanceIds: tm.members.map((m) => m.instanceId),
+    }));
+  }
+  if (need('pluginTools')) {
+    // 2026-11-19：插件工具清单暴露（授权 ref 即 fullName）——此前 agent 只能
+    // 靠 grep 文档猜插件工具名（用户实证卡死链路的起点）
+    result.pluginTools = listAssembledToolDefs(workspaceId).map((t) => ({
+      pluginId: t.pluginId, pluginName: t.pluginName,
+      toolName: t.toolName, fullName: t.fullName,
     }));
   }
   return result;
@@ -556,7 +567,13 @@ export async function validateCapabilityRefs(addRaw: unknown, removeRaw: unknown
     for (const m of [...add.mcps, ...remove.mcps]) if (!names.has(m)) invalid.push(`mcp=${m}`);
   }
   if (invalid.length > 0) {
-    throw new Error(`非法引用: ${invalid.join(', ')}（可先 resource_list 查询可用清单）`);
+    // 2026-11-19：pluginTool 非法给专属可执行指引——用户实证 agent 被「resource_list
+    // 查可用清单」指去后仍查不到插件工具名（清单里没有该 type），转而 grep 文档卡死
+    const hasPluginTool = invalid.some((x) => x.startsWith('pluginTool='));
+    const hint = hasPluginTool
+      ? '（插件工具清单用 resource_list type=pluginTools 获取，授权 ref 用 fullName，如 plugin:db-pro/query；整插件授权可用 plugin:<id>/*）'
+      : '（可先 resource_list 查询可用清单）';
+    throw new Error(`非法引用: ${invalid.join(', ')}${hint}`);
   }
 }
 
@@ -860,7 +877,30 @@ function safeJoin(dir: string, rel: string): string {
   return full;
 }
 
+/**
+ * 技能写盘 IO 错误翻译（2026-11-19）：Windows 杀软/同步盘瞬时锁目录实测抛裸
+ * EPERM（22s 后失败，栈指 asar 产物）——对 LLM/用户零可行动信息。统一翻译为
+ * 中文 + 重试指引（实证：agent 收到可行动错误后重试即成功）。
+ */
+function translateSkillIoError(dir: string, err: unknown): Error {
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code === 'EPERM' || code === 'EBUSY' || code === 'EACCES') {
+    return new Error(
+      `写入技能目录失败（${code}——目录可能被杀毒软件或同步盘临时锁定）：${dir}。请稍候重试本操作`,
+    );
+  }
+  return err instanceof Error ? err : new Error(String(err));
+}
+
 function opCreateSkill(a: Record<string, unknown>): CreateSkillResult {
+  // 形状先验（2026-11-19）：缺 slug/skillMd 时附带期望形状与实际收到的键——
+  // 用户实证 agent 把载荷包进 _raw 后连吃裸报错「slug 必须为非空字符串」盲试
+  if (typeof a['slug'] !== 'string' || typeof a['skillMd'] !== 'string') {
+    throw new Error(
+      `create_skill 需要 slug（英文短名）与 skillMd（SKILL.md 全文含 frontmatter）两个字符串字段；` +
+        `可选 references: Array<{path, content}>。实际收到的键: [${Object.keys(a).join(', ') || '(空)'}]`,
+    );
+  }
   const slug = str(a['slug'], 'slug'); // 显式必填——中文 name 无法可靠派生英文 slug（spec §5.4）
   const skillMd = str(a['skillMd'], 'skillMd');
   const rawRefs = Array.isArray(a['references']) ? a['references'] : [];
@@ -882,17 +922,21 @@ function opCreateSkill(a: Record<string, unknown>): CreateSkillResult {
   const def = parseSkillMd(skillMd, dir); // name/description 必填校验（缺则抛）
   // 全部校验（含 references 越界）先于任何写盘——错误路径零落盘
   const targets = refs.map((r) => safeJoin(dir, r.path));
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'SKILL.md'), skillMd, 'utf-8');
-  refs.forEach((r, i) => {
-    fs.mkdirSync(path.dirname(targets[i]!), { recursive: true });
-    fs.writeFileSync(targets[i]!, r.content, 'utf-8');
-  });
-  // .sha256 标记 = custom 源标识（zip-uploader / form-create 同款）：listInstalled 据此识别
-  fs.writeFileSync(
-    path.join(dir, '.sha256'),
-    createHash('sha256').update(skillMd, 'utf-8').digest('hex'),
-  );
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'SKILL.md'), skillMd, 'utf-8');
+    refs.forEach((r, i) => {
+      fs.mkdirSync(path.dirname(targets[i]!), { recursive: true });
+      fs.writeFileSync(targets[i]!, r.content, 'utf-8');
+    });
+    // .sha256 标记 = custom 源标识（zip-uploader / form-create 同款）：listInstalled 据此识别
+    fs.writeFileSync(
+      path.join(dir, '.sha256'),
+      createHash('sha256').update(skillMd, 'utf-8').digest('hex'),
+    );
+  } catch (err) {
+    throw translateSkillIoError(dir, err);
+  }
   logger.info('会话内安装 skill', { slug });
   return { slug, name: def.name };
 }
@@ -999,11 +1043,15 @@ function opUpdateSkill(a: Record<string, unknown>): UpdateSkillResult {
 
   if (!refsProvided) {
     // 省略分支：只覆写 SKILL.md + 重算 .sha256，附属文件原样保留（目录不 rm）
-    fs.writeFileSync(path.join(dir, 'SKILL.md'), skillMd, 'utf-8');
-    fs.writeFileSync(
-      path.join(dir, '.sha256'),
-      createHash('sha256').update(skillMd, 'utf-8').digest('hex'),
-    );
+    try {
+      fs.writeFileSync(path.join(dir, 'SKILL.md'), skillMd, 'utf-8');
+      fs.writeFileSync(
+        path.join(dir, '.sha256'),
+        createHash('sha256').update(skillMd, 'utf-8').digest('hex'),
+      );
+    } catch (err) {
+      throw translateSkillIoError(dir, err);
+    }
     const agentsUsingIt = countSkillMembers(slug);
     logger.info('会话内更新 skill（保留附属文件）', { slug, agentsUsingIt });
     return {
@@ -1013,17 +1061,21 @@ function opUpdateSkill(a: Record<string, unknown>): UpdateSkillResult {
   }
 
   // 全量替换分支：显式 references（含 [] = 有意清空）
-  fs.rmSync(dir, { recursive: true, force: true });
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'SKILL.md'), skillMd, 'utf-8');
-  refs.forEach((r, i) => {
-    fs.mkdirSync(path.dirname(targets[i]!), { recursive: true });
-    fs.writeFileSync(targets[i]!, r.content, 'utf-8');
-  });
-  fs.writeFileSync(
-    path.join(dir, '.sha256'),
-    createHash('sha256').update(skillMd, 'utf-8').digest('hex'),
-  );
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'SKILL.md'), skillMd, 'utf-8');
+    refs.forEach((r, i) => {
+      fs.mkdirSync(path.dirname(targets[i]!), { recursive: true });
+      fs.writeFileSync(targets[i]!, r.content, 'utf-8');
+    });
+    fs.writeFileSync(
+      path.join(dir, '.sha256'),
+      createHash('sha256').update(skillMd, 'utf-8').digest('hex'),
+    );
+  } catch (err) {
+    throw translateSkillIoError(dir, err);
+  }
 
   const agentsUsingIt = countSkillMembers(slug);
   logger.info('会话内更新 skill', { slug, agentsUsingIt });

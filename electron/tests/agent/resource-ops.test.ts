@@ -136,6 +136,62 @@ describe('list（resource_list 聚合）', () => {
   });
 });
 
+describe('list pluginTools（2026-11-19 插件工具清单暴露）', () => {
+  /** 单文件多工具插件（db-pro 形态）：授权域/装配域共用的工具名来自 getDefs */
+  function seedMultiToolPlugin(id: string): void {
+    const root = path.join(tmpRoot, 'plugins', id);
+    fs.mkdirSync(path.join(root, 'tools'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, 'tools', 'index.js'),
+      `module.exports.createTools = function () {
+        return {
+          getDefs() {
+            return [
+              { name: 'query', description: '查询', inputSchema: {} },
+              { name: 'write', description: '写入', inputSchema: {} },
+            ];
+          },
+          getCatalog() { return []; },
+          handles() { return true; },
+          async execute() { return 'ok'; },
+        };
+      };`,
+    );
+    fs.writeFileSync(
+      path.join(root, 'momo-plugin.json'),
+      JSON.stringify({ id, name: `${id} 数据库工具`, version: '0.1.0', description: '', components: { tools: './tools' } }),
+    );
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO plugins (id, version, manifest_json, state, source, source_path, installed_at)
+       VALUES (?, '0.1.0', ?, 'active', 'dev', ?, 'x')`,
+    ).run(id, fs.readFileSync(path.join(root, 'momo-plugin.json'), 'utf-8'), root);
+    db.prepare(
+      `INSERT INTO plugin_enablements (workspace_id, plugin_id, enabled) VALUES (?, ?, 1)`,
+    ).run(wsId, id);
+  }
+
+  it('type=pluginTools → 列出全名（授权 ref 即用此形态）', async () => {
+    seedMultiToolPlugin('db-x');
+    const r = (await executeResourceOp('list', { type: 'pluginTools' }, wsId)) as {
+      pluginTools: Array<{ pluginId: string; pluginName: string; toolName: string; fullName: string }>;
+    };
+    const names = r.pluginTools.map((t) => t.fullName).sort();
+    expect(names).toEqual(['plugin:db-x/query', 'plugin:db-x/write']);
+    expect(r.pluginTools[0]!.pluginName).toBe('db-x 数据库工具');
+  });
+
+  it('非法 pluginTool 授权报错附 pluginTools 查询指引', async () => {
+    await expect(
+      executeResourceOp(
+        'updateCapabilities',
+        { agent: m1, add: { pluginTools: ['db-x'] } },
+        wsId,
+      ),
+    ).rejects.toThrow(/pluginTool=db-x.*type=pluginTools/s);
+  });
+});
+
 describe('createTeam', () => {
   it('成员不足拒绝并透传 team.ts 事务错误', async () => {
     await expect(
@@ -244,6 +300,39 @@ description: 写结构化报告时使用
     await expect(
       executeResourceOp('createSkill', { slug: 'Bad/Slug', skillMd: md }, wsId),
     ).rejects.toThrow('非法 slug');
+  });
+
+  // 2026-11-19 用户实证：agent 把载荷包进 _raw（缺 slug/skillMd）时报「slug 必须为
+  // 非空字符串」——没说缺什么、收到了什么，agent 连续盲试。锁：报错附期望形状
+  // 与实际收到的键。
+  it('载荷形状错误（缺 slug/skillMd）→ 报错附期望形状与实际收到的键', async () => {
+    await expect(
+      executeResourceOp('createSkill', { _raw: { references: [{ path: 'a.js', content: 'x' }] } }, wsId),
+    ).rejects.toThrow(/slug.*skillMd.*_raw/s);
+  });
+
+  // 2026-11-19 用户实证：update_skill 报裸 EPERM mkdir（Windows 杀软/同步盘瞬时锁
+  // 目录，实测 22s 后失败）——对 LLM/用户都不可行动。锁：IO 权限类错误翻译为
+  // 中文 + 重试指引（实证 agent 收到可行动指引后重试即成功）。
+  it('写盘 EPERM → 人话错误（含锁定原因推测与重试指引）', async () => {
+    const skillsDir = path.join(tmpRoot, 'skills', 'eperm-skill');
+    fs.mkdirSync(skillsDir, { recursive: true });
+    fs.writeFileSync(path.join(skillsDir, 'SKILL.md'), md, 'utf-8');
+    fs.writeFileSync(path.join(skillsDir, '.sha256'), 'x');
+    const spy = vi.spyOn(fs, 'mkdirSync');
+    let installed = false;
+    try {
+      spy.mockImplementationOnce(() => {
+        throw Object.assign(new Error("EPERM: operation not permitted, mkdir 'C:\\skills'"), { code: 'EPERM' });
+      });
+      installed = true;
+      // references: [] = 全量替换分支（rm → mkdir），命中 mkdirSync
+      await expect(
+        executeResourceOp('updateSkill', { slug: 'eperm-skill', skillMd: md, references: [] }, wsId),
+      ).rejects.toThrow(/写入技能目录失败.*EPERM.*重试/s);
+    } finally {
+      if (installed) spy.mockRestore();
+    }
   });
 
   it('与既有 skill 同名拒绝并带来源', async () => {
