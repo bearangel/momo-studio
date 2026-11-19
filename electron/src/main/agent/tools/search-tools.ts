@@ -44,8 +44,54 @@ async function loadGitignore(workspaceDir: string, wsFs: WorkspaceFS): Promise<I
 }
 
 /** 硬编码的默认忽略集：与 .gitignore 是叠加关系（任一命中即过滤）。
- *  这层不依赖用户配置，保证搜索结果永远不包含构建产物和版本库元数据。*/
-const DEFAULT_IGNORE: string[] = ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**'];
+ *  这层不依赖用户配置，保证搜索结果永远不包含构建产物和版本库元数据。
+ *  2026-11-19 补 target（Maven 构建产物）与 logs——用户实证多仓 Java
+ *  workspace 上 grep path:"." 遍历 5 分钟不返回，两类目录是大头。*/
+const DEFAULT_IGNORE: string[] = [
+  '**/node_modules/**',
+  '**/.git/**',
+  '**/dist/**',
+  '**/build/**',
+  '**/target/**',
+  '**/logs/**',
+];
+
+/**
+ * 搜索预算（2026-11-19）：fastGlob 遍历墙钟上限（race 超时即抛错）+ grep
+ * 候选文件数上限（超限抛错指引缩小范围）。动机：Windows 多仓 workspace +
+ * 杀软下无界遍历分钟级卡死且 abort 穿不透在途工具（见 abort 立项 spec）。
+ */
+interface SearchBudget {
+  timeBudgetMs: number;
+  maxGrepCandidates: number;
+}
+
+const DEFAULT_BUDGET: SearchBudget = { timeBudgetMs: 60_000, maxGrepCandidates: 5000 };
+
+let budget: SearchBudget = { ...DEFAULT_BUDGET };
+
+/** 仅测试注入（afterEach 传 null 还原缺省） */
+export function __setSearchBudgetForTest(partial: Partial<SearchBudget> | null): void {
+  budget = partial === null ? { ...DEFAULT_BUDGET } : { ...DEFAULT_BUDGET, ...partial };
+}
+
+/** fastGlob 遍历墙钟保护：超预算立即 reject（结果不可部分取回，明确报错优于无限等） */
+function withTimeBudget<T>(p: Promise<T>, what: string): Promise<T> {
+  // 同步预检：预算已耗尽（含测试注入 0）时确定性立即拒绝——不与已完成的
+  // 微任务竞态（小目录遍历快于 setTimeout(0) 会让 0ms 预算形同虚设）
+  if (budget.timeBudgetMs <= 0) {
+    return Promise.reject(
+      new Error(`${what}时间预算（${budget.timeBudgetMs}ms）耗尽——请缩小 path 范围或加 include 过滤后再试`),
+    );
+  }
+  const timer = new Promise<never>((_, reject) => {
+    const t = setTimeout(() => {
+      reject(new Error(`${what}时间预算（${budget.timeBudgetMs}ms）耗尽——请缩小 path 范围或加 include 过滤后再试`));
+    }, budget.timeBudgetMs);
+    t.unref?.();
+  });
+  return Promise.race([p, timer]);
+}
 
 /**
  * 搜索工具模块（grep + glob）。v1.5 Task 7 引入。
@@ -267,13 +313,26 @@ async function executeGrep(args: Record<string, unknown>, ctx: ToolContext): Pro
 
   // fast-glob 先按文件名 candidate，再读内容过滤。比 ripgrep 慢但 zero-dep。
   // onlyFiles:true 是 v3 默认值，显式注明便于阅读；fast-glob v3 不再支持 nodir 选项。
-  const candidates = await fastGlob(includeGlob, {
-    cwd: absStart, absolute: false, ignore: DEFAULT_IGNORE, onlyFiles: true,
-  });
+  // 遍历墙钟保护（2026-11-19）：大 workspace + 杀软下无界遍历分钟级——超预算立即抛错。
+  const candidates = await withTimeBudget(
+    fastGlob(includeGlob, {
+      cwd: absStart, absolute: false, ignore: DEFAULT_IGNORE, onlyFiles: true,
+    }),
+    'grep 遍历',
+  );
 
   // .gitignore 在 DEFAULT_IGNORE 之上再叠加一层。loadGitignore 失败返回 null。
   const ig = await loadGitignore(ctx.workspaceDir, ctx.wsFs);
   const filtered = ig ? candidates.filter((p) => !ig.ignores(p)) : candidates;
+
+  // 候选数上限（2026-11-19）：逐文件 stat + 内容读的成本面在候选集——超限不
+  // 静默截断（部分结果易误导），报错并给可执行的缩小指引
+  if (filtered.length > budget.maxGrepCandidates) {
+    throw new Error(
+      `grep 候选文件过多：${filtered.length} 个（上限 ${budget.maxGrepCandidates}）——` +
+        '请加 include 过滤（如 "*.java"）或缩小 path 到子目录后再试',
+    );
+  }
 
   // 预过滤：逐文件沙箱校验 + 大小上限，得到可读候选集（B 方案收口：内容读
   // 改为批量经通道，stat/沙箱仍逐文件前置——大文件不进批，省通道流量）
@@ -293,12 +352,22 @@ async function executeGrep(args: Record<string, unknown>, ctx: ToolContext): Pro
   // 密文文件按相对路径收集（与 file 字段同口径），结果末尾聚合提示。
   const skippedEncrypted: string[] = [];
 
+  const startedAt = Date.now();
+  let timeBudgetHit = false;
+  let scannedBatches = 0;
   for (let i = 0; i < readableRels.length; i += GREP_READ_BATCH) {
     if (matches.length >= OUTPUT_LIMITS.grep_matches) {
       state.limitReached = true;
       break;
     }
+    // 墙钟预算（2026-11-19）：stat/读盘在大目录上可达分钟级——超预算停止扫描，
+    // 返回已扫到的部分 + 明确截断说明（部分结果优于无限等/假「无匹配」）
+    if (Date.now() - startedAt > budget.timeBudgetMs) {
+      timeBudgetHit = true;
+      break;
+    }
     const batchRels = readableRels.slice(i, i + GREP_READ_BATCH);
+    scannedBatches++;
     const buffers = await readBatchWithCipherSkip(
       ctx.wsFs,
       batchRels.map((r) => path.join(absStart, r)),
@@ -316,8 +385,11 @@ async function executeGrep(args: Record<string, unknown>, ctx: ToolContext): Pro
   }
 
   const body = formatGrepResult(matches, state.limitReached);
-  if (skippedEncrypted.length === 0) return body;
-  return `${body}\n\n${encryptedSkipNote(skippedEncrypted)}`;
+  const budgetNote = timeBudgetHit
+    ? `\n\n⚠ 时间预算（${budget.timeBudgetMs}ms）耗尽，扫描中止——已扫 ${scannedBatches}/${Math.ceil(readableRels.length / GREP_READ_BATCH)} 批，请缩小 path 或加 include 后再试`
+    : '';
+  if (skippedEncrypted.length === 0) return `${body}${budgetNote}`;
+  return `${body}${budgetNote}\n\n${encryptedSkipNote(skippedEncrypted)}`;
 }
 
 async function executeGlob(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
@@ -332,9 +404,12 @@ async function executeGlob(args: Record<string, unknown>, ctx: ToolContext): Pro
     throw new Error(`path 必须是目录: ${startDir}（glob 的 path 只接受目录；要搜单个文件请用 grep）`);
   }
 
-  const files = await fastGlob(pattern, {
-    cwd: absStart, absolute: false, ignore: DEFAULT_IGNORE, onlyFiles: true,
-  });
+  const files = await withTimeBudget(
+    fastGlob(pattern, {
+      cwd: absStart, absolute: false, ignore: DEFAULT_IGNORE, onlyFiles: true,
+    }),
+    'glob 遍历',
+  );
 
   const ig = await loadGitignore(ctx.workspaceDir, ctx.wsFs);
   const filtered = ig ? files.filter((p) => !ig.ignores(p)) : files;

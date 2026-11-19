@@ -14,7 +14,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { WorkspaceFS } from '../../../src/main/files/workspace-fs';
 import { DirectContentIo } from '../../../src/main/files/file-io/content-io';
-import { SearchTools } from '../../../src/main/agent/tools/search-tools';
+import { SearchTools, __setSearchBudgetForTest } from '../../../src/main/agent/tools/search-tools';
 import type { ToolContext } from '../../../src/main/agent/tools/types';
 import type { ContentIo } from '../../../src/main/files/file-io/types';
 
@@ -53,6 +53,7 @@ beforeEach(() => {
 
 afterEach(() => {
   fs.rmSync(tmpRoot, { recursive: true, force: true });
+  __setSearchBudgetForTest(null);
 });
 
 describe('SearchTools grep', () => {
@@ -371,5 +372,43 @@ describe('SearchTools grep 批量通道读（B 方案收口）', () => {
     const result = await tools.execute('grep', { pattern: 'NEEDLE', path: 'one.ts' }, ctx);
     expect(result).toContain('one.ts:1:NEEDLE');
     expect(io.batches).toHaveLength(0);
+  });
+});
+
+
+// 2026-11-19 预算与忽略集（用户实证：grep path:"." 无 include 在多仓 Java
+// workspace 遍历 5 分钟不返回——target/logs 未忽略 + 无文件数/时间上限）。
+describe('SearchTools 预算与忽略集（2026-11-19）', () => {
+  it('DEFAULT_IGNORE 含 Maven target 与 logs 目录（不进候选集）', async () => {
+    fs.mkdirSync(path.join(tmpDir, 'svc', 'target'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'logs'), { recursive: true });
+    await fs.promises.writeFile(path.join(tmpDir, 'svc', 'target', 'Gen.java'), 'TODO generated\n');
+    await fs.promises.writeFile(path.join(tmpDir, 'logs', 'app.log'), 'TODO log\n');
+    await fs.promises.writeFile(path.join(tmpDir, 'src.ts'), 'TODO real\n');
+    const tools = new SearchTools();
+    const grepRes = await tools.execute('grep', { pattern: 'TODO' }, ctx);
+    expect(grepRes).toContain('src.ts');
+    expect(grepRes).not.toContain('Gen.java');
+    expect(grepRes).not.toContain('app.log');
+    const globRes = await tools.execute('glob', { pattern: '**/*' }, ctx);
+    expect(globRes).not.toContain('target');
+    expect(globRes).not.toContain('logs');
+  });
+
+  it('候选文件数超上限 → 明确报错（含实际数与缩小范围指引），不静默扫描', async () => {
+    for (let i = 0; i < 3; i++) {
+      await fs.promises.writeFile(path.join(tmpDir, `f${i}.ts`), 'x\n');
+    }
+    __setSearchBudgetForTest({ maxGrepCandidates: 2 });
+    const tools = new SearchTools();
+    await expect(tools.execute('grep', { pattern: 'x' }, ctx)).rejects.toThrow(/候选文件过多：3 个.*include/s);
+  });
+
+  it('时间预算耗尽 → 立即抛错（可执行指引），绝不无限扫描', async () => {
+    await fs.promises.writeFile(path.join(tmpDir, 'a.ts'), 'x\n');
+    __setSearchBudgetForTest({ timeBudgetMs: 0 });
+    const tools = new SearchTools();
+    await expect(tools.execute('grep', { pattern: 'x' }, ctx)).rejects.toThrow(/时间预算.*缩小/s);
+    await expect(tools.execute('glob', { pattern: '**/*.ts' }, ctx)).rejects.toThrow(/时间预算/s);
   });
 });
