@@ -208,9 +208,43 @@ function resolveAssignmentId(task: TaskRow, breakpointSsId: string | null): stri
  *
  * D6：检测时**不改任务状态**——卡片是唯一闸门；scheduler 边界回归锁在测试侧固化。
  */
+/**
+ * boot 中断快照（2026-11-19 修复启动误报）：恢复卡的「中断候选」必须是
+ * 本次启动时刻就处于 in_progress 的任务（上次会话遗留）。此前 detectInterrupted
+ * 实时查询——renderer 拉取晚于 executor boot 放行时，把「本次已重新驱动的
+ * 正常执行」误报为中断；随后任务完成，卡上恢复/放弃全撞终态拒（UI 死锁，
+ * 实测 T-049）。快照在 main 启动序最早抓取（executor 放行前），幂等一次。
+ */
+let bootInterruptedIds: ReadonlySet<string> | null = null;
+
+export function captureBootInterruptedSnapshot(): void {
+  if (bootInterruptedIds !== null) return;
+  bootInterruptedIds = new Set(
+    listTasks({ status: ['in_progress'], excludeOrigin: 'dispatch' }).map((t) => t.id),
+  );
+  if (bootInterruptedIds.size > 0) {
+    logger.info('启动中断快照已捕获（恢复卡候选）', { count: bootInterruptedIds.size });
+  }
+}
+
+/** 仅测试复位 */
+export function __resetBootInterruptedForTest(): void {
+  bootInterruptedIds = null;
+}
+
 export function detectInterrupted(): InterruptedTaskInfo[] {
   // D4：dispatch 簿记行非断点续跑候选（链由 registry 管理；boot 对账已复位）
-  const rows = listTasks({ status: ['in_progress'], excludeOrigin: 'dispatch' });
+  // 快照过滤（2026-11-19）：只认 boot 时刻的中断候选——快照后被重新驱动并
+  // 完成的任务自然出集（治 executor 放行被误报 + 完成后操作撞终态死锁）。
+  // 快照缺失（capture 未被调——生产 main 启动序恒调，仅纯单测环境）→ 回退
+  // 直查（保持 v2.6 原语义，detectInterrupted 既有用例零改动）
+  const snapshot = bootInterruptedIds;
+  const rows =
+    snapshot === null
+      ? listTasks({ status: ['in_progress'], excludeOrigin: 'dispatch' })
+      : listTasks({ status: ['in_progress'], excludeOrigin: 'dispatch' }).filter((t) =>
+          snapshot.has(t.id),
+        );
   const store = getJournalStore();
   const result: InterruptedTaskInfo[] = [];
   for (const task of rows) {

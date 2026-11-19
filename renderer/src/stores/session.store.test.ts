@@ -1525,3 +1525,30 @@ describe('session.store · hydratePendingDispatches 代际守卫', () => {
     expect(m.has('sess-a')).toBe(false);
   });
 });
+
+
+// ── D10（2026-11-19）：流活跃边沿（列表「执行中」脉冲点数据源）+ 本地已读位 ──
+describe('session.store — D10 流活跃与已读位', () => {
+  beforeEach(() => {
+    useSessionStore.setState({ streamingSessions: new Set(), readSeqMap: {} });
+    window.localStorage.removeItem('momo.read-seq.v1');
+  });
+
+  it('streaming 消息入集 / 终态出集（done 消息清理流活跃）', () => {
+    useSessionStore.setState({ streamingSessions: new Set() });
+    useSessionStore.getState().receiveMessage({ ...mk('s1', 'x', 1, 'sess-r'), status: 'streaming' });
+    expect(useSessionStore.getState().streamingSessions.has('sess-r')).toBe(true);
+    useSessionStore.getState().receiveMessage({ ...mk('s1', 'x', 2, 'sess-r'), status: 'done' });
+    expect(useSessionStore.getState().streamingSessions.has('sess-r')).toBe(false);
+  });
+
+  it('当前打开会话的新消息即时写平已读位（未打开会话不写——留未读点）', () => {
+    useSessionStore.setState({ activeSessionId: 'sess-r', readSeqMap: {}, sessions: [] });
+    useSessionStore.getState().receiveMessage(mk('m1', 'hi', 12345, 'sess-r'));
+    expect(useSessionStore.getState().readSeqMap['sess-r']).toBe(12345);
+    // 另一会话来消息：不写平
+    useSessionStore.setState({ activeSessionId: 'sess-r' });
+    useSessionStore.getState().receiveMessage(mk('m2', 'other', 23456, 'sess-other'));
+    expect(useSessionStore.getState().readSeqMap['sess-other']).toBeUndefined();
+  });
+});

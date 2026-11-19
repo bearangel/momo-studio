@@ -34,9 +34,9 @@ const journalRevertMock = vi.fn();
 const mockApi = {
   task: {
     listInterrupted: listInterruptedMock,
+    get: getTaskMock,
     resume: resumeMock,
     transition: transitionMock,
-    get: getTaskMock,
   },
   journal: {
     list: journalListMock,
@@ -102,6 +102,7 @@ function makeTaskRow(overrides?: Partial<TaskRow>): TaskRow {
     pinnedAt: null,
     archivedAt: null,
     routing: { mode: 'local' }, delegationId: null, origin: 'user', parentTaskId: null,
+    recurrenceChainRoot: null,
     ...overrides,
   };
 }
@@ -134,7 +135,7 @@ beforeEach(() => {
   listInterruptedMock.mockReset();
   resumeMock.mockReset();
   transitionMock.mockReset();
-  getTaskMock.mockReset();
+  getTaskMock.mockReset().mockResolvedValue(null);
   journalListMock.mockReset();
   journalRevertMock.mockReset();
 });
@@ -329,5 +330,42 @@ describe('ResumeNotice（v2.6.0 Task 6）', () => {
     });
     expect(screen.getByText('重构登录模块')).toBeInTheDocument();
     expect(screen.getByTestId('resume-notice')).toBeInTheDocument();
+  });
+});
+
+
+// ── 2026-11-19 T-049 死锁修复：终态撞拒行消散 + 忽略逃生口 ──
+describe('终态撞拒与忽略（T-049 实测回归）', () => {
+  const ITEM = {
+    taskId: 'T-049', title: '执行ls', status: 'in_progress' as const,
+    agentName: 'Momo', journalCount: 0, streamSessionId: '',
+  };
+
+  it('恢复撞终态拒（任务已被重驱完成）→ 重拉确认终态后行自动消散（卡可关闭）', async () => {
+    listInterruptedMock.mockResolvedValue([ITEM]);
+    (mockApi.task.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...ITEM, status: 'completed',
+    });
+    mockApi.task.resume = vi.fn().mockRejectedValue(new Error('task T-049 不可恢复：status=completed'));
+    render(<ResumeNotice />);
+    await waitFor(() => {
+      expect(screen.getByText('执行ls')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /恢复/ }));
+    await waitFor(() => {
+      expect(screen.queryByText('执行ls')).not.toBeInTheDocument();
+    });
+  });
+
+  it('每行「忽略」按钮 → 行移除（任何状态可逃生，卡不再死锁）', async () => {
+    listInterruptedMock.mockResolvedValue([ITEM]);
+    render(<ResumeNotice />);
+    await waitFor(() => {
+      expect(screen.getByText('执行ls')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: '忽略 执行ls' }));
+    await waitFor(() => {
+      expect(screen.queryByText('执行ls')).not.toBeInTheDocument();
+    });
   });
 });

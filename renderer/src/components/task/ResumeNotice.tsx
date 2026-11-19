@@ -17,7 +17,7 @@
 //       （撤回 x 处 · 跳过 y 处）→ transition('cancelled')
 // 撤回链错误（get/list/revert/transition 任一失败）→ 行保留 + 错误行呈现，不静默吞。
 import { useEffect, useState } from 'react';
-import { Ban, History, RotateCcw, Undo2 } from 'lucide-react';
+import { Ban, History, RotateCcw, Undo2, X } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import type { InterruptedTaskInfo, RevertOutcome } from '../../ipc/types';
 import { Button } from '../ui/Button';
@@ -47,6 +47,39 @@ export function ResumeNotice() {
   const [rowUi, setRowUi] = useState<Record<string, RowUi>>({});
   // 行级互斥：任一行动作 in-flight 时该行按钮禁用（防双击双发 resume/transition）
   const [busyId, setBusyId] = useState<string | null>(null);
+/** 行消散（成功决策 / 终态撞拒 / 用户忽略共用） */
+const dismissRow = (taskId: string): void => {
+  setItems((cur) => (cur === null ? cur : cur.filter((t) => t.taskId !== taskId)));
+  setRowUi((cur) => {
+    const next = { ...cur };
+    delete next[taskId];
+    return next;
+  });
+};
+/**
+ * 终态撞拒消散（2026-11-19 实测 T-049 死锁）：boot 快照后任务被重新驱动并
+ * 完成（循环任务自动验收 + 归档）时，恢复/放弃操作被主进程终态校验拒绝——
+ * 此时任务已自然结束，重拉确认终态后行直接消散（卡不再死锁）。
+ */
+const dismissIfTerminal = async (taskId: string, errText: string): Promise<boolean> => {
+  if (!/不可恢复|不能取消|终态/.test(errText)) return false;
+  try {
+    const t = await ipc.task.get(taskId);
+    if (
+      t !== null &&
+      (t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled')
+    ) {
+      dismissRow(taskId);
+      return true;
+    }
+  } catch {
+    // get 失败不吞原错误——走常规错误行呈现
+  }
+  return false;
+};
+
+
+
 
   // boot 现查现示（瞬态，无 kv）；拉取失败视为无中断任务——恢复卡是体验性增强，
   // 不阻塞启动（与升级首启提示同语义），下次启动自然再现
@@ -145,7 +178,20 @@ export function ResumeNotice() {
             >
               <div className="flex items-baseline justify-between gap-2">
                 <span className="truncate font-medium text-primary">{item.title}</span>
-                <span className="shrink-0 text-xs text-tertiary">{item.agentName}</span>
+                <span className="flex shrink-0 items-center gap-1.5">
+                  <span className="text-xs text-tertiary">{item.agentName}</span>
+                  {/* 忽略逃生口（2026-11-19 T-049 死锁）：任何状态下可移除该行——
+                      任务保持现状（中断检测不改状态，下次启动按快照语义自然处理） */}
+                  <button
+                    type="button"
+                    aria-label={`忽略 ${item.title}`}
+                    title="忽略（不处理，本次不再提示）"
+                    className="inline-flex rounded p-0.5 text-tertiary hover:bg-surface-3 hover:text-secondary"
+                    onClick={() => dismissRow(item.taskId)}
+                  >
+                    <X size={12} strokeWidth={1.75} aria-hidden />
+                  </button>
+                </span>
               </div>
               <div className="mt-0.5 text-xs text-tertiary">
                 {item.journalCount > 0 ? `半程变更 ${item.journalCount} 处` : '无文件变更'}

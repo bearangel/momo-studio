@@ -179,6 +179,7 @@ function makeTask(overrides: Partial<TaskRow> & { id: string }): TaskRow {
     pinnedAt: null,
     archivedAt: null,
     routing: { mode: 'local' }, delegationId: null, origin: 'user', parentTaskId: null,
+    recurrenceChainRoot: null,
     ...overrides,
   };
 }

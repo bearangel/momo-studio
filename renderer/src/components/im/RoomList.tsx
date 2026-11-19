@@ -25,7 +25,9 @@
 // - 挂载/切工作区 refreshAttention(workspaceId) + 订阅幂等兜底
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent } from 'react';
+import { useMemo } from 'react';
 import { useSessionStore } from '../../stores/session.store';
+import { useTaskStore } from '../../stores/task.store';
 import { useHumanStore } from '../../stores/human.store';
 import { useUiStore } from '../../stores/ui.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -184,12 +186,31 @@ interface SessionItemProps {
   onContextMenu: (e: { clientX: number; clientY: number }) => void;
   onRowDragStart: (e: { dataTransfer: DataTransfer | null }) => void;
   onRowDragEnd: () => void;
+  /** D10：执行中（流活跃或关联任务 in_progress/waiting_human）——绿色脉冲点 */
+  streaming?: boolean;
+  /** D10：有未读消息（lastMessageAt > 本地已读位）——蓝色圆点 */
+  unread?: boolean;
 }
 
 /** 会话行（2026-10-22 右键菜单改造 · 预览批准定值）：36px 卡片行
  *  （h-9 · mx-1.5/my-0.5 · rounded-md），hover/active 整行圆角底色高亮；
  *  无 hover 工具条——全部操作走右键菜单；类型图标 14px + Pin 10px 徽标 +
  *  圆点 6px 保留（v2.2 图标极简约束）。多选改造：selected 态 + 可拖拽。 */
+/** D10 会话行状态信号（2026-11-19）派生：执行中（流/任务）与未读 */
+function deriveRowSignals(input: {
+  session: SessionSummary;
+  streamingSessions: ReadonlySet<string>;
+  taskRunningSessionIds: ReadonlySet<string>;
+  readAtMap: Readonly<Record<string, number>>;
+}): { streaming: boolean; unread: boolean } {
+  const { session, streamingSessions, taskRunningSessionIds, readAtMap } = input;
+  const streaming =
+    streamingSessions.has(session.id) || taskRunningSessionIds.has(session.id);
+  const unread =
+    session.lastMessageAt != null && session.lastMessageAt > (readAtMap[session.id] ?? 0);
+  return { streaming, unread };
+}
+
 function SessionItem({
   session,
   active,
@@ -199,6 +220,8 @@ function SessionItem({
   inGroupCard,
   selected,
   attention,
+  streaming,
+  unread,
   onRowClick,
   onContextMenu,
   onRowDragStart,
@@ -246,6 +269,22 @@ function SessionItem({
         >
           <Icon size={14} strokeWidth={1.75} aria-hidden />
         </span>
+        {streaming === true && (
+          <span
+            data-testid="row-streaming-dot"
+            aria-label="执行中"
+            title="执行中"
+            className="h-[7px] w-[7px] shrink-0 rounded-full bg-status-success animate-pulse"
+          />
+        )}
+        {streaming !== true && unread === true && (
+          <span
+            data-testid="row-unread-dot"
+            aria-label="有未读消息"
+            title="有未读消息"
+            className="h-[7px] w-[7px] shrink-0 rounded-full bg-accent-500"
+          />
+        )}
         <span className="truncate flex-1">{session.title}</span>
         {showGroupBadge && session.groupName && (
           <span className="flex items-center gap-1 shrink-0">
@@ -431,6 +470,20 @@ export function RoomList() {
   const workspace = useWorkspaceStore((s) => s.getActive());
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const theme = useThemeStore((s) => s.resolved);
+  // D10（2026-11-19）：执行中 = 流活跃 ∪ 关联任务执行态（in_progress /
+  // waiting_human——跨本机/远端统一）；未读 = lastMessageAt > 本地已读位。
+  // hooks 恒序（rules-of-hooks）：置于组件顶部，任何 early return 之前
+  const streamingSessions = useSessionStore((st) => st.streamingSessions);
+  const readAtMap = useSessionStore((st) => st.readSeqMap);
+  const tasks = useTaskStore((st) => st.tasks);
+  const taskRunningSessionIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const t of tasks) {
+      if (t.executionSessionId == null) continue;
+      if (t.status === 'in_progress' || t.status === 'waiting_human') set.add(t.executionSessionId);
+    }
+    return set;
+  }, [tasks]);
   // 注意力聚合（徽标 + 待处理分区数据源，T23）
   const attentionBySession = useHumanStore((s) => s.attentionBySession);
   const refreshAttention = useHumanStore((s) => s.refreshAttention);
@@ -852,10 +905,14 @@ export function RoomList() {
     void selectSession(session.id);
   };
 
-  const renderSessionItem = (session: SessionSummary, showGroupBadge: boolean, inGroupCard = false) => (
+  const renderSessionItem = (session: SessionSummary, showGroupBadge: boolean, inGroupCard = false) => {
+    const signals = deriveRowSignals({ session, streamingSessions, taskRunningSessionIds, readAtMap });
+    return (
     <SessionItem
       key={session.id}
       session={session}
+      streaming={signals.streaming}
+      unread={signals.unread}
       active={session.id === activeSessionId}
       theme={theme}
       showGroupBadge={showGroupBadge}
@@ -881,7 +938,8 @@ export function RoomList() {
       onRowDragStart={(e) => handleRowDragStart(session, e)}
       onRowDragEnd={handleRowDragEnd}
     />
-  );
+    );
+  };
 
   return (
     <div className="w-full flex-1 min-h-0 bg-surface-1 flex flex-col">

@@ -6,7 +6,7 @@
 // 镜像里程碑，按时间戳、同毫秒镜像先行）+ RemoteSteerComposer。
 // 生命周期由挂载驱动：mount → resolveTrackingTask → store.open；unmount → close。
 // 降级矩阵：miss 占位重试 / 旧 worker legacy 行穿插镜像 / 断开保留已到帧。
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Bot, ChevronUp, CircleCheck, Milestone, Wrench } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { resolveTrackingTask } from '../../lib/resolve-tracking-task';
@@ -150,6 +150,18 @@ export function RemoteSessionPanel({ sessionId, workspaceId, footerSlot, footerE
   // 任务解析失败态（终审 Important 2）：孤儿跟踪会话 / 任务行已删 / list 瞬断
   // ——不得永久「定位执行会话…」，miss 样占位 + 重试
   const [resolveMiss, setResolveMiss] = useState(false);
+  // 滚动贴底（2026-11-19 用户实测回归：切换回远端会话停留在顶部）：语义对齐
+  // MessageList——首帧就绪/切会话必到底；后续新增帧仅在用户处于底部附近时
+  // 跟随（浏览历史不被强行拉底）
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
+  const didInitialScrollRef = useRef<string | null>(null);
+  const prevTimelineLenRef = useRef(0);
+  const handleStreamScroll = (): void => {
+    const el = scrollRef.current;
+    if (!el) return;
+    isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  };
 
   const resolveAndOpen = (): void => {
     setResolveMiss(false);
@@ -174,11 +186,26 @@ export function RemoteSessionPanel({ sessionId, workspaceId, footerSlot, footerE
   }, [sessionId, workspaceId]);
 
   const timeline = mergeTimeline(st.frames, st.mirrorRows, st.wire2 ? [] : st.legacy);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el === null || timeline.length === 0) return;
+    const isRoomChange = didInitialScrollRef.current !== sessionId;
+    const grew = timeline.length > prevTimelineLenRef.current;
+    prevTimelineLenRef.current = timeline.length;
+    // 首次就绪 / 切会话：必到底；后续增长：仅贴底附近跟随（浏览历史不拉底）
+    if (isRoomChange || didInitialScrollRef.current === null || (grew && isNearBottomRef.current)) {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
+      isNearBottomRef.current = true;
+    }
+    didInitialScrollRef.current = sessionId;
+  }, [timeline, sessionId]);
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-canvas" data-testid="remote-session-panel">
       {/* 流域：穿插时间线 */}
       <div
+        ref={scrollRef}
+        onScroll={handleStreamScroll}
         className={cn(
           'flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-4 py-3',
           st.phase === 'ready' && !online && 'opacity-60',
@@ -223,6 +250,18 @@ export function RemoteSessionPanel({ sessionId, workspaceId, footerSlot, footerE
           <p className="mx-1 rounded-md bg-status-error-tint px-2.5 py-2 text-xs leading-relaxed text-status-error" role="alert">
             {st.errorText}
           </p>
+        )}
+        {st.phase === 'ready' && st.target === null && (
+          // 本机任务执行会话（2026-11-19）：无远端帧流——纯镜像行时间线
+          //（执行过程/工具结果全在本地库）；无「加载更早」（镜像一次拉全量）
+          <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-1">
+            {timeline.length === 0 && (
+              <p className="py-4 text-center text-xs text-tertiary">（会话暂无事件）</p>
+            )}
+            {timeline.map((e) =>
+              e.kind === 'mirror' ? <MirrorRow key={`m-${e.mirror.id}`} m={e.mirror} /> : null,
+            )}
+          </div>
         )}
         {st.phase === 'ready' && st.target !== null && (
           <>
@@ -290,7 +329,8 @@ export function RemoteSessionPanel({ sessionId, workspaceId, footerSlot, footerE
         </div>
       )}
       {/* composer=steer（spec §12.4；sessionId 传入 = 草稿仓键） */}
-      <RemoteSteerComposer sessionId={sessionId} />
+      {/* steer 是跨节点概念——本机任务执行会话不渲染远端指令框（2026-11-19） */}
+      {st.task?.routing?.mode !== 'local' && <RemoteSteerComposer sessionId={sessionId} />}
     </div>
   );
 }

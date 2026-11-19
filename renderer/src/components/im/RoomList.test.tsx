@@ -40,7 +40,7 @@ vi.mock('./DefaultAgentPickerDialog', () => ({
 }));
 
 // vi.hoisted：mock store 状态在 vi.mock 工厂注册前完成初始化
-const { sessionState, workspaceState, humanState } = vi.hoisted(() => ({
+const { sessionState, workspaceState, humanState, taskState } = vi.hoisted(() => ({
   sessionState: {
     sessions: [] as SessionSummary[],
     activeSessionId: null as string | null,
@@ -52,6 +52,12 @@ const { sessionState, workspaceState, humanState } = vi.hoisted(() => ({
     setPendingCreateGroupId: vi.fn(),
     revealSessionId: null as string | null,
     setRevealSessionId: vi.fn(),
+    // D10（2026-11-19）：执行中流集 + 本地已读位（列表脉冲点/未读点数据源）
+    streamingSessions: new Set<string>() as ReadonlySet<string>,
+    readSeqMap: {} as Record<string, number>,
+  },
+  taskState: {
+    tasks: [] as Array<{ executionSessionId: string | null; status: string }>,
   },
   workspaceState: {
     activeWorkspaceId: 'ws-1',
@@ -66,6 +72,9 @@ const { sessionState, workspaceState, humanState } = vi.hoisted(() => ({
 
 vi.mock('../../stores/session.store', () => ({
   useSessionStore: (selector: (s: typeof sessionState) => unknown) => selector(sessionState),
+}));
+vi.mock('../../stores/task.store', () => ({
+  useTaskStore: (selector: (s: typeof taskState) => unknown) => selector(taskState),
 }));
 vi.mock('../../stores/workspace.store', () => ({
   useWorkspaceStore: (selector: (s: typeof workspaceState) => unknown) => selector(workspaceState),
@@ -1309,3 +1318,34 @@ describe('RoomList — 「待处理」折叠分区（T23 预览合同 #14/#15）
   });
 });
 
+
+
+// ── D10（2026-11-19）：执行中脉冲点 / 未读点 ──
+describe('RoomList — D10 执行中 / 未读标识', () => {
+  it('流活跃会话 → 绿色脉冲点（row-streaming-dot）；未读优先级低于执行中', () => {
+    sessionState.sessions = [
+      makeSession({ id: 's-run', title: '检查邮件', lastMessageAt: 100 }),
+      makeSession({ id: 's-idle', title: '静默会话', lastMessageAt: 100 }),
+    ];
+    sessionState.streamingSessions = new Set(['s-run']);
+    sessionState.readSeqMap = {}; // 两者都未读
+    render(<RoomList />);
+    const runRow = document.querySelector('[data-session-id="s-run"]')!;
+    const idleRow = document.querySelector('[data-session-id="s-idle"]')!;
+    expect(runRow.querySelector('[data-testid="row-streaming-dot"]')).not.toBeNull();
+    expect(runRow.querySelector('[data-testid="row-unread-dot"]')).toBeNull(); // 执行中优先
+    expect(idleRow.querySelector('[data-testid="row-unread-dot"]')).not.toBeNull();
+    expect(idleRow.querySelector('[data-testid="row-streaming-dot"]')).toBeNull();
+  });
+
+  it('关联任务 in_progress 的会话 → 执行中点（跨本机/远端统一）', () => {
+    sessionState.sessions = [makeSession({ id: 's-task', title: '任务会话', lastMessageAt: 1 })];
+    sessionState.streamingSessions = new Set();
+    sessionState.readSeqMap = { 's-task': 999 };
+    taskState.tasks = [{ executionSessionId: 's-task', status: 'in_progress' }];
+    render(<RoomList />);
+    expect(
+      document.querySelector('[data-session-id="s-task"] [data-testid="row-streaming-dot"]'),
+    ).not.toBeNull();
+  });
+});

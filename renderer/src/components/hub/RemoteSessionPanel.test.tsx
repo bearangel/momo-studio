@@ -36,6 +36,8 @@ const open = vi.fn().mockResolvedValue(undefined);
 const close = vi.fn();
 
 beforeEach(() => {
+  // jsdom 未实现 Element.scrollTo，RemoteSessionPanel 的贴底 useEffect 依赖它
+  window.HTMLElement.prototype.scrollTo = () => {};
   vi.clearAllMocks();
   useRemoteSessionStore.setState({
     phase: 'resolving', errorText: null, task: null, target: null, wire2: false,
@@ -181,5 +183,23 @@ describe('Markdown 渲染（复用本地气泡入口）', () => {
     expect(panel.querySelector('strong')?.textContent).toBe('粗体要点');
     expect(panel.querySelector('h2')?.textContent).toContain('小标题');
     expect(panel.textContent).not.toContain('**粗体要点**');
+  });
+});
+
+
+// ── 滚动贴底（2026-11-19 用户实测回归：切回远端会话停留在顶部） ──
+describe('RemoteSessionPanel — 流域贴底', () => {
+  it('首帧就绪 → scrollTo 到底（切回会话直达最新消息，不再停留顶部）', async () => {
+    const calls: unknown[][] = [];
+    window.HTMLElement.prototype.scrollTo = function (...args: unknown[]) {
+      calls.push(args);
+    } as unknown as typeof window.HTMLElement.prototype.scrollTo;
+    seedReady({ frames: [frame({ frameId: 'f1', seq: 1, content: '最新一条' })] });
+    render(<RemoteSessionPanel sessionId="sx" workspaceId="ws1" />);
+    await waitFor(() => {
+      expect(screen.getByText('最新一条')).toBeInTheDocument();
+    });
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    window.HTMLElement.prototype.scrollTo = () => {};
   });
 });

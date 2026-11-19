@@ -42,6 +42,17 @@ let pendingDispatchSeq = 0;
 interface SessionState {
   sessions: SessionSummary[];
   activeSessionId: string | null;
+  /**
+   * 流活跃会话集（D10，2026-11-19）：收到 status='streaming' 的消息行即入集、
+   * 终态（done/failed/aborted）即出集——会话列表「执行中」脉冲点的数据源。
+   */
+  streamingSessions: ReadonlySet<string>;
+  /**
+   * 本地已读位（D10，2026-11-19）：sessionId → 已读到的最后消息时间戳
+   *（localStorage 持久化）。会话列表据 lastMessageAt > readAt 渲染未读点；
+   * 切换会话与新消息（当前会话）即时写平。
+   */
+  readSeqMap: Readonly<Record<string, number>>;
   messagesBySession: Map<string, ImMessage[]>;
   /** A 子系统：messageId → events（流式事件溯源，按 seq 升序） */
   eventsByMessage: Map<string, MessageEventRow[]>;
@@ -209,9 +220,38 @@ interface SessionState {
 /** 工具条选择按钮的五类触发（2026-11-05 预览合同定序：Agent/技能/文件/会话/任务） */
 export type MentionTriggerKind = 'agent' | 'skill' | 'file' | 'session' | 'task';
 
+// ── D10 本地已读位（2026-11-19）：localStorage 持久化，重启不丢 ──
+const READ_SEQ_KEY = 'momo.read-seq.v1';
+
+function loadReadSeq(): Record<string, number> {
+  try {
+    const raw = window.localStorage.getItem(READ_SEQ_KEY);
+    if (raw === null) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null) return {};
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === 'number' && Number.isFinite(v)) out[k] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function persistReadSeq(map: Readonly<Record<string, number>>): void {
+  try {
+    window.localStorage.setItem(READ_SEQ_KEY, JSON.stringify(map));
+  } catch {
+    // 隐私模式/配额：已读位丢失可接受（仅影响未读点显示）
+  }
+}
+
 export const useSessionStore = create<SessionState>((set, get) => ({
   sessions: [],
   activeSessionId: null,
+  streamingSessions: new Set<string>(),
+  readSeqMap: loadReadSeq(),
   messagesBySession: new Map(),
   eventsByMessage: new Map(),
   members: [],
@@ -288,6 +328,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   selectSession: async (sessionId) => {
+    // D10 已读位写平：打开会话即视为已读（列表未读点清除；持久化）
+    {
+      const cur = get().sessions.find((x) => x.id === sessionId);
+      if (cur != null && cur.lastMessageAt != null) {
+        const rs = get().readSeqMap;
+        if ((rs[sessionId] ?? 0) < cur.lastMessageAt) {
+          const nextMap = { ...rs, [sessionId]: cur.lastMessageAt };
+          persistReadSeq(nextMap);
+          set({ readSeqMap: nextMap });
+        }
+      }
+    }
     // 排队占位态补齐：推送可能在窗口 ready 前发出（启动期首条消息），切会话时拉快照
     void get().hydratePendingDispatches();
     // 乐观只读判定：列表 summary 的 members 与详情同源（三表 JOIN 有效成员），
@@ -463,6 +515,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   receiveMessage: (msg) => {
     set((state) => {
+      // D10 流活跃边沿：streaming 入集 / 终态出集（列表「执行中」脉冲点）
+      let streamingSessions = state.streamingSessions;
+      if (msg.status === 'streaming' && !streamingSessions.has(msg.sessionId)) {
+        streamingSessions = new Set(streamingSessions).add(msg.sessionId);
+      } else if (msg.status !== 'streaming' && streamingSessions.has(msg.sessionId)) {
+        const next = new Set(streamingSessions);
+        next.delete(msg.sessionId);
+        streamingSessions = next;
+      }
+      // D10 已读位：当前打开会话的新消息即时写平（未打开的留未读点）
+      let readSeqMap = state.readSeqMap;
+      if (state.activeSessionId === msg.sessionId) {
+        const prev = readSeqMap[msg.sessionId] ?? 0;
+        if (msg.createdAt > prev) {
+          readSeqMap = { ...readSeqMap, [msg.sessionId]: msg.createdAt };
+          persistReadSeq(readSeqMap);
+        }
+      }
       const map = new Map(state.messagesBySession);
       const existing = map.get(msg.sessionId) ?? [];
       // 按 SQLite messages.id 去重，避免初始同步回放与推送重复；同 id 的
@@ -474,7 +544,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         const next = [...existing];
         next[idx] = msg;
         map.set(msg.sessionId, next);
-        return { messagesBySession: map };
+        return { messagesBySession: map, streamingSessions, readSeqMap };
       }
       map.set(msg.sessionId, [...existing, msg]);
       // 列表实时性（2026-09-08 主机 bug）：非当前打开会话来消息（如任务在
@@ -492,21 +562,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       //   - 非置顶会话：桶内上浮——移至「未置顶且同 groupId」首个位置；不越置顶区、不越组
       //     （主进程全局序保证同桶连续，findIndex 首个命中即桶头）
       const sIdx = state.sessions.findIndex((s) => s.id === msg.sessionId);
-      if (sIdx === -1) return { messagesBySession: map };
+      if (sIdx === -1) return { messagesBySession: map, streamingSessions, readSeqMap };
       const target = state.sessions[sIdx]!;
       const updated = { ...target, lastMessageAt: msg.createdAt };
 
       if (updated.pinnedAt != null) {
         const next = [...state.sessions];
         next[sIdx] = updated;
-        return { messagesBySession: map, sessions: next };
+        return { messagesBySession: map, sessions: next, streamingSessions, readSeqMap };
       }
       const rest = state.sessions.filter((s) => s.id !== msg.sessionId);
       const bucketHead = rest.findIndex((s) => s.pinnedAt == null && s.groupId === updated.groupId);
       // 组内无他人（自己即桶头）：保持原相对位（过滤前 sIdx 映射到过滤后 = sIdx）
       const insertAt = bucketHead !== -1 ? bucketHead : Math.min(sIdx, rest.length);
       const sessions = [...rest.slice(0, insertAt), updated, ...rest.slice(insertAt)];
-      return { messagesBySession: map, sessions };
+      return { messagesBySession: map, sessions, streamingSessions, readSeqMap };
     });
     // A 子系统：流式→持久化由 MessageList 通过 streamSessionId 去重处理，
     // 不在此处读 Matrix content 字段（content 已废弃）。

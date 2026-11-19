@@ -59,6 +59,8 @@ import { setJournalStore, getJournalStore } from '../../src/main/journal/recorde
 import { createJournalStore } from '../../src/main/journal/store';
 import {
   detectInterrupted,
+  captureBootInterruptedSnapshot,
+  __resetBootInterruptedForTest,
   resumeTask,
   sweepStaleStreaming,
   flipMessageBackToStreaming,
@@ -219,8 +221,41 @@ function seedAgentStream(opts: {
 
 // === 测试 ===
 
+describe('detectInterrupted 快照语义（2026-11-19 启动误报修复）', () => {
+  beforeEach(() => {
+    setupDb();
+    __resetBootInterruptedForTest();
+    insertWorkspace('ws1');
+  });
+  afterEach(() => {
+    teardownDb();
+    __resetBootInterruptedForTest();
+  });
+
+  it('快照后完成/重新驱动的任务不再入卡（executor 放行 → 完成后不误报）', () => {
+    const t = insertTask({ workspaceId: 'ws1', title: '巡检', creatorUserId: 'o', status: 'in_progress' });
+    captureBootInterruptedSnapshot(); // boot 时刻 in_progress ✓ 入快照
+    // 快照后任务被重新驱动并完成（循环自动验收链）
+    getDb().prepare(`UPDATE tasks SET status='completed', completed_at=? WHERE id=?`).run(1, t.id);
+    expect(detectInterrupted().map((x) => x.taskId)).not.toContain(t.id);
+  });
+
+  it('boot 前不存在的中断（快照后新 in_progress）→ 不入卡（本次会话正常执行不误报）', () => {
+    captureBootInterruptedSnapshot(); // 快照时无 in_progress
+    insertTask({ workspaceId: 'ws1', title: '新执行', creatorUserId: 'o', status: 'in_progress' });
+    expect(detectInterrupted()).toHaveLength(0);
+  });
+
+  it('空快照（boot 时无中断，快照后新 in_progress 不入卡）', () => {
+    captureBootInterruptedSnapshot(); // 空快照（此刻无 in_progress）
+    insertTask({ workspaceId: 'ws1', title: '新执行', creatorUserId: 'o', status: 'in_progress' });
+    expect(detectInterrupted()).toHaveLength(0);
+  });
+});
+
 describe('detectInterrupted（v2.6.0 启动恢复检测）', () => {
   beforeEach(() => {
+    __resetBootInterruptedForTest();
     setupDb();
     __resetEventBufferForTest();
     setJournalStore(createJournalStore(getDb()));

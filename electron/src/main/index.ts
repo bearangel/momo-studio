@@ -12,6 +12,7 @@ import path from 'node:path';
 import { createMainWindow } from './window';
 import { registerIpcHandlers } from './ipc';
 import { runMigrations } from './storage/db';
+import { captureBootInterruptedSnapshot } from './task/resume';
 import { initPluginBus, getPluginBus } from './plugin/bus-instance';
 import { wirePluginEventSources } from './plugin/event-sources';
 import { reactivatePluginsOnBoot } from './plugin/boot';
@@ -96,6 +97,17 @@ if (!app.requestSingleInstanceLock()) {
       }
 
       runMigrations();
+
+      // 启动中断快照（2026-11-19）：必须在 executor 放行 / 任何任务驱动之前——
+      // 恢复卡候选 = 此刻的 in_progress（上次会话遗留）；之后重新驱动的执行
+      // 不再入卡（实测 T-049 误报 → 操作撞终态 → 卡死锁）
+      try {
+        captureBootInterruptedSnapshot();
+      } catch (err) {
+        logger.warn('启动中断快照失败（恢复卡降级为空）', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
 
       // builtin 预置版本再同步（spec 2026-11-09 §8）：存量已启用 Momo 升级拿新
       // 工具/技能面；失败只 warn 不阻塞启动（reactivatePluginsOnBoot 同风格，
