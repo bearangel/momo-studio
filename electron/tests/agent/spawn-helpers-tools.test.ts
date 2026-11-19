@@ -383,3 +383,68 @@ describe('spawn 装配授权：def 声明纳入授权集（2026-11-04）', () =>
     expect(opts.pluginTools ?? []).toHaveLength(0);
   });
 });
+
+// 2026-11-19 口径分裂修复的 spawn 侧契约：grantedPluginTools（授权集全名）随
+// AGENT_CONFIG 定型下发——子进程 loader 据此对单文件多工具模块逐工具过滤。
+// 锚点场景：def 声明精确工具名（≠模块文件名）时装配成立且授权集透传。
+describe('spawn 装配授权：工具名粒度 + grantedPluginTools 透传（2026-11-19）', () => {
+  /** 真·多工具模块：main.js 声明 real_a/real_b 两工具（文件名与工具名无关） */
+  function seedMultiToolPlugin(): void {
+    const db = getDb();
+    const root = path.join(os.tmpdir(), `momo-spa-multitool-${Date.now()}`);
+    fs.mkdirSync(path.join(root, 'tools'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, 'tools', 'main.js'),
+      `module.exports.createTools = function () {
+        return {
+          getDefs() {
+            return [
+              { name: 'real_a', description: 'a', inputSchema: {} },
+              { name: 'real_b', description: 'b', inputSchema: {} },
+            ];
+          },
+          getCatalog() { return []; },
+          handles(n) { return n === 'real_a' || n === 'real_b'; },
+          async execute() { return 'ok'; },
+        };
+      };`,
+    );
+    fs.writeFileSync(
+      path.join(root, 'momo-plugin.json'),
+      JSON.stringify({
+        id: 'pg', name: 'PG', version: '1.0.0', description: '',
+        components: { tools: './tools' },
+      }),
+    );
+    db.prepare(
+      `INSERT INTO plugins (id, version, manifest_json, state, source, source_path, installed_at)
+       VALUES ('pg', '1.0.0', ?, 'active', 'dev', ?, 'x')`,
+    ).run(fs.readFileSync(path.join(root, 'momo-plugin.json'), 'utf-8'), root);
+    db.prepare(
+      `INSERT OR REPLACE INTO plugin_enablements (workspace_id, plugin_id, enabled) VALUES ('ws1', 'pg', 1)`,
+    ).run();
+  }
+
+  it('精确工具名授权（≠文件名）→ 装配成立 + grantedPluginTools 含该名', async () => {
+    const db = getDb();
+    seedWorkspaceAndDef(db, 'ws1', 'def1', '[]');
+    seedMultiToolPlugin();
+    const opts = await buildSpawnOpts({
+      instanceId: 'inst1', agentUserId: 'agent-t-ab12cd', workspaceId: 'ws1',
+      workspaceDir: '/tmp', def: makeDef('def1', ['plugin:pg/real_a']), role: 'standalone', llmApiKey: 'k',
+    });
+    // 旧实现按 basename 'main' 匹配 → plugin:pg/real_a 永不命中 → 空装配（bug 现场）
+    expect(opts.pluginTools ?? []).toHaveLength(1);
+    expect(opts.grantedPluginTools).toContain('plugin:pg/real_a');
+  });
+
+  it('授权集为空 → grantedPluginTools 不下发（undefined，旧载荷兼容）', async () => {
+    const db = getDb();
+    seedWorkspaceAndDef(db, 'ws1', 'def1', '[]');
+    const opts = await buildSpawnOpts({
+      instanceId: 'inst1', agentUserId: 'agent-t-ab12cd', workspaceId: 'ws1',
+      workspaceDir: '/tmp', def: makeDef('def1', ['read_file']), role: 'standalone', llmApiKey: 'k',
+    });
+    expect(opts.grantedPluginTools).toBeUndefined();
+  });
+});

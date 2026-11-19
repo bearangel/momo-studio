@@ -23,7 +23,8 @@ import {
   readAllocationLayer,
   readAssignmentDeltas,
 } from './capability-merger';
-import { collectKnownToolNames } from './known-tool-names';
+import { collectModuleToolNames } from '../plugin/tool-catalog';
+import { ALL_BUILTIN_TOOLS } from './tools/catalog';
 import { resolveSkillsDir } from '../paths';
 import { resolveBuiltinSkillsDir } from '../skill/zip-uploader';
 import {
@@ -415,8 +416,17 @@ export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentR
   // 必须先于 return 计算——allowedTools 是权限白名单，未知名永远匹配不上，
   // 留着只会让「引用了已下线工具」静默失效；过滤 + warn 让存量 agent 可自查。
   const allPluginRefs = buildPluginToolRefs(workspaceId);
-  // known 域取自真实工具定义（插件工具名来自 getDefs().name，≠ 文件名——终审 B2）
-  const knownToolNames = collectKnownToolNames(workspaceId);
+  // 2026-11-19 口径统一：known 域与装配授权过滤共用一次模块实例化（单一真相源
+  // ——插件工具名来自 getDefs().name，≠ 文件名；map 缺项=坏模块，装配侧回退 basename）
+  const moduleToolNames = collectModuleToolNames(workspaceId);
+  const knownToolNames = new Set<string>(ALL_BUILTIN_TOOLS);
+  for (const { pluginId, names } of moduleToolNames.values()) {
+    for (const name of names) knownToolNames.add(`plugin:${pluginId}/${name}`);
+  }
+  // 只留 plugin: 前缀条目（merged.tools 含内置名——对 loader 匹配域无意义）
+  const pluginGrantSet = [...new Set([...merged.tools, ...(deltas.addedPluginTools ?? [])])].filter(
+    (r) => r.startsWith('plugin:'),
+  );
   const filteredTools = dropUnknownToolRefs(merged.tools, knownToolNames);
   if (filteredTools.dropped.length > 0) {
     logger.warn('能力引用了不存在或已下线的工具，已过滤', {
@@ -461,12 +471,16 @@ export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentR
     // 插件工具装配快照（spec §6 白名单 + 2026-11-04 def 声明纳入）：授权集 =
     // merged.tools（def 声明 ∪ ws allocation ± 成员 tools deltas，与 MCP/Skill
     // 「定义声明是合法授权通道」语义对齐）∪ 成员插件勾选，再剔黑名单
-    // （deniedTools 终态——黑名单优先保守语义）；spawn 时定型
+    // （deniedTools 终态——黑名单优先保守语义）；spawn 时定型。
+    // 2026-11-19：匹配键=模块工具名（moduleToolNames）；授权集随配置下发
+    // （grantedPluginTools），子进程 loader 对单文件多工具模块逐工具收口
     pluginTools: filterPluginToolRefsByGrant(
       allPluginRefs,
-      [...new Set([...merged.tools, ...(deltas.addedPluginTools ?? [])])],
+      pluginGrantSet,
       merged.deniedTools,
+      moduleToolNames,
     ),
+    grantedPluginTools: pluginGrantSet.length > 0 ? pluginGrantSet : undefined,
     // 插件 hooks 存在标志（P3 spec §5.2）：无 hook 的 workspace 子进程零往返短路
     pluginHooks: hasPluginHooks(workspaceId),
     isLeader,
