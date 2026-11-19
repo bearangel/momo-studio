@@ -6,6 +6,20 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 验收裁决 UX 重构（三动作 / 裁决权收敛 / 续作 run / 协议 1.14）+ 跟踪会话面板直连
+
+`2.1.0-alpha.73`。依据 spec `docs/specs/2026-11-18-acceptance-decision-ux-design.md` + 实施计划 `docs/plans/2026-11-18-acceptance-decision-ux.md`（跨仓：hub v0.7.7 / 协议 1.14.0）。
+
+- **三动作裁决卡**（a8bb98fa/b053b288/641b7d75/4df96eb9）：验收卡改为「继续 / 完成 / 驳回」三动作，交付说明走 MarkdownBody + 长文折叠，长交付卡改吸底动作区（交付区内部滚动、裁决按钮常驻）；执行方侧只读卡；卡片标题统一「第 N 轮交付」+ 镜像截断标记
+- **裁决权三层收敛**（dd12891a）：`canDecide` 投影 + 执行方 IPC 守卫，避免执行方自裁
+- **待裁决期单一输入口**（641b7d75/4df96eb9/6320513c）：补充指令框在待裁决期禁用并改由验收卡独占决策；执行方不再渲染补充指令框（死输入框）；`task.steer` 在待裁决期拒绝（防与验收单脱节的僵尸回合）
+- **续作 run 单点写路径**（44ec1b57/58718702/d4579979）：`acceptAndContinue`（run accepted + 续作 run N+1）、任务 `submitted → in_progress`、run trigger `'continue'`；新 IPC `task:continue`（本地直连 / 委派远端先行），preload 与类型两端同 commit
+- **跨节点验收继续（协议 1.14.0）**（bbfab3c0/848a603b）：hub `task.continue` / `task.continued`；worker 消费 `acceptAndContinue` + 要求注入 + 停靠出清；上报结构化 `deliverable`，旧版降级保留 files/artifacts
+- **满屏查看**（8835d8c2/2d27415c/a15582b3）：验收卡右上角切换满屏（V1 覆盖流域）+ Esc 还原，满屏取消折叠；展开确认行补底部内边距
+- **跟踪会话面板直连远端内容**（3b1488e3/ef30f1e9/c4576e15/3280e4e8）：`RemoteSessionPanel` 面板体——帧流与镜像里程碑穿插时间线；MiddlePanel 生命周期挂会话选中，退役独立视图态与 `RemoteSessionView`；看板/详情「进入会话」统一收敛为选中跟踪会话，移除 `RemoteSessionEntryButton`
+- **面板与镜像修复**（6135b7b4/353e5df8/e555a7f8/7abfeb85/55b1888d/87066c53）：面板布局溢出（footerSlot 序、根 min-h-0/overflow-hidden、正文复用 MarkdownBody）；open() epoch 竞态守卫 + resolve-null miss 占位重试；`ensureTrackingSession` 新建后广播 `session:listChanged`；`delegation-sync` 镜像翻态经端口注入 emit `task:runChanged`；intervention 镜像调用补 `withRemoteSegment` 第三参
+- **协议与提示**（9e2999e9/69b4bdac/f09c7795）：pin `momo-hub-protocol` v0.7.7（协议 1.14.0）+ 1.14 面形状锁；本机协议版本过低时给人话升级提示；lint 清零
+
 ## [未发布] — db-pro 数据库插件（宿主扩展面）
 
 `2.1.0-alpha.72`。特性合入：db-pro 插件（独立仓 `../momo-plugin` @ feat/db-pro）+ 宿主四处配套。设计依据 `docs/specs/2026-11-17-db-pro-plugin-design.md`，实施计划 `docs/plans/2026-11-17-db-pro-plugin.md`（19 任务），验收报告 `.omo/qa-reports/2026-11-17-db-pro-e2e/report.md`。
