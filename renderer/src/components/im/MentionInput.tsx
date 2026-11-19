@@ -24,7 +24,7 @@
 //   - 发送：serializeSegments(getSegments()) 一次性提取
 //     sendMessage(body, mentions, context) 三参；失败恢复 setSegments 快照
 //     （pill 原位）；空 body + 仅技能/文件 pill 是合法消息（v2.11 §7.1）
-//   - 会话草稿：draftsRef 存 segments JSON（segmentsToDraft/draftToSegments），
+//   - 会话草稿：模块级仓 composer-drafts 存 segments JSON（draftToSegments 恢复），
 //     切回 pill 与正文原样恢复（旧版「chips 不重建」MVP 取舍随三数组退役）
 //   - 手动键入 @ 文本（不经菜单选择）不注册 mention——与历代一致
 //   - 空态 parity：无激活会话禁用 + placeholder 提示；IME/Enter/Escape 守卫
@@ -55,10 +55,11 @@ import { IconButton } from '../ui/IconButton';
 import { RichComposer, type RichComposerHandle } from './RichComposer';
 import {
   draftToSegments,
-  segmentsToDraft,
   serializeSegments,
+  type ComposerSegment,
   type PillSeg,
 } from './composer-segments';
+import { clearChatDraft, loadChatDraft, saveChatDraft } from './composer-drafts';
 import {
   downscaleImage,
   makeImagePill,
@@ -275,31 +276,46 @@ export function MentionInput() {
 
   // 会话级草稿（segments JSON 往返）：切换会话时保存当前 segments、恢复目标
   // 会话草稿（无则清空）——pill 与文字同权保留，v2「chips 不重建」取舍随
-  // 三数组退役。
-  const draftsRef = useRef<Map<string, string>>(new Map());
-  const prevSessionRef = useRef<string | null>(activeSessionId);
+  // 三数组退役。草稿仓在模块级（composer-drafts）：视图切换卸载（MiddlePanel
+  // 条件渲染）后重挂载仍能恢复（2026-11-19：切文件面板再回来草稿不丢）；
+  // prevSessionRef 初始 null → 首挂载也走恢复分支（重挂载场景的唯一入口）。
+  const prevSessionRef = useRef<string | null>(null);
+  // segments 写穿镜像（RichComposer onSegmentsChange）：卸载存稿时 composerRef
+  // 已被 React 置 null、getSegments 读不到 DOM——存稿一律读镜像
+  const segsRef = useRef<ComposerSegment[]>([]);
   useEffect(() => {
     if (prevSessionRef.current === activeSessionId) return;
+    // 菜单态复位仅会话切换需要（清陈旧 query/fileHits）；首挂载（含视图切换
+    // 重挂载）跳过——同批挂载的 mentionTrigger 开菜单 effect 在其后运行，
+    // 复位会把待开菜单一并关掉（2026-11-19 实测回归）
     if (prevSessionRef.current !== null) {
-      draftsRef.current.set(
-        prevSessionRef.current,
-        segmentsToDraft(composerRef.current?.getSegments() ?? []),
-      );
+      saveChatDraft(prevSessionRef.current, segsRef.current);
+      setMenuType(null);
+      setQuery('');
+      setScopeQuery('');
+      closeMentionScope();
+      // 跨 workspace 陈旧命中防闪现（终审 M1）：menuType 同步置 null 后文件 effect
+      // 会跳过分支不清 fileHits；切会话时显式清空，下一次 @ 触发前菜单条件
+      // (filteredMembers.length > 0 || fileHits.length > 0) 不会拿旧 ws 数据渲染
+      setFileHits([]);
+      setFileTruncated(false);
+      syncImageHint();
     }
     const next =
-      activeSessionId !== null ? draftsRef.current.get(activeSessionId) : undefined;
+      activeSessionId !== null ? loadChatDraft(activeSessionId) : undefined;
     composerRef.current?.setSegments(draftToSegments(next));
-    setMenuType(null);
-    setQuery('');
-    setScopeQuery('');
-    closeMentionScope();
-    // 跨 workspace 陈旧命中防闪现（终审 M1）：menuType 同步置 null 后文件 effect
-    // 会跳过分支不清 fileHits；切会话时显式清空，下一次 @ 触发前菜单条件
-    // (filteredMembers.length > 0 || fileHits.length > 0) 不会拿旧 ws 数据渲染
-    setFileHits([]);
-    setFileTruncated(false);
-    syncImageHint();
     prevSessionRef.current = activeSessionId;
+  }, [activeSessionId]);
+
+  // 卸载存稿：视图切换（im → files 等）卸载 composer 前把当前会话内容落
+  // 模块仓——cleanup 捕获卸载时刻的 activeSessionId；与上方切换 effect 在
+  // 会话切换时对旧会话各存一次（同内容幂等，无竞争）。
+  useEffect(() => {
+    return () => {
+      if (activeSessionId !== null) {
+        saveChatDraft(activeSessionId, segsRef.current);
+      }
+    };
   }, [activeSessionId]);
 
   // @ 统一菜单文件组。手动路径：空 query → file.list('.') 根目录默认列表，
@@ -912,6 +928,8 @@ export function MentionInput() {
     try {
       await sendMessage(trimmed, payload.mentions, payload.context);
       await loadSessions();
+      // 发送成功 → 草稿随之失效（不删则重挂载会回潮已发出的内容）
+      clearChatDraft(activeSessionId);
     } catch {
       // 发送失败恢复：pill 原位 + 正文保留（setSegments 快照），用户可修改后重发
       composerRef.current?.setSegments(segs);
@@ -1137,6 +1155,9 @@ export function MentionInput() {
           }
           ariaLabel="消息输入框"
           onInputText={(before) => detectTrigger(before)}
+          onSegmentsChange={(segs) => {
+            segsRef.current = segs;
+          }}
           onNavigate={handleNavigate}
           onPasteImage={(files) => {
             void handlePasteImages(files);

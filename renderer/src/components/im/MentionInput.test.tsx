@@ -27,6 +27,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import type { ResourceItem, SessionMemberInfo, SessionSummary, TaskRow } from '../../ipc/types';
+import { resetComposerDrafts } from './composer-drafts';
 
 // 图片管线 canvas 边界 mock（jsdom 无 createImageBitmap/canvas.toBlob）：
 // 仅替换 downscaleImage——纯函数与常量经 importOriginal 保真（momo-test-rules：mock 收窄到边界）
@@ -319,6 +320,8 @@ function resetState(): void {
 
 beforeEach(() => {
   resetState();
+  // 模块级草稿仓跨用例存续（组件卸载保存语义）——每用例清空防串扰
+  resetComposerDrafts();
 });
 
 describe('MentionInput 空态与挂载接线', () => {
@@ -737,6 +740,47 @@ describe('MentionInput 会话草稿（segments JSON 往返，pill 不丢）', ()
     rerender(<MentionInput />);
     expect(hasPill(editor(), 'agent', 'inst-pm')).toBe(true);
     expect(visibleText(editor())).toContain('请跟进');
+  });
+
+  // 2026-11-19 用户反馈：切到文件面板查资料再回会话，半截输入全丢——
+  // 根因是草稿存组件 ref，视图切换（MiddlePanel 条件渲染）卸载即销毁。
+  // 锁：卸载 → 重挂载（同会话）草稿原样恢复。
+  it('视图切换卸载重挂载：纯文本草稿原样恢复', () => {
+    const { unmount } = render(<MentionInput />);
+    typeInEditor(editor(), '去文件面板查资料前的半句话');
+    unmount();
+
+    render(<MentionInput />);
+    expect(visibleText(editor())).toBe('去文件面板查资料前的半句话');
+  });
+
+  it('视图切换卸载重挂载：pill 草稿原样恢复（pill 与正文同权）', () => {
+    sessionState.members = [
+      makeMember({ instanceId: 'inst-pm', agentName: 'PM-agent', lastRunning: true }),
+    ];
+    const { unmount } = render(<MentionInput />);
+    const el = editor();
+    typeInEditor(el, '@');
+    fireEvent.click(screen.getByText('PM-agent'));
+    typeAtEnd(el, ' 请跟进');
+    unmount();
+
+    render(<MentionInput />);
+    expect(hasPill(editor(), 'agent', 'inst-pm')).toBe(true);
+    expect(visibleText(editor())).toContain('请跟进');
+  });
+
+  it('发送成功后卸载重挂载：不回潮已发送内容（草稿随发送失效）', async () => {
+    const { unmount } = render(<MentionInput />);
+    typeInEditor(editor(), 'hello');
+    fireEvent.keyDown(editor(), { key: 'Enter', shiftKey: false, isComposing: false } as unknown as Parameters<typeof fireEvent.keyDown>[1]);
+    await waitFor(() => expect(sessionState.sendMessage).toHaveBeenCalled());
+    // 冲刷 handleSend 的 await 链（sendMessage → loadSessions → 草稿失效）
+    await act(async () => {});
+    unmount();
+
+    render(<MentionInput />);
+    expect(visibleText(editor())).toBe('');
   });
 });
 
