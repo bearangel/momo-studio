@@ -14,6 +14,7 @@ import {
   FileSearch,
   TerminalSquare,
   Mail,
+  Database,
 } from 'lucide-react';
 
 export const PANEL_ICONS: Record<string, LucideIcon> = {
@@ -27,6 +28,7 @@ export const PANEL_ICONS: Record<string, LucideIcon> = {
   'file-search': FileSearch,
   terminal: TerminalSquare,
   mail: Mail,
+  database: Database,
 };
 
 export function panelIconOf(icon: string): LucideIcon {
