@@ -217,11 +217,23 @@ function resolveAssignmentId(task: TaskRow, breakpointSsId: string | null): stri
  */
 let bootInterruptedIds: ReadonlySet<string> | null = null;
 
+/**
+ * 中断候选口径（2026-11-20 T-063/T-064 实测补漏）：in_progress 且
+ * ①非 dispatch 簿记行（D4——链由 registry 管理，boot 对账已复位）；
+ * ②非跨节点外派行（delegation_role='out'——执行 agent 在远端节点，本地
+ * resume 无法解析 assignee/targetTeam/断点流 agent，恢复必失败；外派任务
+ * 的中断恢复归 hub 对账/重新委派，不属本地断点续跑）。承接行（'in'）
+ * 执行在本机，照常候选。
+ */
+function listInterruptible(): TaskRow[] {
+  return listTasks({ status: ['in_progress'], excludeOrigin: 'dispatch' }).filter(
+    (t) => t.delegationRole !== 'out',
+  );
+}
+
 export function captureBootInterruptedSnapshot(): void {
   if (bootInterruptedIds !== null) return;
-  bootInterruptedIds = new Set(
-    listTasks({ status: ['in_progress'], excludeOrigin: 'dispatch' }).map((t) => t.id),
-  );
+  bootInterruptedIds = new Set(listInterruptible().map((t) => t.id));
   if (bootInterruptedIds.size > 0) {
     logger.info('启动中断快照已捕获（恢复卡候选）', { count: bootInterruptedIds.size });
   }
@@ -240,11 +252,7 @@ export function detectInterrupted(): InterruptedTaskInfo[] {
   // 直查（保持 v2.6 原语义，detectInterrupted 既有用例零改动）
   const snapshot = bootInterruptedIds;
   const rows =
-    snapshot === null
-      ? listTasks({ status: ['in_progress'], excludeOrigin: 'dispatch' })
-      : listTasks({ status: ['in_progress'], excludeOrigin: 'dispatch' }).filter((t) =>
-          snapshot.has(t.id),
-        );
+    snapshot === null ? listInterruptible() : listInterruptible().filter((t) => snapshot.has(t.id));
   const store = getJournalStore();
   const result: InterruptedTaskInfo[] = [];
   for (const task of rows) {

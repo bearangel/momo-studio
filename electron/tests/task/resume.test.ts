@@ -246,6 +246,20 @@ describe('detectInterrupted 快照语义（2026-11-19 启动误报修复）', ()
     expect(detectInterrupted()).toHaveLength(0);
   });
 
+  it('跨节点外派行（delegation_role=out）不入卡——执行 agent 在远端，本地 resume 必失败（2026-11-20 T-063/T-064 实测）', () => {
+    insertTask({ workspaceId: 'ws1', title: '外派任务', creatorUserId: 'o', status: 'in_progress' });
+    getDb()
+      .prepare(`UPDATE tasks SET delegation_role='out', delegation_id='dl-x' WHERE title='外派任务'`)
+      .run();
+    insertTask({ workspaceId: 'ws1', title: '本地承接', creatorUserId: 'o', status: 'in_progress' });
+    getDb()
+      .prepare(`UPDATE tasks SET delegation_role='in', delegation_id='dl-x' WHERE title='本地承接'`)
+      .run();
+    const hit = detectInterrupted().map((x) => x.title);
+    expect(hit).toContain('本地承接'); // 承接行执行在本机 → 照常候选
+    expect(hit).not.toContain('外派任务'); // 外派行恢复必失败 → 不入卡
+  });
+
   it('空快照（boot 时无中断，快照后新 in_progress 不入卡）', () => {
     captureBootInterruptedSnapshot(); // 空快照（此刻无 in_progress）
     insertTask({ workspaceId: 'ws1', title: '新执行', creatorUserId: 'o', status: 'in_progress' });
