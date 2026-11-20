@@ -171,6 +171,25 @@ describe('A1) 镜像行 → hub task.answer 载荷与 disposition 透传', () =>
   });
 });
 
+describe('A1b) Q4：代答成功 → 留痕里程碑（pending 期不再写请求里程碑）', () => {
+  it('answered 后 messages 出现「已回答 question」delegation_milestone 行（决定摘要）', async () => {
+    const task = seedTask();
+    const row = seedMirrorRequest(task.id);
+    setMirrorAnswerForwarder(async () => 'answered');
+
+    await answerHumanRouted(row.id, { completed: true, text: 'SHOW TABLES 结果…' });
+
+    const rows = getDb()
+      .prepare("SELECT body, context_json FROM messages WHERE event_type = 'delegation_milestone'")
+      .all() as Array<{ body: string; context_json: string }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.body).toContain('已回答 question「确认方案」');
+    expect(rows[0]!.body).toContain('已完成');
+    const meta = JSON.parse(rows[0]!.context_json) as { kind: string };
+    expect(meta.kind).toBe('remote_intervention_answered');
+  });
+});
+
 describe('A2) hub stale → stale 透传，行保持 pending', () => {
   it('对端已答（first-wins 收敛）', async () => {
     const task = seedTask();

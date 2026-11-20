@@ -266,12 +266,14 @@ describe('HumanRequestPanel — manual_action 卡', () => {
     expect(answerMock).toHaveBeenCalledWith('req-m', { completed: true }, undefined);
   });
 
-  it('做不到 → answer {completed:false}；说明情况附言随答复透传', async () => {
+  it('Q3：结果文本域默认展开；做不到 → answer {completed:false} 且结果文本随答复透传', async () => {
     listMock.mockResolvedValueOnce([row()]).mockResolvedValue([]);
     await mountPanel();
 
-    fireEvent.click(screen.getByRole('button', { name: '说明情况' }));
-    fireEvent.change(screen.getByLabelText('说明情况'), { target: { value: '生产权限没批下来' } });
+    // 结果文本域默认在场（Q3 主输入位——不再有「说明情况」开关按钮）
+    const resultBox = screen.getByLabelText('执行结果 / 情况说明');
+    expect(screen.queryByRole('button', { name: '说明情况' })).not.toBeInTheDocument();
+    fireEvent.change(resultBox, { target: { value: '生产权限没批下来' } });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: '我做不到 / 转交' }));
     });
@@ -280,6 +282,19 @@ describe('HumanRequestPanel — manual_action 卡', () => {
       { completed: false, text: '生产权限没批下来' },
       undefined,
     );
+  });
+
+  it('Q1：卡体吸底结构——动作行独立于滚动内容区（提交行恒可见）', async () => {
+    listMock.mockResolvedValueOnce([row()]).mockResolvedValue([]);
+    await mountPanel();
+    // 内容区滚动 + 动作区常驻（CardBody 骨架两区块）
+    const card = screen.getByTestId('human-card-req-m');
+    const scroller = card.querySelector('.overflow-y-auto');
+    const actionBar = card.querySelector('.border-t');
+    expect(scroller).not.toBeNull();
+    expect(actionBar).not.toBeNull();
+    // 动作区含主按钮（已完成，继续）
+    expect(actionBar?.textContent).toContain('已完成，继续');
   });
 });
 

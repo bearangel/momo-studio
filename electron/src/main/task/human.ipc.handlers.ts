@@ -26,6 +26,8 @@ import {
   type HumanAnswerInput,
 } from './lifecycle-runs';
 import { sweepHumanTimeouts } from './human-timeout-sweeper';
+// Q4（2026-11-20 拍板）：远端代答成功后留痕里程碑（bridge 单源——delegation_milestone 写入面）
+import { writeOriginAnsweredMilestone } from '../hub/remote-intervene-bridge';
 import { recoverOrphanToolGates, setToolGateHumanSink } from '../sandbox/write-blocked-emit';
 import {
   getHumanRequest,
@@ -269,6 +271,10 @@ export async function answerHumanRouted(
   const res = tryAnswer(requestId, JSON.stringify(merged), resolveLocalNodeId());
   if (!res.ok) return { disposition: 'stale' };
   emitHumanChanged({ sessionId: req.sessionId, requestId, kind: 'answered' });
+  // Q4：应答成功留痕（pending 期已不再写请求里程碑——操作面收敛到卡+徽标）
+  if (task !== null) {
+    writeOriginAnsweredMilestone(task, req.kind, req.title, answerSummaryText(merged));
+  }
   return { disposition: 'answered' };
 }
 
@@ -370,4 +376,21 @@ export function __teardownHumanIpcForTest(): void {
   setHumanChangedSink(null);
   setTaskRunChangedSink(null);
   setToolGateHumanSink(null);
+}
+
+/** Q4：应答决定 → 留痕摘要文案（决定关键词 + 补充文本截断） */
+function answerSummaryText(answer: HumanAnswerInput): string {
+  const parts: string[] = [];
+  if (answer.completed === true) parts.push('已完成');
+  else if (answer.completed === false) parts.push('未完成/转交');
+  if (answer.decision === 'approve') parts.push('批准');
+  else if (answer.decision === 'deny') parts.push('拒绝');
+  if (Array.isArray(answer.selected) && answer.selected.length > 0) {
+    parts.push(`选择 ${answer.selected.length} 项`);
+  }
+  if (typeof answer.text === 'string' && answer.text.trim() !== '') {
+    const t = answer.text.trim();
+    parts.push(t.length > 60 ? `${t.slice(0, 60)}…` : t);
+  }
+  return parts.length > 0 ? parts.join(' · ') : '已答复';
 }

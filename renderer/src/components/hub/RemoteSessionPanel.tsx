@@ -321,8 +321,11 @@ export function RemoteSessionPanel({ sessionId, workspaceId, footerSlot, footerE
       {footerSlot !== undefined && (
         <div
           className={cn(
-            'flex flex-col overflow-hidden pb-3',
-            footerExpanded ? 'min-h-0 flex-1' : 'max-h-[40vh] shrink-0',
+            // footerExpanded（验收满屏）内部自管滚动；常态 40vh 上限内滚动——
+            // 长选项 question 卡超出槽高时动作区（提交/输入）不得被 overflow-hidden
+            // 静默裁掉（2026-11-19 实测 T-063/T-064：矮窗口下按钮不可达）
+            'flex flex-col pb-3',
+            footerExpanded ? 'min-h-0 flex-1 overflow-hidden' : 'max-h-[40vh] shrink-0 overflow-y-auto',
           )}
         >
           {footerSlot}

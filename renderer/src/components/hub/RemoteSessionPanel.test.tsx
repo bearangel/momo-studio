@@ -149,6 +149,21 @@ describe('面板附属件', () => {
     expect(slot.className).toContain('flex-1');
   });
 
+  it('常态 footer 槽超限可滚动（长选项卡动作区不被 overflow-hidden 裁掉——2026-11-19 T-063/T-064 实测锁）', () => {
+    seedReady();
+    render(
+      <RemoteSessionPanel
+        sessionId="sx"
+        workspaceId="ws1"
+        footerSlot={<div>验收卡占位</div>}
+      />,
+    );
+    const slot = screen.getByText('验收卡占位').parentElement!;
+    expect(slot.className).toContain('max-h-[40vh]');
+    expect(slot.className).toContain('overflow-y-auto');
+    expect(slot.className).not.toContain('overflow-hidden');
+  });
+
   it('面板内不再有独立状态条（状态迁至会话标题行）', () => {
     seedReady();
     render(<RemoteSessionPanel sessionId="sx" workspaceId="ws1" />);

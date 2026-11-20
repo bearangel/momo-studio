@@ -971,6 +971,26 @@ function isDuplicateOriginSteer(delegationId: string, message: string): boolean 
  * 内跟踪会话只落一行）。execution_session_id 空（跟踪会话未接通）跳过 + warn，
  * 不影响 steer 本身成功返回。
  */
+/**
+ * Q4（2026-11-20 拍板）：发起方代答留痕里程碑——应答成功后写「已回答」留痕
+ * （pending 期不再写里程碑：纯文字无按钮的请求文案与操作卡同屏，用户误在
+ * 消息流找按钮——T-063/T-064 实测）。与 writeOriginSteerMilestone 同消费面
+ * （human.ipc.handlers answerHumanRouted 远端镜像分支）。
+ */
+export function writeOriginAnsweredMilestone(
+  task: TaskRow,
+  kind: string,
+  title: string,
+  summary: string,
+): void {
+  writeSessionMilestone(task, `已回答 ${kind}「${title}」（${summary}）`, {
+    kind: 'remote_intervention_answered',
+    interventionKind: kind,
+    title: truncateCodePoints(title, 79),
+    summary: truncateCodePoints(summary, 199),
+  });
+}
+
 export function writeOriginSteerMilestone(task: TaskRow, message: string): void {
   if (isDuplicateOriginSteer(task.delegationId ?? '', message)) {
     logger.info('发起方 steer 里程碑窗口内重复（去重跳过）', { taskId: task.id });
@@ -1232,12 +1252,8 @@ export async function handleTaskInterventionMirror(
       remoteId: intervention.interventionId,
     });
     emitHumanChanged({ sessionId, requestId: row.id, kind: 'inserted' });
-    writeSessionMilestone(task, `远端人工请求（${intervention.kind}）：${intervention.title}`, {
-      kind: 'remote_intervention',
-      interventionId: intervention.interventionId,
-      runNo: intervention.runNo,
-      delegationId,
-    });
+    // Q4（2026-11-20 拍板）：pending 期不写里程碑（操作面=卡+徽标；应答后经
+    // writeOriginAnsweredMilestone 留痕）——消「消息流文字块看似卡片无按钮」
     logger.info('远端干预镜像已落库', {
       taskId: task.id,
       delegationId,

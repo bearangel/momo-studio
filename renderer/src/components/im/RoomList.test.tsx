@@ -1338,6 +1338,30 @@ describe('RoomList — D10 执行中 / 未读标识', () => {
     expect(idleRow.querySelector('[data-testid="row-streaming-dot"]')).toBeNull();
   });
 
+  it('Q7：等待人琥珀点三态互斥——waiting > 执行中 > 未读（等待时脉冲让位）', () => {
+    sessionState.sessions = [
+      makeSession({ id: 's-wait', title: '等待会话', lastMessageAt: 100 }),
+      makeSession({ id: 's-run', title: '执行会话', lastMessageAt: 100 }),
+      makeSession({ id: 's-idle', title: '静默会话', lastMessageAt: 100 }),
+    ];
+    sessionState.streamingSessions = new Set(['s-run', 's-wait']); // 等待会话也挂着流
+    sessionState.readSeqMap = {}; // 全部未读
+    humanState.attentionBySession = {
+      's-wait': { waiting: 1, submitted: false, executorSubmitted: false, failed: false },
+    };
+    render(<RoomList />);
+    const waitRow = document.querySelector('[data-session-id="s-wait"]')!;
+    const runRow = document.querySelector('[data-session-id="s-run"]')!;
+    const idleRow = document.querySelector('[data-session-id="s-idle"]')!;
+    // 等待人：琥珀点独占（脉冲/未读让位）
+    expect(waitRow.querySelector('[data-testid="row-waiting-dot"]')).not.toBeNull();
+    expect(waitRow.querySelector('[data-testid="row-streaming-dot"]')).toBeNull();
+    expect(waitRow.querySelector('[data-testid="row-unread-dot"]')).toBeNull();
+    // 无等待：原两层互斥不变
+    expect(runRow.querySelector('[data-testid="row-streaming-dot"]')).not.toBeNull();
+    expect(idleRow.querySelector('[data-testid="row-unread-dot"]')).not.toBeNull();
+  });
+
   it('关联任务 in_progress 的会话 → 执行中点（跨本机/远端统一）', () => {
     sessionState.sessions = [makeSession({ id: 's-task', title: '任务会话', lastMessageAt: 1 })];
     sessionState.streamingSessions = new Set();

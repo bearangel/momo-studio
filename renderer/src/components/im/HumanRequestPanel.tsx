@@ -385,6 +385,22 @@ function CardHead({ row, now, extraAction }: {
 
 // ── 四种 kind 卡体（#3：内距 10px 12px / 纵向 gap 8px）──────────────────────
 
+/**
+ * 卡体骨架（Q1 吸底，2026-11-20 拍板）：内容区内部滚动 + 动作行恒吸底可见。
+ * 长选项/长指令卡超出槽高时提交行不再被推出可视区（与验收卡满屏态同构；
+ * 无高度约束的宿主〔普通会话直挂〕下自然高度，行为不变）。
+ */
+function CardBody({ children, actions }: { children: React.ReactNode; actions: React.ReactNode }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-3 py-2.5">
+        {children}
+      </div>
+      <div className="flex shrink-0 flex-col gap-2 border-t border-subtle px-3 py-2">{actions}</div>
+    </div>
+  );
+}
+
 /** 卡内错误行：答复/验收 IPC 失败的人话反馈（错误路径必须有可见出口） */
 function ErrorLine({ error }: { error: string | null }) {
   if (error === null) return null;
@@ -412,22 +428,8 @@ function ToolGateBody({ row, now, onError }: {
   };
 
   return (
-    <div className="flex flex-col gap-2 px-3 py-2.5">
-      {isRemoteRow(row) && <RemoteAnswerHint row={row} />}
-      {/* 描述行（未决态）/ 超时策略行（预警态，预览 1B 互换） */}
-      <div className="text-[11px] leading-4 text-tertiary">
-        {warn
-          ? TIMEOUT_POLICY_HINT[row.timeoutPolicy]
-          : db !== null
-            ? `${db.opClass} 写请求 · 连接 ${db.connection}`
-            : gate !== null
-              ? `${gate.toolName} 工具请求写入 ${gate.dirs.length} 个目录。`
-              : row.prompt}
-      </div>
-      {db !== null && <CmdBlock command={`$ ${db.sql}`} />}
-      {db === null && gate !== null && <CmdBlock command={`$ ${gate.command}`} />}
-      {db === null && gate !== null && <Chips items={gate.dirs} />}
-      {!warn && <div className="h-px bg-border-subtle" />}
+    <CardBody
+      actions={
       <div className="flex flex-wrap items-center gap-[7px]">
         <Button
           variant="primary"
@@ -461,7 +463,24 @@ function ToolGateBody({ row, now, onError }: {
           拒绝
         </Button>
       </div>
-    </div>
+      }
+    >
+      {isRemoteRow(row) && <RemoteAnswerHint row={row} />}
+      {/* 描述行（未决态）/ 超时策略行（预警态，预览 1B 互换） */}
+      <div className="text-[11px] leading-4 text-tertiary">
+        {warn
+          ? TIMEOUT_POLICY_HINT[row.timeoutPolicy]
+          : db !== null
+            ? `${db.opClass} 写请求 · 连接 ${db.connection}`
+            : gate !== null
+              ? `${gate.toolName} 工具请求写入 ${gate.dirs.length} 个目录。`
+              : row.prompt}
+      </div>
+      {db !== null && <CmdBlock command={`$ ${db.sql}`} />}
+      {db === null && gate !== null && <CmdBlock command={`$ ${gate.command}`} />}
+      {db === null && gate !== null && <Chips items={gate.dirs} />}
+      {!warn && <div className="h-px bg-border-subtle" />}
+    </CardBody>
   );
 }
 
@@ -487,7 +506,22 @@ function QuestionBody({ row, onError }: {
   };
 
   return (
-    <div className="flex flex-col gap-2 px-3 py-2.5">
+    <CardBody
+      actions={
+      <div className="flex items-center gap-2">
+        <input
+          aria-label="补充说明（可选）"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="补充说明（可选，进入 agent 上下文）…"
+          className="h-[30px] flex-1 rounded-md border border-subtle bg-surface-2 px-[9px] text-xs text-primary placeholder:text-tertiary focus:border-focus focus:outline-none"
+        />
+        <Button variant="primary" size="sm" className={BTN_SM} disabled={!canSubmit} onClick={submit}>
+          提交
+        </Button>
+      </div>
+      }
+    >
       {isRemoteRow(row) && <RemoteAnswerHint row={row} />}
       <div className="text-xs leading-[1.7] text-primary">{row.prompt}</div>
       {options?.map((opt) => (
@@ -519,19 +553,7 @@ function QuestionBody({ row, onError }: {
           </span>
         </button>
       ))}
-      <div className="flex items-center gap-2">
-        <input
-          aria-label="补充说明（可选）"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="补充说明（可选，进入 agent 上下文）…"
-          className="h-[30px] flex-1 rounded-md border border-subtle bg-surface-2 px-[9px] text-xs text-primary placeholder:text-tertiary focus:border-focus focus:outline-none"
-        />
-        <Button variant="primary" size="sm" className={BTN_SM} disabled={!canSubmit} onClick={submit}>
-          提交
-        </Button>
-      </div>
-    </div>
+    </CardBody>
   );
 }
 
@@ -545,20 +567,45 @@ function ManualActionBody({ row, now, onError }: {
   const warn = isWarn(row, now);
   // 步骤勾选是纯本地跟踪态（预览「本地勾选态」），不落库不进答复载荷
   const [done, setDone] = useState<Set<string>>(new Set());
-  const [noteOpen, setNoteOpen] = useState(false);
-  const [note, setNote] = useState('');
+  // Q3（2026-11-20 拍板）：结果文本域默认展开——manual_action 的核心回收物是
+  // 执行结果正文（T-064 实录：只回「已完成」决定导致 B 零信息追问回收形态）
+  const [result, setResult] = useState('');
 
   const submit = (completed: boolean): void => {
     void answer(row.id, {
       completed,
-      text: note.trim() !== '' ? note.trim() : undefined,
+      text: result.trim() !== '' ? result.trim() : undefined,
     }).catch((err: unknown) => {
       onError(err instanceof Error ? err.message : String(err));
     });
   };
 
   return (
-    <div className="flex flex-col gap-2 px-3 py-2.5">
+    <CardBody
+      actions={
+      <>
+      <textarea
+        aria-label="执行结果 / 情况说明"
+        value={result}
+        onChange={(e) => setResult(e.target.value)}
+        placeholder="粘贴执行结果 / 告知情况（随「已完成」带回给 agent）…"
+        className="min-h-[64px] w-full resize-y rounded-md border border-subtle bg-surface-2 px-[9px] py-[7px] text-xs leading-[1.6] text-primary placeholder:text-tertiary focus:border-focus focus:outline-none"
+      />
+      <div className="flex flex-wrap items-center gap-[7px]">
+        <Button variant="primary" size="sm" className={BTN_SM} onClick={() => submit(true)}>
+          已完成，继续
+        </Button>
+        <Button
+          size="sm"
+          className={cn(BTN_SM, 'border border-strong bg-surface-1 text-primary hover:bg-surface-3')}
+          onClick={() => submit(false)}
+        >
+          我做不到 / 转交
+        </Button>
+      </div>
+      </>
+      }
+    >
       {isRemoteRow(row) && <RemoteAnswerHint row={row} />}
       <div className="text-xs leading-[1.7] text-primary">
         {warn ? TIMEOUT_POLICY_HINT[row.timeoutPolicy] : row.prompt}
@@ -593,31 +640,7 @@ function ManualActionBody({ row, now, onError }: {
         );
       })}
       {!warn && <div className="h-px bg-border-subtle" />}
-      {noteOpen && (
-        <textarea
-          aria-label="说明情况"
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          placeholder="说明情况（将随答复进入 agent 上下文）…"
-          className="h-14 w-full resize-none rounded-md border border-subtle bg-surface-2 px-[9px] py-[7px] text-xs leading-[1.6] text-primary placeholder:text-tertiary focus:border-focus focus:outline-none"
-        />
-      )}
-      <div className="flex flex-wrap items-center gap-[7px]">
-        <Button variant="primary" size="sm" className={BTN_SM} onClick={() => submit(true)}>
-          已完成，继续
-        </Button>
-        <Button
-          size="sm"
-          className={cn(BTN_SM, 'border border-strong bg-surface-1 text-primary hover:bg-surface-3')}
-          onClick={() => submit(false)}
-        >
-          我做不到 / 转交
-        </Button>
-        <Button variant="ghost" size="sm" className={BTN_SM} onClick={() => setNoteOpen((v) => !v)}>
-          说明情况
-        </Button>
-      </div>
-    </div>
+    </CardBody>
   );
 }
 
@@ -867,17 +890,16 @@ function KindCard({ row, now, onRemoteWarning, fullscreen = false, onToggleFulls
   // 不替换——平行组发起方保留验收权）
   if (row.peerMirror === true && row.kind !== 'acceptance') {
     return (
-      <div data-testid={`human-card-${row.id}`} className="bg-canvas">
+      <div data-testid={`human-card-${row.id}`} className="flex min-h-0 flex-1 flex-col overflow-hidden bg-canvas">
         <CardHead row={row} now={now} />
         <PeerNeutralCard row={row} />
       </div>
     );
   }
 
-  const rootClass =
-    row.kind === 'acceptance'
-      ? 'flex min-h-0 flex-1 flex-col overflow-hidden bg-canvas'
-      : 'bg-canvas';
+  // Q1（2026-11-20 拍板）：全部 kind 吸底同构（头部固定 + 内容滚动 + 动作行
+  // 恒可见）；无高度约束宿主下自然高度，行为不变
+  const rootClass = 'flex min-h-0 flex-1 flex-col overflow-hidden bg-canvas';
   return (
     <div data-testid={`human-card-${row.id}`} className={rootClass}>
       <CardHead
@@ -1035,17 +1057,10 @@ export function HumanRequestPanel({ sessionId, onAcceptanceFullscreenChange, exc
   // 警示条需存活到下一次成功操作清除）
   if (pending.length === 0 && remoteWarning === null) return null;
   const rest = pending.filter((r) => r.id !== expanded?.id);
-  // 验收卡方案 B（2026-11-18）：只有验收卡吃满槽高并在内部滚动 + 吸底动作区
-  // （其余 kind 保持自然高度，堆叠时可整体滚动）
-  const acceptanceExpanded = expanded?.kind === 'acceptance';
-
   return (
     <div
       data-testid="human-request-panel"
-      className={cn(
-        'border-t border-subtle bg-surface-1 px-3 pt-3',
-        acceptanceExpanded && 'flex min-h-0 flex-1 flex-col',
-      )}
+      className={cn('flex min-h-0 flex-1 flex-col border-t border-subtle bg-surface-1 px-3 pt-3')}
     >
       {remoteWarning !== null && (
         <div
@@ -1058,8 +1073,7 @@ export function HumanRequestPanel({ sessionId, onAcceptanceFullscreenChange, exc
       {pending.length > 0 && (
         <div
           className={cn(
-            'overflow-hidden rounded-lg border bg-canvas shadow-[0_4px_16px_rgba(0,0,0,0.10)]',
-            acceptanceExpanded && 'flex min-h-0 flex-1 flex-col',
+            'flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg bg-canvas shadow-[0_4px_16px_rgba(0,0,0,0.10)]',
             expanded !== null && isWarn(expanded, now) ? 'border-status-warning' : 'border-strong',
           )}
         >

@@ -6,10 +6,11 @@
 // 「任务已结束」；未开始/离线的发送失败由 store 落 failed 人话（hub 既有文案）。
 // 形态对齐 MentionInput 视觉语言（textarea + 右下发送钮）；退役 SteerEntry（CONTRACT #11-16）。
 import { useEffect, useRef, useState } from 'react';
-import { CornerDownLeft } from 'lucide-react';
+import { ChevronDown, CornerDownLeft, MessageCircleQuestion } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { isTerminalStatus } from '../../lib/board';
 import { useRemoteSessionStore } from '../../stores/remote-session.view';
+import { useHumanStore } from '../../stores/human.store';
 import { loadSteerDraft, saveSteerDraft } from '../im/composer-drafts';
 import type { TaskRow } from '../../ipc/types';
 
@@ -37,6 +38,15 @@ export function RemoteSteerComposer({
   // 后重挂载原样恢复（2026-11-19 与会话框同源修复）；useState 初始值即恢复值
   const [text, setText] = useState(() => loadSteerDraft(sessionId));
   const [sending, setSending] = useState(false);
+  // Q2/Q6（2026-11-20 拍板）：有 pending 人工请求卡时 steer 降权折叠——回答优先，
+  // 两条输入通道（应答 vs 指令注入）不再同屏；点开可用，无卡自动恢复常驻
+  const pendingHuman = useHumanStore((s) => s.pendingBySession.get(sessionId));
+  const hasPendingHuman = (pendingHuman ?? []).length > 0;
+  const [steerExpanded, setSteerExpanded] = useState(false);
+  // pending 清空后折叠态复位（下次有卡重新降权）
+  useEffect(() => {
+    if (!hasPendingHuman) setSteerExpanded(false);
+  }, [hasPendingHuman]);
   // 切会话（sessionId prop 变化，不卸载）：换仓恢复目标会话草稿
   const prevSessionRef = useRef(sessionId);
   useEffect(() => {
@@ -72,6 +82,23 @@ export function RemoteSteerComposer({
   };
 
   if (hidden) return null;
+  if (hasPendingHuman && !steerExpanded) {
+    return (
+      <button
+        type="button"
+        data-testid="remote-steer-collapsed"
+        onClick={() => setSteerExpanded(true)}
+        className="flex w-full shrink-0 items-center gap-1.5 border-t border-subtle bg-surface-1 px-4 py-2 text-left text-[11.5px] text-tertiary hover:text-secondary"
+      >
+        <MessageCircleQuestion size={13} strokeWidth={1.75} aria-hidden className="shrink-0 text-status-warning" />
+        <span className="min-w-0 flex-1 truncate">
+          有请求等待回答（在上方操作区）——本框用于<b className="mx-0.5 font-semibold text-secondary">注入执行指令</b>，与回答无关
+        </span>
+        <ChevronDown size={13} strokeWidth={1.75} aria-hidden className="shrink-0" />
+        展开
+      </button>
+    );
+  }
 
   return (
     <div className="shrink-0 border-t border-subtle bg-surface-1 px-4 py-2.5" data-testid="remote-steer-composer">

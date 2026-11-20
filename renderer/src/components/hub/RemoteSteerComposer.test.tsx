@@ -10,6 +10,7 @@ import React from 'react';
 import { RemoteSteerComposer } from './RemoteSteerComposer';
 import { resetComposerDrafts } from '../im/composer-drafts';
 import { useRemoteSessionStore } from '../../stores/remote-session.view';
+import { useHumanStore } from '../../stores/human.store';
 import type { TaskRow } from '../../ipc/types';
 
 const sendSteer = vi.fn().mockResolvedValue(undefined);
@@ -41,6 +42,36 @@ beforeEach(() => {
     live: true, hubOnline: true, liveError: null, pendingSteers: [],
     sendSteer,
   } as Partial<ReturnType<typeof useRemoteSessionStore.getState>>);
+});
+
+describe('Q2/Q6：pending 人工卡时降权折叠', () => {
+  it('有 pending 卡 → 折叠行（语义文案），输入框不渲染；点击展开可用', () => {
+    useHumanStore.setState({
+      pendingBySession: new Map([['s1', [{ id: 'hr1' } as never]]]),
+    });
+    render(<RemoteSteerComposer sessionId="s1" />);
+    const collapsed = screen.getByTestId('remote-steer-collapsed');
+    expect(collapsed.textContent).toContain('注入执行指令');
+    expect(screen.queryByTestId('remote-steer-input')).not.toBeInTheDocument();
+    fireEvent.click(collapsed);
+    expect(screen.getByTestId('remote-steer-input')).toBeInTheDocument();
+  });
+
+  it('pending 清空 → 折叠态复位（恢复常驻输入框）', () => {
+    useHumanStore.setState({
+      pendingBySession: new Map([['s1', [{ id: 'hr1' } as never]]]),
+    });
+    render(<RemoteSteerComposer sessionId="s1" />);
+    fireEvent.click(screen.getByTestId('remote-steer-collapsed'));
+    useHumanStore.setState({ pendingBySession: new Map() });
+    expect(screen.getByTestId('remote-steer-input')).toBeInTheDocument();
+  });
+
+  it('无 pending 卡 → 常驻输入框（行为不变）', () => {
+    render(<RemoteSteerComposer sessionId="s1" />);
+    expect(screen.getByTestId('remote-steer-input')).toBeInTheDocument();
+    expect(screen.queryByTestId('remote-steer-collapsed')).not.toBeInTheDocument();
+  });
 });
 
 describe('门控', () => {

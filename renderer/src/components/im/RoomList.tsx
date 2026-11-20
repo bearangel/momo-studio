@@ -231,6 +231,9 @@ function SessionItem({
   const pinned = session.pinnedAt != null;
   // 徽标恒居行尾（预览合同 #13）；一行仅显最高优先一枚（#12）
   const badge = attention != null ? deriveAttentionBadge(attention) : null;
+  // Q7（2026-11-20 拍板）：状态点三层互斥——等待人（琥珀）> 执行中（绿脉冲）>
+  // 未读（蓝点）。等待人时执行确已停滞，脉冲让位更真；waiting 计数徽标照常。
+  const waitingHuman = attention != null && attention.waiting > 0;
   return (
     <div className={cn('my-0.5', inGroupCard ? 'mx-1' : 'mx-1.5')}>
       <button
@@ -269,7 +272,15 @@ function SessionItem({
         >
           <Icon size={14} strokeWidth={1.75} aria-hidden />
         </span>
-        {streaming === true && (
+        {waitingHuman && (
+          <span
+            data-testid="row-waiting-dot"
+            aria-label="等待你回答"
+            title="等待你回答（有未决人工请求）"
+            className="h-[7px] w-[7px] shrink-0 rounded-full bg-status-warning"
+          />
+        )}
+        {!waitingHuman && streaming === true && (
           <span
             data-testid="row-streaming-dot"
             aria-label="执行中"
@@ -277,7 +288,7 @@ function SessionItem({
             className="h-[7px] w-[7px] shrink-0 rounded-full bg-status-success animate-pulse"
           />
         )}
-        {streaming !== true && unread === true && (
+        {!waitingHuman && streaming !== true && unread === true && (
           <span
             data-testid="row-unread-dot"
             aria-label="有未读消息"
