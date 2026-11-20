@@ -10,6 +10,18 @@
 
 - **git 工具组下线 + bash 放开 git 操作**：git 专用工具组（repos/status/diff/log/show/add/commit/branch/checkout/stash 共 10 工具）整体退役——工具面只覆盖安全子集（reset/revert/push/merge 等永远补不全），通用操作不应被特定工具组封顶；git 全量操作改经 bash（黑名单移除 `git commit` 拦截条目，命令级审计兜底）。**GitPolicy 整体退役**（commit 校验器 / gitPolicy IPC / preload 桥 / GitPolicySettings 组件 / types 类型，随 11-09 设置面板下线彻底收官；`git_policies` 表保留不读写）。存量配置残留 `git_*` ref 由 capability-merger 静默丢弃（零迁移）；builtin Momo 行 default_tools 按处方追加迁移 **085**（72 → 62 项）；`general-assistant.yaml` 去 10 个 git ref。git 仓发现（discoverRepos）与工作区 init 保留（变更账本多仓基线 / workspace 初始化在用）。未来 git 最佳实践走 skill / GitHub MCP 形态（marketplace），本次纯减法。
 
+## [未发布] — git 工具域退役 + 插件审批跨节点桥接 + 远程交互矩阵（alpha.75）
+
+`2.1.0-alpha.75`。alpha.74 之后 7 个提交（跨节点 T-063~T-070 实测修复为主），新增迁移 **085**，协议不变（仍 pin v0.7.7 / 1.14.0）。
+
+- **git 工具域退役**（392f40ce）：git 专用工具组（repos/status/diff/log/show/add/commit/branch/checkout/stash）整体下线——通用操作不该被特定工具组封顶；git 全量操作改经 bash（黑名单移除 `git commit` 拦截，OS 沙箱 / 环境变量白名单 / 命令级审计三道既有防线覆盖）。**GitPolicy 整体收官**（commit 校验、`gitPolicy` IPC / preload / 设置面板 / 类型全退役，`git_policies` 表保留不读写）；迁移 **085** 迁 builtin Momo 的 `default_tools` 引用并交接末位哨兵；留存配置残 `git_*` ref 由 capability-merger 静默丢弃（零迁移）。保留 `discoverRepos`（变更账本多仓基线）与 `initGitRepo`（工作区初始化）
+- **插件工具级审批跨节点桥接**（e7637529，T-065）：db-pro 写 / 脚本两段式审批（`humanGate.create`，kind=tool_gate）此前只推本地面板、不过 intervene 桥——headless 执行节点无人可批、发起方收不到，agent 只能反复追问。修复：create 落行后与 `requestHuman` 同源外发 `emitRemoteIntervene({request_created})`，发起方面板直接出工具授权卡，批准经 hub 回流放行
+- **tool_gate 答复未消费兜底唤醒**（67823b6f）：`handleToolGateAnswer` 返回消费布尔（db 载荷 / 畸形 / 未识别决策 = false；沙箱在途授权 = true 防双驱动）；未消费则复用 `humanAnswerKickoff` 注入【人工答复】并派发新回合（与 question/manual_action 同链）——修 db-pro 两段式批准后会话僵死、需手动「继续」的问题
+- **远端会话帧流三连修**（07b65d92，T-066/067/069/070）：①帧聚合行读取改**尾部窗口**（原升序头窗把超限会话尾部事件永久排除，导致二轮断流）；②tick 增量与未终态长帧重读冲突——深帧重读窗放大到「帧首 → 游标 + 余量」（原 100 事件截断致正文永 streaming 半截）；③同一消息被工具间隔开的多段按工具边界**分段聚合**（段 n 带 `#n` 后缀，段首段末正文行，final 不占位；final 与拼接不一致时退化单帧全文保留权威兜底）
+- **启动恢复卡排除跨节点外派行**（5b0e4ecb，T-063/064）：外派行（`delegation_role='out'`）执行 agent 在远端，本地 resume 必定解析失败——中断候选补第二排除（承接行 `in` 照常候选）
+- **远程交互矩阵六项**（4b17d25d，`.omo/previews/2026-11-20-remote-interaction-matrix.html` Q1-Q9 拍板）：①四类卡统一吸底骨架（卡头固定 + 内容区内部滚动 + 动作行恒可见）；②有 pending 人工卡时 steer 降权折叠（语义文案区分「回答」vs「注入指令」，点开可用）——治双输入框同屏混淆；③`manual_action` 主输入位升级多行结果文本域（随「已完成」带回正文）——治代答闭环断裂；④pending 期不再写消息流里程碑（消「有文字无按钮」错觉），代答成功写「已回答 kind「title」」留痕；⑤折叠行文案随②；⑥列表状态点三层互斥（等待人琥珀 > 执行中绿脉冲 > 未读蓝点）
+- **文档**（7431b65c）：db-pro A/B/C 三期设计与实施计划归档
+
 ## [未发布] — abort 贯穿在途工具 + 插件工具粒度授权 + 循环任务治理（alpha.74）
 
 `2.1.0-alpha.74`。alpha.73 打包后的修复与治理批（17 提交），无协议变更（仍 pin v0.7.7 / 协议 1.14.0）。
