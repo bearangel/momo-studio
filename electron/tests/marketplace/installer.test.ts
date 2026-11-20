@@ -92,22 +92,23 @@ describe('marketplace/installer installPackage（builtin 内联）', () => {
     const manifest = yamlLoad(
       fs.readFileSync(path.join(cachePath, 'manifest.yaml'), 'utf-8'),
     ) as { spec: { defaultTools: Array<{ kind: string; ref: string }> } };
-    // 目录派生改造（Task 3）：全集 = ALL_BUILTIN_TOOLS（含 v2.x 任务/记忆/浏览器/会话/进程/git_repos；LSP 已随子系统下架摘除，2026-10-08）
+    // 目录派生改造（Task 3）：全集 = ALL_BUILTIN_TOOLS（含 v2.x 任务/记忆/浏览器/
+    // 会话/进程；LSP 已随子系统下架摘除，2026-10-08；git 域 2026-11-20 下线）
     expect(manifest.spec.defaultTools.every((t) => t.kind === 'builtin')).toBe(true);
     const refs = manifest.spec.defaultTools.map((t) => t.ref).sort();
     expect(refs).toEqual([...ALL_BUILTIN_TOOLS].sort());
-    for (const probe of ['bash', 'read_file', 'git_commit', 'apply_patch', 'office_read']) {
+    for (const probe of ['bash', 'read_file', 'apply_patch', 'office_read']) {
       expect(refs, probe).toContain(probe);
     }
   });
 
-  it('S3 回归锁：注册入库的 defaultTools 按安全最小集钳制——bash/git_commit 被剔除', async () => {
+  it('S3 回归锁：注册入库的 defaultTools 按安全最小集钳制——bash/rm 被剔除', async () => {
     await installPackage(makeItem());
     const def = listAgentDefinitions().find((d) => d.slug === 'test-agent');
     expect(def).toBeDefined();
     const refs = def!.defaultTools.map((t) => t.ref);
     expect(refs).not.toContain('bash');
-    expect(refs).not.toContain('git_commit');
+    expect(refs).not.toContain('rm');
     // manifest 文件里仍是派生全集（钳制只作用于注册结果）
     const safe = new Set<string>(SAFE_MINIMUM_TOOLS);
     expect(refs.every((r) => safe.has(r))).toBe(true);

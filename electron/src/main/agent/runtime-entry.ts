@@ -145,7 +145,7 @@ export interface RuntimeContext {
   // === v1.5 工具库共享上下文（与 ToolContext 对齐，子集） ===
   /** workspace UUID——FileTools 不消费，Phase 2+ 的 git/lsp/todo 按 workspace 索引 store */
   workspaceId: string;
-  /** workspace 绝对路径——Phase 2+ 的 ShellTools/GitTools 的 cwd */
+  /** workspace 绝对路径——Phase 2+ 的 ShellTools 的 cwd */
   workspaceDir: string;
   /** 当前 Matrix room ID；Phase 1 FileTools 不消费 */
   roomId: string;

@@ -1,7 +1,7 @@
 // electron/tests/storage/084_recurrence_chain_root.test.ts
 //
 // 迁移 084：tasks.recurrence_chain_root 列 + 存量循环链 WITH RECURSIVE 回填。
-// 末位哨兵自 083 测试移入（070→080→082→083 先例：新迁移落地后末位断言随迁）。
+// 末位哨兵已随 085 落地移交其测试（070→080→082→083→084 先例：新迁移落地后末位断言随迁）。
 import { describe, it, expect } from 'vitest';
 import { loadMigrations } from '../../src/main/storage/migrations';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
@@ -13,10 +13,10 @@ import os from 'node:os';
 describe('migration 084 循环链根列 + 存量回填', () => {
   const tmpRoot = path.join(os.tmpdir(), `ap-m084-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
-  it('用例 F：084 注册为最新迁移（末位哨兵自 083 测试移入）', () => {
+  it('用例 F：084 注册在迁移链中（末位哨兵随 085 落地移交其测试，070→080→082→083 先例）', () => {
     const versions = loadMigrations().map((m) => m.version);
     expect(versions).toContain(84);
-    expect(versions[versions.length - 1]).toBe(84);
+    // 版本唯一性（重复注册会让 runner 静默跳过第二条，属契约破坏）
     expect(new Set(versions).size).toBe(versions.length);
   });
 

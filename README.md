@@ -33,7 +33,7 @@
 - OS 级沙箱：macOS Seatbelt / Linux bubblewrap / Windows PowerShell plain，strict 默认
 - WorkspaceFS 路径防御（拒 `..` 与符号链接逃逸）；Read-before-Edit 守门；结构化 apply_patch 原子执行
 - 变更账本：五类写工具落盘前记账，hash 守卫逆序撤销；bash 账外变更事后核对
-- GitPolicy 三层校验（总开关 / 分支保护 / message pattern）；多仓 git 工具（发现列表是唯一 `-C` 入口）
+- git 全量操作经 bash 执行（reset/revert/push 等不受专用工具组封顶；命令级审计兜底；git 专用工具组与 GitPolicy 已于 2026-11-20 退役）
 - 全量工具调用审计 + 配额滚动删除
 
 **连接性**
@@ -93,7 +93,7 @@ docs/       specs（设计）/ plans（实施计划）/ dev（开发指南）
 
 ## 当前状态与路线图
 
-研发中（`2.1.0-alpha`）——自 v2.0.0 起累积：Windows 全平台化 / 多仓 git / 编排元语 / 浏览器工具 / 断点续跑 / 变更账本与撤销 / OS 沙箱 / 记忆系统 / 供应商预设。逐特性详情与验收待办见 `CHANGELOG.md`。
+研发中（`2.1.0-alpha`）——自 v2.0.0 起累积：Windows 全平台化 / 编排元语 / 浏览器工具 / 断点续跑 / 变更账本与撤销 / OS 沙箱 / 记忆系统 / 供应商预设（多仓 git 工具组已退役——git 操作经 bash，2026-11-20）。逐特性详情与验收待办见 `CHANGELOG.md`。
 
 近期方向：Windows 真机验收收口 · 分支工作流（agent 工作独立 branch，PR 式合并）· agent 并发多任务 · e2e 套件重写。（LSP/P2P 已移除——未来以插件 / momo-hub 形式回归）
 

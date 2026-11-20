@@ -489,10 +489,6 @@ const api: ApiSurface = {
     add: (workspaceId, type, ref) => invoke('allocation:add', workspaceId, type, ref),
     remove: (workspaceId, type, ref) => invoke('allocation:remove', workspaceId, type, ref),
   },
-  gitPolicy: {
-    get: (workspaceId) => invoke('gitPolicy:get', workspaceId),
-    set: (workspaceId, policy) => invoke('gitPolicy:set', workspaceId, policy),
-  },
   audit: {
     getToolCalls: (workspaceId, opts) => invoke('audit:getToolCalls', workspaceId, opts),
     // P2 Task 8：容量配额——读取 / 设置（null=回退全局）/ 立即清理

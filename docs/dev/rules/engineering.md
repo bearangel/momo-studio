@@ -95,7 +95,7 @@ v2.4 ShellTools OS 沙箱（spec：`docs/specs/2026-09-10-shell-tools-os-sandbox
 
 v2.5 变更账本与撤销（spec：`docs/specs/2026-09-10-change-journal-undo-design.md`）引入的 agent 写操作记账与撤回约束：
 
-- **写类工具不得绕过 recordChange**——write_file / edit_file / rm / mv（file-tools.ts）与 apply_patch（apply-patch-tools.ts）五个写 op 是仅有的记账点，落盘前经 `recordChangeSafe` 单点收口（spec D2，与 v2.3 Read-before-Edit、v2.4 resolveShellSpawn 同款「单一接入点」纪律）。新增任何能写 workspace 文件的工具（含未来多仓 git 工具）必须先接入 recordChange 再上线——绕过即该工具变更游离于撤销链之外。用户侧 file:* CRUD 不入账是用户主权豁免，不在禁令内
+- **写类工具不得绕过 recordChange**——write_file / edit_file / rm / mv（file-tools.ts）与 apply_patch（apply-patch-tools.ts）五个写 op 是仅有的记账点，落盘前经 `recordChangeSafe` 单点收口（spec D2，与 v2.3 Read-before-Edit、v2.4 resolveShellSpawn 同款「单一接入点」纪律）。新增任何能写 workspace 文件的工具（含未来若回归的 git 专用写工具——现行 git 操作经 bash 走账外事后核对）必须先接入 recordChange 再上线——绕过即该工具变更游离于撤销链之外。用户侧 file:* CRUD 不入账是用户主权豁免，不在禁令内
 - **撤回一律走 revertEntries**——hash 守卫（hash(当前文件) != after_hash 即漂移：其后被任务 B / 手动 / shell 改过，默认跳过 + 黄标，force 强制须 UI 明确警告）+ 逐文件逆序（created_at DESC）。禁止裸写文件撤回、禁止乱序批量写回；交叉场景（任务 A/B 同改一文件撤 A）默认拦截，正确姿势是 rollbackFileBefore 组合操作（自动逆序该文件全部后续 + 本条，逐步守卫逐步汇报，任一步拦截即停）。撤销动作本身记对称条目（撤销可再撤销）
 - **探测器多仓语义**——discoverRepos 限定深度找 workspace 内全部 git 仓（根仓 + 内层仓，目录 mtime 缓存），scanUnjournaled 对每仓 `git status --porcelain=v1` 与账本路径集做差；只读不写、绝不产生 commit。degraded 两成因：本机无 git（spawn ENOENT）与任意仓执行非零退出 / 输出截断（porcelain 不完整）——degraded=true 时三列表恒空，无法核对绝不半真半假
 - **spec §10 已知边界**——账本内容按 utf-8 存取（`fs.readFileSync(abs, 'utf8')` + blob 文本），二进制文件撤回有损；bash 账外变更只有事后核对（无实时记账），未入账区文案诚实标注「经 shell 命令或用户手动修改——无法区分」
@@ -137,14 +137,13 @@ v2.8 Orchestration 元语（spec：`docs/specs/2026-09-12-orchestration-primitiv
 
 ---
 
-## v2.9 多仓 git 规则
+## 多仓 git 规则（v2.9 引入；git 工具域 2026-11-20 退役后纪律延续）
 
-v2.9 多仓 git 工具（spec：`docs/specs/2026-09-12-multi-repo-git-design.md`）引入的 workspace 内层仓操作约束：
+git 专用工具组已整体退役（10 工具 + GitPolicy，拍板见 CHANGELOG 2026-11-20 条目）——git 全量操作改经 bash（OS 沙箱 / 环境变量白名单 / 命令级审计兜底，账外变更走事后核对）。`git/repos.ts` 的 `discoverRepos` 仍存活（变更账本多仓基线在用）。以下纪律对**未来任何再引入 git 子进程的路径**（工具、插件、MCP）仍然生效，历史实现见 v2.9 spec 与退役前 commit：
 
-- **发现列表是唯一 `-C` 入口**——任何给 git 子进程定仓的路径必须经 `resolveRepoPath` 产出（`wsFs` 边界校验 + `discoverRepos` 发现列表命中双校验，工具层统一入口 `resolveRepoArg`）。新增 git 工具（或任何 spawn `git -C` 的路径）不得绕过该校验直接拼接仓路径——绕过即任意目录注入面（`..` / 绝对路径 / symlink 逃逸 / 未发现目录全部由此拦）。单点纪律与 v2.3 Read-before-Edit、v2.4 resolveShellSpawn、v2.5 recordChange 同源
-- **`repo` 参数必须命中 discoverRepos**——命中比对在归一化后进行（`path.normalize` + POSIX `/` 形态，Windows 反斜杠同口径），`./x` / `x/` / `x` 等价；未命中报错附可用仓清单 + 缓存失效重试指引（LLM 可自纠）。命中清单来自 `git/repos.ts` 共享模块（v2.9 自 detector 上提纯搬家）——对账与工具层同源，禁止任何一方另起探测实现造成两份仓清单漂移
-- **缺省恒根仓零变化**——`repo` 缺省时 runGit 不前置 `-C`、spawn args 与 v2.9 前逐字节一致（工具层 `resolveRepoArg` 保 `undefined` 而非填 workspaceDir）。给既有 git 工具加新可选参数时必须维持这条缺省契约：既有 agent 提示词、既有测试快照、账本联动全部锚定在「无 repo = 根仓」的零变化路径上——任何「顺手归一成显式 -C 根仓」的改动都是回归
-- **path 沙箱语义保持 workspace 锚定**——`git_add.paths` / `git_diff.path` 的 `assertInWorkspace` 校验基准仍是 workspace（不因 repo 参数改为按目标仓校验）：指定 repo 后 path 由 git 在 `-C` 下按仓内相对路径解析，仓本身已在 workspace 内 + git `-C` 自限于仓内，无逃逸面。改动 path 校验基准前先答「能否构造出 workspace 外落点」——答案恒否就不要动
+- **发现列表是唯一 `-C` 入口**——任何给 git 子进程定仓的路径必须经 `wsFs` 边界校验 + `discoverRepos` 发现列表命中双校验产出，不得直接拼接仓路径——绕过即任意目录注入面（`..` / 绝对路径 / symlink 逃逸 / 未发现目录全部由此拦）。单点纪律与 v2.3 Read-before-Edit、v2.4 resolveShellSpawn、v2.5 recordChange 同源
+- **仓清单单一真相源**——命中清单必须来自 `git/repos.ts` 共享模块，禁止任何消费方另起探测实现造成两份仓清单漂移（对账与工具层同源原则）
+- **新增写 workspace 文件的工具必须先接入 recordChange**——若未来 git 专用写工具回归（或经 MCP 形态），绕过 recordChange 即该工具变更游离于撤销链之外；bash git 属账外通道，走既有事后核对
 
 ---
 

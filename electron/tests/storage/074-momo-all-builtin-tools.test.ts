@@ -14,6 +14,7 @@ import {
   MOMO_ALL_BUILTIN_TOOL_REFS,
 } from '../../src/main/storage/migrations/074_momo_all_builtin_tools';
 import { MOMO_V23_ALL_BUILTIN_TOOL_REFS } from '../../src/main/storage/migrations/083_momo_lifecycle_v2_tools';
+import { MOMO_V25_ALL_BUILTIN_TOOL_REFS } from '../../src/main/storage/migrations/085_momo_git_tools_removal';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-mig074-test-${Date.now()}-${process.pid}`);
 
@@ -116,9 +117,9 @@ describe('migration 074 Momo 全量内置工具回填', () => {
     // list_models 扩容同式再追加迁移 078；2026-11-12 能力管理五工具同式再追加
     // 迁移 080；2026-11-13 任务生命周期 v2 两工具（request_human / submit_task）
     // 同式再追加迁移 083，本断言与冻结名单同步改指 083 的 72 项全集（074 的 58
-    // 项名单与 SQL 保持冻结不改——用例 A-C 仍锁 074 自身行为）。下次扩容同式再追加。
-    expect([...MOMO_V23_ALL_BUILTIN_TOOL_REFS].sort()).toEqual([...ALL_BUILTIN_TOOLS].sort());
-    expect(MOMO_V23_ALL_BUILTIN_TOOL_REFS).toHaveLength(72);
-    expect(new Set(MOMO_V23_ALL_BUILTIN_TOOL_REFS).size).toBe(MOMO_V23_ALL_BUILTIN_TOOL_REFS.length);
+    // 项名单与 SQL 保持冻结不改——用例 A-C 仍锁 074 自身行为）。下次变更同式再追加。2026-11-20 git 工具域下线同式追加迁移 085（72 → 62），本断言改指 085 的 62 项全集。
+    expect([...MOMO_V25_ALL_BUILTIN_TOOL_REFS].sort()).toEqual([...ALL_BUILTIN_TOOLS].sort());
+    expect(MOMO_V25_ALL_BUILTIN_TOOL_REFS).toHaveLength(62);
+    expect(new Set(MOMO_V25_ALL_BUILTIN_TOOL_REFS).size).toBe(MOMO_V25_ALL_BUILTIN_TOOL_REFS.length);
   });
 });

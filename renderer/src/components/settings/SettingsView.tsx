@@ -5,8 +5,8 @@
 // - Esc 键全局返回会话视图（仅当 SettingsView 挂载时生效——MiddlePanel
 //   的 settings 分支是唯一挂载点，视图切换自动卸载监听）
 // - 12 个分类：模型服务 / 默认模型 / 会话设置 / 插件 / 记忆 / 外观 / 安全沙箱 / 文件访问 / 浏览器 / momo-hub / 审计日志 / 关于
-//   （「节点互联」2026-11-09 更名「momo-hub」；「Git 策略」同日下线——入口隐藏，
-//   GitPolicySettings 组件 / ipc.gitPolicy / 策略运行时保留，后续再讨论处置）
+//   （「节点互联」2026-11-09 更名「momo-hub」；「Git 策略」同日入口下线，组件与
+//   运行时于 2026-11-20 随 git 工具域整体退役——git 操作经 bash 全量放行）
 // - M2.2 P2-8：0-ws 态整页可达（全局分类直接可用）；workspace 级分类
 //   （记忆 / 浏览器 / 审计日志）在 0-ws 态渲染占位提示
 import { useEffect } from 'react';

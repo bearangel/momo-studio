@@ -6,6 +6,10 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — git 工具域退役（bash 全量放行）
+
+- **git 工具组下线 + bash 放开 git 操作**：git 专用工具组（repos/status/diff/log/show/add/commit/branch/checkout/stash 共 10 工具）整体退役——工具面只覆盖安全子集（reset/revert/push/merge 等永远补不全），通用操作不应被特定工具组封顶；git 全量操作改经 bash（黑名单移除 `git commit` 拦截条目，命令级审计兜底）。**GitPolicy 整体退役**（commit 校验器 / gitPolicy IPC / preload 桥 / GitPolicySettings 组件 / types 类型，随 11-09 设置面板下线彻底收官；`git_policies` 表保留不读写）。存量配置残留 `git_*` ref 由 capability-merger 静默丢弃（零迁移）；builtin Momo 行 default_tools 按处方追加迁移 **085**（72 → 62 项）；`general-assistant.yaml` 去 10 个 git ref。git 仓发现（discoverRepos）与工作区 init 保留（变更账本多仓基线 / workspace 初始化在用）。未来 git 最佳实践走 skill / GitHub MCP 形态（marketplace），本次纯减法。
+
 ## [未发布] — abort 贯穿在途工具 + 插件工具粒度授权 + 循环任务治理（alpha.74）
 
 `2.1.0-alpha.74`。alpha.73 打包后的修复与治理批（17 提交），无协议变更（仍 pin v0.7.7 / 协议 1.14.0）。

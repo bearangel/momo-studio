@@ -150,9 +150,12 @@ describe('bash 黑名单', () => {
     expect(fs.existsSync(path.join(tmpDir, 'dist'))).toBe(false);
   });
 
-  it('git commit 走 bash 被拦截', async () => {
+  it('git 命令走 bash 全量放行（git 工具域已下线，2026-11-20 拍板）', async () => {
     const tools = new ShellTools();
-    await expect(tools.execute('bash', { command: 'git commit -m test' }, ctx)).rejects.toThrow(/git_commit/);
+    const result = await tools.execute('bash', { command: 'git commit --help >/dev/null 2>&1; echo ok' }, ctx);
+    // 不再被黑名单拦截（命令本身进入子进程执行——本用例只锁「不拦」，
+    // git commit 真实提交行为由 e2e/人工验收覆盖）
+    expect(result).not.toMatch(/黑名单/);
   });
 
   // v2.4.0 review 修补：Remove-Item 黑名单必须覆盖双向语序。

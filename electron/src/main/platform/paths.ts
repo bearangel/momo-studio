@@ -57,7 +57,7 @@ export function isInsideDir(root: string, child: string, opts?: InsideDirOpts): 
 
 /**
  * root 下 absPath 的相对路径，分隔符统一为 '/'（跨平台稳定展示 / 键控形态，
- * 与 git-tools 既有 '/' 化输出同形）。
+ * 与既有 git 输出的 '/' 化形态同形——git 工具域 2026-11-20 下线后沿用该约定）。
  *
  * 不以裸 split(path.sep) 实现，用 replaceAll 全局字面替换。差异点：split 按分隔符
  * 切段——连续分隔符会产生空段、win32 盘符 'C:' 也是一个独立段，join('/') 后复原

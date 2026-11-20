@@ -23,7 +23,6 @@ import { registerSessionIpcHandlers } from '../im/session.ipc.handlers';
 import { registerSessionGroupIpcHandlers } from '../im/session-group.ipc.handlers';
 import { registerMcpHandlers } from '../mcp/ipc.handlers';
 import { registerAllocationHandlers } from '../workspace/ipc.handlers';
-import { registerGitPolicyHandlers } from '../workspace/git-policy';
 import { registerAuditHandlers } from '../audit/ipc.handlers';
 import { registerProviderHandlers } from '../agent/provider-ipc';
 // OAuth 模块（spec 2026-11-10）：连接管理九通道 + 授权/列表两推送
@@ -94,7 +93,6 @@ export function registerIpcHandlers(opts: WorkspaceIpcOpts = {}): void {
   registerSessionGroupIpcHandlers();
   registerMcpHandlers();
   registerAllocationHandlers();
-  registerGitPolicyHandlers();
   registerAuditHandlers();
   registerProviderHandlers();
   registerOAuthHandlers();

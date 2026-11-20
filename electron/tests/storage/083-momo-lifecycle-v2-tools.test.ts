@@ -4,7 +4,7 @@
 // 全部 72 个内置工具（080 的 70 项 + 任务生命周期 v2 两工具 request_human /
 // submit_task，Task 14）。覆盖：080 后真实升级路径（70 → 72）、替换而非并入
 //（过期引用清掉）、非目标行零改动、重复重放幂等、冻结名单与 ALL_BUILTIN_TOOLS
-// 全集一致（含顺序——顺序即落库顺序）。
+// 全集一致（含顺序——顺序即落库顺序）。2026-11-20 git 工具域下线同式追加迁移 085（72 → 62），本断言改指 085 的 62 项全集。
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -17,6 +17,7 @@ import {
   migration083,
   MOMO_V23_ALL_BUILTIN_TOOL_REFS,
 } from '../../src/main/storage/migrations/083_momo_lifecycle_v2_tools';
+import { MOMO_V25_ALL_BUILTIN_TOOL_REFS } from '../../src/main/storage/migrations/085_momo_git_tools_removal';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-mig083-test-${Date.now()}-${process.pid}`);
 
@@ -112,11 +113,11 @@ describe('migration 083 Momo 任务生命周期 v2 工具回填（70 → 72）',
   });
 
   it('用例 E：冻结名单与 ALL_BUILTIN_TOOLS 全集一致（排序后严格相等，且顺序一致）', () => {
-    expect([...MOMO_V23_ALL_BUILTIN_TOOL_REFS].sort()).toEqual([...ALL_BUILTIN_TOOLS].sort());
+    expect([...MOMO_V25_ALL_BUILTIN_TOOL_REFS].sort()).toEqual([...ALL_BUILTIN_TOOLS].sort());
     // 冻结名单文档声称「顺序即落库顺序」——与 catalog 注册顺序（模块注册序）锁死
-    expect([...MOMO_V23_ALL_BUILTIN_TOOL_REFS]).toEqual([...ALL_BUILTIN_TOOLS]);
-    expect(MOMO_V23_ALL_BUILTIN_TOOL_REFS).toHaveLength(72);
-    expect(new Set(MOMO_V23_ALL_BUILTIN_TOOL_REFS).size).toBe(MOMO_V23_ALL_BUILTIN_TOOL_REFS.length);
+    expect([...MOMO_V25_ALL_BUILTIN_TOOL_REFS]).toEqual([...ALL_BUILTIN_TOOLS]);
+    expect(MOMO_V25_ALL_BUILTIN_TOOL_REFS).toHaveLength(62);
+    expect(new Set(MOMO_V25_ALL_BUILTIN_TOOL_REFS).size).toBe(MOMO_V25_ALL_BUILTIN_TOOL_REFS.length);
   });
 
   it('用例 F：083 注册在迁移链中（末位哨兵随 084 落地移交其测试，070→080→082 先例）', () => {

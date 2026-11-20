@@ -40,9 +40,6 @@ const mockApi = {
   audit: {
     list: vi.fn().mockResolvedValue([]),
   },
-  gitPolicy: {
-    get: vi.fn().mockResolvedValue({}),
-  },
   agent: {
     listMembers: vi.fn().mockResolvedValue([]),
   },

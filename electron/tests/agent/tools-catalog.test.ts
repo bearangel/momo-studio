@@ -14,12 +14,12 @@ import {
 import { unconditionalModules } from '../../src/main/agent/tools/index';
 
 describe('tools/catalog 派生常量', () => {
-  it('ALL_BUILTIN_TOOLS 覆盖全部模块工具（含任务/记忆/浏览器/会话/进程/git_repos）', () => {
+  it('ALL_BUILTIN_TOOLS 覆盖全部模块工具（含任务/记忆/浏览器/会话/进程；git 域 2026-11-20 下线）', () => {
     for (const name of unconditionalModules().flatMap((m) => m.getDefs().map((d) => d.name))) {
       expect(ALL_BUILTIN_TOOLS).toContain(name);
     }
     for (const name of ['bash', 'apply_patch', 'office_read',
-      'read_task', 'memory_search', 'browser_navigate', 'list_sessions', 'process_list', 'git_repos']) {
+      'read_task', 'memory_search', 'browser_navigate', 'list_sessions', 'process_list']) {
       expect(ALL_BUILTIN_TOOLS).toContain(name);
     }
     expect(new Set(ALL_BUILTIN_TOOLS).size).toBe(ALL_BUILTIN_TOOLS.length);

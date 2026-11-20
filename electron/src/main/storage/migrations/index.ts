@@ -57,6 +57,7 @@ import { migration079 } from './079_oauth_module';
 import { migration080 } from './080_momo_capability_management_tools';
 import * as migration081 from './081_task_lifecycle_v2';
 import * as migration084 from './084_recurrence_chain_root';
+import { migration085 } from './085_momo_git_tools_removal';
 import * as migration082 from './082_task_lifecycle_backfill';
 import { migration083 } from './083_momo_lifecycle_v2_tools';
 
@@ -1265,6 +1266,14 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 存量链 WITH RECURSIVE 回填。SQL 住在独立模块 084_recurrence_chain_root.ts。
     version: migration084.version,
     sql: migration084.up,
+  },
+  {
+    // Momo 默认工具全集 72 → 62（git 工具域下线，2026-11-20 拍板）：−= git
+    // 域 10 工具整列替换（git 全量操作改经 bash）；用户自建行残留 git_* ref
+    // 由 capability-merger 静默丢弃，无需清洗。SQL 住在独立模块
+    // 085_momo_git_tools_removal.ts。
+    version: migration085.version,
+    sql: migration085.sql,
   },
 ];
 

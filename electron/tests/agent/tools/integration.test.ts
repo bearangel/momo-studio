@@ -3,8 +3,9 @@
 // v1.5 Task 16：端到端集成测试——模拟 agent 完整工作流。
 //
 // 验证目标：
-//   1. 多工具串联可用（list → write → edit → grep → mkdir+write → git_add），
-//      覆盖 file/search/git 三大类协作场景，证明 tools/index.ts 注册中心路由正确。
+//   1. 多工具串联可用（list → write → edit → grep → mkdir+write → bash git add），
+//      覆盖 file/search/shell 三大类协作场景，证明 tools/index.ts 注册中心路由正确
+//      （git 工具域 2026-11-20 下线，git 操作经 bash——步骤 6 兼作该路径回归锁）。
 //   2. getAllToolDefs 把全部模块的 LLMToolDef 聚合暴露给 LLM（7 大类工具可见）。
 //   3. 工具权限白/黑名单生效——deniedTools 命中即拦截。
 //
@@ -45,7 +46,7 @@ beforeEach(() => {
     available: false, unavailableReason: 'bwrap 未安装', windowsShell: null,
     executionPolicy: null, probedAt: 0,
   });
-  // git init 让 git_add 等工具可用；-b main 显式指定默认分支名（避免 git 版本差异）
+  // git init 供步骤 6 的 bash git 操作使用；-b main 显式指定默认分支名（避免 git 版本差异）
   execSync('git init -b main', { cwd: tmpDir });
   execSync('git config user.email t@t.com && git config user.name T', { cwd: tmpDir });
   ctx = {
@@ -70,7 +71,7 @@ afterEach(() => {
 });
 
 describe('agent 完整工作流', () => {
-  it('list → write → edit → grep → mkdir+write test → git_add，全部工具暴露给 LLM', async () => {
+  it('list → write → edit → grep → mkdir+write test → bash git add，全部工具暴露给 LLM', async () => {
     // 1. 列出 workspace（空目录，仅返回友好提示，不抛错）
     const list = await executeTool('list_files', { path: '.' }, ctx, modules);
     expect(list).toBeDefined();
@@ -106,9 +107,10 @@ describe('agent 完整工作流', () => {
       content: 'import { add } from "../app";\n',
     }, ctx, modules);
 
-    // 6. git_add 暂存全部改动。git_commit 需要 GitPolicy 配置（allowAgentCommits +
-    //    分支保护 + message pattern），集成测试不 mock policy，故只验证 add 阶段。
-    await executeTool('git_add', { paths: ['.'] }, ctx, modules);
+    // 6. bash 执行 git add 暂存全部改动（git 工具域 2026-11-20 下线——全量 git
+    //    操作经 bash，本步骤兼作「bash git 放行」端到端回归锁）。
+    const gitAdd = await executeTool('bash', { command: 'git add -A && git status --porcelain=v1' }, ctx, modules);
+    expect(gitAdd).toMatch(/exit_code: 0/);
 
     // 7. 全部工具类别暴露给 LLM（getAllToolDefs 聚合所有模块的 LLMToolDef）
     const defs = getAllToolDefs(modules);
@@ -122,16 +124,8 @@ describe('agent 完整工作流', () => {
     expect(names.has('glob')).toBe(true);
     // Shell 类
     expect(names.has('bash')).toBe(true);
-    // Git 类（commit 工具存在，运行时由 GitPolicy 决定是否放行）
-    expect(names.has('git_status')).toBe(true);
-    expect(names.has('git_add')).toBe(true);
-    expect(names.has('git_commit')).toBe(true);
-    expect(names.has('git_diff')).toBe(true);
-    expect(names.has('git_log')).toBe(true);
-    expect(names.has('git_show')).toBe(true);
-    expect(names.has('git_branch')).toBe(true);
-    expect(names.has('git_checkout')).toBe(true);
-    expect(names.has('git_stash')).toBe(true);
+    // git 工具域已下线（2026-11-20）：git_* 不再作为工具暴露
+    expect([...names].some((n) => n.startsWith('git_'))).toBe(false);
     // Web 类
     expect(names.has('webfetch')).toBe(true);
     // Todo 类
@@ -144,10 +138,11 @@ describe('agent 完整工作流', () => {
     const deniedConfig = { allowedTools: [], deniedTools: ['bash'] };
     expect(() => assertToolAllowed('bash', deniedConfig)).toThrow(/被禁止/);
 
-    // 通配符支持：git_* 拦截全部 git 工具
-    const wildcardConfig = { allowedTools: [], deniedTools: ['git_*'] };
-    expect(() => assertToolAllowed('git_commit', wildcardConfig)).toThrow(/被禁止/);
-    expect(() => assertToolAllowed('git_status', wildcardConfig)).toThrow(/被禁止/);
+    // 通配符支持：browser_* 拦截全部浏览器工具（git 工具域 2026-11-20 下线，
+    // 通配符语义本身不变）
+    const wildcardConfig = { allowedTools: [], deniedTools: ['browser_*'] };
+    expect(() => assertToolAllowed('browser_navigate', wildcardConfig)).toThrow(/被禁止/);
+    expect(() => assertToolAllowed('browser_snapshot', wildcardConfig)).toThrow(/被禁止/);
 
     // 放行路径：默认 ctx（deny 为空 + allow 为空 = 全允许）下，executeTool 正常分派
     // bash 到 ShellTools 执行。echo hello 必返回 exit_code: 0。

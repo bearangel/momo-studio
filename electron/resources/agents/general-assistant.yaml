@@ -92,26 +92,6 @@ spec:
     - kind: builtin
       ref: process_kill
     - kind: builtin
-      ref: git_repos
-    - kind: builtin
-      ref: git_status
-    - kind: builtin
-      ref: git_diff
-    - kind: builtin
-      ref: git_log
-    - kind: builtin
-      ref: git_show
-    - kind: builtin
-      ref: git_add
-    - kind: builtin
-      ref: git_commit
-    - kind: builtin
-      ref: git_branch
-    - kind: builtin
-      ref: git_checkout
-    - kind: builtin
-      ref: git_stash
-    - kind: builtin
       ref: webfetch
     - kind: builtin
       ref: todowrite

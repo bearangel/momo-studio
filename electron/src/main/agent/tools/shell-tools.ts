@@ -10,8 +10,9 @@
 //     命令内 `cd C:\` 会成功，posix 沙箱也只拦敏感读与 workspace 外写。不要把它
 //     当成「cd 越不了界」的防线。每条命令独立 shell（`bash -c '<cmd>'`），cd 不持久。
 //   - 命令黑名单在 spawn 前拦截：rm -rf 根/家目录、mkfs、dd 写设备、fork bomb、
-//     改写 /etc/passwd|shadow|sudoers、chmod -R /、关机重启、git commit（强制走
-//     git_commit 工具接受 GitPolicy 校验）。命中即抛错，由调用方转成 tool result。
+//     改写 /etc/passwd|shadow|sudoers、chmod -R /、关机重启。命中即抛错，由
+//     调用方转成 tool result。git 命令全量放行（2026-11-20 拍板：git 工具域
+//     下线，reset/revert/push 等全量操作经 bash 执行，命令级审计兜底）。
 //   - 环境变量白名单（两套清单，见下方 POSIX_ALLOWED_ENV / WIN32_ALLOWED_ENV）：
 //     posix 只传 PATH/HOME/USER/TERM 等基础变量（大小写敏感）；win32 只传
 //     Path/PATHEXT/SystemRoot/TEMP/USERPROFILE 等（**没有 HOME**，大小写不敏感）。
@@ -69,8 +70,6 @@ const BLACKLIST_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /\bchmod\s+-R\s+[0-7]+\s+\/$/, reason: '禁止递归改根权限' },
   // 关机 / 重启
   { pattern: /\b(shutdown|reboot|halt|poweroff)\b/, reason: '禁止关机重启' },
-  // git commit 必须走专用 git_commit 工具（走 GitPolicy 校验 + 审计）
-  { pattern: /\bgit\s+commit\b/, reason: '禁止 bash 直接 git commit，请用 git_commit 工具（走 GitPolicy 校验）' },
   // ── Windows 危险命令（v2.4，spec §5.5；regex 大小写不敏感场景用 i flag）──
   { pattern: /\bformat(\.com)?\s+[a-z]:/i, reason: '禁止格式化磁盘卷' },
   // 双向语序：flag 在路径前（-Recurse C:\）或路径后（-Path C:\ -Recurse）均拦截；

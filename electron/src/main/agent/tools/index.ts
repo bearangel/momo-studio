@@ -1,7 +1,8 @@
 // electron/src/main/agent/tools/index.ts
 // 工具注册中心。已接入 FileTools（8 个文件工具）+ ApplyPatchTools（v2.3
 //   apply_patch V4A 多文件原子 patch） + SearchTools（grep / glob）+
-//   ShellTools（bash，workspace 内自由 shell）+ GitTools（git 9 工具）+
+//   ShellTools（bash，workspace 内自由 shell；git 命令全量放行——git 工具域
+//   2026-11-20 下线，reset/revert/push 等经 bash 执行）+
 //   WebTools（webfetch URL 抓取）+ TodoTools（v1.5 todowrite 任务列表）+
 //   TaskTools（v2 B10 任务工具：read_task / read_task_history / read_task_progress /
 //     create_task / complete_task / fail_task / list_tasks）
@@ -27,7 +28,6 @@ import { ApplyPatchTools } from './apply-patch-tools';
 import { SearchTools } from './search-tools';
 import { ShellTools } from './shell-tools';
 import { ProcessTools } from './process-tools';
-import { GitTools } from './git-tools';
 import { WebTools } from './web-tools';
 import { TodoTools } from './todo-tools';
 import { TaskTools } from './task-tools';
@@ -37,7 +37,7 @@ import { OfficeTools } from './office-tools';
 import { SessionTools } from './session-tools';
 import { ResourceTools } from './resource-tools';
 
-/** 14 个无条件注册模块（buildToolRegistry 与 catalog 派生共用——单一清单防漂移） */
+/** 13 个无条件注册模块（buildToolRegistry 与 catalog 派生共用——单一清单防漂移） */
 export function unconditionalModules(): ToolModule[] {
   return [
     new FileTools(),
@@ -45,7 +45,6 @@ export function unconditionalModules(): ToolModule[] {
     new SearchTools(),
     new ShellTools(),
     new ProcessTools(),
-    new GitTools(),
     new WebTools(),
     new TodoTools(),
     new TaskTools(),

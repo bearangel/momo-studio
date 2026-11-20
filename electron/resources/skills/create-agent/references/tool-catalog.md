@@ -27,18 +27,12 @@
 - process_keep：把本回合启动的服务标记为用户保留（跨回合存活，上限每工作空间 5 个）
 - process_kill：终止本回合启动的后台进程（整组击杀）
 
-## Git
+## Git（已退役）
 
-- git_repos：列出 workspace 内可发现的 git 仓库（唯一 -C 入口依据）
-- git_status：查看仓库状态（porcelain 格式）
-- git_diff：查看 diff（默认含 staged 与 unstaged）
-- git_log：提交历史（oneline 格式）
-- git_show：单个 commit 详情（message + diff）
-- git_add：暂存文件
-- git_commit：提交（受 GitPolicy message pattern 管控）
-- git_branch：列出/创建分支（双语义）
-- git_checkout：切换分支（仅切分支）
-- git_stash：stash 管理（push/list/pop/drop）
+git 专用工具组（repos/status/diff/log/show/add/commit/branch/checkout/stash）已于 2026-11-20 下线。
+git 全量操作（status / diff / log / add / commit / reset / revert / push / merge 等）一律经
+bash 工具执行，受 bash 既有防线约束（OS 沙箱 / 环境变量白名单 / 命令级审计）。为 agent
+配置工具时无需也无法勾选 git 工具——bash 即 git 能力入口。
 
 ## 网页与浏览器
 
