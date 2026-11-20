@@ -438,6 +438,21 @@ describe('T12：hub 插件安装——与本地安装等价', () => {
   });
 });
 
+describe('T12：hub 插件安装——版本一致性防御（2026-11-19 分叉事故锁）', () => {
+  it('catalog 版本行 0.3.0 挂包内 manifest 0.2.0 内容 → 拒绝安装 + 零残留', async () => {
+    addPluginFixture('hub-plug-fork');
+    // 模拟事故形态：hub 版本行前进（0.3.0）但 blob 是旧内容（包内 0.2.0）
+    fixtures.get('hub-plug-fork')!.version = '0.3.0';
+    const { installHubPackage } = await import('../../src/main/resource/hub-install');
+    await expect(
+      installHubPackage('plugin', 'hub-plug-fork', { appVersion: '2.1.0', workspaceId: TEST_WS }),
+    ).rejects.toThrow(/版本 0\.3\.0 的包内 manifest 是 0\.2\.0/);
+    expect(getPlugin('hub-plug-fork')).toBeNull();
+    const installedRoot = path.join(tmpRoot, 'plugins', 'installed');
+    expect(fs.existsSync(installedRoot) ? fs.readdirSync(installedRoot).join(',') : '').toBe('');
+  });
+});
+
 describe('T12：卸载级联两条入口', () => {
   it('resource:delete hub 分支（uninstallHubPackage）：PluginRecord / 目录 / MCP 定义 / 记账全清', async () => {
     await installHubPackage('plugin', 'hub-plug-a', {

@@ -15,7 +15,7 @@ import { closeDb, runMigrations } from '../../src/main/storage/db';
 import { upsertPlugin } from '../../src/main/plugin/registry';
 import { resolveTmpDir, resolvePluginInstalledDir, resolvePluginDataDir } from '../../src/main/paths';
 import { assertSafeTarMembers } from '../../src/main/plugin/installer';
-import { packPluginForPublish } from '../../src/main/plugin/publish-pack';
+import { collectPackEntries, packPluginForPublish } from '../../src/main/plugin/publish-pack';
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-ppack-'));
 
@@ -76,7 +76,7 @@ afterEach(() => {
 });
 
 describe('packPluginForPublish', () => {
-  it('正常打包：含 manifest 与工具模块，排除 node_modules，返回 checksum/size/manifest', async () => {
+  it('正常打包：含 manifest 与工具模块，node_modules 依赖随包（2026-11-19 起入包）', async () => {
     const dir = path.join(tmpRoot, 'normal-plugin');
     mkPlugin(dir, 'pp-normal', (d) => {
       fs.mkdirSync(path.join(d, 'skills', 'sa'), { recursive: true });
@@ -98,7 +98,8 @@ describe('packPluginForPublish', () => {
     expect(list).toContain('tools/main.js');
     expect(list).toContain('skills/sa/SKILL.md');
     expect(list).toContain('mcp.json');
-    expect(list.some((m) => m.split('/').includes('node_modules'))).toBe(false);
+    // 2026-11-19 反转：插件 npm 依赖入包（镜像节点可 require），原生/脚本除外
+    expect(list).toContain('node_modules/dep/index.js');
 
     // checksum 是 64 位 hex 且与 node:crypto 手算对照一致
     expect(res.checksum).toMatch(/^[0-9a-f]{64}$/);
@@ -296,6 +297,44 @@ function mkVendorArchive(dir: string, relFile: string): string {
   fs.rmSync(stage, { recursive: true, force: true });
   return sha256File(abs);
 }
+
+describe('collectPackEntries 依赖入包（2026-11-19 镜像缺依赖修复）', () => {
+  it('node_modules 纯 JS 依赖入包；.bin/*.node/symlink 剔除', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-nm-'));
+    mkPlugin(dir, 'nm-dep', (d) => {
+      // 根 node_modules（db-pro 形态）+ vendor/node_modules（email 形态）
+      for (const base of ['node_modules/mysql2', 'vendor/node_modules/imapflow']) {
+        fs.mkdirSync(path.join(d, base), { recursive: true });
+        fs.writeFileSync(path.join(d, base, 'index.js'), 'module.exports={};');
+      }
+      // .bin 剔除
+      fs.mkdirSync(path.join(d, 'node_modules/.bin'), { recursive: true });
+      fs.writeFileSync(path.join(d, 'node_modules/.bin', 'cli'), '#!/bin/sh');
+      // 原生二进制剔除（含嵌套依赖树）
+      fs.mkdirSync(path.join(d, 'node_modules/oracledb/build/Release'), { recursive: true });
+      fs.writeFileSync(path.join(d, 'node_modules/oracledb/build/Release', 'o-darwin.node'), '\x00');
+      // 依赖树内 symlink 跳过不抛（pnpm 布局防御）
+      fs.symlinkSync('mysql2', path.join(d, 'node_modules', 'mysql2-alias'));
+    });
+    const entries = collectPackEntries(dir, path.join(dir, 'nonexistent-data'));
+    const has = (p: string) => entries.includes(p);
+    expect(has('node_modules/mysql2/index.js')).toBe(true);
+    expect(has('vendor/node_modules/imapflow/index.js')).toBe(true);
+    expect(has('momo-plugin.json')).toBe(true);
+    expect(entries.some((e) => e.includes('/.bin/') || e.startsWith('node_modules/.bin'))).toBe(false);
+    expect(entries.some((e) => e.endsWith('.node'))).toBe(false);
+    expect(entries.some((e) => e.includes('mysql2-alias'))).toBe(false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('插件根部 symlink 仍整包拒绝（依赖树放行不外溢）', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-nm2-'));
+    mkPlugin(dir, 'nm-root');
+    fs.symlinkSync('tools', path.join(dir, 'evil-link'));
+    expect(() => collectPackEntries(dir, path.join(dir, 'nonexistent-data'))).toThrow(/符号链接/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
 
 describe('packPluginForPublish vendor 声明插件', () => {
   function mkVendorPlugin(dir: string, id: string, opts: {

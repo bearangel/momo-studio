@@ -8,10 +8,15 @@
 //
 // 打包白名单（spec §6.4「插件包须自身可 require」）：
 //   - 仅常规文件入包
-//   - 排除 node_modules/（任意深度——原生依赖不入包，M1 不做依赖解析）
+//   - node_modules/（含 vendor/node_modules）**入包**——插件 npm 依赖是运行必需
+//     （2026-11-19 实锤：镜像节点装包后 Cannot find module 'mysql2'/'imapflow'，
+//     email vendor/node_modules 被「任意深度排除」整目录剔除）。M1 原生边界
+//     收窄为子规则：剔除 *.node 原生二进制（平台绑定不入包）与 .bin/ 脚本
+//     目录（symlink 高发、无运行价值）；依赖树内 symlink/非常规条目跳过
+//     不整包拒（pnpm 布局防御——跳过比拒绝务实；插件根部的 symlink 仍整包拒）
 //   - 排除插件 dataDir（运行数据不入包；按 resolvePluginDataDir 路径锚定，
 //     正常布局下它在插件根外，根内命中属防御性排除）
-//   - symlink / FIFO / 设备等非常规条目 → 整包拒绝（不跟随、不遍历）
+//   - 插件根部 symlink / FIFO / 设备等非常规条目 → 整包拒绝（不跟随、不遍历）
 //
 // 归档内容 = 插件根相对路径树（顶层即 momo-plugin.json），安装侧解压即得
 // 等价目录（Task 12 hub 安装链的输入契约）。
@@ -44,8 +49,9 @@ export interface PublishPackResult {
 
 /**
  * 白名单 walk：收集 root 下待打包的常规文件相对路径（posix 风格，供 tar 参数用）。
- * 排除 node_modules、dataDir 与 extraExcludeDirs（vendor 声明者的 engine/ 重建态）；
- * symlink / 非常规条目（FIFO/设备等）整包拒绝。
+ * node_modules（任意深度，含 vendor/node_modules）入包——依赖树内剔除 .bin/ 与
+ * *.node，symlink/非常规条目跳过；依赖树外（插件根部）symlink/非常规条目整包拒绝。
+ * 排除 dataDir 与 extraExcludeDirs（vendor 声明者的 engine/ 重建态）；
  * 相对路径 .. / 绝对路径（正常 readdir 不产生）由 assertSafeTarMembers 在
  * tar 前终审——两层防线与安装侧 extractTarGz 对称。
  */
@@ -55,7 +61,7 @@ export function collectPackEntries(root: string, dataDir: string, extraExcludeDi
     return extraExcludeDirs.some((d) => abs === d || abs.startsWith(d + path.sep));
   };
   const out: string[] = [];
-  const walk = (dir: string, relBase: string): void => {
+  const walk = (dir: string, relBase: string, inDeps: boolean): void => {
     const entries = fs
       .readdirSync(dir, { withFileTypes: true })
       .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
@@ -63,24 +69,28 @@ export function collectPackEntries(root: string, dataDir: string, extraExcludeDi
       const rel = relBase === '' ? ent.name : `${relBase}/${ent.name}`;
       const abs = path.join(dir, ent.name);
       if (ent.isDirectory()) {
-        // 排除：依赖不入包（任意深度，spec §6.4）
-        if (ent.name === 'node_modules') continue;
-        // 排除：插件运行数据 / vendor 重建态（按路径锚定——同名目录不受牵连）
         if (excluded(abs)) continue;
-        walk(abs, rel);
+        // 依赖树内 .bin/（脚本 symlink 高发，无运行价值）剔除
+        if (inDeps && ent.name === '.bin') continue;
+        walk(abs, rel, inDeps || ent.name === 'node_modules');
         continue;
       }
       // Dirent 判定均为 lstat 语义（不跟随链接）
       if (ent.isSymbolicLink()) {
+        // 依赖树内跳过（pnpm 布局防御）；插件根部整包拒
+        if (inDeps) continue;
         throw new Error(`插件包含符号链接条目，拒绝打包: ${rel}`);
       }
       if (!ent.isFile()) {
+        if (inDeps) continue;
         throw new Error(`插件包含非常规文件条目（FIFO/设备等），拒绝打包: ${rel}`);
       }
+      // 依赖树内原生二进制剔除（M1 原生边界——平台绑定不入包）
+      if (inDeps && ent.name.endsWith('.node')) continue;
       out.push(rel);
     }
   };
-  walk(root, '');
+  walk(root, '', false);
   return out;
 }
 

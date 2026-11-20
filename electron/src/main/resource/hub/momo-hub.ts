@@ -430,8 +430,12 @@ export function createHubCatalogSource(
   }
 
   function applyPublishedEvent(evt: ResourcePublishedEvent): void {
+    // 双 null（启动后从未拉过目录）时初始化 lastGood 再合并——否则首个目录拉取前
+    // 的发布事件全部静默丢弃（2026-11-19 实锤：B 启动即镜像 apply、从不打开资源库
+    // 页 → 发布 0.1.1 事件丢弃 → 之后 fresh 失败回落旧目录 → 升级链路断）
+    if (lastGoodCatalog === null) lastGoodCatalog = EMPTY_CATALOG;
     if (cache) cache = { ...cache, catalog: upsertPublished(cache.catalog, evt) };
-    if (lastGoodCatalog) lastGoodCatalog = upsertPublished(lastGoodCatalog, evt);
+    lastGoodCatalog = upsertPublished(lastGoodCatalog, evt);
   }
 
   function applyUnpublishedEvent(evt: ResourceUnpublishedEvent): void {

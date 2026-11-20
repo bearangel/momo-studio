@@ -156,6 +156,14 @@ export async function installPluginHubArchive(
         `磁盘 manifest id 与目录 slug 不一致（${manifest.id} ≠ ${item.slug}），拒绝安装`,
       );
     }
+    // 版本一致性防御（2026-11-19 实锤：hub 版本行 0.1.1 挂 0.1.0 内容包——目标节点
+    // 装完落 0.1.0，「无论怎么装都是旧版」）：包内 manifest.version 必须与请求版本
+    // 一致，分叉即拒（人话指向发布方重新发布，不在本端吞错装旧）
+    if (manifest.version !== item.version) {
+      throw new Error(
+        `hub 插件包内容与版本行不一致（版本 ${item.version} 的包内 manifest 是 ${manifest.version}），拒绝安装——该版本发布损坏，请发布方重新发布`,
+      );
+    }
 
     return finalizePluginInstall(staging, manifest, originWorkspaceId);
   } catch (err) {

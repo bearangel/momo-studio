@@ -309,6 +309,19 @@ describe('buildPublishPackage 四类打包', () => {
     expect(r.manifest).toMatchObject({ slug: 'pub-plugin', type: 'plugin', version: '0.1.0' });
   });
 
+  it('plugin：meta.version 与包内 manifest 分叉 → 拒绝（2026-11-19 版本单源——agent 类 meta 覆盖语义不外溢到 plugin）', async () => {
+    seedPlugin('pub-plugin');
+    await expect(
+      buildPublishPackage('plugin', 'pub-plugin', { version: '0.1.1' }),
+    ).rejects.toThrow(/发布版本 0\.1\.1 与插件目录 manifest 0\.1\.0 不一致/);
+  });
+
+  it('plugin：meta.version 与包内一致 → 放行（显式同值不误伤）', async () => {
+    seedPlugin('pub-plugin');
+    const r = await buildPublishPackage('plugin', 'pub-plugin', { version: '0.1.0' });
+    expect(r.manifest.version).toBe('0.1.0');
+  });
+
   it('meta 覆盖：name/version/readme/tags 进发布 manifest（本地定义仅兜底）', async () => {
     seedAgent('def-meta', 'meta-agent');
     const r = await buildPublishPackage('agent', 'def-meta', {

@@ -331,11 +331,20 @@ async function buildPluginPackage(
 ): Promise<{ manifest: HubPublishManifest; archivePath: string }> {
   // 不存在/目录缺失/manifest 非法等由 T11 闸给出人话（含「插件不存在: <id>」）
   const pack = await packPluginForPublish(ref);
+  // 版本单源（2026-11-19 实锤分叉事故）：发布 version 唯一真相 = 包内磁盘 manifest
+  // ——meta.version 显式覆盖历史遗留（发布表单填 0.1.1、目录 manifest 0.1.0 →
+  // hub 版本行 0.1.1 挂 0.1.0 内容包 → 目标节点装完落 0.1.0「永远升不上去」）。
+  // 分叉在场即拒：请先 bump 插件目录 momo-plugin.json 再发布。
+  if (meta.version !== undefined && meta.version !== pack.manifest.version) {
+    throw new Error(
+      `发布版本 ${meta.version} 与插件目录 manifest ${pack.manifest.version} 不一致——请先更新插件目录 momo-plugin.json 的 version 后重试（发布版本以插件目录为唯一来源）`,
+    );
+  }
   const manifest: HubPublishManifest = {
     slug: pack.manifest.id,
     type: 'plugin',
     name: meta.name ?? pack.manifest.name,
-    version: meta.version ?? pack.manifest.version,
+    version: pack.manifest.version,
     author: publishAuthor(),
     description: meta.description ?? pack.manifest.description,
     readme: meta.readme ?? pack.manifest.description,

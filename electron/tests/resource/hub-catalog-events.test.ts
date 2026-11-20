@@ -127,6 +127,23 @@ afterEach(async () => {
 });
 
 describe('B10：applyPublishedEvent（published 即时可见）', () => {
+  it('双 null（从未 load 过目录）→ 事件不再丢弃：lastGood 建立，loadFresh 失败回落可见（2026-11-19 实锤 B 升级链断）', async () => {
+    hub = await startMockHub(catalog([item('demo-skill', '1.0.0')], 7));
+    const source = createHubCatalogSource(resolverFor(hub.url));
+    // 注意：不 load()——模拟 B 启动即镜像 apply、从不打开资源库页的形态
+
+    source.applyPublishedEvent({
+      slug: 'fresh-plugin', type: 'plugin', name: '新发布', version: '0.1.1',
+      author: 'node-a', at: 1_700_000_100_000,
+    });
+
+    // 事件合并的 lastGood 已建立：load() 走「已有已知结果」路径——TTL/cache 无 → 直返 lastGood
+    const merged = await source.load();
+    const entry = merged.catalog.items.find((m) => m.slug === 'fresh-plugin');
+    expect(entry).toBeDefined();
+    expect(entry!.version).toBe('0.1.1');
+  });
+
   it('新 slug → TTL 窗口内 load() 即可见（零网络——事件合并消 5min 盲窗）；条目为展示级占位', async () => {
     hub = await startMockHub(catalog([item('demo-skill', '1.0.0')], 7));
     const source = createHubCatalogSource(resolverFor(hub.url));
