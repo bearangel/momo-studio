@@ -4,7 +4,7 @@
 // 重连对账 reconcileOnReconnect（hub/index onStateChange(online) 装配）：
 //   1) worker 断线期 answered → task.interventions {} 补应用（S3 同一函数——
 //      行 answered + 注入【人工答复】+ 唤醒 routeUserChat systemKickoff）
-//   2) 发起方断线期 pending → 补镜像行 + 里程碑（S5 语义，UNIQUE 幂等键）；
+//   2) 发起方断线期 pending → 补镜像行（S5 语义，UNIQUE 幂等键；Q4 起零请求里程碑）；
 //      answered → 镜像行 tryAnswer 收敛（不注入不唤醒——唤醒在 worker 侧）
 //   3) 幂等：二次对账零重复（行/里程碑计数不变，首答保留）
 //   4) submitted 漏事件补收（task.list → S5 镜像语义，remote_id 幂等键）
@@ -374,7 +374,7 @@ describe('1) worker 断线期 answered → 重连对账应用', () => {
 // ── 2) 发起方断线期：pending 补镜像 / answered 镜像行收敛 ─────────────────────
 
 describe('2) 发起方断线期 pending → 补镜像 + 里程碑', () => {
-  it('镜像行落库（origin/remote 幂等键）+ human:changed inserted + 里程碑 remote_intervention；任务态不动', async () => {
+  it('镜像行落库（origin/remote 幂等键）+ human:changed inserted（Q4：零请求里程碑）；任务态不动', async () => {
     const originTaskId = seedOriginTask();
 
     await reconcileOnReconnect({
@@ -396,7 +396,7 @@ describe('2) 发起方断线期 pending → 补镜像 + 里程碑', () => {
     expect(mirror!.taskId).toBe(originTaskId);
     expect(getTask(originTaskId)!.status).toBe('pending'); // 任务态不动（等待角标由镜像行派生）
     expect(humanEvents).toContainEqual({ sessionId: originSessionId, requestId: mirror!.id, kind: 'inserted' });
-    expect(milestoneCount()).toBe(1);
+    expect(milestoneCount()).toBe(0); // Q4：pending 期恒零请求里程碑（留痕移到代答后）
   });
 
   it('answered 且本地镜像行 pending → tryAnswer 收敛（answered_by=remote:xxx）不注入不唤醒', async () => {
@@ -474,13 +474,13 @@ describe('3) 幂等：二次对账零重复', () => {
     };
     const deps = { client: mkClient(snapshot), consumePorts: consumePorts().ports };
     await reconcileOnReconnect(deps);
-    expect(milestoneCount()).toBe(1); // pending 补镜像落一条
+    expect(milestoneCount()).toBe(0); // Q4：pending 补镜像恒零请求里程碑
     const answeredRow = getHumanRequest(mirror.id)!;
     expect(answeredRow.status).toBe('answered');
 
     await reconcileOnReconnect(deps);
 
-    expect(milestoneCount()).toBe(1); // 镜像行已存在 → 里程碑判重跳过
+    expect(milestoneCount()).toBe(0); // Q4：请求里程碑已移除，恒零
     expect(
       getDb()
         .prepare(`SELECT COUNT(*) AS n FROM human_requests WHERE origin_node_id = ?`)

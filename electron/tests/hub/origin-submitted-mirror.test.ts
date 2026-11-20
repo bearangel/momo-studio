@@ -167,7 +167,7 @@ describe('2) 同 interventionId 二次事件 → 零重复行零重复里程碑'
     handleTaskInterventionMirror(interventionEvent());
 
     expect(listRequests({ status: 'all' })).toHaveLength(1);
-    expect(milestoneRows()).toHaveLength(1); // 行已存在 → 跳过里程碑（判重取舍）
+    expect(milestoneRows()).toHaveLength(0); // Q4：pending 期恒零请求里程碑
   });
 });
 
@@ -283,10 +283,12 @@ describe('6) 非 out 行（承接行/普通本地行）→ 静默', () => {
 
 // ── 7) 里程碑两条 + 判重 ─────────────────────────────────────────────────────
 
-describe('7) 有会话时里程碑 remote_intervention/remote_submitted 各一条', () => {
-  it('meta 含 runNo/interventionId/delegationId；行已存在跳过里程碑', () => {
+describe('7) 有会话时里程碑（Q4：pending 请求不写，仅 remote_submitted）', () => {
+  it('intervention 镜像落行零里程碑；submitted 落 remote_submitted 一条；重放零新增', () => {
     const task = seedOutTask();
     handleTaskInterventionMirror(interventionEvent());
+    // Q4（2026-11-20 拍板）：pending 期不写请求里程碑（操作面=卡+徽标，留痕移到代答后）
+    expect(milestoneRows()).toHaveLength(0);
     handleTaskSubmittedMirror(submittedEvent({ deliverable: { summary: 's' } }));
 
     const rows = getDb()
@@ -300,20 +302,11 @@ describe('7) 有会话时里程碑 remote_intervention/remote_submitted 各一�
       task_id: string | null;
       context_json: string | null;
     }>;
-    expect(rows).toHaveLength(2);
-    for (const r of rows) {
-      expect(r.session_id).toBe(execSessionId);
-      expect(r.sender).toBe('system');
-      expect(r.task_id).toBe(task.id);
-    }
-    const metas = rows.map((r) => JSON.parse(r.context_json!) as Record<string, unknown>);
-    expect(metas[0]).toEqual({
-      kind: 'remote_intervention',
-      interventionId: 'iv-1',
-      runNo: 1,
-      delegationId: DELEGATION_ID,
-    });
-    expect(metas[1]).toEqual({
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.session_id).toBe(execSessionId);
+    expect(rows[0]!.sender).toBe('system');
+    expect(rows[0]!.task_id).toBe(task.id);
+    expect(JSON.parse(rows[0]!.context_json!)).toEqual({
       kind: 'remote_submitted',
       runNo: 1,
       delegationId: DELEGATION_ID,
@@ -321,7 +314,7 @@ describe('7) 有会话时里程碑 remote_intervention/remote_submitted 各一�
 
     // 重放 intervention（镜像行已存在）→ 里程碑不增
     handleTaskInterventionMirror(interventionEvent());
-    expect(milestoneRows()).toHaveLength(2);
+    expect(milestoneRows()).toHaveLength(1);
   });
 });
 

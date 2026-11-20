@@ -30,9 +30,54 @@ describe('text 帧聚合', () => {
       row({ eventType: 'final', payload: { body: '你好世界', status: 'done' } }),
     ];
     const frames = aggregateFrames(rows);
+    // T-070 语义：帧位=段末正文事件行（final 只终态不占位；final.body 与拼接
+    // 不一致时以其为准——本用例 '你好'≠'你好世界' 走权威定稿）
     expect(frames).toEqual([
-      { frameId: 'm1', seq: 3, at: rows[2]!.at, role: 'assistant', kind: 'text', content: '你好世界' },
+      { frameId: 'm1', seq: 2, at: rows[1]!.at, role: 'assistant', kind: 'text', content: '你好世界' },
     ]);
+  });
+
+  it('T-070 拍板：同消息正文遇工具边界分段（段 0 无后缀，段 n≥1 带 #n；段/工具交错序）+ final 全文一致时分段保持', () => {
+    const rows = [
+      row({ eventType: 'text_delta', payload: { delta: '我先看看数据。' } }),
+      row({ eventType: 'tool_call_start', payload: { toolName: 'query', callId: 'c1' } }),
+      row({ eventType: 'tool_call_result', payload: { callId: 'c1', result: 'ok' } }),
+      row({ eventType: 'text_delta', payload: { delta: '数据核对清楚。' } }),
+      row({ eventType: 'tool_call_start', payload: { toolName: 'write_file', callId: 'c2' } }),
+      row({ eventType: 'tool_call_result', payload: { callId: 'c2', result: 'done' } }),
+      row({ eventType: 'text_delta', payload: { delta: '交付物已生成。' } }),
+      row({ eventType: 'final', payload: { body: '我先看看数据。数据核对清楚。交付物已生成。', status: 'done' } }),
+    ];
+    const frames = aggregateFrames(rows);
+    const seq = frames.map((f) => [f.kind, f.frameId]);
+    expect(seq).toEqual([
+      ['text', 'm1'],        // 段 0
+      ['tool', 'c1'],
+      ['text', 'm1#1'],      // 段 1
+      ['tool', 'c2'],
+      ['text', 'm1#2'],      // 段 2
+    ]);
+    expect(frames[0]!.content).toBe('我先看看数据。');
+    expect(frames[2]!.content).toBe('数据核对清楚。');
+    expect(frames[4]!.content).toBe('交付物已生成。');
+    for (const f of frames) {
+      if (f.kind === 'text') expect(f.streaming).toBeUndefined(); // final 一致 → 全段终态
+    }
+  });
+
+  it('T-070 兜底：final 全文与分段拼接不一致（delta 丢失）→ 退化单帧全文（final 权威）', () => {
+    const rows = [
+      row({ eventType: 'text_delta', payload: { delta: '段一' } }),
+      row({ eventType: 'tool_call_start', payload: { toolName: 'q', callId: 'c1' } }),
+      row({ eventType: 'tool_call_result', payload: { callId: 'c1', result: 'r' } }),
+      row({ eventType: 'text_delta', payload: { delta: '段二（部分丢失）' } }),
+      row({ eventType: 'final', payload: { body: '段一段二全文权威版', status: 'done' } }),
+    ];
+    const frames = aggregateFrames(rows);
+    const texts = frames.filter((f) => f.kind === 'text');
+    expect(texts).toHaveLength(1);
+    expect(texts[0]!.frameId).toBe('m1');
+    expect(texts[0]!.content).toBe('段一段二全文权威版');
   });
 
   it('无终态 → streaming=true；content 为已到增量', () => {
@@ -67,7 +112,8 @@ describe('text 帧聚合', () => {
       row({ eventType: 'final', messageId: 'mA', payload: { body: 'A 全文' } }),
     ];
     const frames = aggregateFrames(rows);
-    expect(frames.map((f) => [f.frameId, f.seq])).toEqual([['mU', 2], ['mA', 3]]);
+    // T-070 语义：帧位=段末正文事件行（final 不占位——mA 段末=行 1）
+    expect(frames.map((f) => [f.frameId, f.seq])).toEqual([['mA', 1], ['mU', 2]]);
   });
 });
 

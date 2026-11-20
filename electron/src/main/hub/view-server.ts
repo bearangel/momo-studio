@@ -137,6 +137,22 @@ function sessionEvents(sessionId: string, afterSeq: number, direction: '>' | '>=
     .all(sessionId, afterSeq, limit) as EventRow[];
 }
 
+/**
+ * 帧聚合行读取（尾部窗口，2026-11-20 T-066 实测修复）：会话事件超 CAP 时取
+ * 最新 CAP 行。此前升序 LIMIT 头窗（seq>=0 LIMIT 2000）把超限会话的尾部事件
+ * 永久排除在帧流外——拉页/订阅种子/增量全读不到（二轮交付正文不上行，
+ * 「二次回复数据没实时传」的根因）。帧页语义=最新 limit 帧尾窗，读取面同义。
+ */
+function sessionEventsTail(sessionId: string, cap: number): EventRow[] {
+  const maxSeq = getDb()
+    .prepare(
+      `SELECT COALESCE(MAX(e.rowid), 0) AS m FROM message_events e
+       JOIN messages m ON m.id = e.message_id WHERE m.session_id = ?`,
+    )
+    .get(sessionId) as { m: number };
+  return sessionEvents(sessionId, Math.max(0, maxSeq.m - cap), '>', cap);
+}
+
 /** DB 行 → 聚合输入行（payload 解包；损坏载荷置 null 由聚合层跳过）。 */
 function toFrameEventRow(r: EventRow): FrameEventRow {
   try {
@@ -401,7 +417,7 @@ export class ViewServer {
    *  fromSeq=0 取最新 limit 帧；fromSeq>0 取 seq < fromSeq 中最新 limit 帧（loadEarlier）；
    *  afterSeq>0 取 seq > afterSeq 升序前 limit 帧（断线补拉——1.13.1，优先于 fromSeq 判定）。 */
   private assembleFramePage(sessionId: string, fromSeq: number, limit: number, afterSeq: number | null = null): { frames: ViewFrame[]; hasMore: boolean } {
-    const rows = sessionEvents(sessionId, 0, '>=', ViewServer.FRAME_ROWS_CAP).map(toFrameEventRow);
+    const rows = sessionEventsTail(sessionId, ViewServer.FRAME_ROWS_CAP).map(toFrameEventRow);
     const all = aggregateFrames(rows);
     if (afterSeq !== null && afterSeq > 0) {
       const ahead = all.filter((f) => f.seq > afterSeq);
@@ -410,7 +426,18 @@ export class ViewServer {
     }
     const candidates = fromSeq > 0 ? all.filter((f) => f.seq < fromSeq) : all;
     const frames = candidates.length > limit ? candidates.slice(candidates.length - limit) : candidates;
-    return { frames, hasMore: candidates.length > frames.length };
+    // 尾窗方向（fromSeq=0）：尾部窗口截断的更早历史也计 hasMore（loadEarlier
+    // 依赖它渲染「加载更早」——窗口截断≠无更早，2026-11-20 T-066 修复配套）
+    const truncatedByCap =
+      fromSeq === 0 && rows.length > 0
+        ? getDb()
+            .prepare(
+              `SELECT 1 AS hit FROM message_events e JOIN messages m ON m.id = e.message_id
+               WHERE m.session_id = ? AND e.rowid < ? LIMIT 1`,
+            )
+            .get(sessionId, rows[0]!.seq) !== undefined
+        : false;
+    return { frames, hasMore: candidates.length > frames.length || truncatedByCap };
   }
 
   /** view.tasks 组装：目标节点本地 #T 任务（最新在前）。 */
@@ -441,7 +468,7 @@ export class ViewServer {
       .get(sessionId) as { max_seq: number };
     let openStarts = new Map<string, number>();
     if (wire === 2 && anchor.max_seq > 0) {
-      const rows = sessionEvents(sessionId, 0, '>=', ViewServer.FRAME_ROWS_CAP).map(toFrameEventRow);
+      const rows = sessionEventsTail(sessionId, ViewServer.FRAME_ROWS_CAP).map(toFrameEventRow);
       openStarts = new Map(aggregateTail(rows).openStarts);
     }
     this.watchers.set(sessionId, { sessionId, cursor: anchor.max_seq, ...(wire === 2 ? { wire } : {}), openStarts });
@@ -495,7 +522,16 @@ export class ViewServer {
   /** 帧形态 tick：从 min(cursor+1, 未终态帧首) 重读整帧 → 聚合上行 → 游标推到末行。 */
   private tickFrames(w: TailWatch, client: HubClient | null, allowed: boolean): void {
     const readFrom = Math.min(w.cursor + 1, ...(w.openStarts.size > 0 ? [...w.openStarts.values()] : [Infinity]));
-    const rows = sessionEvents(w.sessionId, readFrom - 1, '>', TAIL_BATCH_MAX);
+    // 深帧重读窗（2026-11-20 T-069 实测修复）：未终态帧首距游标超单拍上限时，
+    // 读取窗放大到「帧首 → 游标 + 单拍余量」——否则 LIMIT 恒截在帧尾 final
+    // 事件之前，帧永不闭合（正文 813 事件帧永远 streaming 半截，final 不上行）。
+    // 上限 FRAME_ROWS_CAP（DoS 下界——帧超 CAP 属极端，截断只影响该帧闭合不拖垮 tick）
+    const span = w.cursor + 1 - readFrom;
+    const batch =
+      span >= TAIL_BATCH_MAX
+        ? Math.min(span + TAIL_BATCH_MAX, ViewServer.FRAME_ROWS_CAP)
+        : TAIL_BATCH_MAX;
+    const rows = sessionEvents(w.sessionId, readFrom - 1, '>', batch);
     if (rows.length === 0) return;
     if (!allowed) return;
     if (!client || client.state() !== 'online') return;

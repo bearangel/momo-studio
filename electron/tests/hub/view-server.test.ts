@@ -742,6 +742,62 @@ describe('wire v2 协商与帧投影', () => {
     expect(p.frames[0]!.kind).toBe('text');
   });
 
+  it('T-069 实测锁：未终态帧超 TAIL_BATCH_MAX（200）→ tick 仍能读到帧尾 final 并闭合整帧', async () => {
+    const { sessionId, msgId } = await seedSessionWithFrames();
+    const { client, calls } = fakeClient();
+    const server = viewServerOf(client);
+    await server.handleViewRequest(req(VIEW_RPC.subscribe, { sessionId, wire: 2 }));
+
+    // 一条 300 事件的长正文帧（delta 数 > TAIL_BATCH_MAX），末尾 final 闭合
+    const db = getDb();
+    const ins = db.prepare(
+      'INSERT INTO message_events (id, message_id, seq, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    );
+    const now = Date.now();
+    for (let i = 0; i < 300; i++) {
+      ins.run(`long-d-${i}-${randomUUID().slice(0, 6)}`, msgId, i + 100, 'text_delta', JSON.stringify({ delta: `段${i};` }), now + i);
+    }
+    ins.run(`long-f-${randomUUID().slice(0, 6)}`, msgId, 500, 'final', JSON.stringify({ body: '长帧定稿正文', status: 'done' }), now + 500);
+
+    await new Promise((res) => setTimeout(res, 80));
+    // 订阅首拍种子 openStarts（msgId 流式帧首）→ 下一拍深帧重读应读到 final
+    await new Promise((res) => setTimeout(res, 60));
+    const frameCalls = calls.filter((c) => 'frames' in c.payload) as unknown as Array<{ payload: { frames: Array<{ frameId: string; content?: string; streaming?: boolean }> } }>;
+    const last = frameCalls[frameCalls.length - 1]!;
+    const longFrame = last.payload.frames.find((f) => f.frameId === msgId);
+    expect(longFrame).toBeDefined();
+    expect(longFrame!.streaming).toBeUndefined(); // final 到达——帧闭合
+    expect(longFrame!.content).toContain('长帧定稿正文');
+  });
+
+  it('T-066 实测锁：会话事件超 FRAME_ROWS_CAP（2000）→ 最新帧仍在帧页（尾部窗口修复）', async () => {
+    const { sessionId } = await seedSessionWithFrames();
+    // 旧消息（超过 CAP 的历史）：thinking 事件占行（聚合裁剪面——只占行数不产帧）
+    const bulk = insertMessage(sessionId, 'agent');
+    const bulkDb = getDb();
+    const insBulk = bulkDb.prepare(
+      'INSERT INTO message_events (id, message_id, seq, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    );
+    const now = Date.now();
+    for (let i = 0; i < 2010; i++) {
+      insBulk.run(`bulk-${i}-${randomUUID().slice(0, 6)}`, bulk, i + 1, 'thinking_delta', JSON.stringify({ delta: 'x' }), now + i);
+    }
+    // 最新交付帧（修复前：升序头窗 LIMIT 2000 永远读不到它）
+    const deliver = insertMessage(sessionId, 'agent');
+    insertEvent(deliver, 'text_delta', { delta: '批准已收到' });
+    insertEvent(deliver, 'final', { body: '批准已收到，完整交付', status: 'done' });
+
+    const server = viewServerOf(null);
+    const page = await server.handleViewRequest(req(VIEW_RPC.messages, { sessionId, fromSeq: 0, limit: 5, wire: 2 }));
+    expect(page.ok).toBe(true);
+    if (!page.ok) return;
+    const p = page.payload as { frames: Array<{ frameId: string; content?: string }>; hasMore: boolean };
+    const hit = p.frames.find((f) => f.frameId === deliver);
+    expect(hit).toBeDefined();
+    expect(hit!.content).toContain('批准已收到');
+    expect(p.hasMore).toBe(true); // 前部历史被尾部窗口截断
+  });
+
   it('viewMessages wire:2 loadEarlier（fromSeq=首帧 seq）→ 更早帧页', async () => {
     const { sessionId } = await seedSessionWithFrames();
     const ids: string[] = [];

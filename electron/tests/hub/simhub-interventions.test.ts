@@ -763,7 +763,7 @@ async function lfThroughSubmitted(): Promise<{
   expect(mirror!.taskId).toBe(out.id);
   expect(mirror!.sessionId).toBe(originSessionId);
   expect(mirror!.status).toBe('pending');
-  expect(milestoneRows().some((m) => m.meta['kind'] === 'remote_intervention')).toBe(true);
+  expect(milestoneRows().some((m) => m.meta['kind'] === 'remote_intervention')).toBe(false); // Q4：pending 不写
 
   // ⑤ 发起方面板数据就位（human:list 投影链路）
   const panel = projectHumanListRows(listRequests({ sessionId: originSessionId }));
@@ -1126,7 +1126,7 @@ describe('场景 4（断线重连）：离线降级 + S7 对账收敛 + 幂等�
     await handleTaskInterventionMirror(sim.interventionEvent(req1.id));
     const mirror1 = findRemoteMirrorRequest(WORKER_NODE, req1.id)!;
     expect(mirror1.status).toBe('pending');
-    expect(milestoneCount()).toBe(1); // remote_intervention
+    expect(milestoneCount()).toBe(0); // Q4：pending 请求里程碑已移除
 
     // ② 断线（client 状态切离线）
     sim.online = false;
@@ -1147,7 +1147,7 @@ describe('场景 4（断线重连）：离线降级 + S7 对账收敛 + 幂等�
     expect(degraded).toBeDefined();
     expect(degraded.body).toContain('干预上报降级');
     expect(degraded.meta['reason']).toBe('hub 离线');
-    expect(milestoneCount()).toBe(2);
+    expect(milestoneCount()).toBe(1); // Q4 后基线：仅 degraded（pending 请求里程碑已移除）
 
     // ④ worker 自答（节点所有者本地面板处理 #2）——#11 语义（2026-11-16）：
     // req1 仍未决，任务/run 保持 waiting_human（不变量 §5.1-3）；注入唤醒照常
@@ -1172,7 +1172,7 @@ describe('场景 4（断线重连）：离线降级 + S7 对账收敛 + 幂等�
     const mirror1After = getHumanRequest(mirror1.id)!;
     expect(mirror1After.status).toBe('answered'); // 发起方镜像收敛（tryAnswer，不注入不唤醒）
     expect(mirror1After.answeredByNodeId).toBe(`remote:${SELF_NODE}`);
-    expect(milestoneCount()).toBe(2); // 对账零新增里程碑
+    expect(milestoneCount()).toBe(1); // 对账零新增里程碑（Q4 后基线 1=degraded）
 
     // ⑦ worker 提交（在线；未决请求已清）→ report submitted
     await submitRun(worker.id, { summary: '断线重连后的交付' });
@@ -1188,7 +1188,7 @@ describe('场景 4（断线重连）：离线降级 + S7 对账收敛 + 幂等�
     const acceptance = findRemoteMirrorRequest(WORKER_NODE, `${dl}#1`)!;
     expect(acceptance).not.toBeNull();
     expect(acceptance.kind).toBe('acceptance');
-    expect(milestoneCount()).toBe(3); // + remote_submitted
+    expect(milestoneCount()).toBe(2); // degraded + remote_submitted（Q4：请求里程碑已移除）
 
     // ⑨ 幂等计数断言：同快照三次对账零重复（里程碑/行数/RPC 计数）
     const milestoneSnap = milestoneCount();
