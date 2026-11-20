@@ -6,6 +6,20 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — abort 贯穿在途工具 + 插件工具粒度授权 + 循环任务治理（alpha.74）
+
+`2.1.0-alpha.74`。alpha.73 打包后的修复与治理批（17 提交），无协议变更（仍 pin v0.7.7 / 协议 1.14.0）。
+
+- **abort 贯穿在途工具**（9637146/1c8abe1a/8ca1fb04）：停止按钮原只中断 LLM 流，在途工具调用无人管——新增 signal 快速路 + 5s 强杀保底，合流 `end(interrupted)` 落库 `aborted` 且 runner 确定性收尾；中断退出合流 `tool_result`（防悬挂的 tool start 让后续回合永久等待）
+- **插件工具粒度授权**（13f1bdca/00b71129/92fd60b0）：授权匹配键由「插件」改「工具名」——修复 db-pro 精确授权失效（授权/装配两侧口径分裂）；`grantedPluginTools` 经 `AGENT_CONFIG` 透传，loader 逐工具收敛 defs/handles（防粒度放大）；spawn 按工具名粒度装配，known 域同源一次实例化
+- **循环任务治理 D8/D9/D11**（aceb09d6）：实例自动归组、归档区链聚合、验收策略、会话复用；新增迁移 **084 `recurrence_chain_root`**
+- **会话可见性三修 D10**（ca0b6937）：会话列表执行中/未读标识、恢复卡防误报死锁逃生、远端面板贴底
+- **任务会话形态按执行节点分辨 D1-D6**（e98d6c8b）：「执行节点 = 委派节点」判定 + 两段式闭合保障
+- **composer 草稿仓**（75a6a808/64c9809a/dc77c547）：`RichComposer` 增 `onSegmentsChange` 全量回调；输入框切面板/切会话草稿不再丢失（草稿提升模块级仓：挂载恢复 / 卸载存稿 / 发送失效），steer 输入框接入同一草稿仓（重挂载恢复、切会话不串稿）
+- **镜像插件三连修**（b73070a7）：发布包携带 npm 依赖、发布/安装版本一致性校验、目录事件不再丢弃
+- **资源与检索**（5abae445/3d86b420）：`resource_list` 暴露插件工具清单、技能写入入参报错可行动化；`grep`/`glob` 加墙钟预算与候选上限，忽略集补 `target`/`logs`（大 workspace 不再无限遍历）
+- **插件 UI**（bf8f890e）：面板图标白名单补 `database`（db-pro 活动栏与页头用数据库图标）
+
 ## [未发布] — 验收裁决 UX 重构（三动作 / 裁决权收敛 / 续作 run / 协议 1.14）+ 跟踪会话面板直连
 
 `2.1.0-alpha.73`。依据 spec `docs/specs/2026-11-18-acceptance-decision-ux-design.md` + 实施计划 `docs/plans/2026-11-18-acceptance-decision-ux.md`（跨仓：hub v0.7.7 / 协议 1.14.0）。
