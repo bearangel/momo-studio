@@ -9,13 +9,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { __setElectronApisForTest } from '../../src/main/electron-access';
 import { buildPluginHumanGateApi } from '../../src/main/plugin/human-gate';
-import { emitHumanChanged } from '../../src/main/task/lifecycle-runs';
+import { emitHumanChanged, setRemoteInterveneSink } from '../../src/main/task/lifecycle-runs';
 import { listPendingBySession } from '../../src/main/storage/tasks/human-requests-repo';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 
-vi.mock('../../src/main/task/lifecycle-runs', () => ({
-  emitHumanChanged: vi.fn(),
-}));
+// 2026-11-20 桥接：emitRemoteIntervene/setRemoteInterveneSink 用真实现
+// （桥接用例经 sink 注入观察）；emitHumanChanged 维持 mock（IPC 推送面）
+vi.mock('../../src/main/task/lifecycle-runs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/task/lifecycle-runs')>();
+  return { ...actual, emitHumanChanged: vi.fn() };
+});
 
 const mockSend = vi.fn();
 
@@ -87,5 +90,30 @@ describe('buildPluginHumanGateApi', () => {
   it('create 缺 sessionId 拒绝（防 NOT NULL 崩 + 面板断链）', async () => {
     const gate = buildPluginHumanGateApi();
     await expect(gate.create({ sessionId: '', title: 't' })).rejects.toThrow(/sessionId/);
+  });
+
+  // ── 2026-11-20 T-065 实测缺口锁：插件 tool_gate 跨节点桥接 ──
+  it('create → emitRemoteIntervene({request_created, kind=tool_gate})——发起方可收到插件审批卡', async () => {
+    const seen: unknown[] = [];
+    setRemoteInterveneSink((e) => {
+      seen.push(e);
+    });
+    seedSession('sess-1');
+    const gate2 = buildPluginHumanGateApi();
+    const id = await gate2.create({
+      sessionId: 'sess-1',
+      taskId: null,
+      title: '脚本执行：mysql · 6 语句',
+      prompt: 'DDL×2',
+      payloadJson: JSON.stringify({ db: { kind: 'script', connection: 'mysql' } }),
+    });
+    expect(id).toBeTruthy();
+    expect(seen).toHaveLength(1);
+    const evt = seen[0] as { kind: string; request: { id: string; kind: string; sessionId: string } };
+    expect(evt.kind).toBe('request_created');
+    expect(evt.request.kind).toBe('tool_gate');
+    expect(evt.request.id).toBe(id);
+    expect(evt.request.sessionId).toBe('sess-1');
+    setRemoteInterveneSink(null);
   });
 });

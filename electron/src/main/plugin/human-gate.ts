@@ -6,7 +6,7 @@ import {
   insertHumanRequest,
   getHumanRequest,
 } from '../storage/tasks/human-requests-repo';
-import { emitHumanChanged } from '../task/lifecycle-runs';
+import { emitHumanChanged, emitRemoteIntervene } from '../task/lifecycle-runs';
 
 /** 插件面的人工请求行投影（避免整行 repo 类型跨域泄漏；payloadJson 供两段式取回执行参数） */
 export interface HumanRequestRowLike {
@@ -47,6 +47,11 @@ export function buildPluginHumanGateApi(): PluginHumanGate {
       // 面板可见性锚：与存量 tool_gate 链同纪律——落行即广播 inserted，
       // 否则面板（listPendingBySession 挂载/事件驱动）不知道有新卡（验收 P0 实证）
       emitHumanChanged({ sessionId: input.sessionId, requestId: row.id, kind: 'inserted' });
+      // 跨节点桥接（2026-11-20 T-065 实测缺口）：插件工具级审批（db-pro 写/脚本
+      // 两段式）此前只推本地面板——headless 执行节点无人可批，发起方也收不到，
+      // agent 只能以 manual_action 反复追问（「批准落在沟通卡上」死循环）。
+      // 与 requestHuman 同源外发：delegation-bound 判定在消费端桥（本地任务 no-op）
+      emitRemoteIntervene({ kind: 'request_created', request: row });
       return row.id;
     },
     status: async (id): Promise<HumanRequestRowLike | null> => {
