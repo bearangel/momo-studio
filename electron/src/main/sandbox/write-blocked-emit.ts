@@ -220,22 +220,23 @@ function isDbGatePayload(payloadJson: string | null): boolean {
  * 无需流键）。同步语义与钩子签名一致；畸形 payload 只 warn（答复本身已经
  * answerHuman 落库）。
  */
-export function handleToolGateAnswer(requestId: string, answer: ToolGateAnswerLike): void {
+export function handleToolGateAnswer(requestId: string, answer: ToolGateAnswerLike): boolean {
   const row = getHumanRequest(requestId);
   if (!row || row.kind !== 'tool_gate') {
     logger.warn('tool_gate 答复回调收到不存在或非 tool_gate 请求', { requestId });
-    return;
+    return true; // 防御路径（answerHuman 已保证 kind）——按已消费处理，不触发唤醒
   }
   // db-pro（spec 2026-11-17 §7-3）：db 形态载荷（{db:{connection,sql,opClass}}）
-  // 无 dirs 可授——approve/deny 语义由插件 service 轮询 status 消费，沙箱授予链路旁路。
+  // 无 dirs 可授——沙箱授予链路旁路；返回未消费（false）——答复走 answerHuman
+  // 兜底唤醒（2026-11-20 批准后续跑链：agent 回合已结束，靠注入【人工答复】续跑）
   if (isDbGatePayload(row.payloadJson)) {
-    logger.info('tool_gate db 载荷——沙箱授予链路旁路（插件 service 轮询消费）', { requestId });
-    return;
+    logger.info('tool_gate db 载荷——沙箱授予链路旁路（answerHuman 兜底唤醒会话）', { requestId });
+    return false;
   }
   const gate = parseToolGatePayload(row);
   if (gate === null) {
     logger.warn('tool_gate 请求 payload 畸形——授权/拒绝原语跳过', { requestId });
-    return;
+    return false; // 畸形也无人接——唤醒兜底（答复总要有人接）
   }
   if (answer.decision === 'approve') {
     grantWriteDirs('session', row.sessionId, gate.dirs);
@@ -245,18 +246,19 @@ export function handleToolGateAnswer(requestId: string, answer: ToolGateAnswerLi
       sessionId: row.sessionId,
       count: gate.dirs.length,
     });
-    return;
+    return true; // 在途等待方（covered 轮询）已接——已消费
   }
   if (answer.decision === 'deny') {
     deniedBroadcaster?.(gate.dirs);
     clearPendingOnDeny(row.sessionId, gate.dirs);
     logger.info('tool_gate 已拒绝：deny 广播解除子进程等待', { requestId, sessionId: row.sessionId });
-    return;
+    return true; // 在途等待方（deny 广播解除）已接——已消费
   }
   logger.warn('tool_gate 答复 decision 未识别（仅处理 approve/deny）', {
     requestId,
     decision: answer.decision,
   });
+  return false; // 无有效决定——无人接，唤醒兜底让 agent 感知异常答复
 }
 
 /**

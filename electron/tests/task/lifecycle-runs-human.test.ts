@@ -58,6 +58,7 @@ import {
 // 注入装配（Task 14 循环依赖修复后 lifecycle-runs 不再静态引 inject——生产由
 // registerSandboxIpc 注册，测试在此同款装配锁「注册→注入生效」契约）
 import { sendSystemKickoffMessage } from '../../src/main/task/human-answer-inject';
+import { handleToolGateAnswer } from '../../src/main/sandbox/write-blocked-emit';
 
 const tmpRoot = path.join(
   os.tmpdir(),
@@ -355,8 +356,13 @@ describe('7) 终态窗口（Review Focus #1 后半）：pending 但任务已终�
   });
 });
 
-describe('8) tool_gate 分派', () => {
-  it('无注册回调：answered 落库不抛、零注入零唤醒', () => {
+describe('8) tool_gate 分派 + 未消费兜底唤醒（2026-11-20 批准后续跑链）', () => {
+  // 语义（spec 会话级两段式断层修复）：tool_gate 答复若未被「回合内等待方」
+  // （沙箱回调返回 true）消费——即 db-pro 类两段式（agent 回合已结束）——
+  // 复用 humanAnswerKickoff 注入【人工答复】并唤醒新回合；沙箱在途形态
+  // 必须不唤醒（防双驱动）。
+  it('无注册回调（无人消费）：answered + 注入 1 条 + 唤醒派发', () => {
+    seedSessionLeader(hitlSessionId);
     const taskId = seedAssignedTask();
     const run = startRun(taskId, { trigger: 'initial' });
     const req = insertHumanRequest({
@@ -370,11 +376,12 @@ describe('8) tool_gate 分派', () => {
     const disp = answerHuman(req.id, { decision: 'approve' }, 'user:local');
     expect(disp).toEqual({ disposition: 'answered' });
     expect(getHumanRequest(req.id)!.status).toBe('answered');
-    expect(systemRows(hitlSessionId)).toHaveLength(0);
-    expect(routeUserChatMock).not.toHaveBeenCalled();
+    expect(systemRows(hitlSessionId)).toHaveLength(1);
+    expect(systemRows(hitlSessionId)[0].body).toContain('批准');
+    expect(routeUserChatMock).toHaveBeenCalledTimes(1);
   });
 
-  it('注册后回调收到 (requestId, answer)；任务终态时不回调', async () => {
+  it('回调消费（返回 true）：收到 (requestId, answer)、零注入零唤醒；任务终态时不回调不唤醒', async () => {
     const taskId = seedAssignedTask();
     const run = startRun(taskId, { trigger: 'initial' });
     const req = insertHumanRequest({
@@ -388,11 +395,14 @@ describe('8) tool_gate 分派', () => {
     const calls: Array<[string, { decision?: string }]> = [];
     setToolGateHandler((id, ans) => {
       calls.push([id, ans]);
+      return true;
     });
     answerHuman(req.id, { decision: 'deny', reason: '不给' }, 'user:local');
     expect(calls).toEqual([[req.id, { decision: 'deny', reason: '不给' }]]);
+    expect(systemRows(hitlSessionId)).toHaveLength(0);
+    expect(routeUserChatMock).not.toHaveBeenCalled();
 
-    // 终态窗口：任务取消后（请求被顶替 → stale 不回调）+ 未顶替终态不回调
+    // 终态窗口：未顶替终态 → 不回调不唤醒
     const req2 = insertHumanRequest({
       sessionId: hitlSessionId,
       kind: 'tool_gate',
@@ -407,7 +417,60 @@ describe('8) tool_gate 分派', () => {
       disposition: 'answered',
     });
     expect(calls).toHaveLength(1); // 终态后不回调
+    expect(systemRows(hitlSessionId)).toHaveLength(0); // 终态后不唤醒
     setToolGateHandler(null); // 还原模块态，防泄漏
+  });
+
+  it('真实生产者链（handleToolGateAnswer）+ db 载荷（db-pro 两段式）：唤醒触发', () => {
+    // 契约测试（boundary rule 4）：注册真实 handleToolGateAnswer（生产装配同款），
+    // db 载荷行答复 → 回调旁路（未消费）→ answerHuman 兜底唤醒
+    seedSessionLeader(hitlSessionId);
+    setToolGateHandler(handleToolGateAnswer);
+    const req = insertHumanRequest({
+      sessionId: hitlSessionId,
+      kind: 'tool_gate',
+      title: '脚本执行：S00971511 · mysql · 3 语句',
+      payloadJson: JSON.stringify({ db: { kind: 'script', connection: 'mysql', script: 'SELECT 1', opClass: 'script' } }),
+    });
+
+    const disp = answerHuman(req.id, { decision: 'approve' }, 'user:local');
+    expect(disp).toEqual({ disposition: 'answered' });
+    expect(systemRows(hitlSessionId)).toHaveLength(1);
+    expect(systemRows(hitlSessionId)[0].body).toContain('批准');
+    expect(systemRows(hitlSessionId)[0].body).toContain('S00971511');
+    expect(routeUserChatMock).toHaveBeenCalledTimes(1);
+    setToolGateHandler(null);
+  });
+
+  it('真实生产者链 + 沙箱形态 payload（在途等待方）：回调消费、零唤醒', () => {
+    seedSessionLeader(hitlSessionId);
+    setToolGateHandler(handleToolGateAnswer);
+    const req = insertHumanRequest({
+      sessionId: hitlSessionId,
+      kind: 'tool_gate',
+      title: '写入请求',
+      payloadJson: JSON.stringify({ toolGate: { command: 'echo hi', dirs: ['/tmp/x'] } }),
+    });
+    answerHuman(req.id, { decision: 'approve' }, 'user:local');
+    expect(systemRows(hitlSessionId)).toHaveLength(0);
+    expect(routeUserChatMock).not.toHaveBeenCalled();
+    setToolGateHandler(null);
+  });
+
+  it('deny + 理由同样注入（agent 需知道被拒原因）', () => {
+    seedSessionLeader(hitlSessionId);
+    const req = insertHumanRequest({
+      sessionId: hitlSessionId,
+      kind: 'tool_gate',
+      title: '数据库写请求（DML）',
+      payloadJson: JSON.stringify({ db: { connection: 'mysql', sql: 'UPDATE t SET a=1', opClass: 'DML' } }),
+    });
+    answerHuman(req.id, { decision: 'deny', reason: '主库别动' }, 'user:local');
+    const rows = systemRows(hitlSessionId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].body).toContain('拒绝');
+    expect(rows[0].body).toContain('主库别动');
+    expect(routeUserChatMock).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -725,8 +725,13 @@ export function acceptAndContinue(
 /** 人工答复载荷（Task 13 tool_gate / Task 14 request_human / Task 16 IPC 消费） */
 export type { HumanAnswerInput } from './human-answer-shared';
 
-/** tool_gate 答复回调（Task 13 注册：approve → grantWriteDirs / deny → broadcastWriteGrantDenied） */
-export type ToolGateAnswerHandler = (requestId: string, answer: HumanAnswerInput) => void;
+/**
+ * tool_gate 答复回调（Task 13 注册：approve → grantWriteDirs / deny → broadcastWriteGrantDenied）。
+ * 返回值 = 消费语义（2026-11-20 批准后续跑链）：true = 回合内等待方已接
+ * （沙箱在途形态，answerHuman 不得再唤醒——防双驱动）；false = 未消费
+ * （db-pro 两段式等回合外形态，answerHuman 兜底注入【人工答复】并唤醒会话）。
+ */
+export type ToolGateAnswerHandler = (requestId: string, answer: HumanAnswerInput) => boolean;
 
 /** tool_gate 答复回调容器（Task 13 装配时注册；null 注销） */
 let toolGateHandler: ToolGateAnswerHandler | null = null;
@@ -817,10 +822,17 @@ export function answerHuman(
       logger.warn('tool_gate 答复到达时任务已终态——回调跳过', { requestId, taskId: req.taskId });
       return { disposition: 'answered' };
     }
-    if (toolGateHandler) {
-      toolGateHandler(req.id, answer);
-    } else {
-      logger.warn('tool_gate 答复无注册回调（Task 13 未装配）——答复已落库', { requestId });
+    // 消费语义（2026-11-20 批准后续跑链）：回调返回 true = 沙箱在途等待方已接
+    // （covered 轮询原地重执行，防双驱动不再唤醒）；false / 无注册回调 = 无人接
+    // （db-pro 两段式——agent 回合已结束、答复躺在库里无人问）→ 与 question /
+    // manual_action 同款【人工答复】注入 + 会话唤醒，agent 新回合轮询 status 续作
+    const consumed = toolGateHandler ? toolGateHandler(req.id, answer) === true : false;
+    if (!consumed) {
+      if (humanAnswerKickoff) {
+        humanAnswerKickoff(req.sessionId, humanAnswerBody(req.title, answer));
+      } else {
+        logger.warn('tool_gate 答复未消费且唤醒未装配（setHumanAnswerKickoff 未注册）——答复已落库', { requestId });
+      }
     }
     return { disposition: 'answered' };
   }
